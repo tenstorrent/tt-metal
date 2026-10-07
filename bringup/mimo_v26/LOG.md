@@ -1569,3 +1569,15 @@
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py
 - supersedes: E261007-0836-176
 - data: {"runs":2,"bit_identical":1,"hosts_identical":2,"n":128,"correct":110}
+
+## E261007-1506-59b
+- date: 2026-10-07T15:06:13
+- commit: 9390e86b264
+- branch: ssinghal/mimo-race
+- host: 30
+- track: decode
+- status: verified
+- claim: COST of the column-reduce workaround, PAIRED in one process (48 layers, 4x8 host 30, unified, spread32, router exact, two traces alive, 5 alternating rounds x 30 blocking replays, host-timed, lib integ_73c014eb46d): step ms ag_sum (new) vs rs64 (old all_reduce of the 64-row partial): U=1 73.58 vs 72.53 (+1.05 ms, +1.45%), U=8 85.82 vs 84.88 (+0.94, +1.1%), U=32 99.00 vs 98.85 (+0.15, +0.15%); rounds agree within 0.03 ms. ~22 us per MoE layer at U=1. AGREEMENT of the two modes on the same state (live rows, PCC / rel L2): ffn_out L1 0.999997/0.28%, L5 0.99907..0.99987/2.0..4.5%, L16 0.9985..0.9995/3.3..5.7%, final hidden 0.9992..0.9994/3.5..4.0% (max abs 5..11 on massive-activation entries). The mode difference is bf16 summation order (all_gather+sum vs reduce_scatter), amplified over layers; NOT a bias test: no oracle alpha was computed here (only the GSM8K n=128 110/128 under ag_sum and the determinism pair vouch for the end result). Cross-check: E261007-1432-327 ag_sum steps 71.0/90.1/106.2 ms (router fast)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_T_ab_h30_9390e86b264.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_allreduce_ab.py
+- data: {"u1_delta_ms":1.053,"u8_delta_ms":0.938,"u32_delta_ms":0.152}
