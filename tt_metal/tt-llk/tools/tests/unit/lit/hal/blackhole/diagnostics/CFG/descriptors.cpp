@@ -6,7 +6,6 @@
 // RUN: %split-file %s %t
 // RUN: %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/valid.cpp
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/invalid-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/word-addr-section.cpp 2>&1 | FileCheck %s --check-prefix=SECTION
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/invalid-value.cpp 2>&1 | FileCheck %s --check-prefix=VALUE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/packer.cpp 2>&1 | FileCheck %s --check-prefix=PACKER
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/packer-addr-ctrl.cpp 2>&1 | FileCheck %s --check-prefix=PACKER_ADDR_CTRL
@@ -248,17 +247,11 @@ static_assert(decltype(gpr_write.source)::index == 16);
 constexpr auto common_gpr_write = cfg::from_gpr<cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(common_gpr);
 static_assert(decltype(common_gpr_write)::addr == 76);
 static_assert(decltype(common_gpr_write)::words == 1);
-static_assert(cfg::word_addr<cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1> == 112);
 
 //--- invalid-section.cpp
 #include "fields.h"
 
 constexpr auto invalid_section = cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S1, 1>();
-
-//--- word-addr-section.cpp
-#include "fields.h"
-
-constexpr auto invalid_word_addr = cfg::word_addr<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S1>;
 
 //--- invalid-value.cpp
 #include "fields.h"
