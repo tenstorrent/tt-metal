@@ -510,11 +510,19 @@ def test_linear_padded_wan_shapes(device, M, K, N, M_block_size, K_block_size, N
     assert check_result["relative_rmse"] < 0.02
 
 
+# An odd subblock_w would split a gate / up tile pair across two DST subblocks, so without a bias it falls back from the
+# pack-thread SwiGLU to the swiglu_block epilogue (fp32 DST holds 4 tiles, hence subblock_h=1 there). out_N=384 gives 24
+# interleaved N tiles, which 6- and 2-tile N blocks divide.
+@pytest.mark.parametrize(
+    "out_N, N_block_size, subblock_h, subblock_w",
+    [(256, 8, 2, 2), (384, 6, 1, 3), (384, 2, 1, 1)],
+    ids=["sbw2", "sbw3", "sbw1"],
+)
 @pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "bias"])
 @pytest.mark.parametrize("gate_is_first", [False, True], ids=["up_gate", "gate_up"])
-def test_linear_swiglu(device, gate_is_first, use_bias):
+def test_linear_swiglu(device, gate_is_first, use_bias, out_N, N_block_size, subblock_h, subblock_w):
     """fuse_swiglu=True: silu(gate)*up with both [up|gate] and [gate|up] weight layouts."""
-    M, K, out_N = 256, 256, 256  # weight is [K, 2*out_N]; output is [M, out_N]
+    M, K = 256, 256  # weight is [K, 2*out_N]; output is [M, out_N]
     two_N = 2 * out_N
     torch_dtype = torch.float32
 
@@ -550,9 +558,9 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
     matmul_config = ttnn.MinimalMatmulConfig(
         M_block_size=8,
         K_block_size=8,
-        N_block_size=8,
-        subblock_h=2,
-        subblock_w=2,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
         compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
     )
 
@@ -567,7 +575,7 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
 
     tt_output = ttnn.to_torch(tt_output)
     result = assert_quality(golden, tt_output)
-    logger.info(f"gate_is_first={gate_is_first}, use_bias={use_bias}: PCC={result['pcc']:.7f}")
+    logger.info(f"gate_is_first={gate_is_first}, use_bias={use_bias}, subblock_w={subblock_w}: PCC={result['pcc']:.7f}")
     assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
 
 

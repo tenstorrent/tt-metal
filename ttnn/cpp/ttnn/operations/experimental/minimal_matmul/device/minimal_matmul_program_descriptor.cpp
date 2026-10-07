@@ -488,8 +488,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         defines["FUSE_SWIGLU"] = "1";
     }
     // Without a bias the compute kernel applies SwiGLU on the pack thread in each output block's last K block
-    // (matmul_blocks_swiglu); with one it runs the swiglu_block epilogue.
-    const bool swiglu_in_k_loop = fuse_swiglu && !use_bias;
+    // (matmul_blocks_swiglu); with one it runs the swiglu_block epilogue. The in-loop path pairs gate / up tiles within
+    // one DST subblock, so an odd subblock_w (a pair straddling two subblocks) takes the epilogue too.
+    const bool swiglu_in_k_loop = fuse_swiglu && !use_bias && subblock_w % 2 == 0;
     // A block-float output's 7-bit mantissas hide a cheaper sigmoid's error (swiglu_sfpu.hpp); bf16 / fp32 outputs
     // keep silu_tile's.
     const bool swiglu_block_float_output =

@@ -483,7 +483,7 @@ void matmul_blocks_swiglu(
             for (uint32_t h = 0; h < subblock_h; h++) {
                 for (uint32_t w = 0; w < subblock_w; w += 2) {
                     const uint32_t gate = h * subblock_w + w;
-                    PACK((llk_minimal_matmul_swiglu<block_float_output>(gate, gate + 1, gate)));
+                    PACK((minimal_matmul_swiglu_tile<block_float_output>(gate, gate + 1, gate)));
                 }
             }
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -547,7 +547,7 @@ void kernel_main() {
 
     matmul_init(dfb::in0, dfb::in1);
     if constexpr (swiglu_in_k_loop) {
-        PACK((llk_minimal_matmul_swiglu_init()));  // once: nothing else on the pack thread reprograms the SFPU
+        PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
     }
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;

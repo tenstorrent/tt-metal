@@ -76,12 +76,14 @@ inline void minimal_matmul_swiglu_init() { sigmoid_init</*APPROXIMATION_MODE=*/f
 
 namespace ckernel {
 
-inline void llk_minimal_matmul_swiglu_init() {
+// Tile-level entry points in the compute API's style, kept op-local (like moe_gpt's swiglu_sfpu.h): the sigmoid is
+// sized for minimal_matmul's outputs, and compute_metal2.cpp chooses the thread (PACK) at the call site.
+inline void minimal_matmul_swiglu_tile_init() {
     llk_math_eltwise_binary_sfpu_init<SfpuType::unused>(ckernel::sfpu::minimal_matmul_swiglu_init);
 }
 
 template <bool block_float_output>
-inline void llk_minimal_matmul_swiglu(uint gate_tile, uint32_t up_tile, uint32_t out_tile) {
+inline void minimal_matmul_swiglu_tile(uint32_t gate_tile, uint32_t up_tile, uint32_t out_tile) {
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
