@@ -1025,7 +1025,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
 
         // Blackhole: a block-float SrcB (the math right-hand operand) has no bits for the last fidelity phase, so HiFi3
-        // gives HiFi4's products.
+        // gives HiFi4's products; with a 16-bit DEST only (with fp32 DEST it measured equal or slower).
         const auto block_float = [](DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; };
         const DataType srca_dtype = scalar_first ? b_dtype : a_dtype;
         const DataType srcb_dtype = scalar_first ? a_dtype : b_dtype;
@@ -1484,7 +1484,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = mul_at_hifi3 ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
+        .math_fidelity = mul_at_hifi3 && !fp32_dest_acc_en ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };

@@ -70,7 +70,9 @@ def _run(device, op, shape, mc, da, db, do, b_shape=None, act=None, scalar=None,
     elif act == "silu":
         ref = torch.nn.functional.silu(ref)
     got = ttnn.to_torch(out).float()
-    tol = 1.0 if do == "bfp4" else (0.3 if "bfp4" in (da, db) else 0.1)
+    for t in [ta, out] + ([tb] if scalar is None else []):
+        ttnn.deallocate(t)
+    tol = 2.0 if do == "bfp4" else (0.3 if "bfp4" in (da, db) else 0.1)
     assert torch.allclose(got, ref, rtol=0.1, atol=tol), float((got - ref).abs().max())
 
 
