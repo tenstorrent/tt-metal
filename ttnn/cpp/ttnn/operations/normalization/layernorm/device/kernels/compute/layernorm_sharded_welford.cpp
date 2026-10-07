@@ -508,7 +508,6 @@ void kernel_main() {
         index_h_offset += block_wt;
     }
     dfb_ex_partial.push_back(num_block_ht_result_tiles);
-    dfb_ex_partial.wait_front(num_block_ht_result_tiles);
 
     // ---------------------------------------------------------------------------
     // Combine Welford local partials with external partials
@@ -550,7 +549,6 @@ void kernel_main() {
             }
         }
         dfb_ex.push_back(static_cast<uint16_t>(2 * num_tiles_per_allgather_worker));
-        dfb_ex.wait_front(static_cast<uint16_t>(2 * num_tiles_per_allgather_worker));
     }
 
     // ---------------------------------------------------------------------------
@@ -700,7 +698,11 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     // Scale by gamma
     // ---------------------------------------------------------------------------
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
+    // Only the gamma and beta stages below read these tiles back; with neither of them this buffer
+    // is the output and its consumer is the writer kernel, so there is nothing to wait for here.
     dfb_im.wait_front(num_tiles_per_block);
+#endif
 #ifdef FUSE_GAMMA
     {
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
@@ -735,7 +737,11 @@ void kernel_main() {
         }
         dfb_outgamma.push_back(num_tiles_per_block);
         dfb_im.pop_front(num_tiles_per_block);
+#ifdef FUSE_BETA
+        // The beta stage reads these tiles back through its fusion alias; without beta this buffer
+        // is the output and the writer kernel consumes it.
         dfb_outgamma.wait_front(num_tiles_per_block);
+#endif
     }
 #endif
 
@@ -775,8 +781,18 @@ void kernel_main() {
         }
         dfb_out.push_back(num_tiles_per_block);
         dfb_beta_src.pop_front(num_tiles_per_block);
-        dfb_out.wait_front(num_tiles_per_block);
     }
+#endif
+
+#ifdef FUSE_GAMMA
+    // Gamma is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_gamma.pop_front(block_wt);
+#endif
+#ifdef FUSE_BETA
+    // Beta is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_beta.pop_front(block_wt);
 #endif
 
 #endif  // IDLE_CORE

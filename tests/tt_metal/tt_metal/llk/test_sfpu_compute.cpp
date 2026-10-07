@@ -191,6 +191,18 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"alt_complex_rotate90", {{"SFPU_OP_CHAIN_0", "alt_complex_rotate90_tile_init(); alt_complex_rotate90_tile(0);"}}},
     {"abs", {{"SFPU_OP_CHAIN_0", "abs_tile_init(); abs_tile(0);"}}},
     {"fill", {{"SFPU_OP_FILL_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile(0, 5.0f);"}}},
+    // Trigonometry family (api/compute/eltwise_unary/trigonometry.h).
+    {"sin", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sin_tile_init(); sin_tile(0);"}}},
+    {"cos", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "cos_tile_init(); cos_tile(0);"}}},
+    {"tan", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "tan_tile_init(); tan_tile(0);"}}},
+    {"asin", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "asin_tile_init(); asin_tile(0);"}}},
+    {"acos", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "acos_tile_init(); acos_tile(0);"}}},
+    {"atan", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "atan_tile_init(); atan_tile(0);"}}},
+    {"sinh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "sinh_tile_init(); sinh_tile(0);"}}},
+    {"cosh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "cosh_tile_init(); cosh_tile(0);"}}},
+    {"asinh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "asinh_tile_init(); asinh_tile(0);"}}},
+    {"acosh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "acosh_tile_init(); acosh_tile(0);"}}},
+    {"atanh", {{"SFPU_OP_TRIG_FAMILY_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "atanh_tile_init(); atanh_tile(0);"}}},
 };
 
 // digamma / trigamma in double: recurrence up to x >= 6, then the asymptotic series.
@@ -867,6 +879,39 @@ float sfpu_function(const std::string& op_name, float input) {
     if (op_name == "softcap") {
         return static_cast<float>(5.0 * std::tanh(d / 5.0));
     }
+    if (op_name == "sin") {
+        return static_cast<float>(std::sin(d));
+    }
+    if (op_name == "cos") {
+        return static_cast<float>(std::cos(d));
+    }
+    if (op_name == "tan") {
+        return static_cast<float>(std::tan(d));
+    }
+    if (op_name == "asin") {
+        return static_cast<float>(std::asin(d));
+    }
+    if (op_name == "acos") {
+        return static_cast<float>(std::acos(d));
+    }
+    if (op_name == "atan") {
+        return static_cast<float>(std::atan(d));
+    }
+    if (op_name == "sinh") {
+        return static_cast<float>(std::sinh(d));
+    }
+    if (op_name == "cosh") {
+        return static_cast<float>(std::cosh(d));
+    }
+    if (op_name == "asinh") {
+        return static_cast<float>(std::asinh(d));
+    }
+    if (op_name == "acosh") {
+        return static_cast<float>(std::acosh(d));
+    }
+    if (op_name == "atanh") {
+        return static_cast<float>(std::atanh(d));
+    }
     if (op_name == "unary_ne") {
         return input != 0.5f ? 1.0f : 0.0f;
     }
@@ -1140,6 +1185,27 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
     }
     if (op_name == "erfinv") {
         return uniform(-0.95f, 0.95f);
+    }
+    // Trigonometry: each op's domain, as in the tt-llk SFPU tests (helpers/sfpu_domains.py).
+    if (op_name == "sin" || op_name == "cos") {
+        return uniform(-3.14f, 3.14f);
+    }
+    if (op_name == "tan") {
+        // Inside the poles at +-pi/2.
+        return uniform(-1.3f, 1.3f);
+    }
+    if (op_name == "asin" || op_name == "acos" || op_name == "atanh") {
+        return uniform(-0.95f, 0.95f);
+    }
+    if (op_name == "atan" || op_name == "asinh") {
+        return uniform(-10.0f, 10.0f);
+    }
+    if (op_name == "sinh" || op_name == "cosh") {
+        return uniform(-5.0f, 5.0f);
+    }
+    if (op_name == "acosh") {
+        // x >= 1; clear of x ~ 1, where the result's slope is unbounded.
+        return uniform(1.1f, 10.0f);
     }
     if (op_name == "lgamma_stirling" || op_name == "digamma" || op_name == "polygamma") {
         return uniform(0.5f, 8.0f);
@@ -2727,7 +2793,20 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "tiled_prod"),
         std::make_tuple(1, "alt_complex_rotate90"),
         std::make_tuple(1, "abs"),
-        std::make_tuple(1, "fill")),
+        std::make_tuple(1, "fill"),
+        std::make_tuple(1, "sin"),
+        std::make_tuple(4, "sin"),
+        std::make_tuple(1, "cos"),
+        std::make_tuple(4, "cos"),
+        std::make_tuple(1, "tan"),
+        std::make_tuple(1, "asin"),
+        std::make_tuple(1, "acos"),
+        std::make_tuple(1, "atan"),
+        std::make_tuple(1, "sinh"),
+        std::make_tuple(1, "cosh"),
+        std::make_tuple(1, "asinh"),
+        std::make_tuple(1, "acosh"),
+        std::make_tuple(1, "atanh")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
@@ -2976,7 +3055,20 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "tiled_prod"),
         std::make_tuple(1, "alt_complex_rotate90"),
         std::make_tuple(1, "abs"),
-        std::make_tuple(1, "fill")),
+        std::make_tuple(1, "fill"),
+        std::make_tuple(1, "sin"),
+        std::make_tuple(4, "sin"),
+        std::make_tuple(1, "cos"),
+        std::make_tuple(4, "cos"),
+        std::make_tuple(1, "tan"),
+        std::make_tuple(1, "asin"),
+        std::make_tuple(1, "acos"),
+        std::make_tuple(1, "atan"),
+        std::make_tuple(1, "sinh"),
+        std::make_tuple(1, "cosh"),
+        std::make_tuple(1, "asinh"),
+        std::make_tuple(1, "acosh"),
+        std::make_tuple(1, "atanh")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });

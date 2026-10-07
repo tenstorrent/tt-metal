@@ -499,4 +499,17 @@ void kernel_main() {
 
     // final sum
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scale, dfb::out>(Ht, Kt);
+
+    // Buffers this kernel waited and left unpopped, popped here so they are left balanced. All
+    // three are produced and consumed entirely within this kernel: sub_exp_block_bcast_cols_inplace
+    // waits Ht tiles of dfb::cur_max, mul_block_inplace waits Ht * Kt tiles of dfb::output_ind, and
+    // reduce_c waits Ht * Kt tiles of dfb::values.
+    DataflowBuffer(dfb::cur_max).pop_front(Ht);
+    DataflowBuffer(dfb::output_ind).pop_front(Ht * Kt);
+    DataflowBuffer(dfb::values).pop_front(Ht * Kt);
+
+    // dfb::scale is pushed once by the writer and waited inside compute_kernel_lib::reduce, which
+    // leaves it unpopped so one pushed tile serves every reduce call. Pop it here so dfb::scale is
+    // left balanced.
+    DataflowBuffer(dfb::scale).pop_front(1);
 }
