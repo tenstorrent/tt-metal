@@ -60,11 +60,12 @@ extern "C" void write_runtime_group_single_overflow()
 extern "C" void write_runtime_group_later_overflow()
 {
     cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, 1>(), cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(2));
+        cfg::set<cfg::StaccRelu::ReluThreshold, cfg::Sec::S0, 0x1234>(), cfg::set<cfg::StaccRelu::ApplyRelu, cfg::Sec::S0>(16));
 }
 
 // ASSERT-LABEL: <write_runtime_group_later_overflow>:
 // ASSERT-NOT: sw
+// ASSERT-NOT: ttrmwcib
 // ASSERT: ebreak
 // ASSERT: ret
 
@@ -190,6 +191,49 @@ extern "C" __attribute__((noinline, used)) void write_mixed_constant_runtime_wor
 // CHECK: R_RISCV_HI20 __instrn_buffer
 // CHECK: sw {{a[0-7]}},0({{a[0-7]}})
 // CHECK-NEXT: ttwrcfg 4,0,76
+// CHECK-NEXT: ret
+
+extern "C" __attribute__((noinline, used)) void write_mixed_relu_bytes(std::uint32_t mode)
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::StaccRelu::ApplyRelu, cfg::Sec::S0>(mode), cfg::set<cfg::StaccRelu::ReluThreshold, cfg::Sec::S0, 0x1234>());
+}
+
+// Word 2: byte 0 mixes runtime mode with threshold bits. Bytes 1 and 2 are constant.
+// CHECK-LABEL: <write_mixed_relu_bytes>:
+// CHECK-DAG: andi a0,a0,15
+// CHECK-DAG: lui [[OP:a[0-7]]],0xb3fc0
+// CHECK-DAG: addi [[OP]],[[OP]],2
+// CHECK-DAG: slli a0,a0,0xa
+// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
+// CHECK: add a0,a0,[[OP]]
+// CHECK: sw a0,0({{a[0-7]}})
+// CHECK-NEXT: ttrmwcib1 255,141,2
+// CHECK-NEXT: ttrmwcib2 63,4,2
+// CHECK-NEXT: ret
+
+extern "C" __attribute__((noinline, used)) void write_mixed_descriptor_bytes(std::uint32_t blobs)
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::Thcon[cfg::Reg0].TileDescriptor.XDim, cfg::Sec::S1, 0x1234>(),
+        cfg::set<cfg::Thcon[cfg::Reg0].TileDescriptor.BlobsPerXyPlane, cfg::Sec::S1>(blobs),
+        cfg::set<cfg::Thcon[cfg::Reg0].TileDescriptor.InDataFormat, cfg::Sec::S1, 0>());
+}
+
+// Word 112: preserve byte order with constant bytes on both sides of runtime byte 1.
+// Byte 0 must still clear its field when the constant data is zero.
+// CHECK-LABEL: <write_mixed_descriptor_bytes>:
+// CHECK-NOT: sw
+// CHECK: ttrmwcib0 15,0,112
+// CHECK-DAG: lui [[OP:a[0-7]]],0xb40f0
+// CHECK-DAG: andi a0,a0,15
+// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],112
+// CHECK-DAG: slli a0,a0,0x8
+// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
+// CHECK: add a0,a0,[[OPA]]
+// CHECK: sw a0,0({{a[0-7]}})
+// CHECK-NEXT: ttrmwcib2 255,52,112
+// CHECK-NEXT: ttrmwcib3 255,18,112
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_thread_and_state_same_address(std::uint32_t base, std::uint32_t override_address)
