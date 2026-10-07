@@ -70,6 +70,7 @@ class Generator:
         alive = torch.zeros(rows, SLOTS, dtype=torch.bool)
         out = [[] for _ in range(n)]
         slog = [[] for _ in range(n)]
+        sbest = [[] for _ in range(n)]
         for i, (r, s) in enumerate(place):
             tkn = int(first[r, s]) if teacher is None else int(teacher[i][0])
             out[i].append(int(first[r, s]))
@@ -92,10 +93,13 @@ class Generator:
                     continue
                 t = int(nxt[r, s])
                 out[i].append(t)
+                sbest[i].append(float(res[1][r, s]))
                 if self.keep_logits:
                     slog[i].append(res[2][r, s].clone())
                 pos[r, s] += 1
                 cur[r, s] = t if teacher is None else int(teacher[i][min(step + 1, len(teacher[i]) - 1)])
                 if t in self.eos or len(out[i]) >= max_new:
                     alive[r, s] = False
-        return dict(tokens=out, first_logits=flg, step_logits=slog, times=times, prefill_s=t_pre, place=place)
+        return dict(
+            tokens=out, first_logits=flg, step_logits=slog, step_best=sbest, times=times, prefill_s=t_pre, place=place
+        )
