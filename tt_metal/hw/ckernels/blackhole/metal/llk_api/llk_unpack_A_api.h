@@ -55,11 +55,12 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest = false,
+    bool early_context_poll = false>
 inline void llk_unpack_A_impl(
     const std::uint32_t address, const std::uint32_t src_format, const std::uint32_t dst_format) {
     WAYPOINT("UPAW");
-    _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(address, src_format, dst_format);
+    _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, early_context_poll>(address, src_format, dst_format);
     WAYPOINT("UPAD");
 }
 
@@ -86,7 +87,8 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest = false,
+    bool early_context_poll = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     std::uint32_t operand_id = get_operand_id(operand);
     std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
@@ -114,7 +116,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
         StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operand_id)),
         StateDiscard<std::uint32_t>(tile_index)));
 
-    llk_unpack_A_impl<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+    llk_unpack_A_impl<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, early_context_poll>(
         address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 

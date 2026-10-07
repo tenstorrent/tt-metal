@@ -385,6 +385,7 @@ inline void _llk_unpack_A_uninit_()
  * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
  * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @tparam early_context_poll: Read the context semaphore before the counter reset and flip the context from a local copy (opt in).
  * @param address: L1 address of the source tile.
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
@@ -396,10 +397,52 @@ template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    bool early_context_poll                      = false>
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+
+    if constexpr (early_context_poll)
+    {
+        std::uint32_t contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+        volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+        std::uint32_t context                  = unp_cfg_context;
+        while (contexts_in_use >= 2)
+        {
+            contexts_in_use = semaphore_read(semaphore::UNPACK_SYNC);
+        }
+        if constexpr (((BType == BroadcastType::NONE) && (!acc_to_dest)) || binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCB || unpack_to_dest)
+        {
+            cfg[(context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
+        }
+        else
+        {
+            cfg[(context == 0) ? THCON_SEC1_REG3_Base_address_ADDR32 : THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address;
+        }
+        semaphore_post(semaphore::UNPACK_SYNC);
+        if constexpr (unpack_to_dest)
+        {
+            if (is_32bit_input(unpack_src_format, unpack_dst_format))
+            {
+                set_dst_write_addr(context);
+                wait_for_dest_available();
+            }
+        }
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        ckernel::ckernel_template::run();
+        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        if constexpr (unpack_to_dest)
+        {
+            if (is_32bit_input(unpack_src_format, unpack_dst_format))
+            {
+                unpack_to_dest_tile_done(context);
+            }
+        }
+        switch_config_context_from(context);
+        return;
+    }
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
