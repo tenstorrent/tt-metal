@@ -159,6 +159,10 @@ class WanTransformerBlock(Module):
         # `1 + scale` programs per block; a rounding change, so it lives in the opt-in presets
         # (QuantConfig.modulation_affine_dtype), never in the bf16 default. Gates stay fp32.
         self.modulation_affine_dtype: ttnn.DataType | None = None
+        # Sprint 7 (A4): False (default) hands `ff_compute_kernel_config` (derived from ffn_ff1
+        # under a preset) to both ff1 and ff2, so ffn_ff2's compute config is ignored; True lets
+        # each linear run its own. Set by `apply_quant_config`; the bf16 default never changes.
+        self.per_linear_compute_config = False
         # Output dtype of norm1 / norm2 / norm3 (None = input dtype, bf16). Set by
         # `apply_quant_config` (QuantConfig.norm_output_dtype) for the bf8-activation presets so
         # the qkv / cross to_q / ff1 gathers move block-float pages; the matmuls pin their
@@ -386,7 +390,7 @@ class WanTransformerBlock(Module):
                     spatial_normed_1BND, dim=3, mesh_axis=self.parallel_config.tensor_parallel.mesh_axis
                 )
 
-            spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self.ff_compute_kernel_config)
+            spatial_ff_1BND = self.ffn(spatial_normed_1BND, compute_kernel_config=self._ff_cfg())
             # spatial_1BND = spatial_1BND + spatial_ff_1BND * c_gate_msa_1B1D
             # NOTE: higher precision compute config in addcmul may be needed for correctness
             spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
@@ -399,11 +403,15 @@ class WanTransformerBlock(Module):
                 spatial_1BND,
                 c_gate_msa_1B1D,
                 scalar=1.0,
-                compute_kernel_config=self.ff_compute_kernel_config,
+                compute_kernel_config=self._ff_cfg(),
                 parallel_config=self.parallel_config,
             )
 
         return spatial_1BND
+
+    def _ff_cfg(self):
+        """Compute config for the feed-forward: None (per-linear) under `per_linear_compute_config`."""
+        return None if self.per_linear_compute_config else self.ff_compute_kernel_config
 
 
 class WanTransformer3DModel(Module):

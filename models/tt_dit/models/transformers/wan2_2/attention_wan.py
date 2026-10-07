@@ -148,6 +148,14 @@ class WanAttention(Module):
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
+        # Sprint 7 (A4). False (default): every matmul in `forward` runs `mm_compute_kernel_config`
+        # (the attention-wide config; under a quant preset, the one derived from self_attn_qkv /
+        # cross_attn_q), so the per-linear compute configs `apply_quant_config` installs on to_out,
+        # to_kv and to_q are silently ignored. True: each linear runs its own `compute_config`.
+        # Set by `apply_quant_config` (QuantConfig.per_linear_compute_config); the bf16 default
+        # path never changes.
+        self.per_linear_compute_config = False
+
         full_grid = self.mesh_device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=full_grid,
@@ -395,10 +403,15 @@ class WanAttention(Module):
         inline path by construction (gate: `test_cfg_hoist_ti2v_5b.py`). Cross-attention only.
         """
         assert not self.is_self, "prepare_kv is for cross-attention (prompt K/V)"
-        k_1BNF, v_1BNF = self.to_kv(prompt_1BLP, compute_kernel_config=self.mm_compute_kernel_config)
+        k_1BNF, v_1BNF = self.to_kv(prompt_1BLP, compute_kernel_config=self._mm_cfg())
         k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
         v_BHNE = self._create_heads(v_1BNF)
         return k_BHNE, v_BHNE
+
+    def _mm_cfg(self):
+        """The compute config `forward` hands to its linears: None (each linear's own) under
+        `per_linear_compute_config`, else the attention-wide `mm_compute_kernel_config`."""
+        return None if self.per_linear_compute_config else self.mm_compute_kernel_config
 
     def forward(
         self,
@@ -455,7 +468,7 @@ class WanAttention(Module):
             # Fused QKV matmul with split output for self-attention
             q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
                 spatial_1BND,
-                compute_kernel_config=self.mm_compute_kernel_config,
+                compute_kernel_config=self._mm_cfg(),
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         else:
@@ -464,17 +477,15 @@ class WanAttention(Module):
             kv_input = prompt_1BLP
             if isinstance(self.to_q, RowParallelLinear):
                 assert not use_nonfused_agmm, "row-parallel to_q needs the Ring topology"
-                q_1BNF = self.to_q.forward_fused_addcmul(
-                    spatial_1BND, None, None, compute_kernel_config=self.mm_compute_kernel_config
-                )
+                q_1BNF = self.to_q.forward_fused_addcmul(spatial_1BND, None, None, compute_kernel_config=self._mm_cfg())
             else:
                 q_1BNF = self.to_q(
                     spatial_1BND,
-                    compute_kernel_config=self.mm_compute_kernel_config,
+                    compute_kernel_config=self._mm_cfg(),
                     parallel_config=None if use_nonfused_agmm else self.parallel_config,
                 )
             if prompt_kv is None:
-                k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+                k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self._mm_cfg())
 
         # Set norm output dtype to the input dtype required for ring self-attn.
         sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
@@ -612,18 +623,18 @@ class WanAttention(Module):
                 spatial_1BND,
                 addcmul_residual,
                 addcmul_gate,
-                compute_kernel_config=self.mm_compute_kernel_config,
+                compute_kernel_config=self._mm_cfg(),
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
         elif isinstance(self.to_out, RowParallelLinear):
             assert not use_nonfused_agmm, "row-parallel to_out needs the Ring topology"
             spatial_1BND = self.to_out.forward_fused_addcmul(
-                spatial_1BND, None, None, compute_kernel_config=self.mm_compute_kernel_config
+                spatial_1BND, None, None, compute_kernel_config=self._mm_cfg()
             )
         else:
             spatial_1BND = self.to_out(
                 spatial_1BND,
-                compute_kernel_config=self.mm_compute_kernel_config,
+                compute_kernel_config=self._mm_cfg(),
                 parallel_config=None if use_nonfused_agmm else self.parallel_config,
             )
 
