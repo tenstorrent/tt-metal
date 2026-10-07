@@ -8,10 +8,12 @@ source_file="$here/raw_lreg_macro_metadata_compile.cpp"
 # Optional real target check. Host syntax checks below deliberately mock the
 # builtin and cannot establish that the compiler implements the interface.
 if [[ ${1:-} == --target-cxx ]]; then
-    [[ $# == 2 ]] || { echo "usage: $0 --target-cxx /path/to/riscv-tt-elf-g++" >&2; exit 2; }
+    [[ $# == 2 || ( $# == 4 && $3 == --sfpi-include ) ]] || {
+        echo "usage: $0 --target-cxx /path/to/riscv-tt-elf-g++ [--sfpi-include /path/to/sfpi/include]" >&2; exit 2;
+    }
     target_cxx=$2
     scratch=$(mktemp -d)
-    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s"; rmdir "$scratch"' EXIT
+    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s"; rmdir "$scratch"' EXIT
     for arch in WH BH QSR; do
         case $arch in
             WH) cpu=tt-wh-tensix ;;
@@ -30,6 +32,20 @@ if [[ ${1:-} == --target-cxx ]]; then
         echo "FAIL: temporary load must not overwrite raw L0" >&2; exit 1;
     }
     echo "PASS: raw input survives intervening typed load/store (assembly check)"
+    if [[ $# == 4 ]]; then
+        root=$(cd "$here/../../../.." && pwd)
+        llk="$root/tt_metal/tt-llk/tt_llk_blackhole"
+        "$target_cxx" -std=c++17 -O2 -mcpu=tt-bh-tensix \
+            -DTENSIX_FIRMWARE -DCOMPILE_FOR_TRISC -DARCH_BLACKHOLE \
+            -I"$root/tt_metal/hw/inc/internal/tt-1xx/blackhole" \
+            -I"$root/tt_metal/hw/inc/internal" -I"$root/tt_metal/hw/inc" \
+            -I"$llk/common/inc" -I"$llk/llk_lib" -I"$4" \
+            -S "$here/raw_lreg_mul_int_compile.cpp" -o "$scratch/mul-int.s"
+        grep -q '# RAWLREG_EFFECT' "$scratch/mul-int.s" || {
+            echo "FAIL: production mul-int compiled without effects" >&2; exit 1;
+        }
+        echo "PASS: production Blackhole mul-int compiled with effects (not a hardware test)"
+    fi
     exit 0
 elif [[ $# != 0 ]]; then
     echo "usage: $0 [--target-cxx /path/to/riscv-tt-elf-g++]" >&2
