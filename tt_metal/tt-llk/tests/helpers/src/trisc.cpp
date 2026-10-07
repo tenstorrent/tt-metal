@@ -16,6 +16,9 @@
 #include "counters.h"
 #include "profiler.h"
 
+#define LLK_STR_(x) #x
+#define LLK_STR(x)  LLK_STR_(x)
+
 #ifdef LLK_PROFILER
 
 namespace llk_profiler
@@ -131,6 +134,10 @@ int main(void)
     (void)ckernel::load_blocking(&ckernel::pc_buf_base[0]);
 #endif
 }
+
+#if defined(LLK_HARNESS_NOPS) // experiment: harness code grows by N never executed nops, ahead of run_kernel
+asm(".pushsection .init, \"ax\"\n.rept " LLK_STR(LLK_HARNESS_NOPS) "\nnop\n.endr\n.popsection");
+#endif
 
 extern "C" __attribute__((section(".init"), naked, noreturn, no_profile_instrument_function)) std::uint32_t _start()
 {

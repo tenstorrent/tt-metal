@@ -1418,6 +1418,12 @@ class TestConfig:
             os.environ.get("LLK_FN_NOPS", "0")
         ):  # experiment: N never executed nops before every function
             OPTIONS_COMPILE += f"-fpatchable-function-entry={int(os.environ['LLK_FN_NOPS'])},{int(os.environ['LLK_FN_NOPS'])} "
+        if int(
+            os.environ.get("LLK_HARNESS_NOPS", "0")
+        ):  # experiment: N nops in the harness code ahead of run_kernel
+            OPTIONS_COMPILE += (
+                f"-DLLK_HARNESS_NOPS={int(os.environ['LLK_HARNESS_NOPS'])} "
+            )
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
