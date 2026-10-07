@@ -660,3 +660,15 @@
 - claim: mm path timing hint (paired alternating one process, host-timed, N=512/row incl dispatch+combine): mm 30 ms vs unified 2.3-2.8 ms per layer (13x slower: extract/FFN run on max_per_expert=2048 padded rows for each of 8 experts; real counts are ~64 avg). N=64/row decode-sized (32 slots padded to 64, ragged live 32/20/7/1): mm 7.8 ms vs unified 2.1 ms, mm PCC 0.99989-0.99998 vs unified 0.9917-0.9997 at L5. Decode-sized finding: dead pad tokens routed to a fixed expert set overflowed max_buf (worst chip load 1280 of 1248 at N=64 cf=4) -> pad tokens must be spread/masked (padding_config) or cf raised. Weights: one DRAM-interleaved bfp8 per-expert copy (analytic 214 MB/chip/layer, ~10 GB at 47 layers) works for mm, loop, unified and fused ops, so prefill and decode via these ops can share it; moe_compute ring layout still needs the C++ patch
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_C_L5_decode_a9f8e9910cd.log
 - paths: models/demos/blackhole/mimo_v26
+
+## E261007-0354-e2f
+- date: 2026-10-07T03:54:31
+- commit: 4e4e06559c5
+- branch: ssinghal/mimo
+- host: 35
+- track: moe
+- status: verified
+- claim: MERGED-COMMIT re-check of MoE gate: test_moe_real_layer.py layer 5, MIMO_UM_OPS=mm,unified, on 4e4e06559c5, host .35, 4x8, 256 real experts bfp8, N=512 tok/row, vs track-0 dump mimo-prefill-s128b16. op=mm (bf16 activations, HiFi2 fp32acc): PCC vs bf16 dump ffn_out per row with dump routing 0.99986-0.99991, with exact router (set match 0.9888) 0.99978-0.9999, 5 runs bit-identical, no dropped tokens (worst chip 896 of 8416 rows, cf=4). op=unified: 0.99151-0.99491 (FAILS 0.999). bf16-vs-fp32 floor 0.9985-0.99911. Time hint (host-timed, paired, not a perf claim): mm 30.7 ms vs unified 2.3 ms per layer. The pytest exit code is 1 only because the test asserts unified too (test design defect, unified is expected to fail at L5).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_moe_L5_35_4e4e06559c5.log
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests
+- data: {"layer":5,"pcc_mm_min":0.99978,"pcc_unified_min":0.99151,"bit_identical_runs":5,"dropped_tokens":0}
