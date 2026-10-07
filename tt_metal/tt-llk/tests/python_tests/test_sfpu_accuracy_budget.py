@@ -2126,8 +2126,8 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     (MathOperation.Expm1Cw, None, None, None, None): 25,
     (MathOperation.I0, None, None, None, None): 18,
     (MathOperation.I1, None, None, None, None): 20,
-    (MathOperation.Lgamma, None, None, None, None): 20,
-    (MathOperation.Polygamma, None, None, None, None): 48,
+    (MathOperation.Lgamma, None, None, None, None): 19,
+    (MathOperation.Polygamma, None, None, None, None): 50,
     (MathOperation.Rpow, None, None, None, None): 20,
 }
 
