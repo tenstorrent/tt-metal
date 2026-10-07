@@ -1556,3 +1556,16 @@
 - claim: RACE TRACK HANDOFF: worktree wt/race, branch ssinghal/mimo-race tip 414f0721e88 (+ this entry). Fix: MiMoMoEDecode._column_reduce (all_gather over columns + sum instead of ttnn.all_reduce), MIMO_MOE_AR=rs restores old. Evidence E261007-0930-424, E261007-1343-2d2, E261007-1453-b3d. Open: workaround cost (paired ms/layer U=1,8,32), PCC/alpha L1/L5/L16, GSM8K n=128 pair, other all_reduce sites (attention decode/prefill, dense FFN, prefill MoE: same op, NOT tested; stand-alone repro does not trigger), upstream repro needs the MoE context; hangs seen were dead=sentinel at >=12 layers and device left dirty after killing a hung job (reset needed), plus any allocation after end_trace_capture hangs the next replay
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_K_full48_ag_sum_h40_22eff654928.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py
+
+## E261007-1505-aa2
+- date: 2026-10-07T15:05:52
+- commit: b5e70f78d96
+- branch: ssinghal/mimo-race
+- host: 40
+- track: decode
+- status: verified
+- claim: DETERMINISM GATE PASS: two identical GSM8K n=128 runs (gsm8k_128_nothink, max_new 512, greedy, 48 layers, 4x8, MIMO_EXPERT_OP=unified MIMO_DEAD=spread32 default, MIMO_MOE_AR=ag_sum default, lib integ_73c014eb46d, commit b5e70f78d96, scenarios 128:512 twice in ONE process, test_gsm8k_decode.py) are TOKEN-IDENTICAL for all 128 users on host 40 (identical_to_previous_run_same_scenario=True, first_diff_user_step=[], 110/128 = 85.9% correct both runs, steady step 107.1/106.7 ms) AND on host 43 (same, 110/128 both); the completions of host 40 and host 43 are also identical for all 128 users (cross-host hint: texts json equal). Before the fix the same pair diverged for 20+ users (E261007-0836-176). Accuracy 110/128 vs earlier 113/112 on the old numerics path: within the Wilson interval (78.9-90.9), gate >=109 passes by one
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_Q_gsm_pair_h40_b5e70f78d96.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py
+- supersedes: E261007-0836-176
+- data: {"runs":2,"bit_identical":1,"hosts_identical":2,"n":128,"correct":110}
