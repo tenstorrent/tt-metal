@@ -317,14 +317,19 @@ def test_demo_vision(mesh_device, batch_size, reset_seeds, is_ci_env):
             # steady-state average below). Traced decode replays a single captured
             # Metal trace per token, matching text_demo_v2's decode path.
             profiler.start(f"inference_decode_time_{iteration}")
-            logits, _ = generator.decode_forward(
+            decode_out = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=True,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=None,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
+            logits = decode_out[0] if isinstance(decode_out, tuple) else decode_out
             out_tok = _host_sample(logits, temperature, top_p)
             current_pos += 1
             tok = int(out_tok[0, 0].item())
@@ -358,14 +363,19 @@ def test_demo_vision(mesh_device, batch_size, reset_seeds, is_ci_env):
         profiler.start("inference_decode")
         while users_decoding and iteration < max_generated_tokens - 1:
             profiler.start(f"inference_decode_time_{iteration}")
-            logits, _ = generator.decode_forward(
+            decode_out = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=True,
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=None,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
+            logits = decode_out[0] if isinstance(decode_out, tuple) else decode_out
             out_tok = _host_sample(logits, temperature, top_p)
             profiler.end(f"inference_decode_time_{iteration}")
             current_pos += 1

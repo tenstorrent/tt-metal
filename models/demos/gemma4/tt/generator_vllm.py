@@ -15,6 +15,7 @@ from vllm.model_executor.models.gemma4_mm import (
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.model_executor.models.gemma4_unified import Gemma4UnifiedProcessingInfo
 
 import ttnn
 from models.demos.gemma4.config import gemma4_kv_bfp8_enabled
@@ -48,6 +49,7 @@ from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.gemma4.tt.vision.vision_tower import VisionTower
+from models.demos.gemma4.tt.vision.unified_embedder import Gemma4UnifiedVisionEmbedder, has_unified_vision_weights
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import SUPPORTED_PREFILL_BATCH_SIZES, create_submeshes
@@ -292,12 +294,22 @@ def _gemma4_position_ids(kwargs):
 
 
 def _gemma4_has_vision_weights(state_dict) -> bool:
-    """True when the checkpoint ships a ``model.vision_tower.*`` sub-tree."""
-    return any(k.startswith("model.vision_tower.") for k in state_dict.keys())
+    """True when the checkpoint ships a ``model.vision_tower.*`` sub-tree (SigLIP,
+    31B) or the unified encoder-free embedder (``model.vision_embedder.*``, 12B)."""
+    return has_unified_vision_weights(state_dict) or any(
+        k.startswith("model.vision_tower.") for k in state_dict.keys()
+    )
 
 
 def _build_gemma4_vision(
-    mesh_device, state_dict, model_path, text_hidden_size, vision_dtype, mesh_config=None, ccl_manager=None
+    mesh_device,
+    state_dict,
+    model_path,
+    text_hidden_size,
+    vision_dtype,
+    mesh_config=None,
+    ccl_manager=None,
+    weight_cache_path=None,
 ):
     """Build the on-device vision tower + multimodal embedder for a Gemma-4
     multimodal checkpoint. Mirrors ``Gemma4Generator.from_pretrained(..., multimodal=True)``.
@@ -311,6 +323,15 @@ def _build_gemma4_vision(
         return None, None, None, None
     pad_token_id = getattr(getattr(hf_config, "text_config", hf_config), "pad_token_id", 0)
     os.environ.setdefault("HF_MODEL", model_path)
+    if has_unified_vision_weights(state_dict):
+        # 12B "unified": no SigLIP tower; the embedder projects straight to text space.
+        embedder = Gemma4UnifiedVisionEmbedder(
+            mesh_device,
+            state_dict,
+            text_hidden_size=text_hidden_size,
+            weight_cache_path=weight_cache_path,
+        )
+        return embedder, None, image_token_id, pad_token_id
     # Share the text model's mesh/CCL setup so the vision tower's TP all-reduces
     # reuse the same semaphores and link/topology tuning.
     vision_args = VisionModelArgs(
@@ -688,12 +709,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         """
         if not self.is_multimodal:
             raise RuntimeError("encode_vision requires a multimodal Gemma-4 checkpoint.")
-        num_patches = image_position_ids.shape[1]
-        seq_len = _vision_encoder_seq_len(num_patches)
-        pooled_tt, mask = self.vision_tower(pixel_values, image_position_ids, seq_len)
-        projected_tt = self.embed_vision(pooled_tt)  # [1, batch, output_length, text_hidden]
-        if hasattr(pooled_tt, "deallocate"):
-            pooled_tt.deallocate(True)
+        if getattr(self.vision_tower, "projects_to_text", False):
+            projected_tt, mask = self.vision_tower(pixel_values, image_position_ids)
+        else:
+            num_patches = image_position_ids.shape[1]
+            seq_len = _vision_encoder_seq_len(num_patches)
+            pooled_tt, mask = self.vision_tower(pixel_values, image_position_ids, seq_len)
+            projected_tt = self.embed_vision(pooled_tt)  # [1, batch, output_length, text_hidden]
+            if hasattr(pooled_tt, "deallocate"):
+                pooled_tt.deallocate(True)
         valid_indices = torch.where(mask[0])[0].to(torch.uint16)  # [num_valid]
         num_valid = int(valid_indices.numel())
         text_hidden = projected_tt.shape[-1]
@@ -753,9 +777,12 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             raise RuntimeError("warmup_vision requires a multimodal Gemma-4 checkpoint.")
         logger.info("Gemma4 vLLM: warming up vision tower + projector...")
         if pixel_values is None or image_position_ids is None:
-            vision_args = self.vision_tower.args
-            in_dim = int(vision_args.hf_config.vision_config.hidden_size)
-            num_patches = max(1, int(getattr(vision_args.hf_config.vision_config, "image_seq_length", 256)))
+            if getattr(self.vision_tower, "projects_to_text", False):
+                in_dim, num_patches = int(self.vision_tower.patch_dim), 280
+            else:
+                vision_args = self.vision_tower.args
+                in_dim = int(vision_args.hf_config.vision_config.hidden_size)
+                num_patches = max(1, int(getattr(vision_args.hf_config.vision_config, "image_seq_length", 256)))
             pixel_values = torch.zeros(1, num_patches, in_dim, dtype=torch.bfloat16)
             image_position_ids = torch.zeros(1, num_patches, 2, dtype=torch.long)
         image_embeds_tt = self.encode_vision(pixel_values, image_position_ids)
@@ -1461,8 +1488,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 vision_dtype,
                 mesh_config=getattr(model[0], "mesh_config", None),
                 ccl_manager=getattr(model[0], "ccl_manager", None),
+                weight_cache_path=model_args[0].weight_cache_path(ttnn.bfloat16),
             )
-            instance.is_multimodal = instance.vision_tower is not None and instance.embed_vision is not None
+            instance.is_multimodal = instance.vision_tower is not None and (
+                instance.embed_vision is not None or getattr(instance.vision_tower, "projects_to_text", False)
+            )
             logger.info(
                 "Gemma4 vLLM: multimodal enabled (image_token_id={}, pad_token_id={}, vision_dtype={})",
                 instance.image_token_id,
@@ -6087,3 +6117,20 @@ class Gemma4VisionForConditionalGeneration(Gemma4ForCausalLM, SupportsMultiModal
     tt_transformers uses for Gemma3 -- so image preprocessing and placeholder
     handling stay vLLM's, and only the encode stays ours.
     """
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Gemma4MultiModalProcessor,
+    info=Gemma4UnifiedProcessingInfo,
+    dummy_inputs=Gemma4DummyInputsBuilder,
+)
+class Gemma4UnifiedVisionForConditionalGeneration(Gemma4VisionForConditionalGeneration):
+    """Gemma4 "unified" (12B) served as text + image.
+
+    Same serving path as ``Gemma4VisionForConditionalGeneration``; the only
+    difference is upstream's ``Gemma4UnifiedProcessingInfo`` (unified config,
+    ``num_soft_tokens`` instead of ``default_output_length``), which the
+    processor registration is keyed on. The encoder-free embedder is picked by
+    the checkpoint's weights (``model.vision_embedder.*``), not by this class.
+    """
+
