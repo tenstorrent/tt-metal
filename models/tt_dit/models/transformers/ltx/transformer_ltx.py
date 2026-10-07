@@ -73,6 +73,11 @@ def _gated_residual(t: ttnn.Tensor, t1: ttnn.Tensor, t2: ttnn.Tensor) -> ttnn.Te
     return ttnn.addcmul(t, t1, t2)
 
 
+def _fuse_norm_adaln_enabled() -> bool:
+    # On by default: no visible or VBench loss on 5 seeds, ~0.1 s faster per 1080p gen; =0 turns it off.
+    return os.environ.get("LTX_FUSE_NORM_ADALN", "1") not in ("0", "false", "False")
+
+
 def _norm_adaln(norm, x, shift, scale_p1, *, fuse: bool):
     """Scalar B=1 AdaLN, optionally folded into the existing RMSNorm op.
 
@@ -190,9 +195,9 @@ class LTXTransformerBlock(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
-        # Construction-time opt-in: captured graphs cannot switch arithmetic
+        # Fixed at construction: captured graphs cannot switch arithmetic
         # routes after creation. Shared A<->V normalization stays unfused below.
-        self._fuse_norm_adaln = os.environ.get("LTX_FUSE_NORM_ADALN", "0") in ("1", "true", "True")
+        self._fuse_norm_adaln = _fuse_norm_adaln_enabled()
 
         rms_norm_kwargs = {
             "norm_eps": eps,

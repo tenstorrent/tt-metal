@@ -50,8 +50,13 @@ def _to_out_fabric_agmm_config(M: int, K: int, N: int, full_grid):
 
 # Fold the gate into Q/QKV after load, on device, from the unfused cache's shards. Device d's fused
 # weight is [qkv_d | gate_d zero-padded to a tile], the exact layout the LTX_FUSE_GATE cache holds,
-# so the fused model runs without a second ~37 GB weight cache.
-LTX_FUSE_GATE_ON_DEVICE = os.environ.get("LTX_FUSE_GATE_ON_DEVICE", "0") in ("1", "true", "True")
+# so the fused model runs without a second ~37 GB weight cache. On by default: the trajectory drifts
+# from the unfused rounding (PCC ~0.97 per clip) with no visible or VBench loss; =0 turns it off.
+def _fuse_gate_on_device_enabled() -> bool:
+    return os.environ.get("LTX_FUSE_GATE_ON_DEVICE", "1") not in ("0", "false", "False")
+
+
+LTX_FUSE_GATE_ON_DEVICE = _fuse_gate_on_device_enabled()
 
 
 def _can_preserve_qk_rope_rounding(norm, x, cos, sin, transform, heads):
