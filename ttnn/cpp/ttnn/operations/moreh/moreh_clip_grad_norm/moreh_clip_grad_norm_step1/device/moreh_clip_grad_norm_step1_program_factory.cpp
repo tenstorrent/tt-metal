@@ -115,10 +115,13 @@ ProgramDescriptor MorehClipGradNormStep1Operation::create_descriptor(
                 i + 1 == num_descriptors ? num_tiles - (num_blocks - 1) * reduce_block_tiles : reduce_block_tiles;
             // Compute retains the two-dimensional source mask before the
             // power transform; the reduction sees complete, identity-padded tiles.
+            auto block =
+                reduce_host::ReduceBlockSpec::tiled(32, block_tiles * 32, tmp_pow_sum.dtype(), tmp_pow_sum.dtype());
+            block.input_cb_tiles = im2_t;
             calls.emplace_back(
                 26,
                 reduce_host::ReduceCallConfig{
-                    reduce_host::ReduceBlockSpec::tiled(32, block_tiles * 32, tmp_pow_sum.dtype(), tmp_pow_sum.dtype()),
+                    block,
                     ReduceOpMath::SUM,
                     ReduceOpDim::HW,
                     1.0F,

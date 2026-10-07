@@ -97,6 +97,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
             Ht,
             local_Wt,
             NC,
+            2,
             true);
     };
     const auto reduction = plan_reduction(Wt);

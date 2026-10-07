@@ -96,8 +96,10 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create_program_artifacts
     // be handled at each batch boundary, using explicit accumulating calls.
     const uint32_t reduce_repetitions = has_partial_height ? batch_num : 1;
     const uint32_t call_height = has_partial_height ? logical_height : batch_num * logical_height;
+    auto block = reduce_host::ReduceBlockSpec::tiled(call_height, 32, output_grad.dtype(), bias_grad.dtype());
+    block.input_cb_tiles = in0_t;
     const reduce_host::ReduceCallConfig reduction{
-        reduce_host::ReduceBlockSpec::tiled(call_height, 32, output_grad.dtype(), bias_grad.dtype()),
+        block,
         ReduceOpMath::SUM,
         ReduceOpDim::H,
         1.0F,

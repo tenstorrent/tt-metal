@@ -36,7 +36,7 @@ inline MorehReduceBlocks make_moreh_reduce_blocks(
             dim == ReduceOpDim::W ? tiles * 32 : 32,
             input_dtype,
             output_dtype);
-        block.resident_input_tiles = std::min(num_tiles, 2 * block_tiles - 1);
+        block.input_cb_tiles = std::min(num_tiles, 2 * block_tiles - 1);
         calls.emplace_back(
             0,
             rh::ReduceCallConfig{

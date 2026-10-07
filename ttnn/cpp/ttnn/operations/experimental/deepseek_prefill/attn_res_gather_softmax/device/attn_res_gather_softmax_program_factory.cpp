@@ -337,8 +337,10 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // the same length either way and the kernel's compile-time offsets do not move. The
     // kernel never reads through it there.
     namespace rh = ttnn::kernel_lib::host;
+    auto reduce_block = rh::ReduceBlockSpec::tiled(32, Wt * 32, partial.dtype(), shift.dtype());
+    reduce_block.input_cb_tiles = Wt;
     auto reduce_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(32, Wt * 32, partial.dtype(), shift.dtype()),
+        reduce_block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

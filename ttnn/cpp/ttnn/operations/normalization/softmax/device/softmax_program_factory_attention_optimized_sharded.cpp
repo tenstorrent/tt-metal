@@ -134,6 +134,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const auto reduce_plans = make_softmax_reduce_plans(
         program_config.block_w,
         program_config.block_w,
+        program_config.block_w,
         input_tensor.dtype(),
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity},

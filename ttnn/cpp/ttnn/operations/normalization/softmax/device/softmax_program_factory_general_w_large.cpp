@@ -102,9 +102,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWLarge::create_program_artif
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_fidelity = math_fidelity};
+    auto max_block = reduce_host::ReduceBlockSpec::tiled(
+        32, input.logical_shape()[-1], input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16);
+    max_block.input_cb_tiles = 2;
     const auto max_plan = reduce_host::make_reduce_plan(
-        reduce_host::ReduceBlockSpec::tiled(
-            32, input.logical_shape()[-1], input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+        max_block,
         ReduceOpMath::MAX,
         ReduceOpDim::W,
         1.0F,
@@ -123,14 +125,16 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralWLarge::create_program_artif
         const uint32_t extent = i + 1 == num_descriptors
                                     ? input.logical_shape()[-1] - (num_blocks - 1) * reduce_block_tiles * 32
                                     : reduce_block_tiles * 32;
+        auto block = reduce_host::ReduceBlockSpec::tiled(
+            32,
+            extent,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16);
+        block.input_cb_tiles = reduce_buffer_tiles;
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                reduce_host::ReduceBlockSpec::tiled(
-                    32,
-                    extent,
-                    fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
-                    fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+                block,
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,

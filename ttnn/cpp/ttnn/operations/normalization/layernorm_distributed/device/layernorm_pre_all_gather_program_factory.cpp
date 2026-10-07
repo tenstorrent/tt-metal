@@ -80,13 +80,16 @@ constexpr const char* PRE2D_COMPUTE_KERNEL =
 
 ttnn::kernel_lib::host::ReducePlan make_pre_norm_reduce_plan(
     uint32_t logical_width,
+    uint32_t input_cb_tiles,
     DataType intermediate_dtype,
     DataType output_dtype,
     bool accurate,
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware) {
     using namespace ttnn::kernel_lib::host;
+    auto block = ReduceBlockSpec::tiled(32, logical_width, intermediate_dtype, output_dtype);
+    block.input_cb_tiles = input_cb_tiles;
     auto plan = make_reduce_plan(
-        ReduceBlockSpec::tiled(32, logical_width, intermediate_dtype, output_dtype),
+        block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,
@@ -176,6 +179,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     namespace rh = ttnn::kernel_lib::host;
     const auto reduce_plan = make_pre_norm_reduce_plan(
         a.logical_shape()[-1],
+        Wt,
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         output.dtype(),
         unpack_fp32_active,
@@ -573,6 +577,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     namespace rh = ttnn::kernel_lib::host;
     const auto reduce_plan = make_pre_norm_reduce_plan(
         tiles_per_core_y * tile_width,
+        intermed0_tiles,
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         unpack_fp32_active,

@@ -97,8 +97,10 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create_program_artifact
     namespace reduce_host = ttnn::kernel_lib::host;
     // The scalar path still masks the two-dimensional edge before reduction;
     // a one-axis partial recipe cannot describe both edges of an HW reduction.
+    auto block = reduce_host::ReduceBlockSpec::tiled(32, 32, output_grad.dtype(), bias_grad.dtype());
+    block.input_cb_tiles = std::min(in0_t, im0_t);
     const reduce_host::ReduceCallConfig reduction{
-        reduce_host::ReduceBlockSpec::tiled(32, 32, output_grad.dtype(), bias_grad.dtype()),
+        block,
         ReduceOpMath::SUM,
         ReduceOpDim::HW,
         1.0F,

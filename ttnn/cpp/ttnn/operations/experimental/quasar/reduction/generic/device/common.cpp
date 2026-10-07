@@ -29,6 +29,7 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
     uint32_t Ht,
     uint32_t Wt,
     uint32_t NC,
+    uint32_t input_cb_tiles,
     bool identity_padded,
     const RmPlan* row_major) {
     using namespace tt::tt_metal;
@@ -63,6 +64,7 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
         }
         auto block = rh::ReduceBlockSpec::tiled(h, w, input.data_type(), output.data_type(), batches, tile);
         block.output_tile = output.tile();
+        block.input_cb_tiles = input_cb_tiles;
         calls.emplace_back(
             0,
             rh::ReduceCallConfig{

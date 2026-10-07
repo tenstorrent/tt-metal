@@ -174,10 +174,12 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         const uint32_t width = is_lastdim_layernorm && i + 1 == num_descriptors
                                    ? origin_w - (num_blocks - 1) * reduce_block_tiles * 32
                                    : block_tiles * 32;
+        auto block = reduce_host::ReduceBlockSpec::tiled(32, width, input.dtype(), input.dtype());
+        block.input_cb_tiles = im7_t;
         moment_calls.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                reduce_host::ReduceBlockSpec::tiled(32, width, input.dtype(), input.dtype()),
+                block,
                 ReduceOpMath::SUM,
                 is_lastdim_layernorm ? ReduceOpDim::W : ReduceOpDim::HW,
                 1.0F / static_cast<float>(reduce_elements),

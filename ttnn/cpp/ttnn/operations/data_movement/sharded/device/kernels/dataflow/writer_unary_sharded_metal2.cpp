@@ -24,7 +24,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#ifdef REDUCE_AUXILIARY_CB
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
 
 void kernel_main() {
 #ifdef REDUCE_AUXILIARY_CB

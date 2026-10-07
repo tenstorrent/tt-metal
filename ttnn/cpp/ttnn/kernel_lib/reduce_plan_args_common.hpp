@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "ttnn/kernel_lib/reduce_types.hpp"
+
 namespace ttnn::kernel_lib::reduce_plan_args {
 
 // Host and device deliberately share only these small wire-format descriptions.
@@ -16,7 +18,7 @@ namespace ttnn::kernel_lib::reduce_plan_args {
 // kernel-owned compile-time arguments.
 inline constexpr std::uint32_t call_count_word_count = 1;
 inline constexpr std::uint32_t auxiliary_header_word_count = 1;
-inline constexpr std::uint32_t no_cb_id = 0xFF;
+inline constexpr std::uint32_t no_cb_id = compute_kernel_lib::REDUCE_NO_AUXILIARY_CB;
 inline constexpr std::uint32_t no_runtime_arg = 0xFFFFFFFF;
 inline constexpr std::uint32_t float_one_bits = 0x3F800000;
 
@@ -45,31 +47,29 @@ enum class Math : std::uint32_t { Sum, Average, Maximum, Minimum };
 enum class Dimension : std::uint32_t { Row, Column, Scalar };
 
 namespace config {
-inline constexpr std::uint32_t path_shift = 0;
-inline constexpr std::uint32_t path_mask = 0x1;
-inline constexpr std::uint32_t math_shift = 1;
+inline constexpr std::uint32_t math_shift = 0;
 inline constexpr std::uint32_t math_mask = 0x3;
-inline constexpr std::uint32_t dimension_shift = 3;
+inline constexpr std::uint32_t dimension_shift = 2;
 inline constexpr std::uint32_t dimension_mask = 0x3;
-inline constexpr std::uint32_t fp32_mode_shift = 5;
+inline constexpr std::uint32_t fp32_mode_shift = 4;
 inline constexpr std::uint32_t fp32_mode_mask = 0x1;
-inline constexpr std::uint32_t algorithm_shift = 6;
+inline constexpr std::uint32_t algorithm_shift = 5;
 inline constexpr std::uint32_t algorithm_mask = 0x1;
-inline constexpr std::uint32_t input_policy_shift = 7;
+inline constexpr std::uint32_t input_policy_shift = 6;
 inline constexpr std::uint32_t input_policy_mask = 0x7;
-inline constexpr std::uint32_t reload_mode_shift = 10;
+inline constexpr std::uint32_t reload_mode_shift = 9;
 inline constexpr std::uint32_t reload_mode_mask = 0x7;
-inline constexpr std::uint32_t reconfig_mode_shift = 13;
+inline constexpr std::uint32_t reconfig_mode_shift = 12;
 inline constexpr std::uint32_t reconfig_mode_mask = 0x3;
-inline constexpr std::uint32_t within_tile_shift = 15;
+inline constexpr std::uint32_t within_tile_shift = 14;
 inline constexpr std::uint32_t within_tile_mask = 0x1;
-inline constexpr std::uint32_t accumulation_mode_shift = 16;
+inline constexpr std::uint32_t accumulation_mode_shift = 15;
 inline constexpr std::uint32_t accumulation_mode_mask = 0x3;
-inline constexpr std::uint32_t partial_mode_shift = 18;
+inline constexpr std::uint32_t partial_mode_shift = 17;
 inline constexpr std::uint32_t partial_mode_mask = 0x3;
-inline constexpr std::uint32_t has_tail_variant_shift = 20;
+inline constexpr std::uint32_t has_tail_variant_shift = 19;
 inline constexpr std::uint32_t has_tail_variant_mask = 0x1;
-inline constexpr std::uint32_t uses_tail_shape_shift = 21;
+inline constexpr std::uint32_t uses_tail_shape_shift = 20;
 inline constexpr std::uint32_t uses_tail_shape_mask = 0x1;
 }  // namespace config
 

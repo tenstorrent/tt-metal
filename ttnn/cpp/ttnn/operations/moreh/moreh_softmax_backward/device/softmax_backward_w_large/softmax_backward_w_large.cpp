@@ -70,11 +70,13 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardWLargeFactory::create_program
         const uint32_t extent = i + 1 == num_descriptors
                                     ? input_grad.logical_shape()[-1] - (num_blocks - 1) * reduce_block_tiles * 32
                                     : reduce_block_tiles * 32;
+        auto block = reduce_host::ReduceBlockSpec::tiled(
+            32, extent, is_log ? output_grad.dtype() : intermediate_dtype, intermediate_dtype);
+        block.input_cb_tiles = is_log ? 2 : reduce_buffer_tiles;
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                reduce_host::ReduceBlockSpec::tiled(
-                    32, extent, is_log ? output_grad.dtype() : intermediate_dtype, intermediate_dtype),
+                block,
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,

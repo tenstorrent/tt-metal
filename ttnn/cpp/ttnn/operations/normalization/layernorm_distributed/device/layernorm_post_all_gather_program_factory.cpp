@@ -315,12 +315,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherProgramFactory::c
     tt::DataFormat scaler_data_format =
         in_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     if (is_rmsnorm) {
+        auto reduce_block = rh::ReduceBlockSpec::tiled(
+            tile_height,
+            stats_tiles_cols * tile_width,
+            stats.dtype(),
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16);
+        reduce_block.input_cb_tiles = in1_tiles;
         auto reduce_plan = rh::make_reduce_plan(
-            rh::ReduceBlockSpec::tiled(
-                tile_height,
-                stats_tiles_cols * tile_width,
-                stats.dtype(),
-                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+            reduce_block,
             ReduceOpMath::SUM,
             ReduceOpDim::W,
             1.0F / reduce_factor,

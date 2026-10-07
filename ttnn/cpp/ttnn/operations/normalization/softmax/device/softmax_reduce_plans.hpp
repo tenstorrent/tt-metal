@@ -31,6 +31,7 @@ struct SoftmaxReducePlans {
 inline SoftmaxReducePlans make_softmax_reduce_plans(
     uint32_t width_tiles,
     uint32_t pass_tiles,
+    uint32_t input_cb_tiles,
     tt::tt_metal::DataType max_input_dtype,
     tt::tt_metal::DataType intermediate_dtype,
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware,
@@ -43,24 +44,18 @@ inline SoftmaxReducePlans make_softmax_reduce_plans(
     std::vector<rh::ReduceCbConfig> sum_calls;
     for (uint32_t i = 0; i < descriptors; ++i) {
         const uint32_t tiles = i + 1 == descriptors ? width_tiles - (passes - 1) * pass_tiles : pass_tiles;
+        auto max_block = rh::ReduceBlockSpec::tiled(32, tiles * 32, max_input_dtype, intermediate_dtype);
+        max_block.input_cb_tiles = input_cb_tiles;
+        auto sum_block = rh::ReduceBlockSpec::tiled(32, tiles * 32, intermediate_dtype, intermediate_dtype);
+        sum_block.input_cb_tiles = input_cb_tiles;
         max_calls.emplace_back(
             0,
             rh::ReduceCallConfig{
-                rh::ReduceBlockSpec::tiled(32, tiles * 32, max_input_dtype, intermediate_dtype),
-                ReduceOpMath::MAX,
-                ReduceOpDim::W,
-                1.0F,
-                ReduceFp32Mode::Fast,
-                input_policy});
+                max_block, ReduceOpMath::MAX, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, input_policy});
         sum_calls.emplace_back(
             0,
             rh::ReduceCallConfig{
-                rh::ReduceBlockSpec::tiled(32, tiles * 32, intermediate_dtype, intermediate_dtype),
-                ReduceOpMath::SUM,
-                ReduceOpDim::W,
-                1.0F,
-                ReduceFp32Mode::Fast,
-                input_policy});
+                sum_block, ReduceOpMath::SUM, ReduceOpDim::W, 1.0F, ReduceFp32Mode::Fast, input_policy});
     }
     SoftmaxReducePlans plans{
         rh::make_reduce_sequence_plan(max_calls, {1, 3, 2}, hardware),

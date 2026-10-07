@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#ifdef REDUCE_AUXILIARY_CB
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
 
 /*
  * This kernel writes tiles from the output buffer to interleaved dram.

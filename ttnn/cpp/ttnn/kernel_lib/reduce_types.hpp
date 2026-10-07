@@ -19,14 +19,13 @@ enum class ReduceOpParallelizationStrategy { MULTI_CORE_H, MULTI_CORE_W, MULTI_C
 /**
  * @brief Float32 reduce precision mode.
  *
- * Fast keeps fp32 on the FPU/GMPOOL path. Accurate routes supported fp32
- * reductions through the SFPU at full fp32 precision.
+ * Fast keeps fp32 on the FPU/GMPOOL path (inputs truncated to tf32 — faster, lossy); Accurate
+ * routes fp32 through the SFPU at full fp32. Only affects Float32; Int32 and bf16 MIN use the SFPU
+ * regardless of this mode.
  */
 enum class ReduceFp32Mode : std::uint8_t { Fast = 0, Accurate = 1 };
 
 namespace ttnn::kernel_lib {
-
-enum class ReducePath : std::uint8_t { Tiled = 0 };
 
 // The accumulation behavior of one independently serialized reduce call.
 // This is planned on the host; a consuming kernel must not infer it from the
@@ -53,7 +52,12 @@ enum class ReduceAuxiliaryTileType : std::uint8_t {
 
 namespace compute_kernel_lib {
 
-/** Concrete input synchronization policy selected by the host planner. */
+/**
+ * Auxiliary CB ID for reductions that read no auxiliary tile (the Int32 and
+ * accurate-fp32 SFPU paths).
+ */
+inline constexpr std::uint32_t REDUCE_NO_AUXILIARY_CB = 0xFF;
+
 enum class ReduceInputPolicy : std::uint8_t {
     WaitAndPopPerTile = 0,
     BulkWaitBulkPop = 1,
@@ -61,7 +65,6 @@ enum class ReduceInputPolicy : std::uint8_t {
     NoWaitNoPop = 3,
 };
 
-/** Concrete reduction datapath selected by the host planner. */
 enum class ReduceAlgorithm : std::uint8_t { ReduceTile = 0, AccumulateViaAdd = 1 };
 
 enum class ReduceWithinTile : std::uint8_t { Collapse = 0, Skip = 1 };
@@ -81,7 +84,7 @@ enum class AccumulateReloadMode : std::uint8_t {
     CopySeedZeroPair = 4,
 };
 
-/** Host-planned treatment of a non-tile-aligned reduction edge. */
+/** Treatment of a non-tile-aligned reduction edge. */
 enum class ReducePartialMode : std::uint8_t {
     None = 0,
     // ReduceTile uses its ordinary scaler for full tiles and a partial scaler

@@ -41,7 +41,9 @@
 namespace generic = norm::kernel_util::generic;
 namespace layernorm_dataflow_utils = norm::layernorm::device::kernels::dataflow;
 
+#ifdef REDUCE_AUXILIARY_CB
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
 
 void kernel_main() {
 #ifdef REDUCE_AUXILIARY_CB

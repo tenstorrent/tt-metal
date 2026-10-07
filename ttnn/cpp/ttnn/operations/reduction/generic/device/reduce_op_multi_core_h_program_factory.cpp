@@ -229,6 +229,12 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
                                        ? ReduceFp32Mode::Accurate
                                        : ReduceFp32Mode::Fast;
     const rh::ReduceHardwareConfig reduce_hardware{device.arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity};
+    // RM compute kernel expects up to wt_tiles_per_chunk * ht_tiles_per_chunk tiles in flight
+    // (NC fan-out is pinned to 1 in the RM compute contract).
+    const uint32_t num_input_tiles =
+        rm_path              ? std::max(2U, plan.wt_tiles_per_chunk * plan.ht_tiles_per_chunk)
+        : use_width_sharding ? 2U
+                             : (use_fpu_negate ? chunk_size : reduce_reader_input_cb_tiles(reader_tiles_per_batch));
     auto make_unit = [&](uint32_t local_ht, uint32_t local_wt, uint32_t local_nc) {
         return make_generic_reduce_sequence(
             a.tensor_spec(),
@@ -241,6 +247,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             local_ht,
             local_wt,
             local_nc,
+            num_input_tiles,
             operation_attributes.negate || planned_sfpu || tile_h_split,
             rm_path ? &plan : nullptr);
     };
@@ -284,9 +291,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     }
 
     if (rm_path) {
-        // RM compute kernel expects up to wt_tiles_per_chunk * ht_tiles_per_chunk tiles in flight
-        // (NC fan-out is pinned to 1 in the RM compute contract).
-        const uint32_t num_input_tiles = std::max(2U, plan.wt_tiles_per_chunk * plan.ht_tiles_per_chunk);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN_DFB,
             .entry_size = src0_single_tile_size,
@@ -295,7 +299,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         });
     } else if (use_width_sharding) {
         uint32_t num_shard_tiles = a.shard_spec().value().numel() / tile_hw;
-        constexpr uint32_t num_input_tiles = 2;
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN_DFB,
             .entry_size = src0_single_tile_size,
@@ -313,7 +316,6 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             .borrowed_from = INPUT_TENSOR,
         });
     } else {
-        uint32_t num_input_tiles = use_fpu_negate ? chunk_size : reduce_reader_input_cb_tiles(reader_tiles_per_batch);
         spec.dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = IN_DFB,
             .entry_size = src0_single_tile_size,

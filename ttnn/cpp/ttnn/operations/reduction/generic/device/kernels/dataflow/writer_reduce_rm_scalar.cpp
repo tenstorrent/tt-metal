@@ -170,7 +170,9 @@ void reduce_rm_writer() {
     }
 }
 
+#ifdef REDUCE_AUXILIARY_CB
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#endif
 
 void kernel_main() {
 #ifdef REDUCE_AUXILIARY_CB

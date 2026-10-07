@@ -60,10 +60,12 @@ ttnn::device_operation::ProgramArtifacts MorehDotOperation::ProgramFactory::crea
     const uint32_t num_call_descriptors = std::min(num_tiles, 3U);
     for (uint32_t i = 0; i < num_call_descriptors; ++i) {
         const uint32_t width = i + 1 == num_call_descriptors ? mask_w : tt::constants::TILE_WIDTH;
+        auto block = reduce_host::ReduceBlockSpec::tiled(32, width, input_a.dtype(), input_a.dtype());
+        block.input_cb_tiles = im0_t;
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                reduce_host::ReduceBlockSpec::tiled(32, width, input_a.dtype(), input_a.dtype()),
+                block,
                 ReduceOpMath::SUM,
                 ReduceOpDim::W,
                 1.0F,

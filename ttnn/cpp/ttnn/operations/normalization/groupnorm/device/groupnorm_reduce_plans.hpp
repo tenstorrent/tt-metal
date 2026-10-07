@@ -35,6 +35,9 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
     uint32_t second_rows,
     uint32_t second_columns,
     uint32_t global_tiles,
+    uint32_t first_input_cb_tiles,
+    uint32_t second_input_cb_tiles,
+    uint32_t global_input_cb_tiles,
     float local_scalar,
     float global_scalar,
     tt::tt_metal::DataType dtype,
@@ -48,6 +51,7 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
     GroupNormReducePlans result;
     auto append = [&](uint32_t rows,
                       uint32_t columns,
+                      uint32_t input_cb_tiles,
                       float scalar,
                       compute_kernel_lib::ReduceInputPolicy policy,
                       rh::ReduceAuxiliaryPlan& auxiliary,
@@ -55,8 +59,8 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
                           compute_kernel_lib::ReduceDataFormatReconfigMode::NONE,
                       std::optional<uint32_t> tail_rows = std::nullopt) {
         auto block = rh::ReduceBlockSpec::tiled(rows * 32, columns * 32, dtype, dtype);
+        block.input_cb_tiles = input_cb_tiles;
         if (tail_rows.has_value()) {
-            block.resident_input_tiles = rows * columns;
             block.tail = rh::ReduceTailConfig{{*tail_rows * 32, columns * 32, 1}};
         }
         auto plan = rh::make_reduce_plan(
@@ -92,17 +96,19 @@ inline GroupNormReducePlans make_groupnorm_reduce_plans(
     append(
         first_rows,
         first_columns,
+        first_input_cb_tiles,
         local_scalar,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         result.local_auxiliary,
         first_native_reconfig,
         second_is_tail && second_rows < first_rows ? std::optional{second_rows} : std::nullopt);
     if (!second_is_tail) {
-        append(second_rows, second_columns, local_scalar, second_policy, result.local_auxiliary);
+        append(second_rows, second_columns, second_input_cb_tiles, local_scalar, second_policy, result.local_auxiliary);
     }
     append(
         global_tiles,
         1,
+        global_input_cb_tiles,
         global_scalar,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
         result.global_auxiliary);
@@ -116,6 +122,8 @@ inline GroupNormReducePlans make_interleaved_groupnorm_reduce_plans(
     uint32_t num_cores,
     uint32_t single_tile_size,
     uint32_t reduce_factor,
+    uint32_t local_input_cb_tiles,
+    uint32_t global_input_cb_tiles,
     const GroupNormPadCorrection& pad,
     tt::tt_metal::DataType dtype,
     const ttnn::kernel_lib::host::ReduceHardwareConfig& hardware) {
@@ -140,6 +148,9 @@ inline GroupNormReducePlans make_interleaved_groupnorm_reduce_plans(
         last_rows == 0 ? normal_rows : last_rows,
         block_w,
         global_tiles,
+        local_input_cb_tiles,
+        local_input_cb_tiles,
+        global_input_cb_tiles,
         1.0F / divisor,
         1.0F / num_cores,
         dtype,

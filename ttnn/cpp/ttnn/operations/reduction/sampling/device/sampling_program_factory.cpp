@@ -196,8 +196,11 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     namespace rh = ttnn::kernel_lib::host;
     // The top-k stage keeps 32 candidates; the writer masks the per-user k.
     const rh::ReduceHardwareConfig hardware{device.arch(), use_32bit_index, false};
+    auto block =
+        rh::ReduceBlockSpec::tiled(Ht * tile_height, 32, input_values_tensor.dtype(), input_values_tensor.dtype());
+    block.input_cb_tiles = num_dfb_unit;
     auto max_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(Ht * tile_height, 32, input_values_tensor.dtype(), input_values_tensor.dtype()),
+        block,
         ReduceOpMath::MAX,
         ReduceOpDim::W,
         1.0F,
@@ -205,7 +208,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         hardware,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
     auto sum_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(Ht * tile_height, 32, input_values_tensor.dtype(), input_values_tensor.dtype()),
+        block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

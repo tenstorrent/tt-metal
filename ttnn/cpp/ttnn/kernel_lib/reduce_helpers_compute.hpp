@@ -14,12 +14,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
 /**
  * @file reduce_helpers_compute.hpp
- * @brief Host-planned and explicit tiled reduction helpers.
+ * @brief Single unified reduce function with automatic dispatch
  *
- * New integrations should use reduce<Call>(), where Call is one independently
- * decoded ttnn::kernel_lib::ReduceCallArgs. The retained explicit overload is
- * available when a kernel intentionally selects every low-level parameter.
- * Both overloads handle:
+ * Provides ONE function that handles all reduce operations:
  * - Row reduction (REDUCE_ROW): Reduces W dimension, outputs Ht tiles per batch
  * - Column reduction (REDUCE_COL): Reduces H dimension, outputs Wt tiles per batch
  * - Scalar reduction (REDUCE_SCALAR): Reduces both H and W, outputs 1 tile per batch
@@ -34,76 +31,89 @@
  * DEST register capacity is automatically detected via dest_helpers.hpp.
  *
  * IMPORTANT: Requires compute kernel hardware initialization.
- * Call compute_kernel_hw_startup(cb_in, cb_out) exactly once at the start of
- * your kernel. With input reconfiguration enabled (the default), the helper
- * configures the operands needed by its algorithm, including auxiliary tiles.
- * Startup and subsequent operands must have compatible tile/face geometry;
- * format reconfiguration alone does not change that geometry.
+ * Call compute_kernel_hw_startup() exactly once at the start of your kernel.
+ * With input reconfiguration enabled (the default), the helper configures the
+ * operands needed by its algorithm, including auxiliary tiles. Startup and
+ * subsequent operands must have compatible tile/face geometry; format
+ * reconfiguration alone does not change that geometry.
  * Do NOT re-call startup later or inside a loop: re-running mid-kernel can race
  * the compute pipeline and produce undefined behavior. If input reconfiguration
  * is disabled, the caller must configure the actual operands before reduce().
  *
- * For the planned interface, the host appends this flat suffix after the
- * compute kernel's own compile-time arguments:
+ * IMPORTANT: The auxiliary (scaler) CB must contain the tiles the selected
+ * algorithm reads BEFORE calling reduce().
  *
- * @code
- * [call_count][call_0][call_1]...[call_(call_count - 1)]
- * @endcode
+ * Basic Usage:
+ *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
  *
- * No sequence object is passed to the kernel. The kernel reads call_count at
- * the known suffix offset and addresses the calls in order. Include
- * reduce_plan_args.hpp alongside this header for these device views:
+ *   compute_kernel_hw_startup(dfb_in, dfb_scaler, dfb_out);
  *
- * @code{.cpp}
- * constexpr uint32_t reduce_args_offset = KERNEL_OWNED_CTA_COUNT;
- * constexpr uint32_t call_count = get_compile_time_arg_val(reduce_args_offset);
- * constexpr uint32_t first_call_offset =
- *     reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
+ *   // Reduce each row (W dimension) - output has Ht tiles per batch
+ *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
- * template <uint32_t I>
- * using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_offset, I>;
+ *   // Reduce each column (H dimension) - output has Wt tiles per batch
+ *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
- * template <uint32_t I = 0>
- * ALWI void issue_calls() {
- *     if constexpr (I < call_count) {
- *         using Call = CallAt<I>;
- *         // Caller-controlled input preparation or fused work may run here.
- *         compute_kernel_lib::reduce<Call>();
- *         // More caller-controlled work may run before the next call.
- *         issue_calls<I + 1>();
- *     }
- * }
+ *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
+ *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
+ *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
- * void kernel_main() {
- *     using First = CallAt<0>;
- *     compute_kernel_hw_startup(First::input_cb_id, First::output_cb_id);
- *     issue_calls();
- * }
- * @endcode
+ * See reduce() function documentation for advanced usage examples including:
+ * - Different input policies (BulkWaitBulkPop, NoWaitNoPop, WaitUpfrontNoPop)
+ * - Post-reduce operations (e.g., recip_tile for softmax)
+ * - Accumulation for block-wise reduction
+ * - The AccumulateViaAdd algorithm and partial (non-tile-aligned) reductions
  *
- * A tail-capable Call includes the full and planned tail alternatives and the
- * runtime override offset. reduce<Call>() selects between them internally:
- * [0] chooses full work without reading further; the planned [height, width, batches] chooses tail
- * work, including its auxiliary slice and AVG normalization. The caller uses
- * the same call type and compiled kernel on all cores of the grid.
- * ReduceCallArgs<CTA_OFFSET, RTA_OFFSET> supplies both argument-section offsets
- * as template parameters. The helper reads and validates runtime geometry
- * internally; the caller supplies only the Call type to reduce<Call>().
+ * Host-planned Usage:
+ *   New integrations should let the host planner (kernel_lib/host/reduce_host.hpp) choose every
+ *   parameter and issue reduce<Call>(), where Call is one independently decoded
+ *   ttnn::kernel_lib::ReduceCallArgs. The host appends this flat suffix after the compute kernel's
+ *   own compile-time arguments:
  *
- * call_count only bounds the walk. Never infer accumulation, final-call, or
- * partial-tile behavior from I: Call carries all of it explicitly. Calls may
- * repeat an input CB ID; the kernel may refill or reuse that CB between calls.
- * Calls need not be issued by a helper-owned loop—the kernel controls their
- * cadence and may place arbitrary operations between them.
+ *   [call_count][call_0][call_1]...[call_(call_count - 1)]
  *
- * Before issuing any call, initialize compute hardware exactly once. The
- * matching dataflow kernel must also have materialized the planning unit's one
- * aggregate auxiliary recipe. The compute kernel never decodes that recipe;
- * Call::partial_mode and Call::auxiliary_tile_offset are already selected by
- * the planner.
+ *   Include reduce_plan_args.hpp alongside this header for the device views:
  *
- * See reduce() below for the lower-level explicit interface and
- * ttnn/ttnn/operations/examples/reduce_block for an end-to-end planned example.
+ *   constexpr uint32_t reduce_args_offset = KERNEL_OWNED_CTA_COUNT;
+ *   constexpr uint32_t call_count = get_compile_time_arg_val(reduce_args_offset);
+ *   constexpr uint32_t first_call_offset =
+ *       reduce_args_offset + ttnn::kernel_lib::reduce_plan_args::call_count_word_count;
+ *
+ *   template <uint32_t I>
+ *   using CallAt = ttnn::kernel_lib::ReduceCallAtT<first_call_offset, I>;
+ *
+ *   template <uint32_t I = 0>
+ *   ALWI void issue_calls() {
+ *       if constexpr (I < call_count) {
+ *           // Caller-controlled input preparation or fused work may run here.
+ *           compute_kernel_lib::reduce<CallAt<I>>();
+ *           issue_calls<I + 1>();
+ *       }
+ *   }
+ *
+ *   void kernel_main() {
+ *       using First = CallAt<0>;
+ *       compute_kernel_hw_startup(First::input_cb_id, First::output_cb_id);
+ *       issue_calls();
+ *   }
+ *
+ *   A tail-capable Call carries the full and planned tail alternatives and the runtime override
+ *   offset. reduce<Call>() selects between them internally: [0] chooses full work; the planned
+ *   [height, width, batches] chooses tail work, including its auxiliary slice and AVG
+ *   normalization. The same call type and compiled kernel run on every core of the grid.
+ *   Output lanes beyond the valid non-reduced extent are unspecified; a consumer that needs them
+ *   to be zero masks its own output.
+ *
+ *   call_count only bounds the walk. Never infer accumulation, final-call, or partial-tile behavior
+ *   from I: Call carries all of it explicitly. Calls may repeat an input CB ID; the kernel may refill
+ *   or reuse that CB between calls.
+ *
+ *   The matching dataflow kernel (by convention the writer) must materialize the planning unit's one
+ *   aggregate auxiliary recipe with dataflow_kernel_lib::prepare_reduce_auxiliary_tiles(). The compute
+ *   kernel never decodes that recipe; Call::partial_mode and Call::auxiliary_tile_offset are already
+ *   selected by the planner.
  */
 
 namespace compute_kernel_lib {
@@ -140,8 +150,7 @@ namespace compute_kernel_lib {
  *
  * Controls when to wait for input tiles and whether to pop them after processing:
  *
- * - WaitAndPopPerTile: Stream input; AccumulateViaAdd consumes pairs and requires an even capacity of at least two
- * tiles.
+ * - WaitAndPopPerTile: Stream input; AccumulateViaAdd consumes pairs and requires a capacity of at least two tiles.
  *
  * - BulkWaitBulkPop: Wait for bulk, process all with indexed access, pop bulk.
  *   Bulk size depends on reduce dimension:
@@ -258,8 +267,7 @@ namespace compute_kernel_lib {
  *                                       ckl::DestAccumulation::WholeShape,
  *                                       ckl::L1Accumulation::Disabled)>{});
  *
- *     `{0, HALF}` are the A and B operand base offsets — that brace pair is the whole trick, and it is
- *     the same idiom the `eltwise_l1_vs_dest_accumulate` example measures. `tiles(...)` is one
+ *     `{0, HALF}` are the A and B operand base offsets — that brace pair is the whole trick. `tiles(...)` is one
  *     contiguous shape, so the accumulation scope is WholeShape (PerRow is rejected there); for a 2D
  *     walk use `grid(H, W)` with `TileAddressing::Strided` and a `StridedTileRange{base, row_stride}` per
  *     operand. ODD N does not tile into halves — fall back to (1), or handle the leftover separately.
@@ -338,9 +346,11 @@ struct ReduceInputBlockShape {
 };
 
 /**
- * ReducePartialMode is the planner-produced partial-edge contract. Kernel
- * callers pass the mode directly; reduce() owns the auxiliary-CB layout needed
- * to implement it.
+ * ReducePartialMode is the partial-edge contract. Kernel callers pass the mode
+ * directly; reduce() owns the auxiliary-CB layout needed to implement it:
+ * - ReduceTile + Scaler: [full scaler, partial scaler] from auxiliary_tile_offset.
+ * - AccumulateViaAdd + Mask: [mask, zero] from auxiliary_tile_offset.
+ * - AccumulateViaAdd + None: [zero] at auxiliary_tile_offset.
  *
  * On the native ReduceTile MAX path, a zero partial-scaler exponent excludes
  * that input from GMPOOL. No separate input mask is needed.
@@ -438,7 +448,7 @@ struct Accumulate {
     constexpr bool is_last() const { return last; }
 };
 
-// NoAccumulation is defined in common_types.hpp (shared with binary_op_helpers).
+// NoAccumulation is defined in common_types.hpp.
 
 // =============================================================================
 // Type Traits
@@ -481,14 +491,14 @@ struct is_post_reduce_op<T, std::void_t<decltype(std::declval<T>()(std::declval<
 template <typename T>
 inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 
-// NoOp is defined in common_types.hpp (shared with binary_op_helpers).
+// NoOp is defined in common_types.hpp.
 
 // =============================================================================
 // Main Reduce Function
 // =============================================================================
 
 /**
- * @brief Low-level explicit reduce function handling all reduction patterns
+ * @brief Unified reduce function handling all reduction patterns
  *
  * This single function handles:
  * - Row reduction (REDUCE_ROW): Reduces W dimension, outputs Ht tiles per batch
@@ -519,13 +529,16 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam input_dfb_id Input DataflowBuffer ID containing tiles to reduce (compile-time CB id)
- * @tparam scaler_dfb_id DataflowBuffer ID containing scaler tile (compile-time CB id)
+ * @tparam scaler_dfb_id Auxiliary DataflowBuffer ID containing the scaler, mask and zero tiles the selected
+ *                       algorithm reads (compile-time CB id). REDUCE_NO_AUXILIARY_CB is valid only for the
+ *                       SFPU paths, which read no auxiliary tile.
  * @tparam output_dfb_id Output DataflowBuffer ID for reduced tiles (compile-time CB id)
  *                       The input/output formats are deduced from these CB ids
- *                       (unpack_src_format / pack_dst_format), so Int32 is routed to the SFPU path
- *                       automatically (Int32 has no FPU support). Other formats use FPU/GMPOOL
- *                       unless Accurate fp32 is requested. SFPU covers REDUCE_ROW/REDUCE_COL only;
- *                       fast-mode float/bf16 MIN is dispatched via reduce_{h,w}_neg.cpp.
+ *                       (unpack_src_format / pack_dst_format), so Int32 and bf16 MIN are routed to the
+ *                       SFPU path automatically (Int32 has no FPU support, the FPU has no MIN pool).
+ *                       Other formats use FPU/GMPOOL unless Accurate fp32 is requested. SFPU covers
+ *                       REDUCE_ROW/REDUCE_COL only; other fast-mode float MIN is dispatched via
+ *                       reduce_{h,w}_neg.cpp.
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 through the
@@ -544,12 +557,10 @@ inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
  * @param accumulate Accumulation configuration (default: NoAccumulation)
  * @param post_reduce_op Callback after each reduction (default: NoOp)
  * @param partial_mode Handling for a non-tile-aligned reduce dimension
- *        (default: ReducePartialMode::None). Planned callers receive this in
- *        Call::partial_mode; direct users of this explicit overload supply it.
- *        Not supported for REDUCE_SCALAR or the Int32 SFPU reduce path.
+ *        (default: ReducePartialMode::None).
+ *        Not supported for REDUCE_SCALAR or any SFPU reduce path, including accurate Float32 and bf16 MIN.
  * @param auxiliary_tile_offset Start of this call's recipe in an auxiliary CB
- *        (default: 0 for standalone calls). The planner supplies this through
- *        Call::auxiliary_tile_offset for the planned overload. AccumulateViaAdd
+ *        (default: 0 for standalone calls). AccumulateViaAdd
  *        requires a zero tile here, or immediately after the partial-axis mask.
  *
  * @example
@@ -650,25 +661,17 @@ ALWI void reduce(
 /**
  * @brief Issue one host-planned tiled reduce call.
  *
- * This overload lowers every planner-selected field from `Call` into the
- * explicit reduce() interface above, including accumulation, post-scaling,
- * partial handling, chunking, and the shared auxiliary-CB slice.
+ * Lowers every planner-selected field of `Call` into the explicit reduce() above, including
+ * accumulation, post-scaling, partial handling, the output group and the shared auxiliary-CB slice.
  *
- * It deliberately does not perform compute-kernel startup or any surrounding
- * CB preparation. The kernel owns when this call runs and may perform
- * arbitrary work, including refilling a reused input CB, between planned
- * calls.
+ * It does not perform compute-kernel startup or any surrounding CB preparation. The kernel owns when
+ * this call runs and may perform arbitrary work, including refilling a reused input CB, between
+ * planned calls.
  *
- * `Call` is self-contained. Do not use its position in the planning unit to
- * choose accumulation/finalization or inspect auxiliary tiles to choose
- * partial handling. The call count exists only so kernel code can locate and
- * walk the ordered calls.
+ * An optional caller post operation runs on each completed output tile after the plan's
+ * post-scaling. Intermediate accumulation calls do not run it.
  *
- * An optional caller post operation runs on each completed output tile after
- * the plan's post-scaling. Intermediate accumulation calls do not run it.
- *
- * @tparam Call A constexpr call descriptor such as
- *         ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
+ * @tparam Call A constexpr call descriptor such as ttnn::kernel_lib::ReduceCallArgs<CTA_OFFSET>.
  */
 template <typename Call, typename PostReduceOp = NoOp>
 ALWI void reduce(PostReduceOp post_reduce_op = PostReduceOp{});

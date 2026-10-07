@@ -108,7 +108,13 @@ def create_program_artifacts(
             (
                 0,
                 planner.ReduceCallConfig(
-                    block=planner.ReduceBlockSpec(Ht * TILE_DIM, width, input_tensor.dtype, output_tensor.dtype),
+                    block=planner.ReduceBlockSpec(
+                        Ht * TILE_DIM,
+                        width,
+                        input_tensor.dtype,
+                        output_tensor.dtype,
+                        input_cb_tiles=2 * tiles_per_block,
+                    ),
                     reduce_math=planner.ReduceMath.SUM,
                     reduce_dim=planner.ReduceDimension.ROW,
                     scalar=1.0 / origin_W,

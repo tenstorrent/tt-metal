@@ -1,7 +1,10 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
+#include <cstdint>
 
 /**
  * @file common_types.hpp

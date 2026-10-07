@@ -62,8 +62,11 @@ MorehSoftmaxBackwardOperation::MorehSoftmaxBackwardHSmallFactory::create_program
     namespace reduce_host = ttnn::kernel_lib::host;
     const auto intermediate_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : input_grad.dtype();
     const auto reduce_dtype = op == MorehSoftmaxBackwardOp::LOGSOFTMAX ? output_grad.dtype() : intermediate_dtype;
+    auto reduce_block =
+        reduce_host::ReduceBlockSpec::tiled(input_grad.logical_shape()[-2], 32, reduce_dtype, intermediate_dtype);
+    reduce_block.input_cb_tiles = Ht;
     auto reduce_plan = reduce_host::make_reduce_plan(
-        reduce_host::ReduceBlockSpec::tiled(input_grad.logical_shape()[-2], 32, reduce_dtype, intermediate_dtype),
+        reduce_block,
         ReduceOpMath::SUM,
         ReduceOpDim::H,
         1.0F,

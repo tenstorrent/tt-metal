@@ -293,7 +293,7 @@ def create_program_descriptor(
                 CB_IN,
                 planner.ReduceCallConfig(
                     block=planner.ReduceBlockSpec(
-                        *input_shape(dim, num_tiles), input_tensor.dtype, output_tensor.dtype
+                        *input_shape(dim, num_tiles), input_tensor.dtype, output_tensor.dtype, input_cb_tiles=num_tiles
                     ),
                     reduce_math=planner.ReduceMath.AVG,
                     reduce_dim={

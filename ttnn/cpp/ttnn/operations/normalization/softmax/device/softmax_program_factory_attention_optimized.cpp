@@ -196,6 +196,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     auto reduce_plans = make_softmax_reduce_plans(
         Wt,
         use_large_kernel ? dfb_length : Wt,
+        use_large_kernel ? dfb_length : im0_t,
         input_tensor.dtype(),
         fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
         {arch, fp32_dest_acc_en, dst_full_sync_en, math_fidelity},

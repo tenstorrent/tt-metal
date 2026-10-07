@@ -116,10 +116,12 @@ ttnn::device_operation::ProgramArtifacts MorehNormOperation::ProgramFactoryWOthe
     for (uint32_t i = 0; i < num_descriptors; ++i) {
         const uint32_t extent =
             i + 1 == num_descriptors ? origin_w - (num_blocks - 1) * reduce_block_tiles * 32 : reduce_block_tiles * 32;
+        auto block = reduce_host::ReduceBlockSpec::tiled(32, extent, intermediate_dtype, out.dtype());
+        block.input_cb_tiles = im0_t;
         reductions.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                reduce_host::ReduceBlockSpec::tiled(32, extent, intermediate_dtype, out.dtype()),
+                block,
                 p == 0.0f ? ReduceOpMath::SUM : ReduceOpMath::MAX,
                 ReduceOpDim::W,
                 1.0F,

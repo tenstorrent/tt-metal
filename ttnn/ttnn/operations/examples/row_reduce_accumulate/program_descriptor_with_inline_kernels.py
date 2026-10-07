@@ -387,7 +387,9 @@ def create_program_descriptor(
             (
                 CB_IN if method_id == 0 else CB_INTERM,
                 planner.ReduceCallConfig(
-                    block=planner.ReduceBlockSpec(32, reduce_tiles * 32, scaler_format, output_tensor.dtype),
+                    block=planner.ReduceBlockSpec(
+                        32, reduce_tiles * 32, scaler_format, output_tensor.dtype, input_cb_tiles=reduce_tiles
+                    ),
                     reduce_math=planner.ReduceMath.SUM,
                     reduce_dim=planner.ReduceDimension.ROW,
                     scalar=1.0 / (width_tiles * TILE),

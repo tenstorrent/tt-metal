@@ -32,6 +32,7 @@ def create_program_descriptor(
                         input_tensor.shape[-1],
                         input_tensor.dtype,
                         output_tensor.dtype,
+                        input_cb_tiles=2,
                         batches=math.prod(list(input_tensor.shape)[:-2]),
                         padded_h=input_tensor.padded_shape[-2],
                         padded_w=input_tensor.padded_shape[-1],

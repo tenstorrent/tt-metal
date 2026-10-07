@@ -358,13 +358,15 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     namespace rh = ttnn::kernel_lib::host;
     const tt::tt_metal::TensorLayout pool_layout(
         DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{});
+    auto pool_block = rh::ReduceBlockSpec::tiled(
+        (block_pool ? blocks_per_unit : 1) * 32,
+        (block_pool ? block_tiles : 1) * 32,
+        DataType::BFLOAT16,
+        DataType::BFLOAT16,
+        (QC));
+    pool_block.input_cb_tiles = std::max(2u * KC, QC * KC);
     auto pool_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(
-            (block_pool ? blocks_per_unit : 1) * 32,
-            (block_pool ? block_tiles : 1) * 32,
-            DataType::BFLOAT16,
-            DataType::BFLOAT16,
-            (QC)),
+        pool_block,
         tt::tt_metal::ReduceOpMath::MAX,
         tt::tt_metal::ReduceOpDim::W,
         1.0F,

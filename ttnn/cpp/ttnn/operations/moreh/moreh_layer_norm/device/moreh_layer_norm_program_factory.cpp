@@ -172,14 +172,16 @@ tt::tt_metal::ProgramDescriptor MorehLayerNormOperation::ProgramFactory::create_
         const uint32_t width = is_lastdim_layer_norm && i + 1 == num_descriptors
                                    ? origin_W - (num_blocks - 1) * reduce_block_tiles * 32
                                    : block_tiles * 32;
+        auto block = reduce_host::ReduceBlockSpec::tiled(
+            32,
+            width,
+            fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(),
+            fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype());
+        block.input_cb_tiles = im7_t;
         moment_calls.emplace_back(
             0,
             reduce_host::ReduceCallConfig{
-                reduce_host::ReduceBlockSpec::tiled(
-                    32,
-                    width,
-                    fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(),
-                    fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),
+                block,
                 ReduceOpMath::SUM,
                 is_lastdim_layer_norm ? ReduceOpDim::W : ReduceOpDim::HW,
                 1.0F / static_cast<float>(reduce_elements),

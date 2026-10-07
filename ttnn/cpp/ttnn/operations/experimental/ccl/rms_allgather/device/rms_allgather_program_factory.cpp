@@ -660,19 +660,18 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
 
     namespace rh = ttnn::kernel_lib::host;
     const rh::ReduceHardwareConfig reduce_hardware{mesh_device->arch(), fp32_dest_acc_en, false, math_fidelity};
-    const auto make_stats_call = [&](uint32_t tiles, float scalar, compute_kernel_lib::ReduceInputPolicy policy) {
+    const auto make_stats_call = [&](uint32_t tiles,
+                                     uint32_t input_cb_tiles,
+                                     float scalar,
+                                     compute_kernel_lib::ReduceInputPolicy policy) {
+        auto block = rh::ReduceBlockSpec::tiled(
+            32,
+            tiles * 32,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16);
+        block.input_cb_tiles = input_cb_tiles;
         auto plan = rh::make_reduce_plan(
-            rh::ReduceBlockSpec::tiled(
-                32,
-                tiles * 32,
-                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
-                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
-            ReduceOpMath::SUM,
-            ReduceOpDim::W,
-            scalar,
-            ReduceFp32Mode::Fast,
-            reduce_hardware,
-            policy);
+            block, ReduceOpMath::SUM, ReduceOpDim::W, scalar, ReduceFp32Mode::Fast, reduce_hardware, policy);
 
         plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
         return rh::ReduceCallPlan{
@@ -680,14 +679,19 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     };
     const auto first_stage_call = make_stats_call(
         num_blocks_first_stage,
+        ex_external_CB_size / single_tile_size,
         use_two_stage_reduce ? 1.0F : 1.0F / num_blocks,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     const auto second_stage_call = make_stats_call(
         use_two_stage_reduce ? num_blocks_first_stage + num_blocks_second_stage - 1 : num_blocks_first_stage,
+        ex_external_CB_size / single_tile_size,
         1.0F / num_blocks,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
     const auto post_call = make_stats_call(
-        num_distributed_devices, 1.0F / num_distributed_devices, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+        num_distributed_devices,
+        post_all_gather_stats_block_tiles,
+        1.0F / num_distributed_devices,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
 
     std::vector<uint32_t> writer_compile_time_args = {
         1,  // Gets overwritten in not all to all workers

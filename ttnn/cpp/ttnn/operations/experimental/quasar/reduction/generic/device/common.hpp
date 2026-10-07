@@ -72,6 +72,7 @@ ttnn::kernel_lib::host::ReduceSequencePlan make_generic_reduce_sequence(
     uint32_t Ht,
     uint32_t Wt,
     uint32_t NC,
+    uint32_t input_cb_tiles,
     bool identity_padded,
     const RmPlan* row_major = nullptr);
 

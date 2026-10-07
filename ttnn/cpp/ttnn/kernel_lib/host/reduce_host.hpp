@@ -18,8 +18,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_types.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args_common.hpp"
+#include "ttnn/kernel_lib/reduce_types.hpp"
+#include "ttnn/kernel_lib/reduce_plan_args_common.hpp"
 
 /**
  * @file reduce_host.hpp
@@ -50,7 +50,6 @@ namespace ttnn::kernel_lib::host {
 
 inline constexpr std::uint32_t no_cb_id = reduce_plan_args::no_cb_id;
 
-using ReducePath = ttnn::kernel_lib::ReducePath;
 using ReduceAuxiliaryTileType = ttnn::kernel_lib::ReduceAuxiliaryTileType;
 
 // Valid elements in one local block. The leading dimensions are flattened into
@@ -64,6 +63,7 @@ struct ReduceValidShape {
 // Plan both the ordinary block and this exact tail. At runtime [0] selects
 // the ordinary block; [height, width, batches] selects the tail on any core using
 // the same compiled kernel. Both auxiliary recipes are prepared upfront.
+// Output lanes beyond the tail's valid non-reduced extent are unspecified.
 struct ReduceTailConfig {
     ReduceValidShape shape;
 };
@@ -74,8 +74,6 @@ enum class ReduceCbRole : std::uint8_t {
     Auxiliary,
     Accumulator,
 };
-
-enum class ReduceCbAlias : std::uint8_t { None, InputTensor, OutputTensor };
 
 struct ReduceHardwareConfig {
     tt::ARCH arch = tt::ARCH::Invalid;
@@ -98,9 +96,6 @@ struct ReduceCbRequirement {
     std::uint32_t page_size;
     std::uint32_t page_count;
     std::size_t total_size_bytes;
-    ReduceCbAlias alias = ReduceCbAlias::None;
-
-    bool owns_l1() const { return alias == ReduceCbAlias::None; }
 };
 
 // One concrete tile for the dataflow-side auxiliary recipe. The planner has
@@ -124,7 +119,6 @@ struct ReduceAuxiliaryPlan {
 };
 
 struct ReducePlan {
-    ReducePath path = ReducePath::Tiled;
     tt::tt_metal::ReduceOpMath reduce_math = tt::tt_metal::ReduceOpMath::SUM;
     tt::tt_metal::ReduceOpDim reduce_dim = tt::tt_metal::ReduceOpDim::W;
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast;
@@ -165,8 +159,6 @@ struct ReducePlan {
     std::uint32_t partial_reduce_axis_elements = 0;
 
     std::vector<ReduceCbRequirement> cb_requirements;
-    // Descriptive allocation total only; no memory budget is accepted or checked.
-    std::size_t total_owned_l1_bytes = 0;
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
     // Use the same compiled plan on full and tail cores. Initialize the runtime
@@ -190,19 +182,18 @@ struct ReduceBlockSpec {
     tt::tt_metal::DataType output_dtype = tt::tt_metal::DataType::BFLOAT16;
     tt::tt_metal::Tile input_tile;
     tt::tt_metal::Tile output_tile;
-    // Tiled resident input only. Zero means contiguous at padded_w.
+    // Retained input policies only. Zero means contiguous at padded_w.
     std::uint32_t input_row_stride_tiles = 0;
-    // Present: caller supplies an existing local allocation of this many tiles.
-    // Synchronization and consumption follow the explicitly requested input policy.
-    // Absent: the planner reports the required buffer capacity.
-    std::optional<std::uint32_t> resident_input_tiles;
-    std::optional<std::uint32_t> resident_output_tiles;
+    // Capacity of the input CB in tiles. Retained policies need the whole block,
+    // BulkWaitBulkPop a whole number of planned bulk packets, and streaming
+    // AccumulateViaAdd at least two tiles; a one-tile streaming CB plans ReduceTile.
+    std::uint32_t input_cb_tiles = 0;
     // Absent: reduce the whole logical block. Present: also plan this known
     // smaller shape, including its normalization and auxiliary tiles. Runtime
     // arguments select full or tail work on each core of the same kernel grid.
     // In an accumulated sequence, the configured tails form one alternative
     // scenario and must be enabled together; calls without tails retain their
-    // geometry but use that scenario's combined AVG divisor. Resident input
+    // geometry but use that scenario's combined AVG divisor. Retained input
     // retains the full block's pitches. FIFO producers use the common planned
     // packet size and pad unused pages at the final axis/output group.
     std::optional<ReduceTailConfig> tail;
@@ -323,8 +314,8 @@ private:
 // Plan one local tiled reduction using the requested input policy. The planner
 // reports buffer requirements; the factory owns allocation and L1 fit checks.
 // Tilization and row-major staging belong to the caller.
-// INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN along W or H on non-Quasar
-// devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization
+// INT32 and accurate FLOAT32 use SFPU SUM/MAX/MIN, and BFLOAT16 MIN uses SFPU MIN,
+// along W or H on non-Quasar devices. Accurate FLOAT32 AVG must be lowered to SUM plus its normalization
 // scalar; SFPU HW reductions must be split into W and H. Tiled SFPU calls require
 // a tile-aligned reduction axis: callers with partial inputs must identity-pad
 // that axis and describe the padded view.
@@ -337,16 +328,6 @@ ReducePlan make_reduce_plan(
     ReduceFp32Mode fp32_mode,
     const ReduceHardwareConfig& hardware,
     compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
-
-inline ReducePlan make_reduce_plan(
-    const ReduceBlockSpec& block,
-    tt::tt_metal::ReduceOpMath reduce_math,
-    tt::tt_metal::ReduceOpDim reduce_dim,
-    ReduceFp32Mode fp32_mode,
-    const ReduceHardwareConfig& hardware,
-    compute_kernel_lib::ReduceInputPolicy input_policy = compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile) {
-    return make_reduce_plan(block, reduce_math, reduce_dim, std::nullopt, fp32_mode, hardware, input_policy);
-}
 
 // Plan a kernel-ordered sequence of reductions whose results are accumulated
 // together. The returned call vector has exactly the same order and length as

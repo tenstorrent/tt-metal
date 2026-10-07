@@ -94,9 +94,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
         .math_fidelity = math_fidelity};
+    auto max_block = reduce_host::ReduceBlockSpec::tiled(
+        32, input.logical_shape()[-1], input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype());
+    max_block.input_cb_tiles = Wt;
     auto max_plan = reduce_host::make_reduce_plan(
-        reduce_host::ReduceBlockSpec::tiled(
-            32, input.logical_shape()[-1], input.dtype(), fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),
+        max_block,
         ReduceOpMath::MAX,
         ReduceOpDim::W,
         1.0F,
@@ -106,12 +108,14 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSma
 
     // The exponentials retain their output-padding mask, so their padded
     // extent is a complete reduction input with zero-valued padding.
+    auto sum_block = reduce_host::ReduceBlockSpec::tiled(
+        32,
+        Wt * 32,
+        fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(),
+        fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype());
+    sum_block.input_cb_tiles = Wt;
     auto sum_plan = reduce_host::make_reduce_plan(
-        reduce_host::ReduceBlockSpec::tiled(
-            32,
-            Wt * 32,
-            fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype(),
-            fp32_dest_acc_en ? DataType::FLOAT32 : input.dtype()),
+        sum_block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

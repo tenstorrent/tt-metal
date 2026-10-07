@@ -204,6 +204,19 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
+    // Every core reads its rows whole, so even the smallest core streams rows * Wt tiles.
+    const uint32_t min_rows_per_core = num_rows_per_core_group_2 == 0
+                                           ? num_rows_per_core_group_1
+                                           : std::min(num_rows_per_core_group_1, num_rows_per_core_group_2);
+    // Fused-negate with one row per core is slower batched.
+    const bool batch_reads = !rm_path && !use_height_sharding && !(use_fpu_negate && min_rows_per_core < 2);
+    const uint32_t reader_tiles_per_batch = batch_reads ? reduce_reader_batch(min_rows_per_core * Wt) : 1u;
+
+    uint32_t num_input_tiles = reduce_reader_input_cb_tiles(reader_tiles_per_batch);
+    if (rm_path) {
+        num_input_tiles = std::max(num_input_tiles, plan.wt_tiles_per_chunk);
+    }
+
     namespace rh = ttnn::kernel_lib::host;
     const bool planned_sfpu =
         use_sfpu_reduce_path(a.dtype(), operation_attributes.math_op, operation_attributes.use_sfpu_reduce);
@@ -224,6 +237,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
             local_ht,
             local_wt,
             local_nc,
+            num_input_tiles,
             operation_attributes.negate || planned_sfpu,
             rm_path ? &plan : nullptr);
     };
@@ -264,18 +278,6 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         });
     }
 
-    // Every core reads its rows whole, so even the smallest core streams rows * Wt tiles.
-    const uint32_t min_rows_per_core = num_rows_per_core_group_2 == 0
-                                           ? num_rows_per_core_group_1
-                                           : std::min(num_rows_per_core_group_1, num_rows_per_core_group_2);
-    // Fused-negate with one row per core is slower batched.
-    const bool batch_reads = !rm_path && !use_height_sharding && !(use_fpu_negate && min_rows_per_core < 2);
-    const uint32_t reader_tiles_per_batch = batch_reads ? reduce_reader_batch(min_rows_per_core * Wt) : 1u;
-
-    uint32_t num_input_tiles = reduce_reader_input_cb_tiles(reader_tiles_per_batch);
-    if (rm_path) {
-        num_input_tiles = std::max(num_input_tiles, plan.wt_tiles_per_chunk);
-    }
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN_DFB,
         .entry_size = src0_single_tile_size,

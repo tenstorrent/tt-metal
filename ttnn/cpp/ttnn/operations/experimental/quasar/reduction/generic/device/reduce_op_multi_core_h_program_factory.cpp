@@ -103,6 +103,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             Ht,
             local_Wt,
             1,
+            2,
             false);
     };
     const auto reduction = plan_reduction(num_cols_per_core_group_1);

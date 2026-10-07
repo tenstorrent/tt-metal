@@ -367,7 +367,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             // The existing elementwise column mask also zeros output padding.
             // Describe full tiles here; the final shard can own fewer tiles.
             auto block = rh::ReduceBlockSpec::tiled(block_ht * 32, block_wt * 32, reduce_dtype, reduce_dtype);
-            block.resident_input_tiles = block_ht * block_wt;
+            block.input_cb_tiles = block_ht * block_wt;
             block.input_row_stride_tiles = block_wt;
             if (last_tiles < block_wt) {
                 block.tail = rh::ReduceTailConfig{{block_ht * 32, last_tiles * 32, 1}};

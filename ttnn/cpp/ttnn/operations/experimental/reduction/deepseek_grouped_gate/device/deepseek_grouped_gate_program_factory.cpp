@@ -145,9 +145,11 @@ tt::tt_metal::ProgramDescriptor DeepseekGroupedGateDeviceOperation::ProgramFacto
     // Normalization scalar CBs
     auto cb_reduce_ones_scalar = tt::CBIndex::c_17;
     namespace rh = ttnn::kernel_lib::host;
+    auto reduce_block = rh::ReduceBlockSpec::tiled(
+        tile_height, operation_attributes.n_activated_experts, scores.dtype(), scores.dtype());
+    reduce_block.input_cb_tiles = 2 * n_activated_expert_tiles;
     auto reduce_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(
-            tile_height, operation_attributes.n_activated_experts, scores.dtype(), scores.dtype()),
+        reduce_block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

@@ -371,7 +371,7 @@ def create_program_descriptor(
                             num_tiles * 32,
                             ttnn.bfloat16,
                             ttnn.bfloat16,
-                            resident_input_tiles=num_tiles,
+                            input_cb_tiles=num_tiles,
                         ),
                         reduce_math=planner.ReduceMath.SUM,
                         reduce_dim=planner.ReduceDimension.ROW,

@@ -297,10 +297,6 @@ def _make_sequence_plan(
     # COL bulk packets are column-group-major; the row-major shard can only be read in place.
     elif dim == "col" and policy == "bulk":
         input_policy = _PLANNER.ReduceInputPolicy.WAIT_UPFRONT_NO_POP
-    resident = input_policy in (
-        _PLANNER.ReduceInputPolicy.NO_WAIT_NO_POP,
-        _PLANNER.ReduceInputPolicy.WAIT_UPFRONT_NO_POP,
-    )
     block = _PLANNER.ReduceBlockSpec(
         logical_h,
         logical_w,
@@ -312,7 +308,7 @@ def _make_sequence_plan(
         input_tile=input_tensor.spec.tile,
         output_tile=output_tensor.spec.tile,
         input_row_stride_tiles=row_stride,
-        resident_input_tiles=input_tensor.buffer_num_pages() if resident else None,
+        input_cb_tiles=input_tensor.buffer_num_pages(),
         allow_empty_auxiliary=True,
     )
     configs = [

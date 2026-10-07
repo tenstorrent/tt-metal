@@ -90,6 +90,10 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     ProgramSpec spec;
     spec.name = "reduce_single_core_hw";
 
+    // One core owns every tile, so a tensor smaller than a batch stays unbatched.
+    const uint32_t reader_tiles_per_batch = reduce_reader_batch(num_tensor_tiles);
+    const uint32_t num_input_tiles = reduce_reader_input_cb_tiles(reader_tiles_per_batch);
+
     namespace rh = ttnn::kernel_lib::host;
     // REDUCE_SCALAR applies the tile once per reduced dimension, which would square the
     // scalar. The HW path is therefore always PostMul, so this tile only carries the identity.
@@ -104,15 +108,13 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         Ht,
         Wt,
         NC,
+        num_input_tiles,
         true);
     const auto* auxiliary_cb = reduce_unit.calls.front().plan.find_cb(rh::ReduceCbRole::Auxiliary);
     scaler_cb_data_format = auxiliary_cb->data_format;
     scaler_single_tile_size = auxiliary_cb->page_size;
 
     // ---- Dataflow buffers ----
-    // One core owns every tile, so a tensor smaller than a batch stays unbatched.
-    const uint32_t reader_tiles_per_batch = reduce_reader_batch(num_tensor_tiles);
-    const uint32_t num_input_tiles = reduce_reader_input_cb_tiles(reader_tiles_per_batch);
     spec.dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN_DFB,
         .entry_size = src0_single_tile_size,

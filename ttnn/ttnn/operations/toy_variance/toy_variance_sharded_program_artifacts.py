@@ -142,13 +142,12 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
     # 1/N over the FULL width: each core's reduce already emits its share of the mean.
     planner = ttnn.reduce_planner
     # The factory partitions the global width; each node reduces only its local block.
-    block = planner.ReduceBlockSpec(origin_H, Wt_local * TILE_DIM, input_tensor.dtype, output_tensor.dtype)
-    resident_block = planner.ReduceBlockSpec(
+    block = planner.ReduceBlockSpec(
         origin_H,
         Wt_local * TILE_DIM,
         input_tensor.dtype,
         output_tensor.dtype,
-        resident_input_tiles=shard_tiles,
+        input_cb_tiles=shard_tiles,
     )
     hardware = planner.ReduceHardwareConfig(
         arch=device.arch(),
@@ -156,7 +155,7 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
         dst_full_sync_en=False,
     )
     mean_plan = planner.make_reduce_plan(
-        block=resident_block,
+        block=block,
         input_policy=planner.ReduceInputPolicy.NO_WAIT_NO_POP,
         reduce_math=planner.ReduceMath.SUM,
         reduce_dim=planner.ReduceDimension.ROW,

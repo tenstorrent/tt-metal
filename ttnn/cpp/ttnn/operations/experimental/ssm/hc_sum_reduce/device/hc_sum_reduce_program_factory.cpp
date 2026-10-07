@@ -57,8 +57,10 @@ tt::tt_metal::ProgramDescriptor HCSumReduceProgramFactory::create_descriptor(
     // call and the matching persistent auxiliary-tile recipe.
     namespace reduce_host = ttnn::kernel_lib::host;
     const auto intermediate_dtype = input_format == tt::DataFormat::Float32 ? DataType::FLOAT32 : DataType::BFLOAT16;
+    auto reduce_block = reduce_host::ReduceBlockSpec::tiled(32, 32, intermediate_dtype, intermediate_dtype);
+    reduce_block.input_cb_tiles = cb_size;
     auto reduce_plan = reduce_host::make_reduce_plan(
-        reduce_host::ReduceBlockSpec::tiled(32, 32, intermediate_dtype, intermediate_dtype),
+        reduce_block,
         ReduceOpMath::SUM,
         ReduceOpDim::H,
         1.0F,

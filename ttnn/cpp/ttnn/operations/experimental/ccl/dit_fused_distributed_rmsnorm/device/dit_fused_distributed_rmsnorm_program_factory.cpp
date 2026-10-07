@@ -1045,9 +1045,11 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // head_dim instead of H_full.
     const uint32_t reduce_factor = args.per_head_norm ? (W / args.num_heads_per_device) : H_full;
     namespace rh = ttnn::kernel_lib::host;
-    const auto make_local_call = [&](float scalar) {
+    const auto make_local_call = [&](float scalar, uint32_t reduce_input_cb_tiles) {
+        auto block = rh::ReduceBlockSpec::tiled(32, 32, DataType::FLOAT32, DataType::FLOAT32);
+        block.input_cb_tiles = reduce_input_cb_tiles;
         auto plan = rh::make_reduce_plan(
-            rh::ReduceBlockSpec::tiled(32, 32, DataType::FLOAT32, DataType::FLOAT32),
+            block,
             ReduceOpMath::SUM,
             ReduceOpDim::W,
             scalar,
@@ -1057,8 +1059,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
 
         return plan;
     };
-    const auto pre_reduce_plan = make_local_call(1.0F);
-    const auto post_reduce_plan = make_local_call(1.0F / reduce_factor);
+    const auto pre_reduce_plan = make_local_call(1.0F, 1);
+    const auto post_reduce_plan = make_local_call(1.0F / reduce_factor, stats_gathered_tiles);
     const auto append_reduce_auxiliary = [&](std::vector<uint32_t>& writer_args) {
         rh::ReduceAuxiliaryArgs({reduce_scalar_sum_cb_id, pre_reduce_plan.auxiliary_tiles}).append_to(writer_args);
         rh::ReduceAuxiliaryArgs({reduce_scalar_avg_cb_id, post_reduce_plan.auxiliary_tiles}).append_to(writer_args);

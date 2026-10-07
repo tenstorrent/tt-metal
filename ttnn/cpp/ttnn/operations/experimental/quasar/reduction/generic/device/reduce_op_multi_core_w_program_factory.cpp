@@ -91,6 +91,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     }
     TT_FATAL(num_cores > 0, "Reduce W requires at least one worker core");
 
+    uint32_t num_input_tiles = 2;
+    if (rm_path) {
+        num_input_tiles = std::max(num_input_tiles, plan.wt_tiles_per_chunk);
+    }
+
     namespace rh = ttnn::kernel_lib::host;
     const rh::ReduceHardwareConfig hardware{device.arch(), fp32_dest_acc_en, false, math_fidelity};
     auto plan_reduction = [&](uint32_t local_Ht) {
@@ -105,6 +110,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             local_Ht,
             Wt,
             1,
+            num_input_tiles,
             rm_path,
             rm_path ? &plan : nullptr);
     };
@@ -153,10 +159,6 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     }
 
     uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
-    if (rm_path) {
-        num_input_tiles = std::max(num_input_tiles, plan.wt_tiles_per_chunk);
-    }
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_input_tiles * src0_single_tile_size,
         .core_ranges = all_cores,

@@ -75,6 +75,7 @@ ttnn::device_operation::ProgramArtifacts MorehMeanOperation::MorehMeanHFactory::
     constexpr uint32_t num_input_tiles = 2;
     namespace reduce_host = ttnn::kernel_lib::host;
     auto reduce_block = reduce_host::ReduceBlockSpec::tiled(origin_H, 32, input.dtype(), output.dtype());
+    reduce_block.input_cb_tiles = num_input_tiles;
     reduce_block.allow_empty_auxiliary = true;
     const auto reduce_plan = reduce_host::make_reduce_plan(
         reduce_block,

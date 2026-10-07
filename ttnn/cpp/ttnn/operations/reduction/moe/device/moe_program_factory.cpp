@@ -97,8 +97,10 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     // The top-k mask already excludes entries beyond k; both reductions see
     // the same resident tiled values and leave them for the following transform.
     const rh::ReduceHardwareConfig hardware{input_tensor.device().arch(), false, false};
+    auto block = rh::ReduceBlockSpec::tiled(Ht * tile_height, Kt * tile_width, DataType::BFLOAT16, out_tensor.dtype());
+    block.input_cb_tiles = Ht * Kt;
     auto max_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(Ht * tile_height, Kt * tile_width, DataType::BFLOAT16, out_tensor.dtype()),
+        block,
         ReduceOpMath::MAX,
         ReduceOpDim::W,
         1.0F,
@@ -106,7 +108,7 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
         hardware,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop);
     auto sum_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(Ht * tile_height, Kt * tile_width, DataType::BFLOAT16, out_tensor.dtype()),
+        block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F,

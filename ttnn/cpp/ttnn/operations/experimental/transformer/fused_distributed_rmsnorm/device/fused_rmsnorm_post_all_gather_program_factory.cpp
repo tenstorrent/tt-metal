@@ -180,12 +180,14 @@ tt::tt_metal::ProgramDescriptor FusedRMSNormPostAllGatherProgramFactory::create_
     const uint32_t epsilon_packed = std::bit_cast<uint32_t>(eps);
 
     namespace rh = ttnn::kernel_lib::host;
+    auto reduce_block = rh::ReduceBlockSpec::tiled(
+        TILE_HEIGHT,
+        stats_tiles_cols * TILE_WIDTH,
+        stats_tensor.dtype(),
+        fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16);
+    reduce_block.input_cb_tiles = stats_cb_num_tiles;
     auto reduce_plan = rh::make_reduce_plan(
-        rh::ReduceBlockSpec::tiled(
-            TILE_HEIGHT,
-            stats_tiles_cols * TILE_WIDTH,
-            stats_tensor.dtype(),
-            fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+        reduce_block,
         ReduceOpMath::SUM,
         ReduceOpDim::W,
         1.0F / (input_tensor.logical_shape()[-1] * num_devices),

@@ -693,9 +693,22 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         .noc = reader_noc,
     };
 
+    uint32_t cb_ex_external_tiles = 0;
+    if (!use_welford) {
+        uint32_t num_out_blocks_padded = num_out_blocks;
+        uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
+        if (block_ht_group_1 % num_out_blocks != 0) {
+            uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
+            num_out_blocks_padded += (residual / out_block_h_normal + 1);
+        }
+        cb_ex_external_tiles = (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes +
+                                single_tile_size - 1) /
+                               single_tile_size;
+    }
+
     const ttnn::kernel_lib::host::ReduceHardwareConfig reduce_hardware{
         device->arch(), fp32_dest_acc_en, dst_full_sync_en, math_fidelity};
-    const auto make_group_plan = [&](uint32_t rows, uint32_t factor) {
+    const auto make_group_plan = [&](uint32_t rows, uint32_t factor, uint32_t input_cb_tiles) {
         return use_welford ? GroupNormReducePlans{}
                            : make_interleaved_groupnorm_reduce_plans(
                                  rows,
@@ -704,15 +717,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                                  num_cores_per_mcast_group,
                                  single_tile_size,
                                  factor,
+                                 input_cb_tiles,
+                                 cb_ex_external_tiles,
                                  pad,
                                  im_data_format,
                                  reduce_hardware);
     };
-    const auto reduce_group_1 =
-        make_group_plan(block_ht_group_1, num_rows_per_batch_per_core_group_1 * num_channels_per_group);
+    const auto reduce_group_1 = make_group_plan(
+        block_ht_group_1, num_rows_per_batch_per_core_group_1 * num_channels_per_group, interm_block_tiles_group_1);
     const auto reduce_group_2 = make_group_plan(
         std::max(num_out_blocks, block_ht_group_2),
-        std::max(1u, num_rows_per_batch_per_core_group_2 * num_channels_per_group));
+        std::max(1u, num_rows_per_batch_per_core_group_2 * num_channels_per_group),
+        std::max(interm_block_tiles_group_2, block_wt));
     if (!use_welford) {
         in2_CB_size = single_tile_size * reduce_group_1.local_auxiliary.tiles.size();
     }
@@ -1397,16 +1413,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     // reserve ceil(num_out_blocks_padded * num_mcast_cores * slot_pitch / tile_size) tiles.
     if (!use_welford) {
         constexpr uint32_t ex_cb_external_index = tt::CBIndex::c_10;
-        uint32_t num_out_blocks_padded = num_out_blocks;
-        uint32_t out_block_h_normal = block_ht_group_1 / num_out_blocks;
-        if (block_ht_group_1 % num_out_blocks != 0) {
-            uint32_t residual = block_ht_group_1 - (num_out_blocks * out_block_h_normal);
-            num_out_blocks_padded += (residual / out_block_h_normal + 1);
-        }
-        uint32_t cb_ex_external_tiles =
-            (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes + single_tile_size -
-             1) /
-            single_tile_size;
         desc.cbs.push_back(CBDescriptor{
             .total_size = cb_ex_external_tiles * single_tile_size,
             .core_ranges = all_cores,
