@@ -1627,3 +1627,38 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_skel4b_u1_64221e89a63.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
 - data: {"n":4,"identical":4,"layers":4}
+
+## E261007-1703-80a
+- date: 2026-10-07T17:03:57
+- commit: 7d6211c6290
+- branch: ssinghal/mimo-spec
+- host: 41,48
+- track: spec
+- status: verified
+- claim: SPEC DECODE, 48 layers, REAL numbers (tt/spec.py on the decode agent's Decoder(block=8, capture) verify + device-resident 5-layer hidden capture -> drafter fc N-sharded + all_gather -> ring append; bf16 drafter; traced prefill, traced verify, drafter eager in round 0 then traced; exact greedy accept). GSM8K prompts (enable_thinking=false), 256 new tokens, ONE traced prefill per process, plain stream from a clean process (fresh prefill) as reference. U=1 per row (B=4): spec stream token-identical to plain for 4/4 users (full lengths incl. EOS: 114/58/250/94 tokens), accepted tokens per round (leading matches + bonus) mean 4.40 over 52 rounds, hist k=1..8: 18 20 13 13 14 6 4 29; U=4 per row (B=16): 14/16 identical, accepted mean 4.33 over 71 rounds (hist 105 130 89 80 70 56 35 153); the 2 non-identical users (13 at token 244, 15 at token 157) differ by an EXACT 1-bf16-ulp logit tie (see divergence-gap entry). Accepted length 4.3-4.4 is higher than the CPU teacher-forced proxy 2.81 (3.43 answer region): own-greedy GSM8K answers are more predictable than the gold text, n is small (20 users, 256 tokens). SPEED (unpaired, host-timed, dedicated process, short context ~100-350 positions): plain decode 73.5 ms/token (13.6 tok/s/user) U=1 and 92.5 ms (10.8 tok/s/user) U=4; spec per round U=1: set_round 4.7 + drafter 84 (traced, includes lm_head argmax readback) + verify 396.6 + append 17.7 ms = ~503 ms -> 4.93 tok/s/user; U=4: verify 351.8, drafter 83.6, append 26.3 -> 5.76 tok/s/user. SPEC IS CURRENTLY 2.4-2.8x SLOWER than plain decode: the verify step costs 4.8-5.4 plain steps (the 8 ordered paged_update_cache calls x 2 x 48 layers + 8x attention rows) and the traced drafter 5-layer step is ~84 ms (should be ~5-10 ms: tile<->row-major permutes/reshapes of tiny tensors and 10 all_reduces are the suspects, not profiled). Decode hooks exactness (decode agent) confirmed end to end here.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_y_u4_7d6211c6290.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/prefill.py
+- data: {"n":20,"identical_strict":18,"identical_modulo_exact_logit_ties":20,"accepted_mean_u1":4.40,"accepted_mean_u4":4.33,"plain_ms_tok_u1":73.5,"plain_ms_tok_u4":92.5,"verify_ms_u1":396.6,"verify_ms_u4":351.8,"drafter_ms":84}
+
+## E261007-1703-420
+- date: 2026-10-07T17:03:57
+- commit: c2c56925fee
+- branch: ssinghal/mimo-spec
+- host: 48
+- track: spec
+- status: verified
+- claim: DIVERGENCE GAPS of the 2 non-identical spec users (U=4 run): teacher-forced plain decode (eager, keep_logits) on the plain stream: user 13 token 244: plain token 320 logit 28.25, spec token 25 logit 28.125 (rank 2, gap 0.125); user 15 token 157: plain 897 logit 22.75, spec 315 logit 22.625 (rank 2, gap 0.125). 0.125 is exactly ONE bf16 ulp at logit magnitude 16-32 (bf16 spacing), i.e. exact ties of the bf16 lm_head output; the spec step computes the same token with a different batch composition (8 virtual rows per user) and the MoE/matmul accumulation order differs at the ulp level. Both divergences are documented near-ties; no divergence with a real gap was seen in 20 users.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_gap_u4_c2c56925fee.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/spec.py
+- data: {"gaps":[0.125,0.125],"bf16_ulp_at_logit":0.125}
+
+## E261007-1703-310
+- date: 2026-10-07T17:03:57
+- commit: 7d6211c6290
+- branch: ssinghal/mimo-spec
+- host: 41,48
+- track: spec
+- status: verified
+- claim: FINDINGS from the spec exactness work: (1) DEAD-SLOT CLOBBER: a user that finished (EOS) inside a run keeps being fed as a dead slot at token 0 / position 0, which OVERWRITES position 0 of ITS OWN cache slot; a second decode run reusing that slot's prefilled KV (same process, no re-prefill) then diverges for exactly the finished users (U=1: users 0,1,3 with 114/58/94 tokens diverge at tokens 16/1/15, user 2 (250 tokens) identical; U=4: all users that finished early, and none of the 256-token users), reproducibly across processes; the first plain run and a clean-process spec run agree, the plain repeat and the spec run in the SAME process agree with each other (and not with the first) -> compare against a plain stream from a clean prefill, run plain and spec in separate processes. Pad content beyond the prompt (cyclic vs random token pad rows) does not change any plain stream (checked, 4/4 users identical). Not a problem when slots are re-prefilled before reuse, but a scheduler must never reuse a finished slot's cache without prefill. (2) TRACE INTERLEAVING HANG, third occurrence: the drafter trace captured BEFORE the decode verify trace (draft trace capture+replay, then verify eager+capture+replay) hangs in the verify execute_trace (stack saved, host .41 and .48 both); the drafter eager (no trace) or the drafter traced from round 1 on (verify trace first, SPEC_DR_TRACE=late default) works. Together with E261007-1046-cbd (second prefill replay after a decode trace) this says: the order in which CCL-using traces are first captured/replayed matters; capture order must be prefill, verify/decode, drafter. (3) the verify step is 4.8-5.4x a plain decode step and the traced drafter 84 ms, see the spec entry.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_48b_u4_c5261577d47.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/prefill.py
