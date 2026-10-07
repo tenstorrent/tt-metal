@@ -17,7 +17,7 @@ for t, o in a["outcome"].items():
     if o == "passed" and b["outcome"].get(t) == "passed":
         print(t)
 PY
-  echo "##### elf twin $grp"; python3 tests/eb_r3_ci/elf_cache_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin 2>&1 | head -20
+  echo "##### elf twin $grp"; python3 tests/eb_r3_ci/elf_set_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin "^tw_$grp$" 2>&1
 done
 echo "##### nodes passing on both sides: $(wc -l < /tmp/tw_nodes.txt)"
 for p in 1 2 3; do
