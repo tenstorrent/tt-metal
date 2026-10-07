@@ -402,7 +402,7 @@ models:
     wh_llmbox: 90
     wh_galaxy: 80
     wh_llmbox_perf: 58
-    wh_n150: 75
+    wh_n150: 275  # +200 Minimax H3 Ref2VA Memory Test (mock device: snapshot download + host JIT)
     wh_n150_civ2: 12
     wh_n300: 43
     bh_p150: 30

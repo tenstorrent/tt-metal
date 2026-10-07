@@ -275,9 +275,9 @@ still allocated at the end of the walk); the full warmup costs the compile-only 
 10 min warm and 55 min cold per the table above.
 
 The test matrix entry is `tests/pipeline_reorg/models_unit_tests.yaml` ("Minimax H3 Ref2VA Memory
-Test", model `minimax-h3`, `bh_quietbox_2`, tier 3, 200 min). The mock ignores the runner's silicon,
-so the SKU is chosen for its weights mount: the quietbox runners map the YYZ4 HuggingFace tree to
-`/mnt/MLPerf/huggingface`. The entry points the descriptor at the checked-in `tt-cluster-descriptors`
+Test", model `minimax-h3`, `wh_n150` and `bh_quietbox_2`, tier 3, 200 min each). The mock ignores the
+runner's silicon, so the SKUs are chosen for their weights mounts at `/mnt/MLPerf/huggingface`: the
+shared cloud MLPerf NFS on the N150 VMs, the YYZ4 HuggingFace tree on the quietboxes. The entry points the descriptor at the checked-in `tt-cluster-descriptors`
 6U yaml, unsets `TT_METAL_WATCHER` (every CI job exports it, and on the mock the watcher's reads come
 back 0 and it aborts at mesh open), sets `HF_HOME=/mnt/MLPerf/huggingface` because the weight resolver
 searches `$HF_HOME/hub` (CI exports `HF_HUB_CACHE` only), allows the resolver to download the ~140 GB

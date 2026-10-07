@@ -1201,11 +1201,12 @@
 # geometry, keep the real allocator, circular-buffer validation and kernel JIT, and turn every device
 # read and write into a no-op. The test runs the ref2va preset's full init warmup (ladder walk, VAE,
 # audio and prompt-encoder warms) and fails on any rung that does not fit DRAM or any program whose
-# static circular buffers overflow L1. The runner's silicon is irrelevant; bh_quietbox_2 is chosen for
-# its HuggingFace mount (/mnt/models/huggingface at YYZ4, mounted at /mnt/MLPerf/huggingface): the
-# first run downloads the ~140 GB ref2va snapshot (transformer_ref, text_encoder, vae, audio_vae) into
-# it, which needs a dispatch with mlperf-read-only=false; later runs find it cached. Nearly all of the
-# remaining time is kernel JIT on the host CPU (~55 min cold on a galaxy host).
+# static circular buffers overflow L1. The runner's silicon is irrelevant; the SKUs are chosen for their
+# HuggingFace mounts at /mnt/MLPerf/huggingface (wh_n150: the shared cloud MLPerf NFS; bh_quietbox_2:
+# /mnt/models/huggingface at YYZ4). The first run on each mount downloads the ~140 GB ref2va snapshot
+# (transformer_ref, text_encoder, vae, audio_vae) into it, which needs a dispatch with
+# mlperf-read-only=false; later runs find it cached. Nearly all of the remaining time is kernel JIT on
+# the host CPU (~55 min cold on a galaxy host).
 # See models/tt_dit/models/MiniMaxH3_mock_oom.md.
 - name: Minimax H3 Ref2VA Memory Test
   cmd: |
@@ -1222,6 +1223,9 @@
     pytest --timeout 10800 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
   model: minimax-h3
   skus:
+    wh_n150:
+      timeout: 200  # first run: ~140 GB snapshot download + cold JIT; cached runs should fit in ~90
+      tier: 3
     bh_quietbox_2:
       timeout: 200  # first run: ~140 GB snapshot download + cold JIT; cached runs should fit in ~90
       tier: 3
