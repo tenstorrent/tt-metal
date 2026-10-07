@@ -68,6 +68,7 @@ constexpr TopkTieOrder topk_tie_order_from_global_direction(bool descending) {
  * | fused           | Sort packed [bf16 value | u16 index] keys with the unstable network        | bool         | true, false                                           | False    |
  * | rank_stamped    | Sort [bf16 value | rank tag] keys with the unstable network (u32 indices)  | bool         | true, false                                           | False    |
  * | tie_order       | Stable tie-break polarity: the GLOBAL sort order; needed with stable_sort  | TopkTieOrder | Ascending, Descending                                 | False    |
+ * | tile0_sorted    | First tiles already sorted in direction idir: phases 0 to 4 run on the second tile only (Blackhole; tie order kept for the stable modes only) | bool         | true, false                                           | False    |
  */
 // clang-format on
 template <
@@ -77,10 +78,32 @@ template <
     bool rank_stamped = false,
     TopkTieOrder tie_order = TopkTieOrder::Unset>
 ALWI void topk_local_sort(
-    uint32_t idst, int idir, int i_end_phase, int i_start_phase = 0, int i_end_step = 0, int i_start_step = 0) {
+    uint32_t idst,
+    int idir,
+    int i_end_phase,
+    int i_start_phase = 0,
+    int i_end_step = 0,
+    int i_start_step = 0,
+    bool tile0_sorted = false) {
     static_assert(
         !stable_sort || tie_order != TopkTieOrder::Unset,
         "comparator-stable topk requires an explicit tie_order");
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_bitonic_topk_local_sort,
+        (true /* APPROXIMATE */, is_fp32_dest_acc_en, stable_sort, fused, rank_stamped, static_cast<ckernel::sfpu::TopkTieOrder>(tie_order)),
+        idst,
+        VectorMode::RC_custom,
+        idir,
+        i_end_phase,
+        i_start_phase,
+        i_end_step,
+        i_start_step,
+        static_cast<uint32_t>(tile0_sorted)));
+#else
+    (void)tile0_sorted;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -93,6 +116,7 @@ ALWI void topk_local_sort(
         i_start_phase,
         i_end_step,
         i_start_step));
+#endif
 }
 
 // topK merge

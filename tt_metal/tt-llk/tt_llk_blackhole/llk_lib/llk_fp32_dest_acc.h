@@ -21,6 +21,13 @@ constexpr std::uint32_t PACK_READY   = 0x46504102; // 'FPA' | 0x02
 constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
 } // namespace fp32_dest_acc
 
+// Uses the mailbox value, so no later instruction enters the pipeline before the read response
+// (BabyRISCV/MemoryOrdering.md); without a use, release builds read it and let the config writes run ahead.
+inline void _llk_fp32_dest_acc_consume_(const std::uint32_t value)
+{
+    asm volatile("and x0, x0, %0" : : "r"(value) : "memory");
+}
+
 /**
  * @brief Coordinate a mid-kernel FP32 dest-acc reconfiguration across Unpack, Math, and Pack.
  *
@@ -49,6 +56,7 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
     {
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
+        _llk_fp32_dest_acc_consume_(math_done);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
         TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
     }
@@ -56,6 +64,7 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
     {
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
+        _llk_fp32_dest_acc_consume_(math_done);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
         TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
     }
@@ -63,6 +72,8 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
     {
         const std::uint32_t unpack_ready = mailbox_read(ThreadId::UnpackThreadId);
         const std::uint32_t pack_ready   = mailbox_read(ThreadId::PackThreadId);
+        _llk_fp32_dest_acc_consume_(unpack_ready);
+        _llk_fp32_dest_acc_consume_(pack_ready);
         LLK_ASSERT(unpack_ready == fp32_dest_acc::UNPACK_READY, "Unexpected dest-acc message from unpack thread.");
         LLK_ASSERT(pack_ready == fp32_dest_acc::PACK_READY, "Unexpected dest-acc message from pack thread.");
 
