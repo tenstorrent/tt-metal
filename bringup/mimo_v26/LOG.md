@@ -909,3 +909,25 @@
 - claim: USER DECISIONS 2026-10-07: drafter confirmed = DFlash-style 5-layer drafter in the checkpoint dflash/ dir (7 draft tokens, block 8). GSM8K gate set to 85%: scorecard gsm8k min_n=128, min_correct=109 on gsm8k_128_nothink.json (sha256 858aa02c...2190b), non-thinking. Supersedes the provisional n=64/55 template value.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0556-577
+- date: 2026-10-07T05:56:30
+- commit: d0d86174096
+- branch: ssinghal/mimo-moe
+- host: 41
+- track: moe
+- status: verified
+- claim: Measured per-chip DRAM of routed-expert weights on a real 4x8 mesh (host 41, 4 real layers 1-4, free-DRAM probe with 64 MB filler tensors per chip before/after): free DRAM per chip 32576 MB before; 4 layers use 832 MB (+-64 MB) = 208 MB/layer (+-16) for BOTH ND-sharded (unified-op layout) and interleaved layouts (analytic bfp8 204 MB/layer). EXTRAPOLATED to 47 layers (linear): 9.5 GB (+-0.75 GB) = 29% of the 32.6 GB free per chip; weights freed completely afterwards
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_F_dram_h41_d0d86174096.log
+- paths: models/demos/blackhole/mimo_v26/tt/router.py, models/demos/blackhole/mimo_v26/tt/router_select.py, models/demos/blackhole/mimo_v26/tt/router_kernels
+
+## E261007-0556-b7f
+- date: 2026-10-07T05:56:51
+- commit: da7b28c0b67
+- branch: ssinghal/mimo-moe
+- host: 41
+- track: moe
+- status: verified
+- claim: Router cost (1 card, real L5 gate, traced, per call): exact router at 64 rows 0.231 ms = matmul fp32 0.092 + sigmoid 0.002 + bias add 0.003 + topk 0.044 + index conversions 0.014 + gather 0.041 + normalize/typecast/RM 0.036; matmul core grid helps (1x8 0.180, 2x8 0.172 ms total). Port of the DSV4 router_select generic_op kernel (exact fp32 top-8, lowest index on ties, normalised bf16 weights, one core per row, T<=32): variant sel (32 rows) 0.066 ms, sel + matmul grid 1x8 (32 rows) 0.031 ms = 7.4x cheaper than the exact router at 64 rows (~0.2 ms/layer, ~9.4 ms/token over 47 layers). Agreement of sel_mm1x8 over ALL 47 layers on real ffn_in (L1-5 bf16 prefill dump, L6-47 device-captured dump, 2048 tokens each, real gate/bias): set match vs fp32-CPU 0.9966 total (exact router 0.9966); expert sets identical to the exact router for 100.00% of tokens (L7 0.9995, all other layers 1.0000); weights PCC vs exact 1.000000; all flips have fp32 gap < 0.01; 2 runs bit-identical on every layer. Host 46 failed device init once (FW init timeout 'try resetting the board') at 05:35, host_health still said OK; not reset by me
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_F_router_agree_h41_6b0f7f3ccc7.log
+- paths: models/demos/blackhole/mimo_v26/tt/router.py, models/demos/blackhole/mimo_v26/tt/router_select.py, models/demos/blackhole/mimo_v26/tt/router_kernels

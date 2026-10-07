@@ -76,6 +76,7 @@ class MiMoGate(TTMoEGate):
         assert not self.use_fallback
         self._plain_enable_sigmoid = self.enable_sigmoid
         rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        self._arch = mesh_device.arch()
 
         def const(t):
             return ttnn.from_torch(
@@ -195,3 +196,85 @@ class MiMoGate(TTMoEGate):
             self.enable_sigmoid = self._plain_enable_sigmoid
         out["kernel_idx"] = h(idx).reshape(T, self.k).clone()
         return out
+
+    # ------------------------------------------------------------------ cost study (decode router variants)
+    STAGES = {
+        1: "matmul fp32",
+        2: "+sigmoid",
+        3: "+bias add",
+        4: "+topk",
+        5: "+index uint16 RM",
+        6: "+gather",
+        7: "+normalize/typecast/RM (full)",
+    }
+    VARIANTS = ("base", "mm1x8", "mm2x8", "mm4x8", "sel", "sel_mm1x8", "sel_mm2x8", "sel_mm4x8")
+
+    def route_stage(self, tt_x, st):
+        logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc32, dtype=ttnn.float32)
+        if st == 1:
+            return logits
+        score = ttnn.sigmoid(logits)
+        if st == 2:
+            return score
+        rank = ttnn.add(score, self._tt_rank_bias)
+        if st == 3:
+            return rank
+        T = score.shape[2]
+        _, idx = ttnn.topk(rank, k=self.k, dim=-1, largest=True, sorted=True)
+        if st == 4:
+            return idx
+        indices = ttnn.view(ttnn.to_layout(ttnn.typecast(idx, ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, self.k))
+        idx32 = ttnn.to_layout(ttnn.typecast(idx, ttnn.uint32), ttnn.TILE_LAYOUT)
+        if st == 5:
+            return indices
+        sel = ttnn.gather(score, 3, index=idx32)
+        if st == 6:
+            return sel
+        denom = ttnn.add(ttnn.sum(sel, dim=3, keepdim=True), 1e-20)
+        w = ttnn.typecast(ttnn.multiply(ttnn.div(sel, denom), self.scaling_factor), ttnn.bfloat16)
+        return ttnn.view(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, self.k)), indices
+
+    def _ckc_for(self, fid):
+        if not hasattr(self, "_ckc_cache"):
+            self._ckc_cache = {}
+        if fid not in self._ckc_cache:
+            self._ckc_cache[fid] = ttnn.init_device_compute_kernel_config(
+                self._arch,
+                math_fidelity={
+                    "hifi2": ttnn.MathFidelity.HiFi2,
+                    "hifi4": ttnn.MathFidelity.HiFi4,
+                    "lofi": ttnn.MathFidelity.LoFi,
+                }[fid],
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        return self._ckc_cache[fid]
+
+    def route_v(self, tt_x, var):
+        """Cheaper variants of the exact router (same outputs as route(x, 'exact')). Name parts: mmYxX = matmul core grid, sel = router_select kernel (T <= 32)."""
+        import re
+
+        m = re.search(r"mm(\d)x(\d)", var)
+        kw = {"core_grid": ttnn.CoreGrid(y=int(m.group(1)), x=int(m.group(2)))} if m else {}
+        logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc32, dtype=ttnn.float32, **kw)
+        T = logits.shape[2]
+        score = ttnn.sigmoid(logits)
+        ttnn.deallocate(logits)
+        rank = ttnn.add(score, self._tt_rank_bias)
+        if var.startswith("sel"):
+            from models.demos.blackhole.mimo_v26.tt.router_select import router_select
+
+            w, i = router_select(rank, score, self.k, 1e-20, self.scaling_factor)
+            ttnn.deallocate(rank)
+            ttnn.deallocate(score)
+            return w, i
+        _, idx = ttnn.topk(rank, k=self.k, dim=-1, largest=True, sorted=True)
+        ttnn.deallocate(rank)
+        indices = ttnn.view(ttnn.to_layout(ttnn.typecast(idx, ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, self.k))
+        idx32 = ttnn.to_layout(ttnn.typecast(idx, ttnn.uint32), ttnn.TILE_LAYOUT)
+        sel = ttnn.gather(score, 3, index=idx32)
+        ttnn.deallocate(score)
+        denom = ttnn.add(ttnn.sum(sel, dim=3, keepdim=True), 1e-20)
+        w = ttnn.typecast(ttnn.multiply(ttnn.div(sel, denom), self.scaling_factor), ttnn.bfloat16)
+        return ttnn.view(ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, self.k)), indices
