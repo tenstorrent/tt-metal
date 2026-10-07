@@ -63,10 +63,8 @@ inline void setup_header_routing_2d(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     eth_chan_directions direction,
     uint32_t range,
-    uint32_t my_dev_id,
     uint32_t dst_dev_id,
-    uint32_t dst_mesh_id,
-    uint32_t ew_dim) {
+    uint32_t dst_mesh_id) {
     if constexpr (is_chip_multicast) {
         set_mcast_header(packet_header, direction, range);
     } else {
@@ -149,8 +147,6 @@ void kernel_main() {
     uint32_t noc_y_start = get_arg_val<uint32_t>(rt_args_idx++);
 
     // routing info
-    uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t fwd_start_distance = get_arg_val<uint32_t>(rt_args_idx++);  // for 1d only
     uint32_t fwd_range = get_arg_val<uint32_t>(rt_args_idx++);           // for multicast only
     uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);          // for 2d unicast only
@@ -193,8 +189,7 @@ void kernel_main() {
         setup_header_routing_1d(fwd_packet_header, fwd_start_distance, fwd_range);
         DPRINT("fwd_start_distance{}, fwd_range{}\n", fwd_start_distance, fwd_range);
     } else {  // 2D
-        setup_header_routing_2d(
-            fwd_packet_header, (eth_chan_directions)fwd_dir, fwd_range, my_dev_id, fwd_dev_id, fwd_mesh_id, ew_dim);
+        setup_header_routing_2d(fwd_packet_header, (eth_chan_directions)fwd_dir, fwd_range, fwd_dev_id, fwd_mesh_id);
     }
 
     /***************** setup backward dir *****************/
@@ -218,7 +213,7 @@ void kernel_main() {
             setup_header_routing_1d(bwd_packet_header, bwd_start_distance, bwd_range);
         } else {  // 2D
             setup_header_routing_2d(
-                bwd_packet_header, (eth_chan_directions)bwd_dir, bwd_range, my_dev_id, bwd_dev_id, bwd_mesh_id, ew_dim);
+                bwd_packet_header, (eth_chan_directions)bwd_dir, bwd_range, bwd_dev_id, bwd_mesh_id);
         }
     }
 
