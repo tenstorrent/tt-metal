@@ -1362,3 +1362,25 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_R3_reconf_sweep4.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/model.py
 - data: {"layers":4,"U":[32,1,2,4,8,16,32],"token_agree":1.0,"dram_drift_mb_per_bank":0.9}
+
+## E261007-0845-8d0
+- date: 2026-10-07T08:45:41
+- commit: c14a403a7ea
+- branch: ssinghal/mimo-moe
+- host: 48,35,43
+- track: moe
+- status: verified
+- claim: RACE reproduced with the MoE alone (MiMoMoEDecode, real layers 1-6 chained in one trace, identical inputs, 3000 replays, 18000 layer-calls per run): router exact 5 glitching layer-calls (rows 1,2), exact with dispatch sparse_mcast OFF (new env MOE_DISPATCH_SPARSE_MCAST=0) 4 (rows 1,2,3), router fast 2 (row 3 and ROW 0). Max abs diff 0.0020-0.0242, values repeat exactly across runs -> one deterministic missing/duplicated/stale contribution, not random noise. NOT the sparse multicast dispatch, NOT the router variant. Hand-over note bringup/mimo_v26/notes/determinism.md; stress test tests/test_moe_race_stress.py; race agent takes over
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_I_base_exact_h48_5c4b1ee7013.log
+- paths: models/demos/blackhole/mimo_v26/tt
+
+## E261007-0853-a85
+- date: 2026-10-07T08:53:03
+- commit: dead50c45f3
+- branch: ssinghal/mimo-moe
+- host: 48
+- track: moe
+- status: verified
+- claim: SMALL-U decode MoE, MiMoMoEDecode accepts [1,1,U,4096] per mesh row for U in {1,2,4,8,16,32} (fast router_select on U rows, internal pad to 64 tokens), real layers 1/5/16 chained in one trace (L1, L5 dump; L16 device capture), precise numerics (fp32 DEST/partials, HiFi3, bf16 act). NEW dead-slot routing 'sentinel' (dead and pad slots get expert id 256 = num experts, dispatch table -1: never dispatched/combined/reduced, outputs 0) vs old 'spread' (round-robin over all 256 experts, touches every expert every call, hence the flat 1.5-1.75 ms). Live outputs are BIT-IDENTICAL between sentinel and spread at every U (max abs diff 0); 5 eager runs identical, trace==eager, PCC vs dump unchanged (min 0.99143-0.99999 per layer; L1 dips at U=8..32 are routing flips vs the dump, same for both). Paired alternating traced time per layer (host-timed, 3 rounds, 30 replays; ms/layer, spread -> sentinel): U=1 1.750 -> 0.713; U=2 1.751 -> 0.967; U=4 1.754 -> 1.276; U=8 1.753 -> 1.440; U=16 1.760 -> 1.599; U=32 1.768 -> 1.708. Stage deltas (sentinel, ms/layer) U=1: router+mask 0.104, counts 0.091, dispatch 0.016, experts 0.193, combine 0.023, post_combine_reduce 0.189, all_reduce+slice 0.095; U=4: 0.105/0.090/0.018/0.624/0.054/0.188/0.197; U=8: 0.105/0.090/0.018/0.818/0.068/0.189/0.152; U=16: 0.108/0.088/0.020/0.978/0.077/0.181/0.146; U=32: 0.107/0.086/0.024/1.089/0.084/0.171/0.148. The unified op already skips zero-count experts (reader num_chunks(0)=0); fixed costs now: counts 0.09, post_combine_reduce 0.18, router+mask 0.1, all_reduce 0.1-0.2
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_J_smallU_h48_dead50c45f3.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
