@@ -1,0 +1,3 @@
+tests/eb_r3_ci/twins/kernels/tw_r21.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
+tests/eb_r3_ci/twins/kernels/tw_gr.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
+tests/eb_r3_ci/twins/kernels/tw_em.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
