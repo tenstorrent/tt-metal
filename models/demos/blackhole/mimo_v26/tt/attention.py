@@ -354,7 +354,15 @@ class MiMoAttention:
         self.decode_set(io, positions)
         return io["cur"], io["idx"]
 
-    def decode(self, x, cur_pos, rope_idx, block=1, upd=None):
+    def rope_prep(self, rope_idx, B):
+        """cos/sin rows of the B decode positions, plain [1,B,1,192] and repeated over the 8 q heads [1,B,8,192]. Depends only on the position and theta, so the decoder computes it
+        ONCE per step per layer kind and hands it to every layer (saves 2 embeddings + 2 repeats + reshapes per layer).
+        """
+        cos = ttnn.reshape(ttnn.embedding(rope_idx, self.cos_tab, layout=ttnn.TILE_LAYOUT), (1, B, 1, DQK))
+        sin = ttnn.reshape(ttnn.embedding(rope_idx, self.sin_tab, layout=ttnn.TILE_LAYOUT), (1, B, 1, DQK))
+        return cos, sin, ttnn.repeat(cos, [1, 1, NQ // TP, 1]), ttnn.repeat(sin, [1, 1, NQ // TP, 1])
+
+    def decode(self, x, cur_pos, rope_idx, block=1, upd=None, rope=None):
         """x: [1,1,B,4096] bf16 TILE per device, B = decode slots per mesh row (1..32). Returns [1,1,B,4096]."""
         B = x.shape[2]
         pt_dec, kv_mem, att_mem = self._dec_state(B, block)
@@ -372,15 +380,15 @@ class MiMoAttention:
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
-        cos = ttnn.embedding(rope_idx, self.cos_tab, layout=ttnn.TILE_LAYOUT)  # [1,B,192]
-        sin = ttnn.embedding(rope_idx, self.sin_tab, layout=ttnn.TILE_LAYOUT)
-        cos = ttnn.reshape(cos, (1, B, 1, DQK))
-        sin = ttnn.reshape(sin, (1, B, 1, DQK))
-        cosq = ttnn.repeat(cos, [1, 1, NQ // TP, 1])
-        sinq = ttnn.repeat(sin, [1, 1, NQ // TP, 1])
+        if rope is None:
+            cos, sin, cosq, sinq = self.rope_prep(rope_idx, B)
+            own = True
+        else:
+            cos, sin, cosq, sinq = rope
+            own = False
         qr = self._rope(q, cosq, sinq)
         kr = self._rope(k, cos, sin)
-        for t in (q, k, cos, sin, cosq, sinq):
+        for t in (q, k) + ((cos, sin, cosq, sinq) if own else ()):
             ttnn.deallocate(t)
         extra = {"cache_position_modulo": self.ring_blocks * BLOCK} if self.ring_blocks else {}
         if block > 1 and os.environ.get("MIMO_VERIFY_NOWRITE") == "1":

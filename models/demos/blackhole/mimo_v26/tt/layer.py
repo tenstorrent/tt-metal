@@ -294,10 +294,10 @@ class MiMoDecoderLayer:
         return h2
 
     # ------------------------------------------------------------------ decode (32 slots per row)
-    def decode(self, h, cur_pos, rope_idx, taps=None, live=None, block=1, upd=None):
+    def decode(self, h, cur_pos, rope_idx, taps=None, live=None, block=1, upd=None, rope=None):
         """h [1,1,32,4096] bf16 tile. Dead slots must hold zeros and cur_pos 0."""
         xn = self.rms(h, self.w_in)
-        a = self.attn.decode(xn, cur_pos, rope_idx, block, upd)
+        a = self.attn.decode(xn, cur_pos, rope_idx, block, upd, rope)
         h1 = ttnn.add(h, a, dtype=ttnn.bfloat16)
         fn = self.rms(h1, self.w_post)
         if self.L == 0:

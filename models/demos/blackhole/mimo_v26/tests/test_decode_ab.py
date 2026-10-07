@@ -28,6 +28,8 @@ VARIANTS = {
     "layers_fast": ({"MIMO_ROUTER": "fast"}, "layers"),
     "full_exact": ({"MIMO_ROUTER": "exact"}, "full"),
     "full_fast": ({"MIMO_ROUTER": "fast"}, "full"),
+    "full_nohoist": ({"MIMO_ROPE_HOIST": "0"}, "full"),
+    "full_hoist": ({"MIMO_ROPE_HOIST": "1"}, "full"),
     "full_plainnorm": ({"MIMO_NORM": "plain"}, "full"),
     "full_shardednorm": ({"MIMO_NORM": "sharded"}, "full"),
 }

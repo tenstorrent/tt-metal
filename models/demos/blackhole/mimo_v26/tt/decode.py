@@ -87,6 +87,11 @@ class Decoder:
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)  # [1,32,4096] per device
         h = ttnn.reshape(e, (1, 1, self.B, HIDDEN))
         caps = []
+        ropes = {}
+        if os.environ.get("MIMO_ROPE_HOIST", "1") == "1":
+            for lyr in m.layers:  # cos/sin of the step: one set per layer kind (SWA theta 1e4, global theta 1e7)
+                if lyr.swa not in ropes:
+                    ropes[lyr.swa] = lyr.attn.rope_prep(self.pos["idx"], self.B)
         for li, lyr in enumerate(m.layers):
             h2 = lyr.decode(
                 h,
@@ -95,11 +100,15 @@ class Decoder:
                 live=self.live.t if self.live is not None else None,
                 block=self.block,
                 upd=self.upd,
+                rope=ropes.get(lyr.swa),
             )
             ttnn.deallocate(h)
             h = h2
             if li in self.capture:
                 caps.append(ttnn.clone(h))
+        for r_ in ropes.values():
+            for t_ in r_:
+                ttnn.deallocate(t_)
         feat = None
         if caps:
             feat = ttnn.concat(caps, dim=3) if len(caps) > 1 else caps[0]
