@@ -931,3 +931,14 @@
 - claim: Router cost (1 card, real L5 gate, traced, per call): exact router at 64 rows 0.231 ms = matmul fp32 0.092 + sigmoid 0.002 + bias add 0.003 + topk 0.044 + index conversions 0.014 + gather 0.041 + normalize/typecast/RM 0.036; matmul core grid helps (1x8 0.180, 2x8 0.172 ms total). Port of the DSV4 router_select generic_op kernel (exact fp32 top-8, lowest index on ties, normalised bf16 weights, one core per row, T<=32): variant sel (32 rows) 0.066 ms, sel + matmul grid 1x8 (32 rows) 0.031 ms = 7.4x cheaper than the exact router at 64 rows (~0.2 ms/layer, ~9.4 ms/token over 47 layers). Agreement of sel_mm1x8 over ALL 47 layers on real ffn_in (L1-5 bf16 prefill dump, L6-47 device-captured dump, 2048 tokens each, real gate/bias): set match vs fp32-CPU 0.9966 total (exact router 0.9966); expert sets identical to the exact router for 100.00% of tokens (L7 0.9995, all other layers 1.0000); weights PCC vs exact 1.000000; all flips have fp32 gap < 0.01; 2 runs bit-identical on every layer. Host 46 failed device init once (FW init timeout 'try resetting the board') at 05:35, host_health still said OK; not reset by me
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_F_router_agree_h41_6b0f7f3ccc7.log
 - paths: models/demos/blackhole/mimo_v26/tt/router.py, models/demos/blackhole/mimo_v26/tt/router_select.py, models/demos/blackhole/mimo_v26/tt/router_kernels
+
+## E261007-0557-8b9
+- date: 2026-10-07T05:57:55
+- commit: 9f2672231cf
+- branch: ssinghal/mimo
+- host: 46
+- track: infra
+- status: inferred
+- claim: Host .46 added to bad_hosts.txt as SUSPECT after two anomalies by two agents (FW init failure at device open while host_health said OK; a 48-layer run stuck at ~2500% CPU for 18 min). Not a proven fault; no reset was done (not mine to reset); skip until a clean canary. host_health.py cannot detect FW-init failures (defect).
+- evidence: -
+- paths: models/common/bringup_kit/bad_hosts.txt
