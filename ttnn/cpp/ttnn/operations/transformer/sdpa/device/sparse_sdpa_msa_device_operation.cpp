@@ -135,7 +135,7 @@ void SparseSDPAMsaOperation::validate_on_program_cache_hit(
 // kernels instead. Checked on hits too: an auto call that fell back and an explicit request with no room resolve
 // to the same (streamed) program, so the miss-only validator would not see the second.
 void SparseSDPAMsaOperation::validate_kv_cache_request(const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
-    if (!attrs.block_cache_requested() || attrs.kv_cache_blocks.value() == 0) {
+    if (attrs.kv_cache_blocks.value_or(0) == 0) {  // off or auto
         return;
     }
     const KvCachePlan kv = resolve_kv_cache(geometry(attrs, t), attrs, t);
@@ -329,7 +329,7 @@ SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
     KvCachePlan plan;
     plan.block_bytes = g.k_tiles_per_block * g.k_tile_bytes + g.v_tiles_per_block * g.v_tile_bytes;
     // The hash runs before validation, so a not-yet-rejected block_size or d below a tile can give block_bytes == 0.
-    if (!attrs.block_cache_requested() || plan.block_bytes == 0) {
+    if (!attrs.kv_cache_blocks.has_value() || plan.block_bytes == 0) {
         return plan;
     }
     uint64_t base_bytes = 0;

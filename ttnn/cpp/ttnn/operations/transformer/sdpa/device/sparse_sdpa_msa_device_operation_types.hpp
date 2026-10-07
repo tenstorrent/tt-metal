@@ -37,8 +37,6 @@ struct SparseSDPAMsaParams {
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
-    // The request, not the resolved state: an auto request may still run the streamed kernels.
-    bool block_cache_requested() const { return kv_cache_blocks.has_value(); }
 };
 
 struct SparseSDPAMsaInputs {
