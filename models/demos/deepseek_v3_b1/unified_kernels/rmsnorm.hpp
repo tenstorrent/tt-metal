@@ -133,8 +133,7 @@ struct RMSNorm {
                 add_rsqrt_tile_init();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
                 tile_regs_acquire();
-                // One DEST tile collects the squares, so the row pays one move and one column reduce.
-                mul_reduce_scalar_tile<PoolType::SUM, DST_ACCUM_MODE, true>(
+                mul_reduce_scalar_tile<PoolType::SUM>(
                     CTArgs::input_cb, CTArgs::input_cb, CTArgs::output_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
             }
