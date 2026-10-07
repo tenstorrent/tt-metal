@@ -2026,3 +2026,47 @@
 - claim: RING decode MoE GSM8K GATE (full 48-layer model, greedy non-thinking, n=128, max_new 512, B=128 users (U=32), traced decode, prefill unified op, MIMO_MOE_DECODE=ring, router fast, library moe_C_29b0e1519bb): run a (host 30) 110/128 = 85.9% (Wilson 78.9-90.9), run b (host 44) 110/128; gate >= 109 PASS; all 128 completions TOKEN-IDENTICAL between the two runs on different hosts (two-run determinism); steady decode median 75.8 / 74.6 ms per step (mixed U as users finish), 1688 tok/s total
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_X_gsm_ring_a_h30_d6df7a1f3ad.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-2010-8c1
+- date: 2026-10-07T20:10:26
+- commit: 71c8a8af2d2
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: MoE decode device-resident live mask: MiMoMoEDecode.mask_from_flags(flags[...,n<=32], any dtype/layout) and mask_from_count(count[1,1,1,1]) give the [1,1,64,1] bf16 tile mask on device; derived masks == host masks (u32/i32/bf16 flags, u32/bf16 counts, 4 ragged patterns); unified and ring forward bit-identical with device vs host mask, eager and traced with in-place flag updates
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Y_maskdev_h30_e4ff6c137d3.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py
+
+## E261007-2010-2bd
+- date: 2026-10-07T20:10:26
+- commit: 71c8a8af2d2
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: ONE integration library artifacts/integ_e4ff6c137d3/lib (C++ identical to merged 20dff715ad7): L5 unified alpha 1.0014 rel L2 0.0044 PCC 0.99999 (mm 1.0006/0.0058); ring layer ms T=4 0.790, T=8 0.964, T=16 1.154, T=32 1.188 vs unified 1.25-1.71; ring deep-trace 48 layers T=8 1000 replays no hang (0.957 ms/layer); unified spread32 deep-trace 48 layers U=8 500 replays ok 1.555 ms/layer
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Z_unideep48_h48_e4ff6c137d3.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
+
+## E261007-2010-04e
+- date: 2026-10-07T20:10:30
+- commit: 71c8a8af2d2
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: Ring decode MoE full-model verify (test_verify_decode, MIMO_MOE_DECODE=ring, U=1,2,4 -> ring T=8U): 4 layers and 48 layers both PASS: argmax 100% token-exact vs sequential, features bit-identical (feat_pcc_min 1.0), verify repeat bit-identical
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AB_verify_ring48.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
+
+## E261007-2010-52e
+- date: 2026-10-07T20:10:30
+- commit: 71c8a8af2d2
+- branch: ssinghal/mimo-moe
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: Ring DRAM headroom cells, 48 layers, free DRAM per chip after prefill (one copy) -> after ring copy (ring copy measured 9.90 GiB per chip for 47 layers): B4/4k 18.13 -> 8.23; B16/4k 17.80 -> 7.90; B4/64k 15.63 -> 5.73; B16/64k 14.11 -> 4.21 GiB; ring fits with >=4 GiB headroom in all four cells (the decision lines in these runs used the old 54 MB/bank constant and are wrong; fixed to 27 in f6d878c32fc, ring_enabled falls back to unified when headroom <1 GiB). B=128/64k not measured (extrapolated ~ -0.5 GiB headroom, would fall back)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AA_dramcell_16_65536.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
