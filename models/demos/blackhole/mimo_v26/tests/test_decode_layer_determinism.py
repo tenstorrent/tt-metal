@@ -75,25 +75,33 @@ def main():
                 taps_all.append(rec_l)
             ttnn.deallocate(h)
             runs.append(taps_all)
-        first = None
-        per_layer = []
+        live = alive  # [rows, 32]
+        first_live, first_any, per_layer = None, None, []
         for L in range(NL):
             diffs = {}
             for k in runs[0][L]:
-                a, b = runs[0][L][k], runs[1][L][k]
-                d = (a - b).abs()
+                d = (runs[0][L][k] - runs[1][L][k]).abs().amax(dim=-1)  # [rows, cols, 32]
+                dl = d[live.unsqueeze(1).expand_as(d)]
+                dd = d[(~live).unsqueeze(1).expand_as(d)]
                 if float(d.max()) > 0:
-                    # which rows / slots
-                    bad = (d.amax(dim=(1, 2, 4)) if d.dim() == 5 else d.amax(dim=-1)) > 0
-                    diffs[k] = dict(maxdiff=float(d.max()), n_bad_row_col_slot=int(bad.sum()))
+                    diffs[k] = dict(
+                        live_maxdiff=float(dl.max()) if dl.numel() else 0.0,
+                        live_bad=int((dl > 0).sum()),
+                        dead_maxdiff=float(dd.max()) if dd.numel() else 0.0,
+                        dead_bad=int((dd > 0).sum()),
+                    )
             per_layer.append(diffs)
-            if diffs and first is None:
-                first = L
+            if diffs and first_any is None:
+                first_any = L
+            if first_live is None and any(v["live_bad"] for v in diffs.values()):
+                first_live = L
         rec(
             "layer_determinism",
             layers=NL,
-            first_layer_with_diff=first,
-            per_layer={L: d for L, d in enumerate(per_layer) if d and (L < (first or 0) + 4)},
+            first_layer_any_diff=first_any,
+            first_layer_live_diff=first_live,
+            n_live_per_row=int(live[0].sum()),
+            per_layer={L: d for L, d in enumerate(per_layer) if d and L < (first_any or 0) + 3 or L == first_live},
         )
         rec("summary", n_layers_with_diff=sum(1 for d in per_layer if d))
     finally:
