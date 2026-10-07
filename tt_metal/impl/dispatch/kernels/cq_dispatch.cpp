@@ -34,6 +34,14 @@ constexpr uint32_t dispatch_cb_pages = DISPATCH_CB_PAGES;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
 constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
+// Values of the dispatch_d shutdown semaphore when dispatch_s runs on the same core. dispatch_s owns the counters of
+// the NOC that dispatch_d also writes on (dispatch_d's upstream NOC). dispatch_s takes its baseline from the physical
+// counters before its kernel_main and publishes SNAPSHOT_READY; dispatch_d must not initialize or issue on that NOC
+// before then, or its early transactions are counted twice (in dispatch_s's baseline and in the deltas dispatch_d
+// exports at shutdown) and dispatch_s's final barrier never completes. dispatch_d publishes DELTAS_READY after
+// exporting its deltas, and dispatch_s merges them only then.
+constexpr uint32_t dispatch_s_noc_snapshot_ready = 1;
+constexpr uint32_t dispatch_d_noc_deltas_ready = 2;
 constexpr uint32_t dispatch_cb_blocks = DISPATCH_CB_BLOCKS;
 constexpr uint32_t upstream_sync_sem = UPSTREAM_SYNC_SEM;
 constexpr uint32_t command_queue_base_addr = COMMAND_QUEUE_BASE_ADDR;
@@ -1622,7 +1630,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
     set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
         upstream_noc_index, posted_writes_delta);
 
-    Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(1);
+    Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).set(dispatch_d_noc_deltas_ready);
 }
 
 void kernel_main() {
@@ -1644,6 +1652,10 @@ void kernel_main() {
 #ifndef ARCH_QUASAR
     static_assert(my_noc_index != upstream_noc_index);
 #endif
+    if constexpr (publish_noc_count) {
+        // dispatch_s owns this NOC's counters: wait until its baseline exists before touching the NOC.
+        Semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id).wait(dispatch_s_noc_snapshot_ready);
+    }
     if constexpr (my_noc_index != upstream_noc_index) {
         noc_local_state_init(upstream_noc_index);
     }

@@ -42,6 +42,9 @@ constexpr uint32_t cb_size = CB_SIZE;
 constexpr uint32_t my_dispatch_cb_sem_id = MY_DISPATCH_CB_SEM_ID;
 constexpr uint32_t upstream_dispatch_cb_sem_id = UPSTREAM_DISPATCH_CB_SEM_ID;
 constexpr uint32_t dispatch_d_shutdown_sem_id = DISPATCH_D_SHUTDOWN_SEM_ID;
+// Shutdown semaphore values when dispatch_d runs on the same core (protocol described in cq_dispatch.cpp).
+constexpr uint32_t dispatch_s_noc_snapshot_ready = 1;
+constexpr uint32_t dispatch_d_noc_deltas_ready = 2;
 constexpr uintptr_t dispatch_s_sync_sem_base_addr = DISPATCH_S_SYNC_SEM_BASE_ADDR;
 constexpr uint32_t mcast_go_signal_addr = MCAST_GO_SIGNAL_ADDR;
 constexpr uint32_t unicast_go_signal_addr = UNICAST_GO_SIGNAL_ADDR;
@@ -789,7 +792,7 @@ void merge_dispatch_d_noc_counter_deltas() {
 
     volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
-    noc_semaphore_wait(shutdown_sem_addr, 1);
+    noc_semaphore_wait(shutdown_sem_addr, dispatch_d_noc_deltas_ready);
 
     invalidate_l1_cache();
     const uint32_t reads_delta =
@@ -826,6 +829,16 @@ void kernel_main() {
 #endif
     set_l1_data_cache<true>();
     DPRINT("dispatch_s : start\n");
+#ifndef ARCH_QUASAR
+    if constexpr (!distributed_dispatcher) {
+        // The NCRISC kernel wrapper initialized this NOC's counters from the physical counters before kernel_main.
+        // Publish that the baseline exists so dispatch_d (same core) may start using this NOC.
+        noc_semaphore_set(
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id)),
+            dispatch_s_noc_snapshot_ready);
+    }
+#endif
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();
