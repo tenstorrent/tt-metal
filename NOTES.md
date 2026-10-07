@@ -25,3 +25,14 @@ step from the split (halo exchange / permutes / sdpa / qkv) and record it here.
 - Conclusion: the NA SDPA kernel itself is 2.35 s of 4.93 s. lofi barely moves it, so it is not math-fidelity bound: look at masked/padded tile waste in the brick (tile narrowing, PLAN), K/V reads and core grid utilization. Second target: qkv-lanes 58 ms/block (0.46 s) -> fuse slice+norm+rope.
 - Next step (standard run): profile the neighborhood-sdpa op (op-level: core count, per-core tiles, useful vs computed QK tiles) and implement NA tile narrowing behind an env knob. Also run the #226 follow-up tests (needs a ttnn build at/after 5c1635d733d on blx01).
 Files: tt-project/t227/stage_tree_{hifi2,lofi}.txt, cmp_lofi_vs_{ref,hifi2}.json.
+
+## Run 2 (2026-10-07 late): design for the next code step, no code yet
+- Rebased onto origin/ttp/t48-ltx25-integrated @ 5c1635d733d (clean).
+- blx01 unreachable (ssh: No route to host), so there was no device job and the #226 follow-up tests
+  (test_choose_sharded_brick_regression + GNA_STRIDE+S5_2D guard) did NOT run. No ttnn build at/after
+  5c1635d733d exists on g15blx02 (/home budget: ~92 GB used, no new build dir allowed).
+- Next step chosen: "key phase" (offset K/V brick grid), see tt-project/t227/KEY_PHASE.md + key_phase_calc.py.
+  It is exact. Brick (2,4,4), phase (1,1,1), chunk (2,1,1): 56 K slots per Q brick vs 98 today (1.75x).
+  Estimated NA SDPA 294 -> ~168 ms/block, decode 4.93 -> ~3.9 s. Tile narrowing (#213) was only ~3%.
+- Next: implement planner + reader query_phase + Python opt-in DIFFVAE_NA_KEY_PHASE=1 (list in KEY_PHASE.md),
+  build on blx01 /var/tmp/fasth3 (or blx03 ~/fasth3), job 1 = tests, job 2 = decode A/B phase off/on.
