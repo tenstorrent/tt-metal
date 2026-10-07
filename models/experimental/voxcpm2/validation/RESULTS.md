@@ -108,3 +108,50 @@ ran after cleanup. Neither run qualifies integrated TT synthesis.
 Fresh current-main TTNN builds, upstream CI/post-commit regressions and
 maintainer/codeowner acceptance have not been completed. Successful tests on
 the installed runtime must not be presented as those checks passing.
+
+## PyTorch 2.10 compatibility — 2026-10-07
+
+Torch and Torchaudio were upgraded together from 2.8.0 to 2.10.0, and the model
+dependency lock was regenerated. No model or validation Python computation was
+changed; implementation revision remains `6c2f371a`. Isolated environments were
+used so the original qualification environments remain available.
+
+Native, uncompiled CUDA generation ran on RTX A6000 GPU 2 with Torch/Torchaudio
+2.10.0+cu128, Python 3.12, and the same pinned official source and checkpoint.
+The fox sentence, seed 42, CFG 2.0, ten diffusion steps per patch and 32-patch cap
+produced four seconds at 48 kHz. A second run used that audio as voice reference
+and produced 3.68 seconds. Both WAVs were finite and non-silent. Fresh component
+captures from these runs were replayed on the same reserved Blackhole p150b.
+
+The TT compatibility environment used Python 3.10, Torch 2.10.0+cpu and the
+existing TTNN 0.65.1rc17.dev6333+h3.3 wheel. The wheel's declared NumPy < 2
+constraint required NumPy 1.26.4 rather than the old environment's 2.2.6; the
+new environment passed `uv pip check`. CUDA dependencies also passed that check.
+TT computation retained BF16, HiFi4, FP32 destination accumulation and the
+256 KiB L1-small reservation. No fresh TT-Metal build was performed.
+
+All 16 cases covering 14 component types passed PCC >= 0.99 against the fresh
+2.10 CUDA oracle. All 30 configured TT tests passed with no skips; host-only
+discovery passed 29 tests and explicitly skipped the device test. The
+[machine-readable upgrade record](results/2026-10-07-torch210-pcc.json) includes
+all case metrics, environment versions and capture-manifest hashes.
+
+| Component | PCC | Relative RMS error |
+| --- | ---: | ---: |
+| Base LM prefill | 0.9999093 | 1.3470% |
+| Residual LM prefill | 0.9999660 | 0.8423% |
+| Local patch encoder | 0.9999826 | 0.5983% |
+| FSQ | 0.9999813 | 0.6156% |
+| Local DiT, three estimator calls | 0.9999425–0.9999566 | 0.9677–1.1138% |
+| AudioVAE encoder | 0.9995424 | 3.0457% |
+| AudioVAE decoder, complete 4 s waveform | 0.9997835 | 7.6411% |
+
+The native same-seed CUDA waveform is not stable sample-by-sample across Torch
+2.8 and 2.10: waveform PCC is 0.632118, relative RMS difference 86.2285%, with
+the same output length. This comparison measures cross-version free-running
+generation, not matched-input component correctness. The component gates above
+use fresh 2.10 native inputs and outputs. These tests establish execution and
+the stated component accuracy; they do not establish bitwise cross-version
+generation, subjective speech quality or integrated TT synthesis. Different
+native trajectories also mean changes in component metrics between the two
+qualification runs must not be described as accuracy improvements.
