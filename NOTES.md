@@ -39,3 +39,13 @@
 - ON arm FAILED at 86 s: TT_FATAL minimal_matmul_split.cpp:46 `N_per_chunk % TILE_WIDTH == 0`
   (replicated audio QKV/FFN fused split matmul: chunk width not tile-aligned when N is not divided by TP).
   Log: blx01 /var/tmp/fasth3/t189/res/ab1/on/run.log line 1039. Needs a code fix (standard tier), then rerun.
+
+## Fix + ab2 (2026-10-07 ~05:50 UTC)
+- Code fix 8e6ba4d72a2: unsharded minimal_matmul_split needs equal tile-aligned chunks; the gate (32 cols)
+  no longer shares the QKV split, it runs its own ttnn.linear. QKV is a 3-way split of 2048.
+  CPU test on blx01 (t189 overlay): 5 passed (new test_qkv_split_chunks_fit_minimal_matmul_split).
+- blx01 overlay rebuilt (OVERLAY_COMMIT 8e6ba4d72a2). #188's job 755 was running, so a detached submitter
+  /var/tmp/fasth3/t189/sub_ab2.sh (pid 125838, log res/sub_ab2.log) waits for no smarton job/hold, then
+  run-bg `run_ab.sh ab2` (-t 600) and writes res/ab2.marker (rc, job id, status) when the job ends.
+- Next: read res/ab2.marker + res/ab2/job.log; score PCC/PSNR per seed vs ref_t48_f6b8; decide default-on
+  (>= ~20 ms e2e win, output equivalent) or keep opt-in; push.
