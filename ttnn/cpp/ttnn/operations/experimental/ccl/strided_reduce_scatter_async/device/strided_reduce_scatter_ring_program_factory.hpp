@@ -10,6 +10,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail {
 
@@ -41,7 +42,7 @@ struct RingStridedReduceScatterMeshWorkloadFactory {
 
 // Builder function for ring topology - creates program artifacts
 StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_program_artifacts(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     const Tensor& input_tensor,
     const Tensor& intermediate_tensor,
     const MeshCoordinate& sender_device_coord,
