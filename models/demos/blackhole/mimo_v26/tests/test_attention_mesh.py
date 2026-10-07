@@ -157,6 +157,34 @@ def main():
                 dres.append(dict(step=step, min=min(dd.values()), col_spread=cs, per_user=dd))
                 ttnn.deallocate(o)
             rec("decode_pcc", kind=kind, min=min(d["min"] for d in dres), steps=dres)
+            if (
+                os.environ.get("ATTN_PERF", "0") == "1"
+            ):  # warm wall time per call (host-dispatch inclusive), 20 decode calls / 5 prefill chunks
+                xin_d = to_mesh(xd_all[:, :, 0].reshape(rows, 1, 32, HIDDEN))
+                for _ in range(3):
+                    ttnn.deallocate(m.decode(xin_d, cur, idx))
+                ttnn.synchronize_device(mesh)
+                t0 = time.perf_counter()
+                for _ in range(20):
+                    ttnn.deallocate(m.decode(xin_d, cur, idx))
+                ttnn.synchronize_device(mesh)
+                dec_ms = (time.perf_counter() - t0) / 20 * 1e3
+                xin_p = to_mesh(x[:, 0, (NCH - 1) * CH : NCH * CH].reshape(rows, 1, CH, HIDDEN))
+                ttnn.deallocate(m.prefill_chunk(xin_p, (NCH - 1) * CH, 0))
+                ttnn.synchronize_device(mesh)
+                t0 = time.perf_counter()
+                for _ in range(5):
+                    ttnn.deallocate(m.prefill_chunk(xin_p, (NCH - 1) * CH, 0))
+                ttnn.synchronize_device(mesh)
+                pre_ms = (time.perf_counter() - t0) / 5 * 1e3
+                rec(
+                    "perf",
+                    kind=kind,
+                    decode_ms_32users=round(dec_ms, 3),
+                    prefill_chunk_ms=round(pre_ms, 3),
+                    chunk=CH,
+                    start=(NCH - 1) * CH,
+                )
     finally:
         ttnn.close_mesh_device(mesh)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
