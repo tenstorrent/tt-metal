@@ -28,4 +28,4 @@ fi
 export MESH_DEVICE=N150
 apply_debug_profile
 trap 'printf "\nIf this run hung, check for leftover Zebu jobs (testing-with-quasar-emulator skill).\n"' EXIT
-run_pytest "emu_2x3" --qwen-expect-grid "${EMU_GRID}"
+run_pytest "emu_2x3" --qwen-quasar-config --qwen-expect-grid "${EMU_GRID}"

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import torch
+import ttnn
 
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e import pcc as P
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e.config import HF_MODEL_ID
@@ -26,6 +27,8 @@ def test_qwen3_vl_e2e(mesh_device, qwen_run_config, monkeypatch, request):
     grid = mesh_device.compute_with_storage_grid_size()
     if cfg.expect_grid is not None:
         assert (grid.x, grid.y) == cfg.expect_grid, f"device grid {grid.x}x{grid.y} != expected {cfg.expect_grid}"
+    # Quasar has no bfp8: without the Quasar config the text weights default to bfloat8_b (and the cache key says native).
+    assert cfg.quasar_config or mesh_device.arch() != ttnn.device.Arch.QUASAR, "pass --qwen-quasar-config on Quasar"
 
     monkeypatch.setenv("HF_MODEL", os.environ.get("HF_MODEL", HF_MODEL_ID))
     cache_root = Path(os.environ.get("TT_CACHE_PATH", Path.home() / ".cache" / "tt_qwen3_vl_quasar"))
