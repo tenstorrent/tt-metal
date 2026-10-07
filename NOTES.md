@@ -11,6 +11,9 @@
   f6b806516cc) + the 4 changed files; OVERLAY_COMMIT 5673d92a566.
 - NOT submitted yet: blx01 broker was HELD recovering tray 3 (chips 16-23).
 
+## Submitted
+- 2026-10-07 05:36 UTC: blx01 broker job 754 (run_ab.sh ab1, -t 600). On wake: check res/ab1/job.log for T189_DONE, then steps 3-5 below.
+
 ## Drop log
 - 2026-10-07 04:59 UTC (06 21:59 LA), blx01, broker job 732 (smarton, #188's s5 config), chips 16-23
   (tray 3) left PCIe; broker-killed, held, reset (jobs 733-736). Not a #189 job.
