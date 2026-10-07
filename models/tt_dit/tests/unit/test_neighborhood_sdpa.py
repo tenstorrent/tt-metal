@@ -565,14 +565,15 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
 @pytest.mark.parametrize(
     "volume, context_window, width_local, shard_count, expected_brick, expected_gather",
     [
-        # 1080p decode: the brick production stage 5 runs with (W over 8 chips).
-        ((84, 272, 480), (11, 11, 11), 60, 8, (2, 8, 2), 147),
+        # 1080p decode: the brick production stage 5 runs with (W over 8 chips). Gather counts are
+        # per query chunk, which at stride 1 is two bricks along T.
+        ((84, 272, 480), (11, 11, 11), 60, 8, (2, 8, 2), 168),
         # Deterministic stages at 1080p, W over the size-8 axis. W_local 15 admits only brick
         # width 1 (shard origins must be brick-aligned and 15 has no even divisor), so these pin
         # that odd widths are searched at all; W_local 30 admits widths 1 and 2 and picks 2.
         ((21, 68, 120), (3, 7, 7), 15, 8, (8, 4, 1), 63),
         ((41, 68, 120), (3, 5, 5), 15, 8, (16, 2, 1), 45),
-        ((81, 136, 240), (3, 5, 5), 30, 8, (8, 2, 2), 27),
+        ((81, 136, 240), (3, 5, 5), 30, 8, (8, 2, 2), 36),
         # The same stages at test_diffvae_ltx.py's arms tests' shorter T, where the deep-in-time bricks
         # exceed the volume and the chooser has to settle for shallower ones.
         ((6, 68, 120), (3, 7, 7), 15, 8, (4, 8, 1), 42),
