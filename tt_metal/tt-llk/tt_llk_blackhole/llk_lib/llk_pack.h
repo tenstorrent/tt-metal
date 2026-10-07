@@ -408,6 +408,8 @@ inline void pack_init_apply(
         _llk_pack_configure_addrmod_<pack_mode>();
     }
     _llk_pack_mop_config_<pack_mode, zero_output>(face_r_dim, tile_c_dim, num_faces, num_tiles);
+    // The per-tile and block packs write the destination address with byte writes that keep byte 3: bit 31, as every full write sets it.
+    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
     if constexpr (!skip_packer_strides)
     {
         set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
@@ -601,7 +603,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<false>(address);
 
     ckernel::ckernel_template::run();
 
@@ -636,7 +638,7 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<false>(address);
 
     // MOP word bits 19:10: a non-zero outer loop length overrides the programmed one for this run only; bits 9:0 (inner loop) stay programmed.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
@@ -670,7 +672,7 @@ inline void _llk_pack_block_closed_(
 
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<false>(address);
 
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves that counter.
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
