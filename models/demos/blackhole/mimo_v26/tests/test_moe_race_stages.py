@@ -79,7 +79,7 @@ def test_moe_race_stages(mesh_device):
         moe = MiMoPrefillMoE(
             md, wts, ckc=make_ckc("hifi2", fp32acc=True, packer_l1_acc=True), expert_op="unified", cf=4
         )
-        dec[L] = MiMoMoEDecode(md, gate, moe, router=ROUTER)
+        dec[L] = MiMoMoEDecode(md, gate, moe, router=ROUTER, dead=os.environ.get("MIMO_DEAD", "sentinel"))
         xdev[L] = ttnn.from_torch(
             x,
             device=md,
