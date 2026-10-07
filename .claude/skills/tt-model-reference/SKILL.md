@@ -5,7 +5,9 @@ description: Build the CPU oracle for a new LLM (HF modeling code + config, laye
 
 # Reference model and dumps (track 0)
 
-Last validated against commit: <none yet>
+Last validated against commit: 8fe1f078f57 (branch ssinghal/mimo-ref, MiMo-V2.6-Flash), ONLY for: sec 0 (local-weights check), sec 1 step 3 on a real fp8/fp4 checkpoint
+(rank-blocked fp8 qkv layout proof, fp4 nibble/e8m0 check by routing selectivity), sec 2 (independent fp32 oracle == HF layer, PCC 0.9999999, same router sets; short chain),
+sec 3 prefill dump format + `single_layer.py` CLI + noise floor (S=128 b16 and S=512 b4, L0-5). NOT validated: decode-step dumps against a device, S>=2048 noise floor, any model other than MiMo.
 
 Policy (user decision): the CPU reference does NOT run the complete model. Prefill-only and decode-only checks are enough.
 1. Per-layer teacher-forced checks: the oracle runs ONE layer on the real hidden state captured from the device (or from a short CPU prefix) and
@@ -24,6 +26,11 @@ layer type, and the short chain reproduces HF logits/greedy tokens on a short re
 decode step) for at least one real-text prompt set exist, with command, commit, S, B and prompt sha256 in LOG.md; (c) bf16 and fp32 runs of the
 same layers exist so the reference's own noise floor is known.
 
+## 0. Local weights first
+Before anything: find the checkpoint on disk (`ls /mnt/tt-data`, HF caches, `bringup_study/<model>/`, the index json's shard names). Study folders often hold only config/index/modeling code
+(MiMo: `sgl.py` there was a 404 stub, there was NO checkpoint). If no complete copy exists, STOP and ask the coordinator/owner before downloading (170-600 GB); do not range-fetch
+weights from the network on your own. Record the checkpoint path in LOG.md (env var `<MODEL>_CKPT`).
+
 ## 1. Get the model
 1. Read, do not guess: the HF repo `config.json`, `modeling_*.py`, the quantisation config, the tokenizer chat template, the
    safetensors index. Save a local copy path in LOG.md (weights live on NFS; never copy 300+ GB to a worktree).
@@ -40,6 +47,12 @@ same layers exist so the reference's own noise floor is known.
 * Router: run it in fp32 and store the decisions; the device router is the main source of divergence (see `tt-moe-correctness`).
 * Check against HF: logits PCC > 0.999 and identical greedy tokens on 3 prompts. Then freeze it.
 * Runtime reference: S=128, 16 users ~ 1 min/layer on CPU; plan CPU hours for 2k/4k/8k dumps and run them in the background (nice).
+
+* Teacher-forced single layer for ANY layer (no CPU chain beyond the short prefix): `python -m <pkg>.reference.single_layer --layer N --h-in <h.pt or layer_*.pt> --out out.pt [--dtype bf16|fp32] [--dec-in dec.pt]`
+  runs the oracle on a hidden state handed in (e.g. captured from the device) and writes the same prefill/state/decode fields as the chain dump (MiMo: `reference/single_layer.py`, tested on L20, L46, L47 with a random real-scale input).
+* Write the oracle independently from the spec and prove it equal to the HF layer on real tokens (MiMo: PCC 0.9999999 fp32, identical expert sets) BEFORE trusting it; PCC saturates on residual-outlier models, also log relative L2 error.
+* Check quantised-layout assumptions with the real HF forward, not statistics alone: wrong qkv layout gave layer outputs 10-90x the residual (MiMo), a functional test (routed tokens must excite their expert more) fixed the fp4 nibble order.
+* The checkpoint's modeling file may target an older transformers than installed (MiMo: 5.3 vs 5.12: mask helper kwargs changed); build masks with the installed API and compare to the oracle mask.
 
 ## 3. Dumps (format the device tests load)
 Real text prompts only (GSM8K chat-template prompts + one long book-text prompt); random tokens give meaningless routing

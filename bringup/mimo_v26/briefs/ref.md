@@ -9,9 +9,9 @@ short CPU chain (first 6 layers = L0..L5 covers all three types) matches HF; (b)
 format per `tt-model-reference` section 3 (h_in, h_out, attn_in/out, ffn_in/out, routing_idx+weights, KV after prefill, decode-step dump). Hash prompts (sha256) in LOG; (c) bf16 and fp32 variants -> noise floor.
 
 First task (blocks everything else, do it first, report within ~2 h): resolve the qkv_proj row layout / scale layout (study risk 1: scale_inv shapes [108,32] GA / [116,32] SWA suggest per-TP4-rank
-[q_r|k_r|v_r] blocking). Decide using the checkpoint files, `sgl.py` and the HF code, with a real test (e.g. dequant both ways, run layers with real weights on real tokens, compare to a
+[q_r|k_r|v_r] blocking). Decide using the checkpoint files, the HF code (there is no sgl.py), with a real test (e.g. dequant both ways, run layers with real weights on real tokens, compare to a
 known-good signal such as sensible per-layer statistics or HF/sglang logic). Write a `decision` LOG entry, and a loader function `load_layer(i, dtype)` used by everyone (dequant fp8 128x128 block, fp4+e8m0 expert dequant:
 verify nibble order and e8m0 bias against DSV4 `reference/ref_kernels.dequant_fp4_weight` AND against the fp8->bf16/known value ranges; report max abs error vs re-quantisation).
 Also verify and log (as `decision` entries, status per what you actually checked): SWA mask convention (window 128 inclusive of self, from transformers `create_sliding_window_causal_mask`), sink semantics, V scale 0.707,
 partial RoPE (first 64 of 192, rotate_half split-half, theta 1e7 global / 1e4 SWA), router semantics, no clamp.
-Secondary: MTP-3 structure (in-checkpoint, no HF code): collect from README/sgl.py/dflash code what exists; do NOT build it now. Hosted-oracle prompts (OpenRouter) are optional: ask before using any network service.
+Secondary: MTP-3 structure (in-checkpoint, no HF code): collect from README/technical report/dflash code (see reference/MTP_NOTES.md) what exists; do NOT build it now. Hosted-oracle prompts (OpenRouter) are optional: ask before using any network service.
