@@ -14,3 +14,9 @@ tt-project/data/g15/ref_t48_s2x2/seed<N>.{mp4,json} + run.log, identity.txt (cmp
 Next: read POST.done + identity.txt, E2E_WALL_S gen#1..5 from run.log, write meta.json, symlink
 baselines/ltx25_1080p_6s/ref_t48_s2x2 -> ../../data/g15/ref_t48_s2x2, hand off done.
 If job 764 dropped: log it, rerun once on blx01 when the broker is healthy (2nd drop -> blx03 runner/exabox).
+
+## Result (2026-10-07)
+Job 764 exit 0, 156.7 s, 0 JIT compiles, no drops. Warm seeds 0-4: 4.779 4.806 4.822 4.774 4.788 s
+(mean 4.794, worst 4.822; was 5.520 at 4194cd98852 with 3-step S2). Cold gen#0 32.5 s.
+All 5 mp4s byte-identical to t185_s2x2 (job 758). Registered baselines/ltx25_1080p_6s/ref_t48_s2x2 ->
+data/g15/ref_t48_s2x2 (meta.json). blx01 overlay tree removed; res/ref5 + scripts kept (/var/tmp/fasth3/t195).
