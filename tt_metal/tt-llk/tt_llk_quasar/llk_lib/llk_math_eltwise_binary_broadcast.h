@@ -24,38 +24,46 @@ using namespace ckernel::math;
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
+ * @param acc_to_dest: When true, accumulate into dest even at LoFi. HiFi partial products still accumulate; without this flag the first phase overwrites.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape)
+inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
-    const std::uint32_t num_eltwise_instrn_per_face = (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
+    // A face shorter than one FPU instruction still needs that instruction, or the
+    // inner loop is 0 and math never clears the Src dvalids unpack raised.
+    const std::uint32_t num_eltwise_instrn_per_face =
+        (tensor_shape.face_r_dim < ELTWISE_MATH_ROWS) ? 1u : (tensor_shape.face_r_dim >> rows_log2(ELTWISE_MATH_ROWS));
 
     constexpr auto SRCB_BROADCAST_TYPE = (BROADCAST_TYPE == BroadcastType::COL)
                                              ? p_elwise::SRCB_BCAST_COL
                                              : ((BROADCAST_TYPE == BroadcastType::ROW) ? p_elwise::SRCB_BCAST_ROW : p_elwise::SRCB_BCAST_ALL);
 
-    constexpr std::uint32_t EN_DST_ACC = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
-    static_assert(!(EN_DST_ACC && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
+    constexpr bool high_fidelity = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
+    static_assert(!(high_fidelity && ELTWISE_BINARY_TYPE != EltwiseBinaryType::ELWMUL), "Math fidelity larger than LoFi only works with Eltwise MUL");
+    // The address-advancing op is a later fidelity phase when HiFi, so it accumulates.
+    // LoFi accumulates only when the caller asked to fold tiles into dest.
+    const std::uint32_t advancing_acc = (high_fidelity || acc_to_dest) ? 1u : 0u;
 
     const std::uint32_t MOP_OUTER_LOOP = tensor_shape.total_num_faces();
     const std::uint32_t MOP_INNER_LOOP = num_eltwise_instrn_per_face;
 
-    const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, SRCB_BROADCAST_TYPE, ADDR_MOD_0>(EN_DST_ACC);
+    const std::uint32_t eltwise_binary_op = eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_NONE, SRCB_BROADCAST_TYPE, ADDR_MOD_0>(advancing_acc);
     const std::uint32_t eltwise_binary_op_clr_srcAB_valid =
-        eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_1>(EN_DST_ACC);
+        eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCAB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_1>(advancing_acc);
 
-    constexpr std::uint32_t replay_buf_len = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
+    constexpr std::uint32_t replay_buf_len = high_fidelity ? to_underlying(MATH_FIDELITY_TYPE) - 1 : 0;
 
-    if constexpr (EN_DST_ACC)
+    if constexpr (high_fidelity)
     {
         load_replay_buf<0, replay_buf_len>(
-            // Lambda function to load reply buffer
-            [replay_buf_len, SRCB_BROADCAST_TYPE]
+            [replay_buf_len, SRCB_BROADCAST_TYPE, acc_to_dest]
             {
                 for (std::uint32_t i = 0; i < replay_buf_len; ++i)
                 {
-                    TTI_ELWMUL(p_elwise::CLR_NONE, true, SRCB_BROADCAST_TYPE, ADDR_MOD_3, 0);
+                    // First phase overwrites unless this tile folds into the previous dest result.
+                    const std::uint32_t phase_acc = (acc_to_dest || i > 0) ? 1u : 0u;
+                    TTI_ELWMUL(p_elwise::CLR_NONE, phase_acc, SRCB_BROADCAST_TYPE, ADDR_MOD_3, 0);
                 }
             });
     }
@@ -65,16 +73,36 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
     ROW -> Unpacker unpacks 4 (default in 32x32 tile) faces: F0, F1, F0, F1, SrcB Inc = 0
     COL -> Unpacker unpacks 4 (default in 32x32 tile) faces: F0, F0, F2, F2, SrcB Inc += ELTWISE_MATH_ROWS
     */
-    ckernel_template temp = EN_DST_ACC ? ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), eltwise_binary_op)
-                                       : ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
+    ckernel_template temp = high_fidelity ? ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), eltwise_binary_op)
+                                          : ckernel_template(MOP_OUTER_LOOP, MOP_INNER_LOOP, eltwise_binary_op);
 
     // Only need to clear per face for ROW/COL, since SCALAR only has 1 face from the unpacker
     if constexpr (BROADCAST_TYPE != BroadcastType::SCALAR)
     {
-        constexpr std::uint32_t ADDR_MOD = (BROADCAST_TYPE == BroadcastType::COL) ? ADDR_MOD_2 : ADDR_MOD_0;
-        const std::uint32_t eltwise_binary_op_clr_srcB =
-            eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD>(EN_DST_ACC);
-        temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
+        // A face that fits in one FPU instruction never advanced SrcB. Clearing the SrcB
+        // counter on that only instruction samples the column before the face is visible.
+        // Longer faces keep the counter clear programmed in the address-mod setup.
+        if constexpr (BROADCAST_TYPE == BroadcastType::COL)
+        {
+            if (num_eltwise_instrn_per_face == 1u)
+            {
+                addr_mod_t {
+                    .srca     = {.incr = ELTWISE_MATH_ROWS},
+                    .srcb     = {.incr = 0},
+                    .dest     = {.incr = ELTWISE_MATH_ROWS},
+                    .fidelity = {.incr = 0, .clr = high_fidelity}}
+                    .set(ADDR_MOD_2);
+            }
+            const std::uint32_t eltwise_binary_op_clr_srcB =
+                eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_2>(advancing_acc);
+            temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
+        }
+        else
+        {
+            const std::uint32_t eltwise_binary_op_clr_srcB =
+                eltwise_binary_func<ELTWISE_BINARY_TYPE, p_elwise::CLR_SRCB_VLD, SRCB_BROADCAST_TYPE, ADDR_MOD_0>(advancing_acc);
+            temp.set_last_inner_loop_instr(eltwise_binary_op_clr_srcB);
+        }
     }
 
     temp.set_last_outer_loop_instr(eltwise_binary_op_clr_srcAB_valid);
@@ -156,15 +184,16 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  *values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Face grid and face row/column dimensions for the operand tile
+ * @param acc_to_dest: When true, accumulate into dest even at LoFi. HiFi partial products still accumulate; without this flag the first phase overwrites.
  * @note On the unpack thread, pair with @ref _llk_unpack_binary_broadcast_operands_init_ (T0) with matching BROADCAST_TYPE; on the pack thread, pair with
  *       @ref _llk_pack_init_ (T2).
  * @note @ref _llk_math_eltwise_binary_broadcast_ runs the configured op with matching template args.
  */
 template <EltwiseBinaryType ELTWISE_BINARY_TYPE, BroadcastType BROADCAST_TYPE, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape)
+inline void _llk_math_eltwise_binary_broadcast_init_(const TensorShape& tensor_shape, bool acc_to_dest = false)
 {
     _llk_math_eltwise_binary_broadcast_addrmod_<BROADCAST_TYPE, MATH_FIDELITY_TYPE>();
-    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+    _llk_math_eltwise_binary_broadcast_mop_config_<ELTWISE_BINARY_TYPE, BROADCAST_TYPE, MATH_FIDELITY_TYPE>(tensor_shape, acc_to_dest);
 
     // Each dest tile uses its total face rows, but takes at least one full face.
     _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, tensor_shape.face_r_dim * tensor_shape.total_num_faces()));

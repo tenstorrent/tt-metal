@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -96,14 +96,6 @@ def _unique_dimensions(dimensions):
     return [list(dim) for dim in dict.fromkeys(tuple(dim) for dim in dimensions)]
 
 
-def _effective_dest_acc(dest_acc, formats):
-    return (
-        DestAccumulation.Yes
-        if formats.output_format == DataFormat.Float32
-        else dest_acc
-    )
-
-
 def get_eltwise_binary_tile_dimensions(transpose_srca, broadcast_type):
     """Functional tile shapes, filtered by transpose and broadcast constraints."""
     if transpose_srca == Transpose.Yes:
@@ -121,7 +113,7 @@ def get_eltwise_binary_perf_tile_dimensions(transpose_srca, broadcast_type):
 
 def _dest_full_dimensions(dest_acc, dest_sync, formats, tile_dimensions):
     return generate_perf_input_dimensions(
-        _effective_dest_acc(dest_acc, formats),
+        dest_acc,
         dest_sync,
         construct_tile_shape(tuple(tile_dimensions)),
     )
@@ -190,6 +182,23 @@ def _accumulated_output_dimensions(
     )
 
 
+def _fp32_dest_pair(formats):
+    """32-bit DEST when either operand format or the output is Float32."""
+    return (
+        formats.input_format == DataFormat.Float32
+        or formats.output_format == DataFormat.Float32
+    )
+
+
+def _expb_to_float16(formats):
+    """Packer cannot convert an exponent-B input to Float16 without 32-bit DEST."""
+    return (
+        formats.input_format.is_exponent_B()
+        and not formats.input_format.is_float32()
+        and formats.output_format == DataFormat.Float16
+    )
+
+
 def _get_valid_formats(dest_acc):
     """Valid pairs for this dest_acc, minus the ones the packer cannot do."""
     all_formats = input_output_formats(
@@ -202,20 +211,22 @@ def _get_valid_formats(dest_acc):
         ],
         same=False,
     )
+    float16_to_bfp4 = InputOutputFormat(DataFormat.Float16, DataFormat.Bfp4_b)
+    selected = []
+    for formats in all_formats:
+        if formats == float16_to_bfp4:
+            continue
+        if dest_acc not in get_valid_dest_accumulation_modes(formats):
+            continue
+        if dest_acc == DestAccumulation.Yes:
+            if _fp32_dest_pair(formats) or _expb_to_float16(formats):
+                selected.append(formats)
+            continue
+        if formats.output_format != DataFormat.Float32:
+            selected.append(formats)
     if dest_acc == DestAccumulation.Yes:
-        return [
-            formats
-            for formats in all_formats
-            if formats.input_format == DataFormat.Float32
-        ] + [INT8_FORMAT]
-    return [
-        formats
-        for formats in all_formats
-        if not is_format_combination_outlier(
-            formats.input_format, formats.output_format, dest_acc
-        )
-        and formats != InputOutputFormat(DataFormat.Float16, DataFormat.Bfp4_b)
-    ]
+        selected.append(INT8_FORMAT)
+    return selected
 
 
 def get_base_perf_formats(dest_acc):
@@ -322,14 +333,9 @@ def _run_eltwise_binary_test(
         src_A = (src_A % 101) - 50
         src_B = (src_B % 101) - 50
 
-    effective_dest_acc = (
-        DestAccumulation.Yes
-        if formats.output_format == DataFormat.Float32
-        else dest_acc
-    )
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync,
-        effective_dest_acc,
+        dest_acc,
         formats,
         output_dimensions,
         tile_dimensions,
@@ -425,7 +431,7 @@ def _run_eltwise_binary_test(
         acc_to_dest=acc_to_dest,
         tile_shape=construct_tile_shape(tuple(tile_dimensions)),
         num_tiles_per_accumulation=num_tiles_per_accumulation,
-        dest_acc=effective_dest_acc,
+        dest_acc=dest_acc,
     )
 
     if is_perf and perf_report is None:
@@ -640,14 +646,9 @@ def _prepare_dest_reuse_inputs(
         tile_dimensions=tile_dimensions,
     )
 
-    effective_dest_acc = (
-        DestAccumulation.Yes
-        if formats.output_format == DataFormat.Float32
-        else dest_acc
-    )
     output_num_blocks, output_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         dest_sync,
-        effective_dest_acc,
+        dest_acc,
         formats,
         output_dimensions,
         tile_dimensions,
@@ -800,12 +801,17 @@ def _doubled_tall_wide(dimensions):
     ]
 
 
+def _quadrupled_tall(dimensions):
+    """Tall matrix with four times the tile count of one output."""
+    return [dimensions[0] * 4, dimensions[1]]
+
+
 def get_dest_reuse_input_dimensions(dest_acc, dest_sync, formats, tile_dimensions):
     """Inputs with at least two tiles per destination-reuse accumulation."""
     tile_rows, tile_cols = tile_dimensions
     dimensions = [[512, 32]] if 512 % tile_rows == 0 and 32 % tile_cols == 0 else []
     for output_dimensions in generate_perf_input_dimensions(
-        _effective_dest_acc(dest_acc, formats),
+        dest_acc,
         dest_sync,
         construct_tile_shape(tuple(tile_dimensions)),
     ):
@@ -846,7 +852,7 @@ def get_dest_reuse_output_dimensions(
             # This also validates the per-block destination capacity.
             get_num_blocks_and_num_tiles_in_block(
                 dest_sync,
-                _effective_dest_acc(dest_acc, formats),
+                dest_acc,
                 formats,
                 output_dimensions,
                 tile_dimensions,
@@ -857,26 +863,27 @@ def get_dest_reuse_output_dimensions(
 
 
 def get_dest_reuse_perf_input_dimensions(dest_acc, dest_sync, formats, tile_dimensions):
-    """Perf inputs derived from doubled dest-full tall/wide outputs."""
+    """Perf inputs at 2:1, plus one 4:1 tall point on 32x32."""
     perf_outputs = generate_perf_input_dimensions(
-        _effective_dest_acc(dest_acc, formats),
+        dest_acc,
         dest_sync,
         construct_tile_shape(tuple(tile_dimensions)),
     )
-    return _unique_dimensions(
-        [
-            dimensions
-            for output in perf_outputs
-            for dimensions in _doubled_tall_wide(output)
-        ]
-    )
+    dimensions = [
+        doubled for output in perf_outputs for doubled in _doubled_tall_wide(output)
+    ]
+    if list(tile_dimensions) == [32, 32]:
+        tall_outputs = [output for output in perf_outputs if output[0] >= output[1]]
+        if tall_outputs:
+            dimensions.append(_quadrupled_tall(tall_outputs[0]))
+    return _unique_dimensions(dimensions)
 
 
 def get_dest_reuse_perf_output_dimensions(
     dest_acc, dest_sync, formats, tile_dimensions, input_dimensions
 ):
     perf_outputs = generate_perf_input_dimensions(
-        _effective_dest_acc(dest_acc, formats),
+        dest_acc,
         dest_sync,
         construct_tile_shape(tuple(tile_dimensions)),
     )

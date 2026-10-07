@@ -928,7 +928,7 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_eltwise_binary_reuse_dest_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -962,6 +962,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "output_num_tiles_in_block",
             "output_tile_cnt",
             "reuse_dest_type",
+            "tile_cnt",
             "unpack_to_dest",
         ],
         "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
