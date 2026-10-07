@@ -1182,7 +1182,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
                                                        // systematic expert-output shrink)
     if (const char* fv = std::getenv("MOE_UNI_FIDELITY")) {
         const std::string f(fv);
-        mimo_fidelity = f == "hifi2" ? MathFidelity::HiFi2 : f == "lofi" ? MathFidelity::LoFi : MathFidelity::HiFi4;
+        mimo_fidelity = f == "hifi2"   ? MathFidelity::HiFi2
+                        : f == "hifi3" ? MathFidelity::HiFi3
+                        : f == "lofi"  ? MathFidelity::LoFi
+                                       : MathFidelity::HiFi4;
     }
     compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = mimo_fidelity,
