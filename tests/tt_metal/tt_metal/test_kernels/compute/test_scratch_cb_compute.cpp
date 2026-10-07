@@ -63,27 +63,27 @@ void kernel_main() {
 
             tile_regs_acquire();
             if constexpr (!nosync) {
-                ::experimental::scratch_wait_front<0, capacity>(a_slot_addr, 1);
+                ::experimental::scratch_wait_front<0, capacity>(1, a_slot_addr);
             }
             ckernel::experimental::copy_tile(a, slot, 0);
-            ::experimental::scratch_pop_front<0, capacity>(a_slot_addr, 1);
+            ::experimental::scratch_pop_front<0, capacity>(1, a_slot_addr);
             tile_regs_commit();
 
             tile_regs_wait();
             if constexpr (!nosync) {
-                ::experimental::scratch_reserve_back<1, capacity>(b_slot_addr, 1);
+                ::experimental::scratch_reserve_back<1, capacity>(1, b_slot_addr);
             }
             ckernel::experimental::pack_tile(b, slot, 0);
-            ::experimental::scratch_push_back<1, capacity>(b_slot_addr, 1);
+            ::experimental::scratch_push_back<1, capacity>(1, b_slot_addr);
             tile_regs_release();
         }
     }
 
     if constexpr (pattern == PATTERN_B) {
         for (std::uint32_t i = 0; i < num_iters; ++i) {
-            ::experimental::scratch_wait_front<0, capacity>(ring_a_addr, 1);
+            ::experimental::scratch_wait_front<0, capacity>(1);
             UNPACK((spin(kSlowConsumerSpins)));
-            ::experimental::scratch_pop_front<0, capacity>(ring_a_addr, 1);
+            ::experimental::scratch_pop_front<0, capacity>(1);
         }
     }
 }

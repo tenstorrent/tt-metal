@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "internal/scratch_cb.h"
 #ifdef TRISC_PACK
 #include "llk_io_pack.h"
@@ -30,7 +31,7 @@ inline std::uint16_t pages_acked[kScratchCbChannels];
 
 #ifdef TRISC_PACK
 template <std::uint32_t Ch, std::uint16_t Capacity>
-inline void llk_scratch_pack_reserve_back(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void llk_scratch_pack_reserve_back(std::int32_t num_pages, std::uint32_t l1_addr) {
     volatile tt_reg_ptr std::uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(cb_id<Ch>());
     std::uint16_t received = pages_received[Ch];
 
@@ -47,7 +48,7 @@ inline void llk_scratch_pack_reserve_back(std::uint32_t l1_addr, std::int32_t nu
 }
 
 template <std::uint32_t Ch>
-inline void llk_scratch_pack_push_back(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void llk_scratch_pack_push_back(std::int32_t num_pages, std::uint32_t l1_addr) {
     SYNC_SIGNAL("SYNC-SCRATCH-CB-PUSH", l1_addr);
     pages_received[Ch] += num_pages;
     // Publish only after the packer has finished writing the page.
@@ -59,7 +60,7 @@ inline void llk_scratch_pack_push_back(std::uint32_t l1_addr, std::int32_t num_p
 
 #ifdef TRISC_UNPACK
 template <std::uint32_t Ch>
-inline void llk_scratch_unpack_wait_front(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void llk_scratch_unpack_wait_front(std::int32_t num_pages, std::uint32_t l1_addr) {
     volatile tt_l1_ptr std::uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(cb_id<Ch>());
     std::uint16_t num_pages_u = (std::uint16_t)num_pages;
 
@@ -74,7 +75,7 @@ inline void llk_scratch_unpack_wait_front(std::uint32_t l1_addr, std::int32_t nu
 }
 
 template <std::uint32_t Ch>
-inline void llk_scratch_unpack_pop_front(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void llk_scratch_unpack_pop_front(std::int32_t num_pages, std::uint32_t l1_addr) {
     SYNC_SIGNAL("SYNC-SCRATCH-CB-POP", l1_addr);
     pages_acked[Ch] += num_pages;
     // Publish only after the unpacker has finished reading the page.
