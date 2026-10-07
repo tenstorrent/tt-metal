@@ -1581,7 +1581,7 @@ class TestConfig:
         return (
             self.profiler_build == ProfilerBuild.Yes
             and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-            and not TestConfig.TEST_TARGET.run_simulator
+            and (not TestConfig.TEST_TARGET.run_simulator or os.environ.get("LLK_SIM_BARRIER") == "1")  # experiment
         )
 
     def _l1_congestion_phases(self) -> bool:
