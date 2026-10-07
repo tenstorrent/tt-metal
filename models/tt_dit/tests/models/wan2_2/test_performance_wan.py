@@ -148,6 +148,10 @@ def ti2v_5b_metrics(mesh_shape, height):
       720p (1280x704):  e2e 11.23s | denoise 10.198s | vae 0.922s | encode 0.089s
     (720p uses height 704 since heights must be a multiple of 32 for patch_size=2.)
     The 480p VAE bound keeps 0.75s: that section spreads up to 11% run to run at ~0.55s.
+    The 720p VAE bound is 1.5s (was 1.2s until 2026-10-07): the decode sits at 0.92-0.95s but
+    one invocation in ~6 lands an outlier up to 1.33s (sprint 6, 2026-09-29) with its denoise
+    unaffected, and `num_perf_runs` is 1, so a mean cannot absorb it. 1.5s still fails a
+    1.6x regression and the pre-rewrite 4.6s; the total bound is unchanged.
 
     Previous bounds (2026-09-22 means + 30%): 480p 0.2 / 7.4 / 0.75 / 8.2, 720p 0.2 / 13.9 /
     1.25 / 15.3. The VAE gate follows the `WanDupUp3D` rewrite (4.63s -> 0.96s); the bound
@@ -158,7 +162,7 @@ def ti2v_5b_metrics(mesh_shape, height):
     if height == 480:
         return {"encoder": 0.2, "denoising": 6.3, "vae": 0.75, "total": 7.2}
     if height == 704:
-        return {"encoder": 0.2, "denoising": 13.3, "vae": 1.2, "total": 14.6}
+        return {"encoder": 0.2, "denoising": 13.3, "vae": 1.5, "total": 14.6}
     assert False, f"No TI2V-5B perf targets for height={height} (expected 480 or 704)"
 
 
@@ -741,6 +745,8 @@ def ti2v_5b_i2v_metrics(mesh_shape, height):
       720p (1280x704):  e2e 12.90s | image_encode 1.293s | denoise 10.580s | vae 0.923s
                         | encode 0.089s
     The host image encode spreads ~12% run to run (1.25-1.36s here), hence 1.7s on it.
+    The VAE bound is 1.5s (was 1.2s until 2026-10-07) for the same outlier reason as the T2V
+    gate: single-sample decode outliers up to 1.33s with the denoise unaffected.
     Previous bounds (2026-09-22 means + 30%): 0.2 / 1.8 / 15.0 / 1.25 / 18.1.
 
     480p is not parametrised by `test_pipeline_performance_ti2v_5b_i2v` (720p only), so that
@@ -753,7 +759,7 @@ def ti2v_5b_i2v_metrics(mesh_shape, height):
         # UNMEASURED and unreachable from the current parametrisation; not a calibrated gate.
         return {"encoder": 0.3, "image_encode": 4.0, "denoising": 18.0, "vae": 3.5, "total": 26.0}
     if height == 704:
-        return {"encoder": 0.2, "image_encode": 1.7, "denoising": 13.8, "vae": 1.2, "total": 16.8}
+        return {"encoder": 0.2, "image_encode": 1.7, "denoising": 13.8, "vae": 1.5, "total": 16.8}
     assert False, f"No TI2V-5B I2V perf targets for height={height} (expected 480 or 704)"
 
 
