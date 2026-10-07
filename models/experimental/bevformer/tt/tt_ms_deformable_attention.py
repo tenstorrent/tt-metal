@@ -7,15 +7,8 @@ TTNN Multi-Scale Deformable Attention implementation for BEVFormer.
 The core attention is a single device op: ``ttnn.experimental.fused_msda_from_offsets``.
 It takes the reference points and the raw sampling offsets and does the whole of
 MSDA -- sampling-location generation, bilinear sampling, the attention multiply
-and the reduction over (levels, points) -- inside one kernel.
-
-What that replaced, for anyone comparing against the reference implementation or
-against git history: the previous path split ``value`` per level, permuted and
-reshaped it to ``(bs*heads, H_l, W_l, head_dim)``, built a full
-``(bs, Q, heads, levels, points, 2)`` sampling grid, ran ``ttnn.grid_sample``
-per level, stacked the results, multiplied by the attention weights, summed over
-``levels * points`` and reshaped/permuted the output back. None of that exists
-any more; no intermediate of that shape is materialized at all.
+and the reduction over (levels, points) -- inside one kernel. No intermediate
+grid or per-level sampled-value tensor is materialized.
 
 Key components:
 - multi_scale_deformable_attn_fused: Core attention computation function
@@ -217,8 +210,7 @@ class TTMSDeformableAttention:
         if ENABLE_LOGGING:
             logger.info("MSDA Value Projection Start")
 
-        # Project value. The fused op accepts packed (B, S, H*D) — the layout
-        # Linear already emits — so there is no TILE reshape into (B, S, H, D).
+        # The fused op takes packed (B, S, H*D), which is what this Linear emits.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
 
@@ -247,12 +239,9 @@ class TTMSDeformableAttention:
         if ENABLE_LOGGING:
             logger.info("MSDA Sampling Offset Generation")
 
-        # Raw offsets, straight from the Linear. The op wants feature-map pixel units
-        # and reference points in [0, 1], and derives the sampling location itself --
-        # so there is no per-level `2 / [W, H]` rescale to fold into these weights and
-        # no `2 * ref - 1` bias to add. The Linear emits channels ordered
-        # (head, level, point, xy), which is the op's packed layout, so the reshape
-        # below is a dimension split rather than a permute.
+        # Offsets stay in feature-map pixel units; the op forms the sampling location.
+        # The Linear's channels are already (head, level, point, xy), the op's
+        # packed layout, so the reshape below splits dimensions.
         sampling_offsets = ttnn.linear(
             query, self.params.sampling_offsets.weight, bias=getattr(self.params.sampling_offsets, "bias", None)
         )

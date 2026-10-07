@@ -5,8 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # `fused_msda` — generic multi-scale deformable attention
 
-Design note for the new MSDA device op. Written before the code; kept next to
-the code so the two stay honest.
+Design note for the MSDA device op.
 
 Two entry points, one device operation, one compute kernel, one writer kernel,
 two readers:
@@ -27,12 +26,11 @@ with `N = B * num_heads` already folded by the caller.
 
 Consumers therefore still pay, per call, for:
 
-* a per-level Python loop (`models/experimental/vadv2/tt/tt_utils.py:118`,
-  `models/experimental/uniad/tt/ttnn_utils.py:184`),
+* a per-level Python loop (`models/experimental/vadv2/tt/tt_utils.py:119`,
+  `models/experimental/uniad/tt/ttnn_utils.py:238`),
 * `split` / `permute` / `reshape` of `value` into `(B*H, H_l, W_l, D)` per level,
 * `permute` / `reshape` of the grid and the attention weights per level,
-* `stack` + `mul` + `sum` across levels when `L > 1`
-  (`models/experimental/bevformer/tt/tt_ms_deformable_attention.py:35`),
+* `stack` + `mul` + `sum` across levels when `L > 1`,
 * a `reshape` + `permute` on the output.
 
 `fused_msda` takes the flattened multi-level tensors directly, keeps the
@@ -40,9 +38,8 @@ Consumers therefore still pay, per call, for:
 and reduces over `L * P` on-core. No `[B, Q, H, L, P, D]` intermediate is ever
 materialized.
 
-**The existing op is not modified, renamed, or removed.** Both remain callable
-so the three implementations (Python composition / existing op / `fused_msda`)
-can be compared in one build.
+The single-level op is a separate contract and is left unchanged. Both remain
+callable.
 
 ---
 
@@ -111,7 +108,7 @@ scale_l = 0                            align_corners = true, singleton axis
 and then runs the identical bilinear + weight + reduce path as V1. `r(l, p)`
 depends on `reference_mode` — see §7.
 
-`sampling_offsets` are **raw**, in feature-map pixel units (spec §13 Option A).
+`sampling_offsets` are **raw**, in feature-map pixel units.
 `scale_l` is the pixel spacing of the mapping in §3, so one offset unit moves
 one pixel for either `align_corners`. The normalization happens in the reader.
 No BEVFormer-specific pre-folding is baked into the op.
@@ -141,8 +138,9 @@ normalized → pixel mapping, per level `l` with `(H_l, W_l)`:
 | `True` | `True` | `(x+1)*(W_l-1)/2` | `(y+1)*(H_l-1)/2` |
 
 Defaults (`False`, `False`) reproduce
-`models/experimental/bevformer/reference/ms_deformable_attention.py:27` exactly:
-`sampling_grids = 2*loc - 1` followed by `F.grid_sample(..., align_corners=False)`.
+`models/experimental/bevformer/reference/ms_deformable_attention.py:58` exactly:
+`sampling_grids = 2*loc - 1` followed by `F.grid_sample(..., align_corners=False)`
+at line 68.
 
 `locations_in_grid_space=True` exists for callers that already hold a
 grid_sample-space grid — for instance one whose sampling-offset projection has
@@ -213,11 +211,11 @@ pair per `(level, point, corner)`, `4 * L * P` pairs per output tile.
 | CB | Role | Pages | Page size |
 | --- | --- | --- | --- |
 | `c_0` `value_scratch` | reader-only L1 arena, one staged `D`-stick per row | 32 | `align(D*2)` |
-| `c_1` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
-| `c_2` `attn_scratch` | reader-only arena for attention weights | 32 (packed) or 32*L | `align(attn_stick)` |
+| `c_1` `attn_scratch` | reader-only arena for attention weights | 32 (packed) or 32*L | `align(attn_stick)` |
+| `c_2` `loc_scratch` | reader-only arena for sampling locations (V1) / offsets (V2) | 32 (packed) or 32*L*P | `align(loc_stick)` |
 | `c_3` `input_tile` | reader → compute, the `V_corner` values | `2 * n_d_tiles` | 2048 |
 | `c_4` `scalar_tile` | reader → compute, `attn * bilinear_coeff` per row | 2 | 2048 |
-| `c_5` `output_scratch` | writer-only stick assembly | 1 | `align(H*D*2)` |
+| `c_5` `output_scratch` | writer-only assembly of one head's `D`-stick | 1 | `align(D*2)` |
 | `c_6` `ref_scratch` | **V2 only** — reference points arena | 32*R | `align(2*2)` |
 | `c_16` `output_tile` | compute → writer, the accumulator | `2 * n_d_tiles` | 2048 |
 
@@ -261,10 +259,10 @@ Surveyed in this repo:
 
 | Where | `reference_points` | Mapping |
 | --- | --- | --- |
-| `models/experimental/uniad/tt/ttnn_deformable_attention.py:112` | `(B, Q, L, 2)` | `ref[b,q,l] + off/[W_l,H_l]` |
-| `models/experimental/vadv2/tt/tt_deformable_attention.py:125` | `(B, Q, L, 2)` | same |
-| `models/experimental/bevformer/reference/ms_deformable_attention.py:239` | `(B, Q, Z, 2)` | points grouped `(P//Z, Z)`; `ref[b,q,z] + off/[W_l,H_l]` |
-| `models/experimental/uniad/tt/ttnn_deformable_attention.py:136` | `(B, Q, L, 4)` | `ref_xy + off/P * ref_wh * 0.5` |
+| `models/experimental/uniad/tt/ttnn_deformable_attention.py:134` | `(B, Q, L, 2)` | `ref[b,q,l] + off/[W_l,H_l]` |
+| `models/experimental/vadv2/tt/tt_deformable_attention.py:137` | `(B, Q, L, 2)` | `ref[b,q,l] + off`, with `1/[W,H]` already folded into the Linear |
+| `models/experimental/bevformer/reference/ms_deformable_attention.py:234` | `(B, Q, Z, 2)` | points grouped `(P//Z, Z)`; `ref[b,q,z] + off/[W_l,H_l]` |
+| `models/experimental/uniad/tt/ttnn_deformable_attention.py:141` | `(B, Q, L, 4)` | `ref_xy + off/P * ref_wh * 0.5` |
 
 So there is **no single reference-point convention**, which is exactly why V1
 must not depend on one. V2 supports two modes and rejects the rest loudly:
@@ -301,11 +299,14 @@ reader_msda_v2.cpp ─┘        (geometry, staging, tile scatter)
    `ref + off * scale_l` (`scale_l` from §2.2) — then map to `(px, py)`, `x0 = floor(px)`,
    `y0 = floor(py)`, `dx`, `dy`, and the four per-corner in-bounds flags;
 3. for each of the four corners: issue `v_rows` NoC reads of the `D`-wide value
-   stick at page `(b*S + level_start[l] + cy*W_l + cx) * H + h`, scatter them
-   into `n_d_tiles` tile rows, and emit the scalar tile carrying
-   `attn * corner_coeff` (0 for invalid rows).
+   stick, scatter them into `n_d_tiles` tile rows, and emit the scalar tile
+   carrying `attn * corner_coeff` (0 for invalid rows). Canonical value layout
+   addresses page `(b*S + level_start[l] + cy*W_l + cx) * H + h`. Packed
+   `(B, S, H*D)` addresses page `b*S + level_start[l] + cy*W_l + cx` at byte
+   offset `h*D*2`.
 
-Only `fused_msda_reader_common.hpp` differs between V1 and V2, and only in step 2.
+The two readers differ only in step 2. Everything else is
+`fused_msda_reader_common.hpp`.
 
 **Compute** (shared). `4 * L * P` iterations of
 `mul_tiles_bcast<COL>(input, scalar)` packed into the output CB with
@@ -340,9 +341,11 @@ Known limitations, to revisit after profiling:
   design brief; both forms are accepted and tested for equality.
 * Sharded inputs unsupported.
 * `fp32` accumulate not exposed; the L1 accumulator runs at the pack format.
-* V2 does not accept BEVFormer's pre-folded offsets (`2/[W,H]` baked into the
-  Linear). Those callers use V1 with `locations_in_grid_space=True`, or keep
-  their Linear unfolded. A fused "pre-folded offsets" V2 variant is future work.
+* V2 offsets are raw feature-map pixels. A Linear that already has `2/[W,H]`
+  and `2*ref - 1` folded into its weights is a grid-space grid: feed that
+  through V1 with `locations_in_grid_space=True`. BEVFormer does not do this;
+  it passes raw pixels to V2 (§11). A V2 frontend for pre-folded offsets is
+  future work.
 
 ---
 
@@ -373,29 +376,14 @@ models/experimental/bevformer/tests/pcc/test_fused_msda_bevformer.py
 BEVFormer's `TTMSDeformableAttention`
 (`models/experimental/bevformer/tt/tt_ms_deformable_attention.py`) computes its
 core attention with `fused_msda_from_offsets` and `reference_mode="pillar"`.
-That call replaced the module's entire previous chain: the per-level `split`, the
-`value` permute/reshape, the materialized `(bs, Q, heads, levels, points, 2)`
-grid, the per-level `ttnn.grid_sample`, the `stack` across levels, the attention
-multiply, the `sum` over `levels * points`, and the output reshape/permute.
+Spatial cross-attention and temporal self-attention both build this module.
 
-It feeds the op the **packed** rank-4 forms, which fall out of the existing code
-for free: the `sampling_offsets` Linear already emits channels ordered
-`(head, level, point, xy)`, and the joint softmax already produces
-`(bs, Q, heads, levels*points)`. The integration is a dimension split, not a permute.
+It feeds the op the packed rank-4 forms. The `sampling_offsets` Linear emits
+channels ordered `(head, level, point, xy)`, and the joint softmax produces
+`(bs, Q, heads, levels*points)`, so the reshape is a dimension split. Offsets
+stay in feature-map pixel units; the reader applies the per-level scale.
 
-It also uses the **unfolded** `sampling_offsets` Linear. The `2 / [W, H]` scale
-and the `2 * ref - 1` shift that the module used to fold into its weights are
-exactly what the V2 reader does for itself, so that whole grid-bias chain
-(`reshape`, `mul`, `sub`, `repeat`, `reshape`, `add`) is gone, along with the two
-construction-time `ttnn.mul` calls that produced the folded weights.
-
-Spatial cross-attention and temporal self-attention both build this module, so
-both run on the op. Numerics are pinned by
-`models/experimental/bevformer/tests/pcc/test_fused_msda_bevformer.py` plus the
-pre-existing `test_ms_deformable_attention.py`, `test_spatial_cross_attention.py`,
-`test_temporal_self_attention.py`, `test_layer.py` and `test_encoder.py`, which
-all pass at their original thresholds.
-
-The previous composition is available only in git history. On Blackhole P100 at
-`nuscenes_base`, the same-configuration encoder-layer profile reduced summed
-device-kernel time from 239.210 ms to 59.945 ms and dispatched ops from 113 to 52.
+Numerics are pinned by
+`models/experimental/bevformer/tests/pcc/test_fused_msda_bevformer.py` plus
+`test_ms_deformable_attention.py`, `test_spatial_cross_attention.py`,
+`test_temporal_self_attention.py`, `test_layer.py` and `test_encoder.py`.

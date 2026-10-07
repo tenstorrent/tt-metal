@@ -16,7 +16,7 @@
 // cross-core communication, because each block owns exactly one head. D being a
 // multiple of 16 keeps the offset 32-B aligned.
 //
-// Nothing model-specific happens here: no SCA scatter, no rebatch, no residual.
+// Generic writer: one head's stick at a byte offset in the query page.
 //
 // Tile face layout (bf16, 32x32 = 4 faces of 16x16, 2048 B) is documented in
 // ../msda_tile_layout.hpp. D-tile k holds value columns [k*32, k*32+31].
