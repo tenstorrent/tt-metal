@@ -1441,7 +1441,7 @@ static void sdpa_inner_loop_step(
     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
     const uint32_t q_base_tiles = 0,
-    // K/V reuse (REUSE_KV): the next Q chunk on this core uses the same K and V, so leave them at the
+    // K/V reuse (reuse_kv): the next Q chunk on this core uses the same K and V, so leave them at the
     // front of cb_kt_in / cb_v_in; the reader does not push them again.
     const bool keep_kv = false) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
@@ -2174,7 +2174,7 @@ void sdpa_standard_v2(
     const LightweightMaskContext& lw_mask = {},
     const uint32_t q_num_chunks = 0,
     const bool use_zigzag_balancing = false,
-    // K/V reuse (REUSE_KV, non-causal, one K chunk): Q heads per KV head, used to tell whether consecutive Q
+    // K/V reuse (reuse_kv, non-causal, one K chunk): Q heads per KV head, used to tell whether consecutive Q
     // chunks of this core share (batch, KV head). 0 = off.
     const uint32_t kv_reuse_group = 0) {
     init_sdpa_streaming_semaphores();

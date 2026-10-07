@@ -590,6 +590,22 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = use_causal_kernel;
 
+    // reuse_kv: a core keeps K/V in its CBs across consecutive Q chunks of the same (batch, KV head), so it needs
+    // the whole K sequence in one chunk; the K/V chains between cores are not built (below).
+    const bool reuse_kv = operation_attributes.reuse_kv;
+    if (reuse_kv) {
+        TT_FATAL(
+            k_num_chunks == 1,
+            "SDPA reuse_kv needs a single K chunk (k_chunk_size {} >= Sk {}), got {} chunks",
+            k_chunk_size,
+            Sk,
+            k_num_chunks);
+        TT_FATAL(use_streaming_compute, "SDPA reuse_kv needs the streaming compute kernel (fp32_dest_acc_en=False)");
+    }
+    // pack_gqa_heads with output_concat_heads: the writer maps packed row r of packed head g back to row r % Sqt of
+    // query head g * gqa_pack + r / Sqt in the [B, 1, Sq, NQH*vDH] output.
+    const bool packed_concat = operation_attributes.output_concat_heads && gqa_pack > 1;
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -629,6 +645,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
     reader_compile_time_args.push_back(static_cast<uint32_t>(windowed_mode));         // arg 33: K-range narrowing
+    reader_compile_time_args.push_back(static_cast<uint32_t>(reuse_kv));              // arg 34: K/V reuse
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -695,6 +712,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 20
         static_cast<uint32_t>(windowed_mode),          // arg 21: windowed block-diagonal mask generation
         static_cast<uint32_t>(operation_attributes.output_concat_heads),  // arg 22: concat-heads output layout
+        packed_concat ? gqa_pack : 1u,                                    // arg 23: query heads per packed head
+        packed_concat ? q_shape[2] / TILE_HEIGHT : 1u,                    // arg 24: row tiles per query head
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
@@ -737,6 +756,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                // arg 28: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(windowed_mode),         // arg 28: K-range narrowing (bounds from the ctrl CB)
+        reuse_kv ? NQH / NKH : 0u,                    // arg 29: K/V reuse, scheduled Q heads per KV head (0 = off)
     };
 
     std::map<std::string, std::string> defines_map;
@@ -745,28 +765,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines_map["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines_map["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (operation_attributes.output_concat_heads && gqa_pack > 1) {
-        // packed row r of packed head g is row r % Sqt of query head g * gqa_pack + r / Sqt
-        defines_map["GQA_PACK"] = std::to_string(gqa_pack);
-        defines_map["GQA_PACK_SQT"] = std::to_string(q_shape[2] / TILE_HEIGHT);
-    }
     log_debug(tt::LogOp, "use_zigzag_balancing: {}", use_zigzag_balancing);
-
-    // reuse_kv: a core keeps K/V in its CBs across consecutive Q chunks of the same (batch, KV head), so it needs
-    // the whole K sequence in one chunk; the K/V chains between cores are not built (below).
-    const bool reuse_kv = operation_attributes.reuse_kv;
-    if (reuse_kv) {
-        TT_FATAL(
-            k_num_chunks == 1,
-            "SDPA reuse_kv needs a single K chunk (k_chunk_size {} >= Sk {}), got {} chunks",
-            k_chunk_size,
-            Sk,
-            k_num_chunks);
-        TT_FATAL(use_streaming_compute, "SDPA reuse_kv needs the streaming compute kernel (fp32_dest_acc_en=False)");
-        defines_map["REUSE_KV"] = "1";
-        // compute keys K/V reuse on the flat chunk index, so it needs the scheduled Q heads per KV head
-        defines_map["REUSE_KV_GROUP"] = std::to_string(NQH / NKH);
-    }
 
     KernelDescriptor::Defines defines(defines_map.begin(), defines_map.end());
 

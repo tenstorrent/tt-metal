@@ -44,9 +44,14 @@ void kernel_main() {
     // Write the heads side by side as [B x 1 x S x NQH*DH] (what nlp_concat_heads produces) instead of [B x NQH x S x
     // DH].
     constexpr bool out_concat_heads = get_compile_time_arg_val(22) == 1;
+    // pack_gqa_heads with out_concat_heads: NQH counts packed heads of gqa_pack query heads x gqa_pack_sqt row tiles
+    // each. Both are 1 otherwise.
+    constexpr uint32_t gqa_pack = get_compile_time_arg_val(23);
+    constexpr uint32_t gqa_pack_sqt = get_compile_time_arg_val(24);
+    constexpr bool packed_concat = out_concat_heads && gqa_pack > 1;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<25>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
@@ -100,18 +105,13 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
-#ifdef GQA_PACK
-    // pack_gqa_heads with out_concat_heads: NQH counts packed heads of GQA_PACK query heads x GQA_PACK_SQT row tiles
-    // each; the output is [B, 1, GQA_PACK_SQT, NQH*GQA_PACK*vDH]. A Q chunk may run into the next query head of its
-    // group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
-    static_assert(out_concat_heads, "GQA_PACK is only defined with out_concat_heads");
-    const auto out_tile_shape = TensorTileShape(B, 1, GQA_PACK_SQT, NQH * GQA_PACK * vDHt);
-    constexpr uint32_t out_row_stride = NQH * GQA_PACK * vDHt;
-#else
+    // Packed, the output is [B, 1, gqa_pack_sqt, NQH*gqa_pack*vDH], and a Q chunk may run into the next query head of
+    // its group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
     const auto out_tile_shape =
-        out_concat_heads ? TensorTileShape(B, 1, valid_Sqt, NQH * vDHt) : TensorTileShape(B, NQH, valid_Sqt, vDHt);
-    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * vDHt : vDHt;
-#endif
+        out_concat_heads ? TensorTileShape(B, 1, packed_concat ? gqa_pack_sqt : valid_Sqt, NQH * gqa_pack * vDHt)
+                         : TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * gqa_pack * vDHt : vDHt;
+    constexpr uint32_t head_rows = packed_concat ? gqa_pack_sqt : 0;  // 0 = rows never wrap to another head
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -241,21 +241,18 @@ void kernel_main() {
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
             uint32_t out_tile_id;
-#ifdef GQA_PACK
-            const uint32_t packed_row = write_offset + out_row_start_tile;
-            out_tile_id = out_tile_shape.id_of(
-                nb, 0, packed_row % GQA_PACK_SQT, (nq * GQA_PACK + packed_row / GQA_PACK_SQT) * vDHt);
-            constexpr uint32_t head_rows = GQA_PACK_SQT;
-            const uint32_t first_row_in_head = packed_row % GQA_PACK_SQT;
-#else
-            constexpr uint32_t head_rows = 0;
-            constexpr uint32_t first_row_in_head = 0;
-            if constexpr (out_concat_heads) {
+            uint32_t first_row_in_head = 0;
+            if constexpr (packed_concat) {
+                // packed row r of packed head nq is row r % gqa_pack_sqt of query head nq * gqa_pack + r / gqa_pack_sqt
+                const uint32_t packed_row = write_offset + out_row_start_tile;
+                first_row_in_head = packed_row % gqa_pack_sqt;
+                out_tile_id =
+                    out_tile_shape.id_of(nb, 0, first_row_in_head, (nq * gqa_pack + packed_row / gqa_pack_sqt) * vDHt);
+            } else if constexpr (out_concat_heads) {
                 out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
             } else {
                 out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
             }
-#endif
             if constexpr (use_streaming_compute) {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
