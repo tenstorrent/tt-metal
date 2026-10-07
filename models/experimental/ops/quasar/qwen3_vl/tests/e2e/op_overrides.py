@@ -137,7 +137,10 @@ def _to_experimental_quasar(name):
     def rewrite(original, args, kwargs):
         import ttnn
 
-        return getattr(ttnn.experimental.quasar, name)(*args, **kwargs)
+        op = ttnn.experimental.quasar
+        for part in name.split("."):  # e.g. "transformer.scaled_dot_product_attention"
+            op = getattr(op, part)
+        return op(*args, **kwargs)
 
     return rewrite
 
@@ -189,6 +192,15 @@ WORKAROUNDS = [
         remove_when="base ttnn.add (binary_ng) is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("add"),
+    ),
+    Workaround(
+        name="quasar_experimental_sdpa",
+        target="ttnn.transformer.scaled_dot_product_attention",
+        reason="base prefill SDPA builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
+        "ttnn.experimental.quasar.transformer.scaled_dot_product_attention runs (QUASAR_GAPS Q8)",
+        remove_when="base ttnn.transformer.scaled_dot_product_attention is ported to Quasar",
+        applies=_on_quasar,
+        rewrite=_to_experimental_quasar("transformer.scaled_dot_product_attention"),
     ),
 ]
 
