@@ -11,6 +11,10 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
+#include <filesystem>
+#include <linux/magic.h>
+#include <sys/vfs.h>
 #include <random>
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -18,6 +22,21 @@
 #include <unistd.h>
 
 namespace tt::tt_metal::distributed {
+
+namespace {
+bool is_hugepage_path(const std::string& name) { return name.find('/', 1) != std::string::npos; }
+
+int unlink_backing(const std::string& name) {
+    return is_hugepage_path(name) ? ::unlink(name.c_str()) : shm_unlink(name.c_str());
+}
+
+size_t hugepage_size(int fd, const std::string& name) {
+    struct statfs fs{};
+    TT_FATAL(fstatfs(fd, &fs) == 0, "fstatfs failed for '{}': {}", name, std::strerror(errno));
+    TT_FATAL(fs.f_type == HUGETLBFS_MAGIC, "Socket backing '{}' must be on hugetlbfs", name);
+    return static_cast<size_t>(fs.f_bsize);
+}
+}  // namespace
 
 NamedShm::NamedShm(const std::string& name, void* ptr, size_t size) : name_(name), ptr_(ptr), size_(size) {}
 
@@ -41,63 +60,86 @@ NamedShm& NamedShm::operator=(NamedShm&& other) noexcept {
 }
 
 NamedShm NamedShm::create(const std::string& name, size_t size) {
-    TT_FATAL(!name.empty() && name[0] == '/', "POSIX shm name must start with '/': {}", name);
+    TT_FATAL(!name.empty() && name[0] == '/' && !is_hugepage_path(name), "Invalid POSIX shm name: {}", name);
     TT_FATAL(size > 0, "Shared memory size must be > 0");
 
     auto& tracker = ShmResourceTracker::instance();
-    int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
-    TT_FATAL(
-        fd != -1,
-        "shm_open(create) failed for '{}': {}. If a stale shm object exists, remove it with shm_unlink or delete "
-        "/dev/shm{}.",
-        name,
-        std::strerror(errno),
-        name);
+    std::string backing = name;
+    if (const char* dir = std::getenv("TT_METAL_SOCKET_HUGEPAGE_DIR");
+        dir && *dir && size > static_cast<size_t>(sysconf(_SC_PAGESIZE))) {
+        TT_FATAL(std::filesystem::path(dir).is_absolute(), "TT_METAL_SOCKET_HUGEPAGE_DIR must be absolute");
+        backing = (std::filesystem::path(dir) / name.substr(1)).string();
+        TT_FATAL(is_hugepage_path(backing), "TT_METAL_SOCKET_HUGEPAGE_DIR cannot be the root directory");
+    }
+    const bool huge = is_hugepage_path(backing);
+    int fd = huge ? ::open(backing.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600)
+                  : shm_open(backing.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+    TT_FATAL(fd != -1, "Creating socket shared memory '{}' failed: {}", backing, std::strerror(errno));
 
-    int rc = ftruncate(fd, static_cast<off_t>(size));
-    if (rc == -1) {
-        int saved_errno = errno;
+    void* ptr = MAP_FAILED;
+    try {
+        if (huge) {
+            const size_t page = hugepage_size(fd, backing);
+            TT_FATAL(
+                size <= page,
+                "Socket buffer {} B exceeds one {} B hugepage; use a larger-page hugetlbfs mount",
+                size,
+                page);
+            size = page;
+        }
+        TT_FATAL(
+            ftruncate(fd, static_cast<off_t>(size)) == 0,
+            "ftruncate failed for '{}': {}",
+            backing,
+            std::strerror(errno));
+        ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        TT_FATAL(ptr != MAP_FAILED, "mmap failed for '{}': {}", backing, std::strerror(errno));
+        std::memset(ptr, 0, size);
+        if (huge) {
+            tracker.track_file(backing);
+        } else {
+            tracker.track_shm(backing);
+        }
+    } catch (...) {
+        if (ptr != MAP_FAILED) {
+            munmap(ptr, size);
+        }
         ::close(fd);
-        shm_unlink(name.c_str());
-        TT_THROW("ftruncate failed for '{}': {}", name, std::strerror(saved_errno));
+        unlink_backing(backing);
+        throw;
     }
-
-    void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    int mmap_errno = errno;
     ::close(fd);
-    if (ptr == MAP_FAILED) {
-        shm_unlink(name.c_str());
-        TT_THROW("mmap failed for '{}': {}", name, std::strerror(mmap_errno));
-    }
-
-    std::memset(ptr, 0, size);
-    tracker.track_shm(name);
-    return NamedShm(name, ptr, size);
+    return NamedShm(backing, ptr, size);
 }
 
 NamedShm NamedShm::open(const std::string& name, size_t size) {
-    TT_FATAL(!name.empty() && name[0] == '/', "POSIX shm name must start with '/': {}", name);
+    TT_FATAL(!name.empty() && name[0] == '/', "Shared memory name must start with '/': {}", name);
     TT_FATAL(size > 0, "Shared memory size must be > 0");
 
-    int fd = shm_open(name.c_str(), O_RDWR, 0600);
-    TT_FATAL(fd != -1, "shm_open(open) failed for '{}': {}", name, std::strerror(errno));
-
-    struct stat st;
-    TT_FATAL(fstat(fd, &st) == 0, "fstat failed for '{}': {}", name, std::strerror(errno));
-    TT_FATAL(
-        static_cast<size_t>(st.st_size) >= size,
-        "Shared memory '{}' backing size ({}) is smaller than requested size ({})",
-        name,
-        st.st_size,
-        size);
-
-    void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    int mmap_errno = errno;
-    ::close(fd);
-    if (ptr == MAP_FAILED) {
-        TT_THROW("mmap failed for '{}': {}", name, std::strerror(mmap_errno));
+    const bool huge = is_hugepage_path(name);
+    int fd = huge ? ::open(name.c_str(), O_RDWR | O_CLOEXEC | O_NOFOLLOW) : shm_open(name.c_str(), O_RDWR, 0600);
+    TT_FATAL(fd != -1, "Opening socket shared memory '{}' failed: {}", name, std::strerror(errno));
+    void* ptr = MAP_FAILED;
+    try {
+        if (huge) {
+            const size_t page = hugepage_size(fd, name);
+            TT_FATAL(size == page, "Hugepage socket mapping must span exactly one {} B page, got {}", page, size);
+        }
+        struct stat st{};
+        TT_FATAL(fstat(fd, &st) == 0, "fstat failed for '{}': {}", name, std::strerror(errno));
+        TT_FATAL(
+            static_cast<size_t>(st.st_size) >= size,
+            "Shared memory '{}' backing size ({}) is smaller than requested size ({})",
+            name,
+            st.st_size,
+            size);
+        ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        TT_FATAL(ptr != MAP_FAILED, "mmap failed for '{}': {}", name, std::strerror(errno));
+    } catch (...) {
+        ::close(fd);
+        throw;
     }
-
+    ::close(fd);
     return NamedShm(name, ptr, size);
 }
 
@@ -112,9 +154,13 @@ void NamedShm::close() {
 void NamedShm::unlink() {
     close();
     if (!name_.empty()) {
-        int rc = shm_unlink(name_.c_str());
+        int rc = unlink_backing(name_);
         if (rc == 0 || errno == ENOENT) {
-            ShmResourceTracker::instance().untrack_shm(name_);
+            if (is_hugepage_path(name_)) {
+                ShmResourceTracker::instance().untrack_file(name_);
+            } else {
+                ShmResourceTracker::instance().untrack_shm(name_);
+            }
             name_.clear();
         }
     }

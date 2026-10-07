@@ -13,7 +13,9 @@ namespace tt::tt_metal::distributed {
  * @brief RAII wrapper around a POSIX named shared memory region.
  *
  * Provides create/open/close/unlink semantics for inter-process shared memory.
- * The underlying object lives in /dev/shm/ on Linux.
+ * The underlying object lives in /dev/shm/ on Linux. With TT_METAL_SOCKET_HUGEPAGE_DIR,
+ * regions larger than a system page use a single page on that hugetlbfs mount.
+ * Their exported name is an absolute file path; connectors need the same library support.
  */
 class NamedShm {
 public:
@@ -34,6 +36,8 @@ public:
      *
      * @param name POSIX shm name (e.g. "/tt_h2d_abc123"). Must start with '/'.
      * @param size Size of the shared memory region in bytes.
+     * Large regions use TT_METAL_SOCKET_HUGEPAGE_DIR when set, rounded to one hugepage.
+     * The requested region must fit in that page. name() and size() describe the actual backing.
      * @return NamedShm owning the new mapping.
      */
     static NamedShm create(const std::string& name, size_t size);
@@ -41,7 +45,8 @@ public:
     /**
      * @brief Open and map an existing named shared memory region.
      *
-     * Opens the shm object via shm_open(O_RDWR) and maps it with mmap(MAP_SHARED).
+     * Opens a POSIX shm name or an absolute hugetlbfs path and maps it with mmap(MAP_SHARED).
+     * Hugepage paths are self-describing; connectors do not need TT_METAL_SOCKET_HUGEPAGE_DIR.
      *
      * @param name POSIX shm name matching a previously created region.
      * @param size Size of the region to map (must match the created size).
