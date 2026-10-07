@@ -53,9 +53,7 @@ configuration that the release CI uses: `MESH_DEVICE=P300x2`, `--block-size 32`,
 Model-local checks (all need the four chips and the pinned weights in the HF cache):
 
 ```bash
-pytest models/demos/k2_horizon_7b_qb2/tests/test_functional_decoder.py \
-       models/demos/k2_horizon_7b_qb2/tests/test_fused_decoder.py \
-       models/demos/k2_horizon_7b_qb2/tests/test_optimized_decoder.py
+pytest models/demos/k2_horizon_7b_qb2/tests/test_decoder.py                # HF comparison: prefill + traced decode
 python -m models.demos.k2_horizon_7b_qb2.tests.check_accurate_prefill_attention   # vs FP64
 python -m models.demos.k2_horizon_7b_qb2.tests.check_accurate_flash_decode
 python -m models.demos.k2_horizon_7b_qb2.tests.run_multichip_long_context  # 524K stream vs HF

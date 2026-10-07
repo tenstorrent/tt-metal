@@ -16,17 +16,9 @@ from transformers import DynamicCache
 import ttnn
 
 from ..tt.multichip_decoder import MultichipDecoder
-from .run_multichip import read, upload
-from .run_optimized import load_reference, pcc
+from .reference import load_reference, pcc, read, real_activations, to_device
 
 DOC = Path(__file__).resolve().parents[1] / "doc/multichip_decoder"
-
-
-def to_device(x, mesh, integer=False):
-    return upload(x, mesh, shard=-1 if not integer and x.shape[-1] == 4096 else None, integer=integer)
-
-
-from .sweep_optimized import real_activations
 
 
 @torch.no_grad()

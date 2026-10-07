@@ -1,9 +1,0 @@
-{
-  "completed": true,
-  "model": "IFM/K2-Horizon-7B",
-  "revision": "036114ce8d46c32b24c15423211069abb9c5d25e",
-  "sequence_length": 257,
-  "selected_query_rows": 32,
-  "full_vs_selected_HF_pcc": 1.0,
-  "max_abs_difference": 0.0
-}
