@@ -18,7 +18,7 @@ $E2E/run_craq.sh --grid 8x4            # craq-sim, full grid
 $E2E/run_emu.sh                        # emulator (needs NNG_SOCKET_ADDR from your IRD reservation)
 ```
 
-Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1 --deepstack-at 0 --debug default`.
+Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1 --deepstack-at 0 --debug default` (`--debug fast` on craq-sim, where the watcher slows each op 150-300x).
 
 | Flag | Meaning |
 |---|---|
