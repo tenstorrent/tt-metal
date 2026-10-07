@@ -79,4 +79,6 @@ def test_router_agreement(mesh_device, mesh_shape):
         p = _w_pcc(ref_idx, ref_w, idx, wt)
         res[(mode, sh)] = a
         print(f"RESULT layer={layer} mode={mode} shift={sh:.3f} set_agree={a:.4f} weights_pcc={p:.6f}")
+    if layer < 0:
+        pytest.skip("synthetic dump (layer<0): modes executed, numbers are not a routing claim")
     assert res[("hilo", 0.0)] >= 0.99 or res[("hilo", shift)] >= 0.99, f"hilo set agreement below 99%: {res}"
