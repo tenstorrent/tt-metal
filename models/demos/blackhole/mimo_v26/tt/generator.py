@@ -5,6 +5,7 @@ Users are spread over mesh rows (prompt i -> row i % rows, slot i // rows); up t
 clamped to 0, MoE routing spread) so they can neither run past max_pos nor overflow dispatch buffers.
 """
 import json
+import os
 import time
 
 import torch
@@ -25,7 +26,16 @@ class Generator:
         self.rows = model.mesh.shape[0]
         self.eos = set(eos) if eos is not None else load_eos()
         self.U, self.trace = U, trace
-        self.dec = Decoder(model, trace=trace, keep_logits=keep_logits, U=U)
+        self.dec = Decoder(
+            model,
+            trace=trace,
+            keep_logits=keep_logits,
+            U=U,
+            feedback=os.environ.get("MIMO_FEEDBACK", "1") == "1",
+            max_pos=max_pos,
+            eos=self.eos,
+            chunk=int(os.environ.get("MIMO_CHUNK", "16")),
+        )
         self.keep_logits = keep_logits
         self.prefill_group = prefill_group
 
@@ -79,13 +89,54 @@ class Generator:
             pos[r, s] = len(prompts[i])
             alive[r, s] = int(first[r, s]) not in self.eos and max_new > 1
         times = []
+        fb = getattr(self.dec, "feedback", False) and teacher is None
+        dirty = True
+        if fb and not self.keep_logits:
+            # device-resident loop: the host only enqueues chunks of trace replays (state, eos/cap handling and the token ring live on device) and reads the ring once per chunk
+            self.dec.set_inputs(cur, pos, ~(alive & (pos < self.max_pos - 1)))
+            step = 0
+            while step < max_new - 1 and alive.any():
+                n = min(self.dec.N, max_new - 1 - step)
+                t1 = time.perf_counter()
+                toks = self.dec.run_chunk(n)
+                dt = (time.perf_counter() - t1) / n
+                for j in range(n):
+                    alive &= pos < self.max_pos - 1
+                    if not alive.any():
+                        break
+                    times.append(dt)
+                    for i, (r, s) in enumerate(place):
+                        if not alive[r, s]:
+                            continue
+                        t = int(toks[j][r, s])
+                        out[i].append(t)
+                        sbest[i].append(0.0)
+                        pos[r, s] += 1
+                        if t in self.eos or len(out[i]) >= max_new:
+                            alive[r, s] = False
+                    step += 1
+            return dict(
+                tokens=out,
+                first_logits=flg,
+                step_logits=slog,
+                step_best=sbest,
+                times=times,
+                prefill_s=t_pre,
+                place=place,
+            )
         for step in range(max_new - 1):
             if not alive.any():
                 break
             # clamp: a user whose next position would reach max_pos is finished
+            before = alive.clone()
             alive &= pos < self.max_pos - 1
-            self.dec.set_inputs(cur, pos, ~alive)
+            dirty |= bool((before != alive).any())
             t1 = time.perf_counter()
+            if (
+                not fb or dirty
+            ):  # feedback decoders keep tokens/positions on device: host inputs only when the set of live users changed
+                self.dec.set_inputs(cur, pos, ~alive)
+                dirty = False
             res = self.dec.run()
             times.append(time.perf_counter() - t1)
             nxt = res[0]
@@ -94,13 +145,14 @@ class Generator:
                     continue
                 t = int(nxt[r, s])
                 out[i].append(t)
-                sbest[i].append(float(res[1][r, s]))
+                sbest[i].append(float(res[1][r, s]) if res[1] is not None else 0.0)
                 if self.keep_logits:
                     slog[i].append(res[2][r, s].clone())
                 pos[r, s] += 1
                 cur[r, s] = t if teacher is None else int(teacher[i][min(step + 1, len(teacher[i]) - 1)])
                 if t in self.eos or len(out[i]) >= max_new:
                     alive[r, s] = False
+                    dirty = True
         return dict(
             tokens=out, first_logits=flg, step_logits=slog, step_best=sbest, times=times, prefill_s=t_pre, place=place
         )
@@ -116,4 +168,13 @@ class Generator:
         gc.collect()
         self.model.reconfigure(layout)
         self.U = U
-        self.dec = Decoder(self.model, trace=self.trace, keep_logits=keep_logits, U=U)
+        self.dec = Decoder(
+            self.model,
+            trace=self.trace,
+            keep_logits=keep_logits,
+            U=U,
+            feedback=os.environ.get("MIMO_FEEDBACK", "1") == "1",
+            max_pos=self.max_pos,
+            eos=self.eos,
+            chunk=int(os.environ.get("MIMO_CHUNK", "16")),
+        )

@@ -37,6 +37,36 @@ def _k_ffn():
     )
 
 
+_NORM_CFG = {}
+
+
+def _norm_cfg():
+    """width-sharded layer-norm config for decode rows ([1,1,<=32,4096] = one tile row): 32 cores x [32,128]. The interleaved rms_norm of one tile row runs on ONE core (65 us)."""
+    if not _NORM_CFG:
+        grid = ttnn.CoreGrid(y=4, x=8)
+        _NORM_CFG["mem"] = ttnn.create_sharded_memory_config(
+            shape=(32, 128),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        _NORM_CFG["pc"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, 4), subblock_w=4, block_h=1, block_w=4, inplace=False
+        )
+    return _NORM_CFG["mem"], _NORM_CFG["pc"]
+
+
+def rms_decode_sharded(x, w):
+    mem, pc = _norm_cfg()
+    xs = ttnn.to_memory_config(x, mem)
+    y = ttnn.rms_norm(xs, epsilon=EPS, weight=w, memory_config=mem, program_config=pc, compute_kernel_config=_k_norm())
+    ttnn.deallocate(xs)
+    out = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(y)
+    return out
+
+
 class MiMoDecoderLayer:
     def __init__(
         self,
@@ -164,6 +194,8 @@ class MiMoDecoderLayer:
 
     # ------------------------------------------------------------------ pieces
     def rms(self, x, w):
+        if x.shape[2] <= 32 and os.environ.get("MIMO_NORM", "sharded") == "sharded":
+            return rms_decode_sharded(x, w)
         return ttnn.rms_norm(x, epsilon=EPS, weight=w, compute_kernel_config=_k_norm())
 
     def all_reduce_cols(self, x):
@@ -262,10 +294,10 @@ class MiMoDecoderLayer:
         return h2
 
     # ------------------------------------------------------------------ decode (32 slots per row)
-    def decode(self, h, cur_pos, rope_idx, taps=None, live=None, block=1, upd=None):
+    def decode(self, h, cur_pos, rope_idx, taps=None, live=None, block=1, upd=None, rope=None):
         """h [1,1,32,4096] bf16 tile. Dead slots must hold zeros and cur_pos 0."""
         xn = self.rms(h, self.w_in)
-        a = self.attn.decode(xn, cur_pos, rope_idx, block, upd)
+        a = self.attn.decode(xn, cur_pos, rope_idx, block, upd, rope)
         h1 = ttnn.add(h, a, dtype=ttnn.bfloat16)
         fn = self.rms(h1, self.w_post)
         if self.L == 0:
@@ -302,7 +334,7 @@ class MiMoDecoderLayer:
                     self.mesh,
                     self.gate,
                     self.moe,
-                    router=os.environ.get("MIMO_ROUTER", "exact"),
+                    router=os.environ.get("MIMO_ROUTER", "fast"),
                     dead=os.environ.get("MIMO_DEAD", "spread32"),
                 )
             return self.moe_dec.forward(x, live)

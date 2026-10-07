@@ -84,6 +84,32 @@ def convert_weights(cfg: LayerCfg, q_w, k_w, v_w, o_w, sink=None):
     return out
 
 
+def mm1d_config(m, k, n, cores, fp32_acc=True, grid_w=8):
+    """1D mcast_in0 decode matmul config on `cores` cores of an INTERLEAVED weight (recipe of qwen36 tp_common.create_matmul_1d_decode_progcfg): qkv 74.6 -> 31.0 us (60 cores),
+    o_proj 32.1 -> 25.8 us (24-32 cores), bit-identical results (tests/test_matmul_sweep.py)."""
+    import math
+
+    cols = min(grid_w, cores)
+    rows = math.ceil(cores / cols)
+    m_t, k_t, n_t = math.ceil(m / 32), math.ceil(k / 32), math.ceil(n / 32)
+    per_core_k = max(i for i in range(1, k_t + 1) if k_t % i == 0 and i <= 8)
+    per_core_n = math.ceil(n_t / (cols * rows))
+    cap = 4 if fp32_acc else 8
+    sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
+    sub_h = max(i for i in range(1, cap + 1) if m_t % i == 0 and i * sub_w <= cap)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=per_core_k,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=m_t,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def _pad8(t):
     """pad the last dim to a multiple of 8 int32 entries (page table stick size must be a multiple of 32 bytes)"""
     n = t.shape[-1]
@@ -354,15 +380,25 @@ class MiMoAttention:
         self.decode_set(io, positions)
         return io["cur"], io["idx"]
 
-    def decode(self, x, cur_pos, rope_idx, block=1, upd=None):
+    def rope_prep(self, rope_idx, B):
+        """cos/sin rows of the B decode positions, plain [1,B,1,192] and repeated over the 8 q heads [1,B,8,192]. Depends only on the position and theta, so the decoder computes it
+        ONCE per step per layer kind and hands it to every layer (saves 2 embeddings + 2 repeats + reshapes per layer).
+        """
+        cos = ttnn.reshape(ttnn.embedding(rope_idx, self.cos_tab, layout=ttnn.TILE_LAYOUT), (1, B, 1, DQK))
+        sin = ttnn.reshape(ttnn.embedding(rope_idx, self.sin_tab, layout=ttnn.TILE_LAYOUT), (1, B, 1, DQK))
+        return cos, sin, ttnn.repeat(cos, [1, 1, NQ // TP, 1]), ttnn.repeat(sin, [1, 1, NQ // TP, 1])
+
+    def decode(self, x, cur_pos, rope_idx, block=1, upd=None, rope=None):
         """x: [1,1,B,4096] bf16 TILE per device, B = decode slots per mesh row (1..32). Returns [1,1,B,4096]."""
         B = x.shape[2]
         pt_dec, kv_mem, att_mem = self._dec_state(B, block)
+        qkv_cores = int(os.environ.get("MIMO_QKV_CORES", "60"))
         qkv = ttnn.linear(
             x,
             self.wqkv,
             dtype=ttnn.bfloat16,
             compute_kernel_config=_k_mm(),
+            program_config=mm1d_config(B, HIDDEN, self.wqkv.shape[-1], qkv_cores) if qkv_cores else None,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -372,15 +408,15 @@ class MiMoAttention:
         q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
-        cos = ttnn.embedding(rope_idx, self.cos_tab, layout=ttnn.TILE_LAYOUT)  # [1,B,192]
-        sin = ttnn.embedding(rope_idx, self.sin_tab, layout=ttnn.TILE_LAYOUT)
-        cos = ttnn.reshape(cos, (1, B, 1, DQK))
-        sin = ttnn.reshape(sin, (1, B, 1, DQK))
-        cosq = ttnn.repeat(cos, [1, 1, NQ // TP, 1])
-        sinq = ttnn.repeat(sin, [1, 1, NQ // TP, 1])
+        if rope is None:
+            cos, sin, cosq, sinq = self.rope_prep(rope_idx, B)
+            own = True
+        else:
+            cos, sin, cosq, sinq = rope
+            own = False
         qr = self._rope(q, cosq, sinq)
         kr = self._rope(k, cos, sin)
-        for t in (q, k, cos, sin, cosq, sinq):
+        for t in (q, k) + ((cos, sin, cosq, sinq) if own else ()):
             ttnn.deallocate(t)
         extra = {"cache_position_modulo": self.ring_blocks * BLOCK} if self.ring_blocks else {}
         if block > 1 and os.environ.get("MIMO_VERIFY_NOWRITE") == "1":
@@ -440,8 +476,14 @@ class MiMoAttention:
         oc = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=NQ // TP)
         ttnn.deallocate(o)
         oc = ttnn.to_memory_config(oc, ttnn.DRAM_MEMORY_CONFIG)
+        wo_cores = int(os.environ.get("MIMO_WO_CORES", "32"))
         part = ttnn.linear(
-            oc, self.wo, dtype=ttnn.bfloat16, compute_kernel_config=_k_mm(), memory_config=ttnn.DRAM_MEMORY_CONFIG
+            oc,
+            self.wo,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=_k_mm(),
+            program_config=mm1d_config(oc.shape[2], oc.shape[3], HIDDEN, wo_cores) if wo_cores else None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(oc)
         if part.shape[2] != B:  # nlp_concat_heads_decode pads the batch to 32 rows
