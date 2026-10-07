@@ -25,6 +25,96 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
+// 1: Blackhole runs the top-k stage on fused [bf16 | u16 index] keys in a 32-bit DEST section.
+#ifndef SAMPLING_TOPK_FUSED_32B_DEST
+#ifdef ARCH_BLACKHOLE
+#define SAMPLING_TOPK_FUSED_32B_DEST 1
+#else
+#define SAMPLING_TOPK_FUSED_32B_DEST 0
+#endif
+#endif
+
+#if SAMPLING_TOPK_FUSED_32B_DEST && defined(TRISC_MATH)
+namespace sampling_fused {
+using namespace ckernel;
+using namespace ckernel::sfpu;
+
+// _topk_fuse_tile_ for value tiles moved in as raw u16 words: DEST 0,1 hold [garbage | bf16 bits].
+// canonicalize_negzero: -0 becomes +0 first, as the comparator path does before its local sort.
+template <bool largest, bool canonicalize_negzero>
+inline void fuse_raw16_slab() {
+    constexpr int body = canonicalize_negzero ? 15 : 10;
+    TOPK_SFPENCC_ALL_LANES_ON();
+    sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    load_replay_buf<Exec>(0, body, [] {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 128);
+        TTI_SFPSHFT(16, 0, p_sfpu::LREG0, 1);
+        if constexpr (canonicalize_negzero) {
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0);
+            TTI_SFPSHFT(1, 0, p_sfpu::LREG2, 1);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TOPK_SFPENCC_ALL_LANES_ON();
+        }
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TOPK_SFPENCC_ALL_LANES_ON();
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_INCRWC(0, 2, 0, 0);
+    });
+    for (int i = 1; i < 64; i++) {
+        lltt::replay(0, body);
+    }
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_replay_init = 0;
+}
+
+// Splits keys into u16 value and index words in the packer-visible high half (mode 9, as the u16 index pack).
+// flush_denormals mirrors the comparator path's BF16 SFPSTORE, which flushes denormals to signed zero.
+template <bool largest, bool flush_denormals>
+inline void defuse_raw16(const int num_tiles) {
+    constexpr std::uint32_t pack_u16 = TOPK_SFPSTORE_MODE_PACK_UINT16;
+    constexpr int body = flush_denormals ? 15 : 10;
+    TOPK_SFPENCC_ALL_LANES_ON();
+    sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    load_replay_buf<Exec>(0, body, [] {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        TOPK_SFPENCC_ALL_LANES_ON();
+        TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+        if constexpr (flush_denormals) {
+            TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+            TTI_SFPSETCC(0, p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+            TTI_SFPSHFT((-31) & 0xFFF, 0, p_sfpu::LREG0, 1);
+            TTI_SFPSHFT(31, 0, p_sfpu::LREG0, 1);
+            TOPK_SFPENCC_ALL_LANES_ON();
+        }
+        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
+        TTI_SFPSTORE(p_sfpu::LREG0, pack_u16, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, pack_u16, ADDR_MOD_7, 128);
+        TTI_INCRWC(0, 2, 0, 0);
+    });
+    const int n = 32 * num_tiles;
+    for (int i = 1; i < n; i++) {
+        lltt::replay(0, body);
+    }
+    set_dst_write_addr(0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    topk_replay_init = 0;
+}
+}  // namespace sampling_fused
+#endif
+
 static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     compute_kernel_hw_startup(dfb_id, dfb_id);
     copy_init(dfb_id);
@@ -402,6 +492,160 @@ void top_k() {
     sfpu::_init_sfpu_config_reg();
 }
 
+#if SAMPLING_TOPK_FUSED_32B_DEST
+// top_k<stable_sort = true> order from fused keys in 32-bit DEST; bf16 values travel as raw u16 words,
+// so unpacker, datacopy MOP and packer all take the UInt16 index CB format.
+template <
+    uint32_t Ht,
+    uint32_t Wt,
+    uint32_t K,
+    uint32_t logWt,
+    uint32_t logk,
+    uint32_t input_dfb_index,
+    uint32_t index_dfb_index,
+    uint32_t input_transposed_dfb_index,
+    uint32_t index_transposed_dfb_index,
+    uint32_t values_dfb_index,
+    uint32_t output_ind_dfb_index,
+    uint32_t tile_width>
+void top_k_fused_32b_dest() {
+    constexpr bool largest = true;
+
+    DataflowBuffer input_dfb(input_dfb_index);
+    DataflowBuffer index_dfb(index_dfb_index);
+    DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
+    DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
+    DataflowBuffer values_dfb(values_dfb_index);
+    DataflowBuffer output_ind_dfb(output_ind_dfb_index);
+
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        set_fp32_dest_acc<true>();
+        ckernel::topk_tile_init</*fused=*/true>();
+        reconfig_data_format_srca(index_dfb_index);
+        PACK((llk_pack_reconfig_data_format<true>(index_transposed_dfb_index)));
+
+        input_transposed_dfb.reserve_back(Wt);
+        index_transposed_dfb.reserve_back(Wt);
+
+        for (uint32_t wt = 0; wt < Wt; wt += 2) {
+            input_dfb.wait_front(2);
+            index_dfb.wait_front(2);
+
+            tile_regs_acquire();
+            transpose_init<true>(index_dfb_index);
+            transpose_tile<true>(input_dfb_index, 0, 0);
+            transpose_tile<true>(input_dfb_index, 1, 1);
+            transpose_tile<true>(index_dfb_index, 0, 2);
+            transpose_tile<true>(index_dfb_index, 1, 3);
+            MATH((_llk_math_eltwise_unary_sfpu_params_(
+                sampling_fused::fuse_raw16_slab<largest, true>, 0, VectorMode::RC_custom)));
+            ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                0, /*idir=*/0, logk - 1);
+            MATH((_llk_math_eltwise_unary_sfpu_params_(
+                sampling_fused::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
+            tile_regs_commit<true>();
+
+            input_dfb.pop_front(2);
+            index_dfb.pop_front(2);
+
+            tile_regs_wait();
+            pack_tile<false, true>(0, input_transposed_dfb_index);
+            pack_tile<false, true>(1, input_transposed_dfb_index);
+            pack_tile<false, true>(2, index_transposed_dfb_index);
+            pack_tile<false, true>(3, index_transposed_dfb_index);
+            tile_regs_release<true>();
+        }
+
+        input_transposed_dfb.push_back(Wt);
+        index_transposed_dfb.push_back(Wt);
+
+        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+            bool a = false;
+            input_transposed_dfb.wait_front(Wt);
+            index_transposed_dfb.wait_front(Wt);
+
+            for (uint32_t left_ind = 0; left_ind < Wt - (1u << m_iter); left_ind += 2u << m_iter) {
+                const uint32_t right_ind = left_ind + (1u << m_iter);
+                tile_regs_acquire();
+                copy_init<true>(index_transposed_dfb_index);
+                copy_tile<true>(input_transposed_dfb_index, left_ind, 0);
+                copy_tile<true>(input_transposed_dfb_index, right_ind, 1);
+                copy_tile<true>(index_transposed_dfb_index, left_ind, 2);
+                copy_tile<true>(index_transposed_dfb_index, right_ind, 3);
+                MATH((_llk_math_eltwise_unary_sfpu_params_(
+                    sampling_fused::fuse_raw16_slab<largest, false>, 0, VectorMode::RC_custom)));
+                ckernel::topk_merge</*idir=*/false, /*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                    0, m_iter, K);
+                ckernel::topk_rebuild</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                    0, (uint32_t)a, m_iter, K, logk, true);
+                MATH((_llk_math_eltwise_unary_sfpu_params_(
+                    sampling_fused::defuse_raw16<largest, false>, 0, VectorMode::RC_custom, 1)));
+                tile_regs_commit<true>();
+
+                tile_regs_wait();
+                pack_tile<true, true>(0, input_transposed_dfb_index, left_ind);
+                pack_tile<true, true>(2, index_transposed_dfb_index, left_ind);
+                tile_regs_release<true>();
+                a = !a;
+            }
+
+            input_transposed_dfb.reserve_back(Wt);
+            index_transposed_dfb.reserve_back(Wt);
+
+            input_transposed_dfb.pop_front(Wt);
+            index_transposed_dfb.pop_front(Wt);
+
+            input_transposed_dfb.push_back(Wt);
+            index_transposed_dfb.push_back(Wt);
+        }
+
+        restore_fp32_dest_acc<true>();
+
+        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : (K / tile_width) + 1;
+
+        // From here on identical to top_k: 16-bit DEST transposes back to row layout.
+        reconfig_data_format_srca(input_transposed_dfb_index);
+        transpose_init(input_transposed_dfb_index);
+        pack_reconfig_data_format(input_transposed_dfb_index);
+        input_transposed_dfb.wait_front(Wt);
+        for (uint32_t i = 0; i < Kt; ++i) {
+            tile_regs_acquire();
+            transpose_tile(input_transposed_dfb_index, i, 0);
+            tile_regs_commit();
+
+            values_dfb.reserve_back(1);
+
+            tile_regs_wait();
+            pack_tile(0, values_dfb_index);
+            tile_regs_release();
+
+            values_dfb.push_back(1);
+        }
+        input_transposed_dfb.pop_front(Wt);
+
+        reconfig_data_format_srca(index_transposed_dfb_index);
+        transpose_init(index_transposed_dfb_index);
+        pack_reconfig_data_format(index_transposed_dfb_index);
+        index_transposed_dfb.wait_front(Wt);
+        for (uint32_t i = 0; i < Kt; ++i) {
+            tile_regs_acquire();
+            transpose_tile(index_transposed_dfb_index, i, 0);
+            tile_regs_commit();
+
+            output_ind_dfb.reserve_back(1);
+
+            tile_regs_wait();
+            pack_tile(0, output_ind_dfb_index);
+            tile_regs_release();
+
+            output_ind_dfb.push_back(1);
+        }
+        index_transposed_dfb.pop_front(Wt);
+    }
+    sfpu::_init_sfpu_config_reg();
+}
+#endif
+
 template <uint32_t in0_dfb, uint32_t in1_scalar_dfb, uint32_t num_tiles>
 void mul_block_bcast_scalar_inplace() {
     // Precondition: in0_cb has num_tiles produced
@@ -455,6 +699,23 @@ void kernel_main() {
     const uint32_t logk = 5;  // log(32)
 
     // top-k
+#if SAMPLING_TOPK_FUSED_32B_DEST
+    if constexpr (stable_sort && !DST_ACCUM_MODE) {
+        top_k_fused_32b_dest<
+            Ht,
+            Wt,
+            nearest32_K,
+            logWt,
+            logk,
+            dfb::input_values,
+            dfb::index,
+            dfb::input_transposed,
+            dfb::index_transposed,
+            dfb::values,
+            dfb::output_ind,
+            tile_width>();
+    } else
+#endif
     top_k<
         Ht,
         Wt,
