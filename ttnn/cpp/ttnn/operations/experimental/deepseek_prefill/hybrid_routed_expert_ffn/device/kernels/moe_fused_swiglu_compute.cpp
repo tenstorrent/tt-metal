@@ -267,13 +267,9 @@ ALWI void mul_blocked(uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, OUT, width);
-#else
         for (uint32_t i = 0; i < width; ++i) {
             pack_tile(i, OUT);
         }
-#endif
         tile_regs_release();
     }
     a_buf.pop_front(n);
@@ -350,13 +346,9 @@ ALWI void fold_binary_act_blocked(uint32_t num_contributors, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, OUT, width);
-#else
         for (uint32_t i = 0; i < width; ++i) {
             pack_tile(i, OUT);
         }
-#endif
         tile_regs_release();
     }
     gate_in.pop_front(num_contributors * n);
@@ -415,13 +407,9 @@ ALWI void fold_binary_act_biased(
         }
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, OUT, width);
-#else
         for (uint32_t i = 0; i < width; ++i) {
             pack_tile(i, OUT);
         }
-#endif
         tile_regs_release();
     }
     sg_in.pop_front(n);
@@ -927,13 +915,9 @@ void kernel_main() {
                         }
                         tile_regs_commit();
                         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                        pack_block_mop(0, cb_out_tiles, w);
-#else
                         for (uint32_t i = 0; i < w; ++i) {
                             pack_tile(i, cb_out_tiles);
                         }
-#endif
                         tile_regs_release();
                     }
                 }
