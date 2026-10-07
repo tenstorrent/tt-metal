@@ -48,6 +48,7 @@ class TextEncoder:
         use_torch: bool,
     ) -> None:
         self._device = device
+        self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
         self._tokenizer = transformers.Qwen2Tokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
 
@@ -70,36 +71,40 @@ class TextEncoder:
             self._torch_encoder.eval()
         else:
             self._checkpoint = Qwen25VlCheckpoint(checkpoint_name, subfolder="text_encoder")
-            with self._reshape():
-                self._encoder = self._checkpoint.build(
-                    device=device,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
-            ttnn.synchronize_device(device)
+            self.load()
 
     def is_loaded(self) -> bool:
-        return self._encoder is None or self._encoder.is_loaded()
+        return self._torch_encoder is not None or self._encoder is not None
 
-    def reload_weights(self) -> None:
-        if self._encoder is None or self._encoder.is_loaded():
+    def load(self) -> None:
+        """Builds the encoder with its weights, after construction or ``unload``."""
+        if self.is_loaded():
             return
         assert self._checkpoint is not None
 
         logger.info("loading text encoder weights to device...")
         with self._reshape():
-            self._checkpoint.load_weights(self._encoder, device=self._device, parallel_config=self._parallel_config)
+            self._encoder = self._checkpoint.build(
+                device=self._device,
+                parallel_config=self._parallel_config,
+                ccl_manager=self._ccl_manager,
+            )
         ttnn.synchronize_device(self._device)
 
-    def deallocate_weights(self) -> None:
-        """Deallocate encoder weights from device."""
-        if self._encoder is None or not self._encoder.is_loaded():
+    def unload(self) -> None:
+        """Drops the encoder, which frees its weights.
+
+        The traces are released and dropped with it: they would read the weights from their old
+        addresses after a reload, and they hold the encoder through its ``forward``.
+        """
+        if self._encoder is None:
             return
 
-        logger.info("deallocating text encoder weights...")
+        logger.info("unloading text encoder weights...")
         for tracer in self._tracers.values():
             tracer.release_trace()
-        self._encoder.deallocate_weights()
+        self._tracers.clear()
+        self._encoder = None
         ttnn.synchronize_device(self._device)
 
     @torch.no_grad()

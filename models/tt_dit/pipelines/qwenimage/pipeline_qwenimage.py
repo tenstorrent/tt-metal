@@ -248,22 +248,16 @@ class QwenImagePipeline(PipelineAPIMixin):
         }
         self._image_processor = VaeImageProcessor(vae_scale_factor=_VAE_SCALE_FACTOR * 2)
 
-        logger.info("creating transformers...")
         self._checkpoint = QwenImageCheckpoint(config.checkpoint_name)
-        # Weight loading is deferred, see _swap_in.
-        self._transformers = [
-            self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
-            for m in self._ccl_managers
-        ]
+        # The transformers are built and loaded on demand, see _swap_in.
         self._transformer_loaders = [
             _TransformerLoader(
-                t,
                 checkpoint=self._checkpoint,
-                device=d,
+                ccl_manager=m,
                 parallel_config=config.dit_parallel_config,
                 tracers=[self._tracers[idx, bucket] for bucket in config.sequence_length_buckets],
             )
-            for idx, (t, d) in enumerate(zip(self._transformers, self._devices, strict=True))
+            for idx, m in enumerate(self._ccl_managers)
         ]
 
         # The encoder is loaded before the transformers, for memory efficiency.
@@ -330,13 +324,13 @@ class QwenImagePipeline(PipelineAPIMixin):
 
     @staticmethod
     def _swap_in(module: _Swappable, *, evict: _Swappable | None = None) -> None:
-        """Loads the weights of ``module``, first deallocating those of ``evict`` to make room."""
+        """Loads the weights of ``module``, first unloading those of ``evict`` to make room."""
         if module.is_loaded():
             return
 
         if evict is not None:
-            evict.deallocate_weights()
-        module.reload_weights()
+            evict.unload()
+        module.load()
 
     def __call__(
         self,
@@ -475,7 +469,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         if self._cfg_enabled and not self._cfg_parallel:
             latents = ttnn.concat([latents, latents])
 
-        return self._transformers[submesh_idx].forward(spatial=latents, **kwargs)
+        return self._transformer_loaders[submesh_idx].transformer.forward(spatial=latents, **kwargs)
 
     def synchronize_devices(self) -> None:
         for d in self._devices:
@@ -493,7 +487,7 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         # We let randn generate a permuted latent tensor in float32, so that the generated noise
         # matches the reference implementation.
-        latents = self._transformers[0].patchify(torch.randn(shape).permute(0, 2, 3, 1))
+        latents = self._transformer_loaders[0].transformer.patchify(torch.randn(shape).permute(0, 2, 3, 1))
 
         return from_torch_to_devices(latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
 
@@ -506,7 +500,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         )
 
         torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
-        torch_latents = self._transformers[0].unpatchify(
+        torch_latents = self._transformer_loaders[0].transformer.unpatchify(
             torch_latents,
             height=self._height // _VAE_SCALE_FACTOR,
             width=self._width // _VAE_SCALE_FACTOR,
@@ -532,51 +526,63 @@ class _Swappable(Protocol):
     def is_loaded(self) -> bool:
         ...
 
-    def reload_weights(self) -> None:
+    def load(self) -> None:
         ...
 
-    def deallocate_weights(self) -> None:
+    def unload(self) -> None:
         ...
 
 
 class _TransformerLoader:
-    """Loads and deallocates the weights of a transformer, releasing its traces with them."""
+    """Builds a transformer with its weights on load and drops it on unload, which frees them.
+
+    The traces of the transformer are released with it, since they would read the weights from
+    their old addresses after a reload.
+    """
 
     def __init__(
         self,
-        transformer: QwenImageTransformer,
         *,
         checkpoint: QwenImageCheckpoint,
-        device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         tracers: Sequence[Tracer],
     ) -> None:
-        self._transformer = transformer
         self._checkpoint = checkpoint
-        self._device = device
+        self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
         self._tracers = tracers
+        self._transformer: QwenImageTransformer | None = None
+
+    @property
+    def transformer(self) -> QwenImageTransformer:
+        if self._transformer is None:
+            msg = "transformer is not loaded"
+            raise RuntimeError(msg)
+        return self._transformer
 
     def is_loaded(self) -> bool:
-        return self._transformer.is_loaded()
+        return self._transformer is not None
 
-    def reload_weights(self) -> None:
-        if self._transformer.is_loaded():
+    def load(self) -> None:
+        if self._transformer is not None:
             return
 
         logger.info("loading transformer weights to device...")
-        self._checkpoint.load(
-            self._transformer, mesh_device=self._device, parallel_config=self._parallel_config, is_fsdp=False
+        device = self._ccl_manager.mesh_device
+        transformer = self._checkpoint.build(
+            ccl_manager=self._ccl_manager, parallel_config=self._parallel_config, is_fsdp=False
         )
-        ttnn.synchronize_device(self._device)
+        self._checkpoint.load(transformer, mesh_device=device, parallel_config=self._parallel_config, is_fsdp=False)
+        ttnn.synchronize_device(device)
+        self._transformer = transformer
 
-    def deallocate_weights(self) -> None:
-        if not self._transformer.is_loaded():
+    def unload(self) -> None:
+        if self._transformer is None:
             return
 
-        logger.info("deallocating transformer weights...")
-        # The traces would read the weights from their old addresses after a reload.
+        logger.info("unloading transformer weights...")
         for tracer in self._tracers:
             tracer.release_trace()
-        self._transformer.deallocate_weights()
-        ttnn.synchronize_device(self._device)
+        self._transformer = None
+        ttnn.synchronize_device(self._ccl_manager.mesh_device)

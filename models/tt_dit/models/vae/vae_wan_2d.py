@@ -449,12 +449,12 @@ class WanVaeDecoder2DAdapter:
             self._tt_latents_mean = tensor.from_torch(torch.tensor(hf_config["latents_mean"]), device=self._device)
 
             if load_weights:
-                self.reload_weights()
+                self.load()
 
     def is_loaded(self) -> bool:
         return self._torch_vae is not None or (self._decoder is not None and self._decoder.is_loaded())
 
-    def reload_weights(self) -> None:
+    def load(self) -> None:
         if self.is_loaded():
             return
 
@@ -471,8 +471,8 @@ class WanVaeDecoder2DAdapter:
         )
         ttnn.synchronize_device(self._device)
 
-    def deallocate_weights(self) -> None:
-        """Drops the decoder, which frees its weights. ``reload_weights`` builds a new one.
+    def unload(self) -> None:
+        """Drops the decoder, which frees its weights. ``load`` builds a new one.
 
         Also releases the trace, which would read the weights from their old addresses after a reload.
         """
