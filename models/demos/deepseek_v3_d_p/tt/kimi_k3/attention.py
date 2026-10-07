@@ -41,6 +41,60 @@ def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> Non
         raise ValueError("K3 KDA requires actual_end > actual_start")
 
 
+def _device_bound(value: int, device) -> ttnn.Tensor:
+    """A replicated 1-element UINT32 bound, the form ttKDA takes."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
+class K3KdaChunk:
+    """What every KDA layer of one eager chunk shares: the device bounds and the selection table.
+
+    Both depend only on the chunk's bounds and the SP geometry, which all of a rank's KDA layers have in common,
+    so building them per layer repeated two host-to-device writes and the whole selection graph on every layer.
+    They are built by the first KDA layer that asks, so a rank with no KDA layer uploads nothing, and the
+    transformer releases them after its last layer. Traced calls bring their bounds in `metadata` and do not use
+    this.
+    """
+
+    def __init__(self, actual_start: int | None, actual_end: int | None):
+        self._host_bounds = (0 if actual_start is None else actual_start, actual_end)
+        self._bounds = None
+        self._selections = {}
+
+    def bounds(self, device) -> tuple:
+        if self._bounds is None:
+            start, end = self._host_bounds
+            self._bounds = (_device_bound(start, device), None if end is None else _device_bound(end, device))
+        return self._bounds
+
+    def selections(self, kda):
+        key = (
+            kda.sequence_parallel_axis,
+            kda.active_seq_len_local,
+            kda.config.num_heads,
+            kda.config.head_k_dim,
+            kda.config.head_v_dim,
+        )
+        if key not in self._selections:
+            self._selections[key] = kda.selections(*self.bounds(kda.device))
+        return self._selections[key]
+
+    def release(self) -> None:
+        self._selections.clear()
+        if self._bounds is not None:
+            for bound in self._bounds:
+                if bound is not None:
+                    ttnn.deallocate(bound)
+            self._bounds = None
+
+
 @dataclass(frozen=True)
 class K3AttnContext:
     """Everything an attention module needs from the caller for one chunk.
@@ -63,6 +117,8 @@ class K3AttnContext:
     # KDA requires both bounds to be 32-token aligned on every replay. Device-only
     # values are caller preconditions; do not round real lengths or read them back.
     metadata: Optional[tuple] = None
+    # Eager calls only: the KDA inputs shared by every layer of this chunk. `None` builds them per layer.
+    kda_chunk: Optional[K3KdaChunk] = None
 
 
 class K3Attention(Protocol):
@@ -183,30 +239,27 @@ class TtK3KdaAttention(LightweightModule):
 
         # Reuse both caller-owned scalars during capture: replay changes the
         # interval without rebuilding the graph or reading bounds on the host.
-        def device_bound(value: int) -> ttnn.Tensor:
-            return ttnn.from_torch(
-                torch.tensor([value], dtype=torch.int64),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.kda.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.kda.device),
-            )
-
+        selections = None
+        owns_bounds = False
         if ctx.metadata is not None:
             actual_start, actual_end = ctx.metadata[1:3]
+        elif ctx.kda_chunk is not None:
+            actual_start, actual_end = ctx.kda_chunk.bounds(self.kda.device)
+            selections = ctx.kda_chunk.selections(self.kda)
         else:
-            actual_start = device_bound(0 if ctx.actual_start is None else ctx.actual_start)
-            actual_end = None if ctx.actual_end is None else device_bound(ctx.actual_end)
+            actual_start = _device_bound(0 if ctx.actual_start is None else ctx.actual_start, self.kda.device)
+            actual_end = None if ctx.actual_end is None else _device_bound(ctx.actual_end, self.kda.device)
+            owns_bounds = True
         try:
             output, new_state = self.kda.forward(
                 hidden,
                 self._states.read(self.layer_idx, ctx.cache_user_id),
                 actual_start=actual_start,
                 actual_end=actual_end,
+                selections=selections,
             )
         finally:
-            if ctx.metadata is None:
+            if owns_bounds:
                 ttnn.deallocate(actual_start)
                 if actual_end is not None:
                     ttnn.deallocate(actual_end)

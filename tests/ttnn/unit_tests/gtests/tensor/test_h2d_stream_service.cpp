@@ -75,7 +75,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::H2DStreamService& service,
     const ttnn::Tensor& output_tensor,
-    const CoreRange& worker_cores,
+    const tt::tt_metal::CoreRange& worker_cores,
     uint32_t metadata_size_bytes,
     uint32_t metadata_input_addr,
     uint32_t metadata_output_addr) {
@@ -188,7 +188,7 @@ void run_h2d_stream_service_case(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const H2DServiceCase& cs,
     InputPath input_path,
-    std::optional<CoreRange> worker_cores = std::nullopt,
+    std::optional<tt::tt_metal::CoreRange> worker_cores = std::nullopt,
     uint32_t num_iterations = 2) {
     SCOPED_TRACE(
         ::testing::Message() << "global_shape=" << cs.global_shape
@@ -530,7 +530,7 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
     struct Row {
         uint32_t per_row_size;
         uint32_t N;  // tensor pages per device; must satisfy N % num_workers == 0
-        CoreRange worker_cores;
+        tt::tt_metal::CoreRange worker_cores;
         uint32_t num_iterations;
         uint32_t metadata_size_bytes;  // 0 = disabled; must be <= smallest socket_page_size in chunkings
         const char* label;
@@ -541,16 +541,46 @@ TEST_F(H2DStreamServiceTest, Replicated_WorkerSync_Sweep) {
         const char* label;
     };
     const Row rows[] = {
-        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 0, "4_workers_row"},
+        {640,
+         16,
+         tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+         20,
+         0,
+         "4_workers_row"},
         // Single worker exercises the num_workers==1 degenerate-multicast path.
-        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}}, 20, 0, "1_worker"},
+        {640,
+         16,
+         tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}},
+         20,
+         0,
+         "1_worker"},
         // Full 12x10 grid = 120 cores; N bumped to 120 to keep divisibility.
-        {640, 120, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{11, 9}}, 100, 0, "120_workers_full_grid"},
+        {640,
+         120,
+         tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{11, 9}},
+         100,
+         0,
+         "120_workers_full_grid"},
 
-        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 16, "4_workers_meta_16B"},
-        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 256, "4_workers_meta_256B"},
+        {640,
+         16,
+         tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+         20,
+         16,
+         "4_workers_meta_16B"},
+        {640,
+         16,
+         tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+         20,
+         256,
+         "4_workers_meta_256B"},
         // Just under socket_page_size=2560 in max_coalesce_pages=1: host pads only 16 B of zeros.
-        {640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 20, 2544, "4_workers_meta_near_page"},
+        {640,
+         16,
+         tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+         20,
+         2544,
+         "4_workers_meta_near_page"},
     };
     const Chunking chunkings[] = {
         {1, 1, "cb1_fifo1"},
@@ -602,7 +632,7 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
     struct Row {
         uint32_t per_row_size;
         uint32_t N;  // per-device page count; must satisfy N % num_workers == 0
-        CoreRange worker_cores;
+        tt::tt_metal::CoreRange worker_cores;
         uint32_t metadata_size_bytes;  // 0 = disabled; must be <= smallest socket_page_size in chunkings
         const char* label;
     };
@@ -612,15 +642,39 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
         const char* label;
     };
     const Row rows[] = {
-        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 0, "4_workers_row"},
+        Row{640,
+            16,
+            tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+            0,
+            "4_workers_row"},
         // Single worker exercises the num_workers==1 degenerate-multicast path.
-        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}}, 0, "1_worker"},
+        Row{640,
+            16,
+            tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}},
+            0,
+            "1_worker"},
         // Full 12x10 grid = 120 cores; N bumped to 120 to keep divisibility.
-        Row{640, 120, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{11, 9}}, 0, "120_workers_full_grid"},
+        Row{640,
+            120,
+            tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{11, 9}},
+            0,
+            "120_workers_full_grid"},
 
-        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 16, "4_workers_meta_16B"},
-        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 256, "4_workers_meta_256B"},
-        Row{640, 16, CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}}, 2544, "4_workers_meta_near_page"},
+        Row{640,
+            16,
+            tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+            16,
+            "4_workers_meta_16B"},
+        Row{640,
+            16,
+            tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+            256,
+            "4_workers_meta_256B"},
+        Row{640,
+            16,
+            tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}},
+            2544,
+            "4_workers_meta_near_page"},
     };
     const Chunking chunkings[] = {
         {1, 1, "cb1_fifo1"},
@@ -730,9 +784,9 @@ TEST_F(H2DStreamServiceTest, MultiThreadedHostPush_Sweep) {
     }
 
     // 4 workers; N=16 is divisible by 4.
-    const CoreRange worker_row{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}};
+    const tt::tt_metal::CoreRange worker_row{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{3, 0}};
     struct Scenario {
-        std::optional<CoreRange> workers;
+        std::optional<tt::tt_metal::CoreRange> workers;
         uint32_t metadata_size_bytes;
         const char* label;
     };
