@@ -49,6 +49,7 @@ from .neighborhood_attention_plan import (
     halo_sites,
     key_phase_applies,
     key_phase_geometry,
+    lean_layout_enabled,
 )
 from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_bricked, to_bricked_grid, to_natural
 
@@ -587,6 +588,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
         )
     # DIFFVAE_NA_HALO_LINKS overrides the link count for this halo exchange only.
     num_links = int(os.environ.get("DIFFVAE_NA_HALO_LINKS", 0)) or max(1, ccl_manager.num_links)
+    # The rebrick and the out-proj both start from row-major, so their tilize/untilize is skipped.
+    lean = lean_layout_enabled() and already_bricked and not single_head_tiles
     semaphore = ccl_manager.get_np_ping_pong_semaphore(sp_axis)
     h_semaphore = ccl_manager.get_np_ping_pong_semaphore(h_axis) if h_axis is not None else None
 
@@ -648,8 +651,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
                 num_links=[num_links],
             )
         _tp_trace(device, f"{lane}: neighbor_pad done -> {tuple(exchanged.shape)}")
+        site_major = ttnn.reshape(exchanged, (batch, 1, bricked_sites, channels))
+        if lean and key_phase:
+            return site_major
         with timing_tree.span(device, f"{lane}: tilize", category=timing_tree.RESHAPE, deep=True):
-            site_major = ttnn.reshape(exchanged, (batch, 1, bricked_sites, channels))
             out = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
         _tp_trace(device, f"{lane}: tilized -> {tuple(out.shape)}")
         return out
@@ -734,7 +739,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
         assert cut_h >= 0 and cut_w >= 0 and cut_h + phased_h <= resident[1] and cut_w + phased_w <= resident[2]
         with timing_tree.span(device, f"{lane}: key-phase rebrick", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(tensor)
+            if rows is not tensor:
+                ttnn.deallocate(tensor)
             flat = ttnn.reshape(rows, (batch, bricked_sites, channels))
             natural = to_natural(flat, volume=resident, brick=brick)
             cut = ttnn.slice(
@@ -824,6 +830,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
             gathered = ccl_manager.all_gather(tiles, dim=3, mesh_axis=tp_axis, use_hyperparams=False)
             ttnn.deallocate(attended)
         return gathered
+
+    if lean and tp_axis is None:
+        # Already the out-proj's (b, 1, sites, C) tiles, which its retile passes through.
+        return ttnn.reshape(attended, (batch, 1, query_bricked_sites, channels))
 
     with timing_tree.span(device, "unbrick-permute", category=timing_tree.RESHAPE, deep=True):
         rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
