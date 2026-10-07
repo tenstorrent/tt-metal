@@ -931,6 +931,8 @@ def g_pre_dbg(dev):
 
 
 GROUPS = dict(
+    edge=g_edge,
+    pre_long=g_pre_long,
     pre_dbg=g_pre_dbg,
     dec_corr=g_dec_corr,
     dec_gqa=g_dec_gqa,
