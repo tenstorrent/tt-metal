@@ -774,3 +774,17 @@ def test_quasar_experimental_add_routes_only_on_quasar(monkeypatch):
     assert wa.rewrite(None, ("a", "b"), {"memory_config": "m"}) == "q" and calls == [
         (("a", "b"), {"memory_config": "m"})
     ]
+
+
+def test_quasar_experimental_sdpa_resolves_dotted_name(monkeypatch):
+    import types
+
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "quasar_experimental_sdpa")
+    assert wa.target == "ttnn.transformer.scaled_dot_product_attention"
+    fake = types.SimpleNamespace(scaled_dot_product_attention=lambda *a, **k: ("q-sdpa", a, k))
+    monkeypatch.setattr(ttnn.experimental.quasar, "transformer", fake)
+    assert wa.rewrite(None, ("q", "k", "v"), {"is_causal": False}) == ("q-sdpa", ("q", "k", "v"), {"is_causal": False})
