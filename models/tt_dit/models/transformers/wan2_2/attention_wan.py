@@ -348,6 +348,45 @@ class WanAttention(Module):
             )
         return output
 
+    def _create_heads(self, inp: ttnn.Tensor) -> ttnn.Tensor:
+        out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            inp,
+            num_heads=self.n_local_heads,
+            num_kv_heads=0,
+            transpose_k_heads=False,
+        )
+        return out
+
+    def dummy_joint_as(self, dtype: ttnn.DataType) -> ttnn.Tensor:
+        """The empty joint input of the ring SDPA in `dtype`, created once per dtype.
+
+        Under the bf8 SDPA presets `forward` used to typecast the zero-length dummy on every call
+        (60 programs per step for nothing); the cast of an empty tensor is the same empty tensor,
+        so it is cached. Called eagerly from `apply_quant_config` so the cached tensor exists
+        before any trace capture.
+        """
+        if dtype == self.dummy_joint_input.dtype:
+            return self.dummy_joint_input
+        cache = self.__dict__.setdefault("_dummy_joint_cache", {})
+        if dtype not in cache:
+            cache[dtype] = ttnn.typecast(self.dummy_joint_input, dtype)
+        return cache[dtype]
+
+    def prepare_kv(self, prompt_1BLP: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Cross-attention K and V in heads layout, straight from the prompt.
+
+        Exactly the three prompt-only programs `forward` runs on the cross path (`to_kv`, the
+        fused `norm_k`, the V head split), in the same order with the same arguments, so a
+        caller that holds a prompt for a whole generation can run them once and hand the result
+        to `forward(prompt_kv=...)` for every step and every CFG pass. Bit-identical to the
+        inline path by construction (gate: `test_cfg_hoist_ti2v_5b.py`). Cross-attention only.
+        """
+        assert not self.is_self, "prepare_kv is for cross-attention (prompt K/V)"
+        k_1BNF, v_1BNF = self.to_kv(prompt_1BLP, compute_kernel_config=self.mm_compute_kernel_config)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
+        v_BHNE = self._create_heads(v_1BNF)
+        return k_BHNE, v_BHNE
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -359,10 +398,13 @@ class WanAttention(Module):
         trans_mat: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
+        prompt_kv: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
+        prompt_kv: (optional, cross-attn only) `prepare_kv(prompt_1BLP)` computed ahead of time;
+            when given, the prompt K/V projection, norm and head split are skipped.
         cross_attn_mask: (optional, cross-attn only) mask for SDPA, shape [B|1, nqh|1, Sq, Sk].
             Must be TILE layout, bf16/bfp8/bfp4 dtype, on device in DRAM.
         rope_cos: fractured on SP, TP
@@ -418,7 +460,8 @@ class WanAttention(Module):
                     compute_kernel_config=self.mm_compute_kernel_config,
                     parallel_config=None if use_nonfused_agmm else self.parallel_config,
                 )
-            k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
+            if prompt_kv is None:
+                k_1BNF, v_1BNF = self.to_kv(kv_input, compute_kernel_config=self.mm_compute_kernel_config)
 
         # Set norm output dtype to the input dtype required for ring self-attn.
         sdpa_input_dtype = getattr(self, "_sdpa_input_dtype", None)
@@ -434,25 +477,20 @@ class WanAttention(Module):
             trans_mat=trans_mat,
             dtype=norm_output_dtype,
         )
-        k_BHNE = self.norm_k(
-            k_1BNF,
-            num_heads_per_device=self.n_local_heads,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
-            trans_mat=trans_mat,
-            dtype=norm_output_dtype,
-        )
-
-        def create_heads(inp):
-            out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-                inp,
-                num_heads=self.n_local_heads,
-                num_kv_heads=0,
-                transpose_k_heads=False,
+        if prompt_kv is not None:
+            # Hoisted prompt K/V (cross-attention): already normed and head-split, see prepare_kv.
+            assert prompt_1BLP is not None, "prompt_kv is only meaningful for cross-attention"
+            k_BHNE, v_BHNE = prompt_kv
+        else:
+            k_BHNE = self.norm_k(
+                k_1BNF,
+                num_heads_per_device=self.n_local_heads,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                trans_mat=trans_mat,
+                dtype=norm_output_dtype,
             )
-            return out
-
-        v_BHNE = create_heads(v_1BNF)
+            v_BHNE = self._create_heads(v_1BNF)
 
         if prompt_1BLP is None:
             # Self attention
@@ -462,8 +500,7 @@ class WanAttention(Module):
                 if sdpa_input_dtype is not None:
                     if v_BHNE.dtype != sdpa_input_dtype:
                         v_BHNE = ttnn.typecast(v_BHNE, sdpa_input_dtype)
-                    if dummy_joint.dtype != sdpa_input_dtype:
-                        dummy_joint = ttnn.typecast(dummy_joint, sdpa_input_dtype)
+                    dummy_joint = self.dummy_joint_as(sdpa_input_dtype)
 
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 if self.use_exp_ring_sdpa:

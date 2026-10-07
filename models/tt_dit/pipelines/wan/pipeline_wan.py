@@ -132,6 +132,11 @@ class WanPipelineConfig:
     # the checkpoint's own `scheduler_config.json` value", which the TI2V-5B needs (5.0; the
     # 14B's 12.0 visibly softens it, notes section 8). Per-call `flow_shift` still overrides.
     flow_shift: float | None = 12.0
+    # Run every block's cross-attention K/V projection, norm_k and V head split once per prompt
+    # per generation (persistent buffers, fed to `combined_step(prompt_kv=...)`) instead of once
+    # per block per CFG pass per step. Bit-identical; saves 180 programs per step on the 5B.
+    # Off by default so the 14B path is untouched; WanTI2V5BPipeline turns it on.
+    hoist_prompt_kv: bool = False
 
     height: int
     width: int
@@ -162,6 +167,7 @@ class WanPipelineConfig:
         sdpa_chunk_size_overrides: dict | None = None,
         small_n_projection: str = "agmm",
         flow_shift: float | None = 12.0,
+        hoist_prompt_kv: bool = False,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -212,6 +218,7 @@ class WanPipelineConfig:
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             small_n_projection=small_n_projection,
             flow_shift=flow_shift,
+            hoist_prompt_kv=hoist_prompt_kv,
             height=height,
             width=width,
             num_frames=num_frames,
@@ -228,6 +235,9 @@ class TransformerState:
     guidance_scale: float
     prompt_buffer: object = field(default=None)
     negative_prompt_buffer: object = field(default=None)
+    # `WanTransformer3DModel.prepare_prompt_kv` of the two prompts (hoist_prompt_kv only).
+    prompt_kv: object = field(default=None)
+    negative_prompt_kv: object = field(default=None)
 
 
 class WanPipeline(PipelineAPIMixin):
@@ -495,6 +505,7 @@ class WanPipeline(PipelineAPIMixin):
 
         self._boundary_ratio = config.boundary_ratio
         self._expand_timesteps = config.expand_timesteps
+        self._hoist_prompt_kv = config.hoist_prompt_kv
         self.vae_scale_factor_temporal = self._vae.config.scale_factor_temporal
         self.vae_scale_factor_spatial = self._vae.config.scale_factor_spatial
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
@@ -524,6 +535,23 @@ class WanPipeline(PipelineAPIMixin):
         else:
             ttnn.copy(prompt_1BLP, buffer)
         return buffer
+
+    def prepare_prompt_kv(self, tt_model, prompt_1BLP, buffers, traced=False):
+        """Per-block cross-attention K/V for one prompt, in persistent buffers when traced.
+
+        Mirrors `prepare_text_conditioning`: untraced (and on the very first call) the fresh
+        tensors become the buffers; traced, the new values are copied into the existing buffers
+        so the captured trace keeps reading the same addresses (the Tracer then issues no
+        per-step copies at all).
+        """
+        kv = tt_model.prepare_prompt_kv(prompt_1BLP)
+        if buffers is None or not traced:
+            return kv
+        assert len(kv) == len(buffers), "prompt K/V buffer count changed"
+        for (k_new, v_new), (k_buf, v_buf) in zip(kv, buffers):
+            ttnn.copy(k_new, k_buf)
+            ttnn.copy(v_new, v_buf)
+        return buffers
 
     def _prepare_text_encoder(self) -> None:
         self._text_encoder.prepare()
@@ -594,6 +622,8 @@ class WanPipeline(PipelineAPIMixin):
             tracer_blocking_execution=self.trace_blocking,
             tracer_input_cq_id=self.trace_input_cq_id,
             gather_output=False,
+            prompt_kv=ts.prompt_kv,
+            negative_prompt_kv=ts.negative_prompt_kv,
         )
 
         return self._solver.step(
@@ -825,6 +855,13 @@ class WanPipeline(PipelineAPIMixin):
                     ts.negative_prompt_buffer = self.prepare_text_conditioning(
                         ts.model, negative_prompt_embeds, ts.negative_prompt_buffer, traced
                     )
+                    if self._hoist_prompt_kv:
+                        # Prompt-only cross-attention work, once per prompt per generation.
+                        ts.prompt_kv = self.prepare_prompt_kv(ts.model, ts.prompt_buffer, ts.prompt_kv, traced)
+                        if ts.negative_prompt_buffer is not None:
+                            ts.negative_prompt_kv = self.prepare_prompt_kv(
+                                ts.model, ts.negative_prompt_buffer, ts.negative_prompt_kv, traced
+                            )
                     prepared_prompts[transformer_idx] = True
 
                 if permuted_latent_tt is None:

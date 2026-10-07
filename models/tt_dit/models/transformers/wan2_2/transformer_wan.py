@@ -288,10 +288,13 @@ class WanTransformerBlock(Module):
         cross_attn_mask: ttnn.Tensor | None = None,
         *,
         modulation: tuple[ttnn.Tensor, ...] | None = None,
+        prompt_kv: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
         """
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
+        prompt_kv: `attn2.prepare_kv(prompt_1BLP)` when the caller holds the prompt for a whole
+            generation (the cross-attention K/V, norm_k and V head split are then skipped here)
         temb_1BTD: replicated on SP, fractured D on TP
         N: logical sequence length of the spatial input
         rope_cos_BANH: fractured N on SP, A (num_heads) on TP
@@ -332,6 +335,7 @@ class WanTransformerBlock(Module):
             N=N,
             prompt_1BLP=prompt_1BLP,
             cross_attn_mask=cross_attn_mask,
+            prompt_kv=prompt_kv,
         )
         spatial_1BND = spatial_1BND + attn_output_1BND
 
@@ -595,6 +599,18 @@ class WanTransformer3DModel(Module):
         logger.info(f"TT trans mat shape: {tt_trans_mat.shape}")
 
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
+
+    def prepare_prompt_kv(self, prompt_1BLP: ttnn.Tensor) -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """Every block's cross-attention K/V for one prompt (`WanAttention.prepare_kv`), eager.
+
+        The prompt is constant for a generation and replicated on every device, so the 30 blocks'
+        `to_kv` + `norm_k` + V head split (180 programs per step under CFG, 60 TP stats gathers)
+        can run once per prompt instead of once per block per pass per step. Hand the list to
+        `combined_step(prompt_kv=..., negative_prompt_kv=...)`; the pipeline keeps the tensors in
+        persistent buffers so a captured trace reads stable addresses. Bit-identical to the inline
+        path (gate: `test_cfg_hoist_ti2v_5b.py`). Memory: 2 x [1, H/tp, L, E] bf16 per block.
+        """
+        return [block.attn2.prepare_kv(prompt_1BLP) for block in self.blocks]
 
     def prepare_text_conditioning(self, encoder_hidden_states):
         tt_prompt_1BLP = self.condition_embedder.forward_text(encoder_hidden_states)
@@ -917,10 +933,12 @@ class WanTransformer3DModel(Module):
         spatial_1BND=None,
         block_modulations=None,
         norm_out_modulation=None,
+        prompt_kv=None,
     ):
         """
         Reduced forward function which assumes outer loop has cached certain inputs that are step independent:
             - prompt_1BLP
+            - prompt_kv (optional): `prepare_prompt_kv(prompt_1BLP)`, one (k, v) per block
             - rope_cos_1HND
             - rope_sin_1HND
             - trans_mat
@@ -948,8 +966,11 @@ class WanTransformer3DModel(Module):
         if block_modulations is None:
             block_modulations = [None] * len(self.blocks)
         assert len(block_modulations) == len(self.blocks), "expected one modulation per block"
+        if prompt_kv is None:
+            prompt_kv = [None] * len(self.blocks)
+        assert len(prompt_kv) == len(self.blocks), "expected one prompt (k, v) per block"
 
-        for block, modulation in zip(self.blocks, block_modulations):
+        for block, modulation, kv in zip(self.blocks, block_modulations, prompt_kv):
             spatial_1BND = block(
                 spatial_1BND=spatial_1BND,
                 prompt_1BLP=prompt_1BLP,
@@ -959,6 +980,7 @@ class WanTransformer3DModel(Module):
                 rope_sin=rope_sin_1HND,
                 trans_mat=trans_mat,
                 modulation=modulation,
+                prompt_kv=kv,
             )
         if norm_out_modulation is None:
             norm_out_modulation = self.prepare_norm_out_modulation(temb_11BD)
@@ -1001,7 +1023,11 @@ class WanTransformer3DModel(Module):
         guidance_scale: ttnn.Tensor,
         *,
         gather_output: bool = True,
+        prompt_kv: list | None = None,
+        negative_prompt_kv: list | None = None,
     ) -> ttnn.Tensor:
+        # `prompt_kv` / `negative_prompt_kv`: `prepare_prompt_kv` of the two prompts, computed once
+        # per generation by the pipeline (persistent buffers); None keeps the inline cross K/V.
         # The timestep embedding, the patch embedding and every block's AdaLN modulation depend
         # only on `timestep` and `spatial_1BNI`, which the conditional and unconditional passes
         # share, so under CFG they are computed once here instead of once per pass.
@@ -1028,6 +1054,7 @@ class WanTransformer3DModel(Module):
             N,
             timestep,
             gather_output=gather_output,
+            prompt_kv=prompt_kv,
             **shared,
         )
         if not do_classifier_free_guidance:
@@ -1042,6 +1069,7 @@ class WanTransformer3DModel(Module):
             N,
             timestep,
             gather_output=gather_output,
+            prompt_kv=negative_prompt_kv,
             **shared,
         )
 
