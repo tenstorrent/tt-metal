@@ -60,3 +60,19 @@ u1 = broker job 775, 87.7 s, rc 0:
   -> initial_conv is <0.5% of the upsampler; arm deltas are inside the base's own drift.
 Wait: ssh blx01 test -e /var/tmp/fasth3/t127/driver.marker ; results grep T119_UPS /var/tmp/fasth3/t127/run127_u?.log
 (summary.txt). Then: delete /var/tmp/fasth3/t127 and /var/tmp/fasth3/t48/tmp/t127 (nothing else was created).
+
+## #127 result (blx01 4x8, LTX_CONV3D_BLOCKING_MESH=4,8, t48 tree bf7db12a149, 2026-10-07)
+Broker jobs 775 (u1), 776 (u2), 779 (u3), all rc 0, no drops. Arms base/cand/base, medians.
+
+| job | arm (ups_initial) | initial_conv med ms | upsampler med ms | PSNR / seam rows / cols dB | output vs base |
+|---|---|---|---|---|---|
+| u1 | base 128,128,1,2,4 | 0.661 / 0.710 | 144.5 / 137.0 | 48.48 / 48.07 / 48.20 | - |
+| u1 | 64,128,3,2,4 | 0.671 (+0.01) | 141.2 | 48.40 / 47.99 / 48.12 | differs |
+| u2 | base | 0.630 / 0.653 | 225.8 (noisy) / 138.5 | 48.48 / 48.07 / 48.20 | - |
+| u2 | 128,64,3,2,4 | 0.575 (-0.07) | 187.2 | same | identical |
+| u3 | base | 0.728 / 0.655 | 143.9 / 137.9 | same | - |
+| u3 | 128,128,3,2,2 | 0.713 (~0) | 138.2 | same | identical |
+
+Base repeats vary 0.63-0.73 ms on initial_conv and 137-226 ms on the upsampler, so every
+delta is inside noise (best: u2 -0.07 ms on a <1 ms layer, ~0.01% of e2e). No winner;
+t48 keeps 128,128,1,2,4. VAE arm not rerun: #135 already timed 4x8 VAE decode on this tree.
