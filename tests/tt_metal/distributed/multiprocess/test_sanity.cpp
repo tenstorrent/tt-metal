@@ -220,13 +220,11 @@ TEST_F(BigMeshDualRankTest2x4, WorkerCoreFromLogicalCoreRejectsCoordinatesOwnedB
     for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
         if (mesh_device_->impl().is_local(mesh_coordinate)) {
             EXPECT_EQ(
-                tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-                    *mesh_device_, mesh_coordinate, logical_core),
+                mesh_device_->worker_core_from_logical_core(mesh_coordinate, logical_core),
                 mesh_device_->impl().get_device(mesh_coordinate)->worker_core_from_logical_core(logical_core));
         } else {
             ++remote_coordinates;
-            EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-                *mesh_device_, mesh_coordinate, logical_core));
+            EXPECT_ANY_THROW(mesh_device_->worker_core_from_logical_core(mesh_coordinate, logical_core));
         }
     }
 

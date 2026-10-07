@@ -61,9 +61,8 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
 
     uint32_t num_output_pages;
     uint32_t single_page_size;
-    const uint32_t common_align_len = std::max(
-        inputs[0].get().mesh_buffer().get_reference_buffer()->alignment(),
-        output.mesh_buffer().get_reference_buffer()->alignment());
+    const uint32_t common_align_len =
+        std::max(inputs[0].get().mesh_buffer().alignment(), output.mesh_buffer().alignment());
     if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);

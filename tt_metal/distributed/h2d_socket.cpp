@@ -342,9 +342,9 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
         // Per-device translation (see metal_SocDescriptor::dram_bank_endpoint_coords): the
         // mesh-level translation validates that every device agrees and throws when they do not,
         // which a logical DRAM coord on a harvested mesh does not.
-        IDevice* recv_device = mesh_device->get_device(recv_core_.device_coord);
-        recv_device_id = recv_device->id();
-        recv_virtual_core = recv_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
+        recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+        recv_virtual_core = mesh_device->virtual_core_from_logical_core(
+            recv_core_.device_coord, recv_core_.core_coord, recv_umd_core_type);
     }
 
     // For DRAM-core recv, every host NOC write to the DRISC L1 needs the DRAM-L1

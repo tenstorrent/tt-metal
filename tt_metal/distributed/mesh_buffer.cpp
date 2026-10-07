@@ -467,6 +467,15 @@ Buffer* MeshBuffer::get_backing_buffer() const {
     return nullptr;
 }
 
+// Every local device buffer is constructed from the same config (see initialize_device_buffers), so any one of them
+// answers for the mesh. Which one is an implementation detail; callers should not depend on it.
+uint32_t MeshBuffer::alignment() const { return get_reference_buffer()->alignment(); }
+DeviceAddr MeshBuffer::aligned_page_size() const { return get_reference_buffer()->aligned_page_size(); }
+DeviceAddr MeshBuffer::aligned_size_per_bank() const { return get_reference_buffer()->aligned_size_per_bank(); }
+std::shared_ptr<const BufferPageMapping> MeshBuffer::buffer_page_mapping() const {
+    return get_reference_buffer()->get_buffer_page_mapping();
+}
+
 DeviceAddr MeshBuffer::size() const {
     return std::visit(
         ttsl::overloaded{

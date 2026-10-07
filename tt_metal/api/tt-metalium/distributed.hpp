@@ -62,8 +62,8 @@ void ReadShard(
         return;
     }
 
-    auto* shard = mesh_buffer->get_device_buffer(coord);
-    dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
+    // device_local_size() is 64-bit; the product of the 32-bit page_size() and num_pages() wraps at 4 GiB.
+    dst.resize(mesh_buffer->device_local_size() / sizeof(DType));
     std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 }

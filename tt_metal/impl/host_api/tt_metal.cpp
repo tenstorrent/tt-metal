@@ -73,6 +73,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
@@ -1066,12 +1067,14 @@ void UpdateDynamicCircularBufferAddress(
 }
 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
-    circular_buffer->set_global_buffer(
-        *tensor.mesh_buffer().get_reference_buffer(),
-        circular_buffer->size(),
-        circular_buffer->config().address_offset());
+    UpdateDynamicCircularBufferAddress(program, cb_handle, tensor.mesh_buffer());
+}
+
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const distributed::MeshBuffer& mesh_buffer) {
+    // A MeshBuffer is allocated in lockstep, so its address and bank size are the same on every device: any local
+    // device buffer carries the values the circular buffer needs.
+    UpdateDynamicCircularBufferAddress(program, cb_handle, *mesh_buffer.get_reference_buffer());
 }
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
@@ -1082,9 +1085,12 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
-    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->set_global_buffer(
-        *tensor.mesh_buffer().get_reference_buffer(), total_size, circular_buffer->config().address_offset());
+    UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, tensor.mesh_buffer(), total_size);
+}
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const distributed::MeshBuffer& mesh_buffer, uint32_t total_size) {
+    UpdateDynamicCircularBufferAddressAndTotalSize(program, cb_handle, *mesh_buffer.get_reference_buffer(), total_size);
 }
 
 uint32_t CreateSemaphore(

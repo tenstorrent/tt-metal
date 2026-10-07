@@ -11,6 +11,7 @@
 #include "buffer.hpp"
 #include "hal.hpp"
 #include "impl/context/metal_context.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 
@@ -192,12 +193,23 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const MeshTensor& tensor) {
-    return set_globally_allocated_address(*tensor.mesh_buffer().get_reference_buffer());
+    return set_globally_allocated_address(tensor.mesh_buffer());
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const MeshTensor& tensor, uint32_t total_size) {
-    return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
+    return set_globally_allocated_address_and_total_size(tensor.mesh_buffer(), total_size);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const distributed::MeshBuffer& mesh_buffer) {
+    return set_globally_allocated_address_and_total_size(mesh_buffer, this->total_size_);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const distributed::MeshBuffer& mesh_buffer, uint32_t total_size) {
+    // A MeshBuffer is allocated in lockstep, so its address and bank size are the same on every device: any local
+    // device buffer carries the values the circular buffer needs.
+    return set_globally_allocated_address_and_total_size(*mesh_buffer.get_reference_buffer(), total_size);
 }
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(

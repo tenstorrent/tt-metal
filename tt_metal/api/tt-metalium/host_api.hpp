@@ -46,6 +46,9 @@ class GlobalSemaphore;
 class CoreRange;
 class CoreRangeSet;
 class MeshTensor;
+namespace distributed {
+class MeshBuffer;
+}
 
 // ==================================================
 //                  HOST API: Device management
@@ -280,6 +283,9 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset);
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor);
+// MeshBuffer variant: the buffer is allocated in lockstep, so one address update applies to every device.
+void UpdateDynamicCircularBufferAddress(
+    Program& program, CBHandle cb_handle, const distributed::MeshBuffer& mesh_buffer);
 
 // clang-format off
 /**
@@ -300,6 +306,9 @@ void UpdateDynamicCircularBufferAddressAndTotalSize(
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const distributed::MeshBuffer& mesh_buffer, uint32_t total_size);
 
 // clang-format off
 /**

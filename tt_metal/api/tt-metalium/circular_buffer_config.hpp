@@ -25,6 +25,9 @@ namespace tt_metal {
 class Buffer;
 class MeshTensor;
 enum class DataType;
+namespace distributed {
+class MeshBuffer;
+}
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -70,9 +73,15 @@ public:
 
     CircularBufferConfig& set_globally_allocated_address(const MeshTensor& tensor);
 
+    // Backs the circular buffer with a lockstep-allocated L1 MeshBuffer; the address is the same on every device.
+    CircularBufferConfig& set_globally_allocated_address(const distributed::MeshBuffer& mesh_buffer);
+
     CircularBufferConfig& set_globally_allocated_address_and_total_size(const Buffer& buffer, uint32_t total_size);
 
     CircularBufferConfig& set_globally_allocated_address_and_total_size(const MeshTensor& tensor, uint32_t total_size);
+
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(
+        const distributed::MeshBuffer& mesh_buffer, uint32_t total_size);
 
     CircularBufferConfig& set_globally_allocated_address_and_total_size(
         const Buffer& buffer, uint32_t total_size, uint32_t address_offset);

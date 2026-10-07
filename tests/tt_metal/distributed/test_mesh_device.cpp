@@ -288,14 +288,37 @@ TEST_F(MeshDevice2x4Test, WorkerCoreFromLogicalCoreUsesSelectedDevice) {
         const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
             mesh_device_->impl().get_fabric_node_id(mesh_coordinate));
         EXPECT_EQ(
-            tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-                *mesh_device_, mesh_coordinate, logical_core),
+            mesh_device_->worker_core_from_logical_core(mesh_coordinate, logical_core),
             metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
                 physical_chip_id, logical_core, CoreType::WORKER));
     }
 
-    EXPECT_ANY_THROW(tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-        *mesh_device_, MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
+    EXPECT_ANY_THROW(
+        mesh_device_->worker_core_from_logical_core(MeshCoordinate{mesh_device_->shape()[0], 0}, logical_core));
+}
+
+TEST_F(MeshDevice2x4Test, VirtualCoreFromLogicalCoreUsesSelectedDevice) {
+    auto& metal_context = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id());
+    const auto& control_plane = metal_context.get_control_plane();
+
+    for (const auto& mesh_coordinate : MeshCoordinateRange(mesh_device_->shape())) {
+        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(
+            mesh_device_->impl().get_fabric_node_id(mesh_coordinate));
+        // DRAM is the core type whose logical-to-virtual mapping is known to differ per chip under harvesting,
+        // so it is the one the per-coordinate overload exists for. Logical DRAM core (0, 0) exists on every chip.
+        const CoreCoord logical_dram_core{0, 0};
+        EXPECT_EQ(
+            mesh_device_->virtual_core_from_logical_core(mesh_coordinate, logical_dram_core, CoreType::DRAM),
+            metal_context.get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                physical_chip_id, logical_dram_core, CoreType::DRAM));
+        // The worker overload is the WORKER core type of the general one.
+        EXPECT_EQ(
+            mesh_device_->virtual_core_from_logical_core(mesh_coordinate, CoreCoord{0, 0}, CoreType::WORKER),
+            mesh_device_->worker_core_from_logical_core(mesh_coordinate, CoreCoord{0, 0}));
+    }
+
+    EXPECT_ANY_THROW(mesh_device_->virtual_core_from_logical_core(
+        MeshCoordinate{0, mesh_device_->shape()[1]}, CoreCoord{0, 0}, CoreType::DRAM));
 }
 
 TEST(GetWorkerNocHopDistanceAPI, UnitMeshes) {

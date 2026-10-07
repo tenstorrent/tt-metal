@@ -286,7 +286,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
     // Write the config buffer to the device
     // Only block for the slow dispatch case
     auto config_buffer_address = cb_config_buffer_->address();
-    const auto& core_to_core_id = cb_config_buffer_->get_reference_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    const auto& core_to_core_id = cb_config_buffer_->buffer_page_mapping()->core_to_core_id;
     uint32_t noc_xy_address = config_buffer_address + (num_config_elements * sizeof(uint32_t));
     uint32_t pages_sent_address = tt::align(noc_xy_address + (num_noc_xy_words * sizeof(uint32_t)), l1_alignment);
     auto buffer_address = cb_buffer().address();
