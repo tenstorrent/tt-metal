@@ -48,3 +48,12 @@ fix failure, and requeue once hugepages are free.
 ## Next
 Wake when `ssh g15blx01 test -e /var/tmp/fasth3/t155/driver.marker`. Read driver.marker, driver.log, j1.log, j2.log
 (T155_PASS/FAIL, 'Output check best vs table', T155_TIMES). Confirm `ls /var/tmp/fasth3/t155/b` is gone.
+
+## 2026-10-07 light wake (blx01)
+- j1 (64,128,5,4,4) broker job 777: pytest PASSED, "1 ok, 0 failed", no hang, 14620 us/op (table 64,256,1,8,4 = 12355 us). Driver marked FAIL only because no "Output check best vs table" PCC line was printed (pcc=none). j2 not run. No drops.
+- Cleanup done: build dir + JIT removed; t48 HEAD bf7db12a149 unchanged.
+- Next (standard): decide how to get the PCC (test prints it only in some path?), then run j2 (64,128,7,4,4) -t ~240 (j1 took 34 s).
+
+## 2026-10-07 standard wake (budget exhausted, $1 left)
+- No new device work. A rebuild on blx01 is needed for j2 (build dir was removed), which does not fit this run.
+- Hand-off: j1 hang fix confirmed (completed, no hang); PCC not checked; j2 not run. Follow-up filed.
