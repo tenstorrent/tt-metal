@@ -71,3 +71,6 @@ Wake when `ssh g15blx01 test -e /var/tmp/fasth3/t155/driver.marker`. Read driver
 ## Next
 Wake when `ssh g15blx01 test -e /var/tmp/fasth3/t155/driver.marker`. Read driver.marker, driver.log, j1.log, j2.log
 (T155_PASS/FAIL pcc=, T155_TIMES). Confirm B and jit are gone and t48 HEAD is bf7db12a149.
+- 10:50 UTC: build failed once: ld.lld aborted ("terminate called recursively", std::runtime_error) linking
+  tracy-capture-daemon; same script built fine at 10:37. Logs in t155/attempt2/. Driver restarted 10:52 (pid 1568307).
+  If the build fails the same way again: add `-j 32` / check `ulimit -u` and thread limits before retrying.
