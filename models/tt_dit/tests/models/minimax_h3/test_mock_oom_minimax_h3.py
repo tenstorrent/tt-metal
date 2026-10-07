@@ -82,7 +82,9 @@ def _dram_line(mesh_device: ttnn.MeshDevice, label: str) -> str:
     )
 
 
-@pytest.mark.timeout(7200)  # a cold kernel cache compiles every H3 program: ~55 min; warm: ~10 min
+# A cold kernel cache compiles every H3 program: ~55 min on a galaxy host, ~2.5 h on an N150 cloud VM (ladder walk
+# 44 min, VAE warm 8, audio warm 30, prompt-encoder warm ~40); warm: ~10 min on the galaxy host.
+@pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
 def test_ref2va_warmup_fits_on_mock(mesh_device, monkeypatch):
     """Run the ref2va preset's full init warmup exactly as serving does and require every rung to bind."""
