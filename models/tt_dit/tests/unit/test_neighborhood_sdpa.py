@@ -652,6 +652,44 @@ def test_choose_sharded_brick_refuses_stride_with_h_split(expect_error):
         _choose_sharded_brick((145, 272, 480), (11, 11, 11), (2, 4, 4), 60, 8, height_local=68, h_shard_count=4)
 
 
+def test_key_phase_pins_brick_and_gather(monkeypatch):
+    """``DIFFVAE_NA_KEY_PHASE=1`` on the 1080p 2-D split: brick (2, 4, 4), phase (1, 1, 1) and 112
+    gathered bricks per chunk on every shard, against 200 for the same brick on the query grid."""
+    from models.tt_dit.layers.neighborhood_attention_plan import (
+        _BRICK_CHOICE_CACHE,
+        _choose_sharded_brick,
+        _query_chunk_bricks,
+        key_phase_geometry,
+    )
+
+    volume, context_window, stride = (145, 272, 480), (11, 11, 11), (1, 1, 1)
+    owned_height, owned_width = 68, 60
+    monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", "1")
+    _BRICK_CHOICE_CACHE.clear()
+    brick = _choose_sharded_brick(
+        volume, context_window, stride, owned_width, 8, height_local=owned_height, h_shard_count=4
+    )
+    _BRICK_CHOICE_CACHE.clear()
+    assert brick == (2, 4, 4)
+
+    resident, low = key_phase_geometry(volume, context_window, brick, owned_height, owned_width)
+    assert resident == (146, 80, 72) and low == (1, 5, 5)
+    for h_index in range(4):
+        for w_index in range(8):
+            plan = ttnn.transformer.neighborhood_plan(
+                volume,
+                context_window,
+                stride,
+                brick,
+                query_chunk_bricks=_query_chunk_bricks(stride, brick),
+                shard_extent=resident,
+                shard_origin=(-low[0], h_index * owned_height - low[1], w_index * owned_width - low[2]),
+                query_extent=(volume[0], owned_height, owned_width),
+                query_origin=low,
+            )
+            assert plan["gather_brick_count"] == 112, (h_index, w_index, plan["gather_bricks"])
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
 def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
     """A volume with few time frames must not select a brick deeper than the volume.

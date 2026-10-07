@@ -208,6 +208,9 @@ tt::tt_metal::ProgramDescriptor NeighborhoodSDPAOperation::NeighborhoodSDPAProgr
     reader_compile_args[kernel_args::reader_arg::query_origin_bricks_time] = plan.query_origin_bricks.time();
     reader_compile_args[kernel_args::reader_arg::query_origin_bricks_height] = plan.query_origin_bricks.height();
     reader_compile_args[kernel_args::reader_arg::query_origin_bricks_width] = plan.query_origin_bricks.width();
+    reader_compile_args[kernel_args::reader_arg::query_phase_time] = plan.query_phase.time();
+    reader_compile_args[kernel_args::reader_arg::query_phase_height] = plan.query_phase.height();
+    reader_compile_args[kernel_args::reader_arg::query_phase_width] = plan.query_phase.width();
     reader_compile_args[kernel_args::reader_arg::brick_sites_time] = config.brick.time();
     reader_compile_args[kernel_args::reader_arg::brick_sites_height] = config.brick.height();
     reader_compile_args[kernel_args::reader_arg::brick_sites_width] = config.brick.width();

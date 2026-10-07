@@ -465,6 +465,97 @@ TEST(NeighborhoodPlanBuild, StrideOneGathersTheUnionOfTheBricksWindows) {
     EXPECT_EQ(plan.gather_extent, ShapeInSites::of(6, 8, 8));
 }
 
+// The 1080p stage-5 2-D split: 4 H shards of 68 rows, 8 W shards of 60 columns, brick (2,4,4),
+// chunk (2,1,1). A key phase starts the resident grid one window reach (5) below the owned sites,
+// and T one zero frame early, so a chunk's first window starts on a K brick boundary.
+NeighborhoodConfig stage5_shard_config(uint32_t h_index, uint32_t w_index, bool key_phase) {
+    NeighborhoodConfig config = make_config(
+        ShapeInSites::of(145, 272, 480),
+        ShapeInSites::of(11, 11, 11),
+        ShapeInSites::of(1, 1, 1),
+        BrickShapeInSites::of(2, 4, 4));
+    config.query_chunk_bricks = ChunkShapeInBricks::of(2, 1, 1);
+    config.query_extent = ShapeInSites::of(145, 68, 60);
+    const int32_t height_start = static_cast<int32_t>(68 * h_index);
+    const int32_t width_start = static_cast<int32_t>(60 * w_index);
+    if (key_phase) {
+        config.shard_extent = ShapeInSites::of(146, 80, 72);
+        config.shard_origin = SiteOffset::at(-1, height_start - 5, width_start - 5);
+        config.query_origin = Site::at(1, 5, 5);
+    } else {
+        config.shard_extent = ShapeInSites::of(145, 84, 76);
+        config.shard_origin = SiteOffset::at(0, height_start - 8, width_start - 8);
+        config.query_origin = Site::at(0, 8, 8);
+    }
+    return config;
+}
+
+TEST(NeighborhoodPlanBuild, KeyPhaseGathersFewerBricksAndCoversEveryWindow) {
+    for (uint32_t h_index = 0; h_index < 4; ++h_index) {
+        for (uint32_t w_index = 0; w_index < 8; ++w_index) {
+            EXPECT_EQ(build_plan(stage5_shard_config(h_index, w_index, false)).gather_brick_count, 200u);
+
+            const NeighborhoodConfig config = stage5_shard_config(h_index, w_index, true);
+            const NeighborhoodPlan plan = build_plan(config);
+            EXPECT_EQ(plan.gather_bricks, ShapeInBricks::of(7, 4, 4));
+            EXPECT_EQ(plan.query_phase, Site::at(1, 1, 1));
+
+            // Every real query's window must lie inside its chunk's whole-brick gather, compared
+            // in GLOBAL sites: query-local + query_origin + shard_origin, and resident-local +
+            // shard_origin for the gather.
+            const ShapeInSites chunk_sites = config.query_chunk_sites();
+            const uint32_t chunks_per_time_slice = plan.volume_chunks.height() * plan.volume_chunks.width();
+            for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {
+                const uint32_t remainder = chunk_index % chunks_per_time_slice;
+                const Site chunk_origin = Site::at(
+                    (chunk_index / chunks_per_time_slice) * chunk_sites.time(),
+                    (remainder / plan.volume_chunks.width()) * chunk_sites.height(),
+                    (remainder % plan.volume_chunks.width()) * chunk_sites.width());
+                const Site gather_origin = plan.gather_origin_by_chunk[chunk_index];
+                for (uint32_t t = 0; t < chunk_sites.time(); ++t) {
+                    for (uint32_t h = 0; h < chunk_sites.height(); ++h) {
+                        for (uint32_t w = 0; w < chunk_sites.width(); ++w) {
+                            const Site local =
+                                Site::at(chunk_origin.time() + t, chunk_origin.height() + h, chunk_origin.width() + w);
+                            Site global;
+                            bool inside = true;
+                            for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+                                const int32_t site = static_cast<int32_t>(local.by_axis[axis_index]) +
+                                                     static_cast<int32_t>(config.query_origin.by_axis[axis_index]) +
+                                                     config.shard_origin.by_axis[axis_index];
+                                inside = inside &&
+                                         local.by_axis[axis_index] < config.query_extent.by_axis[axis_index] &&
+                                         site < static_cast<int32_t>(config.volume.by_axis[axis_index]);
+                                global.by_axis[axis_index] = static_cast<uint32_t>(site);
+                            }
+                            if (!inside) {
+                                continue;
+                            }
+                            const ContextWindow window = context_window_for(global, config);
+                            for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+                                const int32_t gather_start = static_cast<int32_t>(gather_origin.by_axis[axis_index]) +
+                                                             config.shard_origin.by_axis[axis_index];
+                                const int32_t gather_end = gather_start + static_cast<int32_t>(
+                                                                              plan.gather_bricks.by_axis[axis_index] *
+                                                                              config.brick.by_axis[axis_index]);
+                                EXPECT_GE(static_cast<int32_t>(window.origin.by_axis[axis_index]), gather_start)
+                                    << "shard (" << h_index << "," << w_index << ") chunk " << chunk_index << " axis "
+                                    << axis_index;
+                                EXPECT_LE(
+                                    static_cast<int32_t>(
+                                        window.origin.by_axis[axis_index] + window.extent.by_axis[axis_index]),
+                                    gather_end)
+                                    << "shard (" << h_index << "," << w_index << ") chunk " << chunk_index << " axis "
+                                    << axis_index;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 TEST(NeighborhoodPlanBuild, RejectsUnbuildableConfigs) {
     // A brick that is not one tile.
     EXPECT_THROW(

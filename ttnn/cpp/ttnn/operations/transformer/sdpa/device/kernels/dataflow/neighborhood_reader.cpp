@@ -206,6 +206,7 @@ FORCE_INLINE void compute_per_brick_window_clamp(
     const BrickPoint& chunk_origin,
     ChunkShapeInBricks query_chunk_bricks,
     const BrickPoint& query_origin_bricks,
+    const Site& query_phase,
     uint32_t bricks_per_query_chunk,
     const kernel_args::NeighborhoodExtents& extents) {
     const auto brick_sites = extents.brick_sites;
@@ -227,7 +228,7 @@ FORCE_INLINE void compute_per_brick_window_clamp(
 
     for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
         const BrickPoint query_brick = layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
-        const Site site = first_site_of(query_brick + query_origin_bricks, brick_sites);
+        const Site site = first_site_of(query_brick + query_origin_bricks, brick_sites) + query_phase;
         uint32_t word_th = 0;  // T and H shifts
         uint32_t word_w = 0;   // W shifts + ghost flags
         for (Axis axis : ALL_AXES) {
@@ -394,6 +395,10 @@ void kernel_main() {
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_height),
         get_compile_time_arg_val(kernel_args::reader_arg::query_origin_bricks_width));
+    constexpr Site query_phase = Site::at(
+        get_compile_time_arg_val(kernel_args::reader_arg::query_phase_time),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_phase_height),
+        get_compile_time_arg_val(kernel_args::reader_arg::query_phase_width));
     constexpr ShapeInBricks gather_bricks = ShapeInBricks::of(
         get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_time),
         get_compile_time_arg_val(kernel_args::reader_arg::gather_bricks_height),
@@ -581,7 +586,8 @@ void kernel_main() {
             static_cast<int32_t>(origin_row[column::shard_origin_width]));
 
         // RESIDENT-local, like query_origin_site below and like the gather table's key origins.
-        const Site chunk_origin_site = first_site_of(chunk_origin + query_origin_bricks, extents.brick_sites);
+        const Site chunk_origin_site =
+            first_site_of(chunk_origin + query_origin_bricks, extents.brick_sites) + query_phase;
 
         // The relative table needs no regime: it is keyed on (key_brick - query_brick), which is
         // defined for every chunk. Only the per-brick clamping test below gates it.
@@ -611,6 +617,7 @@ void kernel_main() {
                 chunk_origin,
                 query_chunk_bricks,
                 query_origin_bricks,
+                query_phase,
                 bricks_per_query_chunk,
                 extents);
             if (resident_clamp_is_valid) {
@@ -740,7 +747,7 @@ void kernel_main() {
                         // from the gather table, which addresses the resident tensor. Without the
                         // shift a query sub-region would place every window a halo too low.
                         const Site query_origin_site =
-                            first_site_of(query_brick + query_origin_bricks, extents.brick_sites);
+                            first_site_of(query_brick + query_origin_bricks, extents.brick_sites) + query_phase;
                         const uint32_t brick_base =
                             mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
                         // Resolved per brick, not per slot: the table describes a window that centres

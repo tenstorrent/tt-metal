@@ -46,6 +46,8 @@ from .neighborhood_attention_plan import (
     cached_bricked_plan,
     cached_device_plan,
     halo_sites,
+    key_phase_enabled,
+    key_phase_geometry,
 )
 from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_bricked, to_bricked_grid, to_natural
 
@@ -540,6 +542,12 @@ def neighborhood_attention_3d_bricked_w_sharded(
     assert halo_h <= height_extent, f"a {halo_h}-site H halo exceeds the {height_extent}-site H shard"
     assert height_extent % brick[1] == 0, f"H shard {height_extent} is not whole {brick[1]}-site bricks"
     resident = (time_extent, height_extent + 2 * halo_h, width_local + 2 * halo)
+    # Under a key phase the op sees K/V on a grid offset from the query grid (``phased``); they are
+    # still exchanged as whole bricks of the query grid (``resident``) and re-bricked after.
+    key_phase = h_axis is not None and stride == (1, 1, 1) and key_phase_enabled()
+    op_resident, key_phase_low = resident, None
+    if key_phase:
+        op_resident, key_phase_low = key_phase_geometry(volume, context_window, brick, height_extent, width_local)
 
     device = query.device()
     plan = cached_bricked_plan(
@@ -548,11 +556,12 @@ def neighborhood_attention_3d_bricked_w_sharded(
         stride,
         brick,
         device,
-        resident=resident,
+        resident=op_resident,
         shard_count=shard_count,
         sp_axis=sp_axis,
         h_shard_count=h_shard_count,
         h_axis=h_axis,
+        key_phase_low=key_phase_low,
     )
     channels = head_count * head_dim
     # DIFFVAE_NA_RELAYOUT=1 keeps the untilize/permute round trips around the op, for A/B timing.
@@ -706,10 +715,53 @@ def neighborhood_attention_3d_bricked_w_sharded(
         _tp_trace(device, f"{lane}: to_bricked_grid done -> {tuple(grid5.shape)}")
         return exchange(grid5, lane)
 
+    def rephased(tensor: ttnn.Tensor, lane: str) -> ttnn.Tensor:
+        """Whole-brick resident K or V -> the same sites bricked on the key-phase grid.
+
+        The exchanged region starts ``halo_h``/``halo`` below the owned sites; the phased one starts
+        ``key_phase_low`` below, with ``key_phase_low[0]`` zero frames in front of T. No window
+        reaches those frames, so their keys are always masked.
+        """
+        front, low_h, low_w = key_phase_low
+        phased_t, phased_h, phased_w = op_resident
+        cut_h, cut_w = halo_h - low_h, halo - low_w
+        assert cut_h >= 0 and cut_w >= 0 and cut_h + phased_h <= resident[1] and cut_w + phased_w <= resident[2]
+        with timing_tree.span(device, f"{lane}: key-phase rebrick", category=timing_tree.RESHAPE, deep=True):
+            rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(tensor)
+            flat = ttnn.reshape(rows, (batch, bricked_sites, channels))
+            natural = to_natural(flat, volume=resident, brick=brick)
+            cut = ttnn.slice(
+                natural,
+                [0, 0, cut_h, cut_w, 0],
+                [batch, time_extent, cut_h + phased_h, cut_w + phased_w, channels],
+            )
+            ttnn.deallocate(natural)
+
+            def zero_frames(count: int) -> ttnn.Tensor:
+                frame = ttnn.slice(cut, [0, 0, 0, 0, 0], [batch, count, phased_h, phased_w, channels])
+                zeros = ttnn.zeros_like(frame)
+                ttnn.deallocate(frame)
+                return zeros
+
+            back = phased_t - front - time_extent
+            frames = ([zero_frames(front)] if front else []) + [cut] + ([zero_frames(back)] if back else [])
+            padded = ttnn.concat(frames, dim=1) if len(frames) > 1 else cut
+            bricked = to_bricked(padded, volume=op_resident, brick=brick)
+            phased_sites = brick_count(op_resident, brick) * SITES_PER_BRICK
+            site_major = ttnn.reshape(bricked, (batch, 1, phased_sites, channels))
+            return ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
+
     if already_bricked:
         widen = widened_bricked_tiles if single_head_tiles else widened_bricked
     else:
         widen = widened
+    if key_phase:
+        exchange_only = widen
+
+        def widen(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
+            return rephased(exchange_only(tensor, lane), lane)
+
     with timing_tree.span(device, "halo+brick-permute (k,v)", category=timing_tree.RESHAPE, deep=True):
         key_op = widen(key, "k")
         value_op = widen(value, "v")
@@ -744,9 +796,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
             stride=stride,
             brick=brick,
             query_chunk_bricks=plan["query_chunk_bricks"],
-            shard_extent=resident,
+            shard_extent=op_resident,
             # Representative only: each device reads its own origin out of the sharded table.
-            shard_origin=(0, -halo_h, -halo),
+            shard_origin=(0, -halo_h, -halo) if key_phase_low is None else tuple(-l for l in key_phase_low),
             # Uniform across the mesh, so compile-time; one program serves every shard.
             query_extent=plan["query_extent"],
             query_origin=plan["query_origin"],

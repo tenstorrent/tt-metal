@@ -131,6 +131,9 @@ struct NeighborhoodPlan {
     ShapeInBricks query_bricks;
     uint32_t query_brick_count = 0;
     BrickPoint query_origin_bricks;  // a position, not a size: config.query_origin in bricks
+    // config.query_origin past query_origin_bricks: non-zero when the resident (K/V) grid is
+    // offset from the query grid by a key phase.
+    Site query_phase{{0, 0, 0}};
 
     // The QUERY region measured in query chunks. One chunk is one unit of work: its bricks share
     // a gather, a mask and a flash pass. Chunks are counted over the query region, not the

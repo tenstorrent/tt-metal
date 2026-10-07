@@ -734,6 +734,32 @@ def brick_override(volume: tuple[int, int, int]) -> tuple[int, int, int] | None:
     return None
 
 
+KEY_PHASE_BRICK = (2, 4, 4)
+
+
+def key_phase_enabled() -> bool:
+    """``DIFFVAE_NA_KEY_PHASE=1``: offset the K/V brick grid of the 2-D stage-5 split from the query grid."""
+    return os.environ.get("DIFFVAE_NA_KEY_PHASE") == "1"
+
+
+def key_phase_geometry(volume, context_window, brick, owned_height, owned_width):
+    """``(resident, low)``: the K/V region one device holds under a key phase, and the sites it
+    starts below the owned region on each axis.
+
+    The low edge sits one window reach below the owned sites (T: that reach modulo the brick, in
+    zero frames, since T is not split), so the window of a chunk's first query starts on a K brick
+    boundary; with a 2-deep T chunk and an odd reach that saves one brick on every axis. The high
+    edge rounds the resident region up to whole bricks.
+    """
+    reach = tuple(window // 2 for window in context_window)
+    low = (reach[0] % brick[0], reach[1], reach[2])
+    owned = (volume[0], owned_height, owned_width)
+    resident = tuple(
+        -(-(low[axis] + owned[axis] + (reach[axis] if axis else 0)) // brick[axis]) * brick[axis] for axis in range(3)
+    )
+    return resident, low
+
+
 def cached_bricked_plan(
     volume,
     context_window,
@@ -746,6 +772,7 @@ def cached_bricked_plan(
     sp_axis=None,
     h_shard_count=1,
     h_axis=None,
+    key_phase_low=None,
 ):
     """Plan plus uploaded tables, cached per geometry. Unsharded is the one-shard case.
 
@@ -759,6 +786,9 @@ def cached_bricked_plan(
 
     ``h_axis`` adds a second split, H over ``h_shard_count`` devices on that mesh axis, with its own
     halo; the table is then ``(h_shard_count, shard_count, ...)``, one origin pair per device.
+
+    ``key_phase_low`` (from ``key_phase_geometry``) replaces the whole-brick halos with the phased
+    low edges; the planner then rounds each gather on the offset K/V grid.
     """
     sharded = resident is not None
     resident = resident if sharded else volume
@@ -774,6 +804,7 @@ def cached_bricked_plan(
         sp_axis,
         h_shard_count,
         h_axis,
+        key_phase_low,
         id(device),
     )
     entry = _BRICKED_PLAN_CACHE.get(key)
@@ -788,6 +819,11 @@ def cached_bricked_plan(
     owned_height = resident[1] - 2 * halo_h
     query_extent = (resident[0], owned_height, owned_width)
     query_origin = (0, halo_h, halo)
+    if key_phase_low is not None:
+        front, halo_h, halo = key_phase_low
+        owned_height, owned_width = volume[1] // h_shard_count, volume[2] // shard_count
+        query_extent = (volume[0], owned_height, owned_width)
+        query_origin = (front, halo_h, halo)
     plans = []
     for h_index in range(h_shard_count):
         for shard_index in range(shard_count):
@@ -801,7 +837,11 @@ def cached_bricked_plan(
                     brick,
                     query_chunk_bricks=query_chunk_bricks,
                     shard_extent=resident,
-                    shard_origin=(0, h_index * owned_height - halo_h, shard_index * owned_width - halo),
+                    shard_origin=(
+                        -query_origin[0],
+                        h_index * owned_height - halo_h,
+                        shard_index * owned_width - halo,
+                    ),
                     query_extent=query_extent,
                     query_origin=query_origin,
                 )
@@ -850,8 +890,12 @@ def cached_bricked_plan(
     # device per chunk. At stride 1 the pattern is a function of the relative brick offset
     # (_build_relative_masks); under a GNA stride it is the 27 regime sets, which are enumerated
     # against one shard origin and so cannot be uploaded sharded.
-    first["relative_mask"] = stride == (1, 1, 1)
-    if first["relative_mask"]:
+    # The relative table assumes the query and K/V grids coincide; under a key phase every mask is
+    # generated on device.
+    first["relative_mask"] = stride == (1, 1, 1) and key_phase_low is None
+    if key_phase_low is not None:
+        masks = None
+    elif first["relative_mask"]:
         masks = _build_relative_masks(context_window, brick)
     elif sharded:
         masks = None
@@ -920,6 +964,9 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
     cached = _BRICK_CHOICE_CACHE.get(key)
     if cached is not None:
         return cached
+
+    if height_local is not None and key_phase_enabled():
+        return KEY_PHASE_BRICK
 
     default = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
     best, best_gather, best_query = default, None, None

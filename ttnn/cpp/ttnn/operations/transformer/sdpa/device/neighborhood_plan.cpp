@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 // The window rule itself lives here so the device mask generator uses the SAME definition
 // rather than a transcription of it.
@@ -79,6 +80,10 @@ Site chunk_index_to_origin(uint32_t chunk_index, const NeighborhoodPlan& plan) {
         time_index * chunk.time(),
         (remainder / plan.volume_chunks.width()) * chunk.height(),
         (remainder % plan.volume_chunks.width()) * chunk.width());
+}
+
+int32_t floor_div(int32_t numerator, int32_t denominator) {
+    return numerator >= 0 ? numerator / denominator : -((-numerator + denominator - 1) / denominator);
 }
 
 void require(bool condition, const std::string& message) {
@@ -175,9 +180,14 @@ void validate_config(const NeighborhoodConfig& config) {
     for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
         const int32_t shard_start = config.shard_origin.by_axis[axis_index];
         const int32_t brick_extent = static_cast<int32_t>(config.brick.by_axis[axis_index]);
+        // The QUERY grid must line up with the global one; the resident (K/V) grid need not. A
+        // resident grid offset from it (a key phase) lets interior windows start on a K brick
+        // boundary, so they gather fewer bricks.
+        const int32_t query_start = shard_start + static_cast<int32_t>(config.query_origin.by_axis[axis_index]);
         require(
-            shard_start % brick_extent == 0,
-            "shard_origin must be brick-aligned, or the local tensor bricks differently from the global one");
+            query_start - floor_div(query_start, brick_extent) * brick_extent == 0,
+            "shard_origin + query_origin must be brick-aligned, or the query tensor bricks differently from the "
+            "global one");
         // A halo may hang off EITHER end of the volume -- those columns are storage the device
         // holds but the volume does not contain, and nothing ever reads them. What must hold is
         // that the shard overlaps the volume at all.
@@ -196,20 +206,13 @@ void validate_config(const NeighborhoodConfig& config) {
         for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
             const uint32_t brick_extent = config.brick.by_axis[axis_index];
             require(query.by_axis[axis_index] > 0, "query extent must be non-zero on every axis");
-            // The ORIGIN must be brick-aligned: the query grid is a whole-brick sub-grid of the
-            // resident one, and an origin mid-brick would put owned and neighbour sites in one
-            // tile row with no way to address either half.
-            require(
-                config.query_origin.by_axis[axis_index] % brick_extent == 0,
-                "query_origin must be brick-aligned, or a tile row would straddle the query region's edge");
-            // The EXTENT need not be: an axis whose resident extent is not a whole number of
-            // bricks rounds up into ghost sites exactly as the resident grid already does (stage
-            // 5 at 145 frames is 77 or 78 deep against a 2-deep brick). What must hold is that
-            // the rounded-up query bricks still fit inside the rounded-up resident bricks.
-            const uint32_t query_bricks = ceil_div(query.by_axis[axis_index], brick_extent);
+            // Q is its own tensor, bricked on the query grid, so query_origin need not be a whole
+            // number of resident bricks (see the key phase above). The extent need not be whole
+            // bricks either: ghost sites round it up exactly as the resident grid does. What must
+            // hold is that every real query site lies inside the rounded-up resident bricks.
             const uint32_t resident_bricks = ceil_div(resident.by_axis[axis_index], brick_extent);
             require(
-                config.query_origin.by_axis[axis_index] / brick_extent + query_bricks <= resident_bricks,
+                config.query_origin.by_axis[axis_index] + query.by_axis[axis_index] <= resident_bricks * brick_extent,
                 "the query region must lie inside the resident region");
         }
     }
@@ -249,6 +252,11 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
     plan.query_bricks = query_in_bricks(config);
     plan.query_brick_count = plan.query_bricks.count();
     plan.query_origin_bricks = query_origin_in_bricks(config);
+    for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+        plan.query_phase.by_axis[axis_index] =
+            config.query_origin.by_axis[axis_index] -
+            plan.query_origin_bricks.by_axis[axis_index] * config.brick.by_axis[axis_index];
+    }
 
     // Over the QUERY bricks, not the resident ones: a chunk whose output is discarded is work
     // that should never be scheduled.
@@ -276,7 +284,7 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
     // at the window of the first query group inside it.
     // `brick_origin` is QUERY-region-local; window placement needs the GLOBAL position, which is
     // two hops away: + query_origin puts it in resident-local sites, + shard_origin in global ones.
-    const auto union_origin_for = [&](const Site& brick_origin, uint32_t axis_index) {
+    const auto raw_union_origin_for = [&](const Site& brick_origin, uint32_t axis_index) {
         const uint32_t volume_extent_sites = config.volume.by_axis[axis_index];
         const uint32_t stride_extent_sites = config.stride.by_axis[axis_index];
         const uint32_t window_extent_sites =
@@ -291,12 +299,54 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
         // Snapping is only legal when the whole brick is one query group; otherwise the queries
         // in it have distinct windows and moving the origin would drop keys out of them.
         const uint32_t snap_brick = snap_extent_on_axis(stride_extent_sites, config.brick.by_axis[axis_index]);
-        const uint32_t union_origin = window_origin_on_axis(
+        return window_origin_on_axis(
             first_query_group_index, stride_extent_sites, window_extent_sites, volume_extent_sites, snap_brick);
+    };
+    const auto union_origin_for = [&](const Site& brick_origin, uint32_t axis_index) {
+        const uint32_t union_origin = raw_union_origin_for(brick_origin, axis_index);
         // Every gather is the same extent, so pulling an edge brick's origin down keeps it in
         // bounds without changing the tile count. It never under-gathers: moving the origin
         // down only widens the covered range.
-        return std::min(union_origin, volume_extent_sites - plan.gather_extent.by_axis[axis_index]);
+        return std::min(union_origin, config.volume.by_axis[axis_index] - plan.gather_extent.by_axis[axis_index]);
+    };
+
+    // With a key phase the gather is measured from the union's true end, in RESIDENT-local
+    // sites: a window clamped at the volume edge starts off the phased K grid, and charging it a
+    // full gather extent from there would cost the brick the phase exists to save. Without a
+    // phase the measure is the original one, so those plans are unchanged.
+    bool key_phase = false;
+    for (uint32_t axis_index = 0; axis_index < AXIS_COUNT; ++axis_index) {
+        const int32_t brick_extent = static_cast<int32_t>(config.brick.by_axis[axis_index]);
+        const int32_t shard_start = config.shard_origin.by_axis[axis_index];
+        key_phase = key_phase || shard_start - floor_div(shard_start, brick_extent) * brick_extent != 0;
+    }
+    const auto union_end_for = [&](const Site& brick_origin, uint32_t axis_index) {
+        const uint32_t volume_extent_sites = config.volume.by_axis[axis_index];
+        const uint32_t stride_extent_sites = config.stride.by_axis[axis_index];
+        const uint32_t window_extent_sites =
+            window_extent_on_axis(config.context_window.by_axis[axis_index], volume_extent_sites);
+        const int32_t signed_global = static_cast<int32_t>(brick_origin.by_axis[axis_index]) +
+                                      static_cast<int32_t>(config.query_chunk_sites().by_axis[axis_index]) - 1 +
+                                      static_cast<int32_t>(config.query_origin.by_axis[axis_index]) +
+                                      config.shard_origin.by_axis[axis_index];
+        const uint32_t global_site = signed_global > 0 ? static_cast<uint32_t>(signed_global) : 0u;
+        const uint32_t snap_brick = snap_extent_on_axis(stride_extent_sites, config.brick.by_axis[axis_index]);
+        return window_origin_on_axis(
+                   global_site / stride_extent_sites,
+                   stride_extent_sites,
+                   window_extent_sites,
+                   volume_extent_sites,
+                   snap_brick) +
+               window_extent_sites;
+    };
+    // [first, last) resident bricks of one chunk's union under a key phase.
+    const auto phased_brick_span = [&](const Site& brick_origin, uint32_t axis_index) {
+        const int32_t brick_extent = static_cast<int32_t>(config.brick.by_axis[axis_index]);
+        const int32_t shard_start = config.shard_origin.by_axis[axis_index];
+        const int32_t start_local = static_cast<int32_t>(raw_union_origin_for(brick_origin, axis_index)) - shard_start;
+        const int32_t end_local = static_cast<int32_t>(union_end_for(brick_origin, axis_index)) - shard_start;
+        return std::pair<int32_t, int32_t>{
+            floor_div(start_local, brick_extent), floor_div(end_local + brick_extent - 1, brick_extent)};
     };
 
     // How many whole bricks the widest gather spans. Measured rather than bounded: a
@@ -310,6 +360,11 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
         uint32_t widest_bricks = 1;
         for (uint32_t chunk_index = 0; chunk_index < plan.chunk_count; ++chunk_index) {
             const Site brick_origin = chunk_index_to_origin(chunk_index, plan);
+            if (key_phase) {
+                const auto [first_brick, end_brick] = phased_brick_span(brick_origin, axis_index);
+                widest_bricks = std::max(widest_bricks, static_cast<uint32_t>(std::max(end_brick - first_brick, 1)));
+                continue;
+            }
             const uint32_t misalignment_sites = union_origin_for(brick_origin, axis_index) % brick_extent_sites;
             widest_bricks =
                 std::max(widest_bricks, ceil_div(misalignment_sites + gather_extent_sites, brick_extent_sites));
@@ -338,7 +393,12 @@ NeighborhoodPlan build_plan(const NeighborhoodConfig& config) {
             // `origin` is global; the reader addresses the local tensor. A negative shard start
             // shifts the local origin UP, which is exactly how a low-edge halo is addressed.
             const int32_t shard_start = config.shard_origin.by_axis[axis_index];
-            const int32_t signed_local = static_cast<int32_t>(origin) - shard_start;
+            int32_t signed_local = static_cast<int32_t>(origin) - shard_start;
+            if (key_phase) {
+                // Rounded on the resident grid, which is the one the K/V tiles sit on.
+                signed_local =
+                    phased_brick_span(brick_origin, axis_index).first * static_cast<int32_t>(brick_extent_sites);
+            }
             const uint32_t local_origin = signed_local > 0 ? static_cast<uint32_t>(signed_local) : 0u;
             gather_origin.by_axis[axis_index] = std::min(local_origin, padded_resident_sites - brick_span_sites);
         }

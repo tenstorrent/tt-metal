@@ -128,6 +128,11 @@ enum : uint32_t {
     query_origin_bricks_time,
     query_origin_bricks_height,
     query_origin_bricks_width,
+    // Sites the query grid sits past query_origin_bricks: non-zero under a key phase, where the
+    // resident (K/V) grid is offset from the query grid.
+    query_phase_time,
+    query_phase_height,
+    query_phase_width,
 
     // Sites per brick, per axis. Their product is SITES_PER_BRICK.
     brick_sites_time,
