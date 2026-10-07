@@ -273,6 +273,73 @@ def test_record_only_moves_are_not_checked(tmp_path, record):
     assert "warning" not in run(f).stdout
 
 
+@pytest.mark.parametrize(
+    "wait, warns",
+    [
+        (
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCA_VLD);",
+            True,
+        ),
+        (
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::WAIT_SFPU | p_stall::SRCA_VLD);",
+            False,
+        ),
+    ],
+)
+def test_wait_recorded_with_the_moves_is_checked(tmp_path, wait, warns):
+    """The generalized moe-gate shape: the recording carries its own wait, which replays with the
+    moves as the MOP start op, so a valid-only wait there is the same bug as an inline one.
+    """
+    f = hdr(
+        tmp_path,
+        "rec_wait.h",
+        f"""
+        inline void _mop_config_()
+        {{
+            lltt::record<lltt::NoExec>(0, 2);
+            {wait}
+            TTI_MOVD2A(0, 0, ADDR_MOD_1, p_movd2a::MOV_4_ROWS, 0);
+            std::uint32_t replay_instr = lltt::replay_insn(0, 2);
+        }}
+        """,
+    )
+    out = run(f).stdout
+    assert ("MOVD2A behind a SRCA_VLD wait that does not drain math" in out) == warns
+    assert "no SRCA_VLD wait" not in out
+
+
+def test_wait_outside_the_recording_does_not_cover_one_inside(tmp_path):
+    """A wait issued before the recording runs now, not when the replay does."""
+    f = hdr(
+        tmp_path,
+        "rec_outer.h",
+        """
+        inline void _thing_()
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+            load_replay_buf(
+                0,
+                2,
+                []
+                {
+                    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+                    TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+                });
+        }
+        """,
+    )
+    assert "MOVD2B behind a SRCB_VLD wait that does not drain math" in run(f).stdout
+
+
+def test_default_scan_includes_ttnn_kernel_includes_copies():
+    """Op-local LLK copies are included by relative path and drift from the tree."""
+    g = runpy.run_path(SCRIPT)
+    copies = __import__("glob").glob(g["COPIES_GLOB"], recursive=True)
+    assert any(
+        p.endswith("llk_math_deepseek_moe_gate_eltwise_binary.h") for p in copies
+    )
+
+
 def test_exec_record_is_still_checked(tmp_path):
     """`lltt::Exec` issues the instructions as it records them."""
     f = hdr(

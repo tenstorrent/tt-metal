@@ -24,8 +24,11 @@ This is a WARNING, never a failure: the exit status is always 0. A wait can legi
 in a caller, or precede a MOP/replay run that holds the move, and a lexical check cannot see
 either. Moves that are only recorded into a replay buffer (`load_replay_buf` / `lltt::record`
 without `Exec`) and `TT_OP_MOVD2A` / `TT_OP_MOVD2B` instruction words built for a MOP are not
-issued where they are written, so they are not checked: the wait belongs before the replay or
-MOP run.
+issued where they are written, so a missing wait there is not reported: the wait belongs before
+the replay or MOP run. A recording that carries its own valid-bit wait ahead of the moves is
+checked, though: that wait replays with them, so it must drain math like an inline one.
+
+Op-local copies of LLK headers under `ttnn/**/kernel_includes/` are scanned with the tree.
 """
 import argparse
 import glob
@@ -38,6 +41,10 @@ from check_mutex_balance import _blank_noncode, _signature, functions  # noqa: E
 
 LLK = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 TREE_GLOB = os.path.join(LLK, "tt_llk_*", "**", "*.h")
+# Op-local copies of LLK headers that ttnn kernels include by relative path.
+COPIES_GLOB = os.path.join(
+    LLK, "..", "..", "ttnn", "**", "kernel_includes", "**", "*.h"
+)
 
 # (move, the valid bit that must be waited on)
 PAIRS = (("MOVD2A", "SRCA_VLD"), ("MOVD2B", "SRCB_VLD"))
@@ -197,6 +204,18 @@ def scan(path, providers):
                 for m in move_pat.finditer(body)
                 if not any(a <= m.start() < b for a, b in spans)
             ]
+            # A recording that waits on the bank itself: that wait replays with the moves.
+            for a, b in spans:
+                recorded = [m for m in move_pat.finditer(body, a, b)]
+                if not recorded:
+                    continue
+                first = recorded[0].start()
+                full = full_pat.search(body, a, first)
+                vld_only = vld_pat.search(body, a, first)
+                if vld_only and not full:
+                    line = brace_line + body.count("\n", 0, first)
+                    sig = _signature(lines, brace_line)
+                    yield line + 1, move, vld, "vld_only", lines[sig].strip()[:76]
             if not moves:
                 continue
             first_move = moves[0]
@@ -223,7 +242,11 @@ def main():
     )
     args = ap.parse_args()
 
-    tree = sorted(glob.glob(TREE_GLOB, recursive=True))
+    tree = sorted(
+        os.path.normpath(p)
+        for g in (TREE_GLOB, COPIES_GLOB)
+        for p in glob.glob(g, recursive=True)
+    )
     files = args.files or tree
     # Wait helpers live in shared headers a commit seldom touches, so find them in the whole tree.
     providers = wait_providers(sorted(set(tree) | set(files)))
