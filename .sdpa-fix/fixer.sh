@@ -6,6 +6,8 @@
 #   FIX_MODE=dryrun|live   (default from config.sh)
 #   ONLY=<workflow.yaml>   restrict this tick to one pipeline (manual runs)
 #   NO_FIX=1               triage + ledger only, skip the fix stage
+#   FORCE_SIG=<sig>        run the fix agent on this one signature (any kind)
+#   DECISIONS_ONLY=1       only apply decisions clicked in Slack (set by decide.py)
 set -euo pipefail
 
 FIX_HOME="$HOME/.sdpa-fix"
@@ -102,7 +104,7 @@ slack_update() {
   local ts="$1" text="$2" resp
   [[ "$FIX_SLACK" == "1" && -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]] || { log "  (slack edit $ts) $text"; return 0; }
   resp=$(jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg ts "$ts" --arg t "$(linkify <<<"$text")" \
-           '{channel:$ch, ts:$ts, text:$t}' \
+           '{channel:$ch, ts:$ts, text:$t, blocks:[{type:"section", text:{type:"mrkdwn", text:$t}}]}' \
          | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
                 -H 'Content-Type: application/json; charset=utf-8' --data @- https://slack.com/api/chat.update)
   [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]] && return 0
@@ -152,6 +154,77 @@ run_jobs_json() {  # all jobs of a run as [{name, conclusion}]; 3 tries (GitHub 
 # freezing the digest behind the stale-page guard). Adding a created>= window
 # routes the query to a fresh index. 10 days covers every watched schedule.
 RECENT="&created=>$(date -u -d '-10 days' +%F)"
+
+# ---------------------------------------------------------------------------
+# Decisions: when a fix is a human call, the bot opens NOTHING. It posts one
+# Slack message with a button per option (+ Reject) and waits; decide.py
+# (Socket Mode listener) records the click in the ledger and runs
+# DECISIONS_ONLY=1 fixer.sh, which applies the choice right away.
+# ---------------------------------------------------------------------------
+slack_decision() {  # $1 sig(s) as space list, $2 header text, $3 decision json
+  local sigs_s="$1" head="$2" dec="$3" thread resp blocks first
+  first="${sigs_s%% *}"
+  [[ "$FIX_SLACK" == "1" && -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]] || { log "  (slack decision) $head"; return 0; }
+  thread=$(jq -r --arg ch "$SLACK_CHANNEL_ID" 'if (._slack.channel // "") == $ch then (._slack.ts // "") else "" end' \
+             "$WATCH_STATE" 2>/dev/null || true)
+  blocks=$(jq -nc --arg t "$(linkify <<<"$head")" --arg s "$first" --argjson d "$dec" '
+    [ {type: "section", text: {type: "mrkdwn", text: $t}},
+      {type: "context", elements: [{type: "mrkdwn", text: ($d.options | map("*\(.key)* · \(.summary)") | join("\n"))}]},
+      {type: "actions", block_id: "autofix_decide",
+       elements: (($d.options | map({type: "button", action_id: ("autofix_decide_" + .key),
+                                     text: {type: "plain_text", text: ("\(.key) · \(.label)" + (if .key == $d.recommended then " ★" else "" end))},
+                                     value: ({sig: $s, key: .key} | tostring)}
+                                    + (if .key == $d.recommended then {style: "primary"} else {} end)))
+                  + [{type: "button", action_id: "autofix_decide_REJECT", style: "danger",
+                      text: {type: "plain_text", text: "Reject"}, value: ({sig: $s, key: "REJECT"} | tostring)}])} ]')
+  resp=$(jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg t "$(linkify <<<"$head")" --arg th "$thread" --argjson b "$blocks" \
+           '{channel:$ch, text:$t, blocks:$b, unfurl_links:false} + (if $th != "" then {thread_ts:$th} else {} end)' \
+         | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H 'Content-Type: application/json; charset=utf-8' --data @- https://slack.com/api/chat.postMessage)
+  if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
+    # shellcheck disable=SC2086
+    $FIXLIB mark --state keep --extra "$(jq -nc --arg t "$(jq -r .ts <<<"$resp")" '{slack_ts:$t}')" $sigs_s
+  else
+    log "  WARN: decision post failed: $resp"
+  fi
+}
+
+apply_decisions() {
+  local row sig key by short wf kind label cpr who
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    sig=$(jq -r .sig <<<"$row"); key=$(jq -r .r.decision_choice.key <<<"$row"); by=$(jq -r .r.decision_choice.by <<<"$row")
+    short=$(jq -r '.r.test | sub(".*::"; "")' <<<"$row"); wf=$(jq -r .r.workflow <<<"$row")
+    if [[ "$key" == "REJECT" ]]; then
+      $FIXLIB mark --state rejected "$sig"
+      log "  decision for $short: rejected by $by"
+      slack_sig "⚪ decided by <@$by>: *reject*, no change for \`$short\` ($wf)" "$sig"
+      continue
+    fi
+    kind=$(jq -r --arg k "$key" '.r.decision.options[] | select(.key == $k) | .kind' <<<"$row")
+    label=$(jq -r --arg k "$key" '.r.decision.options[] | select(.key == $k) | .label' <<<"$row")
+    case "$kind" in
+      patch)
+        $FIXLIB mark --state decided "$sig"
+        log "  decision for $short: $key ($label) by $by — fix stage implements it now"
+        slack_sig "🛠 decided by <@$by>: *$key · $label* for \`$short\` ($wf), preparing the draft PR…" "$sig" ;;
+      ask_owner)
+        cpr=$(jq -r '.r.decision.culprit_pr // empty' <<<"$row")
+        if [[ -n "$cpr" ]]; then
+          who=$(pr_author "$cpr")
+          gh pr comment "$cpr" -R "$REPO" --body "@$who: nightly CI started failing after this PR: \`$(jq -r .r.test <<<"$row")\` in \`$wf\` ($(jq -r .r.last_seen.url <<<"$row")).
+$(jq -r .r.decision.question <<<"$row")
+Could you take a look? (asked via the SDPA watcher on behalf of the team)" >/dev/null
+          log "  decision for $short: asked @$who on #$cpr"
+          slack_sig "🙋 decided by <@$by>: asked @$who on #$cpr to take \`$short\` ($wf)" "$sig"
+        else
+          slack_sig "🙋 decided by <@$by>: hand \`$short\` to its owner, but no culprit PR is known; please ping them directly" "$sig"
+        fi
+        $FIXLIB mark --state with_owner "$sig" ;;
+      *) log "  WARN: unknown decision $key for $sig" ;;
+    esac
+  done < <(jq -c '.sigs | to_entries[] | select(.value.state == "awaiting_decision" and .value.decision_choice != null) | {sig: .key, r: .value}' "$FIX_HOME/ledger.json")
+}
 
 # ======================================================================
 # Phase A — follow up on open draft PRs (live mode)
@@ -226,6 +299,7 @@ $lines" >/dev/null
 # exists (e.g. from a manual `sdpa-fix` live run) must still be followed to
 # merged / closed, or the ledger and digest keep calling it an open draft.
 followup
+apply_decisions
 
 # ======================================================================
 # Phase B — triage every newly analyzed run of every watched pipeline
@@ -271,6 +345,7 @@ handle_fix_events() {
 }
 
 for entry in "${PIPELINES[@]}"; do
+  [[ "${DECISIONS_ONLY:-0}" == "1" ]] && break
   IFS='|' read -r workflow display test_hint job_pattern <<<"$entry"
   [[ -n "${ONLY:-}" && "$ONLY" != "$workflow" ]] && continue
   st=$(jq -c --arg w "$workflow" '.[$w] // empty' "$WATCH_STATE")
@@ -477,14 +552,14 @@ $(git -C "$TT_METAL_DIR" show --format= "$csha" | head -c 6000)"
     done
   done < <($FIXLIB scan-list | jq -c '.[]')
 }
-scan_human_fixes
+[[ "${DECISIONS_ONLY:-0}" == "1" ]] || scan_human_fixes
 
 [[ "${NO_FIX:-0}" == "1" ]] && { log "NO_FIX=1 — skipping fix stage"; exit 0; }
 
 # ======================================================================
 # Phase C — attempt fixes for eligible regression groups
 # ======================================================================
-elig=$($FIXLIB eligible --mode "$FIX_MODE" --min-streak "$MIN_STREAK" --max-per-day "$MAX_NEW_PER_DAY")
+elig=$($FIXLIB eligible --mode "$FIX_MODE" --min-streak "$MIN_STREAK" --max-per-day "$MAX_NEW_PER_DAY" --only-sig "${FORCE_SIG:-}")
 log "eligible groups: $(jq '.groups | length' <<<"$elig") (daily used $(jq .daily_used <<<"$elig")/$MAX_NEW_PER_DAY)"
 
 prepare_worktree() {
@@ -504,8 +579,11 @@ while IFS= read -r grp; do
   (( attempts >= MAX_FIX_PER_TICK )) && break
   workflow=$(jq -r .workflow <<<"$grp")
   [[ -n "${ONLY:-}" && "$ONLY" != "$workflow" ]] && continue
+  [[ "${DECISIONS_ONLY:-0}" == "1" && "$(jq -r '.forced // false' <<<"$grp")" != "true" ]] && continue
   mapfile -t sigs < <(jq -r '.sigs[]' <<<"$grp")
   recs=$($FIXLIB get "${sigs[@]}")
+  # A human chose an option for this failure: implement exactly that, live.
+  choice=$(jq -c 'to_entries[0].value | if .state == "decided" then {choice: .decision_choice, decision} else empty end' <<<"$recs")
   sig8="${sigs[0]:0:8}"
   first_test=$(jq -r 'to_entries[0].value.test' <<<"$recs")
   log "fix candidate [$workflow] group=$(jq -r .group <<<"$grp") sigs=${sigs[*]}"
@@ -570,6 +648,13 @@ $related
 
 Failing job log excerpts:
 $logs"
+  if [[ -n "$choice" ]]; then
+    prompt+="
+
+# Human decision
+$(jq -r '.choice.key as $k | .decision.options[] | select(.key == $k) | "The human chose option \(.key): \(.label) — \(.summary). Implement exactly this option."' <<<"$choice")
+Original question: $(jq -r .decision.question <<<"$choice")"
+  fi
 
   log "  running fix agent ($FIX_MODEL) in $FIX_WORKTREE"
   set +e
@@ -597,6 +682,20 @@ $logs"
   git -C "$FIX_WORKTREE" diff --cached HEAD > "$pdir/patch.diff"
   v_fixed=$(jq -r .fixed "$pdir/verdict.json")
   v_title=$(jq -r .title "$pdir/verdict.json")
+
+  if [[ -z "$choice" && "$(jq -r '.decision.needed // false' "$pdir/verdict.json")" == "true" ]]; then
+    dec=$(jq -c '.decision' "$pdir/verdict.json")
+    cpr=$(grep -oE '#[0-9]{4,6}' <<<"$(jq -r '.culprit_title + " " + .why' "$pdir/verdict.json")" | head -1 | tr -d '#' || true)
+    [[ -z "$cpr" && -n "$(jq -r .culprit_sha "$pdir/verdict.json")" ]] && \
+      cpr=$(git -C "$TT_METAL_DIR" log -1 --format=%s "$(jq -r .culprit_sha "$pdir/verdict.json")" 2>/dev/null | grep -oE '\(#[0-9]+\)$' | tr -dc 0-9 || true)
+    dec=$(jq -c --arg c "$cpr" --arg p "$pdir" '. + {culprit_pr: $c, proposal: $p}' <<<"$dec")
+    $FIXLIB mark --state awaiting_decision --attempt --extra "$(jq -nc --argjson d "$dec" '{decision: $d, proposal: $d.proposal}')" "${sigs[@]}"
+    log "  needs a human decision: $(jq -r .question <<<"$dec")"
+    slack_decision "${sigs[*]}" "❓ *autofix — needs your decision*: \`$first_test\` ($workflow)
+$(jq -r .question <<<"$dec")" "$dec"
+    git -C "$FIX_WORKTREE" reset -q --hard && git -C "$FIX_WORKTREE" clean -fdq
+    continue
+  fi
 
   if [[ "$v_fixed" != "true" ]]; then
     upstream=$(jq -r .already_fixed_upstream "$pdir/verdict.json")
@@ -651,7 +750,7 @@ $logs"
   files=$(jq -r '.files | join(", ")' <<<"$guard")
   conf=$(jq -r .confidence "$pdir/verdict.json"); appr=$(jq -r .approach "$pdir/verdict.json")
 
-  if [[ "$FIX_MODE" != "live" ]]; then
+  if [[ "$FIX_MODE" != "live" && -z "$choice" ]]; then
     $FIXLIB mark --state proposed_dryrun --attempt --count-daily \
       --extra "$(jq -nc --arg p "$pdir" --arg t "$title" '{proposal:$p, verdict_title:$t}')" "${sigs[@]}"
     log "  DRY RUN — proposal written to $pdir"

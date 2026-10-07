@@ -45,6 +45,11 @@ PR_TITLE_PREFIX="[autofix · needs human review]"
 STATUS_CONTEXT="autofix/human-review"
 CI_STATUS_CONTEXT="autofix/targeted-ci"
 
+# ---- Decisions (Slack buttons, decide.py) ----------------------------------
+# Slack member IDs allowed to click decision buttons (space-separated). Empty =
+# anyone in the private channel. Socket Mode app token: ~/.sdpa-fix/slack_app_token.
+DECIDERS="${DECIDERS:-}"
+
 # ---- Slack -----------------------------------------------------------------
 # Reuses the watcher's bot token + channel. FIX_SLACK=0 silences the fixer.
 FIX_SLACK="${FIX_SLACK:-1}"

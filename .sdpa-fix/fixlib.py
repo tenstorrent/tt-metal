@@ -26,9 +26,10 @@ LEDGER = os.path.join(HOME, "ledger.json")
 # in live mode so a dry-run proposal graduates to a real PR exactly once.
 ATTEMPTABLE = {"tracking"}
 # States that end when main goes green for the signature.
-OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed"}
+OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed",
+               "awaiting_decision", "decided", "with_owner"}
 # States the fix scan looks at: still failing, and no PR of ours on it.
-SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending"}
+SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending", "awaiting_decision"}
 # States a re-appearing failure re-opens (a fresh regression after a fix).
 REOPENABLE = {"resolved_on_main", "verified"}
 # A fix landed (our merged PR, or a commit already on main). The signature is
@@ -218,6 +219,18 @@ def cmd_eligible(a):
     with Ledger() as d:
         used = d["daily"].get(today(), 0)
         latest = {w: (t or {}).get("number") for w, t in d["triaged"].items()}
+        # A human picked an option ("decided"), or a manual run forces one
+        # signature: these go first and bypass kind / streak / daily cap.
+        forced = []
+        for sig, r in d["sigs"].items():
+            if (r["state"] == "decided" and r.get("decision_choice")) or \
+               (a.only_sig and sig == a.only_sig and r["state"] in ("tracking", "no_fix", "proposed_dryrun", "decided")):
+                forced.append({"workflow": r["workflow"], "group": r.get("group") or sig, "sigs": [sig],
+                               "prio": [-1, 0], "forced": True})
+        if a.only_sig:
+            json.dump({"groups": [g for g in forced if a.only_sig in g["sigs"]], "daily_used": used,
+                       "daily_room": max(0, a.max_per_day - used)}, sys.stdout)
+            return
         groups = {}
         for sig, r in d["sigs"].items():
             if r["state"] not in attemptable:
@@ -245,7 +258,9 @@ def cmd_eligible(a):
             })
         out.sort(key=lambda g: g["prio"])
         room = max(0, a.max_per_day - used)
-        json.dump({"groups": out[:room], "daily_used": used, "daily_room": room}, sys.stdout)
+        fsigs = set(x for g in forced for x in g["sigs"])
+        out = [g for g in out if not (set(g["sigs"]) & fsigs)]
+        json.dump({"groups": forced + out[:room], "daily_used": used, "daily_room": room}, sys.stdout)
 
 
 def cmd_get(a):
@@ -265,7 +280,8 @@ def cmd_mark(a):
             if a.attempt:
                 r.setdefault("attempts", []).append(dict(extra, at=now_iso(), state=a.state))
             for k, v in extra.items():
-                if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr", "fix_author"):
+                if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr", "fix_author",
+                         "decision", "decision_choice"):
                     r[k] = v
                 elif k == "checked":
                     r.setdefault("checked", {}).update(v)
@@ -584,6 +600,7 @@ def main():
     e.add_argument("--mode", required=True)
     e.add_argument("--min-streak", type=int, required=True)
     e.add_argument("--max-per-day", type=int, required=True)
+    e.add_argument("--only-sig", default="")
     g = sp.add_parser("get"); g.add_argument("sigs", nargs="+")
     mk = sp.add_parser("mark")
     mk.add_argument("--state", required=True)
