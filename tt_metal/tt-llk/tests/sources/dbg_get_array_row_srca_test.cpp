@@ -59,6 +59,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataFormat l1_fmt          = static_cast<DataFormat>(formats.unpack_A_src);
     constexpr std::uint32_t TILE_IDX = 0;
 
+    // Pin the SFPU's view of dest to the test's DEST width, so the borrow is checked in both modes.
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    tensix_sync();
+
     dbg_copy_dest_tile<DbgDestTileOp::Write, MathThreadId>(l1_fmt, TILE_IDX, reinterpret_cast<void*>(params.buffer_A[0]));
 
     // The call under test. Its return data is not what is being checked -- the dest tile is.

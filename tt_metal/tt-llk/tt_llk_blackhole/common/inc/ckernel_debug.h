@@ -244,6 +244,16 @@ inline void dbg_copy_dest_tile(
     }
 }
 
+// SFPLOAD/SFPSTORE mode that moves a dest row through an LReg without conversion: the raw 32-bit mode
+// when the SFPU sees dest as 32-bit, else the raw 16-bit mode. The implied mode converts, and its FP32
+// form flushes denormal bit patterns, which small Int32 values are.
+inline std::uint32_t dbg_dest_row_save_mode()
+{
+    const std::uint32_t sfpu_fp32 =
+        (get_cfg_pointer()[ALU_ACC_CTRL_SFPU_Fp32_enabled_ADDR32] & ALU_ACC_CTRL_SFPU_Fp32_enabled_MASK) >> ALU_ACC_CTRL_SFPU_Fp32_enabled_SHAMT;
+    return sfpu_fp32 ? 4 /* INT32 */ : 6 /* LO16 */;
+}
+
 inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t row_addr, std::uint32_t *rd_data)
 {
     // Dest offset is added to row_addr to dump currently used half of the dest accumulator (SyncHalf dest mode)
@@ -271,8 +281,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
 
         // Clear counters
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
-        TTI_SFPLOAD(p_sfpu::LREG3, 0, 0, 0); // Save dest addr 0 (even cols) to LREG_3
-        TTI_SFPLOAD(p_sfpu::LREG4, 0, 0, 2); // Save dest addr 0 (odd cols)  to LREG_4
+        TT_SFPLOAD(p_sfpu::LREG3, dbg_dest_row_save_mode(), 0, 0); // Save dest addr 0 (even cols) to LREG_3
+        TT_SFPLOAD(p_sfpu::LREG4, dbg_dest_row_save_mode(), 0, 2); // Save dest addr 0 (odd cols)  to LREG_4
 
         TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SFPU1);
 
@@ -367,8 +377,8 @@ inline void dbg_get_array_row(const std::uint32_t array_id, const std::uint32_t 
     // Restore dest row
     if (array_id == dbg_array_id::SRCA)
     {
-        TTI_SFPSTORE(p_sfpu::LREG3, 0, 0, 0); // Restore dest addr 0 (even cols) from LREG_3
-        TTI_SFPSTORE(p_sfpu::LREG4, 0, 0, 2); // Restore dest addr 0 (odd cols) from LREG_4
+        TT_SFPSTORE(p_sfpu::LREG3, dbg_dest_row_save_mode(), 0, 0); // Restore dest addr 0 (even cols) from LREG_3
+        TT_SFPSTORE(p_sfpu::LREG4, dbg_dest_row_save_mode(), 0, 2); // Restore dest addr 0 (odd cols) from LREG_4
         // Move to the current bank
         TTI_CLEARDVALID(1, 0);
     }
