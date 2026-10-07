@@ -26,7 +26,7 @@ import torch.nn as nn
 
 from models.experimental.bevformer.model_config import EMBED_DIMS, NUM_CAMS, NUM_HEADS, NUM_LEVELS, SCA_NUM_POINTS
 
-from .ms_deformable_attention import multi_scale_deformable_attn
+from models.experimental.bevformer.reference.ms_deformable_attention import multi_scale_deformable_attn
 
 
 class MSDeformableAttention3D(nn.Module):

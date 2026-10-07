@@ -14,7 +14,9 @@ import ttnn
 import torch
 from typing import Tuple, List, Optional
 
-from ..reference.point_sampling_3d_2d import generate_reference_points as torch_generate_reference_points
+from models.experimental.bevformer.reference.point_sampling_3d_2d import (
+    generate_reference_points as torch_generate_reference_points,
+)
 
 try:
     from tracy import signpost

@@ -261,13 +261,14 @@ class DatasetPreset:
     embed_dims: int
     num_heads: int
     num_levels: int
-    num_points: int = 4
+    num_points: int
 
     @property
     def spatial_shapes(self):
-        """The feature levels at strides 8 to 64, rounded up, each as (h, w), as ``SPATIAL_SHAPES``."""
+        """The preset's feature levels at strides 8, 16, ..., rounded up, each as (h, w), as
+        ``SPATIAL_SHAPES``."""
         width, height = self.input_size
-        return [(-(-height // (8 << level)), -(-width // (8 << level))) for level in range(NUM_LEVELS)]
+        return [(-(-height // (8 << level)), -(-width // (8 << level))) for level in range(self.num_levels)]
 
     @property
     def z_cfg(self):
@@ -276,8 +277,8 @@ class DatasetPreset:
 
 
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
-_TINY = dict(embed_dims=128, num_heads=4, num_levels=1)
-_BASE = dict(embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_levels=NUM_LEVELS)
+_TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4)
+_BASE = dict(embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_levels=NUM_LEVELS, num_points=4)
 
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
@@ -454,10 +455,10 @@ SCA_LOGIT_STD = 1.8
 
 # Correlation length of the random features, in cells. The FPN's and the encoder's features are
 # spatially smooth; white noise instead makes every sample position error an O(1) change in the
-# sampled value, which the encoder's queries carry from layer to layer and frame to frame, and the
-# decoder's refinement feeds back into its next layer's positions: with white BEV features the
-# decoder's reference run on bfloat16-rounded inputs and weights (fp32 compute) falls to PCC 0.65
-# against itself by the last layer on the 200x200 grid.
+# sampled value. The encoder's queries carry that error from layer to layer and frame to frame, and
+# the decoder's refinement feeds it back into its next layer's positions. With white BEV features
+# the decoder's reference on bfloat16-rounded inputs and weights (fp32 compute) falls to PCC 0.65
+# against itself by the last layer on the 200x200 grid, so no bound on the port would mean anything.
 FEATURE_CELLS = 4
 
 # Ego translation between the two frames, in BEV fractions (x, y): a few cells on the base grid.
@@ -512,8 +513,9 @@ def camera_rows(value):
 
 
 def random_bev(bev_shape, batch_size, generator=None):
-    """A unit-variance BEV map ``(bev_h * bev_w, bs, C)``, smooth over ``FEATURE_CELLS`` cells,
-    as the encoder's output is; the previous frame's BEV for the self-attention tests."""
+    """A unit-variance BEV map ``(bev_h * bev_w, bs, C)``, smooth over ``FEATURE_CELLS`` cells, as
+    the encoder's output is: the previous BEV, the decoder's and head's BEV features, the spatial
+    cross-attention's queries."""
     bev = _smooth(batch_size, EMBED_DIMS, *bev_shape, generator)
     return (bev / bev.std()).flatten(2).permute(2, 0, 1).contiguous()
 

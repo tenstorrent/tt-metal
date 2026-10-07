@@ -6,16 +6,17 @@ import torch
 import ttnn
 import pytest
 
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
 from models.experimental.bevformer.tests.common import PRESETS
 
 from models.experimental.bevformer.tests.test_utils import (
-    check_with_tolerances,
     check_with_pcc,
+    check_with_tolerances,
+    print_detailed_comparison,
 )
 
 from models.experimental.bevformer.tt.model_preprocessing import (
@@ -42,9 +43,19 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
         ("carla_base", 1, 12000, 0.999, 0.02, 0.15, 0.18),  # CARLA base model
     ],
 )
+@pytest.mark.parametrize(
+    # (grid_dtype, reference-point dtype, fp32-accumulating grid_sample): the encoder's default,
+    # the decoder's float32 grid, and a float32 grid built from bfloat16 reference points.
+    "grid_dtype, reference_points_dtype, fp32_grid_sample",
+    [(None, ttnn.bfloat16, False), (ttnn.float32, ttnn.float32, True), (ttnn.float32, ttnn.bfloat16, False)],
+    ids=["default", "fp32-grid", "fp32-grid-bf16-refs"],
+)
 @pytest.mark.parametrize("seed", [0])
 def test_ms_deformable_attention_forward(
     device,
+    grid_dtype,
+    reference_points_dtype,
+    fp32_grid_sample,
     config_name,
     batch_size,
     num_queries,
@@ -65,9 +76,7 @@ def test_ms_deformable_attention_forward(
     num_levels = preset.num_levels
     num_points = preset.num_points
 
-    # Use spatial shapes from dataset config (limited to num_levels)
-    spatial_shapes_list = preset.spatial_shapes[:num_levels]
-    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+    spatial_shapes = torch.tensor(preset.spatial_shapes, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
     # --------------------------------------------------------------------------- #
@@ -83,7 +92,9 @@ def test_ms_deformable_attention_forward(
     # Convert tensors to ttnn format for ttnn model
     tt_query = ttnn.from_torch(query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_value = ttnn.from_torch(value, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tt_reference_points = ttnn.from_torch(
+        reference_points, device=device, dtype=reference_points_dtype, layout=ttnn.TILE_LAYOUT
+    )
 
     # Create DeformableAttentionConfig from extracted parameters
     config = DeformableAttentionConfig(
@@ -110,6 +121,8 @@ def test_ms_deformable_attention_forward(
         device=device,
         params=tt_parameters,
         spatial_shapes=spatial_shapes,
+        grid_dtype=grid_dtype,
+        grid_sample_compute_config=(fp32_grid_sample_config(device) if fp32_grid_sample else None),
     )
 
     # --------------------------------------------------------------------------- #
