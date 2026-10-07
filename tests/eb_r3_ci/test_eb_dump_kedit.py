@@ -60,7 +60,7 @@ def _bcast_data(dim, small):
     return a, (nb, 1, 64, 1024), B, (nb, 1, 1, 1), np.repeat(B, 65536)
 
 
-BCASTS = [("H", "dram"), ("H", "bs"), ("W", "dram"), ("HW", "dram"), ("HW", "hs")]
+BCASTS = [("H", "dram"), ("H", "bs"), ("H", "bs4"), ("W", "dram"), ("HW", "dram"), ("HW", "hs")]
 
 
 @pytest.mark.parametrize("dim, mem", BCASTS, ids=["-".join(c) for c in BCASTS])
@@ -74,6 +74,9 @@ def test_bcast(device, dim, mem):
         mca = _hs(ashape, cores // 8, 8)
     elif mem == "bs":  # the sharded H factory (bcast_h_sharded_optimised.cpp) takes block or width sharding
         mca = ttnn.create_sharded_memory_config(ashape, core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.BLOCK)
+    elif mem == "bs4":
+        # shards of 4 x 4 tiles: the kernel's DEST block (h_blk = min(Ht, 8) tiles) stays within the 4 tiles of fp32 DEST
+        return _bcast_bs4(device, a, ashape, b, bshape, bel, t0)
     else:
         mca = ttnn.DRAM_MEMORY_CONFIG
     ta = ttnn.from_torch(bf16_from_bits(a.reshape(-1)).reshape(ashape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mca)
@@ -106,3 +109,30 @@ def test_rotate_half(device):
     av = np.concatenate([f32_of_bf16(half), f32_of_bf16(half)], axis=1).reshape(-1)
     bv = np.concatenate([np.full((128, 512), -1.0, np.float32), np.full((128, 512), np.nan, np.float32)], axis=1).reshape(-1)
     stage("rotate_half", out, av, bv, None, f"({time.time() - t0:.1f} s)")
+
+
+def _bcast_bs4(device, a, ashape, b, bshape, bel, t0):
+    R, W = ashape[2], ashape[3]
+    rows = 1024
+    tb = ttnn.from_torch(bf16_from_bits(np.asarray(b).reshape(-1)).reshape(bshape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    av = f32_of_bf16(a.reshape(-1))
+    bv = f32_of_bf16(bel)
+    for fid, fp32 in BCAST_VARIANTS:
+        env = {"EB_R3_BCAST_FIDELITY": fid}
+        if fp32:
+            env["EB_R3_BCAST_FP32"] = "1"
+        set_env(device, env)
+        outs = []
+        for r0 in range(0, R, rows):
+            shp = (1, 1, rows, W)
+            mc = ttnn.create_sharded_memory_config(shp, core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.BLOCK)
+            ta = ttnn.from_torch(bf16_from_bits(a[r0 : r0 + rows].reshape(-1)).reshape(shp), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+            outs.append(out_bits(ttnn.bcast(ta, tb, ttnn.BcastOpMath.MUL, ttnn.BcastOpDim.H, memory_config=mc)))
+            ttnn.deallocate(ta)
+        out = np.concatenate(outs)
+        if fid == "HiFi4" and not fp32:
+            base = out
+        else:
+            print(f"\nDUMP control bcast_H_bs4 {fid}_{'d32' if fp32 else 'd16'} against HiFi4_d16 (same side): differ {int((out != base).sum())}", flush=True)
+        stage(f"bcast_H_bs4_{fid}_{'d32' if fp32 else 'd16'}", out, av, bv, "mul", f"({time.time() - t0:.1f} s)")
+    set_env(device, {})
