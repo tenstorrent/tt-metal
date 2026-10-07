@@ -114,24 +114,12 @@ struct Matmul {
     private:
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_TRISC)
-            constexpr bool fuse_activation = CTArgs::fuse_sigmoid || CTArgs::fuse_silu;
-            // On a wide call with a short K, split_acc's finalize costs more than the DEST hold it avoids.
-            if (CTArgs::out_w > 1 && !fuse_activation && args.k_num_tiles <= 16) {
-                compute<false>(args);
-            } else {
-                compute<true>(args);
-            }
-#endif
-        }
-
-#if defined(COMPILE_FOR_TRISC)
-        template <bool split_acc>
-        FORCE_INLINE void compute(const RTArgs& args) {
             // ================================================================
             // TRISC (Compute)
             // ================================================================
             constexpr uint32_t out_w = CTArgs::out_w;
             constexpr bool transpose = CTArgs::transpose;
+            constexpr bool split_acc = true;
             constexpr bool dense_packing = true;
             constexpr bool finalize = split_acc && true;
             constexpr bool read_transposed = transpose && true;
@@ -228,8 +216,8 @@ struct Matmul {
             if constexpr (pop_in1) {
                 cb_pop_front(args.in1, args.k_num_tiles * out_w);
             }
-        }
 #endif
+        }
     };  // class Op
 
 };  // struct Matmul
