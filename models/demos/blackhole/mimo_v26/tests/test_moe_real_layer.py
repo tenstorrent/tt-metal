@@ -137,6 +137,7 @@ def test_moe_real_layer(mesh_device):
         ),
         flush=True,
     )
+    torch.save({"outA": outA.bfloat16()}, f"/mnt/tt-data/ssinghal/mimo-logs/moe_real_layer{LAYER}_outA.pt")
     # (B) device exact router
     gw, gb = load_gate(LAYER)
     gate = MiMoGate(md, gw.to(torch.bfloat16), gb, bias_shift=0.0, batch_per_device=None)
