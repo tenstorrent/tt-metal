@@ -70,7 +70,7 @@ def main():
     Wn = ck.get("model.norm.weight")
     tok = P.tokenizer()
     toks, texts = P.gsm8k_tokens(16, 128, tok=tok)
-    gold = torch.tensor([tok(t, add_special_tokens=False)["input_ids"][:136] for t in texts])
+    gold = torch.tensor([tok(t, add_special_tokens=False)["input_ids"][:128] for t in texts])
     assert torch.equal(gold[:, :128], toks)
     d0 = torch.load(f"{a.dev}/layer_0.pt")["prefill"]["h_in"]
     print(
@@ -101,7 +101,7 @@ def main():
     users = list(range(a.users))
     anchors_full = list(range(a.p0, 121))
     if a.grid:
-        sub, anc = users[:4], list(range(a.p0, 121, 6))
+        sub, anc = users, list(range(a.p0, 121, 2))
         for conv in ("out", "out_postnorm", "in"):
             feats = features(a.dev, conv, Wn, E, toks)
             for name, var in (
