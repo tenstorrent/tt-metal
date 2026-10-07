@@ -165,6 +165,8 @@ repos:
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.
 # Metal's hooks above are excluded from that subtree; these entries replace them.
+# This is LLK's only pre-commit config: tt_metal/tt-llk/tests/setup_testing_env.sh installs
+# the git hook from the repository root.
 - repo: local
   hooks:
     - id: llk-mutex-balance
@@ -266,6 +268,15 @@ repos:
     - id: pylint
       name: pylint (llk)
       args: [--disable=all, --enable=wildcard-import]
+      files: ^tt_metal/tt-llk/
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
+    - id: check-executables-have-shebangs
+      name: check that executables have shebangs (llk)
+      files: ^tt_metal/tt-llk/
+    - id: check-docstring-first
+      name: check docstring is first (llk)
       files: ^tt_metal/tt-llk/
 - repo: https://github.com/codespell-project/codespell
   rev: v2.4.1
