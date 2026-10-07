@@ -1475,7 +1475,11 @@ ALWI void reduce_planned_variant(PostReduceOp post_reduce_op) {
         post_reduce_op(dst_index);
     };
 
-    auto issue = [&](auto accumulate, auto post_op) {
+    // Out of line, the call keeps its shape and accumulation as runtime values and compiles the generic
+    // reduce body, several times the inlined size per call. TODO: forcing it inline grows kernel_main past
+    // GCC's large-function limits, which then stops inlining further down; find a structure that keeps
+    // planned calls constant-folded without forcing it.
+    auto issue = [&](auto accumulate, auto post_op) __attribute__((always_inline)) {
         reduce<
             Call::reduce_type,
             Call::reduce_dim,
