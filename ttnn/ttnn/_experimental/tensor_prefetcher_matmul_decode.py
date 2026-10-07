@@ -152,7 +152,14 @@ def matmul_decode_k_blocks(weight, num_receivers, page_bytes, *, slab_shape=None
 
 
 def make_matmul_decode_gcb(
-    device, weight, bank_to_receivers, *, slab_shape=None, k_blocks=1, num_pages=_DEFAULT_NUM_PAGES
+    device,
+    weight,
+    bank_to_receivers,
+    *,
+    slab_shape=None,
+    k_blocks=1,
+    num_pages=_DEFAULT_NUM_PAGES,
+    config_buffer_type=None,
 ):
     """Build a DRAM-sender GCB sized to hold ``num_pages`` weight pages per receiver.
 
@@ -179,6 +186,9 @@ def make_matmul_decode_gcb(
             ``k_blocks`` is 1, and the minimum a streamed weight can run on otherwise --
             the matmul holds one page un-acked while the next is delivered. Deeper rings
             buy the prefetcher more run-ahead.
+        config_buffer_type: buffer type of the per-receiver config pages (read pointer and
+            credit counters), forwarded to ``create_global_circular_buffer_for_tensor_prefetcher``.
+            ``None`` keeps them in L1 with the ring.
 
     Returns:
         A ``ttnn.GlobalCircularBuffer`` to pass as ``global_cb`` to both the prefetch
@@ -195,7 +205,9 @@ def make_matmul_decode_gcb(
     if slab_bytes % k_blocks != 0 or _slab_k_tiles(weight, slab_h) % k_blocks != 0:
         raise ValueError(f"a [{slab_h}, {slab_w}] slab does not split into {k_blocks} pages of whole K-rows")
     size = num_pages * (slab_bytes // k_blocks)
-    return ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(device, bank_to_receivers, size)
+    return ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
+        device, bank_to_receivers, size, config_buffer_type=config_buffer_type
+    )
 
 
 def prefetch_and_matmul_decode(
