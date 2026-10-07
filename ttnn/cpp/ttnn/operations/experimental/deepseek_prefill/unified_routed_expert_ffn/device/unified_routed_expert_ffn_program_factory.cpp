@@ -392,8 +392,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     };
     const tt::DataFormat intermed_df =
         env_flag("MOE_UNI_BF16_INTERMED") ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
-    const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
-    const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
+    // MOE_UNI_FP32_PARTIALS=1 -> the K-loop accumulators (cb_mm_partials_gu/up/d) are Float32 instead of Float16_b
+    // (accumulating 128 K-tiles in bf16 loses ~1% systematically; MiMo scale-bias study)
+    const tt::DataFormat partials_gu_df =
+        env_flag("MOE_UNI_FP32_PARTIALS") ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const tt::DataFormat partials_d_df =
+        env_flag("MOE_UNI_FP32_PARTIALS") ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     // See in0_x_ts above: cb_in0_x is bf8_b on the row-major path (tilize output),
     // else it matches x's dtype (bf8_b on the TILE path).
