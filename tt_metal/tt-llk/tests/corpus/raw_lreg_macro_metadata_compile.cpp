@@ -5,6 +5,10 @@
 // Host syntax-only probe for the generated TT/TTI raw-LREG metadata shape.
 // Select exactly one of TEST_WH, TEST_BH, or TEST_QSR on the command line.
 
+#if defined(TEST_TARGET_EFFECT) && !defined(__riscv_xtt_sfprawlreg_effect)
+#error "target check requires a Tensix compiler implementing raw-LREG effects"
+#endif
+
 namespace ckernel
 {
 inline volatile unsigned instrn_buffer[1];
