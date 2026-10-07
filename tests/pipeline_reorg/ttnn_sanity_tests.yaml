@@ -14,7 +14,7 @@
 # makes the changed-tests gate run its cases on hardware before the change merges. Each op's entry
 # goes under its own line below, so the ops' changes merge in any order.
 # generated bf16 op: abs_bw
-- name: "ttnn eltwise generated bf16 accuracy: abs_bw"
+- name: "ttnn eltwise generated bf16 accuracy abs_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_abs.py::test_abs_bw_exhaustive_bfloat16
@@ -28,7 +28,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: acos_bw
-- name: "ttnn eltwise generated bf16 accuracy: acos_bw"
+- name: "ttnn eltwise generated bf16 accuracy acos_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_acos.py::test_acos_bw_exhaustive_bfloat16
@@ -43,7 +43,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: acosh_bw
 # generated bf16 op: asin_bw
-- name: "ttnn eltwise generated bf16 accuracy: asin_bw"
+- name: "ttnn eltwise generated bf16 accuracy asin_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_asin.py::test_asin_bw_exhaustive_bfloat16
@@ -57,7 +57,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: asinh_bw
-- name: "ttnn eltwise generated bf16 accuracy: asinh_bw"
+- name: "ttnn eltwise generated bf16 accuracy asinh_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_asinh.py::test_asinh_bw_exhaustive_bfloat16
@@ -71,7 +71,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: atanh_bw
-- name: "ttnn eltwise generated bf16 accuracy: atanh_bw"
+- name: "ttnn eltwise generated bf16 accuracy atanh_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_atanh.py::test_atanh_bw_exhaustive_bfloat16
@@ -85,7 +85,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: celu_bw
-- name: "ttnn eltwise generated bf16 accuracy: celu_bw"
+- name: "ttnn eltwise generated bf16 accuracy celu_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_celu.py::test_celu_bw_exhaustive_bfloat16
@@ -99,7 +99,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: cosh_bw
-- name: "ttnn eltwise generated bf16 accuracy: cosh_bw"
+- name: "ttnn eltwise generated bf16 accuracy cosh_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_cosh.py::test_cosh_bw_exhaustive_bfloat16
@@ -114,7 +114,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: erf_bw
 # generated bf16 op: erfinv_bw
-- name: "ttnn eltwise generated bf16 accuracy: erfinv_bw"
+- name: "ttnn eltwise generated bf16 accuracy erfinv_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_erfinv.py::test_erfinv_bw_exhaustive_bfloat16
@@ -128,7 +128,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: exp2_bw
-- name: "ttnn eltwise generated bf16 accuracy: exp2_bw"
+- name: "ttnn eltwise generated bf16 accuracy exp2_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_exp2.py::test_exp2_bw_exhaustive_bfloat16
@@ -142,7 +142,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: expm1_bw
-- name: "ttnn eltwise generated bf16 accuracy: expm1_bw"
+- name: "ttnn eltwise generated bf16 accuracy expm1_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_expm1.py::test_expm1_bw_exhaustive_bfloat16
@@ -156,7 +156,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: hardshrink_bw
-- name: "ttnn eltwise generated bf16 accuracy: hardshrink_bw"
+- name: "ttnn eltwise generated bf16 accuracy hardshrink_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_hardshrink.py::test_hardshrink_bw_exhaustive_bfloat16
@@ -170,7 +170,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: hardsigmoid_bw
-- name: "ttnn eltwise generated bf16 accuracy: hardsigmoid_bw"
+- name: "ttnn eltwise generated bf16 accuracy hardsigmoid_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_hardsigmoid.py::test_hardsigmoid_bw_exhaustive_bfloat16
@@ -185,7 +185,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: hardswish_bw
 # generated bf16 op: hardtanh_bw
-- name: "ttnn eltwise generated bf16 accuracy: hardtanh_bw"
+- name: "ttnn eltwise generated bf16 accuracy hardtanh_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_hardtanh.py::test_hardtanh_bw_exhaustive_bfloat16
@@ -199,7 +199,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: leaky_relu_bw
-- name: "ttnn eltwise generated bf16 accuracy: leaky_relu_bw"
+- name: "ttnn eltwise generated bf16 accuracy leaky_relu_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_leaky_relu.py::test_leaky_relu_bw_exhaustive_bfloat16
@@ -213,7 +213,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log10_bw
-- name: "ttnn eltwise generated bf16 accuracy: log10_bw"
+- name: "ttnn eltwise generated bf16 accuracy log10_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_log10.py::test_log10_bw_exhaustive_bfloat16
@@ -227,7 +227,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log1p_bw
-- name: "ttnn eltwise generated bf16 accuracy: log1p_bw"
+- name: "ttnn eltwise generated bf16 accuracy log1p_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_log1p.py::test_log1p_bw_exhaustive_bfloat16
@@ -241,7 +241,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log2_bw
-- name: "ttnn eltwise generated bf16 accuracy: log2_bw"
+- name: "ttnn eltwise generated bf16 accuracy log2_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_log2.py::test_log2_bw_exhaustive_bfloat16
@@ -255,7 +255,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log_bw
-- name: "ttnn eltwise generated bf16 accuracy: log_bw"
+- name: "ttnn eltwise generated bf16 accuracy log_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_log.py::test_log_bw_exhaustive_bfloat16
@@ -270,7 +270,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log_sigmoid
 # generated bf16 op: log_sigmoid_bw
-- name: "ttnn eltwise generated bf16 accuracy: log_sigmoid_bw"
+- name: "ttnn eltwise generated bf16 accuracy log_sigmoid_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_log_sigmoid.py::test_log_sigmoid_bw_exhaustive_bfloat16
@@ -285,7 +285,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: logit
 # generated bf16 op: logit_bw
-- name: "ttnn eltwise generated bf16 accuracy: logit_bw"
+- name: "ttnn eltwise generated bf16 accuracy logit_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_logit.py::test_logit_bw_exhaustive_bfloat16
@@ -299,7 +299,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: logiteps_bw
-- name: "ttnn eltwise generated bf16 accuracy: logiteps_bw"
+- name: "ttnn eltwise generated bf16 accuracy logiteps_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_logiteps.py::test_logiteps_bw_exhaustive_bfloat16
@@ -314,7 +314,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: multigammaln
 # generated bf16 op: multigammaln_bw
-- name: "ttnn eltwise generated bf16 accuracy: multigammaln_bw"
+- name: "ttnn eltwise generated bf16 accuracy multigammaln_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_mvlgamma.py::test_multigammaln_bw_exhaustive_bfloat16
@@ -329,7 +329,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: pack_relu
 # generated bf16 op: reciprocal_bw
-- name: "ttnn eltwise generated bf16 accuracy: reciprocal_bw"
+- name: "ttnn eltwise generated bf16 accuracy reciprocal_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_reciprocal.py::test_reciprocal_bw_exhaustive_bfloat16
@@ -343,7 +343,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: relu6_bw
-- name: "ttnn eltwise generated bf16 accuracy: relu6_bw"
+- name: "ttnn eltwise generated bf16 accuracy relu6_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_relu6.py::test_relu6_bw_exhaustive_bfloat16
@@ -358,7 +358,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: relu_bw
 # generated bf16 op: rsqrt_bw
-- name: "ttnn eltwise generated bf16 accuracy: rsqrt_bw"
+- name: "ttnn eltwise generated bf16 accuracy rsqrt_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_rsqrt.py::test_rsqrt_bw_exhaustive_bfloat16
@@ -372,7 +372,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: selu_bw
-- name: "ttnn eltwise generated bf16 accuracy: selu_bw"
+- name: "ttnn eltwise generated bf16 accuracy selu_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_selu.py::test_selu_bw_exhaustive_bfloat16
@@ -386,7 +386,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: sinh_bw
-- name: "ttnn eltwise generated bf16 accuracy: sinh_bw"
+- name: "ttnn eltwise generated bf16 accuracy sinh_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_sinh.py::test_sinh_bw_exhaustive_bfloat16
@@ -400,7 +400,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: softplus_bw
-- name: "ttnn eltwise generated bf16 accuracy: softplus_bw"
+- name: "ttnn eltwise generated bf16 accuracy softplus_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_softplus.py::test_softplus_bw_exhaustive_bfloat16
@@ -414,7 +414,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: softshrink_bw
-- name: "ttnn eltwise generated bf16 accuracy: softshrink_bw"
+- name: "ttnn eltwise generated bf16 accuracy softshrink_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_softshrink.py::test_softshrink_bw_exhaustive_bfloat16
@@ -429,7 +429,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: softsign_bw
 # generated bf16 op: sqrt_bw
-- name: "ttnn eltwise generated bf16 accuracy: sqrt_bw"
+- name: "ttnn eltwise generated bf16 accuracy sqrt_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_sqrt.py::test_sqrt_bw_exhaustive_bfloat16
@@ -443,7 +443,7 @@
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: square_bw
-- name: "ttnn eltwise generated bf16 accuracy: square_bw"
+- name: "ttnn eltwise generated bf16 accuracy square_bw"
   cmd: >-
     pytest --timeout 300 -s -v
     tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_square.py::test_square_bw_exhaustive_bfloat16

@@ -18,7 +18,7 @@
 # build, before the change merges. Each op's entry goes under its own line below, so the ops'
 # changes merge in any order.
 # generated bf16 op: abs_bw
-- name: "ttnn eltwise generated bf16 device perf: abs_bw"
+- name: "ttnn eltwise generated bf16 device perf abs_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_abs_bw_device_perf.py
@@ -31,7 +31,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: acos_bw
-- name: "ttnn eltwise generated bf16 device perf: acos_bw"
+- name: "ttnn eltwise generated bf16 device perf acos_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_acos_bw_device_perf.py
@@ -45,7 +45,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: acosh_bw
 # generated bf16 op: asin_bw
-- name: "ttnn eltwise generated bf16 device perf: asin_bw"
+- name: "ttnn eltwise generated bf16 device perf asin_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_asin_bw_device_perf.py
@@ -58,7 +58,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: asinh_bw
-- name: "ttnn eltwise generated bf16 device perf: asinh_bw"
+- name: "ttnn eltwise generated bf16 device perf asinh_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_asinh_bw_device_perf.py
@@ -71,7 +71,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: atanh_bw
-- name: "ttnn eltwise generated bf16 device perf: atanh_bw"
+- name: "ttnn eltwise generated bf16 device perf atanh_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_atanh_bw_device_perf.py
@@ -84,7 +84,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: celu_bw
-- name: "ttnn eltwise generated bf16 device perf: celu_bw"
+- name: "ttnn eltwise generated bf16 device perf celu_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_celu_bw_device_perf.py
@@ -97,7 +97,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: cosh_bw
-- name: "ttnn eltwise generated bf16 device perf: cosh_bw"
+- name: "ttnn eltwise generated bf16 device perf cosh_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_cosh_bw_device_perf.py
@@ -111,7 +111,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: erf_bw
 # generated bf16 op: erfinv_bw
-- name: "ttnn eltwise generated bf16 device perf: erfinv_bw"
+- name: "ttnn eltwise generated bf16 device perf erfinv_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_erfinv_bw_device_perf.py
@@ -124,7 +124,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: exp2_bw
-- name: "ttnn eltwise generated bf16 device perf: exp2_bw"
+- name: "ttnn eltwise generated bf16 device perf exp2_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_exp2_bw_device_perf.py
@@ -137,7 +137,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: expm1_bw
-- name: "ttnn eltwise generated bf16 device perf: expm1_bw"
+- name: "ttnn eltwise generated bf16 device perf expm1_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_expm1_bw_device_perf.py
@@ -150,7 +150,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: hardshrink_bw
-- name: "ttnn eltwise generated bf16 device perf: hardshrink_bw"
+- name: "ttnn eltwise generated bf16 device perf hardshrink_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_hardshrink_bw_device_perf.py
@@ -163,7 +163,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: hardsigmoid_bw
-- name: "ttnn eltwise generated bf16 device perf: hardsigmoid_bw"
+- name: "ttnn eltwise generated bf16 device perf hardsigmoid_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_hardsigmoid_bw_device_perf.py
@@ -177,7 +177,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: hardswish_bw
 # generated bf16 op: hardtanh_bw
-- name: "ttnn eltwise generated bf16 device perf: hardtanh_bw"
+- name: "ttnn eltwise generated bf16 device perf hardtanh_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_hardtanh_bw_device_perf.py
@@ -190,7 +190,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: leaky_relu_bw
-- name: "ttnn eltwise generated bf16 device perf: leaky_relu_bw"
+- name: "ttnn eltwise generated bf16 device perf leaky_relu_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_leaky_relu_bw_device_perf.py
@@ -203,7 +203,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log10_bw
-- name: "ttnn eltwise generated bf16 device perf: log10_bw"
+- name: "ttnn eltwise generated bf16 device perf log10_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_log10_bw_device_perf.py
@@ -216,7 +216,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log1p_bw
-- name: "ttnn eltwise generated bf16 device perf: log1p_bw"
+- name: "ttnn eltwise generated bf16 device perf log1p_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_log1p_bw_device_perf.py
@@ -229,7 +229,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log2_bw
-- name: "ttnn eltwise generated bf16 device perf: log2_bw"
+- name: "ttnn eltwise generated bf16 device perf log2_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_log2_bw_device_perf.py
@@ -242,7 +242,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log_bw
-- name: "ttnn eltwise generated bf16 device perf: log_bw"
+- name: "ttnn eltwise generated bf16 device perf log_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_log_bw_device_perf.py
@@ -256,7 +256,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: log_sigmoid
 # generated bf16 op: log_sigmoid_bw
-- name: "ttnn eltwise generated bf16 device perf: log_sigmoid_bw"
+- name: "ttnn eltwise generated bf16 device perf log_sigmoid_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_log_sigmoid_bw_device_perf.py
@@ -270,7 +270,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: logit
 # generated bf16 op: logit_bw
-- name: "ttnn eltwise generated bf16 device perf: logit_bw"
+- name: "ttnn eltwise generated bf16 device perf logit_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_logit_bw_device_perf.py
@@ -283,7 +283,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: logiteps_bw
-- name: "ttnn eltwise generated bf16 device perf: logiteps_bw"
+- name: "ttnn eltwise generated bf16 device perf logiteps_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_logiteps_bw_device_perf.py
@@ -297,7 +297,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: multigammaln
 # generated bf16 op: multigammaln_bw
-- name: "ttnn eltwise generated bf16 device perf: multigammaln_bw"
+- name: "ttnn eltwise generated bf16 device perf multigammaln_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_multigammaln_bw_device_perf.py
@@ -311,7 +311,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: pack_relu
 # generated bf16 op: reciprocal_bw
-- name: "ttnn eltwise generated bf16 device perf: reciprocal_bw"
+- name: "ttnn eltwise generated bf16 device perf reciprocal_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_reciprocal_bw_device_perf.py
@@ -324,7 +324,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: relu6_bw
-- name: "ttnn eltwise generated bf16 device perf: relu6_bw"
+- name: "ttnn eltwise generated bf16 device perf relu6_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_relu6_bw_device_perf.py
@@ -338,7 +338,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: relu_bw
 # generated bf16 op: rsqrt_bw
-- name: "ttnn eltwise generated bf16 device perf: rsqrt_bw"
+- name: "ttnn eltwise generated bf16 device perf rsqrt_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_rsqrt_bw_device_perf.py
@@ -351,7 +351,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: selu_bw
-- name: "ttnn eltwise generated bf16 device perf: selu_bw"
+- name: "ttnn eltwise generated bf16 device perf selu_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_selu_bw_device_perf.py
@@ -364,7 +364,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: sinh_bw
-- name: "ttnn eltwise generated bf16 device perf: sinh_bw"
+- name: "ttnn eltwise generated bf16 device perf sinh_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_sinh_bw_device_perf.py
@@ -377,7 +377,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: softplus_bw
-- name: "ttnn eltwise generated bf16 device perf: softplus_bw"
+- name: "ttnn eltwise generated bf16 device perf softplus_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_softplus_bw_device_perf.py
@@ -390,7 +390,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: softshrink_bw
-- name: "ttnn eltwise generated bf16 device perf: softshrink_bw"
+- name: "ttnn eltwise generated bf16 device perf softshrink_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_softshrink_bw_device_perf.py
@@ -404,7 +404,7 @@
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: softsign_bw
 # generated bf16 op: sqrt_bw
-- name: "ttnn eltwise generated bf16 device perf: sqrt_bw"
+- name: "ttnn eltwise generated bf16 device perf sqrt_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_sqrt_bw_device_perf.py
@@ -417,7 +417,7 @@
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
 # generated bf16 op: square_bw
-- name: "ttnn eltwise generated bf16 device perf: square_bw"
+- name: "ttnn eltwise generated bf16 device perf square_bw"
   cmd: >-
     TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
     tests/ttnn/perf_tests/operations/eltwise/test_square_bw_device_perf.py
