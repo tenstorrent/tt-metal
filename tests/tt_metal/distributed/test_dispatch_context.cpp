@@ -50,8 +50,9 @@ protected:
 
 namespace {
 
-// Why a guard test cannot run here, or nullopt if it can: manual FD switching needs Slow Dispatch,
-// real hardware, and a Galaxy or Blackhole cluster.
+// Why a guard test cannot run here, or nullopt if it can: the guard tests need Slow Dispatch, real
+// hardware, and Blackhole. They target Blackhole's dispatch cores and its unit-mesh (ServiceCore) path,
+// so elsewhere they skip before opening a device.
 std::optional<std::string> fd_preflight_skip_reason() {
     const auto& context = MetalContext::instance();
     if (context.rtoptions().get_fast_dispatch()) {
@@ -61,8 +62,8 @@ std::optional<std::string> fd_preflight_skip_reason() {
     if (cluster.is_mock_or_emulated()) {
         return "This test requires real hardware.";
     }
-    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
-        return "Manual Fast Dispatch setup is supported only on Galaxy and Blackhole clusters.";
+    if (cluster.arch() != tt::ARCH::BLACKHOLE) {
+        return "The fast-dispatch guard tests run only on Blackhole.";
     }
     return std::nullopt;
 }
