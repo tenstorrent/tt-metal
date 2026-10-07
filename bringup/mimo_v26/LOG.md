@@ -764,3 +764,16 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_moebf16uni_L1_h41_23b56c47ac7.log
 - paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
 - data: {"layer":1,"pcc":0.99979,"bit_identical_runs":5}
+
+## E261007-0456-8fe
+- date: 2026-10-07T04:56:09
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: L0..L5 chain re-run with the FAST bf16-activation unified expert op (expert_op=unified, MOE_UNI_BF16_X/INTERMED/OUT=1, private relink lib integ_23b56c47ac7), same test as E261007-0401-3fc: free-running h_out PCC min vs bf16 dump L0..L5 = 0.99998,0.99989,0.99984,0.99984,0.99986,0.99973 (vs fp32 same to 5 digits; floor 1.0,0.99995,0.99994,0.99994,0.99995,0.99994). FFN-only teacher forcing (dump ffn_in) ffn_out vs bf16 dump L1..L5 0.99932,0.9998,0.99917,0.99849,0.99926 (L5 0.99926 vs 0.99965 with mm); vs fp32 = floor-level in all layers (L5 0.99461/0.99497). Teacher-forced decode min over 3 steps L0..L5: 0.99997,0.99981,0.99893,0.99992,0.99996,0.98723 (L5 step 2; same low value as mm 0.9874, 4 live tokens per row, near-tie routing). Router set match unchanged (0.96,0.72,0.76,0.78,0.82 in-chain; 0.994,0.988,0.991,0.995,0.989 on dump ffn_in). Whole 6-layer test (weights from cache 2.8 s, TF prefill+ffn-only+decode+free chain) 41 s. L1-exhaustion fix included: per-gate L1 buffers freed in exact mode.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6u_43f8c5f81d5.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-0401-3fc
+- data: {"free_chain_l5_vs_bf16":0.99973,"ffn_only_l5":0.99926,"dec_l5_min":0.98723}
