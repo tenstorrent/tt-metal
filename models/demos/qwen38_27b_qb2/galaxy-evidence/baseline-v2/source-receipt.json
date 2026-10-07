@@ -1,0 +1,56 @@
+{
+  "scope": "Source bytes on host immediately after successful single-replica baseline v2; model source unchanged during run",
+  "host": "10.228.203.98",
+  "runtime_metal_sha": "a08819ddbe23077f8037d3802303939064868ff6",
+  "checkpoint_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "source_sha256": {
+    "tt/model.py": "5a30843e69d55cc21b66fe8a182772a154b72ca5e990b88c98bf5a0e31418c28",
+    "tt/generator.py": "c30d9967baeaac24f55fe2be689fb6590106fc3e7711d02754664d8e15306bba",
+    "tt/decoder.py": "47ee0afde624a4ffd7ac687986568e03e847fa4e7cc8672fc8b57b939617999a",
+    "tt/decoder_tp.py": "1c8815b901c1e6de4d28bf1249b528d6ed44185e39f6e2165556e283c013c283",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "tt/precision.py": "e298d8ad7a78d7f22566d0d293c17c3257f8524569f511ad57c8417ae372b039",
+    "config/precision.json": "33a8fa95c118a85ceb53e6ba707ae4d6eb74631263d5120c1842afa6605628d1",
+    "tests/test_galaxy_smoke.py": "b119ae6f3bda72f09161ae3dd7306c0cbdfb022dc07188f66b576a9f023382ad"
+  },
+  "unit": "qwen38-metal-galaxy-baseline-v2-20261006.service",
+  "precision": {
+    "config_id": "head_bfp4_lofi",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "output": "bfloat4_b",
+      "gate": "bfloat4_b",
+      "up": "bfloat4_b",
+      "down": "bfloat4_b",
+      "head": "bfloat4_b"
+    },
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "output": "LoFi",
+      "gate": "LoFi",
+      "up": "LoFi",
+      "down": "LoFi",
+      "head": "LoFi"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2"
+  },
+  "generation": "fixed 128-token greedy probe, intentionally continues after EOS; serving EOS behavior is not tested"
+}

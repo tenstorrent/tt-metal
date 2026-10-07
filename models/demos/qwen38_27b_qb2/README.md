@@ -39,9 +39,24 @@ prefill is outside the timed interval. This is a G0 test, not a serving benchmar
 or proof of long-context/batched performance. A two-replica run is available for
 bring-up but does not pass the eight-replica gate.
 
-At initial publication, 66 host tests pass (plus 40 subtests). The full model
-hardware test is running; performance, eight concurrent replicas, long-context
-serving and reference evaluation results remain unqualified on Galaxy.
+The first full-model Galaxy test passes on `10.228.203.98`: all 64 layers,
+prefill, device sampling and traced decode, with identical 128-token greedy
+outputs across two runs. Receipts and source hashes are in
+`galaxy-evidence/baseline-v2/`; 66 host tests also pass (plus 40 subtests).
+
+| Single TP4 replica, 63-token prompt / 128 output tokens | Measured |
+| --- | ---: |
+| Model/generator setup | 325.94 s |
+| First-use TTFT, including compilation | 49.44 s |
+| Warm TTFT | 62.13 ms |
+| Warm decode, 127 steps plus final history readback | 38.89 tokens/s/user |
+| Warm TPOT | 25.72 ms |
+
+The decoded answer is coherent through its first EOS. This fixed-length probe
+intentionally continues after EOS, so its trailing output is not a serving EOS
+test. These are short-context B1 results; they do not establish long-context,
+high-batch, eight-replica or reference-evaluation performance. The eight-replica
+test has been launched as a separate persistent job and is not yet qualified.
 
 ## Capacity
 
