@@ -131,17 +131,20 @@ constexpr unsigned write(unsigned x) {
 // Preserve the old destination as an input, including for nominally write-only
 // operations. This is deliberately conservative when all lanes are enabled.
 constexpr unsigned inputs(unsigned x) { return read(x) | write(x); }
+// A template argument requires constant evaluation without introducing local
+// constexpr objects (whose initialization can emit stack stores at -O0).
+template <unsigned Mask> struct constant_mask { enum : unsigned { value = Mask }; };
 } // namespace ckernel::raw_lreg_effect
 
 #define TT_LLK_SFPU_EFFECT(word)                                                                \
     do {                                                                                        \
         static_assert(!__builtin_constant_p(word) || ckernel::raw_lreg_effect::supported(word), \
                       "unsupported raw SFPU effect; use an explicit typed annotation");         \
-        [[maybe_unused]] constexpr unsigned tt_llk_reads = __builtin_constant_p(word)           \
-            ? ckernel::raw_lreg_effect::inputs(word) : 0xffu;                                    \
-        [[maybe_unused]] constexpr unsigned tt_llk_writes = __builtin_constant_p(word)          \
-            ? ckernel::raw_lreg_effect::write(word) : 0xffu;                                     \
-        TT_LLK_SFPRAWLREG_EFFECT(tt_llk_reads, tt_llk_writes);                                    \
+        TT_LLK_SFPRAWLREG_EFFECT(                                                               \
+            (ckernel::raw_lreg_effect::constant_mask<__builtin_constant_p(word)                  \
+                ? ckernel::raw_lreg_effect::inputs(word) : 0xffu>::value),                       \
+            (ckernel::raw_lreg_effect::constant_mask<__builtin_constant_p(word)                  \
+                ? ckernel::raw_lreg_effect::write(word) : 0xffu>::value));                       \
     } while (0)
 #define TT_LLK_SFPU_ISSUE_TT(word)  do { TT_INSN(word); TT_LLK_SFPU_EFFECT(word); } while (0)
 #define TT_LLK_SFPU_ISSUE_TTI(word) do { TTI_INSN(word); TT_LLK_SFPU_EFFECT(word); } while (0)
