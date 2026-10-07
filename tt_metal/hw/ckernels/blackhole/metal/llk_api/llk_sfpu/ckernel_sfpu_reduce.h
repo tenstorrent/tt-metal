@@ -849,6 +849,19 @@ inline void set_manual_col_swap_direction() {
     set_sfpswap_direction<pool_type == PoolType::MAX>();
 }
 
+// LOADMACRO sequences 2 and 3 of the fused row MAX/MIN: SFPSWAP, srcC LREG0 / LREG1, dest the loaded register (0x80;
+// 0x06 / 0x07: template 2 / 3). Written per row call, so the init the column calls share does not hold them.
+inline void init_row_max_min_load_macros() {
+    TTI_SFPSWAP(0, p_sfpu::LREG0, 0xE /* instruction template 2 */, 1);
+    TTI_SFPLOADI(0, 0xA, 0x0286);
+    TTI_SFPLOADI(0, 0x8, 0x0000);
+    TTI_SFPCONFIG(0, 6, 0);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, 0xF /* instruction template 3 */, 1);
+    TTI_SFPLOADI(0, 0xA, 0x0287);
+    TTI_SFPLOADI(0, 0x8, 0x0000);
+    TTI_SFPCONFIG(0, 7, 0);
+}
+
 /**
  * @brief Row-wise maximum/minimum reduction across a block of tiles.
  *
@@ -878,6 +891,11 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
     // Set the SFPSWAP direction on entry (MAX default, MIN inverts) rather than trusting the init: under one
     // shared init (e.g. ttir.max dim=[1,2]) a preceding manual column MAX/MIN leaves the opposite convention.
     set_sfpswap_direction<pool_type == PoolType::MIN>();
+#ifndef DISABLE_SFPLOADMACRO
+    if constexpr (!is_int32 && !clear_high_bits) {
+        init_row_max_min_load_macros();
+    }
+#endif
 
     // The horizontal reduce is inline and nothing is recorded here, so the column LOADMACRO window [0, 11)
     // survives a row reduce under one shared init.
@@ -1257,18 +1275,6 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPLOADI(0, 0xA, 0x0085);
     TTI_SFPLOADI(0, 0x8, 0x0000);
     TTI_SFPCONFIG(0, 5, 0);
-
-    // Setup LOADMACRO sequences 2 and 3 for the row MAX/MIN kernel: the fused load-and-compare of sequences 0 and 1
-    // with accumulators LREG0 and LREG1 (0x80: the loaded register is the swap's dest; 0x06 / 0x07: template 2 / 3).
-    TTI_SFPSWAP(0, p_sfpu::LREG0, 0xE /* instruction template 2 */, 1);
-    TTI_SFPLOADI(0, 0xA, 0x0286);
-    TTI_SFPLOADI(0, 0x8, 0x0000);
-    TTI_SFPCONFIG(0, 6, 0);
-
-    TTI_SFPSWAP(0, p_sfpu::LREG1, 0xF /* instruction template 3 */, 1);
-    TTI_SFPLOADI(0, 0xA, 0x0287);
-    TTI_SFPLOADI(0, 0x8, 0x0000);
-    TTI_SFPCONFIG(0, 7, 0);
 
     configure_addrmod_max_min(num_cols);
 
