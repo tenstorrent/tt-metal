@@ -671,3 +671,30 @@ def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
     assert all(b <= v for b, v in zip(brick, volume)), (
         f"brick {brick} exceeds volume {volume} on at least one axis -- " f"the oversized-brick filter is not working"
     )
+
+
+def test_choose_sharded_brick_divides_h_shard():
+    """Under the 2-D split the brick must divide the H shard as well as the W shard.
+
+    Host only: the planner needs no device. At 1080p stage 5 the W-only search picks (2, 8, 2),
+    whose 8-site H extent does not divide the 68-row H shard of a 4-way H split.
+    """
+    from models.tt_dit.layers.neighborhood_attention_plan import _BRICK_CHOICE_CACHE, _choose_sharded_brick
+
+    _BRICK_CHOICE_CACHE.clear()
+    volume, context_window, stride = (145, 272, 480), (11, 11, 11), (1, 1, 1)
+    width_local, shard_count, h_shard_count = 60, 8, 4
+    height_local = volume[1] // h_shard_count
+
+    brick = _choose_sharded_brick(
+        volume,
+        context_window,
+        stride,
+        width_local,
+        shard_count,
+        height_local=height_local,
+        h_shard_count=h_shard_count,
+    )
+    assert height_local % brick[1] == 0, f"brick {brick} does not divide the {height_local}-row H shard"
+    assert width_local % brick[2] == 0, f"brick {brick} does not divide the {width_local}-column W shard"
+    assert all(b <= v for b, v in zip(brick, volume)), f"brick {brick} exceeds volume {volume}"

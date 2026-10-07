@@ -892,7 +892,7 @@ def halo_sites(context_window_extent: int, brick_extent: int) -> int:
 _BRICK_CHOICE_CACHE: dict = {}
 
 
-def _choose_sharded_brick(volume, context_window, stride, width_local, shard_count):
+def _choose_sharded_brick(volume, context_window, stride, width_local, shard_count, height_local=None, h_shard_count=1):
     """The 32-site brick that makes the GATHER smallest, measured in bricks by the real planner.
 
     ``neighborhood_choose_brick`` minimises the window union in SITES. At stride 1 that is the
@@ -903,11 +903,14 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
 
     Only for stride 1. Where the stride is a whole number of bricks the window origin snaps to a
     brick boundary and the two objectives agree.
+
+    ``height_local`` (the 2-D split) also shards H over ``h_shard_count`` devices: the brick must
+    then divide the H shard too, and every H x W shard must gather alike.
     """
     if stride != (1, 1, 1):
         return tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
 
-    key = (volume, context_window, stride, width_local, shard_count)
+    key = (volume, context_window, stride, width_local, shard_count, height_local, h_shard_count)
     cached = _BRICK_CHOICE_CACHE.get(key)
     if cached is not None:
         return cached
@@ -933,7 +936,16 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
             halo = halo_sites(min(context_window[2], volume[2]), brick_width)
             if halo > width_local:
                 continue
-            resident = (volume[0], volume[1], width_local + 2 * halo)
+            if height_local is None:
+                owned_height, halo_h = volume[1], 0
+            else:
+                if height_local % brick_height:
+                    continue
+                owned_height = height_local
+                halo_h = halo_sites(min(context_window[1], volume[1]), brick_height)
+                if halo_h > height_local:
+                    continue
+            resident = (volume[0], owned_height + 2 * halo_h, width_local + 2 * halo)
             try:
                 plans = [
                     ttnn.transformer.neighborhood_plan(
@@ -943,12 +955,13 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
                         brick,
                         query_chunk_bricks=_query_chunk_bricks(stride, brick),
                         shard_extent=resident,
-                        shard_origin=(0, 0, index * width_local - halo),
+                        shard_origin=(0, h_index * owned_height - halo_h, index * width_local - halo),
                         # The owned bricks only, as cached_bricked_plan passes: the planner refuses
                         # a query region that starts below the volume, which shard 0's halo does.
-                        query_extent=(volume[0], volume[1], width_local),
-                        query_origin=(0, 0, halo),
+                        query_extent=(volume[0], owned_height, width_local),
+                        query_origin=(0, halo_h, halo),
                     )
+                    for h_index in range(h_shard_count)
                     for index in range(shard_count)
                 ]
             except (ValueError, RuntimeError):

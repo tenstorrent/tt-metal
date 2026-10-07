@@ -520,7 +520,13 @@ def neighborhood_attention_3d_bricked_w_sharded(
         stride = (1, 1, 1)
     if brick is None:
         brick = brick_override(volume) or _choose_sharded_brick(
-            volume, context_window, stride, width_local, shard_count
+            volume,
+            context_window,
+            stride,
+            width_local,
+            shard_count,
+            height_local=height_extent if h_axis is not None else None,
+            h_shard_count=h_shard_count,
         )
     if scale is None:
         scale = head_dim**-0.5
