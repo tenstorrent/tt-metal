@@ -656,17 +656,12 @@ def test_the_golden_sees_the_zero_the_kernel_receives(fmt, dest_acc, keeps_sign)
     assert torch.equal(received[2:], src[2:])
 
 
-def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
-    """#58590, pinned until it lands. UnarySFPUGolden tilizes and untilizes its Dest
-    result in the *input* format, so a bfloat16 input's Float32 golden at a 32-bit Dest
-    is rounded to bfloat16 while the kernel keeps fp32: 1.0078125**2 reads 1.015625
-    against the exact 1.0156860. Every 16-bit/block input -> Float32, ``dest: "Yes"``
-    row of the table measures that rounding rather than the kernel (the YAML header
-    says so), and nothing else would tell them apart once the golden is fixed.
-
-    So when this fails, the golden has stopped rounding there: re-emit the whole table
-    (`--ulp-emit`) on the fix, which tightens those rows, drop the header paragraph, and
-    delete this test."""
+def test_the_unary_golden_keeps_a_float32_output_at_fp32_on_a_16bit_input():
+    """#58590: UnarySFPUGolden tilized and untilized its Dest result in the *input*
+    format, so a bfloat16 input's Float32 golden at a 32-bit Dest was rounded to
+    bfloat16 -- 1.0078125**2 read 1.015625 against the exact 1.0156860 -- and every
+    16-bit/block input -> Float32 ``dest: "Yes"`` row measured that rounding. Both are
+    permutations in Float32 now; a regression would loosen those rows again."""
     from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 
     x = 1.0 + 2.0**-7  # bf16-exact; its square is not
@@ -680,8 +675,7 @@ def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
         [32, 32],
     )
     assert golden.dtype == torch.float32
-    rounded = float(torch.tensor(x * x, dtype=torch.bfloat16))
-    assert float(golden[0]) == rounded != x * x
+    assert float(golden[0]) == float(torch.tensor(x * x, dtype=torch.float32))
 
 
 def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():

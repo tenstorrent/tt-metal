@@ -2008,17 +2008,44 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         "the same shortfall at fp32's overflow edge: exp(88.75) is 3.497e38, past "
         "FLT_MAX, and the approximation answers 3.396e38, one lane"
     ),
-    # -- kernel behaviour over a wide band of the format, not yet triaged -----------
-    # Each is what the sweep found and the row records; none is a golden or store
-    # artefact, and none is a handful of lanes an issue could name. They hold their
-    # cells on tolerance until the kernel is looked at.
-    (MathOperation.Digamma, None, None, None, None): (
-        "non-finite of the wrong sign for |x| above ~1e36, and a finite -61312 where a "
-        "block-quantized input lands on the pole at 0"
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): (
+        "the same shortfall through the 0.5 scale: approximate exp(0.5 x) answers "
+        "64256..64640 for x in 22.19..22.22, where the answer is past 65504"
     ),
-    (MathOperation.ExpWithBase, None, None, ApproximationMode.Yes, None): (
-        "past the overflow point the approximate kernel returns x itself instead of "
-        "inf, and NaN for large negative x where the answer is 0"
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): (
+        "the same shortfall through the 0.5 scale from a strided Float32 input, one lane"
+    ),
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        ApproximationMode.Yes,
+        DestAccumulation.Yes,
+    ): (
+        "the same shortfall at fp32's overflow edge through the 0.5 scale: exp(0.5 * "
+        "177.5) is past FLT_MAX, and the approximation answers 3.396e38, one lane"
+    ),
+    # -- kernel behaviour over a wide band of the format -----------------------------
+    # Each is what the sweep found and the row records; none is a golden or store
+    # artefact, and none is a handful of lanes an issue could name. Each names the issue
+    # that tracks it, or says why it is no defect, so retiring the entry is tied to
+    # something: the stale check below fails once no row needs it.
+    (MathOperation.Digamma, None, None, None, None): (
+        "wrong for negative x, which the LUT has no branch for (#58682): -inf of the "
+        "wrong sign for large negative x, and a finite -61312 where a block-quantized "
+        "input lands on the pole at 0 (the saturation below the fit range is #51128)"
     ),
     (MathOperation.Expm1Cw, None, None, None, None): (
         "past the overflow point (x ~ 89) the kernel returns -1, the x -> -inf limit, "
@@ -2082,12 +2109,25 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         None,
     ): 2,
     (MathOperation.Digamma, None, None, None, None): 22,
-    (MathOperation.ExpWithBase, None, None, ApproximationMode.Yes, None): 25,
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): 2,
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 25,
     (MathOperation.I0, None, None, None, None): 18,
     (MathOperation.I1, None, None, None, None): 20,
     (MathOperation.Lgamma, None, None, None, None): 20,
-    (MathOperation.Polygamma, None, None, None, None): 46,
+    (MathOperation.Polygamma, None, None, None, None): 48,
     (MathOperation.Rpow, None, None, None, None): 20,
 }
 
