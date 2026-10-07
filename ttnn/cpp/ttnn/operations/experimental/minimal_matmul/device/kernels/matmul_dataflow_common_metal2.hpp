@@ -211,10 +211,11 @@ void write_block_sync(
  * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
  * of data movement and compute improves overall throughput.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorTypeA, typename TensorAccessorTypeB>
+// Metal 2.0 bindings encode each tensor's CRTA offset in its accessor type.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TernaryAAccessor, typename TernaryBAccessor>
 void read_ternary_blocks_sync(
-    const TensorAccessorTypeA& ternary_a_accessor,
-    const TensorAccessorTypeB& ternary_b_accessor,
+    const TernaryAAccessor& ternary_a_accessor,
+    const TernaryBAccessor& ternary_b_accessor,
     const TensorShape2D& shape,
     DataflowBuffer& dfb_ternary_a,
     DataflowBuffer& dfb_ternary_b,
