@@ -12,7 +12,7 @@ public:
     void TestCompileKernelFailure(
         const std::string& kernel_path,
         const std::string& expected_error_message,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         try {
             CompileKernel(kernel_path, runtime_args);
         } catch (std::runtime_error& e) {

@@ -15,6 +15,7 @@
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -40,13 +41,14 @@ const experimental::KernelSpecName WRITER{"writer"};
 const experimental::KernelSpecName COMPUTE{"compute"};
 
 struct BmmParams {
-    uint32_t Mt, Kt, Nt;
-    uint32_t B_total;       // total batch count (buffer sizing + validation)
-    uint32_t B_per_core;    // batch count per core (kernel runtime args)
-    uint32_t num_threads = 2;
-    uint32_t num_input_tiles = 4;
-    uint32_t num_output_tiles = 4;
-    uint32_t single_tile_size = 2 * 1024;
+    std::uint32_t Mt, Kt, Nt;
+    std::uint32_t B_total;     // total batch count (buffer sizing + validation)
+    std::uint32_t B_per_core;  // batch count per core (kernel runtime args)
+    std::uint32_t num_threads = 2;
+    std::uint32_t num_input_tiles = 4;
+    std::uint32_t num_output_tiles = 4;
+    std::uint32_t single_tile_size = 2 * 1024;
+    std::uint32_t transpose = 0;
 };
 
 struct BmmTensors {
@@ -58,8 +60,8 @@ struct BmmTensors {
 // Flat 2D UINT32 page layout: one DRAM page per tile, tile_size bytes each. The element type
 // is UINT32 only so DRAM exposes raw tile-paged storage at the buffer level; the kernels still
 // operate on bfloat16 tiles via TensorAccessor / matmul LLKs.
-TensorSpec make_flat_dram_tensor_spec(uint32_t tile_size, uint32_t num_tiles) {
-    const uint32_t tile_size_words = tile_size / sizeof(uint32_t);
+TensorSpec make_flat_dram_tensor_spec(std::uint32_t tile_size, std::uint32_t num_tiles) {
+    const std::uint32_t tile_size_words = tile_size / sizeof(std::uint32_t);
     auto page_config = PageConfig(Layout::ROW_MAJOR);
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto tensor_layout = TensorLayout(DataType::UINT32, page_config, memory_config);
@@ -67,9 +69,9 @@ TensorSpec make_flat_dram_tensor_spec(uint32_t tile_size, uint32_t num_tiles) {
 }
 
 BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmParams& p) {
-    const uint32_t num_tiles_A = p.Mt * p.Kt * p.B_total;
-    const uint32_t num_tiles_B = p.Kt * p.Nt * p.B_total;
-    const uint32_t num_tiles_C = p.Mt * p.Nt * p.B_total;
+    const std::uint32_t num_tiles_A = p.Mt * p.Kt * p.B_total;
+    const std::uint32_t num_tiles_B = p.Kt * p.Nt * p.B_total;
+    const std::uint32_t num_tiles_C = p.Mt * p.Nt * p.B_total;
     return {
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_A)),
         MeshTensor::allocate_on_device(mesh_device, make_flat_dram_tensor_spec(p.single_tile_size, num_tiles_B)),
@@ -80,8 +82,8 @@ BmmTensors create_bmm_tensors(distributed::MeshDevice& mesh_device, const BmmPar
 template <typename TargetNodes>
 experimental::ProgramSpec build_bmm_program_spec(
     const BmmParams& p, const BmmTensors& tensors, const TargetNodes& target_nodes, bool use_implicit_sync) {
-    // Both kernels expose Gen1 + Gen2 data movement configs so the same spec runs on WH/BH and
-    // Quasar; the runtime picks the right one per arch. The kernel sources use the unified
+    // Data movement configs are chosen per arch so the same spec runs on WH/BH and
+    // Quasar. The kernel sources use the unified
     // DataflowBuffer device API on both arches (CB-backed on Gen1, DFB-backed on Gen2).
     // On Quasar we also enable implicit sync on each DFB so the reader/writer kernels can drop
     // explicit reserve_back/wait_front/push_back/pop_front; on WH/BH implicit sync is unsupported
@@ -91,15 +93,35 @@ experimental::ProgramSpec build_bmm_program_spec(
     experimental::DataMovementHardwareConfig writer_config;
     experimental::ComputeHardwareConfig compute_config;
     if (is_quasar) {
-        reader_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        writer_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        compute_config = experimental::ComputeGen2Config{};
+        reader_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = !use_implicit_sync,
+                },
+        };
+        writer_config = experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = !use_implicit_sync,
+                },
+        };
+        compute_config = experimental::ComputeHardwareConfig{};
     } else {
-        reader_config = experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
-        writer_config = experimental::DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        compute_config = experimental::ComputeGen1Config{};
+        reader_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                },
+        };
+        writer_config = experimental::DataMovementHardwareConfig{
+            .config_1xx =
+                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                },
+        };
+        compute_config = experimental::ComputeHardwareConfig{};
     }
 
     experimental::DataflowBufferSpec src0_dfb_spec{
@@ -155,7 +177,8 @@ experimental::ProgramSpec build_bmm_program_spec(
             {experimental::ConsumerOf(SRC0_DFB, "src0"),
              experimental::AllConsumerOf(SRC1_DFB, "src1"),
              experimental::ProducerOf(DST_DFB, "dst")},
-        .compile_time_args = {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}},
+        .compile_time_args =
+            {{"batch", p.B_per_core}, {"Mt", p.Mt}, {"Kt", p.Kt}, {"Nt", p.Nt}, {"transpose", p.transpose}},
         .hw_config = compute_config,
     };
 
@@ -173,9 +196,9 @@ experimental::ProgramSpec build_bmm_program_spec(
 
 bool validate_bmm_result(
     const BmmParams& p,
-    const std::vector<uint32_t>& src0_vec,
-    const std::vector<uint32_t>& src1_vec,
-    const std::vector<uint32_t>& result_vec,
+    const std::vector<std::uint32_t>& src0_vec,
+    const std::vector<std::uint32_t>& src1_vec,
+    const std::vector<std::uint32_t>& result_vec,
     int* argfail) {
     auto comparison_function = [](float a, float b) {
         const float rtol = 0.05f;
@@ -184,49 +207,35 @@ bool validate_bmm_result(
         float absdiff = fabsf(a - b);
         return (absdiff <= atol) || absdiff < rtol * maxabs;
     };
-    vector<uint32_t> shapeA = {1, p.B_total, p.Mt * 32, p.Kt * 32};
-    vector<uint32_t> shapeB = {1, p.B_total, p.Kt * 32, p.Nt * 32};
-    vector<uint32_t> shapeC = {1, p.B_total, p.Mt * 32, p.Nt * 32};
+    vector<std::uint32_t> shapeA = {1, p.B_total, p.Mt * 32, p.Kt * 32};
+    vector<std::uint32_t> shapeB = {1, p.B_total, p.Kt * 32, p.Nt * 32};
+    vector<std::uint32_t> shapeC = {1, p.B_total, p.Mt * 32, p.Nt * 32};
     auto u16_src0 = u16_from_u32_vector(src0_vec);
     auto u16_src1 = u16_from_u32_vector(src1_vec);
-    auto src0_linear =
-        convert_layout<uint16_t>(u16_src0, shapeA, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
-    auto src1_linear =
-        convert_layout<uint16_t>(u16_src1, shapeB, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+    auto src0_linear = convert_layout<std::uint16_t>(
+        u16_src0, shapeA, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
+
+    const bool transpose_tiles = (p.transpose != 0);
+
+    auto src1_linear = convert_layout<std::uint16_t>(
+        u16_src1,
+        shapeB,
+        TensorLayoutType::TILED_NFACES,
+        TensorLayoutType::LIN_ROW_MAJOR,
+        std::nullopt,
+        std::nullopt,
+        transpose_tiles,
+        transpose_tiles);
+
     auto ref_bmm = gold_bmm(shapeA, src0_linear, shapeB, src1_linear);
-    auto gold = u32_from_u16_vector(
-        convert_layout<uint16_t>(ref_bmm, shapeC, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
+    auto gold = u32_from_u16_vector(convert_layout<std::uint16_t>(
+        ref_bmm, shapeC, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES));
     return packed_uint32_t_vector_comparison(result_vec, gold, comparison_function, argfail);
 }
 
-}  // namespace
-
-TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
-    auto& mesh_device = *devices_[0];
-
-    BmmParams p;
-    if (mesh_device.arch() != ARCH::QUASAR) {
-        p.Mt = 4; p.Kt = 2; p.Nt = 3;
-        p.B_total = 2; p.B_per_core = 2;
-        p.num_input_tiles = 2; p.num_output_tiles = 2;
-        p.num_threads = 1;
-    } else {
-        p.Mt = 2; p.Kt = 2; p.Nt = 2;
-        p.B_total = 1; p.B_per_core = 1;
-        p.num_threads = 2;
-    }
-
-    auto tensors = create_bmm_tensors(mesh_device, p);
-    const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
-    const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
-
-    const experimental::NodeCoord node{0, 0};
-    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
-    auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
-    auto workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec);
-    Program& program = workload.get_programs().begin()->second;
-
-    constexpr uint32_t do_bcast = 0;
+void set_bmm_run_args(
+    Program& program, const BmmParams& p, const BmmTensors& tensors, const experimental::NodeCoord& node) {
+    constexpr std::uint32_t do_bcast = 0;
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
@@ -254,22 +263,95 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
         {DST_T, experimental::TensorArgument{tensors.dst}},
     };
     experimental::SetProgramRunArgs(program, params);
+}
 
-    auto& cq = mesh_device.mesh_command_queue();
-    auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
-    auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
-    auto src0_host = HostTensor::from_vector(src0_vec, tensors.src0.tensor_spec());
-    auto src1_host = HostTensor::from_vector(src1_vec, tensors.src1.tensor_spec());
-    cq.enqueue_write_tensor(src0_host, tensors.src0);
-    cq.enqueue_write_tensor(src1_host, tensors.src1);
+struct BmmInputs {
+    std::vector<std::uint32_t> src0;
+    std::vector<std::uint32_t> src1;
+};
 
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+BmmInputs make_bmm_inputs(const BmmParams& p) {
+    const std::uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
+    const std::uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
+    return BmmInputs{
+        .src0 = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234),
+        .src1 = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f),
+    };
+}
 
-    auto result_vec = cq.enqueue_read_tensor(tensors.dst).to_vector<uint32_t>();
+BmmParams single_node_bmm_params(ARCH arch) {
+    BmmParams p;
+    if (arch != ARCH::QUASAR) {
+        p.Mt = 4;
+        p.Kt = 2;
+        p.Nt = 3;
+        p.B_total = 2;
+        p.B_per_core = 2;
+        p.num_input_tiles = 2;
+        p.num_output_tiles = 2;
+        p.num_threads = 1;
+    } else {
+        p.Mt = 2;
+        p.Kt = 2;
+        p.Nt = 2;
+        p.B_total = 1;
+        p.B_per_core = 1;
+        p.num_threads = 2;
+    }
+    return p;
+}
+
+void check_bmm_output(
+    distributed::MeshCommandQueue& cq, const BmmParams& p, const BmmTensors& tensors, const BmmInputs& inputs) {
+    auto result_vec = cq.enqueue_read_tensor(tensors.dst).to_vector<std::uint32_t>();
 
     int argfail = -1;
-    bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
+    bool pass = validate_bmm_result(p, inputs.src0, inputs.src1, result_vec, &argfail);
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+struct BmmSingleNode {
+    distributed::MeshWorkload workload;
+    BmmInputs inputs;
+};
+
+// Builds the single-node bmm workload and writes its inputs. The workload binds `tensors` by
+// reference, so the caller keeps them alive.
+BmmSingleNode setup_bmm_single_node(distributed::MeshDevice& mesh_device, const BmmParams& p, BmmTensors& tensors) {
+    const experimental::NodeCoord node{0, 0};
+    const bool use_implicit_sync = (mesh_device.arch() == ARCH::QUASAR);
+    auto spec = build_bmm_program_spec(p, tensors, node, use_implicit_sync);
+    BmmSingleNode bmm{
+        .workload = experimental::MakeMeshWorkloadFromSpec(mesh_device, spec),
+        .inputs = make_bmm_inputs(p),
+    };
+    set_bmm_run_args(bmm.workload.get_programs().begin()->second, p, tensors, node);
+
+    auto& cq = mesh_device.mesh_command_queue();
+    cq.enqueue_write_tensor(HostTensor::from_vector(bmm.inputs.src0, tensors.src0.tensor_spec()), tensors.src0);
+    cq.enqueue_write_tensor(HostTensor::from_vector(bmm.inputs.src1, tensors.src1.tensor_spec()), tensors.src1);
+    return bmm;
+}
+
+void run_bmm_single_node(distributed::MeshDevice& mesh_device, const BmmParams& p) {
+    BmmTensors tensors = create_bmm_tensors(mesh_device, p);
+    BmmSingleNode bmm = setup_bmm_single_node(mesh_device, p, tensors);
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, bmm.workload, /*blocking=*/true);
+    check_bmm_output(cq, p, tensors, bmm.inputs);
+}
+}  // namespace
+
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
+    auto& mesh_device = *devices_[0];
+    run_bmm_single_node(mesh_device, single_node_bmm_params(mesh_device.arch()));
+}
+
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BmmTranspose) {
+    auto& mesh_device = *devices_[0];
+    BmmParams p = single_node_bmm_params(mesh_device.arch());
+    p.transpose = 1;
+    run_bmm_single_node(mesh_device, p);
 }
 
 // This needs to be a separate test because we don't have a way of querying the correct compute grid size
@@ -281,14 +363,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     }
 
     BmmParams p;
-    p.Mt = 2; p.Kt = 2; p.Nt = 2;
-    p.B_total = 2;      // total batches across both cores
-    p.B_per_core = 1;   // each core computes exactly one batch
+    p.Mt = 2;
+    p.Kt = 2;
+    p.Nt = 2;
+    p.B_total = 2;     // total batches across both cores
+    p.B_per_core = 1;  // each core computes exactly one batch
     p.num_threads = 2;
 
     auto tensors = create_bmm_tensors(mesh_device, p);
-    const uint32_t bytesA = p.single_tile_size * p.Mt * p.Kt * p.B_total;
-    const uint32_t bytesB = p.single_tile_size * p.Kt * p.Nt * p.B_total;
 
     const experimental::NodeCoord node0{0, 0};
     const experimental::NodeCoord node1{1, 0};
@@ -298,7 +380,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     auto spec = build_bmm_program_spec(p, tensors, node_range, /*use_implicit_sync=*/true);
     auto program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    constexpr uint32_t do_bcast = 0;
+    constexpr std::uint32_t do_bcast = 0;
     // node0 handles batch 0, node1 handles batch 1 (batch_start = node index)
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -328,18 +410,44 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, BmmMultinode) {
     };
     experimental::SetProgramRunArgs(program, params);
 
-    auto src0_vec = create_random_vector_of_bfloat16(bytesA, 1.0f, 0x1234);
-    auto src1_vec = create_random_vector_of_bfloat16(bytesB, 1.0f, 0x1234, -0.45f);
+    const BmmInputs inputs = make_bmm_inputs(p);
     // MeshTensor doesn't yet expose slow-dispatch read/write APIs; use unit-mesh MeshBuffer helpers.
-    slow_dispatch::WriteToBuffer(tensors.src0.mesh_buffer(), src0_vec);
-    slow_dispatch::WriteToBuffer(tensors.src1.mesh_buffer(), src1_vec);
+    slow_dispatch::WriteToBuffer(tensors.src0.mesh_buffer(), inputs.src0);
+    slow_dispatch::WriteToBuffer(tensors.src1.mesh_buffer(), inputs.src1);
 
     LaunchProgram(mesh_device, std::move(program));
 
-    std::vector<uint32_t> result_vec;
+    std::vector<std::uint32_t> result_vec;
     slow_dispatch::ReadFromBuffer(tensors.dst.mesh_buffer(), result_vec);
 
     int argfail = -1;
-    bool pass = validate_bmm_result(p, src0_vec, src1_vec, result_vec, &argfail);
+    bool pass = validate_bmm_result(p, inputs.src0, inputs.src1, result_vec, &argfail);
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, TraceBmm) {
+    if (this->IsSlowDispatch()) {
+        GTEST_SKIP();
+    }
+    auto& mesh_device = *devices_[0];
+    const BmmParams p = single_node_bmm_params(mesh_device.arch());
+    BmmTensors tensors = create_bmm_tensors(mesh_device, p);
+    BmmSingleNode bmm = setup_bmm_single_node(mesh_device, p, tensors);
+    auto& cq = mesh_device.mesh_command_queue();
+
+    // Warm up
+    distributed::EnqueueMeshWorkload(cq, bmm.workload, /*blocking=*/true);
+    check_bmm_output(cq, p, tensors, bmm.inputs);
+
+    const std::vector<std::uint32_t> zeros(p.single_tile_size * p.Mt * p.Nt * p.B_total / sizeof(std::uint32_t), 0);
+    cq.enqueue_write_tensor(HostTensor::from_vector(zeros, tensors.dst.tensor_spec()), tensors.dst);
+
+    distributed::MeshTraceId trace_id = mesh_device.begin_mesh_trace(cq);
+    distributed::EnqueueMeshWorkload(cq, bmm.workload, /*blocking=*/false);
+    mesh_device.end_mesh_trace(cq, trace_id);
+
+    mesh_device.replay_mesh_trace(cq, trace_id, /*blocking=*/true);
+    check_bmm_output(cq, p, tensors, bmm.inputs);
+
+    mesh_device.release_mesh_trace(trace_id);
 }

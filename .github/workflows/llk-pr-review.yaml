@@ -27,9 +27,9 @@ on:
       effort:
         description: "Reasoning effort for the review session (--effort)"
         required: false
-        default: "max"
+        default: "xhigh"
         type: choice
-        options: [low, medium, high, max]
+        options: [low, medium, high, xhigh, max]
       debug_output:
         description: "Print full Claude output (may expose private review context in Actions logs)"
         required: false
@@ -90,28 +90,25 @@ jobs:
           fi
 
           base_tip_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
-          head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-          if [[ ! "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]] || [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::GitHub returned an invalid PR base or head SHA"
+          if [[ ! "$base_tip_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::GitHub returned an invalid PR base SHA"
             exit 1
           fi
 
+          # The fetched PR head is the reviewed revision for the whole run. A
+          # push after this point is expected; the review stays pinned to this
+          # commit and says so when it posts.
           git fetch --no-tags --depth=200 origin "$base_tip_sha"
           git fetch --no-tags --depth=200 origin "pull/${PR_NUMBER}/head"
-          fetched_head="$(git rev-parse FETCH_HEAD)"
-          if [ "$fetched_head" != "$head_sha" ]; then
-            echo "::error::PR head moved while the review was starting; dispatch a fresh review"
+          head_sha="$(git rev-parse FETCH_HEAD)"
+          if [[ ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Could not resolve the fetched PR head"
             exit 1
           fi
 
           if ! comparison_base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"; then
             git fetch --no-tags --depth=2000 origin "$base_tip_sha"
-            git fetch --no-tags --depth=2000 origin "pull/${PR_NUMBER}/head"
-            fetched_head="$(git rev-parse FETCH_HEAD)"
-            if [ "$fetched_head" != "$head_sha" ]; then
-              echo "::error::PR head moved while resolving its merge-base; dispatch a fresh review"
-              exit 1
-            fi
+            git fetch --no-tags --depth=2000 origin "$head_sha"
             comparison_base_sha="$(git merge-base "$base_tip_sha" "$head_sha")"
           fi
           if [[ ! "$comparison_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -185,10 +182,15 @@ jobs:
             echo "Read baseline code only from the exact PR merge-base worktree:"
             echo "  $LLK_PR_BASE_DIR (merge-base commit $LLK_PR_BASE_SHA)"
             echo "The current PR base-branch tip is commit $LLK_PR_BASE_TIP_SHA."
-            echo "The intake agent may inspect the complete PR diff once to build whole-PR"
-            echo "context. Downstream reviewers and validators must use exact-SHA, path-scoped"
-            echo "git diffs. Never infer PR code from the workflow checkout root or another"
-            echo "local branch."
+            echo "The intake agent may inspect the complete exact-SHA diff once to build"
+            echo "whole-PR context. Downstream reviewers and validators must use exact-SHA,"
+            echo "path-scoped git diffs. Never infer PR code from the workflow checkout root or"
+            echo "another local branch."
+            echo
+            echo "Commit $LLK_PR_HEAD_SHA is the reviewed revision for the whole run. New"
+            echo "commits pushed to the PR while the review runs are expected and are not an"
+            echo "error: keep reviewing the pinned revision and post as the review command's"
+            echo "moved-head rules describe. Never review or fetch the newer head."
             echo
             echo "Task subagents do not inherit this system prompt or the parent's context."
             echo "For every delegated review or validation task, explicitly name the exact"
@@ -217,8 +219,8 @@ jobs:
             echo "relevant changed line or contiguous right-side range, with file/line fallback."
             echo
             echo "Keep all worktrees read-only. Never use Write/Edit or temporary files. Use"
-            echo "Bash only for one direct gh api command, the intake agent's one complete"
-            echo "gh pr diff call, or an allowlisted read-only"
+            echo "Bash only for one direct gh api command, the intake agent's one gh pr view"
+            echo "metadata call, or an allowlisted read-only"
             echo "git diff/show/log/rev-parse command per call, with no pipes, redirects, shell"
             echo "composition, substitution, or inline environment assignment. Never run"
             echo "find / or read Claude execution/tool-result files. Repeat these constraints"
@@ -264,8 +266,8 @@ jobs:
           # sets the session reasoning effort (the review command itself takes
           # no effort argument). gh is used for both PR inspection and posting.
           claude_args: |
-            --effort ${{ inputs.effort || 'max' }}
-            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr diff:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
+            --effort ${{ inputs.effort || 'xhigh' }}
+            --allowedTools "Agent,Task,Read,Grep,Glob,Skill,Bash(gh api:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git show:*),Bash(git log:*),Bash(git rev-parse:*),mcp__deepwiki__*,mcp__atlassian__*,mcp__glean_default__*"
             --max-turns 150
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
@@ -303,8 +305,6 @@ jobs:
                     "inline-environment-assignment"
                   elif ($command | test("^[[:space:]]*gh[[:space:]]+api([[:space:]]|$)")) then
                     "allowlisted-gh-api"
-                  elif ($command | test("^[[:space:]]*gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)")) then
-                    "allowlisted-intake-pr-diff"
                   elif ($command | test("^[[:space:]]*git[[:space:]]+(diff|show|log|rev-parse)([[:space:]]|$)")) then
                     "allowlisted-read-only-git"
                   elif ($command | test("^[[:space:]]*find([[:space:]]|$)")) then
@@ -356,6 +356,11 @@ jobs:
       # Re-read GitHub instead of trusting process success. A session that exits
       # cleanly without executing its posting contract is a failed review; never
       # mask that failure by manufacturing a workflow-level "No issues found".
+      # Match only this reviewer's comments by their signature footer (the marker
+      # plus the footer line as the body suffix), not any github-actions[bot]
+      # comment: several bots share that login, and one could even quote the marker
+      # mid-body, so a login-or-substring check could mistake another bot's comment
+      # for this review's output.
       - name: Verify review output was posted
         if: steps.llk_code_review.outcome == 'success'
         env:
@@ -364,20 +369,19 @@ jobs:
           set -euo pipefail
           current_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
           if [ "$current_head" != "$LLK_PR_HEAD_SHA" ]; then
-            echo "::error::PR head changed during review; discard this result and dispatch a fresh review"
-            exit 1
+            echo "::warning::PR head moved from ${LLK_PR_HEAD_SHA:0:12} to ${current_head:0:12} during review; comments are anchored to the reviewed commit"
           fi
 
           for attempt in 1 2 3; do
             inline_count="$(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+                --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- llk-pr-reviewer -->")) and ((.body // "") | gsub("\\s+$"; "") | endswith("_Posted by the **LLK PR Reviewer**._")))] | length'
             )"
             issue_count="$(
               gh api \
                 "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?since=${LLK_REVIEW_STARTED_AT}&per_page=100" \
-                --jq '[.[] | select(.user.login == "github-actions[bot]")] | length'
+                --jq '[.[] | select(.user.login == "github-actions[bot]" and ((.body // "") | contains("<!-- llk-pr-reviewer -->")) and ((.body // "") | gsub("\\s+$"; "") | endswith("_Posted by the **LLK PR Reviewer**._")))] | length'
             )"
             if (( inline_count + issue_count > 0 )); then
               echo "LLK review posted ${inline_count} inline and ${issue_count} issue-level comment(s)"

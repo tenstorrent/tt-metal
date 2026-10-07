@@ -10,7 +10,6 @@ from dataclasses import dataclass
 
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
@@ -22,6 +21,12 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
     assert_equal,
+)
+
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+    qkv_to_device,
+    qkv_device_inputs,
+    qkv_reference,
 )
 
 pytestmark = [
@@ -43,19 +48,10 @@ class _BenchmarkCase:
 
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Recalibrated 2026-08-19 on Blackhole P150b device 0, firmware 19.5.0.0. The
-# previous references (92_606, 50_123, 55_324) were calibrated before the
-# hoisted unpack/init optimization, which made every shape 3.7-4.6% faster with
-# bit-identical outputs. Against a symmetric band that left each case only
-# 335-672 ns above its lower bound, so a further improvement would have failed
-# the gate for being too fast. Seven real-time-profiler samples of the current
-# implementation produced 88358-88443 ns, 47952-48257 ns, and 53230-53373 ns;
-# the inline references are their medians. The 5% symmetric margin now leaves
-# 2.2-4.4 us on both sides, against an observed spread of 85-305 ns.
 _PRODUCTION_CASES = (
-    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=88_383),
-    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=48_090),
-    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=53_270),
+    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=83_401),
+    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=46_345),
+    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=50_579),
 )
 
 
@@ -126,76 +122,12 @@ def test_qkv_causal_conv1d_silu_work_golden() -> None:
     assert sfpu == perf_model.SfpuOps(silu_ops=8)
 
 
-def _host_inputs(
-    *,
-    sequence: int = _SEQUENCE,
-    widths: tuple[int, int, int] = _DEFAULT_WIDTHS,
-    batch: int = 1,
-    history_rows: int = 3,
-    seed: int = 223,
-) -> tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
-    generator = torch.Generator().manual_seed(seed)
-    channels = sum(widths)
-    inputs = torch.randn(batch, sequence, channels, generator=generator, dtype=torch.bfloat16)
-    history = torch.randn(batch, history_rows, channels, generator=generator, dtype=torch.bfloat16)
-    taps = tuple(torch.randn(1, 1, channels, generator=generator, dtype=torch.bfloat16) for _ in range(4))
-    return inputs, history, taps
-
-
-def _to_device(
-    tensor: torch.Tensor,
-    device: ttnn.Device,
-    *,
-    dtype: ttnn.DataType = ttnn.bfloat16,
-    layout: ttnn.Layout,
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    return ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
-
-
-def _device_inputs(
-    device: ttnn.Device,
-    *,
-    sequence: int = _SEQUENCE,
-    widths: tuple[int, int, int] = _DEFAULT_WIDTHS,
-    batch: int = 1,
-    history_rows: int = 3,
-    seed: int = 223,
-) -> tuple[
-    tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]],
-    tuple[ttnn.Tensor, ttnn.Tensor, tuple[ttnn.Tensor, ...]],
-]:
-    host = _host_inputs(
-        sequence=sequence,
-        widths=widths,
-        batch=batch,
-        history_rows=history_rows,
-        seed=seed,
-    )
-    inputs, history, taps = host
-    return host, (
-        _to_device(inputs, device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        _to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT),
-        tuple(_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps),
-    )
-
-
-def _reference(
-    inputs: torch.Tensor,
-    history: torch.Tensor,
-    taps: tuple[torch.Tensor, ...],
-    widths: tuple[int, int, int],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    window = torch.cat((history, inputs), dim=1)
-    convolved = sum(window[:, tap : tap + inputs.shape[1]] * taps[tap] for tap in range(4))
-    return F.silu(convolved).split(widths, dim=-1)
-
-
 def _run(
     input_tt: ttnn.Tensor,
     history_tt: ttnn.Tensor,
     taps_tt: tuple[ttnn.Tensor, ...],
     *,
+    actual_start: ttnn.Tensor,
     channel_chunk_size: int,
     widths: tuple[int, int, int] = _DEFAULT_WIDTHS,
     memory_config: ttnn.MemoryConfig | None = None,
@@ -206,6 +138,8 @@ def _run(
         history_tt,
         *taps_tt,
         *widths,
+        actual_start=actual_start,
+        predecessor_carry=history_tt,
         program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
@@ -221,22 +155,30 @@ def _run(
     ],
 )
 def test_qkv_causal_conv1d_silu_contract(
+    zero_actual_start,
     device: ttnn.Device,
     widths: tuple[int, int, int],
     channel_chunk_size: int,
     full_contract: bool,
 ) -> None:
     """Cover every geometry numerically and the invariant output/trace contract once."""
-    host, device_inputs = _device_inputs(device, widths=widths)
+    host, device_inputs = qkv_device_inputs(device, widths=widths)
     inputs, history, taps = host
     input_tt, history_tt, taps_tt = device_inputs
-    expected = _reference(inputs, history, taps, widths)
+    expected = qkv_reference(inputs, history, taps, widths)
     input_tensors = (input_tt, history_tt, *taps_tt)
     snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in input_tensors) if full_contract else ()
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
-            return _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=channel_chunk_size)
+            return _run(
+                input_tt,
+                history_tt,
+                taps_tt,
+                widths=widths,
+                channel_chunk_size=channel_chunk_size,
+                actual_start=zero_actual_start,
+            )
 
     outputs = run()
     for output, width in zip(outputs, widths, strict=True):
@@ -268,11 +210,46 @@ def test_qkv_causal_conv1d_silu_contract(
         ttnn.release_trace(device, trace_id)
 
 
+@pytest.mark.parametrize(
+    ("sequence", "channel_chunk_size"),
+    [
+        # 4 channel blocks x 65 row tiles = 260 work items: cores own several items, and on 110-140 core grids
+        # some own items on both sides of a channel-block boundary.
+        pytest.param(2080, 768, id="items-cross-blocks"),
+        # 6- and 3-tile channel blocks: compute groups two tiles and one tile per destination acquire.
+        pytest.param(64, 192, id="two-tile-groups"),
+        pytest.param(64, 96, id="one-tile-groups"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_work_distribution(
+    zero_actual_start, device: ttnn.Device, sequence: int, channel_chunk_size: int
+) -> None:
+    """Weight reuse across a core's work items and every destination grouping match the reference."""
+    widths = (1024, 1024, 1024)
+    host, device_inputs = qkv_device_inputs(device, sequence=sequence, widths=widths)
+    inputs, history, taps = host
+    input_tt, history_tt, taps_tt = device_inputs
+    outputs = _run(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        actual_start=zero_actual_start,
+    )
+    for name, golden, output in zip(
+        ("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs, strict=True
+    ):
+        assert_accurate(golden, ttnn.to_torch(output), name=name, pcc_threshold=0.999)
+
+
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
-def test_qkv_causal_conv1d_silu_is_device_deterministic(device: ttnn.Device, case: _BenchmarkCase) -> None:
+def test_qkv_causal_conv1d_silu_is_device_deterministic(
+    zero_actual_start, device: ttnn.Device, case: _BenchmarkCase
+) -> None:
     """Compare repeated large outputs on device; cache behavior is tested separately."""
-    host, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=case.widths)
-    expected = _reference(*host, case.widths)
+    host, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=case.widths)
+    expected = qkv_reference(*host, case.widths)
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -282,6 +259,7 @@ def test_qkv_causal_conv1d_silu_is_device_deterministic(device: ttnn.Device, cas
                 taps_tt,
                 widths=case.widths,
                 channel_chunk_size=case.channel_chunk_size,
+                actual_start=zero_actual_start,
             )
 
     output_tensors, outputs, mismatch_marker = collect_accuracy_and_determinism_results(device, run)
@@ -297,16 +275,16 @@ def test_qkv_causal_conv1d_silu_is_device_deterministic(device: ttnn.Device, cas
 
 
 def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     widths = (128, 128, 128)
-    host_a, device_inputs_a = _device_inputs(device, widths=widths, sequence=32, seed=1911)
-    host_b, device_inputs_b = _device_inputs(device, widths=widths, sequence=32, seed=1912)
+    host_a, device_inputs_a = qkv_device_inputs(device, widths=widths, sequence=32, seed=1911)
+    host_b, device_inputs_b = qkv_device_inputs(device, widths=widths, sequence=32, seed=1912)
 
-    output_a = _run(*device_inputs_a, widths=widths, channel_chunk_size=384)
+    output_a = _run(*device_inputs_a, widths=widths, channel_chunk_size=384, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
     entries = device.num_program_cache_entries()
-    output_b = _run(*device_inputs_b, widths=widths, channel_chunk_size=384)
+    output_b = _run(*device_inputs_b, widths=widths, channel_chunk_size=384, actual_start=zero_actual_start)
     ttnn.synchronize_device(device)
 
     flat_inputs_a = (device_inputs_a[0], device_inputs_a[1], *device_inputs_a[2])
@@ -321,8 +299,8 @@ def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(
         for tensor_a, tensor_b in zip(output_a, output_b, strict=True)
     )
 
-    expected_a = _reference(*host_a, widths)
-    expected_b = _reference(*host_b, widths)
+    expected_a = qkv_reference(*host_a, widths)
+    expected_b = qkv_reference(*host_b, widths)
     for name, golden_a, golden_b, actual_a_tt, actual_b_tt in zip(
         ("q", "k", "v"), expected_a, expected_b, output_a, output_b, strict=True
     ):
@@ -334,10 +312,12 @@ def test_qkv_causal_conv1d_silu_cache_hit_rebinds_fresh_tensors(
 
 
 def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=817)
-    implicit = _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, sequence=32, widths=(128, 128, 128), seed=817)
+    implicit = _run(
+        input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384, actual_start=zero_actual_start
+    )
     entries = device.num_program_cache_entries()
     explicit_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -355,6 +335,7 @@ def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults
         widths=(128, 128, 128),
         channel_chunk_size=384,
         compute_kernel_config=explicit_config,
+        actual_start=zero_actual_start,
     )
     assert device.num_program_cache_entries() == entries
     for name, implicit_output, explicit_output in zip(("q", "k", "v"), implicit, explicit, strict=True):
@@ -365,8 +346,10 @@ def test_qkv_causal_conv1d_silu_default_compute_config_matches_explicit_defaults
         )
 
 
-def test_qkv_causal_conv1d_silu_rejects_approximate_math(device: ttnn.Device, expect_error: Callable) -> None:
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128), seed=818)
+def test_qkv_causal_conv1d_silu_rejects_approximate_math(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, sequence=32, widths=(128, 128, 128), seed=818)
     approximate_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -384,11 +367,14 @@ def test_qkv_causal_conv1d_silu_rejects_approximate_math(device: ttnn.Device, ex
             widths=(128, 128, 128),
             channel_chunk_size=384,
             compute_kernel_config=approximate_config,
+            actual_start=zero_actual_start,
         )
 
 
-def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(device: ttnn.Device, expect_error: Callable) -> None:
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, sequence=32, widths=(128, 128, 128))
+def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, sequence=32, widths=(128, 128, 128))
     unsupported_config = ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         packer_l1_acc=True,
@@ -401,6 +387,7 @@ def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(device: ttnn.
             widths=(128, 128, 128),
             channel_chunk_size=384,
             compute_kernel_config=unsupported_config,
+            actual_start=zero_actual_start,
         )
 
 
@@ -408,11 +395,13 @@ def test_qkv_causal_conv1d_silu_rejects_unsupported_compute_config(device: ttnn.
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case: _BenchmarkCase) -> None:
+def test_qkv_causal_conv1d_silu_production_performance(
+    zero_actual_start, device: ttnn.Device, case: _BenchmarkCase
+) -> None:
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for QKV causal Conv1D plus SiLU performance checks")
 
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=case.widths)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=case.widths)
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         return _run(
@@ -421,6 +410,7 @@ def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case
             taps_tt,
             widths=case.widths,
             channel_chunk_size=case.channel_chunk_size,
+            actual_start=zero_actual_start,
         )
 
     outputs, perf_record = profile_realtime_program(device, run)
@@ -452,27 +442,27 @@ def test_qkv_causal_conv1d_silu_production_performance(device: ttnn.Device, case
 
 
 def test_qkv_causal_conv1d_silu_program_key_includes_split_widths(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=(128, 128, 128), sequence=32, seed=772)
-    _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=(128, 128, 128), sequence=32, seed=772)
+    _run(input_tt, history_tt, taps_tt, widths=(128, 128, 128), channel_chunk_size=384, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
-    _run(input_tt, history_tt, taps_tt, widths=(64, 128, 192), channel_chunk_size=384)
+    _run(input_tt, history_tt, taps_tt, widths=(64, 128, 192), channel_chunk_size=384, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
-    _run(input_tt, history_tt, taps_tt, widths=(64, 128, 192), channel_chunk_size=384)
+    _run(input_tt, history_tt, taps_tt, widths=(64, 128, 192), channel_chunk_size=384, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
 
 
 def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(
-    device: ttnn.Device, isolated_program_cache: None
+    zero_actual_start, device: ttnn.Device, isolated_program_cache: None
 ) -> None:
     widths = (128, 128, 128)
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=widths, sequence=32, seed=773)
-    _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=384)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=widths, sequence=32, seed=773)
+    _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=384, actual_start=zero_actual_start)
     entries = device.num_program_cache_entries()
-    _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=192)
+    _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=192, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
-    _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=192)
+    _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=192, actual_start=zero_actual_start)
     assert device.num_program_cache_entries() == entries + 1
 
 
@@ -486,10 +476,10 @@ def test_qkv_causal_conv1d_silu_program_key_includes_channel_chunk_size(
     ],
 )
 def test_qkv_causal_conv1d_silu_rejects_invalid_channel_chunk_size(
-    device: ttnn.Device, expect_error: Callable, channel_chunk_size: int, message: str
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, channel_chunk_size: int, message: str
 ) -> None:
     widths = (128, 128, 128)
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=widths, sequence=32)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=widths, sequence=32)
     with expect_error(RuntimeError, message):
         _run(
             input_tt,
@@ -497,6 +487,24 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_channel_chunk_size(
             taps_tt,
             widths=widths,
             channel_chunk_size=channel_chunk_size,
+            actual_start=zero_actual_start,
+        )
+
+
+def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
+    # One 96-tile channel block needs about 2.4 MB of DFBs and window per core.
+    widths = (1024, 1024, 1024)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=widths, sequence=32)
+    with expect_error(RuntimeError, "channel_chunk_size = 3072 needs .* bytes of L1 per core"):
+        _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            widths=widths,
+            channel_chunk_size=3072,
+            actual_start=zero_actual_start,
         )
 
 
@@ -519,12 +527,12 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_channel_chunk_size(
     ],
 )
 def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
-    device: ttnn.Device, expect_error: Callable, case: str, message: str
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, case: str, message: str
 ) -> None:
     batch = 2 if case == "batch" else 1
     history_rows = 2 if case == "history_shape" else 3
     sequence = 33 if case == "sequence_alignment" else 32
-    host, device_inputs = _device_inputs(
+    host, device_inputs = qkv_device_inputs(
         device,
         widths=(128, 128, 128),
         batch=batch,
@@ -539,21 +547,21 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
     if case == "host_input":
         input_tt = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     elif case == "tap_last_dimension":
-        taps_list[2] = _to_device(taps[2].reshape(-1, 1), device, layout=ttnn.TILE_LAYOUT)
+        taps_list[2] = qkv_to_device(taps[2].reshape(-1, 1), device, layout=ttnn.TILE_LAYOUT)
     elif case == "tap_volume":
-        taps_list[2] = _to_device(torch.cat((taps[2], taps[2]), dim=0), device, layout=ttnn.TILE_LAYOUT)
+        taps_list[2] = qkv_to_device(torch.cat((taps[2], taps[2]), dim=0), device, layout=ttnn.TILE_LAYOUT)
     elif case == "input_layout":
-        input_tt = _to_device(inputs, device, layout=ttnn.TILE_LAYOUT)
+        input_tt = qkv_to_device(inputs, device, layout=ttnn.TILE_LAYOUT)
     elif case == "history_layout":
-        history_tt = _to_device(history, device, layout=ttnn.TILE_LAYOUT)
+        history_tt = qkv_to_device(history, device, layout=ttnn.TILE_LAYOUT)
     elif case == "tap_layout":
-        taps_list[1] = _to_device(taps[1], device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        taps_list[1] = qkv_to_device(taps[1], device, layout=ttnn.ROW_MAJOR_LAYOUT)
     elif case == "input_dtype":
-        input_tt = _to_device(inputs.float(), device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        input_tt = qkv_to_device(inputs.float(), device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
     elif case == "history_dtype":
-        history_tt = _to_device(history.float(), device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        history_tt = qkv_to_device(history.float(), device, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
     elif case == "tap_dtype":
-        taps_list[3] = _to_device(taps[3].float(), device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        taps_list[3] = qkv_to_device(taps[3].float(), device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
     elif case == "sharded_history":
         shard_spec = ttnn.ShardSpec(
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
@@ -561,10 +569,17 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
             ttnn.ShardOrientation.ROW_MAJOR,
         )
         sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-        history_tt = _to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=sharded_config)
+        history_tt = qkv_to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=sharded_config)
 
     with expect_error(RuntimeError, message):
-        _run(input_tt, history_tt, tuple(taps_list), widths=(128, 128, 128), channel_chunk_size=384)
+        _run(
+            input_tt,
+            history_tt,
+            tuple(taps_list),
+            widths=(128, 128, 128),
+            channel_chunk_size=384,
+            actual_start=zero_actual_start,
+        )
 
 
 @pytest.mark.parametrize(
@@ -576,15 +591,19 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
     ],
 )
 def test_qkv_causal_conv1d_silu_rejects_invalid_widths(
-    device: ttnn.Device, expect_error: Callable, widths: tuple[int, int, int], message: str
+    zero_actual_start, device: ttnn.Device, expect_error: Callable, widths: tuple[int, int, int], message: str
 ) -> None:
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=(128, 128, 128), sequence=32)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=(128, 128, 128), sequence=32)
     with expect_error(RuntimeError, message):
-        _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=sum(widths))
+        _run(
+            input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=sum(widths), actual_start=zero_actual_start
+        )
 
 
-def test_qkv_causal_conv1d_silu_rejects_sharded_output(device: ttnn.Device, expect_error: Callable) -> None:
-    _, (input_tt, history_tt, taps_tt) = _device_inputs(device, widths=(128, 128, 128), sequence=32)
+def test_qkv_causal_conv1d_silu_rejects_sharded_output(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=(128, 128, 128), sequence=32)
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
         [32, 128],
@@ -599,4 +618,5 @@ def test_qkv_causal_conv1d_silu_rejects_sharded_output(device: ttnn.Device, expe
             widths=(128, 128, 128),
             channel_chunk_size=384,
             memory_config=sharded_config,
+            actual_start=zero_actual_start,
         )

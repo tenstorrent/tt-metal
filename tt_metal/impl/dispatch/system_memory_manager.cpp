@@ -255,8 +255,17 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
             prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
         this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-        this->prefetch_q_windows.emplace_back(
-            ctx.get_cluster().get_static_tlb_window(this->prefetcher_cores[cq_id]));
+        // Both dispatch windows are anchored at 0, so the L1 addresses below are also their offsets.
+        // Each is sized to the span it writes; the driver rounds that up to a window it can provide.
+        const tt::umd::CoreCoord prefetcher_translated =
+            ctx.get_cluster()
+                .get_soc_desc(prefetcher_core.chip)
+                .get_coord_at(this->prefetcher_cores[cq_id], tt::CoordSystem::TRANSLATED);
+        this->prefetch_q_windows.emplace_back(ctx.get_cluster().get_driver()->create_io_window(
+            prefetcher_core.chip,
+            prefetcher_translated,
+            /*addr=*/0,
+            {.size = prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes()}));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(this->device_id, channel, cq_id);
@@ -265,20 +274,18 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
             core_type);
 
-        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = ctx.get_cluster()
-                                                                                 .get_tlb_data(tt_cxy_pair(
-                                                                                     completion_queue_writer_core.chip,
-                                                                                     completion_queue_writer_virtual.x,
-                                                                                     completion_queue_writer_virtual.y))
-                                                                                 .value();
-        auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
-
-        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_windows.emplace_back(
-            ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
-                completion_queue_writer_core.chip,
-                completion_queue_writer_virtual.x,
-                completion_queue_writer_virtual.y)));
+        const tt::umd::CoreCoord completion_queue_writer_translated =
+            ctx.get_cluster()
+                .get_soc_desc(completion_queue_writer_core.chip)
+                .get_coord_at(
+                    tt_xy_pair(completion_queue_writer_virtual.x, completion_queue_writer_virtual.y),
+                    tt::CoordSystem::TRANSLATED);
+        this->completion_q_windows.emplace_back(ctx.get_cluster().get_driver()->create_io_window(
+            completion_queue_writer_core.chip,
+            completion_queue_writer_translated,
+            /*addr=*/0,
+            {.size = completion_q_rd_ptr + sizeof(uint32_t)}));
+        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr;
 
         const uint32_t alignment =
             is_dram_backed() ? ctx.hal().get_alignment(HalMemType::DRAM) : ctx.hal().get_alignment(HalMemType::HOST);

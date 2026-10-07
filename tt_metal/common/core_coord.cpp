@@ -661,15 +661,15 @@ auto fmt::formatter<tt::tt_metal::CoreCoord>::format(const tt::tt_metal::CoreCoo
     return fmt::format_to(ctx.out(), "{}", ss.str());
 }
 
-auto fmt::formatter<CoreRange>::format(const CoreRange& core_range, format_context& ctx) const
-    -> format_context::iterator {
+auto fmt::formatter<tt::tt_metal::CoreRange>::format(
+    const tt::tt_metal::CoreRange& core_range, format_context& ctx) const -> format_context::iterator {
     std::stringstream ss;
     ss << core_range.str();
     return fmt::format_to(ctx.out(), "{}", ss.str());
 }
 
-auto fmt::formatter<CoreRangeSet>::format(const CoreRangeSet& core_range_set, format_context& ctx) const
-    -> format_context::iterator {
+auto fmt::formatter<tt::tt_metal::CoreRangeSet>::format(
+    const tt::tt_metal::CoreRangeSet& core_range_set, format_context& ctx) const -> format_context::iterator {
     std::stringstream ss;
     ss << core_range_set.str();
     return fmt::format_to(ctx.out(), "{}", ss.str());
@@ -681,29 +681,27 @@ using tt::tt_metal::RelativeCoreCoord;
 
 std::size_t hash<RelativeCoreCoord>::operator()(const RelativeCoreCoord& o) const {
     std::size_t seed = 0;
-    seed ^= std::hash<std::size_t>()(o.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>()(o.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    ttsl::hash::hash_combine(seed, o.x);
+    ttsl::hash::hash_combine(seed, o.y);
     return seed;
 }
 
-std::size_t hash<CoreRange>::operator()(const CoreRange& core_range) const {
-    // Hash x and y components individually using boost-style hash combine to avoid
-    // collisions from the weak std::hash<CoreCoord> (x ^ (y << 1)) in UMD.
-    // E.g. CoreCoord(3,0) and CoreCoord(1,1) both hash to 3 with the weak hash.
-    // TODO: Roll back to std::hash<CoreCoord> once we have a strong hash for xy_pair in UMD.
+std::size_t hash<tt::tt_metal::CoreRange>::operator()(const tt::tt_metal::CoreRange& core_range) const {
+    // Hash x/y, not CoreCoord: UMD's std::hash<CoreCoord> is x ^ (y << 1)
     std::size_t seed = 0;
-    seed ^= std::hash<std::size_t>{}(core_range.start_coord.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.start_coord.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.end_coord.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<std::size_t>{}(core_range.end_coord.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    ttsl::hash::hash_combine(seed, core_range.start_coord.x);
+    ttsl::hash::hash_combine(seed, core_range.start_coord.y);
+    ttsl::hash::hash_combine(seed, core_range.end_coord.x);
+    ttsl::hash::hash_combine(seed, core_range.end_coord.y);
     return seed;
 }
 
-std::size_t hash<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) const {
+std::size_t hash<tt::tt_metal::CoreRangeSet>::operator()(const tt::tt_metal::CoreRangeSet& core_range_set) const {
     std::size_t seed = 0;
-    for (const auto& core_range : core_range_set.ranges()) {
-        seed = std::hash<CoreRange>{}(core_range) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    }
+    ttsl::hash::hash_combine(seed, core_range_set.ranges().size());
+    std::for_each(core_range_set.ranges().begin(), core_range_set.ranges().end(), [&](const auto& core_range) {
+        ttsl::hash::hash_combine(seed, core_range);
+    });
     return seed;
 }
 
@@ -729,26 +727,27 @@ tt::tt_metal::RelativeCoreCoord from_json_t<tt::tt_metal::RelativeCoreCoord>::op
     return {from_json<int32_t>(json.at("x")), from_json<int32_t>(json.at("y"))};
 }
 
-nlohmann::json to_json_t<CoreRange>::operator()(const CoreRange& core_range) noexcept {
+nlohmann::json to_json_t<tt::tt_metal::CoreRange>::operator()(const tt::tt_metal::CoreRange& core_range) noexcept {
     return {{"start", to_json(core_range.start_coord)}, {"end", to_json(core_range.end_coord)}};
 }
 
-CoreRange from_json_t<CoreRange>::operator()(const nlohmann::json& json) noexcept {
+tt::tt_metal::CoreRange from_json_t<tt::tt_metal::CoreRange>::operator()(const nlohmann::json& json) noexcept {
     return {from_json<tt::tt_metal::CoreCoord>(json.at("start")), from_json<tt::tt_metal::CoreCoord>(json.at("end"))};
 }
 
-nlohmann::json to_json_t<CoreRangeSet>::operator()(const CoreRangeSet& core_range_set) noexcept {
+nlohmann::json to_json_t<tt::tt_metal::CoreRangeSet>::operator()(
+    const tt::tt_metal::CoreRangeSet& core_range_set) noexcept {
     nlohmann::json core_range_set_json = nlohmann::json::array();
     return to_json(core_range_set.ranges());
 }
 
-CoreRangeSet from_json_t<CoreRangeSet>::operator()(const nlohmann::json& json) noexcept {
-    return CoreRangeSet(from_json<std::vector<CoreRange>>(json));
+tt::tt_metal::CoreRangeSet from_json_t<tt::tt_metal::CoreRangeSet>::operator()(const nlohmann::json& json) noexcept {
+    return tt::tt_metal::CoreRangeSet(from_json<std::vector<tt::tt_metal::CoreRange>>(json));
 }
 
 }  // namespace ttsl::json
 
-std::ostream& operator<<(std::ostream& os, const CoreRangeSet& core_range_set) {
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::CoreRangeSet& core_range_set) {
     ttsl::reflection::operator<<(os, core_range_set);
     return os;
 }

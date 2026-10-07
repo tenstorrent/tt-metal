@@ -9,8 +9,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include "buffer.hpp"
-#include "hal.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 
@@ -28,6 +26,16 @@ void validate_unpack_face_geometry(uint32_t face_r_dim, uint32_t num_faces) {
         face_r_dim,
         tt::constants::FACE_HEIGHT);
     TT_FATAL(num_faces > 0, "num_faces must be > 0");
+}
+
+// Bounds an index by the config's per-index array storage. The architecture's limit depends on the
+// Program's environment and is enforced when the config is added to a Program.
+void validate_buffer_index_capacity(uint32_t buffer_index, size_t capacity) {
+    TT_FATAL(
+        buffer_index < capacity,
+        "Buffer index ({}) exceeds max number of circular buffers per core ({})",
+        buffer_index,
+        capacity);
 }
 
 }  // namespace
@@ -72,34 +80,12 @@ CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : tot
         backing_buffer = descriptor.tensor->mesh_buffer().get_reference_buffer();
     }
     if (backing_buffer) {
-        this->set_globally_allocated_address(*backing_buffer);
-        if (descriptor.address_offset != 0) {
-            uint32_t l1_alignment = hal::get_l1_alignment();
-            TT_FATAL(
-                descriptor.address_offset % l1_alignment == 0,
-                "address_offset ({}) must be aligned to L1 alignment ({})",
-                descriptor.address_offset,
-                l1_alignment);
-            this->address_offset_ = descriptor.address_offset;
-            this->globally_allocated_address_ = this->globally_allocated_address_.value() + descriptor.address_offset;
-            this->max_size_ -= descriptor.address_offset;
-            TT_FATAL(
-                this->total_size_ <= this->max_size_,
-                "address_offset ({}) + total_size ({}) exceeds buffer bank size ({})",
-                descriptor.address_offset,
-                this->total_size_,
-                this->max_size_ + descriptor.address_offset);
-        }
+        this->set_globally_allocated_address_and_total_size(
+            *backing_buffer, descriptor.total_size, descriptor.address_offset);
     }
 
     auto process_format_descriptor = [this](const CBFormatDescriptor& format_descriptor) {
-        uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-        if (format_descriptor.buffer_index > max_cbs - 1) {
-            TT_THROW(
-                "Buffer index ({}) exceeds max number of circular buffers per core ({})",
-                format_descriptor.buffer_index,
-                max_cbs);
-        }
+        validate_buffer_index_capacity(format_descriptor.buffer_index, this->data_formats_.size());
         this->data_formats_[format_descriptor.buffer_index] = format_descriptor.data_format;
         if (this->total_size_ % format_descriptor.page_size != 0) {
             TT_THROW(
@@ -167,10 +153,7 @@ CircularBufferConfig::CircularBufferConfig(
 }
 
 CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (buffer_index > max_cbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
-    }
+    validate_buffer_index_capacity(buffer_index, this->page_sizes_.size());
     if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
             "Illegal circular buffer index {}. Page size can only be specified for buffer indices configured "
@@ -218,29 +201,52 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const Buffer& buffer, uint32_t total_size) {
+    return set_globally_allocated_address_and_total_size(buffer, total_size, address_offset_);
+}
+
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
+    const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
     if (not buffer.is_l1()) {
         TT_THROW("Only L1 buffers can have an associated circular buffer!");
     }
-    this->globally_allocated_address_ = buffer.address();
+    // Reject invalid retargeting before changing any of the current backing-buffer state.
+    const auto bank_size = buffer.aligned_size_per_bank();
+    TT_FATAL(
+        address_offset <= bank_size, "address_offset ({}) exceeds buffer bank size ({})", address_offset, bank_size);
+    if (address_offset != 0) {
+        const uint32_t l1_alignment = buffer.alignment();
+        TT_FATAL(
+            address_offset % l1_alignment == 0,
+            "address_offset ({}) must be aligned to L1 alignment ({})",
+            address_offset,
+            l1_alignment);
+    }
+    const auto max_size = bank_size - address_offset;
+    TT_FATAL(
+        total_size <= max_size,
+        "Cannot set circular buffer size to {}. This is larger than the associated dynamically allocated "
+        "L1 buffer bank size of {} B",
+        total_size,
+        max_size);
+    this->globally_allocated_address_ = buffer.address() + address_offset;
+    this->address_offset_ = address_offset;
     this->dynamic_cb_ = true;
-    this->max_size_ = buffer.aligned_size_per_bank();
+    this->max_size_ = max_size;
     this->buffer_size_ = buffer.aligned_size();
     this->shadow_global_buffer = &buffer;
-    this->set_total_size(total_size);
+    this->total_size_ = total_size;
     return *this;
 }
 
 CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, const Tile& tile) {
+    validate_buffer_index_capacity(buffer_index, this->tiles_.size());
     this->tiles_[buffer_index] = tile;
     return *this;
 }
 
 CircularBufferConfig& CircularBufferConfig::set_unpack_face_geometry(
     uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (buffer_index > max_cbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
-    }
+    validate_buffer_index_capacity(buffer_index, this->unpack_face_geometry_.size());
     if (!this->buffer_indices_.contains(buffer_index)) {
         TT_THROW(
             "Illegal circular buffer index {}. Unpack face geometry can only be set for buffer indices configured "
@@ -291,7 +297,13 @@ uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; 
 
 uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
 
-void CircularBufferConfig::set_address_offset(uint32_t offset) { this->address_offset_ = offset; }
+void CircularBufferConfig::set_address_offset(uint32_t offset) {
+    if (shadow_global_buffer != nullptr) {
+        set_globally_allocated_address_and_total_size(*shadow_global_buffer, total_size_, offset);
+    } else {
+        address_offset_ = offset;
+    }
+}
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
@@ -320,10 +332,7 @@ CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
 
 CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buffer_index) :
     parent_(parent), buffer_index_(buffer_index) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (buffer_index > max_cbs - 1) {
-        TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
-    }
+    validate_buffer_index_capacity(buffer_index, parent_.data_formats_.size());
     parent_.buffer_indices_.insert(buffer_index_);
 }
 
@@ -356,18 +365,8 @@ CircularBufferConfig::Builder CircularBufferConfig::remote_index(uint8_t buffer_
 }
 
 void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (data_format_spec.size() > max_cbs) {
-        TT_THROW(
-            "Only {} circular buffer slots are available but data formats are specified for {} indices",
-            max_cbs,
-            data_format_spec.size());
-    }
-
     for (const auto& [buffer_index, data_format] : data_format_spec) {
-        if (buffer_index > max_cbs - 1) {
-            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
-        }
+        validate_buffer_index_capacity(buffer_index, this->data_formats_.size());
         this->data_formats_[buffer_index] = data_format;
         this->buffer_indices_.insert(buffer_index);
         this->local_buffer_indices_.insert(buffer_index);

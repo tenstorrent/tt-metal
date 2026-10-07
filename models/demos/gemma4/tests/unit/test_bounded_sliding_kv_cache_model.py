@@ -106,6 +106,9 @@ def test_build_hybrid_page_tables_shapes_and_padding():
 
 
 def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_error):
+    """A ring smaller than one block cannot be paged. Kept reachable by using a
+    POWER-OF-TWO window: bounded_ring_modulo screens the ring first, so a window
+    like 100 never reaches this check (see the power-of-two test below)."""
     with expect_error(ValueError, "must be a multiple of block_size"):
         build_hybrid_page_tables(
             num_layers=1,
@@ -113,7 +116,22 @@ def test_build_hybrid_page_tables_rejects_non_multiple_sliding_window(expect_err
             num_users=1,
             block_size=32,
             max_seq_len=256,
-            sliding_window=100,  # not a multiple of 32
+            sliding_window=16,  # power of two, but not a multiple of 32
+        )
+
+
+def test_build_hybrid_page_tables_rejects_non_power_of_two_ring(expect_error):
+    """bounded_ring_modulo rejects a ring with an odd factor before the
+    block_size check: chunk starts must be multiples of BOTH the ring and SDPA's
+    q_chunk_size, which an odd factor makes nearly unsatisfiable."""
+    with expect_error(ValueError, "must be a power of two"):
+        build_hybrid_page_tables(
+            num_layers=1,
+            sliding_layers_mask=[True],
+            num_users=1,
+            block_size=32,
+            max_seq_len=256,
+            sliding_window=100,  # not a power of two
         )
 
 

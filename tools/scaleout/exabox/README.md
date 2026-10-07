@@ -8,7 +8,7 @@ Scripts for validating Blackhole Galaxy Exabox clusters before running workloads
 
 **Last Known-Good Docker Image:**
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.79.0-dev20260903-20-gcc9c295fdf0
+ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20261006-45-g1d758e27faf
 ```
 
 ## Full Hardware Qualification
@@ -86,6 +86,18 @@ Options for `<tag>`:
 
 To build an image from a custom branch (your own branch or one requested from a Metal developer), run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
 
+**`exabox-tools` image**
+
+The [exabox-tools-image workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/exabox-tools-image.yaml) publishes `ghcr.io/tenstorrent/tt-metal/exabox-tools` from [`dockerfile/exabox_tools/Dockerfile`](../../../dockerfile/exabox_tools/Dockerfile): the `upstream-tests-bh-glx` content plus the health-check requirements, without the test-script entrypoint. It is meant to be the one image `recover.sh`, the health check and the k8s jobs share.
+
+Tags:
+- `exabox-tools:<git describe>` (e.g. `v0.80.0-dev20260925-49-g78b5458946e`) - one per commit. Rebuilding the same commit re-pushes it with a new digest; pin the digest if that matters.
+- `exabox-tools:latest` - moved only when the workflow is dispatched with "Make latest" ticked. Gated only by the smoke test in the Dockerfile, not by hardware tests.
+
+To build: dispatch the workflow on `main` (or any branch); the run summary lists the tags.
+
+To pin a run, pass `--image ghcr.io/tenstorrent/tt-metal/exabox-tools:<tag>`. To find which commit a running container came from: `docker inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' <image>`.
+
 ### Physical Validation
 
 Discovers Ethernet connections, compares against expected topology (FSD), resets chips, sends traffic. Catches bad cables, DRAM failures, unstable links, CRC errors.
@@ -140,7 +152,7 @@ python3 tools/scaleout/exabox/report_cluster_health.py \
   --dry-run
 ```
 
-`--hosts` and `--analyzer-code` remain valid overrides. For physical, the reporter infers them (and optional `pass_pct`, the analyzer success rate 0–100) from `--artifact-dir` logs when omitted. Other test types still require `--hosts` and `--analyzer-code`. Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory is created `03770` (setgid, sticky, owner/group write — not world-writable) with DIR's group, so later users in that group can add records the same day instead of hitting the first writer's umask-masked `0755`. Only that directory is chmod'd; DIR and its ancestors are left as they are, so point DIR at a directory whose group already covers everyone who shares the store. Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
+`--hosts` and `--analyzer-code` remain valid overrides. For physical, the reporter infers them (and optional `pass_pct`, the analyzer success rate 0–100) from `--artifact-dir` logs when omitted. Other test types still require `--hosts` and `--analyzer-code`. Stdout is always one compact JSON object. Pass `--store-root DIR` (or set `CLUSTER_HEALTH_STORE_ROOT`) if your site persists files; there is no default directory. Layout is `DIR/<YYYY-MM-DD>/<record_id>.json` (one compact JSON line per file). The date directory mode follows DIR: group-only roots get `03770` (setgid, sticky, owner/group write); when DIR is already other-writable the date dir is sticky `01777` so mixed UIDs (humans, automation, log shippers) can share it. An existing date dir that is already other-writable is never tightened back to group-only. Only that directory is chmod'd; DIR and its ancestors are left as they are. Record files themselves follow the caller's umask, so a restrictive umask (`0077`) writes records your log shipper cannot read. Writes use a dotted temp in that same directory then an exclusive (no-clobber) link onto the final name; if that name already exists with different content the file is left in place and stdout omits `record_id`. Scrapers should glob `*.json` and ignore `*.tmp`. Optional `--cabling` / `--deployment` / `--fsd` / `--gsd` / `--rankfile` / `--rank-bindings` fill portable `topology` from native artifacts. Optional `--label key=value` stores opaque site aliases under `labels`. Non-passing records automatically include a concise `labels.failure_reason` derived from the test type and analyzer code; an explicit `--label failure_reason=...` overrides it with caller-specific context.
 
 Replay leftover dumps without re-running validation:
 

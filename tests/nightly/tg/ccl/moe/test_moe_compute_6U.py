@@ -70,6 +70,7 @@ def is_mesh_graph_descriptor_set(expected_path):
 # ---------------------------------------------------------------------------
 
 MOE_DEVICE_PARAMS = {
+    "l1_small_size": 16384,
     "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -77,6 +78,7 @@ MOE_DEVICE_PARAMS = {
 }
 
 MOE_DEVICE_PARAMS_LINEAR = {
+    "l1_small_size": 16384,
     "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -84,6 +86,7 @@ MOE_DEVICE_PARAMS_LINEAR = {
 }
 
 MOE_DEVICE_PARAMS_ROW = {
+    "l1_small_size": 16384,
     "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
@@ -91,6 +94,7 @@ MOE_DEVICE_PARAMS_ROW = {
 }
 
 MOE_DEVICE_PARAMS_ROW_LINEAR = {
+    "l1_small_size": 16384,
     "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,

@@ -41,8 +41,9 @@ on:
       hang-detection-timeout:
         required: false
         type: number
-        default: 10
-        description: "Seconds without dispatch progress before tt-triage fires on the hung rank(s). 0 or less disables hang detection (the runtime treats any non-positive duration as no timeout)."
+        default: 120
+        description: >-
+          Seconds without dispatch progress before tt-triage fires; 0 or less disables it.
 
 permissions:
   id-token: write
@@ -75,11 +76,11 @@ jobs:
 
       - name: Build test matrix
         id: build-matrix
-        run: |
-          python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: "${{ inputs.enabled-skus }}"
+          sku-config: ./.github/sku_config.yaml
 
       - name: Apply test-type filter
         id: apply-test-type-filter
@@ -179,6 +180,8 @@ jobs:
       PREFILL_SUMMARIES: /ci/prefill_summaries/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
       # On /ci for the same reason as PREFILL_SUMMARIES: triage runs on a worker node.
       TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+      # Pinned host-memory H2D makes weight load 10x slower; 0 restores the copy path. See #52893.
+      TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES: "0"
     strategy:
       fail-fast: false
       matrix:
@@ -200,6 +203,7 @@ jobs:
           auto-triage: ${{ inputs.hang-detection-timeout > 0 }}
           hang-detection-timeout: ${{ inputs.hang-detection-timeout }}
           triage-job-info: "leg: ${{ matrix.test-group.name }} | sku: ${{ matrix.test-group.sku }}"
+          hang-report-test-id: "tests/pipeline_reorg/blaze_models_prefill_tests.py::${{ matrix.test-group.name }}"
 
       - name: Configure TorusXY fabric profile
         if: ${{ matrix.test-group.fabric_profile == 'torus_xy' }}
@@ -256,6 +260,15 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
+      - name: ⬆️ Upload test results
+        if: always() && !cancelled() && matrix.test-group.artifact_subdir
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: prefill-results-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }} (attempt ${{ github.run_attempt }})
+          path: ${{ env.PREFILL_SUMMARIES }}/${{ matrix.test-group.artifact_subdir }}/
+          if-no-files-found: warn
+          retention-days: 30
+
       # Only uploaded on a hang; the triage report itself is already in the test step's log.
       - name: ⬆️ Upload triage output
         if: always() && !cancelled()
@@ -308,17 +321,38 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # Keep the raw .md files for cross-run perf-trend analysis. Uploaded before cleanup; unique name per
-      # matrix job so v7 (no auto-merge) doesn't collide when the whole suite runs.
+      # Keep the .md summaries and each model's PCC verdicts, rank logs and rank binding for review.
+      # Upload before cleanup; names are unique per matrix job so whole-suite runs do not collide.
       - name: ⬆️ Upload prefill summaries
         if: always() && !cancelled()
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: prefill-summaries-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          path: ${{ env.PREFILL_SUMMARIES }}/**/*.md
+          path: |
+            ${{ env.PREFILL_SUMMARIES }}/**/*.md
+            ${{ env.PREFILL_SUMMARIES }}/pcc/**
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: ⬆️ Upload layer perf reports
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: layer-perf-${{ inputs.resource-prefix }}-${{ inputs.sp-config }}-${{ strategy.job-index }}-attempt${{ github.run_attempt }}
+          path: ${{ env.PREFILL_SUMMARIES }}/layer_perf/**
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # Hang report the triage hook wrote. Must precede the cleanup that removes it.
+      - name: ⬆️ Upload hang report
+        uses: ./.github/actions/upload-artifact-with-job-uuid
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+          path: ${{ env.TRIAGE_OUTPUT_DIR }}/test_reports/
 
       - name: 🧹 Clean shared dirs
         if: always()
@@ -331,7 +365,7 @@ jobs:
             echo "::notice title=tt-triage::Hang triaged on $(ls "$TRIAGE_OUTPUT_DIR" | tr '\n' ' ')— see artifact \"triage_output_$TEST_NAME (attempt ${{ github.run_attempt }})\""
           fi
           if [ -n "$PREFILL_SUMMARIES" ]; then rm -rf "$PREFILL_SUMMARIES"; fi
-          if [ -n "$TRIAGE_OUTPUT_DIR" ]; then rm -rf "$TRIAGE_OUTPUT_DIR"; fi
+          if [ -n "$TRIAGE_OUTPUT_DIR" ]; then rm -rf "$TRIAGE_OUTPUT_DIR"; rmdir --ignore-fail-on-non-empty "$(dirname "$TRIAGE_OUTPUT_DIR")" 2>/dev/null || true; fi
 
       - name: 🤖 AI job summary
         if: always() && !cancelled()

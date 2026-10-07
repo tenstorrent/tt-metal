@@ -20,6 +20,7 @@
 #include <set>
 #include <tuple>
 #include <unordered_map>
+#include <filesystem>
 #include <unordered_set>
 #include <vector>
 
@@ -28,8 +29,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/chip_helpers/tlb_manager.hpp>
-#include <umd/device/pcie/tlb_window.hpp>
+#include <umd/device/types/io_window_config.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -64,6 +64,10 @@ public:
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
+    // The chips UMD opens from the simulator build in simulator_dir. A partitioned build (one with an
+    // ip_layout.yaml) states its own devices, so it gets none and UMD opens all of them, or the ones
+    // TT_VISIBLE_DEVICES selects. Any other build is a single chip, 0.
+    static std::unordered_set<ChipId> simulator_target_devices(const std::filesystem::path& simulator_dir);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
@@ -141,11 +145,20 @@ public:
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
-        const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId device_id,
+        int dram_view,
+        uint64_t addr,
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
-    // Write to core. Accepts physical noc coordinates
-    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void write_core(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        tt_cxy_pair core,
+        uint64_t addr,
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
 
     // Access physical noc coordinates. Does write without effects of write combining
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
@@ -200,38 +213,6 @@ public:
         tt::tt_metal::CoreCoord core_start,
         tt::tt_metal::CoreCoord core_end,
         uint64_t addr) const;
-
-    std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
-        tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        auto tlb_configuration = driver_->get_tlb_configuration(target.chip, target_coord);
-        return std::tuple((uint32_t)tlb_configuration.tlb_offset, (uint32_t)tlb_configuration.size);
-    }
-
-    /**
-     * Returns a pointer to the static TLB window associated with the given target.
-     *
-     * Ownership:
-     *   - The returned TlbWindow is owned and managed by the underlying driver.
-     *   - Callers must not delete, free, or otherwise take ownership of the pointer.
-     *
-     * Lifetime:
-     *   - The pointer remains valid for as long as the underlying driver/device
-     *     context for this Cluster instance remains initialized and the static TLB
-     *     configuration is not torn down by the driver.
-     *   - Callers may cache the pointer, but must ensure they do not use it after
-     *     the Cluster/driver has been destroyed or the device has been deinitialized.
-     *
-     * Concurrency:
-     *   - The driver may return the same TlbWindow instance across multiple calls
-     *     (i.e., this is typically a cached/static window).
-     *   - It is safe to share the pointer across threads for read-only operations.
-     *   - If callers perform operations that mutate the TlbWindow or its underlying
-     *     mappings, they must provide appropriate external synchronization.
-     */
-    tt::umd::TlbWindow* get_static_tlb_window(tt_cxy_pair target) const {
-        tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
-        return driver_->get_static_tlb_window(target.chip, target_coord);
-    }
 
     std::uint32_t get_numa_node_for_device(uint32_t device_id) const {
         // Simulation/mock/emule chips do not have host NUMA affinity; UMD throws if queried.

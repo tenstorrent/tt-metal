@@ -9,12 +9,13 @@
 #include <cstdio>
 #include <cerrno>
 #include <string>
-#include <string_view>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
+#include <atomic>
+#include <fmt/format.h>
 
 #include <flatbuffers/flatbuffers.h>
 #include <flatbuffers/reflection.h>
@@ -24,34 +25,20 @@
 #include <tt_stl/cleanup.hpp>
 
 #include "tensor/tensor_spec.hpp"
+#include "tensor/flatbuffer/tensor_file_layout.hpp"
 #include "tensor/flatbuffer/tensor_flatbuffer.hpp"
 #include "ttnn/distributed/host_ccl.hpp"
 
 namespace ttnn {
-using tt::tt_metal::HostBuffer;
 using tt::tt_metal::MemoryPin;
 
 namespace {
 
-void safe_fwrite_bytes(
-    const void* buffer, size_t bytes, FILE* file, const std::string& filename, std::string_view what) {
-    TT_FATAL(bytes > 0, "Expected to write > 0 bytes to file");
-
-    // Use byte-wise fwrite so we can detect partial writes
-    const size_t written = fwrite(buffer, /*size=*/1, /*count=*/bytes, file);
-    TT_FATAL(
-        written == bytes,
-        "Failed to write {} to \"{}\": wrote {}/{} bytes (ferror={}, errno={} \"{}\")",
-        what,
-        filename,
-        written,
-        bytes,
-        ferror(file),
-        errno,
-        strerror(errno));
+// Distinguishes temporary files written by different threads of one process.
+uint64_t next_temp_file_id() {
+    static std::atomic<uint64_t> counter{0};
+    return counter.fetch_add(1, std::memory_order_relaxed);
 }
-
-constexpr std::uint32_t kFlatbufferAlignment = alignof(std::uint64_t);
 
 void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& tensor, DumpTensorMode mode) {
     Tensor cpu_tensor = tensor.cpu();
@@ -69,35 +56,73 @@ void dump_tensor_flatbuffer_impl(const std::string& file_name, const Tensor& ten
         }
     }
 
-    FILE* output_file = fopen(file_name.c_str(), "wb");
-    TT_FATAL(
-        output_file != nullptr, "Cannot open \"{}\" for writing: errno={} \"{}\"", file_name, errno, strerror(errno));
-    auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
-        if (f && fclose(f) != 0) {
-            log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
+    // Write to a private temporary sibling and rename it into place. rename(2) is atomic, so a
+    // concurrent reader (another process sharing the same tensor cache, e.g. the engines of a
+    // multi-process data-parallel vLLM server) sees either no file or a complete one, never a
+    // half-written file that load_tensor_flatbuffer would accept and then crash on. Two writers
+    // racing on the same name each produce a complete file; the last rename wins.
+    //
+    // The temporary file is created exclusively: containers sharing one cache can share a pid, so
+    // the name alone is not unique. It takes the destination's permissions when a destination
+    // exists, so replacing a restricted cache file does not widen access. A writer killed outright
+    // leaves its temporary file behind; the name does not end in .tensorbin, so cache listings
+    // that glob for tensorbins never pick it up.
+    mode_t file_mode = 0666;
+    struct stat destination_stat{};
+    if (stat(file_name.c_str(), &destination_stat) == 0) {
+        file_mode = destination_stat.st_mode & 07777;
+    }
+    std::string temp_file_name;
+    int fd = -1;
+    do {
+        temp_file_name = fmt::format("{}.tmp.{}.{}", file_name, getpid(), next_temp_file_id());
+        fd = open(temp_file_name.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, file_mode);
+    } while (fd == -1 && errno == EEXIST);
+    TT_FATAL(fd != -1, "Cannot create \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
+    FILE* output_file = nullptr;
+    bool renamed = false;
+    auto cleanup = ttsl::make_cleanup([&output_file, &fd, &temp_file_name, &renamed]() {
+        if (output_file != nullptr) {
+            if (fclose(output_file) != 0) {
+                log_warning(tt::LogAlways, "Failed to close \"{}\"", temp_file_name);
+            }
+        } else if (fd != -1) {
+            close(fd);
+        }
+        if (!renamed) {
+            unlink(temp_file_name.c_str());
         }
     });
+    output_file = fdopen(fd, "wb");
+    TT_FATAL(
+        output_file != nullptr,
+        "Cannot open \"{}\" for writing: errno={} \"{}\"",
+        temp_file_name,
+        errno,
+        strerror(errno));
 
-    std::vector<HostBuffer> buffers;
+    std::vector<SerializedTensorBuffer> buffers;
     flatbuffers::FlatBufferBuilder builder;
     auto tensor_offset = ttnn::to_flatbuffer(cpu_tensor, builder, buffers);
-    // To be able to read flatbuffer data with `mmap` safely, make sure the serialized flatbuffer is aligned to at
-    // least 8 bytes, just like `header_size`. Individual `buffers` are aligned according to their element size,
-    // which is already what we need for `mmap` to work.
-    builder.Align(kFlatbufferAlignment);
     builder.Finish(tensor_offset);
 
-    const uint64_t header_size = builder.GetSize();
-    safe_fwrite_bytes(&header_size, sizeof(header_size), output_file, file_name, "tensor header size");
-    safe_fwrite_bytes(builder.GetBufferPointer(), header_size, output_file, file_name, "tensor header");
+    write_tensor_file(output_file, temp_file_name, builder, buffers);
 
-    for (const auto& buffer : buffers) {
-        auto buffer_view = buffer.view_bytes();
-        TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during tensor serialization");
-        safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), output_file, file_name, "tensor data");
-    }
-
-    TT_FATAL(fflush(output_file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
+    TT_FATAL(fflush(output_file) == 0, "Cannot flush \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
+    // Close before publishing: a deferred write error (ENOSPC, a network file system) surfaces at
+    // fclose, and only a fully written file may be renamed into place.
+    const int close_rc = fclose(output_file);
+    output_file = nullptr;
+    fd = -1;
+    TT_FATAL(close_rc == 0, "Cannot close \"{}\": errno={} \"{}\"", temp_file_name, errno, strerror(errno));
+    TT_FATAL(
+        rename(temp_file_name.c_str(), file_name.c_str()) == 0,
+        "Cannot rename \"{}\" to \"{}\": errno={} \"{}\"",
+        temp_file_name,
+        file_name,
+        errno,
+        strerror(errno));
+    renamed = true;
 
     if (mode == DumpTensorMode::DISTRIBUTED_GATHER) {
         const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
@@ -153,8 +178,9 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, tt::tt_metal::distri
 
     std::byte* data_region = file_data + data_offset;
     TT_FATAL(
-        (reinterpret_cast<uintptr_t>(data_region) & (kFlatbufferAlignment - 1)) == 0,
-        "Tensor data pointer must be 8-byte aligned!");
+        (reinterpret_cast<uintptr_t>(data_region) & (kMinTensorDataAlignment - 1)) == 0,
+        "Tensor data pointer must be {}-byte aligned!",
+        kMinTensorDataAlignment);
 
     Tensor tensor = ttnn::from_flatbuffer(fb_tensor, ttsl::Span<std::byte>(data_region, data_size), memory_pin);
     if (device != nullptr) {

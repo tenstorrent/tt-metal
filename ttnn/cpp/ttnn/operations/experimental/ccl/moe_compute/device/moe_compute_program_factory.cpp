@@ -53,22 +53,22 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
 std::tuple<
     std::vector<tt::tt_metal::CoreCoord>,  // T cores
     std::vector<tt::tt_metal::CoreCoord>,  // MM cores
-    CoreRangeSet,            // T CoreRangeSet
-    CoreRangeSet,            // MM CoreRangeSet
-    CoreRangeSet,            // T + MM CoreRangeSet
-    CoreRangeSet,            // Combine CoreRangeSet
-    CoreRangeSet,            // C + MM CoreRangeSet
-    CoreRangeSet,            // All worker cores (T + MM + C)
+    tt::tt_metal::CoreRangeSet,            // T tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // MM tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // T + MM tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // Combine tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // C + MM tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // All worker cores (T + MM + C)
     std::vector<tt::tt_metal::CoreCoord>,  // Combine vector of CoreCoord
-    CoreRange,               // T bounding box
-    CoreRange>               // MM bounding box
+    tt::tt_metal::CoreRange,               // T bounding box
+    tt::tt_metal::CoreRange>               // MM bounding box
 get_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
     uint32_t bh_ring_size,
-    const CoreRangeSet& mux_core_range_set) {
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set, bh_ring_size);
 
@@ -576,7 +576,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Tilize CBs
     //-------------------------------------------------------------------------
 
-    // CB for passing total_chunks from writer to compute
+    // CB for passing total_chunks from the tilize reader to the tilize compute kernel
     uint32_t total_chunks_cb_id = tt::CBIndex::c_3;
     // full indices buffer
     uint32_t indices_tensor_cb_id = tt::CBIndex::c_4;
@@ -731,7 +731,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_num_cores - 1,  // one entry per non-drain core
         tt::DataFormat::UInt32);
 
-    // CB for passing total_chunks from writer to compute kernel
+    // CB for passing total_chunks from the tilize reader to the tilize compute kernel
     // Single page holding one uint32_t value. Page size floored at l1_alignment /
     // CIRCULAR_BUFFER_COMPUTE_WORD_SIZE so the unpack LLK fifo_* fields (16 B words) are non-zero
     // when tilize_compute pops this CB.

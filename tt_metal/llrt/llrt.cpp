@@ -27,6 +27,9 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
 #include "llrt.hpp"
+#include "binary_metadata.hpp"
+#include "tt_elffile.hpp"
+#include "zone_meta.hpp"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -38,25 +41,58 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-const ll_api::memory& get_risc_binary(
+namespace {
+
+// The binary cache's value: the packed device image PLUS host-side metadata, both harvested from a
+// single ELF open (see get_cached_binary). Kept together so a consumer that only wants metadata (e.g. the
+// op-to-op R/W query) reads it straight from the cache without re-opening the ELF.
+struct CachedBinary {
+    ll_api::memory image;
+    ll_api::BinaryMetadata metadata;
+};
+
+struct BinaryCache {
+    std::unordered_map<std::string, std::unique_ptr<const CachedBinary>> map;
+    std::mutex mutex;
+    std::condition_variable cvar;
+};
+
+BinaryCache& binary_cache() {
+    static BinaryCache cache;
+    return cache;
+}
+
+// Common lookup-or-load: return the cached binary for PATH, reading + parsing + caching it on first use.
+// Both get_risc_binary and get_binary_metadata build on this and just return their own slice, so the two
+// share one cache and one read path. `loading` / `update_callback` are consulted only on first load.
+const CachedBinary& get_cached_binary(
     const std::string& path,
     ll_api::memory::Loading loading,
     const std::function<void(ll_api::memory&)>& update_callback) {
-    static struct {
-        std::unordered_map<std::string, std::unique_ptr<const ll_api::memory>> map;
-        std::mutex mutex;
-        std::condition_variable cvar;
-    } cache;
+    BinaryCache& cache = binary_cache();
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
-    const ll_api::memory* ptr = nullptr;
+    const CachedBinary* ptr = nullptr;
     if (inserted) {
         // We're the first with PATH. Create and insert.
         lock.unlock();
-        ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
+        // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
+        // place for XIP), then pack the device image.
+        ll_api::ElfFile elf;
+        elf.ReadImage(path);
+        ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
+        ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
         if (update_callback) {
-            update_callback(*mutable_ptr);
+            update_callback(image);
+        }
+        auto* mutable_ptr = new CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
+        // Every device-executed image, kernel or firmware, passes through here before it can run, so
+        // harvesting .tt_zone_meta registers a zone's name strictly before that zone can reach the host.
+        // Streaming only: the DRAM profiler's ELFs carry no .tt_zone_meta and resolve names its own way.
+        // TODO(op2op): fold this harvest into parse_binary_metadata above so it shares the single open.
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_streaming_profiler_enabled()) {
+            ZoneMetaRegistry::instance().ingest_elf(path);
         }
 
         lock.lock();
@@ -72,10 +108,29 @@ const ll_api::memory& get_risc_binary(
             cache.cvar.wait(lock, [=] { return bool(slot->second); });
         }
         ptr = slot->second.get();
-        TT_ASSERT(ptr->get_loading() == loading);
+        TT_ASSERT(ptr->image.get_loading() == loading);
     }
 
     return *ptr;
+}
+
+}  // namespace
+
+const ll_api::memory& get_risc_binary(
+    const std::string& path,
+    ll_api::memory::Loading loading,
+    const std::function<void(ll_api::memory&)>& update_callback) {
+    return get_cached_binary(path, loading, update_callback).image;
+}
+
+const ll_api::BinaryMetadata& get_binary_metadata(
+    const std::string& path,
+    ll_api::memory::Loading loading,
+    const std::function<void(ll_api::memory&)>& update_callback) {
+    // The common case is a cache hit: the binary was already loaded via get_risc_binary (an op-to-op
+    // query runs after the program has). If not, the shared child loads it once with LOADING, exactly as
+    // get_risc_binary would. Cache entries are stable, so the returned reference outlives this call.
+    return get_cached_binary(path, loading, update_callback).metadata;
 }
 
 // CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
@@ -390,6 +445,10 @@ void wait_until_cores_done(
     auto& env = tt::tt_metal::MetalEnvAccessor(context.get_env()).impl();
     // poll the cores until the set of not done cores is empty
     [[maybe_unused]] int loop_count = 1;
+#ifdef DEBUG
+    const bool debug_logging_enabled =
+        tt::LoggerRegistry::instance().get(tt::LogMetal)->should_log(spdlog::level::debug);
+#endif
     auto start = std::chrono::high_resolution_clock::now();
     const auto& rtoptions = env.get_rtoptions();
     bool is_simulator = rtoptions.get_simulator_enabled();
@@ -424,8 +483,10 @@ void wait_until_cores_done(
         }
 
 #ifdef DEBUG
-        // Print not-done cores
-        if (loop_count % 1000 == 0) {
+        // Print not-done cores. The sleep paces this output, so it must not run when the
+        // message is filtered out: polls cost ~6 us, so 100 ms per 1000 of them slows every
+        // wait by up to 17x for a line nobody sees at the default log level.
+        if (loop_count % 1000 == 0 && debug_logging_enabled) {
             log_debug(
                 tt::LogMetal, "Device {}: Not done phys cores: {}", device_id, fmt::join(not_done_phys_cores, " "));
             usleep(100000);

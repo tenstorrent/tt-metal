@@ -29,12 +29,7 @@ struct RingIdSequencer {
     RingIdSequencer() = default;
 
     RingIdSequencer(uint32_t ring_index_, uint32_t ring_size_, uint32_t backward_expected, uint32_t forward_expected) :
-        ring_index(ring_index_),
-        ring_size(ring_size_),
-        received{0, 0},
-        expected{backward_expected, forward_expected},
-        curr_dir(0),
-        transfer_idx(0) {}
+        ring_index(ring_index_), ring_size(ring_size_), received{0, 0}, expected{backward_expected, forward_expected} {}
 
     /**
      * Compute the next ring_id and advance the state machine.
@@ -45,6 +40,7 @@ struct RingIdSequencer {
      *                 - wait_val: semaphore threshold (0 on first iteration)
      */
     template <typename SyncFn>
+    // NOLINTNEXTLINE(cppcoreguidelines-missing-std-forward) -- Preserve lvalue invocation of temporary callbacks.
     uint32_t get_next_ring_id(SyncFn&& sync_fn) {
         uint32_t sender_ring_id;
         uint32_t sync_dir = curr_dir;

@@ -34,6 +34,8 @@ from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -69,13 +71,13 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
     ]
-)
+    # The MX pair is on the input side: these operands reach the SFPU through UNP_S
+    # into SrcS, a decode port the unpack test (UnpA/UnpB) does not cover.
+) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 
 def _matmul_output_fits_dest(
@@ -118,9 +120,9 @@ def generate_parallel_matmul_add_combinations(formats_list):
                             dest_acc,
                             dest_sync,
                             implied_math_format,
-                            ADD_INPUT_DIMENSIONS,
-                            MATMUL_A_DIMENSIONS,
-                            MATMUL_B_DIMENSIONS,
+                            runtime(ADD_INPUT_DIMENSIONS),
+                            runtime(MATMUL_A_DIMENSIONS),
+                            runtime(MATMUL_B_DIMENSIONS),
                         )
                     )
     return combinations
@@ -244,10 +246,6 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         math_format=pack_src_format,
         dest_acc=dest_acc,
     )
-    if formats.output_format.is_mx_format():
-        golden_matmul = quantize_mx_tensor_chunked(
-            golden_matmul.to(format_dict[pack_src_format]), formats.output_format
-        ).to(torch_format)
     generate_add_golden = get_golden_generator(BinarySFPUGolden)
     golden_add = generate_add_golden(
         MathOperation.SfpuElwadd,

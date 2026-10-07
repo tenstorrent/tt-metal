@@ -57,7 +57,7 @@ class MyModelAdapter(PrefillModelAdapter):
     l1_small_size: int = 0     # L1_SMALL carve-out at mesh-open (only if an op routes semaphores there)
     supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
                                # drafter is a separate checkpoint targeting ONE architecture (today only
-                               # Kimi-K2.6/K2.7), so leave it False unless a matching drafter exists.
+                               # Kimi-K2.7), so leave it False unless a matching drafter exists.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -140,30 +140,47 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
         channel carries no payload and can ignore it."""
 
+    def capture_trace(self, kv_cache) -> None:
+        """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
+        engine calls this via `getattr(runtime, "capture_trace", None)`, once, after `compile()`
+        and only when `config.use_trace` is set; a model that never traces can omit it entirely, and
+        the runner then refuses PREFILL_USE_TRACE=1 instead of running eagerly.
+        Must be idempotent (no-op if already captured) since the engine does not track capture
+        state itself."""
+
     # --- OPTIONAL hooks — implement only if your model supports cache migration; the serving loop
     #     never calls them. Keep the heavy table logic in your model's own module (a thin forwarder on
     #     the runtime), not inline here. ---
-    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+    def build_kv_chunk_table(
+        self, kv_cache, path: str, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None
+    ) -> str:
         """Build + serialize the KV-chunk address table for `kv_cache` (your model's block-cyclic layout)
         to `path` and return it; issue no comms (the engine publishes it). Use the shared
         `serialize_kv_chunk_table` helper (common/prefill/runners/migration.py) for the config-population +
         protobuf-serialize boilerplate; supply only your model's table builder + chunk geometry."""
 
-    def kv_migration_base_address(self, kv_cache) -> int:
-        """This rank's KV base DRAM address — the anchor the engine all-gathers to merge every pipeline
-        stage into one table. Return `int(<your base tensor>.buffer_address())`; you pick which of your
-        cache tensors is the migratable base, since the engine treats `kv_cache` as opaque and cannot.
-        Enough for a model with ONE migratable cache; otherwise implement `kv_migration_stages`."""
-
     def kv_migration_stages(self, kv_cache, first_layer_idx=None, num_my_layers=None):
         """One `KvCacheStage` (common/prefill/runners/migration.py) per config of your merged table, in
-        config order — the engine gathers a layout for each, on every rank, and hands them to
-        `build_kv_chunk_table`. Implement it instead of `kv_migration_base_address` when your model
-        migrates SEVERAL caches, or one whose layer numbering is not the model's global numbering."""
+        config order — the engine gathers a layout for each, on every rank, and hands them back to
+        `build_kv_chunk_table` as `stage_layouts`. A single-cache model returns a one-element list
+        anchored on whichever tensor it migrates, since the engine treats `kv_cache` as opaque and
+        cannot pick for you. Number a stage in its own space when that is not the model's global layer
+        numbering (a cache only some layers write), and map it back to model layers in your
+        `build_kv_chunk_table` (see DeepSeek's `kv_table_layer_rows`)."""
+
+    # If your merged table's second config is NOT a DSA index cache, override `cache_kind(config_id)`
+    # on the ADAPTER (default: 0 = "kvpe", 1 = "index", else "other") so the producer and the
+    # migration driver do not infer an index cache from the config count. Kimi-K3 publishes its KDA
+    # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
+    # If a layer's cache is not on the token axis, also override `layer_position_range(layer_idx,
+    # real_len)` (default `(0, real_len)`): the driver issues one /migrate per run of consecutive layers
+    # with equal ranges and byte-verifies that range. Kimi-K3 returns the KDA version window there.
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
-        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead.
+        with PREFILL_LAYER_ACK_D2H=1 and takes completions off the device instead. That mode needs
+        `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
+        PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
         Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
         `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
@@ -187,7 +204,7 @@ lazily, so the common module never imports your model at load):
 ```python
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
-    "kimi_k2_6": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6:KimiK26Adapter",
+    "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "my_model": "models.demos.my_model.tt.runners.adapters.my_model:MyModelAdapter",
 }
 ```

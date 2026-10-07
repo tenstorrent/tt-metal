@@ -202,6 +202,8 @@ jobs:
       # submodule out here so its JIT-compiled kernels match the libraries it
       # links against.
       metal-ref: ${{ github.sha }}
+      # tt-blaze compiles kernels with this container's SFPI; must be this commit's image.
+      dev-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       # Run tt-blaze's full merge gate from its main branch.
       blaze-ref: main
 
@@ -433,6 +435,106 @@ jobs:
           path: test-reports
           merge-multiple: false
 
+      # AIIPSW-15 (Horizon) is tested in the separate private tt-umd-horizon repo.
+      # Its "Release Horizon" workflow (tt-umd-horizon#29) runs the /dev/horizon
+      # suite on a main commit and, on green, tags it `horizon-<shortsha>` and
+      # publishes a GitHub Release carrying the evidence as a `latest.json` asset
+      # (schema horizon-test-results/v1). A red run publishes nothing, so the
+      # newest horizon-* release is always the last main commit that passed.
+      #
+      # Select by tag prefix + asset, not GitHub's "latest" pointer: the repo also
+      # carries UMD version tags (v0.9.x), and a version release without the asset
+      # must not shadow the evidence. Read-only, cross-repo. Non-fatal: a missing
+      # token/release/asset just leaves AIIPSW-15 inconclusive.
+      - name: Pull tt-umd-horizon test evidence
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.HORIZON_RESULTS_TOKEN }}
+          HORIZON_REPO: tenstorrent/tt-umd-horizon
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::HORIZON_RESULTS_TOKEN not configured; skipping Horizon evidence."
+            exit 0
+          fi
+          # Newest published horizon-* release that actually carries latest.json.
+          TAG=$(gh api "repos/${HORIZON_REPO}/releases?per_page=50" --jq '
+            [ .[] | select(.draft == false)
+                  | select(.tag_name | startswith("horizon-"))
+                  | select(any(.assets[]?; .name == "latest.json")) ]
+            | sort_by(.created_at) | last | .tag_name // empty' 2>/dev/null || true)
+          if [ -n "${TAG}" ] \
+             && gh release download "${TAG}" --repo "${HORIZON_REPO}" \
+                  --pattern latest.json --output horizon-results.json --clobber 2>/dev/null \
+             && [ -s horizon-results.json ]; then
+            # Log only the verdict, never the file: it comes from a private repo
+            # and this log is public. The report step prints the per-test rows.
+            python3 - <<'PY' || echo "::notice::Horizon results downloaded but not parseable; report will treat as inconclusive."
+          import json
+          d = json.load(open("horizon-results.json"))
+          d = d if isinstance(d, dict) else {}
+          t = d.get("totals") or {}
+          print("Pulled Horizon results:", "schema=%s conclusion=%s passed=%s failed=%s timestamp=%s"
+                % (d.get("schema"), d.get("conclusion"), t.get("passed"), t.get("failed"), d.get("timestamp")))
+          PY
+          else
+            echo "::notice::No horizon-* release with a latest.json asset (or no access); AIIPSW-15 inconclusive."
+            rm -f horizon-results.json
+          fi
+
+      # Emulator evidence from tt-umd-simulators. Its polling agent runs the Quasar
+      # Release and Horizon Release pipelines on each stable HEAD (and the newest
+      # release tag): tests/scripts/quasar/quasar_regression_tests.yaml and
+      # quasar_local_tests.yaml on the Quasar emulators (each row on its own config)
+      # and on the Horizon emulator. Each posts a completed "Quasar Release" /
+      # "Horizon Release" check run (TT CI Reporter app) on the commit it tested,
+      # with quasar-test-results/v1 / horizon-test-results/v1 in an HTML comment in
+      # output.summary. A run takes hours, so take the newest one with results on
+      # the released commit or its recent ancestors; the report's
+      # HORIZON_MAX_AGE_DAYS freshness rule still applies. Non-fatal: no check just
+      # leaves the requirements those tests serve without emulator evidence.
+      - name: Pull emulator evidence
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}
+        run: |
+          set -uo pipefail
+          commits=$(gh api "repos/${GITHUB_REPOSITORY}/commits?sha=${SHA}&per_page=30" --jq '.[].sha' 2>/dev/null)
+          pull() {  # $1 check name, $2 schema, $3 output file
+            local c summary
+            for c in $commits; do
+              # Newest completed run on this commit; cancelled runs carry no results.
+              summary=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${c}/check-runs?check_name=${1// /+}&filter=all" \
+                --jq '[.check_runs[] | select(.app.slug == "tt-ci-reporter-2" and .status == "completed"
+                        and (.conclusion == "success" or .conclusion == "failure"))]
+                      | sort_by(.completed_at) | last | .output.summary // empty' 2>/dev/null) || summary=""
+              [ -n "$summary" ] || continue
+              # Only a summary that carries the results block counts; a run that
+              # ended in an error message keeps the walk going to older commits.
+              if SUMMARY="$summary" python3 - "$2" "$3" <<'PY'
+          import json, os, pathlib, re, sys
+          schema, out = sys.argv[1], sys.argv[2]
+          m = re.search(r"<!--\s*" + re.escape(schema) + r"\s*\n(\{.*?\})\s*\n-->", os.environ["SUMMARY"], re.DOTALL)
+          if not m:
+              raise SystemExit(1)
+          d = json.loads(m.group(1))
+          pathlib.Path(out).write_text(json.dumps(d))
+          t = d.get("totals") or {}
+          print("Pulled %s: conclusion=%s passed=%s failed=%s tested_sha=%s timestamp=%s"
+                % (schema, d.get("conclusion"), t.get("passed"), t.get("failed"), str(d.get("tested_sha", ""))[:12], d.get("timestamp")))
+          PY
+              then
+                echo "$1 check found on ${c}"
+                return 0
+              fi
+              echo "$1 check on ${c} carries no $2 block; looking further back"
+            done
+            echo "::notice::No usable $1 check; its tests give no emulator evidence."
+          }
+          pull "Quasar Release" quasar-test-results/v1 quasar-emu-results.json
+          pull "Horizon Release" horizon-test-results/v1 horizon-emu-results.json
+
       - name: Build report
         continue-on-error: true
         env:
@@ -448,6 +550,9 @@ jobs:
           RTL_SIM_SHA: ${{ needs.check-rtl-sim-status.outputs.sha }}
           RTL_SIM_URL: ${{ needs.check-rtl-sim-status.outputs.url }}
           RTL_SIM_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HORIZON_RESULTS_FILE: horizon-results.json
+          HORIZON_EMU_RESULTS_FILE: horizon-emu-results.json
+          QUASAR_EMU_RESULTS_FILE: quasar-emu-results.json
           RELEASE_VERSION: ${{ inputs.tag-version }}
           TEST_REPORTS_DIR: test-reports
           REPORT_MD_OUT: release-test-evidence.md

@@ -26,6 +26,43 @@ uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint
     return page_size;
 }
 
+// How the two RISCs divide the leading blocks of a height concat.
+struct RiscBlockPartition {
+    bool split_blocks;
+    uint32_t reader_block_count;
+    uint32_t writer_block_start;
+    uint32_t writer_block_count;
+};
+
+// Divide the work between the two RISCs on whichever axis balances better.
+//
+// Neither axis dominates. Splitting sticks within a block leaves one RISC with nothing when a
+// block is one stick tall -- div_up(1, 2) is 1, so the writer gets 1 - 1 = 0 -- and skews for any
+// odd stick count. Splitting blocks is just as lopsided for an odd block count whose sticks
+// already halve evenly: 3 blocks of 4 sticks goes 8/4 by block but 6/6 by stick.
+//
+// So cost both and take the lower critical path, counting the busier RISC's sticks summed over
+// the inputs. Each block's copy is independent, so any partition of blocks is correct, and the
+// sticks within a block were already free to split.
+RiscBlockPartition choose_risc_block_partition(
+    uint32_t num_blocks, const std::vector<uint32_t>& input_num_sticks_per_block) {
+    uint32_t total_sticks_per_block = 0;
+    uint32_t halved_sticks_per_block = 0;
+    for (const uint32_t sticks_per_block : input_num_sticks_per_block) {
+        total_sticks_per_block += sticks_per_block;
+        halved_sticks_per_block += tt::div_up(sticks_per_block, 2);
+    }
+    const uint32_t block_split_critical = tt::div_up(num_blocks, 2) * total_sticks_per_block;
+    const uint32_t stick_split_critical = num_blocks * halved_sticks_per_block;
+    const bool split_blocks = block_split_critical < stick_split_critical;
+    const uint32_t reader_block_count = split_blocks ? tt::div_up(num_blocks, 2) : num_blocks;
+    return {
+        .split_blocks = split_blocks,
+        .reader_block_count = reader_block_count,
+        .writer_block_start = split_blocks ? reader_block_count : 0,
+        .writer_block_count = num_blocks - (split_blocks ? reader_block_count : 0)};
+}
+
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
@@ -37,6 +74,12 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     Tensor& output = tensor_return_value;
     const uint32_t rank = input_tensors[0].logical_shape().rank();
     const bool height_concat = is_height_concat(rank, operation_attributes.dim);
+    // Height concat has to interleave per leading index (see num_leading_blocks). Width concat
+    // does not: it appends along the stick, so one block is both correct and what the kernel did
+    // before -- and for a height-sharded width concat a per-core block count is not even
+    // well-defined, since a core's rows can straddle leading indices. Pinning it to 1 there keeps
+    // width concat untouched by construction.
+    const uint32_t num_blocks = height_concat ? num_leading_blocks(input_tensors[0]) : 1u;
     ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
@@ -72,20 +115,45 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     std::vector<uint32_t> input_num_pages_per_stick;
     std::vector<uint32_t> input_num_sticks;
     std::vector<uint32_t> input_write_offsets;
+    std::vector<uint32_t> input_num_sticks_per_block;
+    std::vector<uint32_t> input_block_strides;
     input_num_pages_per_stick.reserve(num_input_tensors);
     input_num_sticks.reserve(num_input_tensors);
     input_write_offsets.reserve(num_input_tensors);
+    input_num_sticks_per_block.reserve(num_input_tensors);
+    input_block_strides.reserve(num_input_tensors);
 
     // Assume inputs and output have the same sharding grid.
     const auto all_cores = input_tensors[0].shard_spec().value().grid;
 
     // Input CBs
+    //
+    // For height concat the write offset carries only this input's *prefix within one leading
+    // block*: block b of input i starts b * output_block_stride further on, and the kernel adds
+    // that term. Advancing by the whole shard instead lays the result out as
+    // [all of input 0; all of input 1; ...] rather than interleaving per leading index (#55342).
+    // At one block the two are the same expression, which is why width concat is unaffected.
     uint32_t curr_input_write_offset = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto shard_spec = input_tensors[input_id].shard_spec().value();
         input_num_pages_per_stick.push_back(tt::div_up(shard_spec.shape[1], elements_per_page_width));
         input_num_sticks.push_back(tt::div_up(shard_spec.shape[0], elements_per_page_height));
         input_write_offsets.push_back(curr_input_write_offset);
+
+        // A width-sharded shard spans the whole flattened height, so every leading index
+        // contributes the same number of rows. Anything else is a shard spec this factory cannot
+        // describe as a strided copy. Vacuous at num_blocks == 1.
+        TT_FATAL(
+            input_num_sticks[input_id] % num_blocks == 0,
+            "Height concat: input {} has {} shard rows, which does not divide into the {} leading "
+            "indices of shape {}.",
+            input_id,
+            input_num_sticks[input_id],
+            num_blocks,
+            input_tensors[input_id].padded_shape());
+        input_num_sticks_per_block.push_back(input_num_sticks[input_id] / num_blocks);
+        input_block_strides.push_back(
+            page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_block[input_id]);
 
         const uint32_t input_num_pages = input_num_pages_per_stick[input_id] * input_num_sticks[input_id];
         desc.cbs.push_back(CBDescriptor{
@@ -99,7 +167,10 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .buffer = input_tensors[input_id].buffer(),
         });
 
-        curr_input_write_offset += page_size * (height_concat ? input_num_pages : input_num_pages_per_stick[input_id]);
+        // Height concat: this input's rows within one block. Width concat: one stick.
+        // input_block_strides is page_size * input_num_pages when num_blocks == 1.
+        curr_input_write_offset +=
+            height_concat ? input_block_strides[input_id] : page_size * input_num_pages_per_stick[input_id];
     }
 
     // Output CB
@@ -118,23 +189,85 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     });
 
     const uint32_t output_stride = page_size * output_num_pages_per_stick;
-    const KernelDescriptor::CompileTimeArgs compile_time_args = {
-        cb_dst_id, page_size, output_stride, num_input_tensors};
+
+    TT_FATAL(
+        output_num_sticks % num_blocks == 0,
+        "Height concat: output has {} shard rows, which does not divide into the {} leading "
+        "indices of shape {}.",
+        output_num_sticks,
+        num_blocks,
+        output.padded_shape());
+    // The write offsets above were accumulated in units of each input's own pages-per-stick, but
+    // they index the output shard, so for height concat the two have to agree. They do: the inputs
+    // differ only in the concat dim, which is not the width. Checked rather than assumed, because
+    // a mismatch would skew every row silently.
+    if (height_concat) {
+        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+            TT_FATAL(
+                input_num_pages_per_stick[input_id] == output_num_pages_per_stick,
+                "Height concat: input {} is {} pages wide but the output is {}; height concat "
+                "requires equal widths.",
+                input_id,
+                input_num_pages_per_stick[input_id],
+                output_num_pages_per_stick);
+        }
+    }
+    // Rows one leading index contributes to the output shard, in bytes.
+    const uint32_t output_block_stride = output_stride * (output_num_sticks / num_blocks);
+    // Ties that back to the offsets accumulated above. curr_input_write_offset ended at
+    // sum(input_block_strides) -- the bytes one leading index actually fills -- and the kernel
+    // then steps output_block_stride to reach the next. If the output shard were taller than the
+    // inputs' combined per-block rows, the blocks would be spaced further apart than they were
+    // filled and every block after the first would leave unwritten rows inside the tensor's real
+    // height, read back as garbage rather than as a failure.
+    if (height_concat) {
+        TT_FATAL(
+            curr_input_write_offset == output_block_stride,
+            "Height concat: inputs fill {} bytes per leading index but the output shard spaces "
+            "them {} apart ({} rows over {} indices), which would leave gaps inside the tensor.",
+            curr_input_write_offset,
+            output_block_stride,
+            output_num_sticks,
+            num_blocks);
+    }
+
+    const auto [split_blocks, reader_block_count, writer_block_start, writer_block_count] =
+        choose_risc_block_partition(num_blocks, input_num_sticks_per_block);
+
+    // Each kernel carries its own block range as compile-time args so its loop bound is constant.
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
+        cb_dst_id, page_size, output_stride, num_input_tensors, output_block_stride, 0, reader_block_count};
+    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
+        cb_dst_id,
+        page_size,
+        output_stride,
+        num_input_tensors,
+        output_block_stride,
+        writer_block_start,
+        writer_block_count};
 
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
-    runtime_args_0.reserve(num_input_tensors * 4);
-    runtime_args_1.reserve(num_input_tensors * 4);
+    runtime_args_0.reserve(num_input_tensors * 5);
+    runtime_args_1.reserve(num_input_tensors * 5);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-        const auto input_num_sticks_per_risc = tt::div_up(input_num_sticks[input_id], 2);
+        const uint32_t sticks_per_block = input_num_sticks_per_block[input_id];
+        // Under a block split each RISC copies every stick of the blocks it owns. Otherwise both
+        // RISCs walk every block -- however many there are -- and halve each block's sticks, with
+        // the writer starting where the reader stops.
+        const uint32_t reader_sticks = split_blocks ? sticks_per_block : tt::div_up(sticks_per_block, 2);
+        const uint32_t writer_sticks = split_blocks ? sticks_per_block : sticks_per_block - reader_sticks;
+        const uint32_t writer_stick_offset = split_blocks ? 0 : reader_sticks;
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);
-        runtime_args_0.push_back(input_num_sticks_per_risc);
+        runtime_args_0.push_back(reader_sticks);
         runtime_args_0.push_back(input_write_offsets[input_id]);
         runtime_args_0.push_back(0);
+        runtime_args_0.push_back(input_block_strides[input_id]);
         runtime_args_1.push_back(input_num_pages_per_stick[input_id]);
-        runtime_args_1.push_back(input_num_sticks[input_id] - input_num_sticks_per_risc);
-        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * input_num_sticks_per_risc));
-        runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * input_num_sticks_per_risc);
+        runtime_args_1.push_back(writer_sticks);
+        runtime_args_1.push_back(input_write_offsets[input_id] + (output_stride * writer_stick_offset));
+        runtime_args_1.push_back(page_size * input_num_pages_per_stick[input_id] * writer_stick_offset);
+        runtime_args_1.push_back(input_block_strides[input_id]);
     }
 
     // Match the legacy CachedProgram path: SetRuntimeArgs(..., all_cores, args).
@@ -150,7 +283,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = compile_time_args;
+    reader_desc.compile_time_args = reader_compile_time_args;
     reader_desc.runtime_args.reserve(all_cores.num_cores());
     for (const auto& range : all_cores.ranges()) {
         for (const CoreCoord& core : range) {
@@ -164,7 +297,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2s_tensor_concat.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = compile_time_args;
+    writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.runtime_args.reserve(all_cores.num_cores());
     for (const auto& range : all_cores.ranges()) {
         for (const CoreCoord& core : range) {

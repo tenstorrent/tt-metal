@@ -85,7 +85,7 @@ inline uint64_t make_key(tt::tt_metal::distributed::MeshDevice* md, uint32_t big
 }
 
 inline std::shared_ptr<DeltaPlan> get_or_create(
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> md, uint32_t big_modulus, uint32_t full_N) {
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md, uint32_t big_modulus, uint32_t full_N) {
     using namespace tt::tt_metal::distributed;
 
     const uint64_t key = make_key(md.get(), big_modulus, full_N);
@@ -106,7 +106,7 @@ inline std::shared_ptr<DeltaPlan> get_or_create(
     auto [r, i] = build_delta_table(big_modulus, full_N);
     // Vectors are padded to `padded` already.
     using namespace tt::tt_metal;
-    const ttnn::Shape shape{ttnn::SmallVector<uint32_t>{padded / kTileElems, kTileElems}};
+    const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{padded / kTileElems, kTileElems}};
     const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     plan->dr = Tensor::from_vector(std::move(r), spec, md.get());
     plan->di = Tensor::from_vector(std::move(i), spec, md.get());

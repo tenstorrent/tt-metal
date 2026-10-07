@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
 
@@ -30,6 +31,7 @@ struct MoeGroupedTopkDeviceOperation {
         bool stable_sort;
         ScoreFunc score_func;
         tt::tt_metal::MemoryConfig output_mem_config;
+        tt::tt_metal::Layout weights_layout = tt::tt_metal::Layout::TILE;
     };
 
     struct tensor_args_t {
@@ -43,22 +45,7 @@ struct MoeGroupedTopkDeviceOperation {
     using tensor_return_value_t = std::array<Tensor, 2>;
 
     struct ProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            std::vector<tt::tt_metal::CoreCoord> cores;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -95,6 +82,7 @@ moe_grouped_topk(
         ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc::Sigmoid,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& padding_config = std::nullopt,
-    const std::optional<Tensor>& biased_scores = std::nullopt);
+    const std::optional<Tensor>& biased_scores = std::nullopt,
+    tt::tt_metal::Layout weights_layout = tt::tt_metal::Layout::TILE);
 
 }  // namespace ttnn::prim

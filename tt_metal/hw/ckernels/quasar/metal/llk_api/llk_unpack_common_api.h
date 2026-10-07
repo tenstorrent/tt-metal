@@ -30,13 +30,16 @@
  * @tparam E: physical UNPACR engine that will consume the descriptor (Unp0 or Unp1)
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * UNPACR_STRIDE tilize sequences.
+ * @param operand_id: Input DFB used to look up the descriptor parameters
+ * @return Allocated BFD id for the unpack init
  */
 template <ckernel::trisc::BfdResource E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
+inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
+    LLK_REINIT_GUARD_NOTE_PROGRAMMED(E, operand_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
     // llk_pack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
-    ckernel::trisc::bfd_alloc_and_program<E, MODE>(
+    return ckernel::trisc::bfd_alloc_and_program<E, MODE>(
         get_operand_tensor_shape(operand_id),
         get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));

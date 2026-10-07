@@ -25,7 +25,6 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
-    runtime,
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -88,7 +87,7 @@ def generate_unpack_tilize_combinations(
             if in_fmt.is_32_bit()
             else (
                 (DestAccumulation.No,)
-                if in_fmt in [DataFormat.Float16, DataFormat.Int16]
+                if in_fmt in [DataFormat.Int16]
                 else (DestAccumulation.No, DestAccumulation.Yes)
             )
         )
@@ -142,7 +141,7 @@ def generate_unpack_tilize_combinations(
                                     dest_sync,
                                     unpacker_sel,
                                     dimensions,
-                                    runtime(tile_dims),
+                                    tile_dims,
                                 )
                             )
 
@@ -153,8 +152,11 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
+        DataFormat.Float32,
         DataFormat.Int32,
         DataFormat.Int16,
+        DataFormat.Int8,
+        DataFormat.UInt8,
         DataFormat.MxFp4,
         DataFormat.MxInt8,
         DataFormat.MxInt4,

@@ -24,3 +24,4 @@ ignore:
     - models/experimental/xtts_v2/reference/coqui/
     - models/experimental/chronos_forecast/reference/chronos2/
     - models/experimental/chronos_forecast/reference/chronos_bolt_ops.py
+    - models/demos/audio/qwen3_tts/reference/qwen/

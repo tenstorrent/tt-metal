@@ -93,23 +93,11 @@ std::vector<std::pair<int32_t, int32_t>> chunks_in_forwarder_ref_frame(uint32_t 
 
 std::vector<cmbf2d::ChunkDescriptor> forwarding_chunks(
     StreamId stream, uint32_t my_dg_index, uint32_t ring_extent, uint32_t num_links) {
-    const bool is_cw = (stream % 2) == 0;
-    const uint32_t link = stream / 2;
-    const uint32_t m = ring_extent / 2;
-    const int32_t travel = is_cw ? 1 : -1;
-
     std::vector<cmbf2d::ChunkDescriptor> chunks;
     for (const auto& [src, dst] : chunks_in_forwarder_ref_frame(ring_extent)) {
-        // A counter-clockwise stream mirrors the offsets through 0; then both land on a dispatch-group index
-        // by adding where this chip sits on the ring.
-        const uint32_t distance = static_cast<uint32_t>(dst - src);
-        chunks.push_back(cmbf2d::ChunkDescriptor{
-            .origin_dg_index = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_dg_index) + travel * src + static_cast<int32_t>(ring_extent)) % ring_extent),
-            .dst_dg_index = static_cast<uint32_t>(
-                (static_cast<int32_t>(my_dg_index) + travel * dst + static_cast<int32_t>(ring_extent)) % ring_extent),
-            .split_idx = distance == m ? stream : link,
-            .split_count = distance == m ? stream_count(num_links) : num_links});
+        const uint32_t origin = cmbf2d::ring_step(stream, my_dg_index, src, ring_extent);
+        chunks.push_back(cmbf2d::stream_chunk(
+            stream, origin, static_cast<uint32_t>(dst - src), ring_extent, stream_count(num_links)));
     }
     return chunks;
 }
@@ -131,33 +119,29 @@ std::map<StreamId, std::vector<Assignment>> generate_assignments(
             const StreamId stream = make_stream_id(link, is_cw);
             auto& list = per_stream[stream];
 
-            auto own = [&](uint32_t distance, uint32_t split_idx, uint32_t split_count) {
-                const uint32_t dg_index = (my_dg_index + (is_cw ? distance : extent - distance)) % extent;
+            auto own = [&](uint32_t distance) {
+                const cmbf2d::ChunkDescriptor chunk =
+                    cmbf2d::stream_chunk(stream, my_dg_index, distance, extent, stream_count(num_links));
                 list.push_back(Assignment{
-                    .dst_chip_id = ring_chip_ids[dg_index],
-                    .dst_dg_index = dg_index,
-                    .split_idx = split_idx,
-                    .split_count = split_count});
+                    .dst_chip_id = ring_chip_ids[chunk.dst_dg_index],
+                    .dst_dg_index = chunk.dst_dg_index,
+                    .split_idx = chunk.split_idx,
+                    .split_count = chunk.split_count});
             };
 
-            // Furthest destination first, with relays interleaved so downstream streams get work early.
-            // After the j-th own assignment the cumulative relay count is the triangular number
-            // T(j-2) = (j-2)(j-1)/2, which for m=4 gives own4 own3 own2 relay0 own1 relay1 relay2 relay3..5
-            // (own by distance, so own1 is the neighbour, which is delivered rather than forwarded).
-            uint32_t relays = 0;
-            for (uint32_t j = 1; j <= m; j++) {
-                const uint32_t distance = m - j + 1;
-                if (distance == m) {
-                    own(m, stream, stream_count(num_links));  // the opposite chip, shared by every stream
-                } else {
-                    own(distance, link, num_links);
-                }
-                const uint32_t want = (j >= 2) ? (j - 2) * (j - 1) / 2 : 0;
-                for (; relays < want && relays < relay_chunks_per_stream(extent); relays++) {
-                    list.push_back(Assignment{.is_relay = true, .relay_chunk = relays});
-                }
+            // Furthest destination first, then the relays. Doing our own work first is what puts DISTANCE
+            // between a relay and the upstream chunk feeding it: the upstream emits that chunk at the top of
+            // its pass, we consume it at the bottom of ours, and the whole own phase is the slack the ring
+            // has to absorb jitter with. The schedule runs once per local expert, so that slack is a pass,
+            // not a run -- interleaving relays earlier would shrink it to a chunk or two.
+            //
+            // Emission order is unaffected: a relay for our neighbour and the nearest own assignment are
+            // both final writes, so neither puts a chunk downstream, and the forwarding chunks come off in
+            // the same sequence either way.
+            for (uint32_t distance = m; distance >= 1; distance--) {
+                own(distance);
             }
-            for (; relays < relay_chunks_per_stream(extent); relays++) {
+            for (uint32_t relays = 0; relays < relay_chunks_per_stream(extent); relays++) {
                 list.push_back(Assignment{.is_relay = true, .relay_chunk = relays});
             }
             TT_FATAL(

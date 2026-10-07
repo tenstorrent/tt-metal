@@ -27,35 +27,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const Operand& buffer_A         = params.buffer_A;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
 #endif
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-        }
-        else
-        {
-            const DataFormat src_format     = static_cast<DataFormat>(formats.math);
-            const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
-            const bool int8_math_into_int32_dest =
-                is_fp32_dest_acc_en && (src_format == DataFormat::Int8 || src_format == DataFormat::UInt8) && sfpu_in_format == DataFormat::Int32;
-            if (int8_math_into_int32_dest)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>();
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>();
-            }
-        }
-
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -67,8 +49,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
         // writes before TILE_LOOP. UNPACK is only a dest client on UNP_DEST.
@@ -153,25 +134,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (unpack_to_dest)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
-        }
-        else
-        {
-            const bool int8_math_into_int32_dest =
-                is_fp32_dest_acc_en && (src_format == DataFormat::Int8 || src_format == DataFormat::UInt8) && sfpu_in_format == DataFormat::Int32;
-            if (int8_math_into_int32_dest)
-            {
-                // ALU_ACC_CTRL_INT8_math_enabled is only for Int8/UInt8 math
-                // accumulating into the Int32 Dest through the ELWADD datacopy.
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(src_format, src_format);
-            }
-            else
-            {
-                _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
-            }
-        }
+
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
 
         if constexpr (!unpack_to_dest)
         {
@@ -274,19 +238,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t DST_INDEX   = params.DST_INDEX;
-    const Operand& buffer_Res       = params.buffer_Res;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t DST_INDEX       = params.DST_INDEX;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
 
     {
         ZONE_SCOPED("INIT")
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-            ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
 
         // Program dest-dvalid CFG after HW configure so wait masks are the last
         // writes before TILE_LOOP.

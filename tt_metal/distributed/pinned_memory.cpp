@@ -16,8 +16,9 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_event.hpp>
+#include "mesh_event_impl.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <context/metal_context.hpp>
+#include "impl/context/metal_env_impl.hpp"
 #include <umd/device/chip_helpers/sysmem_manager.hpp>
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
@@ -38,12 +39,13 @@ tt::umd::DeviceBufferAccess to_umd_access(PinnedMemoryDeviceAccess access) {
 
 // PinnedMemoryImpl implementation
 PinnedMemoryImpl::PinnedMemoryImpl(
+    MetalEnvImpl& metal_env,
     const std::vector<IDevice*>& devices,
     void* host_buffer,
     size_t buffer_size,
     bool map_to_noc,
     PinnedMemoryDeviceAccess access) :
-    buffer_size_(buffer_size), map_to_noc_(map_to_noc), device_access_(access) {
+    metal_env_(&metal_env), buffer_size_(buffer_size), map_to_noc_(map_to_noc), device_access_(access) {
     initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc, access);
 }
 
@@ -53,6 +55,7 @@ PinnedMemoryImpl::~PinnedMemoryImpl() {
 }
 
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept :
+    metal_env_(std::exchange(other.metal_env_, nullptr)),
     buffer_size_(std::exchange(other.buffer_size_, 0)),
     map_to_noc_(std::exchange(other.map_to_noc_, false)),
     device_access_(std::exchange(other.device_access_, PinnedMemoryDeviceAccess::ReadWrite)),
@@ -69,6 +72,7 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
         drain_barrier_events();
         device_buffers_.clear();
 
+        metal_env_ = std::exchange(other.metal_env_, nullptr);
         buffer_size_ = std::exchange(other.buffer_size_, 0);
         map_to_noc_ = std::exchange(other.map_to_noc_, false);
         device_access_ = std::exchange(other.device_access_, PinnedMemoryDeviceAccess::ReadWrite);
@@ -102,7 +106,7 @@ void PinnedMemoryImpl::initialize_from_devices(
             "PinnedMemory only supports mapping existing host memory. Use constructor with host_buffer parameter.");
     }
 
-    auto& cluster = MetalContext::instance().get_cluster();
+    auto& cluster = metal_env_->get_cluster();
 
     // Collect all devices and their associated MMIO devices, deduplicating MMIO devices
     std::unordered_map<ChipId, ChipId> device_to_mmio_map;
@@ -142,7 +146,7 @@ void PinnedMemoryImpl::initialize_from_devices(
 
     // Create one buffer per unique MMIO device, all mapping the same aligned host memory
     std::unordered_map<ChipId, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
-    if (MetalContext::instance().hal().get_supports_64_bit_pcie_addressing()) {
+    if (metal_env_->get_hal().get_supports_64_bit_pcie_addressing()) {
         // On Blackhole, we can use 64-bit address space, so we don't need to use the iATU.
         map_to_noc = false;
         use_64bit_address_space_ = true;
@@ -241,11 +245,11 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
     if (buffer_it == device_buffers_.end()) {
         return std::nullopt;
     }
-    const auto& soc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(mmio_device_id);
+    const auto& soc = metal_env_->get_cluster().get_soc_desc(mmio_device_id);
     const auto& pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     TT_ASSERT(!pcie_cores.empty());
     auto pcie_xy = pcie_cores.front();
-    uint32_t pcie_xy_enc = tt::tt_metal::MetalContext::instance().hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
+    uint32_t pcie_xy_enc = metal_env_->get_hal().noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
 
     if (use_64bit_address_space_) {
         return PinnedMemory::NocAddr{
@@ -296,14 +300,15 @@ void PinnedMemoryImpl::add_barrier_event(const distributed::MeshEvent& event) {
     // Clear completed barrier events to avoid unbounded growth of the barrier queue.
     while (!barrier_events_.empty()) {
         auto& event = barrier_events_.front();
-        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        if (!metal_env_->get_rtoptions().get_fast_dispatch()) {
             barrier_events_.pop_front();
             continue;
         }
         bool all_devices_completed = true;
-        for (const auto& coord : event.device_range()) {
+        for (const auto& coord : event.impl().device_range()) {
             auto* physical_device = event.device()->impl().get_device(coord);
-            if (physical_device->sysmem_manager().get_last_completed_event(event.mesh_cq_id()) < event.id()) {
+            if (physical_device->sysmem_manager().get_last_completed_event(event.impl().mesh_cq_id()) <
+                event.impl().id()) {
                 all_devices_completed = false;
                 break;
             }
@@ -335,12 +340,14 @@ void PinnedMemoryImpl::unlock() {}
 
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
+    distributed::MeshDevice& mesh_device,
     const std::vector<IDevice*>& devices,
     void* host_buffer,
     size_t buffer_size,
     bool map_to_noc,
     PinnedMemoryDeviceAccess access) :
-    pImpl(std::make_unique<PinnedMemoryImpl>(devices, host_buffer, buffer_size, map_to_noc, access)) {}
+    pImpl(std::make_unique<PinnedMemoryImpl>(
+        mesh_device.impl().metal_env(), devices, host_buffer, buffer_size, map_to_noc, access)) {}
 
 PinnedMemory::~PinnedMemory() = default;
 
@@ -414,27 +421,28 @@ std::shared_ptr<PinnedMemory> PinnedMemory::Create(
     void* host_ptr = static_cast<void*>(bytes.data());
     size_t buffer_size = bytes.size();
 
-    auto pinned_memory =
-        std::shared_ptr<PinnedMemory>(new PinnedMemory(devices, host_ptr, buffer_size, map_to_noc, access));
+    auto pinned_memory = std::shared_ptr<PinnedMemory>(
+        new PinnedMemory(mesh_device, devices, host_ptr, buffer_size, map_to_noc, access));
     HostBufferSetPinnedMemory(host_buffer, pinned_memory);
     return pinned_memory;
 }
 
-experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& /* mesh_device */) {
+experimental::MemoryPinningParameters GetMemoryPinningParameters(distributed::MeshDevice& mesh_device) {
+    auto& env = mesh_device.impl().metal_env();
     // Use UMD Cluster to determine IOMMU and NOC mapping support and arch
-    bool iommu_enabled = MetalContext::instance().get_cluster().is_iommu_enabled();
+    bool iommu_enabled = env.get_cluster().is_iommu_enabled();
     if (!iommu_enabled) {
         return experimental::MemoryPinningParameters{0u, 0u, false, false};
     }
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = env.get_hal();
     experimental::MemoryPinningParameters params{};
     params.max_pins = hal.get_max_pinned_memory_count();
     params.max_total_pin_size = hal.get_total_pinned_memory_size();
     // Ideally use a 64-bit addresses through the NOC, but otherwise use the iATU to translate 36-bit addresses to 64
     // bit addresses.
     params.can_map_to_noc = true;
-    params.supports_read_only = MetalContext::instance().get_cluster().is_read_only_page_pinning_supported();
+    params.supports_read_only = env.get_cluster().is_read_only_page_pinning_supported();
     return params;
 }
 

@@ -60,7 +60,7 @@ struct SyncInfo {
 
 struct FabricEventMarkers {
     std::vector<tracy::TTDeviceMarker> fabric_write_markers;
-    tracy::TTDeviceMarker fabric_routing_fields_marker;
+    tracy::TTDeviceMarker fabric_routing_metadata_marker;
     tracy::TTDeviceMarker local_noc_write_marker;
     std::optional<tracy::TTDeviceMarker> fabric_mux_marker;
 };
@@ -123,6 +123,7 @@ private:
 
     // Storage for trace ids that are currently being recorded
     std::unordered_set<uint32_t> traces_being_recorded;
+    std::unordered_set<uint32_t> named_lane_threads;
 
     // Runtime ids associated with each trace
     std::unordered_map<uint32_t, std::unordered_set<uint32_t>> runtime_ids_per_trace;

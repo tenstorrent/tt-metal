@@ -114,7 +114,8 @@ Tensor bias_gelu(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor bias_gelu(
     const ttnn::Tensor& input_tensor_a,
@@ -126,7 +127,8 @@ Tensor bias_gelu(
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const std::optional<bool>& fast_and_approximate_mode = std::nullopt);
 
 Tensor fmod(
     const Tensor& input_a,
@@ -298,6 +300,16 @@ Tensor situ_glu(
     const Tensor& up,
     float beta1,
     float beta2,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+// DeepSeek-V4's clamped SiLU-GLU: silu(min(gate, limit)) * clamp(up, -limit, limit). The gate is
+// bounded from above only; the asymmetry is the model's. gate and up are supplied pre-split.
+Tensor clamped_silu_glu(
+    const Tensor& gate,
+    const Tensor& up,
+    float limit,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);

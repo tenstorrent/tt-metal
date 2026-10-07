@@ -81,6 +81,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     const tt::DataFormat mask_cb_data_format =
         has_mask ? datatype_to_dataformat_converter(tensor_args.mask.value().dtype()) : tt::DataFormat::Float16_b;
     const std::uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
+    // The writer fills the padding tile with bfloat16 -inf whatever the mask dtype.
+    const std::uint32_t mask_padded_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
@@ -285,9 +287,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     }
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MASK_PADDED,
-        .entry_size = mask_tile_size,
+        .entry_size = mask_padded_tile_size,
         .num_entries = in5_t,
-        .data_format_metadata = mask_cb_data_format});
+        .data_format_metadata = tt::DataFormat::Float16_b});
     if (attributes.numeric_stable) {
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = MAX,
@@ -377,7 +379,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .tensor_bindings = reader_tensor_bindings,
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // ---- Writer kernel ----
@@ -394,7 +396,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = DST, .accessor_name = "dst"}},
         .compile_time_args = {{"num_datum_padded", num_datum_padded}, {"tile_hw", tile_height * tile_width}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset", "blk", "mask_padded_data", "Wt"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // for broadcasting in H direction we need to
@@ -458,9 +460,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
 
     // Compute hardware config (Style A). Legacy defaulted unpack_to_dest_mode (=> UnpackToSrc); Metal 2.0
     // requires an explicit entry for every Float32 DFB the compute consumes under enable_32_bit_dest.
-    auto compute_hw = ttnn::to_compute_hardware_config(arch, attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(attributes.compute_kernel_config);
     if (fp32_dest_acc_en) {
-        auto& gen1 = std::get<ComputeGen1Config>(compute_hw);
+        auto& gen1 = compute_hw;
         auto add_unpack = [&](const DFBSpecName& name, tt::DataFormat fmt) {
             if (fmt == tt::DataFormat::Float32) {
                 gen1.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
@@ -469,7 +471,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         add_unpack(IN0, in0_cb_data_format);
         add_unpack(MAX_SCALER, max_scaler_cb_data_format);
         add_unpack(SUM_SCALER, sum_scaler_cb_data_format);
-        add_unpack(MASK_PADDED, mask_cb_data_format);
+        add_unpack(MASK_PADDED, tt::DataFormat::Float16_b);
         add_unpack(EXPS, im_cb_data_format);
         add_unpack(RECIP_SUM_EXPS, im_cb_data_format);
         if (has_mask) {

@@ -22,6 +22,12 @@ namespace tt::tt_fabric {
 // Reuse the capture data structure for import overrides so export and import are consistent.
 using ChannelTrimmingOverrides =
     FabricDatapathUsageL1Results<true, builder_config::MAX_NUM_VCS, builder_config::num_max_sender_channels>;
+static_assert(
+    builder_config::num_max_sender_channels <= sizeof(uint16_t) * 8,
+    "Channel trimming sender masks must cover every flattened sender channel");
+static_assert(
+    builder_config::MAX_NUM_VCS <= sizeof(uint16_t) * 8,
+    "Channel trimming receiver masks must cover every virtual channel");
 
 struct Vc0TrimFastPathInfo {
     bool terminal_or_source_only = false;
@@ -47,7 +53,7 @@ inline bool has_real_channel_trimming_capture_entry(
     if (!capture_overrides.has_value()) {
         return false;
     }
-    return capture_overrides->find(make_override_key(chip_id, eth_chan)) != capture_overrides->end();
+    return capture_overrides->contains(make_override_key(chip_id, eth_chan));
 }
 
 // Per-VC override specification for channel trimming.
