@@ -125,15 +125,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     if constexpr (QUANT_OP == 0)
     {
-        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_quant_int32<false, 8, false, SCALAR>, 0, 1, 0, VectorMode::RC);
+        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_quant_int32<false, 32, false, SCALAR>, 0, 1, 0, VectorMode::None);
     }
     else if constexpr (QUANT_OP == 1)
     {
-        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_requant_int32<false, 8, false, false, SCALAR>, 0, 1, 0, VectorMode::RC);
+        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_requant_int32<false, 32, false, false, SCALAR>, 0, 1, 0, VectorMode::None);
     }
     else
     {
-        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_dequant_int32<false, 8, false, false, SCALAR>, 0, 1, 0, VectorMode::RC);
+        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_dequant_int32<false, 32, false, false, SCALAR>, 0, 1, 0, VectorMode::None);
     }
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }

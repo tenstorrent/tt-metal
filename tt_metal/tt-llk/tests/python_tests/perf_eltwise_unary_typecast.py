@@ -94,7 +94,7 @@ def _is_block_float(fmt: DataFormat) -> bool:
     ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
     iterations=[
         8,
-    ],  # SFPU iteration count; the typecast dispatch hardcodes 8 ITERATIONS internally
+    ],  # SFPU iteration count; on Blackhole the typecast dispatch issues one 32-row call, as typecast_tile does
     input_dimensions=[
         [128, 64],  # tile_cnt: 8
     ],

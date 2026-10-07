@@ -12,6 +12,19 @@
 
 namespace ckernel {
 
+#ifdef TRISC_MATH
+namespace detail {
+#ifdef ARCH_BLACKHOLE
+// Blackhole quantizes a tile in one 32-row call.
+inline constexpr int quant_iterations = 32;
+inline constexpr VectorMode quant_vector_mode = VectorMode::None;
+#else
+inline constexpr int quant_iterations = 8;
+inline constexpr VectorMode quant_vector_mode = VectorMode::RC;
+#endif
+}  // namespace detail
+#endif
+
 // clang-format off
 /**
  * Performs an elementwise per-tensor affine quantization operation on the first operand using the scaling factor in the second operand.
@@ -28,7 +41,14 @@ namespace ckernel {
 // clang-format on
 ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_quant_int32,
+        (APPROX, detail::quant_iterations),
+        idst0,
+        idst1,
+        odst,
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -47,7 +67,14 @@ ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 // clang-format on
 ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32_int8_pack, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_quant_int32_int8_pack,
+        (APPROX, detail::quant_iterations),
+        idst0,
+        idst1,
+        odst,
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -66,7 +93,14 @@ ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 // clang-format on
 ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_requant_int32,
+        (APPROX, detail::quant_iterations),
+        idst0,
+        idst1,
+        odst,
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -88,11 +122,11 @@ ALWI void requant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32_int8_pack,
-        (APPROX),
+        (APPROX, detail::quant_iterations),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -114,11 +148,11 @@ ALWI void requant_int8_in_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32,
-        (APPROX, 8, false, true),
+        (APPROX, detail::quant_iterations, false, true),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -141,11 +175,11 @@ ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32_int8_pack,
-        (APPROX, 8, true),
+        (APPROX, detail::quant_iterations, true),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -164,7 +198,14 @@ ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t
 // clang-format on
 ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dequant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_dequant_int32,
+        (APPROX, detail::quant_iterations),
+        idst0,
+        idst1,
+        odst,
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -186,11 +227,11 @@ ALWI void dequant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_dequant_int32,
-        (APPROX, 8, false, true),
+        (APPROX, detail::quant_iterations, false, true),
         idst0,
         idst1,
         odst,
-        VectorMode::RC)));
+        detail::quant_vector_mode)));
 }
 
 // clang-format off
@@ -389,11 +430,11 @@ ALWI void quant_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_quant_int32,
-        (APPROX, 8, false, true /* SCALAR_SCALE */),
+        (APPROX, 32, false, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 ALWI void quant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
@@ -401,11 +442,11 @@ ALWI void quant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_quant_int32_int8_pack,
-        (APPROX, 8, true /* SCALAR_SCALE */),
+        (APPROX, 32, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 ALWI void requant_scalar_tile(uint32_t idst, uint32_t odst) {
@@ -413,11 +454,11 @@ ALWI void requant_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32,
-        (APPROX, 8, false, false, true /* SCALAR_SCALE */),
+        (APPROX, 32, false, false, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 ALWI void requant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
@@ -425,11 +466,11 @@ ALWI void requant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32_int8_pack,
-        (APPROX, 8, false, true /* SCALAR_SCALE */),
+        (APPROX, 32, false, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 ALWI void requant_int8_in_scalar_tile(uint32_t idst, uint32_t odst) {
@@ -437,11 +478,11 @@ ALWI void requant_int8_in_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32,
-        (APPROX, 8, false, true, true /* SCALAR_SCALE */),
+        (APPROX, 32, false, true, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 ALWI void requant_int8_in_int8_out_scalar_tile(uint32_t idst, uint32_t odst) {
@@ -449,11 +490,11 @@ ALWI void requant_int8_in_int8_out_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_requant_int32_int8_pack,
-        (APPROX, 8, true, true /* SCALAR_SCALE */),
+        (APPROX, 32, true, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 ALWI void dequant_scalar_tile(uint32_t idst, uint32_t odst) {
@@ -461,11 +502,11 @@ ALWI void dequant_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_dequant_int32,
-        (APPROX, 8, false, false, true /* SCALAR_SCALE */),
+        (APPROX, 32, false, false, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 ALWI void dequant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
@@ -473,11 +514,11 @@ ALWI void dequant_int8_scalar_tile(uint32_t idst, uint32_t odst) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_dequant_int32,
-        (APPROX, 8, false, true, true /* SCALAR_SCALE */),
+        (APPROX, 32, false, true, true /* SCALAR_SCALE */),
         idst,
         idst,
         odst,
-        VectorMode::RC)));
+        VectorMode::None)));
 }
 
 // clang-format off

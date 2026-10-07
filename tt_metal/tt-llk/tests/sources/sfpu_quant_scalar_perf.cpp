@@ -148,22 +148,23 @@ inline void quant_op_init()
     }
 }
 
+// One 32-row call per tile, as the compute API issues it on Blackhole.
 inline void quant_op_tile()
 {
     constexpr bool SCALAR = (QUANT_SCALE_FORM == 1);
     if constexpr (QUANT_OP == 0)
     {
-        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_quant_int32<false, 8, false, SCALAR>, DATA_TILE, SCALE_TILE, RESULT_TILE, VectorMode::RC);
+        _llk_math_eltwise_binary_sfpu_params_(sfpu::calculate_quant_int32<false, 32, false, SCALAR>, DATA_TILE, SCALE_TILE, RESULT_TILE, VectorMode::None);
     }
     else if constexpr (QUANT_OP == 1)
     {
         _llk_math_eltwise_binary_sfpu_params_(
-            sfpu::calculate_requant_int32<false, 8, false, false, SCALAR>, DATA_TILE, SCALE_TILE, RESULT_TILE, VectorMode::RC);
+            sfpu::calculate_requant_int32<false, 32, false, false, SCALAR>, DATA_TILE, SCALE_TILE, RESULT_TILE, VectorMode::None);
     }
     else
     {
         _llk_math_eltwise_binary_sfpu_params_(
-            sfpu::calculate_dequant_int32<false, 8, false, false, SCALAR>, DATA_TILE, SCALE_TILE, RESULT_TILE, VectorMode::RC);
+            sfpu::calculate_dequant_int32<false, 32, false, false, SCALAR>, DATA_TILE, SCALE_TILE, RESULT_TILE, VectorMode::None);
     }
 }
 
