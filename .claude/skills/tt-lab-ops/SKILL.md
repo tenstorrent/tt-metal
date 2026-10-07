@@ -5,7 +5,7 @@ description: Run device jobs safely on the shared Blackhole Galaxy hosts - host 
 
 # Lab operations (shared hosts, shared NFS, many agents)
 
-Last validated against commit: <none yet> (cache-dir text: ec8191781a8 vs launch.py)
+Last validated against commit: <none yet> (cache-dir text: ec8191781a8 vs launch.py; trace-allocation and dirty-device paragraphs: observed by the race track at 22eff654928)
 Evidence: `bringup/GUIDE_dsv4_lessons.md`. Kit tools in `models/common/bringup_kit/` (README there): `launch.py` (pinned commit, locked, detached, watched launch),
 `host_health.py` (pre-flight; bad hosts in `bad_hosts.txt`), `hangwatch.py`, `results.py` (parse demo logs), `status_report.py`. Use them instead of hand-rolled ssh/nohup.
 Not hardware-validated yet: `host_health.py --canary`, and the tt-smi reset step of hangwatch (check the reset rc in the log and run a smoke test after).
@@ -41,6 +41,8 @@ Worktree creation on NFS takes minutes: run it in the background. Logs: `/mnt/tt
   kill your pid, then `tt-smi -glx_reset` under the device lock (only on your own host, only if nobody else holds the lock). Known signature: main thread in `FDMeshCommandQueue::wait_for_outstanding_reads` at the first op.
   After a reset run a 1-minute smoke test before long jobs. A killed hung job leaves the device dirty: the next job hangs on its first op until reset.
 * A hang is normal: detect, triage-save, kill own pid, reset, retry once on another host. Second failure with the same signature: stop, log, report. Do not retry blindly in a loop.
+* Allocation after trace capture hangs the next replay [L-trace-alloc, MiMo race track]: any device allocation made after `ttnn.end_trace_capture` while the trace is alive (even a temporary from an eager compare, a `ttnn.copy(tf(x), ref)` typecast or a flag tensor) logs "Allocating device buffers is potentially unsafe due to the existence of an active trace" and the NEXT `execute_trace` can hang (main thread in `FDMeshCommandQueue::wait_for_outstanding_reads`, hangwatch RC=3), because the allocator hands out addresses that the trace's freed intermediates still use. Allocate every persistent tensor (references, masks, flag/pack tensors) BEFORE `begin_trace_capture`, put compare/pack ops inside the trace and read one persistent output per replay; verify with a few replays before a long run. The stage-instrumented stress `test_moe_race_stages.py` got away with it on a short trace, the 48-layer determinism test did not.
+* host_health.py reports a dirty device as OK [MiMo race track]: a job killed while hung (or one that died inside a trace) leaves the chips dirty, and the next job fails FW init ("Device 0 init: failed to initialize FW! Try resetting the board", `risc_firmware_initializer.cpp:1590`) or hangs at its first replay, while `host_health.py` still prints OK (it checks processes and the lock, not the chips). Treat "killed a hung job on host H" as "H needs `flock -w 300 /tmp/dsv4_dev.lock tt-smi -glx_reset` before the next job" (own host, lock free, nobody else running), run a short smoke test after it, and never read a hang right after a kill as a property of the code under test; a hang that appears with a new test version on a host you killed on is first a dirty-device suspect, but compare with a known-good control on a freshly reset host.
 * `import` of some demo modules opens the device driver: do not import them on a busy host (`Read 0xffffffff over PCIe`).
 
 ## 4. Measuring
