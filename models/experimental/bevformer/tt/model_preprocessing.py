@@ -6,7 +6,7 @@ takes them, on device, with whatever the forward would otherwise compute from th
 already computed. ``create_bevformer_parameters`` builds the whole detector's.
 
 Sections:
-- Shared helpers: Linears and LayerNorms
+- Shared helpers: Linears, LayerNorms and FFNs
 - Deformable attention and encoder
 - Perception transformer
 - Backbone and FPN
@@ -20,11 +20,11 @@ from types import SimpleNamespace
 import torch
 
 import ttnn
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.reference.fpn import FPN
 from models.experimental.bevformer.reference.resnet import ModulatedDeformConv2dPack, ResNet
 from models.experimental.bevformer.tt.tt_modulated_deform_conv import grid_offset_order
-from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 
 DEFAULT_DTYPE = ttnn.bfloat16
@@ -64,7 +64,7 @@ def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=DEFAULT_DTYPE)
     )
 
 
-def ffn_parameters(ffn, device, dtype=DEFAULT_DTYPE):
+def preprocess_ffn_parameters(ffn, *, device, dtype=DEFAULT_DTYPE):
     """The encoder's and decoder's mmcv-style ``FFN``: ``layers`` is
     ``Sequential(Sequential(Linear, ReLU), Linear)``, so the two Linears are ``layers[0][0]`` and
     ``layers[1]``."""
@@ -131,7 +131,7 @@ def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
     return SimpleNamespace(
         tsa=create_temporal_self_attention_parameters(layer.attentions[0], device, dtype),
         sca=create_spatial_cross_attention_parameters(layer.attentions[1], device, dtype),
-        ffn=ffn_parameters(layer.ffns[0], device, dtype),
+        ffn=preprocess_ffn_parameters(layer.ffns[0], device=device, dtype=dtype),
         norms=[preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms],
     )
 
@@ -388,7 +388,7 @@ def _decoder_layer_parameters(layer, device, dtype):
     return SimpleNamespace(
         self_attn=_self_attn_parameters(layer.attentions[0].attn, device, dtype),
         cross_attn=_cross_attn_parameters(layer.attentions[1], device, dtype),
-        ffn=ffn_parameters(layer.ffns[0], device, dtype),
+        ffn=preprocess_ffn_parameters(layer.ffns[0], device=device, dtype=dtype),
         norms=[preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms],
     )
 
