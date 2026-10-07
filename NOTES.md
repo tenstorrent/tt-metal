@@ -28,3 +28,8 @@
 4. Score PCC/PSNR per seed vs tt-project/baselines/ltx25_1080p_6s/ref_t48_f6b8 (DEFAULT prompt, seeds 0-4).
 5. Clear win (>= ~20 ms e2e, output equivalent) -> default-on commit, `ttp push` to ttp/t48-ltx25-integrated
    (code only). Else keep opt-in, `ttp push --own --detach`.
+
+## Push blocker (2026-10-07 05:37 UTC)
+- `ttp push --own` fails its check twice (exit 4): ~/fasth3/tt-metal/build -> build_Release, which no
+  longer exists on g15blx02, so `import ttnn` in the root conftest fails (_ttnncpp.so). t188's 04:53 push
+  hit the same. Not a code failure; the task branch stays local until the g15 build is back.
