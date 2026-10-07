@@ -16,6 +16,11 @@ and a `ttnn.lerp`) to the bit, each pass must match its standalone `inner_step`,
 of the six modulation tensors per block (and the two `norm_out` ones) must match its legacy
 counterpart, so a mismatch is attributed to one op.
 
+Since sprint 7 the gate also covers the prompt K/V hoist (`WanTransformer3DModel.prepare_prompt_kv`
+feeding `combined_step(prompt_kv=..., negative_prompt_kv=...)`): the passes and the combined step
+with hoisted K/V must equal the pre-hoist references, and each block's `attn2` must return the
+same tensor from the hoisted (k, v) as from the prompt.
+
 Both timestep layouts are covered: the scalar (T2V) one and the two-row per-token (I2V) one,
 the latter with all-ones masks so it reduces to the scalar values while exercising the
 per-token arm's shapes.
@@ -110,6 +115,50 @@ def _bit_exact_checks(tt_model, *, timestep, guidance, spatial_device, prompt_1B
     checks["cond pass"] = (ref_cond, new_cond)
     checks["uncond pass"] = (ref_uncond, new_uncond)
     checks["combined_step"] = (ref_combined, new_combined)
+
+    # Sprint 7 A2: prompt-only cross-attention K/V hoisted out of the step. The per-block
+    # (k, v) from `prepare_prompt_kv` replace the inline to_kv / norm_k / V head split; the
+    # passes and the combined step must still match the pre-hoist references to the bit, and
+    # each block's attn2 must give the same output from the hoisted pair as from the prompt.
+    prompt_kv = tt_model.prepare_prompt_kv(prompt_1BLP)
+    negative_kv = tt_model.prepare_prompt_kv(negative_1BLP)
+    checks["cond pass + prompt_kv"] = (
+        ref_cond,
+        local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, prompt_kv=prompt_kv, **common, **shared)),
+    )
+    checks["uncond pass + prompt_kv"] = (
+        ref_uncond,
+        local_device_to_torch(
+            tt_model.inner_step(prompt_1BLP=negative_1BLP, prompt_kv=negative_kv, **common, **shared)
+        ),
+    )
+    checks["combined_step + prompt_kv"] = (
+        ref_combined,
+        local_device_to_torch(
+            tt_model.combined_step(
+                do_classifier_free_guidance=True,
+                spatial_1BNI=spatial_device,
+                prompt_1BLP=prompt_1BLP,
+                negative_prompt_1BLP=negative_1BLP,
+                N=n,
+                rope_cos_1HND=common["rope_cos_1HND"],
+                rope_sin_1HND=common["rope_sin_1HND"],
+                trans_mat=common["trans_mat"],
+                timestep=timestep,
+                guidance_scale=guidance,
+                gather_output=False,
+                prompt_kv=prompt_kv,
+                negative_prompt_kv=negative_kv,
+            )
+        ),
+    )
+    for b, block in enumerate(tt_model.blocks):
+        normed = block.norm2(shared["spatial_1BND"])
+        inline = block.attn2(spatial_1BND=normed, N=n, prompt_1BLP=prompt_1BLP)
+        hoisted = block.attn2(spatial_1BND=normed, N=n, prompt_1BLP=prompt_1BLP, prompt_kv=prompt_kv[b])
+        k_b, v_b = prompt_kv[b]
+        assert k_b.dtype == v_b.dtype == ttnn.bfloat16, f"block {b} prompt K/V dtype {k_b.dtype} / {v_b.dtype}"
+        checks[f"block {b} attn2 with prompt_kv"] = (local_device_to_torch(inline), local_device_to_torch(hoisted))
 
     # Per-tensor: legacy layout (add the 6-row / flat table, ttnn.chunk, typecast) against the
     # split layout (tile-aligned slices of the projection, pre-split table rows, bf16 adds).

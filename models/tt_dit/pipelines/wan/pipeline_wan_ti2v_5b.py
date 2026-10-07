@@ -175,6 +175,11 @@ class WanTI2V5BPipeline(WanPipeline):
             # 923 (40 steps) and visibly softens the output (notes section 8). Host-side only:
             # the sigma schedule changes, no captured program does.
             "flow_shift": None,
+            # Sprint 7 A2: the prompt is constant per generation, so every block's cross-attention
+            # K/V (to_kv, norm_k, V head split: 180 programs per step under CFG) is computed once
+            # per prompt and fed to the trace from persistent buffers. Bit-identical (gate:
+            # test_cfg_hoist_ti2v_5b.py).
+            "hoist_prompt_kv": True,
             # 4x8 BH preset defaults vae_t_chunk_size=None (full-T), which OOMs DRAM
             # for long clips (e.g. 121f needs a ~14GB VAE activation). Chunk the temporal
             # VAE decode (feat_cache carries causal-conv state across chunks).
