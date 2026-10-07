@@ -83,6 +83,13 @@ class QuantConfig:
     # scale` programs per block (the +1 is folded into fp32 table rows once per load). A rounding
     # change: presets only, PCC- and fidelity-gated.
     modulation_affine_dtype: ttnn.DataType | None = None
+    # Sprint 7 (A4, plumbing fix). Three per-linear compute configs were silently ignored:
+    # attn1.to_out ran the config derived from self_attn_qkv, attn2.to_kv / to_out the one from
+    # cross_attn_q, ff2 the one from ffn_ff1 (only their weight dtypes took effect, so e.g. the
+    # sprint-6 "cross_attn_out at HiFi2" pin only changed the weight dtype). True makes every
+    # linear run its own LinearQuantConfig. Off for the measured presets so their numbers stay
+    # reproducible; on in the act8 family.
+    per_linear_compute_config: bool = False
 
     @staticmethod
     def default() -> QuantConfig:
@@ -229,6 +236,10 @@ def _all_bf8_lofi_act8() -> QuantConfig:
     base = QuantConfig.all_bf8_lofi()
     base.apply_activation_dtype = True
     base.norm_output_dtype = ttnn.bfloat8_b
+    # A4 plumbing fix: with this the preset's cross_attn_out really runs HiFi2 + fp32 accumulate
+    # (the sprint-6 pin only reached its weight dtype) and ff2 / to_kv run their own configs
+    # (identical to the inherited ones in this preset).
+    base.per_linear_compute_config = True
     # The SDPA outputs feeding the two to_out projections stay bf16 here (no cast program);
     # the hoisted prompt K/V projection keeps bf16 in and out (norm_k needs bf16).
     base.self_attn_out = replace(base.self_attn_out, activation_dtype=None)
@@ -361,6 +372,10 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         block.norm_output_dtype = config.norm_output_dtype
         # AdaLN affine dtype (A3): shift / 1+scale emitted as bf16 with the +1 pre-folded.
         block.modulation_affine_dtype = config.modulation_affine_dtype
+        # Per-linear compute configs (A4): honour self_attn_out / cross_attn_kv / cross_attn_out / ffn_ff2.
+        block.per_linear_compute_config = config.per_linear_compute_config
+        block.attn1.per_linear_compute_config = config.per_linear_compute_config
+        block.attn2.per_linear_compute_config = config.per_linear_compute_config
 
         # Self-attention linears
         _apply_linear_config(block.attn1.to_qkv, config.self_attn_qkv, arch, f"blocks[{idx}].attn1.to_qkv", **act)
@@ -421,7 +436,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     logger.info(f"  Math fidelities: {fidelities}")
     logger.info(
         f"  Activations: apply_activation_dtype={config.apply_activation_dtype}, "
-        f"norm_output_dtype={config.norm_output_dtype}, modulation_affine_dtype={config.modulation_affine_dtype}"
+        f"norm_output_dtype={config.norm_output_dtype}, modulation_affine_dtype={config.modulation_affine_dtype}, "
+        f"per_linear_compute_config={config.per_linear_compute_config}"
     )
     logger.info(
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
