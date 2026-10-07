@@ -207,7 +207,7 @@ class MiMoGate(TTMoEGate):
         6: "+gather",
         7: "+normalize/typecast/RM (full)",
     }
-    VARIANTS = ("base", "hifi2", "fusedact", "unsorted", "fusedact_hifi2_unsorted", "bf16mm")
+    VARIANTS = ("base", "mm1x8", "mm2x8", "mm4x8", "sel", "sel_mm1x8", "sel_mm2x8", "sel_mm4x8")
 
     def route_stage(self, tt_x, st):
         logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc32, dtype=ttnn.float32)
@@ -252,30 +252,24 @@ class MiMoGate(TTMoEGate):
         return self._ckc_cache[fid]
 
     def route_v(self, tt_x, var):
-        """Cheaper variants of the exact router. Same outputs as route(x, 'exact')."""
-        fid = "hifi2" if ("hifi2" in var) else "hifi4"
-        fused = "fusedact" in var
-        sorted_ = "unsorted" not in var
-        if var == "bf16mm":
-            logits = ttnn.matmul(
-                tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc_for("hifi4"), dtype=ttnn.bfloat16
-            )
-            logits = ttnn.typecast(logits, ttnn.float32)
-        else:
-            logits = ttnn.matmul(
-                tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc_for(fid), dtype=ttnn.float32
-            )
+        """Cheaper variants of the exact router (same outputs as route(x, 'exact')). Name parts: mmYxX = matmul core grid, sel = router_select kernel (T <= 32)."""
+        import re
+
+        m = re.search(r"mm(\d)x(\d)", var)
+        kw = {"core_grid": ttnn.CoreGrid(y=int(m.group(1)), x=int(m.group(2)))} if m else {}
+        logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc32, dtype=ttnn.float32, **kw)
         T = logits.shape[2]
         score = ttnn.sigmoid(logits)
-        if fused:
-            # sigmoid + bias add in ONE binary op (lhs activation)
-            rank = ttnn.add(
-                logits, self._tt_rank_bias, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)]
-            )
-        else:
-            rank = ttnn.add(score, self._tt_rank_bias)
         ttnn.deallocate(logits)
-        _, idx = ttnn.topk(rank, k=self.k, dim=-1, largest=True, sorted=sorted_)
+        rank = ttnn.add(score, self._tt_rank_bias)
+        if var.startswith("sel"):
+            from models.demos.blackhole.mimo_v26.tt.router_select import router_select
+
+            w, i = router_select(rank, score, self.k, 1e-20, self.scaling_factor)
+            ttnn.deallocate(rank)
+            ttnn.deallocate(score)
+            return w, i
+        _, idx = ttnn.topk(rank, k=self.k, dim=-1, largest=True, sorted=True)
         ttnn.deallocate(rank)
         indices = ttnn.view(ttnn.to_layout(ttnn.typecast(idx, ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, self.k))
         idx32 = ttnn.to_layout(ttnn.typecast(idx, ttnn.uint32), ttnn.TILE_LAYOUT)
