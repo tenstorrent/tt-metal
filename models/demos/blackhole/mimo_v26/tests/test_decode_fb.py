@@ -5,6 +5,9 @@ Env: DEC_US (1,8,32) DEC_LAYERS (48) DEC_STEPS (40) DEC_ROUNDS (3)."""
 import json
 import os
 import sys
+import time
+
+import ttnn
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from decode_common import gsm_prompts  # noqa: E402
