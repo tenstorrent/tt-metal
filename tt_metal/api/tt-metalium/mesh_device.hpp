@@ -48,9 +48,8 @@ struct ProgramCache;
 namespace tt::tt_fabric {
 class FabricNodeId;
 }
-namespace tt::tt_metal {
 
-namespace distributed {
+namespace tt::tt_metal::distributed {
 
 class MeshCommandQueue;
 struct MeshTraceBuffer;
@@ -333,6 +332,4 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
 
-}  // namespace distributed
-
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed
