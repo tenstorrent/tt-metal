@@ -24,7 +24,7 @@ import math
 
 import ttnn
 from models.experimental.bevformer.model_config import CODE_XY, CODE_Z, GRID_DTYPE
-from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 
@@ -59,18 +59,6 @@ class TtMultiheadAttention:
 
         out = ttnn.transformer.concatenate_heads(out)
         return ttnn.linear(out, p.out_proj.weight, bias=p.out_proj.bias)
-
-
-class TtFFN:
-    """Linear-ReLU-Linear, without the residual (the layer adds it inside the following LayerNorm)."""
-
-    def __init__(self, params):
-        self.params = params
-
-    def __call__(self, x):
-        p = self.params
-        y = ttnn.linear(x, p.linear1.weight, bias=p.linear1.bias, activation="relu")
-        return ttnn.linear(y, p.linear2.weight, bias=p.linear2.bias)
 
 
 class TtDetrTransformerDecoderLayer:

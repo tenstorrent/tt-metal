@@ -278,7 +278,9 @@ class DatasetPreset:
 
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
 _TINY = dict(embed_dims=128, num_heads=4, num_levels=1, num_points=4)
-_BASE = dict(embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_levels=NUM_LEVELS, num_points=4)
+# The base presets size the deformable attention as the decoder's cross-attention, the plain
+# MSDeformableAttention, does.
+_BASE = dict(embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_levels=NUM_LEVELS, num_points=DECODER_NUM_POINTS)
 
 PRESETS = {
     "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
