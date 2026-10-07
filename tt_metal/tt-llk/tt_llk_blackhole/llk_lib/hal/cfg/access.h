@@ -190,14 +190,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     if constexpr (A == Access::MMIO)
     {
         static_assert(F.scope == RegisterScope::State, "RISC writes target state CFG; use Access::TensixCfgUnit for thread CFG");
-        if constexpr (F.width == 32)
-        {
-            detail::state_cfg_bank()[cfg_word_addr] = value; // whole 32-bit word
-        }
-        else
-        {
-            detail::rmw_state_word_mmio(cfg_word_addr, F.shamt(S), F.mask(S), value); // read-modify-write
-        }
+        detail::write_word<A, F.scope, cfg_word_addr, F.shamt(S), F.mask(S)>(value, detail::state_cfg_bank());
     }
     else // Access::TensixCfgUnit
     {
