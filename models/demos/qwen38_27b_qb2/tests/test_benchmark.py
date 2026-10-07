@@ -121,6 +121,10 @@ def gpqa_args(output_dir, *, prepare_only=False):
         performance_input_lengths=(128,),
         prepare_only=prepare_only,
         base_url="http://test",
+        gpqa_count=10,
+        gpqa_concurrency=10,
+        gpqa_max_tokens=32768,
+        gpqa_threshold=0.9,
     )
 
 
@@ -182,7 +186,7 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
             "decode_tokens_per_s": 40,
         }
 
-    monkeypatch.setattr(benchmark, "load_gpqa", lambda: (SimpleNamespace(process_results=score), cases))
+    monkeypatch.setattr(benchmark, "load_gpqa", lambda count: (SimpleNamespace(process_results=score), cases))
     monkeypatch.setattr(benchmark, "complete", complete)
     assert benchmark.run(gpqa_args(tmp_path, prepare_only=True)) == 0
     manifest = [json.loads(line) for line in (tmp_path / "inputs.jsonl").read_text().splitlines()]
@@ -213,6 +217,100 @@ def test_benchmark_failure_withholds_exception_content(monkeypatch, tmp_path, ca
     assert error["error_type"] == "ValueError"
     capture = capsys.readouterr()
     assert "PRIVATE_PROMPT_OR_RESPONSE_SENTINEL" not in capture.out + capture.err + json.dumps(error)
+
+
+def test_full_gpqa_scores_every_row_with_bounded_concurrency_and_truncations(monkeypatch, tmp_path):
+    active = peak = 0
+    budgets = []
+
+    async def complete(client, payload, *, chat):
+        nonlocal active, peak
+        budgets.append(payload["max_tokens"])
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+        ident = int(payload["messages"][0]["content"])
+        return {
+            "text": "Synthetic final answer",
+            "usage": {"prompt_tokens": 20, "completion_tokens": 4},
+            "finish_reason": "length" if ident in (1, 190) else "stop",
+            "elapsed_s": 1,
+            "ttft_ms": 10,
+            "decode_tokens_per_s": 4,
+        }
+
+    monkeypatch.setattr(benchmark, "complete", complete)
+    cases = [{"id": i, "doc": i, "prompt": str(i)} for i in range(198)]
+    task = SimpleNamespace(process_results=lambda doc, answers: {"exact_match": int(doc < 177)})
+    result = asyncio.run(
+        benchmark.run_gpqa(None, tmp_path, task, cases, count=198, concurrency=7, max_tokens=65536, threshold=0.892)
+    )
+    assert peak == result["concurrency"] == 7
+    assert budgets.count(1) == budgets.count(65536) == 198
+    assert result["completed_samples"] == 198 and result["full_dataset"]
+    assert result["correct"] == 177 and result["accuracy"] == 177 / 198 and result["passed"]
+    assert result["truncated_samples"] == 2 and result["truncated_correct"] == 1
+    rows = [json.loads(line) for line in (tmp_path / "gpqa-responses.jsonl").read_text().splitlines()]
+    assert sorted(row["id"] for row in rows) == list(range(198))
+    assert json.loads((tmp_path / "gpqa-progress.json").read_text())["state"] == "completed"
+
+
+def test_gpqa_rejects_incomplete_selection_before_network(expect_error, tmp_path):
+    cases = [{"id": i} for i in range(197)]
+    with expect_error(ValueError, "every selected row"):
+        asyncio.run(benchmark.run_gpqa(None, tmp_path, None, cases, count=198))
+    assert not (tmp_path / "gpqa-responses.jsonl").exists()
+
+
+def test_gpqa_rerun_preserves_existing_receipts_and_protocol(tmp_path):
+    for name in ("gpqa-responses.jsonl", "protocol.json"):
+        (tmp_path / name).write_text("preserve this evidence\n")
+    assert benchmark.run(gpqa_args(tmp_path)) == 1
+    for name in ("gpqa-responses.jsonl", "protocol.json"):
+        assert (tmp_path / name).read_text() == "preserve this evidence\n"
+
+
+def test_gpqa_rejects_concurrency_above_capacity_before_dataset_access(tmp_path):
+    args = gpqa_args(tmp_path)
+    args.server_capacity = 1
+    assert benchmark.run(args) == 1
+    assert not (tmp_path / "protocol.json").exists()
+
+
+def test_gpqa_stream_failure_keeps_completed_rows_and_marks_interruption(monkeypatch, tmp_path, expect_error):
+    cancelled = []
+
+    async def complete(client, payload, *, chat):
+        ident = int(payload["messages"][0]["content"])
+        if payload["max_tokens"] != 1:
+            if ident == 1:
+                await asyncio.sleep(0)
+                raise RuntimeError("synthetic stream failure")
+            if ident == 2:
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.append(ident)
+        return {
+            "text": "Synthetic answer",
+            "usage": {"prompt_tokens": 20, "completion_tokens": 4},
+            "finish_reason": "stop",
+            "elapsed_s": 1,
+            "ttft_ms": 10,
+            "decode_tokens_per_s": 4,
+        }
+
+    monkeypatch.setattr(benchmark, "complete", complete)
+    cases = [{"id": i, "doc": i, "prompt": str(i)} for i in range(3)]
+    task = SimpleNamespace(process_results=lambda doc, answers: {"exact_match": 1})
+    with expect_error(RuntimeError, "synthetic stream failure"):
+        asyncio.run(benchmark.run_gpqa(None, tmp_path, task, cases, count=3, concurrency=3))
+    rows = [json.loads(line) for line in (tmp_path / "gpqa-responses.jsonl").read_text().splitlines()]
+    assert [row["id"] for row in rows] == [0]
+    assert cancelled == [2]
+    progress = json.loads((tmp_path / "gpqa-progress.json").read_text())
+    assert progress["state"] == "interrupted" and progress["completed_samples"] == 1
 
 
 def test_stream_error_withholds_server_response(expect_error, capsys):

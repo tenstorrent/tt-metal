@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
-"""Time and score the fixed GPQA CI subset; optionally measure fixed-length serving."""
+"""Time and score a pinned GPQA selection; optionally measure fixed-length serving."""
 
 import argparse
 import asyncio
@@ -29,7 +29,14 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def load_gpqa():
+def validate_gpqa_settings(*, count, concurrency, max_tokens, threshold):
+    if not 1 <= count <= 198 or not 1 <= concurrency <= count:
+        raise ValueError("GPQA needs 1..198 questions and concurrency within the selected count")
+    if not 1 <= max_tokens < 262144 or not 0 <= threshold <= 1:
+        raise ValueError("Invalid GPQA output budget or accuracy threshold")
+
+
+def load_gpqa(count=GPQA_COUNT):
     import datasets
     from lm_eval.api.task import ConfigurableTask
     from lm_eval.tasks import TaskManager
@@ -45,7 +52,7 @@ def load_gpqa():
     docs = task.validation_docs()
     if len(docs) != 198:
         raise ValueError(f"Expected 198 GPQA Diamond questions, got {len(docs)}")
-    cases = [{"id": i, "doc": docs[i], "prompt": task.doc_to_text(docs[i])} for i in range(GPQA_COUNT)]
+    cases = [{"id": i, "doc": docs[i], "prompt": task.doc_to_text(docs[i])} for i in range(count)]
     return task, cases
 
 
@@ -121,11 +128,29 @@ def response_metrics(response):
     }
 
 
-async def run_gpqa(client, output_dir, task, cases):
+async def run_gpqa(
+    client,
+    output_dir,
+    task,
+    cases,
+    *,
+    count=GPQA_COUNT,
+    concurrency=GPQA_CONCURRENCY,
+    max_tokens=GPQA_TOKENS,
+    threshold=GPQA_THRESHOLD,
+):
+    validate_gpqa_settings(count=count, concurrency=concurrency, max_tokens=max_tokens, threshold=threshold)
+    if sorted(case["id"] for case in cases) != list(range(count)):
+        raise ValueError("GPQA selection must contain every selected row exactly once")
+    # A fresh directory is required after an interrupted measured run. Never
+    # replace its durable per-question receipts with an accidental rerun.
+    response_log = output_dir / "gpqa-responses.jsonl"
+    if response_log.exists():
+        raise FileExistsError("Use a fresh output directory for another measured GPQA run")
     payloads = [
         {
             "messages": [{"role": "user", "content": case["prompt"]}],
-            "max_tokens": GPQA_TOKENS,
+            "max_tokens": max_tokens,
             "temperature": 1.0,
             "top_p": 0.95,
             "top_k": 20,
@@ -139,35 +164,69 @@ async def run_gpqa(client, output_dir, task, cases):
     for payload in payloads:
         await complete(client, {**payload, "max_tokens": 1}, chat=True)
     rows = []
-    semaphore = asyncio.Semaphore(GPQA_CONCURRENCY)
-    with (output_dir / "gpqa-responses.jsonl").open("w") as log:
+    semaphore = asyncio.Semaphore(concurrency)
+    with response_log.open("x") as log:
 
         async def generate(case, payload):
             async with semaphore:
                 response = await complete(client, payload, chat=True)
             score = task.process_results(case["doc"], [response["text"]])["exact_match"]
-            row = {"id": case["id"], **response_metrics(response), "correct": int(score)}
+            row = {
+                "id": case["id"],
+                **response_metrics(response),
+                "correct": int(score),
+                "final_answer_sha256": hashlib.sha256(response["text"].encode()).hexdigest(),
+                "reasoning_sha256": hashlib.sha256(response.get("reasoning", "").encode()).hexdigest(),
+            }
             rows.append(row)
             log.write(json.dumps(row) + "\n")
             log.flush()
+            progress = dict(
+                completed_samples=len(rows),
+                selected_samples=count,
+                correct=sum(r["correct"] for r in rows),
+                truncated_samples=sum(r["finish_reason"] == "length" for r in rows),
+                state="running",
+                updated_at=utc_now(),
+            )
+            temporary = output_dir / "gpqa-progress.json.tmp"
+            temporary.write_text(json.dumps(progress, indent=2) + "\n")
+            temporary.replace(output_dir / "gpqa-progress.json")
             print(f"GPQA {case['id']}: score={row['correct']}, tokens={row['usage']['completion_tokens']}", flush=True)
 
         start, tick = utc_now(), time.perf_counter()
-        await asyncio.gather(*(generate(case, payload) for case, payload in zip(cases, payloads)))
+        pending = [asyncio.create_task(generate(case, payload)) for case, payload in zip(cases, payloads)]
+        try:
+            await asyncio.gather(*pending)
+        except BaseException:
+            for request in pending:
+                request.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            progress_path = output_dir / "gpqa-progress.json"
+            progress = json.loads(progress_path.read_text()) if progress_path.exists() else {}
+            progress.update(state="interrupted", selected_samples=count, updated_at=utc_now())
+            progress_path.write_text(json.dumps(progress, indent=2) + "\n")
+            raise
         elapsed, end = time.perf_counter() - tick, utc_now()
-    if len(rows) != GPQA_COUNT or len({r["id"] for r in rows}) != GPQA_COUNT:
-        raise AssertionError("The CI result must include every selected question exactly once")
-    accuracy = sum(r["correct"] for r in rows) / GPQA_COUNT
-    return {
+    if len(rows) != count or len({r["id"] for r in rows}) != count:
+        raise AssertionError("The result must include every selected question exactly once")
+    accuracy = sum(r["correct"] for r in rows) / count
+    result = {
         **summarize(rows, start, end, elapsed),
         "accuracy": accuracy,
         "correct": sum(r["correct"] for r in rows),
-        "completed_samples": GPQA_COUNT,
+        "completed_samples": count,
         "dataset_samples": 198,
-        "concurrency": GPQA_CONCURRENCY,
-        "max_output_tokens": GPQA_TOKENS,
-        "passed": accuracy >= GPQA_THRESHOLD,
+        "full_dataset": count == 198,
+        "concurrency": concurrency,
+        "max_output_tokens": max_tokens,
+        "accuracy_threshold": threshold,
+        "truncated_samples": sum(r["finish_reason"] == "length" for r in rows),
+        "truncated_correct": sum(r["correct"] for r in rows if r["finish_reason"] == "length"),
+        "passed": accuracy >= threshold,
     }
+    (output_dir / "gpqa-progress.json").write_text(json.dumps({**result, "state": "completed"}, indent=2) + "\n")
+    return result
 
 
 def performance_shapes(server_capacity, input_lengths):
@@ -234,8 +293,19 @@ async def run_performance(client, output_dir, server_capacity, input_lengths):
 
 
 async def main(args):
+    gpqa = dict(
+        count=args.gpqa_count,
+        concurrency=args.gpqa_concurrency,
+        max_tokens=args.gpqa_max_tokens,
+        threshold=args.gpqa_threshold,
+    )
+    validate_gpqa_settings(**gpqa)
+    if args.mode != "performance" and gpqa["concurrency"] > args.server_capacity:
+        raise ValueError("GPQA concurrency exceeds the declared server capacity")
+    if args.mode != "performance" and (args.output_dir / "gpqa-responses.jsonl").exists():
+        raise FileExistsError("Use a fresh output directory for another measured GPQA run")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    task, cases = load_gpqa() if args.mode != "performance" else (None, [])
+    task, cases = load_gpqa(gpqa["count"]) if args.mode != "performance" else (None, [])
     inputs = "".join(json.dumps(c, sort_keys=True) + "\n" for c in cases)
     # GPQA terms prohibit publishing examples. Keep reproducibility hashes,
     # including the shuffled choices, without saving documents or prompts.
@@ -250,11 +320,11 @@ async def main(args):
         "checkpoint_revision": MODEL_REVISION,
         "dataset_revision": DATASET_REVISION,
         "harness_revision": HARNESS_REVISION,
-        "selection": "first 10 Diamond rows, choice shuffle seed 42",
+        "selection": f"first {gpqa['count']} Diamond rows, choice shuffle seed 42",
         "scope": (
             "fixed-length performance only"
             if args.mode == "performance"
-            else "10/198 CI subset; 32768-token output budget bounds weekly runtime"
+            else f"{gpqa['count']}/198 Diamond questions; {gpqa['max_tokens']}-token output budget"
         ),
         "gpqa": {
             "temperature": 1.0,
@@ -262,9 +332,11 @@ async def main(args):
             "top_k": 20,
             "seed": 42,
             "thinking": True,
-            "max_output_tokens": GPQA_TOKENS,
-            "concurrency": GPQA_CONCURRENCY,
-            "accuracy_threshold": GPQA_THRESHOLD,
+            "max_output_tokens": gpqa["max_tokens"],
+            "concurrency": gpqa["concurrency"],
+            "accuracy_threshold": gpqa["threshold"],
+            "selected_samples": gpqa["count"],
+            "full_dataset": gpqa["count"] == 198,
         },
         "performance": {
             "shapes": [
@@ -285,7 +357,7 @@ async def main(args):
     summary = dict(protocol)
     async with httpx.AsyncClient(base_url=args.base_url, timeout=7200) as client:
         if args.mode != "performance":
-            summary["gpqa_result"] = await run_gpqa(client, args.output_dir, task, cases)
+            summary["gpqa_result"] = await run_gpqa(client, args.output_dir, task, cases, **gpqa)
             (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if args.mode != "gpqa":
             summary["performance_results"] = await run_performance(
@@ -293,7 +365,7 @@ async def main(args):
             )
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if "gpqa_result" in summary and not summary["gpqa_result"]["passed"]:
-        raise AssertionError(f"GPQA CI accuracy below {GPQA_THRESHOLD}: {summary['gpqa_result']['accuracy']}")
+        raise AssertionError(f"GPQA accuracy below {gpqa['threshold']}: {summary['gpqa_result']['accuracy']}")
 
 
 def run(args):
@@ -324,7 +396,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--performance-input-lengths", type=int, nargs="+", choices=(128, 1024), default=(128, 1024))
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--gpqa-count", type=int, default=GPQA_COUNT, help="Use 198 for the full Diamond dataset")
+    parser.add_argument("--gpqa-concurrency", type=int, default=GPQA_CONCURRENCY)
+    parser.add_argument("--gpqa-max-tokens", type=int, default=GPQA_TOKENS)
+    parser.add_argument("--gpqa-threshold", type=float, default=GPQA_THRESHOLD)
     args = parser.parse_args()
-    if args.server_capacity < GPQA_CONCURRENCY and args.mode != "performance":
-        parser.error("The 10-question concurrent GPQA protocol requires --server-capacity 16")
+    if args.server_capacity < args.gpqa_concurrency and args.mode != "performance":
+        parser.error("GPQA concurrency must not exceed --server-capacity")
     raise SystemExit(run(args))

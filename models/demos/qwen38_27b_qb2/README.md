@@ -124,6 +124,45 @@ Evaluation results:
 - Terminal-Bench 2.1: 4/5 (80%).
 - SWE-bench Verified: 3/5 (60%).
 
+These inherited demo results are small subsets; they are not full Galaxy
+qualification. The evaluator now accepts a full 198-question Diamond run while
+retaining the ten-question CI default:
+
+```bash
+python models/demos/qwen38_27b_qb2/tests/benchmark.py \
+  --mode gpqa --base-url http://127.0.0.1:8000 \
+  --server-capacity 16 --gpqa-count 198 --gpqa-concurrency 16 \
+  --gpqa-max-tokens 32768 --gpqa-threshold 0.892 \
+  --output-dir /path/to/new-gpqa-receipts
+```
+
+This pins the existing dataset and scoring harness, uses choice-shuffle seed
+42 and thinking sampling (temperature 1, top-p 0.95, top-k 20), and records the
+exact question selection and protocol. `gpqa-progress.json` updates after every
+completed question; the JSONL preserves per-question scores, truncations,
+timings, usage and response hashes. Interrupted runs keep completed receipts,
+and a rerun refuses to overwrite them. Prompts and generated evaluation content
+are not written to these publication artifacts. Sixteen host tests pass,
+including synthetic full-dataset accounting, interrupted streams and bounded
+concurrency; these tests do not measure model accuracy.
+
+The 0.892 threshold above is the published
+[model-card GPQA-D score](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/README.md).
+It requires at least 177/198 correct in this single seeded run. The card does
+not specify an equivalent GPQA harness and output budget, so meeting that
+numeric threshold alone does not establish protocol equivalence. The default
+CI threshold remains 0.9. Report truncations when comparing output budgets.
+
+For the isolated Galaxy task layout, `demo/prepare_galaxy_serving_env.sh`
+prepares `serving_env` and `eval_env` without installing into the running native
+test environment. Put the vLLM plugin at `TASK_ROOT/vllm-plugin` checked out at
+`b7e4292e4193cba20abe9c7c68ce489201b2e36b` first. The entrypoint requires the
+base uv environment to be relocatable, copies it using separate inodes, keeps
+the Torch/Transformers/NumPy pins, installs the plugin's pinned vLLM empty
+target, and installs the existing evaluation requirements separately. It
+refuses to replace existing environments and does not launch a server or open
+devices. Hardware serving and reference evaluations remain to be qualified.
+
 ## Run the demo
 
 Build tt-metal and activate its Python environment:
