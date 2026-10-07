@@ -10,7 +10,7 @@
 namespace ttnn::experimental::prim {
 
 struct RecvAsyncH2DSharedVariables {
-    tt::tt_metal::CoreCoord receiver_core_coord{};
+    tt::tt_metal::CoreCoord receiver_core_coord;
     tt::tt_metal::KernelHandle writer_kernel_id{};
 };
 

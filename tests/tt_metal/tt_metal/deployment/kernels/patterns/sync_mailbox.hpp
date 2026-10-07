@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _SYNC_MAILBOX_H
-#define _SYNC_MAILBOX_H
+#ifndef SYNC_MAILBOX_H
+#define SYNC_MAILBOX_H
 
 #include <stdint.h>
 
@@ -186,4 +186,4 @@ enum DramSyncStage : uint32_t {
     MB_STAGE_JOB_DONE,
 };
 
-#endif /* _SYNC_MAILBOX_H */
+#endif /* SYNC_MAILBOX_H */

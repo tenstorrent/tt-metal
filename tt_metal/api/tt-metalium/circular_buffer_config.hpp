@@ -74,6 +74,9 @@ public:
 
     CircularBufferConfig& set_globally_allocated_address_and_total_size(const MeshTensor& tensor, uint32_t total_size);
 
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(
+        const Buffer& buffer, uint32_t total_size, uint32_t address_offset);
+
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
     /// Override face row count and logical face count metadata for this buffer index.
@@ -137,7 +140,6 @@ public:
 
 private:
     void set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec);
-    void validate_total_size(uint32_t total_size);
 
     uint32_t total_size_ = 0;
     std::optional<uint32_t> globally_allocated_address_ = std::nullopt;

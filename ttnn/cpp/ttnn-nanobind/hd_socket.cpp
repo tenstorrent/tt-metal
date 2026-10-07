@@ -118,6 +118,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::H2DSocket::write,
             nb::arg("data"),
             nb::arg("num_pages"),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Writes data pages to the socket FIFO.
 
@@ -145,6 +146,7 @@ void py_module_types(nb::module_& mod) {
                     data_span.size(),
                     page_size);
                 uint32_t num_writes = data_span.size() / page_size;
+                nb::gil_scoped_release release;
                 for (uint32_t i = 0; i < num_writes; i++) {
                     self.write(data_span.data() + (i * page_size), 1);
                 }
@@ -174,6 +176,7 @@ void py_module_types(nb::module_& mod) {
                     page_size);
                 auto* base = static_cast<std::byte*>(const_cast<void*>(tensor.data()));
                 uint32_t num_writes = nbytes / page_size;
+                nb::gil_scoped_release release;
                 for (uint32_t i = 0; i < num_writes; i++) {
                     self.write(base + (i * page_size), 1);
                 }
@@ -195,6 +198,7 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::distributed::H2DSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Blocks until the device has acknowledged all written data.
 
@@ -247,6 +251,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::H2DSocket::connect,
             nb::arg("socket_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Connects to an existing H2DSocket from another process.
             )doc");
@@ -323,6 +328,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("data"),
             nb::arg("num_pages"),
             nb::arg("notify_sender") = true,
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Reads data pages from the socket FIFO.
 
@@ -353,14 +359,17 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = data_span.size() / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
-                while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read = 1;
-                    self.read(
-                        reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
-                        num_pages_to_read,
-                        notify_sender);
-                    bytes_read += num_pages_to_read * page_size;
-                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                {
+                    nb::gil_scoped_release release;
+                    while (remaining_bytes_to_read > 0) {
+                        uint32_t num_pages_to_read = 1;
+                        self.read(
+                            reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
+                            num_pages_to_read,
+                            notify_sender);
+                        bytes_read += num_pages_to_read * page_size;
+                        remaining_bytes_to_read -= num_pages_to_read * page_size;
+                    }
                 }
             },
             nb::arg("tensor"),
@@ -395,11 +404,14 @@ void py_module_types(nb::module_& mod) {
                 uint32_t num_pages = nbytes / page_size;
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
-                while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read = 1;
-                    self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
-                    bytes_read += num_pages_to_read * page_size;
-                    remaining_bytes_to_read -= num_pages_to_read * page_size;
+                {
+                    nb::gil_scoped_release release;
+                    while (remaining_bytes_to_read > 0) {
+                        uint32_t num_pages_to_read = 1;
+                        self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
+                        bytes_read += num_pages_to_read * page_size;
+                        remaining_bytes_to_read -= num_pages_to_read * page_size;
+                    }
                 }
             },
             nb::arg("tensor"),
@@ -422,6 +434,7 @@ void py_module_types(nb::module_& mod) {
             "barrier",
             &tt::tt_metal::distributed::D2HSocket::barrier,
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Blocks until all sent data has been acknowledged.
 
@@ -485,6 +498,7 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::distributed::D2HSocket::connect,
             nb::arg("socket_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Connects to an existing D2HSocket from another process.
             )doc");

@@ -5,12 +5,19 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, assert_with_pcc, flush_subnormal_values_to_zero
+from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_ulp,
+    assert_allclose,
+    assert_with_pcc,
+    flush_subnormal_values_to_zero,
+)
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     flush_to_zero,
     to_tt_tensor,
+    MAX_BF16,
     SMALLEST_NORMAL_BF16,
 )
 
@@ -351,14 +358,33 @@ def test_error_functions(device, ttnn_op, low, high):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# reciprocal: 1/x, undefined at 0; use positive range (1, 3e36)
-# Large inputs produce outputs near zero — flush both sides at 2*smallest normal
+# reciprocal: 1/x, swept over both signs
+#
+# Split at |x| = 2^126, whose reciprocal is the smallest normal BF16.
+# Wormhole preserves that boundary result; the other architectures retain
+# their existing flush-to-zero behavior there. Larger magnitudes produce
+# subnormal reciprocals and are flushed to +0. Test the boundary separately
+# so the normal-domain comparison does not mask underflow errors.
 # ─────────────────────────────────────────────────────────────────────────────
 
+RECIPROCAL_BOUNDARY_INPUT = 2.0**126
+RECIPROCAL_MAX_INPUT = RECIPROCAL_BOUNDARY_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
 
-def test_reciprocal(device):
-    input_tensor = generate_bfloat16_bits_in_range(1.0, 3e36)
-    input_tensor[input_tensor == 0] = 1.0  # avoid division by zero
+
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (SMALLEST_NORMAL_BF16, RECIPROCAL_MAX_INPUT),
+        (-RECIPROCAL_MAX_INPUT, -SMALLEST_NORMAL_BF16),
+    ],
+    ids=["positive", "negative"],
+)
+def test_reciprocal(device, low, high):
+    """Every normal bfloat16 of one sign below the underflow boundary.
+    This covers |x| < 1, where 1/x amplifies instead of shrinking and the
+    output runs all the way up to 2^126, as well as the shrinking half.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
 
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -368,11 +394,66 @@ def test_reciprocal(device):
     tt_result = ttnn.reciprocal(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    threshold = 2 * SMALLEST_NORMAL_BF16
-    result = torch.where(torch.abs(result) <= threshold, torch.zeros_like(result), result)
-    golden = torch.where(torch.abs(golden) <= threshold, torch.zeros_like(golden), golden)
+    ulp_threshold = 0 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 1
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold)
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (RECIPROCAL_BOUNDARY_INPUT, MAX_BF16),
+        (-MAX_BF16, -RECIPROCAL_BOUNDARY_INPUT),
+    ],
+    ids=["positive", "negative"],
+)
+def test_reciprocal_underflow_boundary(device, low, high):
+    """Wormhole returns +/-2^-126 at +/-2^126 and +0 beyond that boundary.
+    Other architectures retain their existing +0 result at the boundary.
+    Every exact reciprocal in this range is nonzero and BF16-representable
+    after rounding, but subnormal outputs are flushed on the device.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
+
+    golden = ttnn.get_golden_function(ttnn.reciprocal)(input_tensor, device=device)
+    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
+
+    assert (golden != 0).all(), "expected every reciprocal in this range to be representable"
+    expected = torch.zeros_like(result)
+    if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+        boundary = input_tensor.abs() == RECIPROCAL_BOUNDARY_INPUT
+        expected[boundary] = golden[boundary]
+    assert_equal(expected, result)
+    assert not torch.signbit(result[expected == 0]).any(), "flushed results must be +0 for both input signs"
+
+
+def test_reciprocal_zero_and_nonfinite(device):
+    """Signed zero divides the way torch does; two of the non-finite inputs do
+    not. The device and torch results are as follows:
+
+        input    | torch (IEEE 754) | device (actual)
+        ---------+------------------+----------------
+        +0       | +inf             | +inf            ✓
+        -0       | -inf             | -inf            ✓
+        +inf     | +0               | +0              ✓
+        -inf     | -0               | +0              ✗ sign lost
+        NaN      | NaN              | +0              ✗ not propagated
+
+    The last two are pinned as the device's current behavior rather than
+    endorsed as correct.
+    """
+    special = [0.0, -0.0, float("inf"), float("-inf"), float("nan")]
+    input_tensor = torch.ones(32, 32, dtype=torch.bfloat16)
+    input_tensor.view(-1)[: len(special)] = torch.tensor(special, dtype=torch.bfloat16)
+
+    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device))).view(-1)
+    pos_zero, neg_zero, pos_inf, neg_inf, nan = (result[i] for i in range(len(special)))
+
+    assert pos_zero == float("inf") and not torch.signbit(pos_zero), "1/+0 must be +inf"
+    assert neg_zero == float("-inf") and torch.signbit(neg_zero), "1/-0 must be -inf"
+
+    assert pos_inf == 0.0 and not torch.signbit(pos_inf), "1/+inf is +0, matching torch"
+    assert neg_inf == 0.0 and not torch.signbit(neg_inf), "1/-inf is +0 on device, -0 in torch"
+    assert nan == 0.0, "the device returns 0 for NaN instead of propagating it"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -453,6 +534,79 @@ def test_exp_ops(device, ttnn_op, low, high):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
+def test_exp_allclose(device):
+    """exp underflow region (-89, -87) allclose check.
+
+    The ULP sweep in test_exp_ops covers (-87.0, 88.5); this extends into the
+    underflow tail where exp(x) approaches the smallest normals. 1020 of 1024
+    bf16 values here are bit-exact; the remaining 4 are flushed to zero by the
+    device (golden ~1e-38, device 0). atol is set just above the largest
+    flushed golden value.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(-89, -87)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    tt_result = ttnn.exp(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_allclose(expected_result=golden, actual_result=result, atol=1.1e-38, rtol=0)
+
+
+def test_exp2_allclose(device):
+    """exp2 underflow region (-127, -126) allclose check.
+
+    The ULP sweep in test_exp_ops covers (-126.0, 127.0); this extends into the
+    underflow tail where exp2(x) approaches the smallest normals. 1022 of 1024
+    bf16 values here are bit-exact; the remaining 2 are flushed to zero by the
+    device (golden ~8.4e-39, device 0). atol is set just above the largest
+    flushed golden value.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(-127, -126)
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_allclose(actual_result=result, expected_result=golden, atol=8.5e-39, rtol=0)
+
+
+@pytest.mark.parametrize(
+    "low, high, expected_atol, expected_rtol",
+    [
+        (-1.6 * 10**38, -0.28515625, 0, 0),
+        (-0.28515625, 0.69140625, 0, 0),
+        (0.69140625, 88.5, 0, 0),
+    ],
+)
+def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
+    """expm1 sub-range allclose check.
+
+    The ULP sweep in test_exp_ops covers [-87.0, 88.5]; this test extends the
+    negative tail to -1.6e38 and verifies allclose over three subdomains. All
+    three are bit-exact on device (17408 + 32768 + 1024 = 51200 values, zero
+    mismatches), so atol = rtol = 0.
+    """
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
+
+    golden_function = ttnn.get_golden_function(ttnn.expm1)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    tt_result = ttnn.expm1(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_allclose(actual_result=result, expected_result=golden, atol=expected_atol, rtol=expected_rtol)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # digamma and multigammaln
 # digamma: defined for x > 0, LUT kernel fitted on [0.01, 102], asymptotic for x > 102
@@ -479,6 +633,39 @@ def test_digamma_multigammaln(device, ttnn_op, low, high, ulp):
     result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp)
+
+
+def test_digamma_large_x(device):
+    """Regression guard for digamma at large x (issue #45520: "behaves bad for x>1000").
+
+    The LUT kernel is fit on [0.01, 102]; beyond it a Bernoulli asymptotic branch
+    (ln(x) - 1/2x - 1/12x^2 + ...) restores the (1, inf) support the pre-LUT composite
+    op had. ``test_digamma`` only exercises [2, 102], so this covers the LUT->asymptotic
+    crossover (102) and several decades past x=1000.
+    """
+    xs = torch.tensor(
+        [[101.0, 102.0, 103.0, 150.0, 500.0, 1000.0, 5000.0, 1e4, 5e4, 1e5, 5e5, 1e6, 1e7, float("inf")]],
+        dtype=torch.bfloat16,
+    )
+    golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
+    input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
+    assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2, allow_nonfinite=True)
+
+
+def test_digamma_small_x(device):
+    """Guard the steep near-pole region [0.01, 2): psi has a pole at 0 (psi(x) ~ -1/x),
+    the steepest part of the fitted domain. test_digamma only exercises [2, 102].
+    Sample avoids the zero-crossing at x~=1.4616 where ULP is ill-defined.
+    """
+    xs = torch.tensor(
+        [[0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 0.75, 1.0, 1.25, 1.75, 1.9, 1.99]],
+        dtype=torch.bfloat16,
+    )
+    golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
+    input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
+    assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

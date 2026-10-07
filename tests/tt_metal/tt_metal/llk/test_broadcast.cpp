@@ -93,26 +93,46 @@ constexpr float k_broadcast_rtol = 0.0155;
 // the processor/NOC pair per direction. Identical for every runner in this file, hence the helpers.
 experimental::DataMovementHardwareConfig make_reader_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx =
+            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+            },
+    };
 }
 
 experimental::DataMovementHardwareConfig make_writer_hw_config(const distributed::MeshDevice& mesh_device) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        return experimental::DataMovementHardwareConfig{
+            .config_2xx =
+                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                    .disable_dfb_implicit_sync_for_all = true,
+                },
+        };
     }
-    return experimental::DataMovementGen1Config{
-        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
+    return experimental::DataMovementHardwareConfig{
+        .config_1xx =
+            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+            },
+    };
 }
 
 experimental::ComputeHardwareConfig make_compute_hw_config(
     const distributed::MeshDevice& mesh_device, MathFidelity math_fidelity) {
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        return experimental::ComputeGen2Config{.fpu_math_fidelity = math_fidelity};
+        return experimental::ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
     }
-    return experimental::ComputeGen1Config{.fpu_math_fidelity = math_fidelity};
+    return experimental::ComputeHardwareConfig{.fpu_math_fidelity = math_fidelity};
 }
 
 struct BroadcastConfig {
@@ -539,13 +559,20 @@ void run_sub_bcast_col_custom(distributed::MeshDevice& mesh_device, const SubBca
 
     // srcA and the output are total_tile_rows x ct_dim grids; srcB is rt_dim tiles, each reused by
     // its row in every block.
-    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    //
+    // One page per buffer rather than one per tile, because the reader and writer kernels walk a
+    // single DRAM bank linearly (bank_id 0, the address advancing by one tile per transfer). A
+    // page-per-tile buffer is interleaved, so page k lands in bank k % num_banks -- two banks on
+    // Quasar -- and a linear walk of bank 0 would read page 2k for tile k and run off the end of
+    // that bank's share of the buffer once k passes half the tile count. Giving the allocator one
+    // page puts the whole buffer in one bank, which is what these kernels address.
+    auto src_a_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_src_a_addr = src_a_dram_buffer->address();
 
-    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, test_config.rt_dim);
+    auto src_b_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * test_config.rt_dim, 1);
     std::uint32_t dram_buffer_src_b_addr = src_b_dram_buffer->address();
 
-    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size, total_tiles);
+    auto dst_dram_buffer = CreateDramBufferForPageSize(mesh_device, single_tile_size * total_tiles, 1);
     std::uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     const bool is_quasar = mesh_device.arch() == ARCH::QUASAR;

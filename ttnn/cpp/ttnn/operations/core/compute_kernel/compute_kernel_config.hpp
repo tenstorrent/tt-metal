@@ -61,17 +61,14 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
     tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config);
 
-// Maps the four hardware knobs (math_fidelity, math_approx_mode, fp32_dest_acc_en,
-// dst_full_sync_en) of a ComputeKernelConfig to a Metal 2.0 ComputeHardwareConfig. The knobs are
-// common to both generations; `arch` selects the matching alternative (ComputeGen2Config on Quasar,
-// else ComputeGen1Config) — the config's generation must match the target platform.
+// Maps the four hardware settings (math_fidelity, math_approx_mode, fp32_dest_acc_en,
+// dst_full_sync_en) of a ComputeKernelConfig onto a Metal 2.0 ComputeHardwareConfig. Those
+// settings are common to both generations and are written on the outer struct.
 // packer_l1_acc and throttle_level are op-side concerns, not translated.
 //
 // The result's per-DFB unpack_modes table is left default for the program factory to set.
-// bfp_pack_precision_mode is likewise left default (rarely set non-default).
 //
-tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
-    tt::ARCH arch, const ComputeKernelConfig& config);
+tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(const ComputeKernelConfig& config);
 
 uint32_t get_dest_reg_count(
     const DeviceComputeKernelConfig& compute_kernel_config,

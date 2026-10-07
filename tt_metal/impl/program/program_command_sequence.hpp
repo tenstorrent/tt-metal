@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <vector>
+#include <cstdint>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -49,10 +50,19 @@ struct ProgramCommandSequence {
         void* dst;
         uint32_t size;
     };
+    struct DataflowBufferConfigUpdate {
+        std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
+        // The logical core the payload was serialized for, so trace capture can re-serialize it.
+        CoreCoord logical_core;
+        uint8_t* dst;
+        uint32_t size;
+    };
     struct CircularBufferConfigUpdate {
         CircularBufferImpl* circular_buffer;
         uint32_t* dst;
         uint32_t buffer_index;
+        // The assembled payload already contains this generation's config.
+        uint64_t last_config_generation;
     };
     struct LaunchMsgData {
         const bool is_multicast = false;
@@ -68,6 +78,7 @@ struct ProgramCommandSequence {
     MetalContext* ctx = nullptr;
     HostMemDeviceCommand preamble_command_sequence;
     uint32_t current_stall_seq_idx = 0;
+    // NOLINTNEXTLINE(modernize-use-default-member-init) -- Initialization needs the constructor parameter metal_ctx.
     HostMemDeviceCommand stall_command_sequences[2];
     std::vector<HostMemDeviceCommand> runtime_args_command_sequences;
     HostMemDeviceCommand program_config_buffer_command_sequence;
@@ -84,10 +95,8 @@ struct ProgramCommandSequence {
     std::vector<std::vector<std::shared_ptr<CircularBufferImpl>>> circular_buffers_on_core_ranges;
     std::vector<CircularBufferConfigUpdate> local_cb_config_updates;
     std::vector<CircularBufferConfigUpdate> remote_cb_config_updates;
-    // Parallel to cb_configs_payloads/circular_buffers_on_core_ranges but for Dataflow Buffers.
-    std::vector<uint8_t*> dfb_configs_payloads;
-    std::vector<std::vector<std::shared_ptr<experimental::dfb::detail::DataflowBufferImpl>>>
-        dataflow_buffers_on_core_ranges;
+    // Like cb_configs_payloads/circular_buffers_on_core_ranges, but for Dataflow Buffers.
+    std::vector<DataflowBufferConfigUpdate> dfb_config_updates;
     // Note: some RTAs may be have their RuntimeArgsData modified so the source-of-truth of their data is the command
     // sequence. They won't be listed in rta_updates.
     std::vector<RtaUpdate> rta_updates;

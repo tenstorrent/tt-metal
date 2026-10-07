@@ -38,6 +38,27 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
+def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
+    """Resolve one allocation shape per shared KV buffer (``tensor_idx``).
+
+    First sharing layer's view, sized by the largest ``num_blocks``; differing per-block element counts raise.
+    """
+    canonical: dict = {}
+    for kv_cache_shape, _dtype, tensor_idx in per_layer_specs:
+        nb, heads, bs, hd = kv_cache_shape
+        cur = canonical.get(tensor_idx)
+        if cur is None:
+            canonical[tensor_idx] = tuple(kv_cache_shape)
+            continue
+        if cur[1] * cur[2] * cur[3] != heads * bs * hd:
+            raise ValueError(
+                f"KV buffer {tensor_idx} shared by layers with different "
+                f"per-block element counts: {cur} vs {tuple(kv_cache_shape)}"
+            )
+        canonical[tensor_idx] = (max(cur[0], nb), *cur[1:])
+    return canonical
+
+
 def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer], tt_cache_path):
     """Allocate KV cache tensors with optional cross-layer DRAM sharing.
 
@@ -59,6 +80,7 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
         ``layer_idx`` entries may refer to the same underlying tensor
         objects when they share a ``tensor_idx``.
     """
+    canonical_shape = _canonical_shared_kv_shapes(per_layer_specs)
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
@@ -66,13 +88,14 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
         # share a buffer.
         unique_buffers: dict[int, list] = {}
         kv_tt = []
-        for layer_num, (kv_cache_shape, dtype, tensor_idx) in enumerate(
+        for layer_num, (_, dtype, tensor_idx) in enumerate(
             tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
         ):
             existing = unique_buffers.get(tensor_idx)
             if existing is not None:
                 kv_tt.append(existing)
                 continue
+            kv_cache_shape = canonical_shape[tensor_idx]
             cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:
@@ -96,8 +119,16 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
                     dtype=kv_cache_dtype,
                     # Separate cache files for K and V to avoid collision.
                     # ``tensor_idx`` distinguishes shared buffers that have the
-                    # same shape but back different layer subsets.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}",
+                    # same shape but back different layer subsets. A ``None``
+                    # tt_cache_path disables disk caching of these zero-filled
+                    # tensors entirely (callers whose DP ranks share one cache
+                    # dir opt out: concurrent create/load of the same file is
+                    # a torn-read crash, and caching zeros buys little).
+                    cache_file_name=(
+                        tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}"
+                        if tt_cache_path is not None
+                        else None
+                    ),
                 )
                 for kv in ["k", "v"]
             ]
@@ -241,6 +272,11 @@ class HybridAttentionForCausalLM(Generator):
     def allocate_kv_cache_per_layer(self, per_layer_specs):
         return allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model=self.model, tt_cache_path=self.cache_path)
 
+    @staticmethod
+    def _reload_per_layer_page_tables(kwargs) -> bool:
+        """Whether the explicit contract requests per-layer page-table upload."""
+        return bool(kwargs["reload_inputs"] or kwargs["reload_page_table"])
+
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """When invoked outside the vLLM hybrid plugin (e.g. by warmup
         which only knows about the legacy single ``page_table``), optionally
@@ -362,6 +398,9 @@ def initialize_vllm_text_transformer(
         ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
+        # vLLM path: same-seed requests must reproduce identically (n>1 children already
+        # arrive with distinct seeds), so keep SeedManager salting off, as llama3_70b_galaxy does.
+        model_args_i.salt_duplicate_seeds = False
 
         model_args.append(model_args_i)
 
@@ -410,6 +449,8 @@ class CustomNamespace(SimpleNamespace):
     dummy_inputs=Mistral3DummyInputsBuilder,
 )
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
+    decode_input_update_contract = 1
+
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_sample_on_device": True,
@@ -502,6 +543,8 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 #     MllamaMultiModalProcessor, info=TT_MllamaProcessingInfo, dummy_inputs=DummyInputsBuilder
 # )
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     # Note: Mllama doesn't support prefix caching (it's V0 only)
     # decode_forward calls decode_forward_llama_vision and discards anything
@@ -509,7 +552,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     # declare on-device sampling unsupported.
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": True,
+        "supports_async_decode": False,
         "supports_sample_on_device": False,
     }
 
@@ -615,6 +658,16 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def decode_forward(self, *args, **kwargs):
+        reload_inputs = kwargs.pop("reload_inputs")
+        reload_page_table = kwargs.pop("reload_page_table")
+        reload_sampling_params = kwargs.pop("reload_sampling_params")
+        reset_sampling_state = kwargs.pop("reset_sampling_state")
+        # Mllama has no persistent model state keyed by vLLM's condensed
+        # decode slots. Contract v1 nevertheless supplies slot_remap for every
+        # decode so adapters with recurrent state can consume it.
+        kwargs.pop("slot_remap", None)
+        if not reload_inputs or reload_page_table or reload_sampling_params or reset_sampling_state:
+            raise ValueError("Mllama requires a full host-input reload and has no " "device sampling state")
         logits = super().decode_forward_llama_vision(*args, **kwargs)
         if isinstance(logits, tuple):
             return logits[0]
@@ -626,6 +679,8 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
 
 
 class LlamaForCausalLM(Generator):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -718,6 +773,8 @@ class LlamaForCausalLM(Generator):
 
 
 class QwenForCausalLM(Generator):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -803,7 +860,68 @@ class QwenForCausalLM(Generator):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
 
 
+class CohereForCausalLM(Generator):
+    """Command-R / Command-A family (HF model_type "cohere").
+
+    Minimal text-only dense wrapper, same shape as QwenForCausalLM. All
+    Cohere-specific behaviour (parallel decoder block, LayerNorm instead of
+    RMSNorm, LM-head logit_scale 0.0625, tied embeddings) is handled by the
+    model_type=="cohere" family dispatch in model.py / model_config.py (P5a).
+    Canada Quant Labs (org-internal) - bounty tt-metal#49307 track.
+    """
+
+    # Class-level capabilities
+    model_capabilities = {
+        "supports_prefix_caching": True,
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        tt_model, model_args = initialize_vllm_text_transformer(
+            hf_config,
+            tt_data_parallel,
+            mesh_device,
+            max_batch_size,
+            max_seq_len=max_seq_len,
+            n_layers=n_layers,
+            dtype=ttnn.bfloat8_b,
+            optimizations=DecodersPrecision.from_string(optimizations)
+            if optimizations is not None
+            else DecodersPrecision.performance,
+        )
+        return cls(tt_model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    def prefill_forward(self, *args, **kwargs):
+        return super().prefill_forward_text(*args, **kwargs)
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
 class MistralForCausalLM(Generator):
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": True,
@@ -908,6 +1026,8 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
     picks up the stash via ``_active_page_tables_per_layer`` and routes
     each layer's attention to its own page table.
     """
+
+    decode_input_update_contract = 1
 
     # Class-level capabilities
     model_capabilities = {
@@ -1016,7 +1136,7 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None:
+        if per_submesh is not None and self._reload_per_layer_page_tables(kwargs):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):
@@ -1156,12 +1276,16 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
     isn't accidentally affected.
     """
 
+    decode_input_update_contract = 1
+
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        "supports_compact_host_logits": True,
+        "supports_selective_host_readback": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -1197,7 +1321,7 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
             return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
-        if per_submesh is not None:
+        if per_submesh is not None and self._reload_per_layer_page_tables(kwargs):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):

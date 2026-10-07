@@ -23,7 +23,7 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
 
 #ifdef REDUCE_SCALER
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    const auto scaler_bits = get_arg(args::scaler_bits);
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 #endif
@@ -56,4 +56,7 @@ void kernel_main() {
         noc.async_read_barrier();
         dfb_in0.push_back(onetile);
     }
+    // dfb_in1 is reserved above only to take its base address, so push the reserved tiles here
+    // to leave the buffer balanced.
+    dfb_in1.push_back(static_cast<uint16_t>(num_tiles));
 }

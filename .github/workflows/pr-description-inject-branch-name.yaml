@@ -39,9 +39,8 @@ jobs:
               { name: "(Runtime) Sanity tests",         workflow: "runtime-sanity-tests.yaml",     optional: false },
               { name: "L2 Nightly",                    workflow: "tt-metal-l2-nightly.yaml",        optional: false },
               { name: "All Model Tests",               workflow: "all-model-tests.yaml",            optional: true  },
-              { name: "(Single) Choose your pipeline", workflow: "pipeline-select.yaml",            optional: true  },
-              { name: "(T3K) Choose your pipeline",    workflow: "pipeline-select-t3k.yaml",        optional: true  },
-              { name: "(Galaxy) Choose your pipeline", workflow: "pipeline-select-galaxy.yaml",     optional: true  },
+              { name: "T3K tests",                     workflow: "t3000-tests.yaml",                optional: true  },
+              { name: "Galaxy tests",                  workflow: "galaxy-tests.yaml",               optional: true  },
             ];
 
             const badges = [];
@@ -61,6 +60,69 @@ jobs:
               "",
               badges.join("\n"),
             ].join("\n");
+
+            // Keep the "Ping pending code owners" checkbox (read by
+            // codeowners-group-analysis.yaml) in every PR: if the author deleted it
+            // or the PR was opened without the template, add it back unticked,
+            // just above CI Status. An existing box keeps its ticked state.
+            // Detect it the way the consumer reads it: a standalone top-level
+            // task-list line (at most 3 leading spaces; 4 is indented code) outside
+            // fenced code blocks and HTML comments. A copy in a comment or
+            // code example, or a reworded line, does not count as present. Headings
+            // are located the same way, so an example section is never rewritten.
+            const visibleLines = (text) => {
+              const out = [];
+              let fence = null, inComment = false, offset = 0;
+              for (const raw of text.split("\n")) {
+                const start = offset;
+                offset += raw.length + 1;
+                const line = raw.replace(/\r$/, "");
+                const m = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+                if (m) {
+                  if (!fence) { fence = m[1]; continue; }
+                  if (m[1][0] === fence[0] && m[1].length >= fence.length && !m[2].trim()) { fence = null; continue; }
+                }
+                if (fence) continue;
+                let visible = "", rest = line;
+                while (true) {
+                  if (inComment) {
+                    const e = rest.indexOf("-->");
+                    if (e === -1) { rest = ""; break; }
+                    rest = rest.slice(e + 3);
+                    inComment = false;
+                  }
+                  const c = rest.indexOf("<!--");
+                  if (c === -1) break;
+                  visible += rest.slice(0, c);
+                  rest = rest.slice(c + 4);
+                  inComment = true;
+                }
+                out.push({ text: visible + rest, start });
+              }
+              return out;
+            };
+            const pingCheckboxRegex = /^ {0,3}[-*] \[[ xX]\] Ping pending code owners\s*$/;
+            const lines = visibleLines(body);
+            if (!lines.some((l) => pingCheckboxRegex.test(l.text))) {
+              const codeownersSection = [
+                "### Code owners",
+                "<!-- Tick to ping pending code owners on Slack (same as commenting /codeowners ping).",
+                "     Untick and tick again to re-ping. Leave unticked until the PR is ready for their review. -->",
+                "- [ ] Ping pending code owners",
+              ].join("\n");
+              const headingAt = lines.findIndex((l) => /^### Code owners\s*$/.test(l.text));
+              const ciStatus = lines.find((l) => l.text.startsWith("### CI Status"));
+              if (headingAt !== -1) {
+                // Heading survived but the checkbox line was deleted or reworded.
+                const next = lines.slice(headingAt + 1).find((l) => /^#{1,6} /.test(l.text));
+                body = body.slice(0, lines[headingAt].start) + codeownersSection +
+                  (next ? "\n\n" + body.slice(next.start) : "");
+              } else if (ciStatus) {
+                body = body.slice(0, ciStatus.start) + codeownersSection + "\n\n" + body.slice(ciStatus.start);
+              } else {
+                body = body.trimEnd() + "\n\n" + codeownersSection;
+              }
+            }
 
             // Replace existing CI Status section if present, otherwise append
             const ciStatusRegex = /### CI Status[\s\S]*?(?=\n#{1,6} |\s*$)/;

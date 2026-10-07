@@ -13,9 +13,26 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 
+#include <enchantum/enchantum.hpp>
+
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 namespace ttnn::experimental::ccl {
+
+uint32_t count_worker_cores_placeable_after_offset(
+    const tt::tt_metal::CoreRangeSet& worker_cores, const tt::tt_metal::CoreCoord& core_grid_offset) {
+    // Shift every range by the offset, then keep the part that still lands on worker cores. The
+    // ranges of a CoreRangeSet are disjoint, so the intersection's core count is exactly the number
+    // of cores whose shifted position is a worker core.
+    std::vector<tt::tt_metal::CoreRange> shifted_ranges;
+    shifted_ranges.reserve(worker_cores.ranges().size());
+    for (const auto& core_range : worker_cores.ranges()) {
+        shifted_ranges.emplace_back(
+            tt::tt_metal::CoreCoord(core_range.start_coord.x + core_grid_offset.x, core_range.start_coord.y + core_grid_offset.y),
+            tt::tt_metal::CoreCoord(core_range.end_coord.x + core_grid_offset.x, core_range.end_coord.y + core_grid_offset.y));
+    }
+    return tt::tt_metal::CoreRangeSet(std::move(shifted_ranges)).intersection(worker_cores).num_cores();
+}
 
 uint32_t reduce_scatter_core_count_per_link(
     uint32_t num_workers_per_direction,
@@ -34,14 +51,21 @@ uint32_t reduce_scatter_default_workers(
     const ttnn::MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     ttnn::ccl::Topology topology,
-    uint32_t input_data_size_bytes,
+    uint64_t input_data_size_bytes,
     uint32_t num_links,
     uint32_t ring_size,
     uint32_t num_directions_per_link,
-    uint32_t num_mux_cores_per_direction_per_link) {
+    uint32_t num_mux_cores_per_direction_per_link,
+    const tt::tt_metal::CoreCoord& core_grid_offset) {
+    TT_FATAL(
+        topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
+        "reduce_scatter_default_workers only supports Ring and Linear topologies, got {}",
+        enchantum::to_string(topology));
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    // choose_worker_cores shifts every core it picks by core_grid_offset, so only the cores whose
+    // shifted position is still a worker core are available; the rest would land off the grid.
+    const uint32_t num_cores = count_worker_cores_placeable_after_offset(subdevice_core_range_set, core_grid_offset);
     log_trace(tt::LogOp, "DEBUG: num_cores: {}", num_cores);
     ttsl::SmallVector<uint32_t> candidate_worker_counts;
     double data_moved_per_link_bytes = double(input_data_size_bytes) * (ring_size - 1) / ring_size / num_links /
@@ -50,9 +74,10 @@ uint32_t reduce_scatter_default_workers(
     // Heuristic thresholds derived from sweep tests:
     // tests/ttnn/multidevice_perf_tests/test_reduce_scatter_hyperparameter_sweep_perf_galaxy.py
     // For linear: 4+MB → 8 workers; 0.5–4MB → 4 workers; 0–0.5MB → 2 workers.
-    // For ring:  50+MB → 8 workers;   1–50MB → 4 workers;   0–1MB → 2 workers.
+    // For ring:  50+MB → 8 workers;   1–50MB → 4 workers;   0–1MB → 2 workers (BH: 1+MB → 8).
     // At a single packet size (4KB) use one worker to minimise mux overhead.
-    constexpr double RING_HIGH_DATA_THRESHOLD = 50.0 * 1024 * 1024;
+    const double RING_HIGH_DATA_THRESHOLD =
+        mesh_device.arch() == tt::ARCH::BLACKHOLE ? 1.0 * 1024 * 1024 : 50.0 * 1024 * 1024;
     constexpr double RING_LOW_DATA_THRESHOLD = 1.0 * 1024 * 1024;
     constexpr double LINEAR_HIGH_DATA_THRESHOLD = 4000000.0;
     constexpr double LINEAR_LOW_DATA_THRESHOLD = 500000.0;
@@ -94,8 +119,13 @@ uint32_t reduce_scatter_default_workers(
     }
     TT_THROW(
         "Not enough cores available on the subdevice or device for the requested configuration to match the number of "
-        "links {}",
-        num_links);
+        "links {}: {} worker cores stay on the grid after core_grid_offset ({}, {}), the smallest candidate needs {}",
+        num_links,
+        num_cores,
+        core_grid_offset.x,
+        core_grid_offset.y,
+        num_links * reduce_scatter_core_count_per_link(
+                        candidate_worker_counts.back(), num_directions_per_link, num_mux_cores_per_direction_per_link));
 }
 
 uint32_t reduce_scatter_default_chunks_per_sync(

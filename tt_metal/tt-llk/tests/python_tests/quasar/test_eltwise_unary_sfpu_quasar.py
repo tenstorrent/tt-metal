@@ -7,6 +7,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.constraints import is_valid_quasar_fpu_path
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TilizeGolden,
@@ -38,6 +39,7 @@ from helpers.sfpu_dispatch_constants import (
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
 )
+from helpers.sfpu_domains import op_edge_points
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -63,6 +65,7 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
+    FACE_C_DIM,
     MAX_FACE_R_DIM,
     MAX_NUM_FACES,
 )
@@ -106,17 +109,33 @@ COMP_OPS = [
     MathOperation.GreaterThanEqualZero,
 ]
 
+# Ops that sweep the comp format set (float + integer formats) and build on the comp stimuli.
+# Signbit is a pure sign-bit test: it differs from an IEEE `< 0` at -0.0 and negative NaN, and from
+# Quasar's less_than_zero (itself a bit-31 test with a magnitude-nonzero guard) only at -0.0. The
+# comp stimuli seed +/-0.0 at a single datum and keep UInt16 below bit 15, so signbit adds its own
+# per-face seeds on top of them (see prepare_signbit_inputs).
+COMP_FORMAT_OPS = COMP_OPS + [MathOperation.Signbit]
+
 RELU_CC_OPS = [
     MathOperation.Lrelu,
     MathOperation.ReluMin,
     MathOperation.ReluMax,
 ]
 
+# Float rounding family. Domain [-10, 10] spans both signs so floor/ceil differ from trunc.
+# Exact knees (round-half-to-even ties, integer boundaries) come from op_edge_points().
+ROUNDING_OPS = [
+    MathOperation.Floor,
+    MathOperation.Ceil,
+    MathOperation.Trunc,
+    MathOperation.Frac,
+    MathOperation.Round,
+]
 
-# Extra (integer) formats only the comp family sweeps. Int32/Int16/Int8 (signed) and UInt8
-# (unsigned) use their native Quasar dest format. UInt16 is the exception: it has no native Quasar
+# Extra (integer) formats only COMP_FORMAT_OPS (the comp family + signbit) sweep. Int32/Int16/Int8
+# (signed) and UInt8 (unsigned) use their native Quasar dest format. UInt16 is the exception: it has no native Quasar
 # dest format, so the inference routes its data path through Int16 and sets FormatConfig.sfpu_src=
-# UInt16, the only stage the comp kernel reads as uint16.
+# UInt16, the only stage the comp/signbit kernels read as uint16.
 SFPU_COMP_EXTRA_FORMATS = input_output_formats(
     [
         DataFormat.Int32,
@@ -411,6 +430,19 @@ def prepare_inputs_for_operation(
         max_val = 30.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
+    elif mathop in ROUNDING_OPS:
+        # [-10, 10] spans both signs so floor/ceil differ from trunc. Overlay op_edge_points()
+        # so ties and integer knees are exact; a uniform draw does not hit them.
+        min_val = -10.0
+        max_val = 10.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        edges = op_edge_points(mathop)
+        if edges:
+            flat = src_A.flatten()
+            n = min(len(edges), flat.numel())
+            flat[:n] = torch.tensor(edges[:n], dtype=flat.dtype)
+            src_A = flat.view(src_A.shape)
+        src_A = src_A.to(torch_format)
     # else: keep src_A as-is
 
     return src_A
@@ -486,7 +518,9 @@ def prepare_unary_inputs(
         return prepare_cumsum_inputs(src_A, input_format)
     if mathop in TRIGONOMETRY_OPS:
         return prepare_trig_inputs(src_A, mathop, input_format)
-    if mathop in COMP_OPS:
+    if mathop == MathOperation.Signbit:
+        return prepare_signbit_inputs(src_A, src_B, input_format, output_format)
+    if mathop in COMP_FORMAT_OPS:
         # Unsigned formats need non-negative stimuli (a signed split would wrap under the unsigned
         # dtype); signed formats use the sign-vs-magnitude builder.
         if input_format in (DataFormat.UInt16, DataFormat.UInt8):
@@ -578,6 +612,89 @@ def prepare_comp_inputs_uint(
     return flat.reshape(values.shape).to(format_dict[input_format])
 
 
+# Raw bit patterns of a quiet NaN of either sign, per float input format, as (view dtype, +NaN,
+# -NaN). Written through a signed integer view, so -NaN is the two's-complement spelling of
+# 0xFFC00000 / 0xFFC0 / 0xFE00, and no float conversion can canonicalise the NaN's sign.
+_SIGNED_NAN_BITS = {
+    DataFormat.Float32: (torch.int32, 0x7FC00000, -0x00400000),
+    DataFormat.Float16_b: (torch.int16, 0x7FC0, -0x0040),
+    DataFormat.Float16: (torch.int16, 0x7E00, -0x0200),
+}
+
+# Elements per 16x16 face. The suite writes row-major data that the hardware reads as tiles, so
+# every consecutive FACE_ELEMS-element chunk of the flat input lands in its own face.
+FACE_ELEMS = MAX_FACE_R_DIM * FACE_C_DIM
+
+
+def prepare_signbit_inputs(
+    src_A: torch.Tensor,
+    src_B: torch.Tensor,
+    input_format: DataFormat,
+    output_format: DataFormat,
+) -> torch.Tensor:
+    """
+    Comp stimuli plus the inputs on which a sign-bit test differs from a compare.
+
+    Floats: every face gets +0.0, -0.0, +NaN and -NaN, so a compare-based kernel (wrong at -0.0 and
+    -NaN) or a datacopy that drops the sign of -0.0 fails in every face, not at one datum. UInt16: the
+    comp builder stays below bit 15, so seed 0x8000 / 0xFFFF per face to catch a sign-extending load
+    (signbit of an unsigned value is always 0). Other integer formats keep the comp stimuli, which
+    already sign about half the lanes across every face.
+    """
+    if input_format in (DataFormat.UInt16, DataFormat.UInt8):
+        values = prepare_comp_inputs_uint(src_A, src_B, input_format)
+        if input_format == DataFormat.UInt16:
+            flat = values.flatten()
+            for base in range(0, flat.numel(), FACE_ELEMS):
+                flat[base + 8] = 0x8000
+                flat[base + 9] = 0xFFFF
+            values = flat.reshape(values.shape)
+        return values
+
+    values = prepare_comp_inputs(src_A, src_B, input_format, output_format)
+    if input_format not in _SIGNED_NAN_BITS:
+        return values
+
+    int_dtype, pos_nan, neg_nan = _SIGNED_NAN_BITS[input_format]
+    flat = values.flatten().clone()
+    bits = flat.view(int_dtype)
+    for base in range(0, flat.numel(), FACE_ELEMS):
+        flat[base + 8] = 0.0
+        flat[base + 9] = -0.0
+        bits[base + 10] = pos_nan
+        bits[base + 11] = neg_nan
+    return flat.reshape(values.shape)
+
+
+def _drops_zero_and_nan_sign(mathop: MathOperation, variant: QuasarSfpuVariant) -> bool:
+    """
+    Whether this signbit route reaches Dest through Quasar's 32-bit-Dest FPU datacopy.
+
+    That datacopy is ELWADD (SrcA + SrcB, SrcB zero; llk_math_eltwise_unary_datacopy.h), and the add
+    returns +0.0 for -0.0 + 0.0 and a positive NaN for a negative one, so the sign bit of -0.0 and
+    -NaN never reaches the SFPU. Measured on emu-quasar-1x3 for every Float16/Float16_b ELWADD route;
+    the 16-bit-Dest MOVA2D route and Unpack-to-Dest keep both signs. Only signbit can see the
+    difference (its result is the raw sign bit), so only signbit models it.
+    """
+    return (
+        mathop == MathOperation.Signbit
+        and variant.uses_fpu
+        and variant.dest_acc == DestAccumulation.Yes
+        and format_dict[variant.formats.input_format].is_floating_point
+    )
+
+
+def _elwadd_datacopy_dest_image(src: torch.Tensor) -> torch.Tensor:
+    """
+    Signbit golden input for an ELWADD route: -0.0 and every NaN reach the SFPU sign-clear.
+
+    Both are spelled +0.0, which has the same sign bit as the positive NaN the datacopy really leaves
+    in Dest: the golden's bf16-input / 32-bit-Dest path re-canonicalises a positive NaN to a negative
+    one (torch's fp32 -> bf16 cast), which would put the sign bit back.
+    """
+    return torch.where((src == 0) | torch.isnan(src), torch.zeros_like(src), src)
+
+
 # ---------------------------------------------------------------------------
 # Typecast: a *conversion* op whose applicability is per (src, dst) format pair,
 # not per single format, so it cannot register in the generic unary-SFPU format
@@ -594,6 +711,11 @@ def prepare_comp_inputs_uint(
 #   int->float : SFPCAST (+ fp16 narrow if the dst is fp16)
 #   int<->int : store sfpmem mode (widen/equal) or RNE narrow to 8-bit
 #
+# Int16 (signed 16-bit) is not in the ttnn typecast matrix, but the kernel handles
+# it on every path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int
+# via the int->int path), so it is swept here too. Mirrors the UInt16 set; Int16
+# has a native Quasar dest format.
+#
 # The functor `calculate_typecast<IN_FMT, OUT_FMT>` needs the format pair at
 # COMPILE time, but the unified dispatcher only carries `SfpuType` at compile time
 # and formats at runtime. We bridge that with the `TYPECAST_FORMATS` template param,
@@ -606,33 +728,50 @@ class TypecastCase:
     dst: DataFormat
 
 
-_TYPECAST_PAIRS = (
-    (DataFormat.Float16_b, DataFormat.Float32),
-    (DataFormat.Float16_b, DataFormat.Int32),
-    (DataFormat.Float16_b, DataFormat.UInt8),
-    (DataFormat.Float16_b, DataFormat.UInt16),
-    (DataFormat.Float32, DataFormat.Int32),
-    (DataFormat.Float32, DataFormat.UInt8),
-    (DataFormat.Float32, DataFormat.UInt16),
-    (DataFormat.UInt16, DataFormat.Int32),
-    (DataFormat.UInt16, DataFormat.UInt8),
-    # Int16 (signed 16-bit) — not in the ttnn typecast matrix, but the kernel handles it on every
-    # path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int via the int->int path), so
-    # it is swept here too. Mirrors the UInt16 set; Int16 has a native Quasar dest format.
-    (DataFormat.Float16_b, DataFormat.Int16),
-    (DataFormat.Float32, DataFormat.Int16),
-    (DataFormat.Int16, DataFormat.Int32),
-    (DataFormat.Int16, DataFormat.UInt8),
-)
-
-# Expand each unordered pair into both cast directions.
-TYPECAST_CASES = tuple(
-    TypecastCase(a, b)
-    for src, dst in _TYPECAST_PAIRS
-    for a, b in ((src, dst), (dst, src))
+TYPECAST_CASES = (
+    # float <-> float: widen on store, RNE narrow to fp16
+    TypecastCase(DataFormat.Float16_b, DataFormat.Float32),
+    TypecastCase(DataFormat.Float32, DataFormat.Float16_b),
+    # float <-> int32: SFPCAST (+ fp16 narrow when the dst is fp16)
+    TypecastCase(DataFormat.Float16_b, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Float32),
+    # float <-> int16
+    TypecastCase(DataFormat.Float16_b, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.Float32),
+    # float <-> uint16
+    TypecastCase(DataFormat.Float16_b, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.Float32),
+    # float <-> uint8: clamps negatives, then RNE narrows
+    TypecastCase(DataFormat.Float16_b, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Float16_b),
+    TypecastCase(DataFormat.Float32, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Float32),
+    # int <-> int: store sfpmem mode (widen/equal) or RNE narrow to 8-bit
+    TypecastCase(DataFormat.UInt16, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.UInt16),
+    TypecastCase(DataFormat.UInt16, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.UInt16),
+    TypecastCase(DataFormat.Int16, DataFormat.Int32),
+    TypecastCase(DataFormat.Int32, DataFormat.Int16),
+    TypecastCase(DataFormat.Int16, DataFormat.UInt8),
+    TypecastCase(DataFormat.UInt8, DataFormat.Int16),
 )
 
 _RANGE_SAFETY_FACTOR = 0.9
+
+# Integers around the bf16 ulp=2 boundary (256). 255/256/258 are exact; 257 and 259
+# are halfway cases that round-nearest-even must resolve (257→256, 259→260).
+_INT32_TO_FP16B_RNE_BOUNDARIES = (255, 256, 257, 258, 259)
+
+
+def _is_int32_to_fp16b(src_format: DataFormat, dst_format: DataFormat) -> bool:
+    return src_format == DataFormat.Int32 and dst_format == DataFormat.Float16_b
 
 
 def _prepare_typecast_input(
@@ -666,7 +805,22 @@ def _prepare_typecast_input(
         span = af.max() - af.min()
         norm = (af - af.min()) / span if span > 0 else torch.zeros_like(af)
         vals = lo + norm * (cap - lo)
-        return vals.round().to(format_dict[src_format])
+        result = vals.round().to(format_dict[src_format])
+
+        # Int32 → Float16_b: plant bf16 spacing-boundary integers (and their negatives)
+        # so FP32_TO_FP16B nearest-even is actually exercised. The random band above
+        # stays in [-200, 200], which is integer-exact in bf16 and would not catch a
+        # missing or wrong rounding step.
+        if _is_int32_to_fp16b(src_format, dst_format):
+            flat = result.flatten()
+            seeds = list(_INT32_TO_FP16B_RNE_BOUNDARIES) + [
+                -v for v in _INT32_TO_FP16B_RNE_BOUNDARIES
+            ]
+            for i, seed in enumerate(seeds):
+                if i < flat.numel():
+                    flat[i] = seed
+            result = flat.reshape(result.shape)
+        return result
 
     # Float endpoints: log-uniform magnitudes inside both formats' representable ranges,
     # so values stay accurate through the narrowing cast.
@@ -734,16 +888,58 @@ OP_CONFIGS = [
         OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
         for op in TRIGONOMETRY_OPS
     ],
-] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
+    *[
+        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
+        for op in ROUNDING_OPS
+    ],
+] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_FORMAT_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
 
+# Float formats whose 16-bit Dest route gets an explicit MOVA2D (FPU datacopy) signbit variant.
+SIGNBIT_MOVA2D_FORMATS = (DataFormat.Float16, DataFormat.Float16_b)
+
+
+def signbit_fpu_route_variants() -> List[QuasarSfpuVariant]:
+    """
+    Signbit variants that reach Dest through the FPU datacopy instead of Unpack-to-Dest.
+
+    The default dedup keeps Unpack-to-Dest for every signbit state, so -0.0 (and -NaN) never cross the
+    FPU datacopy, the route a default copy_tile takes and the one that flushed -0.0 on WH/BH. This adds
+    every FPU route of the full format-route sweep (ELWADD into a 32-bit Dest) plus a MOVA2D route into
+    a 16-bit Dest, which the resolver never picks because a direct unpack is always valid there. The
+    ELWADD routes do drop the sign of -0.0 and -NaN; see _drops_zero_and_nan_sign.
+    """
+    variants = [
+        variant
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.Signbit,
+            formats_for_op(OP_CONFIG_BY_MATHOP[MathOperation.Signbit]),
+            full_format_route_sweep=True,
+        )
+        if variant.uses_fpu
+    ]
+    for fmt in SIGNBIT_MOVA2D_FORMATS:
+        assert is_valid_quasar_fpu_path(fmt, fmt, fmt, DestAccumulation.No)
+        variants.append(
+            QuasarSfpuVariant(
+                formats=InputOutputFormat(fmt, fmt),
+                dest_acc=DestAccumulation.No,
+                unpack_to_dest=False,
+                unpack_dst=fmt,
+                sfpu_src=fmt,
+                sfpu_dst=fmt,
+                pack_src=fmt,
+            )
+        )
+    return variants
+
 
 def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
-    """Float formats for every op, plus the integer/UInt16 formats only comp sweeps."""
+    """Float formats for every op, plus the integer/UInt16 formats only COMP_FORMAT_OPS sweep."""
     if cfg.mathop == MathOperation.Typecast:
         return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
-    if cfg.mathop in COMP_OPS:
+    if cfg.mathop in COMP_FORMAT_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
     return SFPU_UNARY_FORMATS
 
@@ -776,22 +972,32 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
             )
             else (ApproximationMode.No,)
         )
-        format_variants = generate_quasar_sfpu_format_variants(
-            cfg.mathop, formats_for_op(cfg)
-        )
-        for variant in format_variants:
-            dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
+        format_variants = [
+            (variant, False)
+            for variant in generate_quasar_sfpu_format_variants(
+                cfg.mathop, formats_for_op(cfg)
+            )
+        ]
+        if cfg.mathop == MathOperation.Signbit and not is_perf:
+            # The extra FPU routes only check the datacopy keeps the sign bit, so they run at one
+            # dest-sync / size point (still both implied-math modes) instead of the full matrix.
+            format_variants += [(v, True) for v in signbit_fpu_route_variants()]
+        for variant, route_only in format_variants:
+            dest_sync_modes = (
+                (DestSync.Half,) if (is_perf or route_only) else cfg.dest_sync_modes
+            )
             if cfg.mathop == MathOperation.Typecast:
                 implied_math_formats = (ImpliedMathFormat.No,)
             elif is_perf:
                 implied_math_formats = (ImpliedMathFormat.Yes,)
             else:
                 implied_math_formats = (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
-            input_dims = (
-                select_perf_input_dimensions(cfg.input_dims)
-                if is_perf
-                else cfg.input_dims
-            )
+            if is_perf:
+                input_dims = select_perf_input_dimensions(cfg.input_dims)
+            elif route_only:
+                input_dims = cfg.input_dims[:1]
+            else:
+                input_dims = cfg.input_dims
             for dest_sync in dest_sync_modes:
                 for implied_math_format in implied_math_formats:
                     for approx_mode in approx_modes:
@@ -825,8 +1031,9 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast, and the six
-    compare-to-zero modes), validated against the UnarySFPUGolden reference.
+    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
+    floor/ceil/trunc/frac/round, the six
+    compare-to-zero modes, and signbit), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
     shared format matrix.
     """
@@ -876,23 +1083,32 @@ def test_eltwise_unary_sfpu_quasar(
             generate_golden = get_golden_generator(UnarySFPUGolden)
             golden_tensor = generate_golden(
                 mathop,
-                src_A,
+                (
+                    _elwadd_datacopy_dest_image(src_A)
+                    if _drops_zero_and_nan_sign(mathop, format_variant)
+                    else src_A
+                ),
                 formats.output_format,
                 dest_acc,
                 formats.input_format,
                 input_dimensions,
             )
         else:
-            # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
+            # Integer-input ops (Int32/Int16/UInt16 — currently COMP_FORMAT_OPS): apply the
             # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
             # float-only pipeline (float dst, tilize, FTZ) that would mangle integer values; applying
             # the op per element keeps integers intact, and for an element-wise op row-major order
             # already matches the packed result. A non-element-wise integer op would need its own path.
-            ops = UnarySFPUGolden().ops
-            op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
-            golden_tensor = torch.tensor(
-                op_res, dtype=format_dict[formats.output_format]
-            )
+            if _is_int32_to_fp16b(formats.input_format, formats.output_format):
+                # Explicit fp32 → bf16 RNE so planted 257/259 (and negatives) check the
+                # kernel's FP32_TO_FP16B nearest-even step, not an identity bit copy.
+                golden_tensor = src_A.to(torch.float32).to(torch.bfloat16)
+            else:
+                ops = UnarySFPUGolden().ops
+                op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
+                golden_tensor = torch.tensor(
+                    op_res, dtype=format_dict[formats.output_format]
+                )
 
     # A layout-sensitive op reads the tile's face structure, so it gets the tilized buffer tt-metal
     # would feed it, and its result is read back through the matching untilize. UnarySFPUGolden
@@ -953,6 +1169,11 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            # Unpack-to-Dest copies Int32 L1 as two's-complement. Only Int32 → Float16_b
+            # converts 2SC → SM in the kernel; other integer typecasts still pack SM.
+            twos_complement=_is_int32_to_fp16b(
+                formats.input_format, formats.output_format
+            ),
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,

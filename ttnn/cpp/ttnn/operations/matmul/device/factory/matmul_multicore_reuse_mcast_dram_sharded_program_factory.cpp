@@ -34,7 +34,7 @@ using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 using tt::tt_metal::experimental::ComputeHardwareConfig;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
@@ -44,6 +44,8 @@ using tt::tt_metal::experimental::KernelSpec;
 using tt::tt_metal::experimental::KernelSpecName;
 using tt::tt_metal::experimental::ProgramRunArgs;
 using tt::tt_metal::experimental::ProgramSpec;
+using tt::tt_metal::experimental::ScratchpadSpec;
+using tt::tt_metal::experimental::ScratchpadSpecName;
 using tt::tt_metal::experimental::SemaphoreBinding;
 using tt::tt_metal::experimental::SemaphoreSpec;
 using tt::tt_metal::experimental::SemaphoreSpecName;
@@ -51,7 +53,6 @@ using tt::tt_metal::experimental::Table;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -63,7 +64,7 @@ using dram_sharded_helpers::move_common_entries;
 using dram_sharded_helpers::validate_num_workers_per_dram_bank;
 
 static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice& device,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
     ComputeHardwareConfig compute_hw,
@@ -111,36 +112,64 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_mcast_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     CoreCoord top_left_core = {(std::size_t)start_core_x, (std::size_t)start_core_y};
     CoreCoord bottom_right_core = {
         (std::size_t)start_core_x + compute_with_storage_grid_size.x - 1,
         (std::size_t)start_core_y + compute_with_storage_grid_size.y - 1};
-    auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
+    auto top_left_core_physical = device.worker_core_from_logical_core(top_left_core);
+    auto bottom_right_core_physical = device.worker_core_from_logical_core(bottom_right_core);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
+
+    // Quasar (Gen2) uplift: every Quasar-specific choice below is keyed on this one flag so WH/BH
+    // keep their path unchanged.
+    const bool is_quasar = device.arch() == tt::ARCH::QUASAR;
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
-    if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+    // WH/BH reverse the multicast rectangle for a NOC_1 (high->low) multicast. Quasar is
+    // single-NOC / non-torus and needs an ascending [min..max] rectangle regardless of the
+    // preferred NOC (preferred_noc_for_dram_write() returns NOC_1 there too), so the swap is
+    // Gen1-only; a reversed rectangle would stall the sender in the multicast write.
+    if (in0_noc == tt::tt_metal::NOC::NOC_1 && !is_quasar) {
         std::swap(start_core_noc, end_core_noc);
     }
 
     validate_num_workers_per_dram_bank(workers_per_bank);
     TT_FATAL(
-        workers_per_bank == 1 || device->arch() == tt::ARCH::BLACKHOLE,
+        workers_per_bank == 1 || device.arch() == tt::ARCH::BLACKHOLE,
         "Multiple workers per DRAM bank are currently supported only on Blackhole");
     TT_FATAL(
         workers_per_bank == 1 || in1_noc == tt::tt_metal::NOC::NOC_0,
         "Multiple workers per DRAM bank currently require a NOC0 data-movement kernel");
 
-    auto reader_assignments =
-        get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores);
+    std::vector<dram_sharded_helpers::DramBankReaderAssignment> reader_assignments;
+    if (is_quasar) {
+        // get_dram_bank_reader_assignments() -> IDevice::get_optimal_dram_bank_to_logical_worker_assignment()
+        // -> tt_metal/common/core_assignment.cpp, which has no QUASAR arm and throws
+        // "Invalid Arch Name specified". Interim Quasar-only placement until the runtime grows one:
+        // bank b reads from the b-th compute core in row-major logical order (workers_per_bank is
+        // already pinned to 1 off Blackhole above).
+        const uint32_t num_banks = device.num_dram_channels();
+        TT_FATAL(
+            num_banks <= num_mcast_cores,
+            "DRAM-sharded matmul on Quasar needs one worker core per DRAM bank ({} banks, {} cores)",
+            num_banks,
+            num_mcast_cores);
+        reader_assignments.reserve(num_banks);
+        for (uint32_t bank = 0; bank < num_banks; ++bank) {
+            reader_assignments.push_back(
+                {CoreCoord{bank % compute_with_storage_grid_size.x, bank / compute_with_storage_grid_size.x}, bank, 0});
+        }
+    } else {
+        reader_assignments =
+            get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores);
+    }
     uint32_t num_dram_banks = reader_assignments.size() / workers_per_bank;
 
     // Remove cores assigned to padding-only DRAM banks from the workers category
@@ -191,7 +220,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     auto out_subblock_w = std::get<1>(subblock_hw);
 
     uint32_t max_subblock_w = fp32_dest_acc_en ? 4 : 8;
-    if (out_subblock_h == 1 and out_subblock_w < max_subblock_w) {
+    // The widening below may pad per_core_N_compute past per_core_N_in1_sender, in which case the
+    // compute kernel narrows matmul_block's ct_dim on the last in1 subblock. Quasar's matmul LLK
+    // bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init, so a per-call ct_dim that
+    // differs from the init's desyncs the src-register handshake (hangs). Keep the divisor-based
+    // subblock width there (per_core_N_compute % out_subblock_w == 0, no padded lanes); WH/BH unchanged.
+    if (out_subblock_h == 1 and out_subblock_w < max_subblock_w and !is_quasar) {
         uint32_t num_subblock_w_per_core_N = per_core_N_compute / out_subblock_w;
         uint32_t num_iter = max_subblock_w - out_subblock_w;
         uint32_t new_out_subblock_w = out_subblock_w;
@@ -218,6 +252,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     // subblock so it never reads in1 tile indices that were not produced for the current block.
     // When no padding occurs (per_core_N_compute == per_core_N_in1_sender) this equals out_subblock_w.
     uint32_t last_subblock_w_valid = out_subblock_w - (per_core_N_compute - per_core_N_in1_sender);
+    // Quasar: the widening above is skipped there, so no padded lane can reach the compute kernel (whose
+    // ARCH_QUASAR static_assert would otherwise fail at JIT time). Catch any future regression on the host.
+    TT_FATAL(
+        !is_quasar || last_subblock_w_valid == out_subblock_w,
+        "DRAM-sharded matmul on Quasar cannot pad per_core_N ({} compute vs {} in1 sender tiles): the Quasar "
+        "matmul LLK bakes ct_dim at init",
+        per_core_N_compute,
+        per_core_N_in1_sender);
 
     uint32_t in1_num_subblocks = (per_core_N_compute / out_subblock_w);
 
@@ -255,11 +297,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t out_block_tiles = per_core_M * per_core_N_compute;
     uint32_t out_num_entries = out_block_tiles;
 
-    uint32_t out_reshard_block_tiles = per_core_M * per_core_N_storage;
-    uint32_t out_reshard_num_entries = out_reshard_block_tiles;
-
     uint32_t in0_shard_width_in_tiles = in0_tensor.shard_spec()->shape[1] / in0_tile.get_tile_shape()[1];
-    uint32_t in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
     // The activation multicast is one semaphore-gated block per sender, so its cost is the block
     // count K / in0_block_w. A block may be wider than a storage shard: the sender then gathers
     // shards_per_block consecutive shards over the NoC before multicasting (see the in0 sender
@@ -277,8 +315,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             per_core_M);
         shards_per_block = in0_block_w / in0_shard_width_in_tiles;
     }
-    uint32_t in0_sharded_num_entries = in2_block_tiles;
-
     uint32_t bias_num_entries = per_core_N_compute;
 
     // get the max page size based on num tiles
@@ -358,12 +394,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName IN1_DFB{"in1"};
-    const DFBSpecName IN0_SHARDED_DFB{"in0_sharded"};
-    const DFBSpecName IN0_STAGE_DFB{"in0_stage"};
+    const ScratchpadSpecName IN0_STAGE_SCRATCH{"in0_stage"};
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERMED0_DFB{"intermed0"};
-    const DFBSpecName OUT_RESHARD_DFB{"out_reshard"};
 
     const SemaphoreSpecName IN0_MCAST_SENDER_SEM{"in0_mcast_sender"};
     const SemaphoreSpecName IN0_MCAST_RECEIVER_SEM{"in0_mcast_receiver"};
@@ -420,9 +454,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 
     const uint32_t num_compute_cores = all_cores_in_rect_grid.num_cores();
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_compute_cores, mm_kernel_defines);
+        device.arch(), num_compute_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_compute_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_compute_cores, mm_kernel_defines, throttle_level);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build DataflowBufferSpecs
@@ -445,15 +479,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .data_format_metadata = in1_data_format,
         .tile_format_metadata = in1_tile,
     };
-    // in0 arrives already resident in L1 as a width shard; the buffer is a non-owning view of it.
-    DataflowBufferSpec in0_sharded_dfb_spec{
-        .unique_id = IN0_SHARDED_DFB,
-        .entry_size = in0_single_tile_size,
-        .num_entries = in0_sharded_num_entries,
-        .data_format_metadata = in0_data_format,
-        .tile_format_metadata = in0_tile,
-        .borrowed_from = IN0,
-    };
+    // The resident in0 width shard and the output tensor's own L1 shard are reached through
+    // LocalTensorAccessor (tensor::in0_shard on the in0 sender, tensor::out_shard on the in1
+    // sender/writer) rather than borrowed DataflowBuffers: neither kernel ever exchanged FIFO
+    // credits on those views (sync-free one-touchers), and a DM kernel bound as both PRODUCER and
+    // CONSUMER of one DFB is a self-loop that Gen2 (Quasar) rejects. Same L1 addresses on WH/BH.
     DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
@@ -468,15 +498,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
     };
-    // The resharded output is written straight into the output tensor's own L1 shard.
-    DataflowBufferSpec out_reshard_dfb_spec{
-        .unique_id = OUT_RESHARD_DFB,
-        .entry_size = output_single_tile_size,
-        .num_entries = out_reshard_num_entries,
-        .data_format_metadata = output_data_format,
-        .tile_format_metadata = output_tile,
-        .borrowed_from = OUTPUT,
-    };
     if (share_out_interm_buffer) {
         out_dfb_spec.advanced_options.alias_with = {INTERMED0_DFB};
         intermed0_dfb_spec.advanced_options.alias_with = {OUT_DFB};
@@ -486,22 +507,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     dataflow_buffers.reserve(8);
     dataflow_buffers.push_back(std::move(in0_dfb_spec));
     dataflow_buffers.push_back(std::move(in1_dfb_spec));
-    dataflow_buffers.push_back(std::move(in0_sharded_dfb_spec));
+    Group<ScratchpadSpec> scratchpads;
     if (shards_per_block > 1) {
         // One block of scratch for a storage core that does no compute to assemble its multi-shard
         // block in: its in0 slot lies inside the multicast rectangle and receives the other senders'
-        // blocks. The in0 sender kernel is its only toucher.
-        dataflow_buffers.push_back(DataflowBufferSpec{
-            .unique_id = IN0_STAGE_DFB,
-            .entry_size = in0_single_tile_size,
-            .num_entries = in0_block_tiles,
-            .data_format_metadata = in0_data_format,
-            .tile_format_metadata = in0_tile,
+        // blocks. The in0 sender kernel is its only toucher and never exchanges FIFO credits on it,
+        // so it is a kernel-private scratchpad (a DM self-loop DFB is rejected on Gen2 / Quasar).
+        scratchpads.push_back(ScratchpadSpec{
+            .unique_id = IN0_STAGE_SCRATCH,
+            .size_per_node = in0_block_tiles * in0_single_tile_size,
         });
     }
     dataflow_buffers.push_back(std::move(out_dfb_spec));
     dataflow_buffers.push_back(std::move(intermed0_dfb_spec));
-    dataflow_buffers.push_back(std::move(out_reshard_dfb_spec));
     if (bias.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
@@ -526,11 +544,17 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .unique_id = IN0_MCAST_RECEIVER_SEM,
         .target_nodes = all_cores_in_rect_grid,
     });
-    semaphores.push_back(SemaphoreSpec{
-        .unique_id = IN0_MCAST_SENDER_VALID_SEM,
-        .target_nodes = all_cores_in_rect_grid,
-        .advanced_options = {.initial_value = VALID},
-    });
+    // No kernel binds this semaphore (the in0 sender publishes VALID from its own receiver
+    // semaphore's L1 word), so it is dead state carried over from the legacy factory. Quasar
+    // supports zero-initialized semaphores only (ValidateProgramSpec rejects initial_value != 0),
+    // so it is omitted there; WH/BH keep it to leave their semaphore layout untouched.
+    if (!is_quasar) {
+        semaphores.push_back(SemaphoreSpec{
+            .unique_id = IN0_MCAST_SENDER_VALID_SEM,
+            .target_nodes = all_cores_in_rect_grid,
+            .advanced_options = {.initial_value = VALID},
+        });
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loops)
@@ -551,11 +575,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     });
     in0_mcast_sender_noc_x.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        in0_mcast_sender_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     in0_mcast_sender_noc_y.reserve(mcast_senders_coords.size());
     for (auto core : mcast_senders_coords) {
-        in0_mcast_sender_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        in0_mcast_sender_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     AdvancedKernelRunArgs::Varargs in0_sender_noc_varargs;
@@ -629,11 +653,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     std::vector<CoreCoord> output_coords = corerange_to_cores(output_all_storage_cores, std::nullopt, true);
     output_noc_x.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
+        output_noc_x.push_back((std::uint32_t)device.worker_core_from_logical_core(core).x);
     }
     output_noc_y.reserve(output_coords.size());
     for (auto core : output_coords) {
-        output_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+        output_noc_y.push_back((std::uint32_t)device.worker_core_from_logical_core(core).y);
     }
 
     uint32_t num_cores_written_back = (N + per_core_N_storage - 1) / per_core_N_storage;
@@ -846,6 +870,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     //                      Build KernelSpecs
     ////////////////////////////////////////////////////////////////////////////
 
+    // config_1xx applies on WH/BH; config_2xx on Quasar (each is ignored on the other arch, selected at
+    // program construction). On Quasar these DM kernels manage DFB credits EXPLICITLY (reserve_back /
+    // push_back on in0 / in1, wait_front / pop_front on out); leaving implicit sync ON adds an extra
+    // final-credit ACK on top of the explicit credits -> tile-counter underflow (seen on the 1D-mcast
+    // factory, #58197). Opt every bound DFB out of implicit sync on Quasar, matching the sibling matmul
+    // factories.
     // in0 sender kernel (reader - RISCV_1)
     KernelSpec in0_sender{
         .unique_id = IN0_SENDER,
@@ -860,18 +890,6 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                     .accessor_name = "in0",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                // Sync-free one-toucher: the kernel only takes the shard's base address from it,
-                // with no FIFO traffic, so it stands as both endpoints of its own buffer.
-                DFBBinding{
-                    .dfb_spec_name = IN0_SHARDED_DFB,
-                    .accessor_name = "in0_sharded",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = IN0_SHARDED_DFB,
-                    .accessor_name = "in0_sharded",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
             },
         .semaphore_bindings =
             {
@@ -882,6 +900,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                 SemaphoreBinding{
                     .semaphore_spec_name = IN0_MCAST_RECEIVER_SEM,
                     .accessor_name = "in0_mcast_receiver",
+                },
+            },
+        // The resident in0 width shard, read via LocalTensorAccessor (base address only).
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = IN0,
+                    .accessor_name = "in0_shard",
                 },
             },
         .compile_time_args =
@@ -906,21 +932,26 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             {
                 .runtime_arg_names = {"worker_core_type", "sender_id", "is_last_ktile_padded"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = in0_noc,
+                    },
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
+                    },
+            },
         .advanced_options = {.num_runtime_varargs = num_in0_sender_varargs},
     };
     if (shards_per_block > 1) {
-        // Sync-free one-toucher, like in0_sharded above: the sender only takes the scratch's base
-        // address, so it stands as both endpoints of its own buffer.
-        in0_sender.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = IN0_STAGE_DFB,
+        // The multi-shard staging block (see IN0_STAGE_SCRATCH above): the sender only takes its
+        // base address.
+        in0_sender.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
+            .scratchpad_spec_name = IN0_STAGE_SCRATCH,
             .accessor_name = "in0_stage",
-            .endpoint_type = DFBEndpointType::PRODUCER,
-        });
-        in0_sender.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = IN0_STAGE_DFB,
-            .accessor_name = "in0_stage",
-            .endpoint_type = DFBEndpointType::CONSUMER,
         });
     }
 
@@ -943,24 +974,17 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                     .accessor_name = "out",
                     .endpoint_type = DFBEndpointType::CONSUMER,
                 },
-                // Sync-free one-toucher, as in0_sharded is on the sender: the kernel writes the
-                // resharded output through the tensor's own L1 address with no FIFO traffic.
-                DFBBinding{
-                    .dfb_spec_name = OUT_RESHARD_DFB,
-                    .accessor_name = "out_reshard",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = OUT_RESHARD_DFB,
-                    .accessor_name = "out_reshard",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
             },
         .tensor_bindings =
             {
                 TensorBinding{
                     .tensor_parameter_name = IN1,
                     .accessor_name = "in1",
+                },
+                // The output tensor's own L1 shard, written via LocalTensorAccessor (base address only).
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "out_shard",
                 },
             },
         .compile_time_args =
@@ -988,7 +1012,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                      "num_shard_to_write_back",
                      "reshard_tensor_start_offset"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = in1_noc,
+                    },
+                .config_2xx =
+                    DataMovementHardwareConfig::DataMovement2XXConfig{
+                        .disable_dfb_implicit_sync_for_all = true,
+                    },
+            },
         .advanced_options = {.num_runtime_varargs = num_in1_writer_varargs},
     };
     if (bias.has_value()) {
@@ -1010,13 +1045,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t in1_per_core_w = per_core_N_in1_sender;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    unpack_modes(compute_hw) = {
+    compute_hw.unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {IN1_DFB, UnpackMode::UnpackToSrc},
         {INTERMED0_DFB, UnpackMode::UnpackToSrc},
     };
     if (bias.has_value()) {
-        unpack_modes(compute_hw).insert({BIAS_DFB, UnpackMode::UnpackToSrc});
+        compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
     }
 
     KernelSpec compute{
@@ -1133,6 +1168,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .kernels = std::move(kernels),
         .dataflow_buffers = std::move(dataflow_buffers),
         .semaphores = std::move(semaphores),
+        .scratchpads = std::move(scratchpads),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units =
             {
@@ -1208,7 +1244,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
 
     const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::distributed::MeshDevice* device = a.device();
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -1283,10 +1319,10 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
     const auto& output_mesh = output.mesh_tensor();
 
     return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_spec(
-        device,
+        *device,
         input_all_cores_storage,
         output_all_cores_storage,
-        ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        ttnn::to_compute_hardware_config(compute_kernel_config),
         fp32_dest_acc_en,
         packer_l1_acc,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config),

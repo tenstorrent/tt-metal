@@ -11,6 +11,7 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -216,6 +217,7 @@ void Inspector::program_compile_finished(
         std::lock_guard<std::mutex> lock(data->programs_mutex);
         auto& program_data = data->programs_data[program->get_id()];
         program_data.compile_finished_timestamp = std::chrono::high_resolution_clock::now();
+        program_data.semaphores = program->semaphores();
         data->logger.log_program_compile_finished(program_data);
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program compile finished: {}", e.what());
@@ -338,6 +340,7 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
         {
             std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
             data->mesh_buffers_data.erase(mesh_buffer);
+            data->global_semaphores_data.erase(mesh_buffer);
             if (auto it = data->mesh_sockets_data.find(mesh_buffer); it != data->mesh_sockets_data.end()) {
                 destroyed_socket = std::move(it->second);
                 data->mesh_sockets_data.erase(it);
@@ -360,7 +363,9 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         return;
     }
     try {
-        const distributed::SocketSenderSize sender_size;
+        auto* mesh_device = socket->get_mesh_device();
+        const distributed::SocketSenderSize sender_size(
+            mesh_device->impl().metal_env().get_hal().get_alignment(HalMemType::L1));
         auto config_buffer = socket->get_config_buffer();
         const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
 
@@ -372,7 +377,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
         socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
 
-        auto* mesh_device = socket->get_mesh_device();
         const auto local_ep = socket->get_socket_endpoint_type();
         const auto peer_ep = is_sender ? distributed::SocketEndpoint::RECEIVER : distributed::SocketEndpoint::SENDER;
         // One entry per local core; a sender core feeding several downstreams collects several peers.
@@ -423,6 +427,46 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         data->mesh_sockets_data.insert_or_assign(config_buffer.get(), std::move(socket_data));
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());
+    }
+}
+
+void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, const CoreRangeSet& cores) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        inspector::GlobalSemaphoreData semaphore_data;
+        semaphore_data.address = buffer->address();
+        semaphore_data.cores = cores;
+        for (const auto* device : buffer->device()->get_devices()) {
+            semaphore_data.chip_ids.push_back(device->id());
+        }
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->global_semaphores_data.insert_or_assign(buffer, std::move(semaphore_data));
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log global semaphore created: {}", e.what());
+    }
+}
+
+void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, uint32_t value) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        if (auto it = data->global_semaphores_data.find(buffer); it != data->global_semaphores_data.end()) {
+            it->second.reset_value = value;
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log global semaphore reset: {}", e.what());
     }
 }
 
