@@ -211,23 +211,28 @@ def test_cpu_medium_routes_on_merge_group(tmp_path: Path):
     assert matrix[0]["runs_on"] == ["tt-ubuntu-2204-medium-prio-stable"]
 
 
+GALAXY_GENERAL = ["arch-wormhole_b0", "pipeline-functional", "topology-6u", "in-service"]
+GALAXY_DEDICATED = ["arch-wormhole_b0", "pipeline-merge-gate", "topology-6u", "in-service"]
+
+
 @pytest.mark.parametrize(
-    "event, expected_sku, expected_pipeline",
+    "event, expected_sku, expected_runs_on",
     [
-        ("merge_group", "wh_galaxy_merge_gate_dedicated", "pipeline-merge-gate"),
-        ("pull_request", "wh_galaxy", "pipeline-functional"),
-        ("workflow_dispatch", "wh_galaxy", "pipeline-functional"),
+        ("merge_group", "wh_galaxy_merge_gate_dedicated", GALAXY_DEDICATED),
+        ("pull_request", "wh_galaxy", GALAXY_GENERAL),
+        ("workflow_dispatch", "wh_galaxy", GALAXY_GENERAL),
     ],
 )
-def test_wh_galaxy_merge_gate_routes_by_event(tmp_path: Path, event: str, expected_sku: str, expected_pipeline: str):
+def test_wh_galaxy_merge_gate_routes_by_event(tmp_path: Path, event: str, expected_sku: str, expected_runs_on: list):
     """Only the merge queue lands on the dedicated galaxies; every other trigger uses wh_galaxy."""
     path = tmp_path / "tests.yaml"
-    path.write_text("- name: galaxy\n  cmd: echo ok\n  skus:\n    wh_galaxy_merge_gate:\n      timeout: 5\n  team: models\n")
+    path.write_text(
+        "- name: galaxy\n  cmd: echo ok\n  skus:\n    wh_galaxy_merge_gate:\n      timeout: 5\n  team: models\n"
+    )
     matrix = run_matrix(path, "ALL_SKUS_IN_TESTS", "--event", event)
     assert matrix[0]["sku"] == expected_sku
     assert matrix[0]["logical_sku"] == "wh_galaxy_merge_gate"
-    assert expected_pipeline in matrix[0]["runs_on"]
-    assert "in-service" in matrix[0]["runs_on"]
+    assert matrix[0]["runs_on"] == expected_runs_on
 
 
 def test_wh_galaxy_merge_gate_dedicated_never_carries_general_pipeline_labels():
