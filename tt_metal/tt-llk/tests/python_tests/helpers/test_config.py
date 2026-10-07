@@ -1817,6 +1817,12 @@ class TestConfig:
             optional_kernel_flags,
             f"-DLLK_TRISC_{trisc_define}",
             device_print_flags,
+            (  # experiment: LLK_THREAD_FN_NOPS=N moves every function of the threads in LLK_FN_NOPS_THREADS only
+                f"-fpatchable-function-entry={int(os.environ['LLK_THREAD_FN_NOPS'])},{int(os.environ['LLK_THREAD_FN_NOPS'])}"
+                if trisc_define in os.environ.get("LLK_FN_NOPS_THREADS", "").split(",")
+                and int(os.environ.get("LLK_THREAD_FN_NOPS", "0"))
+                else ""
+            ),
         )
         link_flags = TestConfig._argv(
             TestConfig.OPTIONS_LINK,
