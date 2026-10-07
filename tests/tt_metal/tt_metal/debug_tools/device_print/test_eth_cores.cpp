@@ -76,6 +76,9 @@ void RunTest(
 }  // namespace
 
 TEST_F(DevicePrintFixture, ActiveEthTestPrint) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         // Skip if no ethernet cores on this device

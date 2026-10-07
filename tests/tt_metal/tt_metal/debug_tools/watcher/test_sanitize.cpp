@@ -813,6 +813,10 @@ void RunTestEth(
         GTEST_SKIP() << "Quasar has no active Ethernet cores runtime support";
     }
     auto* device = mesh_device->get_devices()[0];
+    if (not fixture->IsSlowDispatch()) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+        return;
+    }
     if (fixture->IsSlowDispatch()) {
         GTEST_SKIP();
     }
