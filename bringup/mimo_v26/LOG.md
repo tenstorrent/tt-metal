@@ -887,3 +887,14 @@
 - claim: CORRECTION (coordinator): briefs/COMMON.md listed 'bfp8 attention weights default' among decisions already made. The user's decisions covered only routed experts bfp8. bfp8 qkv/o is the coordinator's working assumption inherited from the study (o_proj is bf16 in the checkpoint, qkv fp8 128x128 block). Evidence so far: attention PCC with bfp8 vs bf16 weights differs by about 0.0001 on L1/L5 at S=128 (attn agent E261007-0247-b41 and earlier); device-vs-oracle layers 6-47 run median 2-4x above the bf16-vs-fp32 oracle floor, which excludes weight quantisation (E261007-0540-c3b). To be put to the user; a bf16 o_proj switch is kept available (cost ~0.2 GB/chip extra).
 - evidence: -
 - paths: bringup/mimo_v26/briefs
+
+## E261007-0550-d25
+- date: 2026-10-07T05:50:36
+- commit: fcfc8f0f421
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER DECISIONS 2026-10-07: (1) spec decode drafter = the model card's 5-layer SWA DFlash-style drafter predicting 7 tokens per forward pass (model card README section 'Speculative Decoder'; block size 8 = 1 verified + 7 drafted; checkpoint dir dflash/), NOT the in-checkpoint MTP-3 (interpretation of 'MTP 7 token prediction': the card calls the DFlash drafter an MTP drafter; coordinator to confirm in the report). (2) bfp8 attention weights confirmed (keep bfp8 qkv/o; supersedes the open question in E261007-0542-8b2). (3) GSM8K threshold: user asked to use a different benchmark prompt set from the model card; the README publishes only agentic suites (DeepSWE, ProgramBench, Terminal Bench, OSWorld ...) with no runnable prompts or example messages, so no such set exists locally: clarification requested, GSM8K non-thinking n=128 remains the interim runnable proxy with threshold not yet set.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
