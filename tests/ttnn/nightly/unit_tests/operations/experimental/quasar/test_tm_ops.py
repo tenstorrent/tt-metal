@@ -444,3 +444,36 @@ def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
         assert not _qsr_is_tile_native_fold_supported(t, sh, sw), f"predicate must reject stride ({sh},{sw})"
         with expect_error(RuntimeError, r"stride_[hw] .* must be > 0"):
             _qsr_prim_fold(t, sh, sw)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
+    tile_dim, out_tile_bytes = 32, 2048  # untilize emits bfloat16 for both input dtypes
+    in_tile_bytes = 2048 if dtype == ttnn.bfloat16 else 1088
+    info = ttnn._ttnn.reports.get_device_info(device)
+    free_l1, num_banks = info.cb_limit, info.l1_num_banks
+
+    Wt = 64
+    row_bytes = Wt * tile_dim * 2
+    cbs = Wt * (in_tile_bytes + out_tile_bytes)
+    rows = -(-(94 * free_l1 // 100) * num_banks // row_bytes)
+    Ht = -(-rows // tile_dim)
+    output = -(-Ht * tile_dim // num_banks) * row_bytes
+
+    if not (Wt > 0 and cbs < free_l1 < cbs + output):
+        pytest.skip(f"No shape separates the routes on this device (free_l1={free_l1}, banks={num_banks})")
+
+    shape = (1, 1, Ht * tile_dim, Wt * tile_dim)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=dtype,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    result = ttnn.experimental.quasar.untilize(ttnn_in, memory_config=L1_INTERLEAVED)
+    ref = ttnn.to_torch(ttnn_in)
+    got = ttnn.to_torch(result)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
