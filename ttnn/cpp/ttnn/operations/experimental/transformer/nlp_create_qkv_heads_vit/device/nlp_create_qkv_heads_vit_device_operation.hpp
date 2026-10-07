@@ -4,9 +4,11 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <variant>
+
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/device/nlp_create_qkv_heads_vit_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 
@@ -18,13 +20,16 @@ struct NlpCreateHeadsVitDeviceOperation {
     using spec_return_value_t = NlpCreateQkvHeadsVitResultSpec;
     using tensor_return_value_t = NlpCreateQkvHeadsVitResult;
 
-    // The only per-dispatch state is the four buffer addresses (input, q, k, v); the work split and
-    // every per-core tile offset derive from the input's padded shape and the compute grid, both
-    // covered by the program hash. The address bindings are therefore the whole cache-hit refresh.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+    struct NlpCreateQkvHeadsVitProgramFactory {
+        // The only per-dispatch state is the four buffer addresses (input, q, k, v); the work split and
+        // every per-core tile offset derive from the input's padded shape and the compute grid, both
+        // covered by the program hash. The tensor bindings are therefore the whole cache-hit refresh.
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output);
+    };
+    using program_factory_t = std::variant<NlpCreateQkvHeadsVitProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
