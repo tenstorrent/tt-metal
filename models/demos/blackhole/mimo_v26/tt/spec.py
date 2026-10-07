@@ -95,8 +95,10 @@ class SpecEngine:
         self.alive = alive
         t0 = time.perf_counter()
         dr.set_round(self.anchor, self.pos)
+        t_set = time.perf_counter() - t0
         d, _ = dr.draft(use_trace=self.dr_trace)  # [rows,U,7]
         t_draft = time.perf_counter() - t0
+        self.stats.setdefault("t_set", []).append(t_set)
         block = torch.cat([self.anchor[:, :, None], d], 2)  # [rows,U,8]
         t0 = time.perf_counter()
         post, _ = dec.verify(

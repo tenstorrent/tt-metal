@@ -138,6 +138,7 @@ def test_spec_exact(mesh_device):
         rounds=nr,
         accepted_mean=round(sum(acc) / max(1, len(acc)), 3),
         accepted_hist=[acc.count(k) for k in range(1, 9)],
+        set_round_ms_mean=round(1e3 * sum(eng.stats["t_set"]) / max(1, nr), 2),
         draft_ms_mean=round(1e3 * sum(eng.stats["t_draft"]) / max(1, nr), 2),
         verify_ms_mean_fallback_8_steps=round(1e3 * sum(eng.stats["t_verify"]) / max(1, nr), 2),
         append_ms_mean=round(1e3 * sum(eng.stats["t_append"]) / max(1, nr), 2),
