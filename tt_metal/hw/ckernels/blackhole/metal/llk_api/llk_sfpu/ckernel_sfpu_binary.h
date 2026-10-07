@@ -307,7 +307,9 @@ inline void calculate_sfpu_binary_div_fp32_rows(
 }
 
 // The 16-bit division row of the sfpi form (reciprocal, two Newton steps, product, zero-divisor arm, nearest-even
-// rounding), with the rounding's final AND and the store scheduled by load macro 0.
+// rounding), ordered so that no instruction reads a multiply-add result on the next cycle (the second step's first
+// multiply-add runs on every lane into L5, which only the predicated second one reads), with the rounding's final AND
+// and the store scheduled by load macro 0.
 template <int ITERATIONS>
 inline void calculate_sfpu_binary_div_bf16_rows(
     const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
@@ -325,11 +327,12 @@ inline void calculate_sfpu_binary_div_bf16_rows(
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
         TTI_SFPARECIP(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                           // r
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, 2);  // t = in1 * r - 2
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
+        TTI_SFPLOADI(p_sfpu::LREG6, 2, 0x7fff);                                      // the rounding's addend
         TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG3, 3);  // y1 = r * -t
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in0);
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG5, 1);    // 2 - in1 * y1
         TTI_SFPGT(0, p_sfpu::LREG4, p_sfpu::LCONST_0, 1);                              // lanes t < 0
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG4, 1);
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LCONST_0, p_sfpu::LREG0, 2);  // r = y1 * (2 - in1 * y1)
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG0, 2);  // r = y1 * (2 - in1 * y1)
         TTI_SFPENCC(3, 0, 0, 10);
         TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // result = in0 * r
         TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6);                                          // lanes in1 == 0
@@ -340,8 +343,7 @@ inline void calculate_sfpu_binary_div_bf16_rows(
         TTI_SFPSHFT(0xFF0, p_sfpu::LREG0, p_sfpu::LREG1, 5);  // float32_to_bf16_rne
         TTI_SFPLOADI(p_sfpu::LREG2, 2, 1);
         TTI_SFPAND(1, p_sfpu::LREG2, p_sfpu::LREG1, 1);
-        TTI_SFPLOADI(p_sfpu::LREG2, 2, 0x7fff);
-        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG0, 4);
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, 4);
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
         TT_SFPLOADMACRO(
             (0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG1 >> 2));
