@@ -33,6 +33,7 @@ inline void _llk_unpack_AB_matmul_set_in1_column_stride_(const std::uint32_t til
     LLK_ASSERT(tile_size > 0 && tile_size <= 0xffff, "Matmul tile size must fit the SrcA address-step register");
     LLK_ASSERT(stride_tiles > 0 && stride_tiles <= 0xffff / tile_size, "Matmul column stride must fit the SrcA address-step register");
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size * stride_tiles), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // the in1 stream's WRCFG reads this GPR without a wait of its own
 }
 
 /**
@@ -85,7 +86,7 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t unpB_src_format,
     const bool fp32_dest_acc_en)
 {
-    return !fp32_dest_acc_en && _llk_unpack_AB_matmul_narrow_format_((ct_dim >= rt_dim) ? unpA_src_format : unpB_src_format);
+    return ((ct_dim >= rt_dim) || !fp32_dest_acc_en) && _llk_unpack_AB_matmul_narrow_format_((ct_dim >= rt_dim) ? unpA_src_format : unpB_src_format);
 }
 
 /**
@@ -133,7 +134,14 @@ inline void _llk_unpack_AB_matmul_stream_tile_body_(const bool partial_face, con
     {
         // SCRATCH_SEC0_val = STRIDE_GPR, then CFG_REG += SCRATCH_SEC0_val (0b011 = add, 32-bit mask, scratch_sel 0): the stride is
         // read from the GPR every tile as before, without the RDCFG and ADDDMAREG round trip
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // THCON writes the stride GPR, and on Blackhole a WRCFG can pass that write
+        if constexpr (SRC == SrcA)
+        {
+            TTI_NOP; // TILE_SIZE_A is written only at configure time, each write followed by a THCON wait
+        }
+        else
+        {
+            TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // THCON writes the stride GPR, and on Blackhole a WRCFG can pass that write
+        }
         TTI_WRCFG(STRIDE_GPR, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
         TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0, CFG_REG);
     }

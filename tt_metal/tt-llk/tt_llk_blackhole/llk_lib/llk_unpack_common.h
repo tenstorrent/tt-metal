@@ -83,6 +83,7 @@ inline void _llk_unpack_hw_configure_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(unpA_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
     TT_SETDMAREG(0, LOWER_HALFWORD(unpB_tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // the matmul in1 stream's WRCFG reads TILE_SIZE_A without a wait
 }
 
 /**
@@ -138,6 +139,7 @@ inline void _llk_unpack_reconfig_tile_shape_srca_(
 
     // Tile size (bytes) tracks the tile shape; refresh the GPR the unpack MOP uses to step the SrcA L1 base.
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // the matmul in1 stream's WRCFG reads TILE_SIZE_A without a wait
 
     // Program unpacker0 per context x_dim (face size in l1)
     // Overrides value set by tile descriptor when thread override bit is set in unpack instruction
@@ -242,6 +244,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON); // the matmul in1 stream's WRCFG reads TILE_SIZE_A without a wait
 
     // The ch1 (register-side) Z/Y strides are format-derived (datum size), so re-commit them on EVERY format
     // change, independent of dim_stride_target. They drive partial-face unpack addressing (e.g. partial-face
