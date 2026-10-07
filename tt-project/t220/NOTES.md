@@ -42,3 +42,13 @@ Tray-2 incident 2026-10-07 19:49 UTC (bridge-reset chips 8-15, broker job 417/41
 - Requeued: t220-fill-r2 = broker 459 (started 21:52 UTC, building VAE/upsampler/bf8 DiT caches), t220-time-r2 queued.
 - Next wake: read done/t220-time-r2.done. If time-r2 timed out while still filling, enqueue t220-time-r3.
   Then parse out_time/run.log: E2E_WALL_S gen=2..6 (seeds 0-4 warm; gen1 = capture), timing tables, warmup.
+
+## 2026-10-07 22:12 UTC (attempt 1, standard run 3)
+- DROP 1 (this config on blx03): 21:57 UTC, blx03, broker job 459 (t220-fill-r2, OUR job), chips 8,9,12,13
+  (tray 2) left PCIe. Broker recovery (glx_reset + bridge resets) still looping at 22:11 UTC; chip 9 bridge
+  reset failing (broker 472/473), health-gate 474 running. Not reset by us.
+- Runner is dead (lock free); t220-fill-r2 stays in running/ (runner resumes it first on restart),
+  t220-time-r2 in queue. Probe: `bash tt-project/t220/probe_ready.sh` (blx03 or blx01 30 min clear).
+- Next wake: if blx03 clear -> `ssh g14blx03 bash ~/fasth3/runner/runner-start.sh` (reruns fill-r2 = rerun after
+  drop 1). If fill-r2 drops again on blx03 -> skip blx03 (2 drops), move to blx01 (needs /var/tmp/fasth3/t220
+  build + cache first). If only blx01 clear: blx01 setup (setup.sh paths -> /var/tmp/fasth3) is the next step.
