@@ -57,22 +57,6 @@ inline bool pick_forwarding_link_or_fail(
     return true;
 }
 
-// Device lookup and basic existence check.
-inline bool lookup_devices_or_fail(
-    const tt::tt_metal::distributed::MeshDevice& mesh,
-    ChipId src_phys,
-    ChipId dst_phys,
-    tt::tt_metal::IDevice*& src_dev,
-    tt::tt_metal::IDevice*& dst_dev) {
-    src_dev = mesh.get_device(src_phys);
-    dst_dev = mesh.get_device(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return false;
-    }
-    return true;
-}
-
 // Generate deterministic TX pattern.
 inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
     std::vector<uint32_t> tx(n_words);
@@ -108,17 +92,9 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = nullptr;
-    tt::tt_metal::IDevice* dst_dev = nullptr;
-    if (!lookup_devices_or_fail(*fixture->get_mesh_device(), src_phys, dst_phys, src_dev, dst_dev)) {
-        return PerfPoint{};
-    }
-
     if (!validate_workload_or_fail(p)) {
         return PerfPoint{};
     }
-
-    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // --- Mesh device + coords for per-shard IO ---
     auto mesh = fixture->get_mesh_device();
@@ -263,6 +239,7 @@ Notes:
         return PerfPoint{};
     }
 
+    tt::tt_metal::CoreCoord rx_xy = mesh->worker_core_from_logical_core(p.receiver_core);
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
         (uint32_t)p.mesh_id,           // 1: dst_mesh_id (logical)

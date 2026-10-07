@@ -25,7 +25,9 @@ namespace detail {
  * | device        | The device holding the program being profiled.    | IDevice*        |                           |
  * True     |
  * */
-[[deprecated("InitDeviceProfiler is an internal API and will be removed after 2026-11-06.")]]
+[[deprecated(
+    "InitDeviceProfiler is an internal API: the profiler is initialized when the device is opened, so remove the "
+    "call. It will be removed after 2026-11-06.")]]
 void InitDeviceProfiler(IDevice* device);
 
 /**

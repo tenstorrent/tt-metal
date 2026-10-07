@@ -46,7 +46,7 @@ static json tensor_meta_to_json(const TensorMeta& m) {
     return ret;
 }
 
-static json get_kernels_json(distributed::MeshDevice* mesh_device, const Program& program) {
+static json get_kernels_json(distributed::MeshDevice& mesh_device, const Program& program) {
     std::vector<json> computeKernels;
     std::vector<json> datamovementKernels;
 
@@ -71,7 +71,7 @@ static json get_kernels_json(distributed::MeshDevice* mesh_device, const Program
     // profiler JSON well within Tracy's 64 KiB message limit.
     std::set<std::pair<std::string_view, std::string>> seenCompute;
     std::set<std::string_view> seenDatamovement;
-    const auto kernelMeta = detail::collect_kernel_meta(program, *mesh_device);
+    const auto kernelMeta = detail::collect_kernel_meta(program, mesh_device);
     computeKernels.reserve(kernelMeta.size());
     datamovementKernels.reserve(kernelMeta.size());
     for (const auto& kernel : kernelMeta) {
@@ -125,7 +125,7 @@ std::string assemble_device_op_json(
     [[maybe_unused]] const OpProfileData& data,
     [[maybe_unused]] ttsl::hash::hash_t program_hash,
     [[maybe_unused]] ChipId device_id,
-    [[maybe_unused]] tt::tt_metal::distributed::MeshDevice* mesh_device,
+    [[maybe_unused]] tt::tt_metal::distributed::MeshDevice& mesh_device,
     [[maybe_unused]] bool program_cache_hit,
     [[maybe_unused]] const tt::tt_metal::Program& program) {
 #if defined(TRACY_ENABLE)

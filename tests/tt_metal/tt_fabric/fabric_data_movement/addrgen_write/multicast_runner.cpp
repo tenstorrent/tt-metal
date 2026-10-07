@@ -84,18 +84,9 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
     ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
-    tt::tt_metal::IDevice* src_dev = fixture->get_mesh_device()->get_device(src_phys);
-    tt::tt_metal::IDevice* dst_dev = fixture->get_mesh_device()->get_device(dst_phys);
-    if (!src_dev || !dst_dev) {
-        ADD_FAILURE() << "Failed to find devices: src=" << src_phys << " dst=" << dst_phys;
-        return;
-    }
-
     if (!validate_workload_or_fail(p)) {
         return;
     }
-
-    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // --- IO buffers & initialization ---
     namespace Dist = tt::tt_metal::distributed;
@@ -228,6 +219,7 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
             receiver_progs.back(), rx_wait_k, p.receiver_core, {gsem_done->address(), sem_wait_value});
     }
 
+    tt::tt_metal::CoreCoord rx_xy = mesh->worker_core_from_logical_core(p.receiver_core);
     // Ensure the same logical worker maps to the same physical XY across all receiver chips
     for (const auto& mc : dst_coords) {
         auto* dev_i = view.impl().get_device(mc);
