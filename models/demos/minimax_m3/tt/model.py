@@ -384,6 +384,8 @@ class Model:
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
+                # The migration reader is outside this command queue.
+                ttnn.synchronize_device(self.mesh_device)
                 on_layer_complete(i)
 
         # Non-last rank: hand the hidden state to the next rank (the norm/lm_head tail is last-rank only).
