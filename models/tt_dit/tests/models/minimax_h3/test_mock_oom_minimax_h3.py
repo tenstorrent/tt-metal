@@ -22,8 +22,9 @@ per-owner DRAM attribution at every checkpoint; the probe reads that variable at
 What the mock cannot see: per-program kernel-binary DRAM buffers are not allocated in mock mode, so
 its headroom reads about 60 MB per device higher than silicon for a fully warmed H3, and nothing
 data-dependent or timing-dependent runs. A pass here means every rung's allocations fit the
-allocator and every warmed program's static circular buffers fit L1; a DRAM failure names the rungs
-that do not fit, an L1 failure raises from the program that clashes.
+allocator and every warmed program's static circular buffers fit L1. The first rung that does not fit
+raises the allocator's "Out of Memory" from the ladder walk; an L1 clash raises from the program that
+hits it. Either ends the test at once.
 """
 
 from __future__ import annotations
@@ -86,13 +87,10 @@ def _dram_line(mesh_device: ttnn.MeshDevice, label: str) -> str:
 # 44 min, VAE warm 8, audio warm 30, prompt-encoder warm ~40); warm: ~10 min on the galaxy host.
 @pytest.mark.timeout(10800)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
-def test_ref2va_warmup_fits_on_mock(mesh_device, monkeypatch):
-    """Run the ref2va preset's full init warmup exactly as serving does and require every rung to bind."""
+def test_ref2va_warmup_fits_on_mock(mesh_device):
+    """Run the ref2va preset's full init warmup exactly as serving does; any OOM or L1 clash fails it at once."""
     assert ttnn.get_arch_name() == "wormhole_b0", f"this check targets Wormhole; descriptor {MOCK_CLUSTER_DESC}"
     assert tuple(mesh_device.shape) == (4, 8), tuple(mesh_device.shape)
-
-    # Report-and-skip rungs that run out of DRAM instead of raising, so one walk names every unfittable rung.
-    monkeypatch.setenv("MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS", "1")
 
     # Serving's constructor arguments: the default yuv420 output keeps the VAE decode warm in the walk.
     pipeline = MiniMaxH3Pipeline.create_pipeline(
@@ -110,9 +108,4 @@ def test_ref2va_warmup_fits_on_mock(mesh_device, monkeypatch):
 
     logger.info(_dram_line(mesh_device, "after the full warmup"))
     ladder = sorted(pipeline.bucket_ladder, reverse=True)
-    assert not pipeline.unfittable_rungs, (
-        f"rungs that do not fit in DRAM on the mock {tuple(mesh_device.shape)} mesh: "
-        f"{sorted(pipeline.unfittable_rungs)} of ladder {ladder}; "
-        "run with MINIMAX_H3_DRAM_PROBE=1 for the per-owner attribution at the failing rung"
-    )
     logger.info(f"all {len(ladder)} rungs bound ({ladder[0]} .. {ladder[-1]} rows) on the mock mesh")

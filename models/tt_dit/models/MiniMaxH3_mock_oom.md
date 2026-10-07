@@ -264,12 +264,13 @@ compile-only warms.
 `models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py` turns the recipe into a test.
 It skips unless `TT_METAL_MOCK_CLUSTER_DESC_PATH` is set, so it never takes a galaxy; opens the
 Wormhole 4x8 preset with the ref2va gates' `l1_small_size=16384`; builds the ref2va pipeline with
-serving's constructor defaults and `warmup=False`; then calls the constructor's own `_warmup_on_init`
-with `MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS=1`, so the ladder walk binds every rung with serving's own
-warmup requests and reports the rungs that do not fit instead of raising on the first, and the VAE,
-audio and prompt-encoder warms that follow compile every remaining program through the static
-circular-buffer check (the vocoder conv3d overflow of case 1 fires there). The assert is
-`pipeline.unfittable_rungs == []`; an L1 clash raises from the warm that hits it. Its first form
+serving's constructor defaults and `warmup=False`; then calls the constructor's own `_warmup_on_init`,
+so the ladder walk binds every rung with serving's own warmup requests, and the VAE, audio and
+prompt-encoder warms that follow compile every remaining program through the static circular-buffer
+check (the vocoder conv3d overflow of case 1 fires there). There is no assert of its own: the first
+rung that does not fit raises the allocator's "Out of Memory" from the walk (with
+`MINIMAX_H3_DRAM_PROBE=1` the per-owner attribution at that point is in the log), and an L1 clash
+raises from the warm that hits it, so either fails the test at once. Its first form
 stopped after the ladder walk (5:11 with a warm kernel cache, 17 rungs bound, 6.65 GB per device
 still allocated at the end of the walk); the full warmup costs the compile-only warms on top, about
 10 min warm and 55 min cold per the table above.
@@ -314,9 +315,8 @@ cost 23 s on the mock.
    blocking table; the mock compile loop is the whole iteration, no device needed.
 3. If it is a DRAM OOM, read the probe report at the failing checkpoint: a large `ccl_ping_pong`
    or `pipeline.*` owner that should not be resident names the leak; a large unattributed total
-   points at transients, and the block table says how fragmented they left the heap.
-   `MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS=1` makes the ladder walk report and skip unfittable rungs
-   instead of raising, so one run names the largest rung the mesh binds.
+   points at transients, and the block table says how fragmented they left the heap. The walk
+   raises at the first rung that does not fit, so the largest failing rung is the one in the log.
 4. Iterate on mock until the run reaches the value asserts, then confirm once on silicon. Keep
    the two caveats above in mind: mock under-counts DRAM by the live kernel binaries (up to about
    60 MB per device here), and it cannot see hangs or data-dependent paths.
