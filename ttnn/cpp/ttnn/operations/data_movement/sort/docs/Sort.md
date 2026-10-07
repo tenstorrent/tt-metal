@@ -108,23 +108,17 @@ Both `ROW_MAJOR` and `COL_MAJOR` shard orientations are accepted.
 
 - Unstable indices are a valid per-row permutation: gathering the input by
   the returned indices reproduces the sorted values, and no index repeats or
-  leaves the logical range. The CrossCore factory runs the
-  index-aware comparator for **both** stabilities (issue #54043: the raw
-  positional tie decision was not consistent between the two cores sharing a
-  spanning tile pair, so ties could duplicate indices) — its unstable output
-  is therefore exactly the torch-stable permutation. The single-core and
-  MultiCore-DRAM factories decide ties within one instruction stream, so they
-  cannot duplicate indices. Padding is a separate hazard (issue #53326): when
-  the input contains the padding sentinel (±inf, or 0/65535 for uint16), real
-  values tie with the padding. MultiCore-DRAM runs the index-aware comparator
-  whenever the sort dimension was padded, so padding indices never reach the
-  logical row. Known exception: the single-core factory (padded width <= 2048)
-  can still emit padding indices past the logical row for such inputs.
-- One observable side effect wherever that comparator runs with `stable=False`
-  (CrossCore, and padded MultiCore-DRAM): `float32` values are
-  canonicalized `-0.0` → `+0.0` on entry (the comparator's 32-bit-DEST tie
-  sweep, previously applied only under `stable=True`). Numerically equal;
-  bit-exact consumers of signed zeros (`copysign`, `1/x`) see `+0.0`.
+  leaves the logical range. The Cross Core Data Exchange strategy runs the
+  index-aware comparator for **both** stabilities — its unstable output
+  is therefore exactly the torch-stable permutation. The Single Row Single
+  Core and Single Row Multi Core strategies run it whenever the sort
+  dimension is padded, so values equal to the padding never pull padding
+  indices into the result.
+- One observable side effect: even with `stable=False`, Cross Core Data
+  Exchange sorts and padded Single Row Single Core / Single Row Multi Core
+  sorts canonicalize `float32` `-0.0` → `+0.0` on entry, as with
+  `stable=True`. Numerically equal; bit-exact consumers of signed zeros
+  (`copysign`, `1/x`) see `+0.0`.
 
 ## Tensor Transformations
 
