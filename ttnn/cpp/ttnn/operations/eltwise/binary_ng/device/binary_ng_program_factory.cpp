@@ -1392,6 +1392,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
     compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = block_pack ? "1" : "0";
 
+    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
+    // acquire.
+    const bool bcast_sections = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
+                                !is_where_op &&
+                                (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeColBcastNg ||
+                                 compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg) &&
+                                (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+                                 operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) &&
+                                a_sharded && c_sharded;
+    if (bcast_sections) {
+        compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
+    }
+
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
