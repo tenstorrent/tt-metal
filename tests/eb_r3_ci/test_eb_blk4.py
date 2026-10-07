@@ -123,7 +123,7 @@ def test_blk4_bcast(device, op, mem, kind, d, do, act):
 
 # #58725 / #58726: sharded column and scalar broadcasts whose per-tile operand carries an activation (rsub's NEG, the logical
 # ops' NEZ), one tile per section on main.
-OPACT = [(op, m, k) for op in ("rsub", "logical_and", "logical_or", "add_arelu", "mul_asilu") for m in ("hs8_t128", "hs32_t128") for k in ("col", "scalar")]
+OPACT = [(op, m, k) for op in ("rsub", "logical_and", "logical_or", "add_arelu", "mul_asilu") for m in ("hs8_t128", "hs32_t128", "bs64_t80") for k in ("col", "scalar")]
 
 
 @pytest.mark.parametrize("op, mem, kind", OPACT, ids=["-".join(c) for c in OPACT])

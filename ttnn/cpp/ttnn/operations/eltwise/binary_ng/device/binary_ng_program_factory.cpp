@@ -1099,11 +1099,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Blackhole FPU op whose sharded a and c with a column or scalar broadcast b run DEST sections (below): an operand
-    // activation there runs a section at a time, so a's intermediate CB holds one.
+    // Blackhole FPU op whose sharded a and c with a column or scalar broadcast b run DEST sections (below); with an
+    // activation (operand or post, not both) only a height-sharded a. An operand activation there runs a section at a
+    // time, so a's intermediate CB holds one.
     const bool bh_fpu_op = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                            std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !post_zero_point;
-    const bool bcast_sections = bh_fpu_op && !(has_operand_activations && has_post_activations) && a_sharded &&
+    const bool sections_activations =
+        !(has_operand_activations || has_post_activations) ||
+        (!(has_operand_activations && has_post_activations) &&
+         a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
+    const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded &&
                                 !eb_r3_env("EB_R3_NO_BCAST_CHUNK") &&
                                 !(eb_r3_env("EB_R3_NO_BCAST_ACT") && (has_operand_activations || has_post_activations)) &&
                                 c_sharded &&
