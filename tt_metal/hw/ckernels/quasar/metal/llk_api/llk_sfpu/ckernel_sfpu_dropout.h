@@ -18,64 +18,39 @@ namespace sfpu {
 
 constexpr std::uint32_t SFPSETSGN_MOD1_ARG_IMM = 1;   // sign bit taken from imm12[0]
 constexpr std::uint32_t SFPSETSGN_SIGN_POSITIVE = 0;  // imm12[0] = 0 -> sign bit cleared
-// probability is compared as a signed int32 (SFPIADD MOD1_SUB_CC_GTE0), so p = 1 is INT_MAX.
+// probability is compared signed (SFPIADD), so p = 1 is INT_MAX.
 constexpr std::uint32_t DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF;
 
-/**
- * @brief Dropout body for one SFPU row pair (Quasar = 2 Dest rows):
- *        out = (rand31 <= probability) ? 0.0f : x * scale.
- *
- * @note Load LREG1 = scale and LREG2 = probability before this runs; @ref calculate_dropout does that.
- * @note The PRNG read advances the per-lane PRNG and honours LaneEnable, so it must stay outside any
- *       CC-narrowed region.
- * @note The store uses @c ADDR_MOD_6, which @ref dropout_init programs to advance Dest by one row pair.
- */
+// out = (rand31 <= probability) ? 0 : x * scale, for one row pair. Expects LREG1 = scale, LREG2 = probability.
+// The PRNG read honours LaneEnable, so it must stay outside the CC-narrowed region.
 inline void _calculate_dropout_sfp_rows_() {
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);  // x from dest
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);          // x * scale
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);
     TTI_SFPMOV(sfpi::SFPCONFIG_SRC_RAND, p_sfpu::LREG3, sfpi::SFPMOV_MOD1_CONFIG);  // per-lane random, steps PRNG
     TTI_SFPSETSGN(SFPSETSGN_SIGN_POSITIVE, p_sfpu::LREG3, p_sfpu::LREG3, SFPSETSGN_MOD1_ARG_IMM);  // rand &= 0x7FFFFFFF
     TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpiadd::MOD1_SUB_CC_GTE0);  // CC = (prob - rand >= 0)
-    TTI_SFPMOV(p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);                              // dropped lanes -> 0.0
-    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1 */);                                               // re-enable all lanes
+    TTI_SFPMOV(p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);
+    TTI_SFPENCC(0 /* imm12 */, 0 /* mod1 */);
     TTI_SFPSTORE(
-        p_sfpu::LREG0,
-        p_sfpu::sfpmem::DEFAULT,
-        ADDR_MOD_6,
-        0 /* done */,
-        0 /* dest_reg */);  // store, then Dest += SFP_ROWS
+        p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /* done */, 0 /* dest_reg */);  // Dest += SFP_ROWS
 }
 
-// The p = 0 body for one SFPU row pair: out = x * scale, no PRNG compare (see calculate_dropout).
-// The store uses ADDR_MOD_6, which dropout_init programs to advance Dest by one row pair.
+// p = 0 body: out = x * scale, no PRNG compare.
 inline void _calculate_dropout_scale_sfp_rows_() {
-    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);   // x from dest
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);           // x * scale
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);
     TTI_SFPSTORE(
-        p_sfpu::LREG0,
-        p_sfpu::sfpmem::DEFAULT,
-        ADDR_MOD_6,
-        0 /* done */,
-        0 /* dest_reg */);  // store, then Dest += SFP_ROWS
+        p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_6, 0 /* done */, 0 /* dest_reg */);  // Dest += SFP_ROWS
 }
 
-// Loads a 32-bit runtime value into an LREG as two 16-bit halves.
 inline void _dropout_load_u32_(const std::uint32_t lreg, const std::uint32_t value) {
     TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_LOWER, value & 0xFFFF /* imm16 */);
     TT_SFPLOADI(lreg, sfpi::SFPLOADI_MOD0_UPPER, value >> 16 /* imm16 */);
 }
 
 /**
- * @brief Apply dropout in place over one face of Dest.
- *
- * @tparam APPROXIMATION_MODE: Accepted for Compute API parity; dropout has no approximate variant.
- * @tparam ITERATIONS: SFPU row-pair iterations covering one face.
- * @param probability: Drop probability scaled to an integer, p * INT_MAX, range 0 .. DROPOUT_PROBABILITY_MAX.
- * @param scale: fp32 bit pattern of the scale applied to surviving data (normally 1 / (1 - p)).
- * @note Call @ref dropout_init once before this. It seeds the PRNG and programs @c ADDR_MOD_6, which
- *       the stores use to advance Dest.
- * @note Overwrites LREG0-LREG3. Issues its body inline (no replay buffer), so replay-backed math
- *       ops recorded in their init stay valid across dropout calls.
+ * @brief Dropout over one face of Dest; probability = p * INT_MAX, scale = fp32 bits (normally 1 / (1 - p)).
+ * @note Requires @ref dropout_init. Inline body, no replay, so other ops' recorded replays stay valid.
  */
 template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_dropout(const std::uint32_t probability, const std::uint32_t scale) {
@@ -84,8 +59,7 @@ inline void calculate_dropout(const std::uint32_t probability, const std::uint32
         "dropout: probability is p * INT_MAX and is compared signed; bit 31 must be clear");
     _dropout_load_u32_(p_sfpu::LREG1, scale);
     if (probability == 0) {
-        // The compare drops rand <= probability, which at p = 0 would still drop a zero rand
-        // (1 in 2**31); p = 0 must keep every datum, so skip the compare.
+        // The compare drops rand == 0 even at p = 0, so p = 0 skips it to keep every datum.
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             _calculate_dropout_scale_sfp_rows_();
@@ -100,12 +74,8 @@ inline void calculate_dropout(const std::uint32_t probability, const std::uint32
 }
 
 /**
- * @brief Seed the hardware PRNG and program the store-side Dest walk.
- *
- * @tparam APPROXIMATION_MODE: Accepted for Compute API parity; unused.
- * @param seed: Seed value handed to the Tensix PRNG seeder.
- * @note Call once before @ref calculate_dropout. Programs @c ADDR_MOD_6 with a Dest increment of
- *       one SFPU row pair; any other SFPU init that writes @c ADDR_MOD_6 must run before this one.
+ * @brief Seed the PRNG and program ADDR_MOD_6 (Dest += SFP_ROWS on store).
+ * @note Other SFPU inits that write ADDR_MOD_6 must run before this one.
  */
 template <bool APPROXIMATION_MODE>
 inline void dropout_init(const std::uint32_t seed) {
