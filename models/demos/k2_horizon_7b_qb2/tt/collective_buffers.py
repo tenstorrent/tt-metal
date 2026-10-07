@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Scratch ownership for sequential TP4 decoder layers and captured replay.
 
 Pass one pool to every layer in a sequential stack on the same command queue.

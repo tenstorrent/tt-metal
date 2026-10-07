@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Full-model batched decode beyond the stock bound: flash vs chunked-fallback logits.
 
 Mixed-length real-text prompts are prefilled once per case into one shuffled paged cache. Then one

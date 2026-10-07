@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """TP4 decoder for IFM/K2-Horizon-7B; OptimizedDecoder is the single-chip baseline.
 
 One rank owns8 Q heads,2 KV heads,3072 intermediate channels and optionally one

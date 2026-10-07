@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Model-owned CPU sampler with unchanged per-request random streams.
 
 Audited against vLLM 5c5a3cdacb7ad84f733c679845967e1f4172fccd, PyTorch

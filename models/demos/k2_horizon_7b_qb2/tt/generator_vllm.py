@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """vLLM interface translation for the canonical K2 TP4 generator."""
 
 from __future__ import annotations

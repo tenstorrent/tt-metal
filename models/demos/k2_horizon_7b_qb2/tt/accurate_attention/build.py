@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Build the model-local host binding and private SDPA kernel adaptation.
 
 This script performs only host compilation; it never imports TTNN or opens a

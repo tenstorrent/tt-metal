@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Stream the full advertised context through the actual layer on the TP4 mesh.
 
 HF projects every input into the canonical K/V cache. At checkpoints the real

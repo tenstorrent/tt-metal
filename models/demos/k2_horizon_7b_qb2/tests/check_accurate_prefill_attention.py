@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Accuracy and latency of one 4096-token prefill chunk's attention at long start positions (one chip).
 
 Per-chip TP4 geometry: 8 Q heads, 2 KV heads, head_dim 128, BFP8 paged cache (page 32). The FP32

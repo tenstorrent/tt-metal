@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """K2-Horizon TP4 autoregressive model over the reviewed multichip decoder.
 
 Host work is restricted to checkpoint loading and public input preparation.

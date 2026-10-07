@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Optimized single-chip IFM/K2-Horizon-7B dense decoder.
 
 Setup owns HF conversion. Forward methods consume/return device TTNN tensors.

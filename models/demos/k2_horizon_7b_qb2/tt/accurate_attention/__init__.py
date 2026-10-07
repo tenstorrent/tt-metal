@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Model-local full-context paged SDPA with FP32 accumulator recurrence.
 
 Run ``python -m models.demos.k2_horizon_7b_qb2.tt.accurate_attention.build``

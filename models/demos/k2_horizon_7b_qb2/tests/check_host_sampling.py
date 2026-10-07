@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Focused CPU-only equivalence checks for the optional K2 host sampler."""
 
 import unittest

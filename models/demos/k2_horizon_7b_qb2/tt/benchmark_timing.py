@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Opt-in host-only serving ledger. No device operations or per-token file I/O.
 
 The optional runner bridge supplies immutable submission IDs and reports output

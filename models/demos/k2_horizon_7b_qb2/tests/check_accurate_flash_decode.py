@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Accuracy and latency of decode attention paths against an FP32 oracle (one chip).
 
 Fixtures use the per-chip TP4 geometry (8 Q heads, 2 KV heads, head_dim 128, BFP8 paged

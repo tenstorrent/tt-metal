@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Required stage-8 precision artifact, shared by all generator construction paths.
 
 An explicit path (or mapping) overrides the selected artifact. Geometry stays

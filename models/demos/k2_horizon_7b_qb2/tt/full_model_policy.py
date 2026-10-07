@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Stage-6 precision policy for the TP4 full stack.
 
 Layer indices are zero based. The owner-authorized accuracy repair keeps the

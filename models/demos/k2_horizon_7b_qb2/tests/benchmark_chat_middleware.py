@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Native IFM assistant-history normalization via vLLM's ASGI extension.
 
 The pinned template requires a string thinking field on assistant exemplars.

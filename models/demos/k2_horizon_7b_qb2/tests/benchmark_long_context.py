@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
 """Single-user long-context TTFT/TPOT on the full TP4 model (selected precision policy).
 
 Per ISL, K2Generator.generate runs its untimed warm eager prefill (it compiles every chunk-offset
