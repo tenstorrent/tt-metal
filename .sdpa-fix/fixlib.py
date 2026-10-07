@@ -27,7 +27,7 @@ LEDGER = os.path.join(HOME, "ledger.json")
 ATTEMPTABLE = {"tracking"}
 # States that end when main goes green for the signature.
 OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed",
-               "awaiting_decision", "decided", "revise", "ready_to_merge"}
+               "awaiting_decision", "decided", "revise", "ready_to_merge", "repair"}
 # States the fix scan looks at: still failing, and no PR of ours on it.
 SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending", "awaiting_decision"}
 # States a re-appearing failure re-opens (a fresh regression after a fix).
@@ -225,6 +225,7 @@ def cmd_eligible(a):
         for sig, r in d["sigs"].items():
             if (r["state"] == "decided" and r.get("decision_choice")) or \
                (r["state"] == "revise" and r.get("decision_note")) or \
+               (r["state"] == "repair" and r.get("repair")) or \
                (a.only_sig and sig == a.only_sig and r["state"] in ("tracking", "no_fix", "proposed_dryrun", "decided")):
                 forced.append({"workflow": r["workflow"], "group": r.get("group") or sig, "sigs": [sig],
                                "prio": [-1, 0], "forced": True})
@@ -283,7 +284,7 @@ def cmd_mark(a):
             for k, v in extra.items():
                 if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr", "fix_author",
                          "decision", "decision_choice", "decision_thread", "decision_note",
-                         "decision_history", "gate_note"):
+                         "decision_history", "gate_note", "repair", "repair_tries"):
                     r[k] = v
                 elif k == "checked":
                     r.setdefault("checked", {}).update(v)
@@ -360,6 +361,77 @@ def cmd_scan_list(a):
                         "first_at": r.get("created", ""), "paths": paths, "terms": terms[:3],
                         "fix_pr": r.get("fix_pr"), "checked": r.get("checked", {})})
         json.dump(out, sys.stdout)
+
+
+def _gh_json(args):
+    import subprocess
+    out = subprocess.run(["gh", "api"] + args, capture_output=True, text=True, check=False).stdout
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def _workflows_for_yaml(repo, yaml_base):
+    """Scheduled workflows that (directly or via one reusable workflow) run
+    jobs from tests/pipeline_reorg/<yaml_base>."""
+    import glob
+    wdir = os.path.join(repo, ".github", "workflows")
+    texts = {}
+    for f in glob.glob(os.path.join(wdir, "*.y*ml")):
+        try:
+            texts[os.path.basename(f)] = open(f).read()
+        except OSError:
+            pass
+    direct = [w for w, t in texts.items() if yaml_base in t]
+    out = set(w for w in direct if "schedule:" in texts[w])
+    for w, t in texts.items():
+        if "schedule:" in t and any(("workflows/" + d) in t for d in direct):
+            out.add(w)
+    return sorted(out)
+
+
+def cmd_runtime_stats(a):
+    """Per group of <yaml> on <sku>: timeout vs observed runtime (minutes) over
+    recent completed runs of the scheduled workflows that run it. Used when a
+    PR trips verify-time-budgets: shows where an offset is safe."""
+    import datetime as dt
+    import statistics
+    import yaml as y
+    repo = os.environ.get("TT_METAL_DIR", ".")
+    rows = y.safe_load(open(os.path.join(repo, "tests", "pipeline_reorg", a.yaml)))
+    groups = {r["name"]: (r.get("skus") or {}).get(a.sku, {}).get("timeout")
+              for r in rows if isinstance(r, dict) and a.sku in (r.get("skus") or {})}
+    owners = {r["name"]: r.get("owner_id", "") for r in rows if isinstance(r, dict) and r.get("name") in groups}
+    since = (dt.datetime.utcnow() - dt.timedelta(days=a.days)).strftime("%Y-%m-%d")
+    durs = {g: [] for g in groups}
+    wfs = a.workflows.split(",") if a.workflows else _workflows_for_yaml(repo, a.yaml)
+    for wf in wfs:
+        runs = _gh_json(["repos/%s/actions/workflows/%s/runs?branch=main&status=completed&per_page=%d&created=>%s"
+                         % (a.repo_slug, wf, a.runs, since)]) or {}
+        for run in (runs.get("workflow_runs") or [])[:a.runs]:
+            import subprocess
+            raw = subprocess.run(["gh", "api", "--paginate", "repos/%s/actions/runs/%s/jobs?per_page=100" % (a.repo_slug, run["id"]),
+                                  "--jq", ".jobs[] | {name, started_at, completed_at, conclusion} | tojson"],
+                                 capture_output=True, text=True, check=False).stdout
+            jobs = [json.loads(l) for l in raw.splitlines() if l.strip()]
+            for j in jobs:
+                if j.get("conclusion") != "success" or not j.get("completed_at"):
+                    continue
+                for g in groups:
+                    if ("%s [%s]" % (g, a.sku)) in j["name"]:
+                        t0 = dt.datetime.strptime(j["started_at"], "%Y-%m-%dT%H:%M:%SZ")
+                        t1 = dt.datetime.strptime(j["completed_at"], "%Y-%m-%dT%H:%M:%SZ")
+                        durs[g].append((t1 - t0).total_seconds() / 60.0)
+    out = []
+    for g, t in groups.items():
+        d = sorted(durs[g])
+        out.append({"group": g, "timeout": t, "n": len(d), "owner": owners.get(g, ""),
+                    "max_min": round(d[-1], 1) if d else None,
+                    "p90_min": round(d[int(0.9 * (len(d) - 1))], 1) if d else None,
+                    "slack_min": (t - round(d[-1])) if (d and t) else None})
+    out.sort(key=lambda r: -(r["slack_min"] or -999))
+    json.dump({"yaml": a.yaml, "sku": a.sku, "workflows": wfs, "days": a.days, "groups": out}, sys.stdout)
 
 
 def cmd_list(a):
@@ -628,6 +700,10 @@ def main():
     mk.add_argument("sigs", nargs="+")
     sp.add_parser("list")
     sp.add_parser("scan-list")
+    rs = sp.add_parser("runtime-stats")
+    rs.add_argument("--yaml", required=True); rs.add_argument("--sku", required=True)
+    rs.add_argument("--workflows", default=""); rs.add_argument("--days", type=int, default=7)
+    rs.add_argument("--runs", type=int, default=10); rs.add_argument("--repo-slug", default="tenstorrent/tt-metal")
     dp = sp.add_parser("dispatch")
     dp.add_argument("--workflow", required=True)
     dp.add_argument("--jobs", required=True, help="JSON list of full GH job names")
@@ -640,7 +716,7 @@ def main():
     a = p.parse_args()
     {"update": cmd_update, "triaged": cmd_triaged, "eligible": cmd_eligible, "get": cmd_get,
      "mark": cmd_mark, "list": cmd_list, "dispatch": cmd_dispatch, "guard": cmd_guard,
-     "render": cmd_render, "scan-list": cmd_scan_list}[a.cmd](a)
+     "render": cmd_render, "scan-list": cmd_scan_list, "runtime-stats": cmd_runtime_stats}[a.cmd](a)
 
 
 if __name__ == "__main__":
