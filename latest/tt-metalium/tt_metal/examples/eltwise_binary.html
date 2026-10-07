@@ -443,7 +443,7 @@ depending on the most up-to-date installation methods.</p>
 <span class="w">    </span><span class="n">program</span><span class="p">,</span>
 <span class="w">    </span><span class="s">"eltwise_binary/kernels/compute/tiles_add.cpp"</span><span class="p">,</span>
 <span class="w">    </span><span class="n">core</span><span class="p">,</span>
-<span class="w">    </span><span class="n">ComputeConfig</span><span class="p">{.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">});</span>
+<span class="w">    </span><span class="n">ComputeConfig</span><span class="p">{.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">});</span>
 </pre></div>
 </div>
 <p>Notice the <code class="docutils literal notranslate"><span class="pre">ComputeConfig</span></code> object. This indicates to the framework that a compute kernel should be created. There’s a plethora of settings that can be set here. The most important one is the <code class="docutils literal notranslate"><span class="pre">math_fidelity</span></code> setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.</p>
