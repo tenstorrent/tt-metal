@@ -13,8 +13,10 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/embedding/embedding.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama.hpp"
 #include "ttnn/types.hpp"
 
@@ -183,6 +185,64 @@ autograd::TensorPtr rope(
             input->add_grad(unsquished);
         };
 
+    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, input));
+
+    return out;
+}
+
+namespace {
+
+ttnn::Tensor gather_trig_rows(const ttnn::Tensor& cache, const ttnn::Tensor& position_ids, uint32_t num_heads) {
+    const auto cache_shape = cache.logical_shape();
+    const uint32_t head_dim = cache_shape[-1];
+    const auto table = ttnn::reshape(cache, ttnn::Shape{cache_shape[-2], head_dim});
+    const uint32_t batch = position_ids.logical_shape()[0];
+    const uint32_t seq_len = position_ids.logical_shape()[1];
+
+    auto rows = ttnn::embedding(position_ids, table, std::nullopt, ttnn::Layout::TILE);
+    rows = ttnn::reshape(rows, ttnn::Shape{batch, 1U, seq_len, head_dim});
+    rows = ttnn::repeat(rows, ttnn::Shape{1U, num_heads, 1U, 1U});
+    return ttnn::reshape(rows, ttnn::Shape{1U, batch * num_heads, seq_len, head_dim});
+}
+
+ttnn::Tensor rotate_per_head(
+    const ttnn::Tensor& x, const ttnn::Tensor& cos, const ttnn::Tensor& sin, const ttnn::Tensor& trans_mat) {
+    const auto shape = x.logical_shape();
+    const auto flat = ttnn::reshape(x, ttnn::Shape{1U, shape[0] * shape[1], shape[2], shape[3]});
+    const auto rotated = ttnn::experimental::rotary_embedding_llama(
+        flat,
+        cos,
+        sin,
+        trans_mat,
+        /*is_decode_mode=*/false,
+        /*memory_config=*/std::nullopt,
+        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+    return ttnn::reshape(rotated, shape);
+}
+
+}  // namespace
+
+autograd::TensorPtr rope(
+    const autograd::TensorPtr& input, const RotaryEmbeddingParams& params, const autograd::TensorPtr& position_ids) {
+    validate_rope_input_and_params(input, params);
+
+    const auto input_shape = input->get_value().logical_shape();
+    const auto& ids = position_ids->get_value();
+    const auto ids_shape = ids.logical_shape();
+    if (ids_shape.rank() != 2U || ids_shape[0] != input_shape[0] || ids_shape[1] != input_shape[2]) {
+        throw std::runtime_error(fmt::format(
+            "RoPE position_ids must have shape [{}, {}], but got {}", input_shape[0], input_shape[2], ids_shape));
+    }
+
+    const uint32_t num_heads = input_shape[1];
+    const auto cos = gather_trig_rows(params.cos_cache, ids, num_heads);
+    const auto sin = gather_trig_rows(params.sin_cache, ids, num_heads);
+
+    auto out = autograd::create_tensor(rotate_per_head(input->get_value(), cos, sin, params.trans_mat));
+
+    autograd::GradFunction grad_fn = [input, out, cos, sin, trans_mat = params.trans_mat]() {
+        input->add_grad(rotate_per_head(out->get_grad(), cos, ttnn::neg(sin), trans_mat));
+    };
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, input));
 
     return out;
