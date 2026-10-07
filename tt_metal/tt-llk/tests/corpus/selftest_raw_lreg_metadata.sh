@@ -13,7 +13,7 @@ if [[ ${1:-} == --target-cxx ]]; then
     }
     target_cxx=$2
     scratch=$(mktemp -d)
-    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s"; rmdir "$scratch"' EXIT
+    trap 'rm -f "$scratch/WH.s" "$scratch/BH.s" "$scratch/QSR.s" "$scratch/gap.s" "$scratch/mul-int.s" "$scratch/baseline.s"; rmdir "$scratch"' EXIT
     for arch in WH BH QSR; do
         case $arch in
             WH) cpu=tt-wh-tensix ;;
@@ -28,6 +28,14 @@ if [[ ${1:-} == --target-cxx ]]; then
             if grep -Eq '[[:space:]]call[[:space:]]' "$scratch/$arch.s"; then
                 echo "FAIL: metadata fixture emitted a runtime helper call at $opt" >&2; exit 1
             fi
+            "$target_cxx" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_DEFAULT_FALLBACK \
+                '-DTT_LLK_SFPRAWLREG_EFFECT(r,w)=((void)0)' "-DTEST_$arch" \
+                -S "$source_file" -o "$scratch/baseline.s"
+            stores=$(grep -Ec '^[[:space:]]+(sw|sd)[[:space:]]' "$scratch/$arch.s" || true)
+            baseline_stores=$(grep -Ec '^[[:space:]]+(sw|sd)[[:space:]]' "$scratch/baseline.s" || true)
+            [[ $stores == "$baseline_stores" ]] || {
+                echo "FAIL: metadata added scalar stores at $arch $opt" >&2; exit 1;
+            }
             echo "PASS: $cpu $opt compiled with 13 real effect markers (not a hardware test)"
         done
     done
