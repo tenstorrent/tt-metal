@@ -332,7 +332,22 @@ jobs:
           base=$(git merge-base origin/main HEAD)
           mapfile -t headers < <(git diff --name-only --diff-filter=ACMR "${base}..HEAD" -- 'tt_metal/api/*.h' 'tt_metal/api/*.hpp')
           if [ "${#headers[@]}" -eq 0 ]; then
-            # Triggered by a change to the check itself, not by a header.
+            # No added/modified header. Sweep everything only if the check itself
+            # changed (same list as tt-metalium-api-headers-changed in
+            # .github/scripts/utils/find-changed-files.sh).
+            check_files=(
+              .github/api-include-cleaner.clang-tidy
+              .github/scripts/utils/run_api_header_include_cleaner.py
+              .github/scripts/utils/test_run_api_header_include_cleaner.py
+              .github/scripts/utils/find-changed-files.sh
+              .github/actions/find-changed-files/action.yml
+              .github/workflows/code-analysis.yaml
+            )
+            if [ -z "$(git diff --name-only "${base}..HEAD" -- "${check_files[@]}")" ]; then
+              echo "No added or modified tt_metal/api header and no change to the check; nothing to analyze." \
+                | tee -a "${GITHUB_STEP_SUMMARY}"
+              exit 0
+            fi
             headers=(--all)
           fi
           # Report-only. To gate, add --fail-on-findings and drop continue-on-error.

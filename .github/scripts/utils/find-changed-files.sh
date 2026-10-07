@@ -273,18 +273,33 @@ done <<< "$CHANGED_FILES"
 # ----------------------------------------------------------------------------
 
 # tt-metalium-api-headers-changed: gates the misc-include-cleaner check on
-# tt_metal/api headers (code-analysis.yaml). Public headers themselves, plus the
-# files that define that check, so a PR that edits the check also exercises it.
-# Deliberately not derived from tt-metalium-changed, which fires on any
-# tt_metal source.
+# tt_metal/api headers (code-analysis.yaml). Public headers themselves, plus
+# the files that define that check, so a PR that edits the check also
+# exercises it. Deliberately not derived from tt-metalium-changed, which fires
+# on any tt_metal source.
+#
+# pr-gate.yaml only calls code-analysis.yaml when run-clang-tidy (computed
+# below) is true. Headers reach it through CPP_SOURCE_FOR_CLANG_TIDY_CHANGED
+# and code-analysis.yaml is already a key workflow; the check's config, script
+# and tests are promoted here. find-changed-files.sh and its action.yml are
+# shared change-detection plumbing: they run the check when something else
+# triggers code analysis, but on their own do not force a full clang-tidy scan.
+# Keep the check-file list in sync with the include-cleaner job in
+# code-analysis.yaml.
 TTMETALIUM_API_HEADERS_CHANGED=false
 while IFS= read -r FILE; do
     case "$FILE" in
         tt_metal/api/*(*/)*.@(h|hpp)|\
-        .github/api-include-cleaner.clang-tidy|\
-        .github/scripts/utils/run_api_header_include_cleaner.py|\
+        .github/scripts/utils/find-changed-files.sh|\
+        .github/actions/find-changed-files/action.yml|\
         .github/workflows/code-analysis.yaml)
             TTMETALIUM_API_HEADERS_CHANGED=true
+            ;;
+        .github/api-include-cleaner.clang-tidy|\
+        .github/scripts/utils/run_api_header_include_cleaner.py|\
+        .github/scripts/utils/test_run_api_header_include_cleaner.py)
+            TTMETALIUM_API_HEADERS_CHANGED=true
+            CLANG_TIDY_KEY_WORKFLOW_CHANGED=true
             ;;
     esac
 done <<< "$CHANGED_FILES"
