@@ -24,6 +24,11 @@ def open_mesh(trace_mb=256):
 
 
 def open_mesh_full(trace_mb=512):
+    import faulthandler
+
+    faulthandler.dump_traceback_later(
+        int(os.environ.get("ATTN_STACK_S", "900")), repeat=True
+    )  # python stacks of a stuck run into the log
     """mesh for the full model tests (same params as the smoke fixtures: FABRIC_1D_RING, l1_small 16384)"""
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=trace_mb * 1024 * 1024)

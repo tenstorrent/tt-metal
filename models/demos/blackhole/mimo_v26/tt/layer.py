@@ -242,7 +242,7 @@ class MiMoDecoderLayer:
         return h2
 
     # ------------------------------------------------------------------ decode (32 slots per row)
-    def decode(self, h, cur_pos, rope_idx, taps=None, dead=None):
+    def decode(self, h, cur_pos, rope_idx, taps=None, live=None):
         """h [1,1,32,4096] bf16 tile. Dead slots must hold zeros and cur_pos 0."""
         xn = self.rms(h, self.w_in)
         a = self.attn.decode(xn, cur_pos, rope_idx)
@@ -251,7 +251,7 @@ class MiMoDecoderLayer:
         if self.L == 0:
             f = self.ffn_dense(fn)
         else:
-            f = self.moe_decode(fn, dead)
+            f = self.moe_decode(fn, live)
         h2 = ttnn.add(h1, f, dtype=ttnn.bfloat16)
         if taps is not None:
             taps.update(attn_out=a, ffn_in=fn, ffn_out=f)
@@ -260,16 +260,19 @@ class MiMoDecoderLayer:
                 ttnn.deallocate(t)
         return h2
 
-    def moe_decode(self, x, dead=None):
-        """32 live-or-dead slots per row padded with 32 zero rows to 64 tokens (masked_bincount needs N % 64 == 0); dead rows are dropped from the output.
-        dead: optional tt/decode.py DeadRouting; its (spread) routing replaces the router output on dead slots and pad rows so they cannot overflow a chip's
-        dispatch buffer (L-oob / capacity)."""
+    def moe_decode(self, x, live=None):
+        """Decode MoE for the 32 slots of a mesh row. live: persistent device live-slot mask [1,1,64,1] (tt/decode.py LiveMask): traced path through
+        tt/moe_decode.MiMoMoEDecode (router -> dead-slot routing spread -> dispatch -> experts -> combine -> all-reduce, no host reads). Without a mask the old
+        untraceable path (zero pad rows, no spread, optional capacity check) is used."""
+        if live is not None:
+            if getattr(self, "moe_dec", None) is None:
+                from models.demos.blackhole.mimo_v26.tt.moe_decode import MiMoMoEDecode
+
+                self.moe_dec = MiMoMoEDecode(self.mesh, self.gate, self.moe)
+            return self.moe_dec.forward(x, live)
         B = x.shape[2]
         xp = ttnn.pad(x, [(0, 0), (0, 0), (0, 64 - B), (0, 0)], 0.0)
-        route = None
-        if dead is not None:
-            route = dead.override(self.gate.route(xp, ROUTER_MODE), self.L)
-        out = self.ffn_moe(xp, route)
+        out = self.ffn_moe(xp)
         ttnn.deallocate(xp)
         o = ttnn.slice(out, [0, 0, 0, 0], [1, 1, B, HIDDEN])
         ttnn.deallocate(out)

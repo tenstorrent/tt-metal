@@ -13,28 +13,21 @@ import torch
 import ttnn
 from models.demos.blackhole.mimo_v26.tt.attention import decode_pos_io, decode_pos_set
 from models.demos.blackhole.mimo_v26.tt.layer import EPS, _k_norm
-from models.demos.blackhole.mimo_v26.tt.moe_prefill import NUM_ROUTED, TOPK, spread_pad_routing
 
 HIDDEN, SLOTS, T64 = 4096, 32, 64
 
 
-class DeadRouting:
-    """Replaces the router output of dead slots and of the 32 zero pad rows (decode MoE runs on 64 tokens per row) by a round-robin spread over all experts
-    (spread_pad_routing), selected per row by a persistent mask updated each step."""
+class LiveMask:
+    """Persistent live-slot mask for tt/moe_decode.MiMoMoEDecode: bf16 tile [rows,1,64,1] sharded over mesh rows, 1.0 = live slot (slots 32..63 are pad rows, always 0).
+    Dead slots get their routing spread round-robin over all experts (they would otherwise all pick the same experts and overflow a chip's dispatch buffer).
+    """
 
     def __init__(self, mesh):
         self.mesh = mesh
         rows = mesh.shape[0]
-        rep = ttnn.ReplicateTensorToMesh(mesh)
         self.rowmap = ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, None))
-        idx, w = spread_pad_routing(1, T64, TOPK, NUM_ROUTED)
-        mk = lambda t, dt: ttnn.from_torch(
-            t, device=mesh, dtype=dt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep
-        )
-        self.spread_idx = mk(idx.reshape(1, 1, T64, TOPK).to(torch.int32), ttnn.int32)
-        self.spread_w = mk(w.reshape(1, 1, T64, TOPK).bfloat16(), ttnn.bfloat16)
-        self.mask = ttnn.from_torch(
-            torch.ones(rows, 1, T64, TOPK).bfloat16(),
+        self.t = ttnn.from_torch(
+            torch.zeros(rows, 1, T64, 1).bfloat16(),
             device=mesh,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -42,30 +35,12 @@ class DeadRouting:
             mesh_mapper=self.rowmap,
         )
 
-    def set(self, dead):
-        """dead: bool [rows, 32] (True = dead/finished/no user)."""
-        rows = dead.shape[0]
-        m = torch.ones(rows, 1, T64, TOPK)
-        m[:, 0, : dead.shape[1]] = dead.float().unsqueeze(-1)  # 1 where dead
+    def set(self, alive):
+        """alive: bool [rows, 32]."""
+        m = torch.zeros(alive.shape[0], 1, T64, 1)
+        m[:, 0, : alive.shape[1], 0] = alive.float()
         host = ttnn.from_torch(m.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self.rowmap)
-        ttnn.copy_host_to_device_tensor(host, self.mask)
-
-    def override(self, route, L=None):
-        """route = (weights [T,1,1,k] bf16 RM, indices [T,1,1,k] uint16 RM) as returned by MiMoGate.route -> same format with dead rows replaced."""
-        wts, idx = route
-        T, k = wts.shape[0], wts.shape[3]
-        assert T == T64 and k == TOPK
-        i32 = ttnn.typecast(ttnn.to_layout(ttnn.reshape(idx, (1, 1, T, k)), ttnn.TILE_LAYOUT), ttnn.int32)
-        w16 = ttnn.to_layout(ttnn.reshape(wts, (1, 1, T, k)), ttnn.TILE_LAYOUT)
-        ni = ttnn.where(self.mask, self.spread_idx, i32)
-        nw = ttnn.where(self.mask, self.spread_w, w16)
-        for t in (i32, w16, wts, idx):
-            ttnn.deallocate(t)
-        new_idx = ttnn.view(ttnn.to_layout(ttnn.typecast(ni, ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, k))
-        new_w = ttnn.view(ttnn.to_layout(nw, ttnn.ROW_MAJOR_LAYOUT), (T, 1, 1, k))
-        ttnn.deallocate(ni)
-        ttnn.deallocate(nw)
-        return new_w, new_idx
+        ttnn.copy_host_to_device_tensor(host, self.t)
 
 
 class Decoder:
@@ -81,7 +56,7 @@ class Decoder:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=self.rowmap,
         )
-        self.dead = DeadRouting(self.mesh) if spread else None
+        self.live = LiveMask(self.mesh) if spread else None
         self.vocab_local = model.lm_head.shape[-1]
         self._tr = None
         self.out = None
@@ -93,7 +68,7 @@ class Decoder:
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)  # [1,32,4096] per device
         h = ttnn.reshape(e, (1, 1, SLOTS, HIDDEN))
         for lyr in m.layers:
-            h2 = lyr.decode(h, self.pos["cur"], self.pos["idx"], dead=self.dead)
+            h2 = lyr.decode(h, self.pos["cur"], self.pos["idx"], live=self.live.t if self.live is not None else None)
             ttnn.deallocate(h)
             h = h2
         x = ttnn.rms_norm(h, epsilon=EPS, weight=m.w_norm, compute_kernel_config=_k_norm())
@@ -124,8 +99,8 @@ class Decoder:
         )
         ttnn.copy_host_to_device_tensor(host, self.tok)
         decode_pos_set(self.mesh, self.pos, positions)
-        if self.dead is not None:
-            self.dead.set(dead)
+        if self.live is not None:
+            self.live.set(~dead)
 
     def run(self):
         """Run one step with the inputs currently on device; returns (next token ids [rows,32], max logit [rows,32][, logits [rows,32,V]])."""
