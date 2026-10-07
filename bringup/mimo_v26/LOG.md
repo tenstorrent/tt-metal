@@ -879,3 +879,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps4_64k_a43e4229c9f.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
 - data: {"step_ms_64k_median_4L":30.0,"free_mb_per_bank_after":3589.8}
+
+## E261007-0557-332
+- date: 2026-10-07T05:57:13
+- commit: 990094ad6bc
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: asm
+- status: verified
+- claim: FULL 48-LAYER chunked traced prefill, memory_fit cells, real GSM8K text concatenated to the ISL, CH=2048 per mesh row, unified bf16 experts, bfp8 weights, KV pool sized to the cell (KVLayout users=B/4, max_pos=ISL+8 rounded to 2048), no OOM in any cell, all logits finite. FREE DRAM per bank after prefill (ttnn memory view, 8 banks/chip, so x8 = per chip; measured, not arithmetic): (B=4,ISL 4096) 2321.0 MB/bank = 18.1 GiB/chip free (after build 2324.7, weights+pool 1557.8 MB/bank allocated); (16,4096) 2278.3 MB/bank (17.8 GiB/chip); (4,65536) 2000.2 MB/bank (15.6 GiB/chip, after build 2003.9); (16,65536) 1805.7 MB/bank (14.1 GiB/chip, after build 1809.4). Chip DRAM 3882.4 MB/bank before build. Trace+io after first prefill costs only 3.7 MB/bank. TWO/THREE ISLs in one process (4 users, 64k -> 8k -> 64k): free DRAM identical (2000.2 MB/bank) after each case. Replay step (2048 tokens per row, 4 rows in parallel = 8192 tokens): 370-376 ms at 4k and 8k (median 375/391), 382 ms first chunk -> 445 median -> 505 ms last chunk at 64k (global-attention cost grows with cache length). Prefill tokens/s (replay only, real tokens over summed replay time): 21.9k at 4k (B=4 and B=16), 18.4k at 64k (B=4 and B=16); 64k per user: 14.2 s (B=4, 32 steps, 4 users in parallel), 56.9 s for 16 users (128 steps). Wall includes eager warm-up + trace capture (20-33 s first case). Weights load from the warm/cold NFS cache: 816-1260 s when 4 loaders ran at once (152 s alone). First tokens at 64k of the concatenated GSM8K text are not meaningful (no accuracy claim).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps48_16_65536_990094ad6bc.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
+- data: {"free_mb_bank":{"4_4096":2321.0,"16_4096":2278.3,"4_65536":2000.2,"16_65536":1805.7},"tok_s_4k":21900,"tok_s_64k":18400}
