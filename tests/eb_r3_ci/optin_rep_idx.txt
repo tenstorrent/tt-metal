@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/compute_indexer_score.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
