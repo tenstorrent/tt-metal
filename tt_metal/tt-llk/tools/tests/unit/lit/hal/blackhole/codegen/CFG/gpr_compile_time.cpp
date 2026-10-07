@@ -9,11 +9,9 @@
 
 namespace cfg = hal::cfg;
 
-// The last state word (223) and the last THCON block (176-179) hold no named
-// field, so these descriptors reach the bank ends directly.
+// These descriptors reach the last state word (223) and block (220-223).
 inline constexpr cfg::Field state_last {cfg::RegisterScope::State, 32, 223, 0, 0, 32, 1, 0};
 inline constexpr cfg::Field state_last_block {cfg::RegisterScope::State, 32, 220, 0, 0, 32, 1, 0};
-inline constexpr cfg::Field thcon_last_block {cfg::RegisterScope::State, 32, 176, 0, 0, 32, 1, 0};
 
 // WRCFG through Access::TensixCfgUnit.
 
@@ -120,35 +118,6 @@ extern "C" __attribute__((noinline, used)) void write_word_after_gpr_transfer()
 // CHECK-NEXT: ttrmwcib3 255,0,80
 // CHECK-NEXT: ret
 
-// REG2FLOP through Access::TensixScalarUnit: flop index = word - 64, size 1 = 32-bit.
-
-extern "C" __attribute__((noinline, used)) void write_thcon_gpr_scalar()
-{
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<4>());
-}
-
-// CHECK-LABEL: <write_thcon_gpr_scalar>:
-// CHECK-NEXT: ttreg2flop 1,0,0,0,12,4
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_thcon_gpr_scalar_last_index()
-{
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<63>());
-}
-
-// CHECK-LABEL: <write_thcon_gpr_scalar_last_index>:
-// CHECK-NEXT: ttreg2flop 1,0,0,0,12,63
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_thcon_gpr_128_scalar()
-{
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr<16>());
-}
-
-// CHECK-LABEL: <write_thcon_gpr_128_scalar>:
-// CHECK-NEXT: ttreg2flop 0,0,0,0,48,16
-// CHECK-NEXT: ret
-
 // RDCFG copies the complete word that contains the field.
 
 extern "C" __attribute__((noinline, used)) void read_cfg_to_gpr()
@@ -214,13 +183,4 @@ extern "C" __attribute__((noinline, used)) void read_gpr_last_word()
 
 // CHECK-LABEL: <read_gpr_last_word>:
 // CHECK-NEXT: ttrdcfg 63,223
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_scalar_last_thcon_block()
-{
-    cfg::write<cfg::Access::TensixScalarUnit, thcon_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>());
-}
-
-// CHECK-LABEL: <write_scalar_last_thcon_block>:
-// CHECK-NEXT: ttreg2flop 0,0,0,0,112,4
 // CHECK-NEXT: ret

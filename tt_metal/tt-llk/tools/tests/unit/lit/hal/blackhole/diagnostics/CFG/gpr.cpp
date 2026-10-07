@@ -24,11 +24,12 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_INDEX
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_SOURCE_ALIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-destination.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_DEST
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-index.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_INDEX
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_SOURCE_ALIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-span.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-span.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_SPAN
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-static.cpp -DCFG_TEST_SIZE=Bits128 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-runtime.cpp -DCFG_TEST_SIZE=Bits32 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-runtime.cpp -DCFG_TEST_SIZE=Bits128 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-wait.cpp 2>&1 | FileCheck %s --check-prefix=REG2FLOP_DISABLED
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/group-scalar.cpp 2>&1 | FileCheck %s --check-prefix=HETEROGENEOUS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/field-overlap.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAP
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=0 2>&1 | FileCheck %s --check-prefix=OVERLAP
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-field-overlap.cpp -DCFG_TEST_WORD=1 2>&1 | FileCheck %s --check-prefix=OVERLAP
@@ -41,9 +42,6 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-gpr-overlap.cpp 2>&1 | FileCheck %s --check-prefix=OVERLAP
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-gpr-overlap.cpp -DCFG_TEST_REVERSE 2>&1 | FileCheck %s --check-prefix=OVERLAP
 
-// Every four-word aligned THCON start fits (176 + 3 < 180), so a 128-bit
-// REG2FLOP that crosses the THCON range end is also misaligned.
-
 // GPR_RESERVED: error: static assertion failed: GPR index is reserved by hal::gpr()
 // RDCFG_ACCESS: error: static assertion failed: RDCFG requires Access::TensixCfgUnit
 // RDCFG_INDEX: error: static assertion failed: RDCFG requires a compile-time GPR index: use hal::gpr<Index>()
@@ -53,7 +51,7 @@
 // RDCFG_CROSS: error: static assertion failed: field crosses a CFG word boundary
 // SECTION: error: static assertion failed: section index out of range for this register
 // GPR_READ: error: static assertion failed: CFG read source lies outside the state bank
-// GPR_ACCESS: error: static assertion failed: GPR-backed cfg::write requires Access::TensixCfgUnit or Access::TensixScalarUnit
+// GPR_ACCESS: error: static assertion failed: GPR-backed cfg::write requires Access::TensixCfgUnit
 // HETEROGENEOUS: error: static assertion failed: heterogeneous cfg::write supports Access::TensixCfgUnit only
 // GPR_STATE: error: static assertion failed: GPR-backed CFG writes require a state-CFG destination
 // GPR_START: error: static assertion failed: GPR-backed CFG writes must start at the beginning of a CFG word
@@ -63,10 +61,7 @@
 // WRCFG_ALIGN: error: static assertion failed: 128-bit GPR cfg::write destination must be four-word aligned
 // WRCFG_INDEX: error: static assertion failed: WRCFG GPR index must be in [0, 63]
 // WRCFG_SOURCE_ALIGN: error: static assertion failed: 128-bit WRCFG source GPR must be four-word aligned
-// SCALAR_DEST: error: static assertion failed: Access::TensixScalarUnit supports THCON CFG destinations only
-// SCALAR_INDEX: error: static assertion failed: REG2FLOP GPR index must be in [0, 63]
-// SCALAR_SOURCE_ALIGN: error: static assertion failed: 128-bit REG2FLOP source GPR must be four-word aligned
-// SCALAR_SPAN: error: static assertion failed: 128-bit REG2FLOP transfer crosses the THCON CFG range
+// REG2FLOP_DISABLED: error: static assertion failed: Blackhole does not handle REG2FLOP properly. Use Access::TensixCfgUnit (WRCFG)
 // OVERLAP: error: static assertion failed: overlapping field assignments or GPR destination spans in cfg::write
 // clang-format on
 
@@ -84,7 +79,6 @@ inline constexpr cfg::Field state_crossing {cfg::RegisterScope::State, 32, 222, 
 inline constexpr cfg::Field state_outside {cfg::RegisterScope::State, 32, 224, 0, 0, 32, 1, 0};
 inline constexpr cfg::Field state_two_words {cfg::RegisterScope::State, 32, 64, 0, 0, 64, 1, 0};
 inline constexpr cfg::Field state_word_crossing {cfg::RegisterScope::State, 32, 64, 0, 28, 8, 1, 0};
-inline constexpr cfg::Field thcon_crossing {cfg::RegisterScope::State, 32, 177, 0, 0, 32, 1, 0};
 
 //--- gpr-reserved.cpp
 #include "fields.h"
@@ -228,36 +222,37 @@ void probe()
     cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<5>()));
 }
 
-//--- scalar-destination.cpp
+//--- scalar-static.cpp
 #include "fields.h"
 
 void probe()
 {
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(hal::gpr<4>());
+    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::CFG_TEST_SIZE>(hal::gpr<4>());
 }
 
-//--- scalar-index.cpp
+//--- scalar-runtime.cpp
 #include "fields.h"
 
-void probe()
+void probe(std::uint32_t index)
 {
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<64>());
+    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::CFG_TEST_SIZE>(hal::gpr(index));
 }
 
-//--- scalar-source-misaligned.cpp
+//--- scalar-wait.cpp
 #include "fields.h"
 
 void probe()
 {
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor.Raw, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<10>());
+    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128, cfg::WrcfgCompletion::Wait>(
+        hal::gpr<4>());
 }
 
-//--- scalar-span.cpp
+//--- group-scalar.cpp
 #include "fields.h"
 
 void probe()
 {
-    cfg::write<cfg::Access::TensixScalarUnit, thcon_crossing, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>());
+    cfg::write<cfg::Access::TensixScalarUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0>(hal::gpr<4>()));
 }
 
 //--- field-overlap.cpp

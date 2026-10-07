@@ -24,7 +24,7 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/prepacked-shifted.cpp 2>&1 | FileCheck %s --check-prefix=PREPACKED_SHIFT
 
 // ACCESS: error: static assertion failed: compile-time instruction emission requires Access::TensixCfgUnit
-// VALUE_ACCESS: error: static assertion failed: value-backed cfg::write requires Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand
+// VALUE_ACCESS: error: static assertion failed: value-backed cfg::write requires Access::MMIO or Access::TensixCfgUnit
 // WIDE_WRITE: error: static assertion failed: field wider than 32b cannot be written through a single value
 // SECTION: error: static assertion failed: section index out of range for this register
 // VALUE: error: static assertion failed: value exceeds field width

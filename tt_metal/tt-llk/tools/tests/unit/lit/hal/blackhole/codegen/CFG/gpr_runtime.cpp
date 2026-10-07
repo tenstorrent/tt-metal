@@ -15,7 +15,7 @@ namespace cfg = hal::cfg;
 
 // hal::gpr(index) selects the GPR at runtime, so the transfer is built in a
 // register and pushed through the instruction buffer with the index in bits
-// 23:16 (WRCFG) or 5:0 (REG2FLOP). RDCFG accepts only hal::gpr<Index>().
+// 23:16 (WRCFG). RDCFG accepts only hal::gpr<Index>().
 
 inline constexpr cfg::Field state_last_block {cfg::RegisterScope::State, 32, 220, 0, 0, 32, 1, 0};
 
@@ -141,32 +141,4 @@ extern "C" __attribute__((noinline, used)) void write_runtime_from_gpr_deferred_
 // CHECK-NEXT: ttrmwcib1 255,0,80
 // CHECK-NEXT: ttrmwcib2 255,0,80
 // CHECK-NEXT: ttrmwcib3 255,0,80
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_runtime_gpr_scalar(std::uint32_t index)
-{
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr(index));
-}
-
-// REG2FLOP 32-bit to flop 12 is 0x48400000 + (12 << 6).
-// CHECK-LABEL: <write_runtime_gpr_scalar>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0x48400
-// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],768
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: add a0,a0,[[OPA]]
-// CHECK: sw a0,0({{a[0-7]}})
-// CHECK-NEXT: ret
-
-extern "C" __attribute__((noinline, used)) void write_runtime_gpr_128_scalar(std::uint32_t index)
-{
-    cfg::write<cfg::Access::TensixScalarUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S1, cfg::GprTransferSize::Bits128>(hal::gpr(index));
-}
-
-// REG2FLOP 128-bit to flop 48 is 0x48000000 + (48 << 6).
-// CHECK-LABEL: <write_runtime_gpr_128_scalar>:
-// CHECK-DAG: lui [[OP:a[0-7]]],0x48001
-// CHECK-DAG: addi [[OPA:a[0-7]]],[[OP]],-1024
-// CHECK-DAG: R_RISCV_HI20 __instrn_buffer
-// CHECK: add a0,a0,[[OPA]]
-// CHECK: sw a0,0({{a[0-7]}})
 // CHECK-NEXT: ret
