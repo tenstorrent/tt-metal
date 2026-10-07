@@ -10,27 +10,29 @@
 // The binding and argument names below are this fork's interface: every factory that later ports
 // onto it inherits them and cannot rename them.
 //
-// This fork carries the plain ring only. Every ring core computes, so there are no hop cores; there
-// is one weight, so in0 is gathered once; and every in0 shard holds the same K / ring_size unpadded
-// tiles, so every shard is forwarded. The legacy kernel keeps the hop-core, multi-weight and
-// padded-shard paths for the factories that need them.
+// This fork gathers in0 once, for one weight; the legacy kernel keeps the multi-weight path. Hop cores
+// that only forward run reader_bmm_tile_layout_in0_ring_hop_metal2.cpp beside it.
 
 #include <stdint.h>
 
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "api/dataflow/endpoints.h"
-#include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/matmul/device/kernels/dataflow/in0_ring_forward.hpp"
 
 void kernel_main() {
     constexpr auto shard_width_in_tiles = get_arg(args::shard_width_in_tiles);
     constexpr auto shard_height_in_tiles = get_arg(args::shard_height_in_tiles);
     constexpr auto ring_size = get_arg(args::ring_size);
+    constexpr auto k_tiles = get_arg(args::k_tiles);  // the activation's unpadded K
+
+    // This core holds activation shard ring_idx.
+    const uint32_t ring_idx = get_arg(args::ring_idx);
 
     // The core this one forwards to: the previous core in ring order, so that at step s this core
-    // holds the shard of ring position (ring_idx + s) % ring_size.
+    // holds the shard of ring position (ring_idx + s) % ring_size. Hop cores, when the ring has any,
+    // carry the link from the first core round to the last.
     const uint32_t next_core_noc_x = get_arg(args::next_core_noc_x);
     const uint32_t next_core_noc_y = get_arg(args::next_core_noc_y);
 
@@ -65,20 +67,15 @@ void kernel_main() {
 
         // The last shard has gone all the way round: the next core already holds it.
         if (shard_cnt < ring_size - 1) {
-            const UnicastEndpoint dst_ep;
-            noc.async_write(
-                CoreLocalMem<uint32_t>(curr_shard_read_addr),
-                dst_ep,
+            forward_in0_shard(
+                noc,
+                signal_sem,
+                curr_shard_read_addr,
+                curr_shard_write_addr,
                 shard_size_bytes,
-                {},
-                {.noc_x = next_core_noc_x, .noc_y = next_core_noc_y, .addr = curr_shard_write_addr});
-            // Flush the write before issuing the semaphore increment. The write uses the regular
-            // write command buffer while the atomic increment uses the AT command buffer; without
-            // this flush the atomic can arrive at the destination before the payload, causing the
-            // receiver to read stale data.
-            noc.async_writes_flushed();
-
-            signal_sem.up(noc, next_core_noc_x, next_core_noc_y, 1);
+                next_core_noc_x,
+                next_core_noc_y,
+                in0_shard_is_empty((ring_idx + shard_cnt) % ring_size, shard_width_in_tiles, k_tiles));
         }
 
         if (shard_cnt > 0) {
