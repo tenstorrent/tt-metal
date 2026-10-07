@@ -18,7 +18,7 @@ struct SliceParams {
     bool use_tensor_args = false;
     std::optional<uint32_t> slice_dim = std::nullopt;
     std::optional<uint32_t> num_devices = std::nullopt;
-    std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 struct SliceInputs {

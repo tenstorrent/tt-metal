@@ -39,7 +39,7 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const auto kernel_config = init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
