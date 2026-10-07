@@ -70,7 +70,7 @@ UNUSED = re.compile(r"^included header (?P<header>.+) is not used directly$")
 # include directory it was found through ("tt_stl/span.hpp", "core_coord.hpp");
 # the repo writes <tt_stl/span.hpp> and <tt-metalium/core_coord.hpp>, and
 # tt_metal/api has no quoted includes at all. (root relative to the repo,
-# include prefix), in lookup order. Same table as summarize_host_iwyu.py.
+# include prefix), in lookup order: the include directories of the verification TUs.
 PROJECT_INCLUDE_ROOTS = (
     ("tt_metal/api/tt-metalium", "tt-metalium/"),
     ("tt_metal/api", ""),
@@ -131,6 +131,8 @@ def parse_export_fixes(text: str) -> list[dict]:
             diagnostics[-1]["message"] = unquote(value)
         elif key == "FileOffset":
             diagnostics[-1]["offset"] = int(value)
+        elif key == "Level":
+            diagnostics[-1]["level"] = unquote(value)
         elif key == "Offset":
             diagnostics[-1].setdefault("edits", []).append([int(value), 0, ""])
         elif key == "Length":
@@ -189,7 +191,6 @@ def select(build: str, root: str, headers: list[str]) -> list[dict]:
 
 def run_one(entry: dict, args: argparse.Namespace, out: str, root: str) -> Result:
     api_dir = os.path.join(root, "tt_metal", "api") + os.sep
-    result = Result(header=entry["file"][len(api_dir) :])
     with open(entry["file"], "rb") as source:
         content = source.read()
     with tempfile.NamedTemporaryFile("r", suffix=".yaml") as fixes:
@@ -200,19 +201,27 @@ def run_one(entry: dict, args: argparse.Namespace, out: str, root: str) -> Resul
             f"--config-file={args.config}",
             f"--export-fixes={fixes.name}",
             "--quiet",
+            entry["file"],
         ]
-        command.append(entry["file"])
         start = time.monotonic()
         proc = subprocess.run(command, capture_output=True, text=True, errors="replace")
-        result.seconds = time.monotonic() - start
-        result.output = proc.stdout + proc.stderr
+        seconds = time.monotonic() - start
         exported = fixes.read()
+    result = analyze(entry["file"][len(api_dir) :], proc.returncode, proc.stdout + proc.stderr, exported, content, root)
+    result.seconds = seconds
+    return result
 
+
+def analyze(header: str, returncode: int, output: str, exported: str, content: bytes, root: str) -> Result:
+    """Turn one clang-tidy run (exit status, console output, --export-fixes YAML) into a Result."""
+    result = Result(header=header, output=output)
+    promoted = False  # a misc-include-cleaner finding reported at error level
     for diagnostic in parse_export_fixes(exported):
         message = diagnostic.get("message", "")
         if diagnostic["name"] != CHECK:
             result.errors.append(f"{diagnostic['name']}: {message}")
             continue
+        promoted |= diagnostic.get("level") == "Error"
         result.edits += [tuple(edit) for edit in diagnostic.get("edits", [])]
         if match := MISSING.match(message):
             # clang-tidy attaches the insertion to the first symbol a header
@@ -230,12 +239,22 @@ def run_one(entry: dict, args: argparse.Namespace, out: str, root: str) -> Resul
         else:
             result.errors.append(f"{CHECK}: unrecognised message: {message}")
     # Compiler errors are not always exported as fixes; take them from the output too.
-    for line in result.output.splitlines():
+    for line in output.splitlines():
         if re.search(r": (fatal )?error: ", line) and line not in result.errors:
             result.errors.append(line)
-    if proc.returncode != 0 and not result.errors and not (result.missing or result.unused):
-        result.errors.append(f"clang-tidy exited with {proc.returncode}")
 
+    # Exit status, as measured with clang-tidy 20.1.8 and this config
+    # (WarningsAsErrors ''): 0 when the header parsed, with or without findings
+    # (they are warnings); 1 when the header has a compile error, even if
+    # findings were reported too ("Error while processing ..."); negative when
+    # killed by a signal. So a nonzero exit is a failure unless it is fully
+    # explained: by a compile error recorded above (already a failure), or by
+    # findings promoted to errors through WarningsAsErrors. Findings never
+    # excuse a nonzero exit on their own.
+    if returncode < 0:
+        result.errors.append(f"clang-tidy was killed by signal {-returncode}")
+    elif returncode != 0 and not result.errors and not promoted:
+        result.errors.append(f"clang-tidy exited with {returncode} without reporting an error")
     return result
 
 
@@ -243,12 +262,19 @@ def apply_edits(path: str, edits: list, root: str) -> None:
     """Apply one header's fix-its (byte offsets into the unmodified file), last first."""
     with open(path, "rb") as source:
         content = source.read()
-    # At one offset: the removal first, then insertions, which end up in sorted order.
-    for offset, length, text in sorted(set(edits), key=lambda e: (e[0], e[1], e[2]), reverse=True):
-        text = repo_spelling(text, root).encode()
-        content = content[:offset] + text + content[offset + length :]
+    # Respell first so insertions sort by their final text. Applied from the
+    # end: at one offset the removal goes first, then the insertions, each in
+    # front of the previous one, so they end up in ascending order.
+    respelled = {(offset, length, repo_spelling(text, root)) for offset, length, text in edits}
+    for offset, length, text in sorted(respelled, reverse=True):
+        content = content[:offset] + text.encode() + content[offset + length :]
     with open(path, "wb") as source:
         source.write(content)
+
+
+def exit_status(results: list[Result], gating: bool) -> int:
+    """1 in gating mode if any header has a finding or failed to analyze, else 0."""
+    return 1 if gating and any(r.missing or r.unused or r.failed for r in results) else 0
 
 
 def render(results: list[Result], status: int, artifact: str, gating: bool) -> str:
@@ -266,7 +292,7 @@ def render(results: list[Result], status: int, artifact: str, gating: bool) -> s
         f"| with findings | {len(flagged)} |",
         f"| with missing includes | {sum(1 for r in results if r.missing)} ({missing} includes to add) |",
         f"| with unused includes | {sum(1 for r in results if r.unused)} ({unused} includes to remove) |",
-        f"| failed to parse | {len(failed)} |",
+        f"| failed to analyze | {len(failed)} |",
         "",
         f"Exit status: {status}. Wall time per header: "
         f"max {max((r.seconds for r in results), default=0):.1f} s, "
@@ -278,7 +304,7 @@ def render(results: list[Result], status: int, artifact: str, gating: bool) -> s
             add = "<br>".join(f"`{inc}`" for inc in sorted(r.missing.keys() - {COVERED}))
             rm = "<br>".join(f"`{inc}` (line {n})" for n, inc in r.unused)
             if r.failed:
-                rm += (" " if rm else "") + "**parse failed**"
+                rm += (" " if rm else "") + "**analysis failed**"
             lines.append(f"| `{r.header}` | {add} | {rm} |")
     lines += [
         "",
@@ -332,9 +358,8 @@ def main() -> int:
             if result.edits:
                 apply_edits(entry["file"], result.edits, root)
 
-    flagged = any(r.missing or r.unused for r in results)
+    status = exit_status(results, args.fail_on_findings)
     failed = any(r.failed for r in results)
-    status = 1 if args.fail_on_findings and (flagged or failed) else 0
     with open(os.path.join(out, "include-cleaner.txt"), "w") as f:
         for r in results:
             f.write(f"=== {r.header} ({r.seconds:.2f} s)\n{r.output}\n")
@@ -344,7 +369,7 @@ def main() -> int:
         f.write(f"{status}\n")
     print(render(results, status, args.artifact, args.fail_on_findings))
     if failed:
-        print(f"::warning::{CHECK} could not parse some headers; see include-cleaner.txt", file=sys.stderr)
+        print(f"::warning::{CHECK} could not analyze some headers; see include-cleaner.txt", file=sys.stderr)
     return status
 
 
