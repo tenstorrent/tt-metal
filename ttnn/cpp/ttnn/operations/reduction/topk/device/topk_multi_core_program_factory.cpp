@@ -148,7 +148,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     const std::uint32_t index_tile_size = tile_size(index_cb_data_format);
     const std::uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
-    const auto* device = &input_tensor.mutable_device();
+    const auto& device = input_tensor.device();
 
     const auto input_shape = input_tensor.padded_shape();
     const std::uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
@@ -157,14 +157,14 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
     // Determine optimal core configuration based on input dimensions, K value, and memory constraints
     const auto [num_cores, local_topk_input_size, rem, final_topk_input_size, selected_x, selected_y] = cores_utilized(
-        input_shape[args.dim],       // Total width dimension
-        64,                          // Minimum elements per core (LLK requirement)
-        input_shape[args.dim] / 2,   // Maximum elements per core (load balancing)
-        args.k,                      // TopK value
-        first_core_range,            // Available core grid
-        device->l1_size_per_core(),  // L1 memory per core
-        value_tile_size,             // Value tile memory footprint
-        index_tile_size,             // Index tile memory footprint
+        input_shape[args.dim],      // Total width dimension
+        64,                         // Minimum elements per core (LLK requirement)
+        input_shape[args.dim] / 2,  // Maximum elements per core (load balancing)
+        args.k,                     // TopK value
+        first_core_range,           // Available core grid
+        device.l1_size_per_core(),  // L1 memory per core
+        value_tile_size,            // Value tile memory footprint
+        index_tile_size,            // Index tile memory footprint
         tile_width);
 
     constexpr bool select_cores_row_wise = false;
@@ -190,7 +190,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     validate_reduce_op_program_grid(
         "TopK multi-core",
         all_cores_range_set,
-        device->compute_with_storage_grid_size(),
+        device.compute_with_storage_grid_size(),
         &first_core_range_set,
         false,
         {});
@@ -433,8 +433,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Final reader - Local TopK Results Aggregation Coordinator
     // Responsibility: Coordinate reception of TopK results from all local cores
     // Uses semaphore protocol to synchronize with multiple sender cores
-    CoreCoord local_cores_physical_start = device->worker_core_from_logical_core(local_cores.at(0));
-    CoreCoord local_cores_physical_end = device->worker_core_from_logical_core(local_cores.at(num_cores - 2u));
+    CoreCoord local_cores_physical_start = device.worker_core_from_logical_core(local_cores.at(0));
+    CoreCoord local_cores_physical_end = device.worker_core_from_logical_core(local_cores.at(num_cores - 2u));
     const std::vector<std::uint32_t> reader_final_compile_time_args = {
         static_cast<std::uint32_t>(receiver_semaphore_id),         // Semaphore for coordinating data reception
         static_cast<std::uint32_t>(sender_semaphore_id),           // Semaphore for tracking transmission completion
@@ -469,7 +469,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     // Local writer - Local TopK Results Transmission
     // Responsibility: Send local TopK results from each core to final aggregation core
     // Implements sender side of semaphore-based synchronization protocol
-    const CoreCoord final_cores_physical = device->worker_core_from_logical_core(final_core);
+    const CoreCoord final_cores_physical = device.worker_core_from_logical_core(final_core);
     const std::vector<std::uint32_t> writer_local_compile_time_args = {
         static_cast<std::uint32_t>(receiver_semaphore_id),   // Semaphore to check final core readiness
         static_cast<std::uint32_t>(sender_semaphore_id),     // Semaphore to signal transmission completion

@@ -51,7 +51,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
-#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -1220,9 +1220,24 @@ void MeshDeviceImpl::validate_sub_device_manager_tracker() const {
     }
 }
 
+SubDeviceManagerId MeshDeviceImpl::acquire_command_list_builder() {
+    auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Only one CommandListBuilder may exist for a MeshDevice");
+    validate_sub_device_manager_tracker();
+    command_list_builder_active_ = true;
+    return sub_device_manager_tracker_->get_active_sub_device_manager_id();
+}
+
+void MeshDeviceImpl::release_command_list_builder() {
+    auto lock = lock_api();
+    TT_ASSERT(command_list_builder_active_);
+    command_list_builder_active_ = false;
+}
+
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot create a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
@@ -1230,22 +1245,26 @@ SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot create a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot remove a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
     this->allocator_impl()->unregister_active_traces(sub_device_manager_id);
 }
 void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot load a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot clear the sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
 }

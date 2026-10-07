@@ -90,7 +90,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
 
     uint32_t num_tile_rows = NC * Ht;
 
-    log_debug(tt::LogOp, "device_id: {}", gamma.value().device()->get_device_ids());
+    log_debug(tt::LogOp, "device_id: {}", a.device()->get_device_ids());
     log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
     log_debug(tt::LogOp, "W: {}", W);
     log_debug(tt::LogOp, "H: {}", H);
