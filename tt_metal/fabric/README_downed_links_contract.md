@@ -23,12 +23,11 @@
 >
 > There is **no** separate `get_absent_intermesh_cables()` set. Intermesh holes are downed links.
 >
-> ## NOTE — STRICT + FSD: do **not** fatal on down
+> ## NOTE — STRICT + FSD rejects a mismatch
 >
-> When an FSD is set, STRICT must **not** `TT_FATAL` on a missing or downed cable — intra or
-> intermesh. Do **not** consult `is_link_healthy` or `cluster.is_ethernet_link_up` to abort.
-> The outcome is a `LinkInfo` in `LinkHealth`. Log each skipped STRICT check at warning.
-> Without an FSD, STRICT is unchanged. See §3.2.
+> Superseded by [`README_fsd_reliability_rules.md`](README_fsd_reliability_rules.md). STRICT with a
+> factory descriptor errors when the live physical descriptor disagrees with it. §3.2 below is the
+> old "record and continue" rule and is not the behavior to implement.
 
 ---
 

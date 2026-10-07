@@ -165,14 +165,33 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     this->router_port_directions_to_num_reserved_planes_map_.clear();
 
     auto topology = FabricContext::get_topology_from_config(fabric_config);
+    // Relaxed, with a factory descriptor. A routing plane is one parallel ethernet path in a direction;
+    // the mesh then takes the minimum so every hop in a row or column has the same number.
+    // The mesh graph's count is what we route when the factory descriptor has at least that many cables,
+    // even if one of them is missing. Extra factory cables above that count are not planes. When the
+    // mesh graph asks for more than the factory descriptor has, planes drop to the factory count.
+    // That gap is a downgrade, not a downed link.
+    auto channels_for_min = [&](FabricNodeId node, RoutingDirection direction, size_t live, size_t golden) {
+        if (reliability_mode != tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE ||
+            this->link_health_ == nullptr) {
+            return live;
+        }
+        const auto fsd_cables = live + this->link_health_->get_num_downed_routing_planes_in_direction(node, direction);
+        if (golden == 0) {
+            return fsd_cables;
+        }
+        return golden > fsd_cables ? fsd_cables : golden;
+    };
     auto apply_min =
-        [&](const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
+        [&](FabricNodeId node,
+            const std::unordered_map<tt::tt_fabric::RoutingDirection, std::vector<tt::tt_fabric::chan_id_t>>&
                 port_direction_eth_chans,
             tt::tt_fabric::RoutingDirection direction,
-            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& /*golden_link_counts*/,
+            const std::unordered_map<tt::tt_fabric::RoutingDirection, size_t>& golden_link_counts,
             size_t& val) {
             if (auto it = port_direction_eth_chans.find(direction); it != port_direction_eth_chans.end()) {
-                val = std::min(val, it->second.size());
+                const auto golden = golden_link_counts.contains(direction) ? golden_link_counts.at(direction) : 0;
+                val = std::min(val, channels_for_min(node, direction, it->second.size(), golden));
             }
         };
 
@@ -228,10 +247,30 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
                 const auto& port_directions = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
 
                 const auto& golden_counts = golden_link_counts.at(MeshId{mesh_id}).at(fabric_chip_id);
-                apply_min(port_directions, RoutingDirection::E, golden_counts, row_min_planes.at(mesh_coord_x));
-                apply_min(port_directions, RoutingDirection::W, golden_counts, row_min_planes.at(mesh_coord_x));
-                apply_min(port_directions, RoutingDirection::N, golden_counts, col_min_planes.at(mesh_coord_y));
-                apply_min(port_directions, RoutingDirection::S, golden_counts, col_min_planes.at(mesh_coord_y));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::E,
+                    golden_counts,
+                    row_min_planes.at(mesh_coord_x));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::W,
+                    golden_counts,
+                    row_min_planes.at(mesh_coord_x));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::N,
+                    golden_counts,
+                    col_min_planes.at(mesh_coord_y));
+                apply_min(
+                    fabric_node_id,
+                    port_directions,
+                    RoutingDirection::S,
+                    golden_counts,
+                    col_min_planes.at(mesh_coord_y));
             }
 
             // Collect row and column mins from all hosts in a BigMesh
@@ -441,6 +480,7 @@ void ControlPlane::init_control_plane(
 
     // Create mesh_graph first
     this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
+    this->validate_system_health_against_mesh_graph_policy();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd = tt::tt_metal::run_physical_system_discovery(
@@ -602,6 +642,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     this->mesh_graph_ = std::make_unique<tt::tt_fabric::MeshGraph>(
         tt::tt_fabric::TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
             this->cluster_.get(), this->descriptor_to_map_on(), this->fabric_config_, this->fabric_reliability_mode_));
+    this->validate_system_health_against_mesh_graph_policy();
 
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -971,6 +1012,27 @@ void ControlPlane::construct_link_health_after_intermesh() {
     this->confirm_local_downed_links();
 }
 
+void ControlPlane::validate_system_health_against_mesh_graph_policy() const {
+    if (this->fabric_reliability_mode_ != tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {
+        return;
+    }
+    TT_FATAL(this->mesh_graph_ != nullptr, "Mesh graph is not initialized");
+    bool relaxed =
+        this->mesh_graph_->is_inter_mesh_policy_specified() && this->mesh_graph_->is_inter_mesh_policy_relaxed();
+    if (!relaxed) {
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+            if (this->mesh_graph_->is_intra_mesh_policy_relaxed(mesh_id)) {
+                relaxed = true;
+                break;
+            }
+        }
+    }
+    TT_FATAL(
+        !relaxed,
+        "A RELAXED mesh graph cannot be used with STRICT system health setup. A STRICT mesh graph may "
+        "use RELAXED system health. Use RELAXED_SYSTEM_HEALTH_SETUP_MODE with this mesh graph.");
+}
+
 void ControlPlane::check_fsd_compatibility_and_downed_fraction() {
     TT_ASSERT(this->link_health_ != nullptr);
     const std::size_t expected = this->link_health_->fsd_expected_count();
@@ -987,6 +1049,27 @@ void ControlPlane::check_fsd_compatibility_and_downed_fraction() {
         expected,
         downed,
         100.0 * fraction);
+
+    // STRICT system health rejects every factory cable the live descriptor is missing, intra or inter,
+    // including one the mesh graph filed as unused. Relaxed system health keeps those records.
+    if (this->fabric_reliability_mode_ == tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE &&
+        downed > 0) {
+        std::size_t intra = 0;
+        std::size_t inter = 0;
+        auto tally = [&](const std::vector<LinkInfo>& links) {
+            for (const auto& link : links) {
+                intra += link.is_intramesh();
+                inter += link.is_intermesh();
+            }
+        };
+        tally(this->link_health_->get_downed_links());
+        tally(this->link_health_->get_unused_downed_links());
+        TT_THROW(
+            "STRICT system health: the live physical system descriptor does not match the factory "
+            "descriptor, intramesh={} intermesh={} missing cable(s).",
+            intra,
+            inter);
+    }
 
     if (fraction > kMaxDownedConnectionFraction) {
         TT_THROW(
@@ -1090,15 +1173,44 @@ void ControlPlane::classify_unused_downed_after_plane_trim() {
         }
     }
 
+    const auto unused_before = this->link_health_->get_unused_downed_links().size();
     this->link_health_->classify_unused_from_routing_planes(snapshot);
+    this->reject_used_downed_links_under_strict_policy();
 
-    const auto unused = this->link_health_->get_unused_downed_links().size();
-    if (unused > 0) {
+    const auto filed_unused = this->link_health_->get_unused_downed_links().size() - unused_before;
+    if (filed_unused > 0) {
         log_info(
             tt::LogFabric,
-            "Factory System Descriptor: {} downed link(s) sit on routing planes fabric already downgraded "
-            "away and will not drive rerouting. They stay in get_unused_downed_links().",
-            unused);
+            "Factory System Descriptor: {} link(s) are factory cables the mesh graph does not route. "
+            "They stay in get_unused_downed_links().",
+            filed_unused);
+    }
+}
+
+void ControlPlane::reject_used_downed_links_under_strict_policy() {
+    if (this->mesh_graph_ == nullptr || this->link_health_ == nullptr) {
+        return;
+    }
+    // get_downed_links() is the cables the mesh graph still uses. Unused holes are a different set.
+    // Intra is per mesh. Intermesh is one policy for the whole graph.
+    const bool inter_strict =
+        this->mesh_graph_->is_inter_mesh_policy_specified() && !this->mesh_graph_->is_inter_mesh_policy_relaxed();
+    std::size_t intra = 0;
+    std::size_t inter = 0;
+    for (const auto& link : this->link_health_->get_downed_links()) {
+        if (link.is_intramesh()) {
+            if (!this->mesh_graph_->is_intra_mesh_policy_relaxed(link.src_mesh())) {
+                ++intra;
+            }
+        } else if (link.is_intermesh() && inter_strict) {
+            ++inter;
+        }
+    }
+    if (intra > 0 || inter > 0) {
+        TT_THROW(
+            "STRICT mesh graph cannot have a downed link it uses. intramesh={} intermesh={} used downed cable(s).",
+            intra,
+            inter);
     }
 }
 

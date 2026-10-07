@@ -341,35 +341,19 @@ TEST_F(LinkHealthTest, RouteQueriesFindTheCable) {
         std::vector<chan_id_t>{record.src_chan});
 }
 
-// A hole on a routing plane fabric already downgraded away is a real unplugged cable that fabric
-// will never route over, so it must not drive rerouting -- but it stays documented.
-TEST_F(LinkHealthTest, HolesOnDowngradedPlanesMoveToTheUnusedSet) {
-    const auto cable = first_cable(*live_);
-    ASSERT_TRUE(cable.has_value());
-    unplug(*live_, *cable);
-
-    LinkHealth health(*mapper_, *live_);
-    ASSERT_EQ(health.get_downed_links().size(), 2u);
-    const auto records = health.get_downed_links();
-
-    // Say fabric ended up routing on fewer planes than the mesh graph asked for, in the direction
-    // one of the two records faces.
-    RoutingPlaneSnapshot snapshot;
-    snapshot.expected_planes[records.front().src_node][records.front().src_direction] = 4;
-    snapshot.live_planes[records.front().src_node][records.front().src_direction] = 2;
-
-    health.classify_unused_from_routing_planes(snapshot);
-
-    EXPECT_EQ(health.get_unused_downed_links().size(), 1u);
-    EXPECT_EQ(health.get_downed_links().size(), 1u);
-    // Lost capacity ignores them: fabric already stopped routing there.
-    EXPECT_EQ(
-        health.get_num_downed_routing_planes_in_direction(records.front().src_node, records.front().src_direction), 0u);
-    // The other half of the cable faced a direction nothing was said about, so it stays active.
-    EXPECT_TRUE(health.fsd_rerouting_active());
+std::size_t count_direction(const std::vector<LinkInfo>& links, const LinkInfo& sample) {
+    std::size_t count = 0;
+    for (const auto& link : links) {
+        if (link.src_node == sample.src_node && link.src_direction == sample.src_direction) {
+            ++count;
+        }
+    }
+    return count;
 }
 
-TEST_F(LinkHealthTest, UndowngradedHolesStayActive) {
+// Mesh graph 2, factory 2, live 1. The one missing cable is still needed, so it stays downed.
+// Routing planes stay at 2; that count is applied by the control plane, not here.
+TEST_F(LinkHealthTest, MeshGraphCoveredByTheFactoryKeepsTheHoleDowned) {
     const auto cable = first_cable(*live_);
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
@@ -378,17 +362,75 @@ TEST_F(LinkHealthTest, UndowngradedHolesStayActive) {
     const auto records = health.get_downed_links();
     ASSERT_EQ(records.size(), 2u);
 
-    // Fabric is routing on everything the mesh graph asked for, so the hole sits on a live plane.
     RoutingPlaneSnapshot snapshot;
     for (const auto& record : records) {
-        snapshot.expected_planes[record.src_node][record.src_direction] = 4;
-        snapshot.live_planes[record.src_node][record.src_direction] = 4;
+        snapshot.expected_planes[record.src_node][record.src_direction] = 2;
+        snapshot.psd_cables[record.src_node][record.src_direction] = 1;
     }
 
     health.classify_unused_from_routing_planes(snapshot);
 
     EXPECT_TRUE(health.get_unused_downed_links().empty());
     EXPECT_EQ(health.get_downed_links().size(), 2u);
+    for (const auto& record : records) {
+        EXPECT_EQ(count_direction(health.get_downed_links(), record), 1u);
+    }
+}
+
+// Mesh graph 2, factory 4, live 3. Live cables already cover the mesh graph, so nothing is downed.
+// The one missing factory cable is unused. The extra live cable is not a downed link.
+TEST_F(LinkHealthTest, FactoryCablesBeyondTheMeshGraphAreUnused) {
+    const auto cable = first_cable(*live_);
+    ASSERT_TRUE(cable.has_value());
+    unplug(*live_, *cable);
+
+    LinkHealth health(*mapper_, *live_);
+    const auto records = health.get_downed_links();
+    ASSERT_EQ(records.size(), 2u);
+
+    RoutingPlaneSnapshot snapshot;
+    for (const auto& record : records) {
+        snapshot.expected_planes[record.src_node][record.src_direction] = 2;
+        snapshot.psd_cables[record.src_node][record.src_direction] = 3;
+    }
+
+    health.classify_unused_from_routing_planes(snapshot);
+
+    EXPECT_TRUE(health.get_downed_links().empty());
+    EXPECT_EQ(health.get_unused_downed_links().size(), 2u);
+    for (const auto& record : records) {
+        EXPECT_EQ(count_direction(health.get_unused_downed_links(), record), 1u);
+        EXPECT_EQ(health.get_num_downed_routing_planes_in_direction(record.src_node, record.src_direction), 0u);
+    }
+    EXPECT_FALSE(health.fsd_rerouting_active());
+}
+
+// Mesh graph 4, factory 2, live 1. The two channels the mesh graph asks for beyond the factory
+// descriptor are a routing-plane downgrade, not downed links. The one missing factory cable stays
+// downed.
+TEST_F(LinkHealthTest, MeshGraphCountAboveTheFactoryStaysDowned) {
+    const auto cable = first_cable(*live_);
+    ASSERT_TRUE(cable.has_value());
+    unplug(*live_, *cable);
+
+    LinkHealth health(*mapper_, *live_);
+    const auto records = health.get_downed_links();
+    ASSERT_EQ(records.size(), 2u);
+
+    RoutingPlaneSnapshot snapshot;
+    for (const auto& record : records) {
+        snapshot.expected_planes[record.src_node][record.src_direction] = 4;
+        snapshot.psd_cables[record.src_node][record.src_direction] = 1;
+    }
+
+    health.classify_unused_from_routing_planes(snapshot);
+
+    EXPECT_TRUE(health.get_unused_downed_links().empty());
+    EXPECT_EQ(health.get_downed_links().size(), 2u);
+    for (const auto& record : records) {
+        EXPECT_EQ(count_direction(health.get_downed_links(), record), 1u);
+        EXPECT_EQ(health.get_num_downed_routing_planes_in_direction(record.src_node, record.src_direction), 1u);
+    }
 }
 
 TEST_F(LinkHealthTest, RefreshIsIdempotentAndCanRebind) {

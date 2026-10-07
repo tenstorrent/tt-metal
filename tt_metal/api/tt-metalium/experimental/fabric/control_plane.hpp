@@ -546,6 +546,10 @@ private:
     // deadlocks.
     void ingest_factory_system_descriptor();
 
+    // A STRICT mesh graph may run with relaxed system health. A RELAXED mesh graph may not run with
+    // STRICT system health.
+    void validate_system_health_against_mesh_graph_policy() const;
+
     // The descriptor the mapper solves on: the factory one when there is one, else the live one. Solving
     // on the factory descriptor is the point of the feature -- it keeps a downed cable from changing where
     // the mesh lands.
@@ -566,6 +570,9 @@ private:
     // Move holes that sit on routing planes fabric already gave up on out of the active set. Must run
     // after the plane trim and the cross-host merge, so every rank classifies identically.
     void classify_unused_downed_after_plane_trim();
+
+    // A used downed link fails when that mesh's intra policy is STRICT, or when intermesh is STRICT.
+    void reject_used_downed_links_under_strict_policy();
     // Live routing planes in a given direction: the post-health-check active plane count.
     // Note: this includes reserved planes as well, as opposed to get_num_usable_routing_planes.
     size_t get_num_live_routing_planes(FabricNodeId fabric_node_id, RoutingDirection routing_direction) const;
