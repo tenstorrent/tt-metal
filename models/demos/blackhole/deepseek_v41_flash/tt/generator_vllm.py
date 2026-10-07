@@ -253,6 +253,7 @@ class DeepseekV41ForCausalLM:
         s_pad = VS.s_pad_bucket(S, chunk, self.s_pad_policy)
         want_logits = not device_sampling
         self.m.release_trace()  # decode trace: recaptured by the next decode step
+        self._first_decode_after_prefill = True
         logger.info(
             f"DSV4.1 prefill: {N} new request(s) in slots {empty_slots} (users {phys_new}), lens max {S}, chunk {chunk}, S_pad {s_pad}, "
             f"{'re-prefill of ' + str(len(live_other)) + ' live users, ' if refill else ''}{'host sampling' if want_logits else 'device sampling'}"
@@ -328,7 +329,15 @@ class DeepseekV41ForCausalLM:
             self.book.note_fed(p, pos, int(tok_B[p]))
         self.timing["decode"] = time.perf_counter() - t0
         self._calls["decode"] += 1
-        self._decode_stats(t_in, time.perf_counter())
+        t_out = time.perf_counter()
+        if self.__dict__.pop(
+            "_first_decode_after_prefill", False
+        ):  # includes the decode trace re-capture (released before every prefill)
+            logger.info(
+                f"DSV4.1 first decode after prefill: {t_out - t_in:.2f} s (trace re-capture included; model: { {k: round(v * 1e3, 1) for k, v in self.m.timing.items() if k.startswith('decode')} } ms)"
+            )
+        else:
+            self._decode_stats(t_in, t_out)
         if device_sampling:
             return VS.scatter_rows(out.reshape(-1, 1).to(torch.int32), rows, W)
         logits = self.m.read_logits().float()  # [B, vocab] host
