@@ -39,11 +39,32 @@ def test_bw_log10(input_shapes, device):
 # the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
 # path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
-# another class, for the output and for the composite's on the same operands.
+# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
+# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
+# pure ULP error against torch and the lanes of another class, for the output and for the
+# composite's on the same operands.
 # The output is 0 wherever f'(x) alone is below the smallest normal BF16 value, as the composite this
 # program replaces computes it; torch keeps the exact product.
-LOG10_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# The output is 0 wherever x is infinite, where f'(x)'s limit is 0 (torch's product is NaN for an
+# infinite or NaN grad), as the composite this program replaces computes it; torch keeps the exact
+# product.
+LOG10_BW_GRADS = [
+    "1",
+    "-1",
+    "0.5",
+    "3",
+    "random0",
+    "random1",
+    "0",
+    "-0",
+    "inf",
+    "-inf",
+    "nan",
+    "1.1754943508222875e-38",
+    "-1.1754943508222875e-38",
+    "3.3895313892515355e+38",
+    "-3.3895313892515355e+38",
+]
 LOG10_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -72,7 +93,10 @@ def _log10_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _log10_bw_torch_reference(grad, x, flush)
     unit = _log10_bw_torch_reference(torch.ones_like(grad), x, flush)
+    g = _log10_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
     result = torch.where(unit.abs() < LOG10_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
+    x32 = x.to(torch.float32)
+    result = torch.where((torch.isinf(x32)), torch.zeros_like(result), result)
     return result
 
 
@@ -118,7 +142,10 @@ def _log10_bw_pure_ulp(reference, actual):
     ulp = ((golden - actual.to(torch.float64)).abs().to(torch.float32) / spacing.to(torch.float32)).to(torch.float64)
     same_class = _log10_bw_stored_classes(rounded) == _log10_bw_stored_classes(actual)
     ulp = torch.where(torch.isfinite(rounded), ulp, torch.zeros_like(ulp))
-    return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    ulp = torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    # A +0 where torch's own result is subnormal is torch's result as stored: BF16 cannot store a subnormal.
+    flushed = (actual.to(torch.float64) == 0) & (reference.abs() < LOG10_BW_SMALLEST_NORMAL)
+    return torch.where(flushed, torch.zeros_like(ulp), ulp)
 
 
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
