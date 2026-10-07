@@ -17,6 +17,9 @@ void bind_chronological_selections(nb::module_& mod) {
     layout.attr("FINAL_HISTORY") = final_history;
     layout.attr("FINAL_STATE") = final_state;
     layout.attr("LOCAL_FINAL_HISTORY") = local_final_history;
+    layout.attr("PACKED_HISTORY_ROWS") = packed_history_rows;
+    layout.attr("OUTGOING_AND_LOCAL_FINAL_HISTORY") = outgoing_and_local_final_history;
+    layout.attr("PREDECESSOR_AND_FINAL_HISTORY") = predecessor_and_final_history;
 
     ttnn::bind_function<"chronological_selections", "ttnn.experimental.kda.">(
         mod,

@@ -37,17 +37,32 @@ TT_KERNEL void derive() {
         for (uint32_t i = 0; i < selection::record_width; ++i) {
             words[i] = 0;
         }
+        const uint32_t outgoing_base =
+            (topology.local_split ? topology.head_rows : local_rows) - selection::history_rows;
+        const uint32_t history_end = topology.valid_rows == 0 ? selection::history_rows : topology.valid_rows;
+        const uint32_t predecessor_rank = (topology.rank + sp_size - 1) % sp_size;
         if (row == selection::local_final_history) {
-            const uint32_t history_end = topology.valid_rows == 0 ? selection::history_rows : topology.valid_rows;
             for (uint32_t i = 0; i < selection::history_rows; ++i) {
                 words[i] = history_end - selection::history_rows + i;
+            }
+        } else if (row == selection::outgoing_and_local_final_history) {
+            for (uint32_t i = 0; i < selection::history_rows; ++i) {
+                words[i] = outgoing_base + i;
+                words[selection::history_rows + i] = history_end - selection::history_rows + i;
+            }
+        } else if (row == selection::predecessor_and_final_history) {
+            // The gathered table holds packed_history_rows rows per rank: outgoing, then local final.
+            for (uint32_t i = 0; i < selection::history_rows; ++i) {
+                words[i] = predecessor_rank * selection::packed_history_rows + i;
+                words[selection::history_rows + i] =
+                    topology.final_owner * selection::packed_history_rows + selection::history_rows + i;
             }
         } else if (row < selection::final_state) {
             uint32_t base;
             if (row == selection::outgoing_history) {
-                base = (topology.local_split ? topology.head_rows : local_rows) - selection::history_rows;
+                base = outgoing_base;
             } else if (row == selection::predecessor_history) {
-                base = ((topology.rank + sp_size - 1) % sp_size) * selection::history_rows;
+                base = predecessor_rank * selection::history_rows;
             } else {
                 base = topology.final_owner * selection::history_rows;
             }

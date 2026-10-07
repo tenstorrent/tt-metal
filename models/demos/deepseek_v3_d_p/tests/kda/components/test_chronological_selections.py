@@ -40,6 +40,9 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
     history_host = torch.arange(3 * partitions).reshape(1, -1, 1).expand(1, -1, 32).bfloat16()
     qkv = device(qkv_host, ttnn.ROW_MAJOR_LAYOUT)
     histories = device(history_host, ttnn.ROW_MAJOR_LAYOUT)
+    # Six rows per rank, as the packed outgoing and local final selection is gathered.
+    packed_history_host = torch.arange(6 * partitions).reshape(1, -1, 1).expand(1, -1, 32).bfloat16()
+    packed_histories = device(packed_history_host, ttnn.ROW_MAJOR_LAYOUT)
     finals = device(torch.arange(21, 21 + partitions).reshape(-1, 1, 1).expand(-1, 32, 32))
     prefix = device(torch.full((1, 32, 32), 99))
 
@@ -55,6 +58,8 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
             selections.select_final_history(histories),
             selections.select_final_state(finals, prefix),
             selections.select_local_final_history(qkv),
+            selections.select_outgoing_and_local_final_history(qkv, width=32),
+            selections.select_predecessor_and_final_history(packed_histories),
         )
 
     for _ in range(2):
@@ -107,6 +112,16 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
                     history_host[:, 3 * last : 3 * (last + 1)],
                     torch.full((1, 1, 32, 32), 21 + last if has_tail else 99),
                     qkv_host[:, local_history_end - 3 : local_history_end],
+                    torch.cat(
+                        [qkv_host[:, end - 3 : end], qkv_host[:, local_history_end - 3 : local_history_end]], dim=1
+                    ),
+                    torch.cat(
+                        [
+                            packed_history_host[:, 6 * previous : 6 * previous + 3],
+                            packed_history_host[:, 6 * last + 3 : 6 * last + 6],
+                        ],
+                        dim=1,
+                    ),
                 ]
                 for selector, (wanted, actual) in enumerate(zip(expected, shards, strict=True)):
                     assert torch.equal(

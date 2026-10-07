@@ -14,7 +14,13 @@ constexpr uint32_t predecessor_history = outgoing_history + 1;
 constexpr uint32_t final_history = predecessor_history + 1;
 constexpr uint32_t final_state = final_history + 1;
 constexpr uint32_t local_final_history = final_state + 2;
-constexpr uint32_t record_count = local_final_history + 1;
+// Packed history records for the sequence-parallel convolution exchange. The first selects the outgoing then the
+// local final history from the projection, so one gather carries both as six rows per rank; the second selects the
+// predecessor's outgoing then the final owner's local final history from that gathered table.
+constexpr uint32_t packed_history_rows = 2 * history_rows;
+constexpr uint32_t outgoing_and_local_final_history = local_final_history + 1;
+constexpr uint32_t predecessor_and_final_history = outgoing_and_local_final_history + 1;
+constexpr uint32_t record_count = predecessor_and_final_history + 1;
 }  // namespace selection
 
 struct Topology {

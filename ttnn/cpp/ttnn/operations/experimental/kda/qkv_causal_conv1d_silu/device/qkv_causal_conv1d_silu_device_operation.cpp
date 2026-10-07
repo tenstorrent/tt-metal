@@ -28,7 +28,16 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_actual_start(in.input, in.actual_start, operation_name);
     kda_factory_detail::check_allocated_device_tensor(in.predecessor_carry, operation_name, "predecessor_carry");
     kda_factory_detail::check_same_device(in.input, in.predecessor_carry, operation_name, "predecessor_carry");
-    TT_FATAL(in.predecessor_carry.tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
+    // The predecessor may carry further rows after its history, as the packed selection does; only the leading
+    // history rows are read.
+    const auto& predecessor_shape = in.predecessor_carry.logical_shape();
+    const auto& carry_shape = in.history.logical_shape();
+    TT_FATAL(
+        in.predecessor_carry.dtype() == in.history.dtype() && in.predecessor_carry.layout() == in.history.layout() &&
+            in.predecessor_carry.memory_config() == in.history.memory_config() &&
+            predecessor_shape.rank() == carry_shape.rank() && predecessor_shape[0] == carry_shape[0] &&
+            predecessor_shape[-1] == carry_shape[-1] && predecessor_shape[-2] >= carry_shape[-2],
+        "qkv convolution: the predecessor carry must match the history, with at least as many rows");
 
     check_allocated_device_tensor(in.input, operation_name, "input");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");

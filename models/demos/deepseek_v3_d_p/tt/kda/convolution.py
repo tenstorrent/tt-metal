@@ -15,25 +15,20 @@ def exchange_convolution_carry(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return predecessor history and the replacement logical stream carry.
 
-    Both outputs are BF16 row-major DRAM tensors shaped ``[1, 3, local_channels]``.
-    Predecessor history varies by SP rank; the final carry is replicated across
-    each SP line. Channels remain sharded across TP. The native convolution
+    Both outputs are BF16 row-major DRAM tensors. The predecessor is ``[1, 6, local_channels]``, whose leading
+    three rows are the history; the final carry is ``[1, 3, local_channels]``. Predecessor history varies by SP
+    rank; the final carry is replicated across each SP line. Channels remain sharded across TP. The native convolution
     selects the caller's initial history at the logical sequence start.
     ``projected_qkv`` is the tiled projection whose leading ``width`` columns are the channels.
     """
-    outgoing = selections.select_outgoing_history(projected_qkv, width=width)
-    physical_tail_history = selections.select_local_final_history(projected_qkv, width=width)
-    # One collective carries both histories side by side: gathering along rows keeps the rank-major
-    # [rank * 3 + row] layout both selections index, so each selection reads its own half.
-    packed = ttnn.concat([outgoing, physical_tail_history], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # One selection packs the outgoing and the local final history as six rows per rank, so one gather along rows
+    # carries both, and one selection picks the predecessor's outgoing then the final owner's local final rows.
+    histories = selections.select_outgoing_and_local_final_history(projected_qkv, width=width)
     gathered = ttnn.all_gather(
-        packed, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        histories, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    predecessor = _columns(selections.select_predecessor_history(gathered), 0, width)
-    final_carry = _columns(selections.select_final_history(gathered), width, 2 * width)
-    return predecessor, final_carry
-
-
-def _columns(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
-    batch, rows, _ = tensor.shape
-    return ttnn.slice(tensor, (0, 0, start), (batch, rows, end), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    selected = selections.select_predecessor_and_final_history(gathered)
+    # The convolution reads only the leading three predecessor rows, so it takes the packed selection as is.
+    rows = selected.shape[1] // 2
+    final_carry = ttnn.slice(selected, (0, rows, 0), (1, 2 * rows, width), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return selected, final_carry
