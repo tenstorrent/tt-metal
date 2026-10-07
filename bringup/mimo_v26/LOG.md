@@ -684,3 +684,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6_28b183e4d8b.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py
 - data: {"free_chain_l5_vs_bf16":0.99977,"tf_l5_ffn_out_min":0.92992,"tf_l5_dec_min":0.9874}
+
+## E261007-0408-758
+- date: 2026-10-07T04:08:31
+- commit: fd73ec06bc7
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: FFN-only teacher forcing L0..L5 (dump ffn_in -> device exact router + mm bf16-activation experts + column all-reduce), min PCC over 16 users of ffn_out: vs bf16 dump L0 0.99996, L1 0.99936, L2 0.99984, L3 0.99922, L4 0.99849, L5 0.99965; vs fp32 dump = bf16/fp32 floor in every layer (L1 0.99739/0.99739, L2 0.9982/0.99826, L3 0.99625/0.99627, L4 0.96018/0.96141, L5 0.99478/0.99497). Device router on the dump ffn_in: expert-SET match 0.99365,0.98828,0.99121,0.99463,0.98877 for L1..L5 (13,24,18,11,23 flips of 2048, ALL gap<0.01 near-ties). So the low set-match in the chain run (0.72-0.82, E261007-0401-3fc) comes from upstream device attention noise in ffn_in, not from the router/FFN. Expert op mm, cf 4, 4 users x128 tokens per mesh row.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6b_1522188db07.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py
+- data: {"l5_ffn_vs_bf16":0.99965,"l4_ffn_vs_bf16":0.99849,"setmatch_l1_l5":[0.99365,0.98828,0.99121,0.99463,0.98877]}
