@@ -952,6 +952,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     bool has_operand_activations = false;
     bool has_post_activations = false;
     bool post_zero_point = false;
+    bool mul_at_hifi3 = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1017,6 +1018,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             });
         }
 
+        // Blackhole: a block-float SrcB (the math right-hand operand) has no bits for the last fidelity phase, so HiFi3
+        // gives HiFi4's products.
+        const auto block_float = [](DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; };
+        const DataType srca_dtype = scalar_first ? b_dtype : a_dtype;
+        const DataType srcb_dtype = scalar_first ? a_dtype : b_dtype;
+        mul_at_hifi3 = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op &&
+                       std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+                       std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
+                       lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
+                       (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16);
         has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
         has_post_activations = !post_activations.empty();
         post_zero_point = has_post_activations && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
@@ -1447,6 +1458,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = mul_at_hifi3 ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };
