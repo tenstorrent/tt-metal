@@ -560,4 +560,191 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     distributed::Finish(mesh_device->mesh_command_queue(1));
 }
 
+// A trace replay advances the host's shared per-sub-device GO-count mirror by a computed amount (the replay's reset go
+// plus the traced program gos), and the next CQ to take ownership of the sub-device reseeds the dispatcher's GO counter
+// from that mirror. Replay on one CQ, hand the sub-device to the other CQ (and back), and count how many times every
+// core actually ran: a mirror that is low drops the next GO, leaving the count short. Not covered: a mirror that is
+// high makes the worker run ahead into already-queued launch slots (a spurious done, healed by the next read-pointer
+// reset), so the run count stays exact.
+TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixTestSubDeviceCQOwnershipAfterTraceReplay) {
+    if (this->num_cqs_ != 2) {
+        GTEST_SKIP() << "This test must be run with TT_METAL_GTEST_NUM_HW_CQS=2";
+    }
+    CreateDevice(16384);
+    auto mesh_device = device_;
+
+    const CoreRange worker_range({0, 0}, {2, 2});
+    SubDevice sub_device(std::array{CoreRangeSet(worker_range)});
+    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device}, k_local_l1_size);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+
+    const uint32_t counter_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> zero = {0};
+        slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
+    }
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
+        CoreRangeSet(worker_range),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {counter_addr}});
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+
+    auto& cq0 = mesh_device->mesh_command_queue(0);
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+    uint32_t expected_runs = 0;
+
+    // Compile and run once on CQ 0, then capture a trace of several launches on CQ 0.
+    distributed::EnqueueMeshWorkload(cq0, workload, false);
+    expected_runs += 1;
+    constexpr uint32_t k_programs_in_trace = 3;
+    auto trace_id = mesh_device->begin_mesh_trace(cq0);
+    for (uint32_t i = 0; i < k_programs_in_trace; i++) {
+        distributed::EnqueueMeshWorkload(cq0, workload, false);
+    }
+    mesh_device->end_mesh_trace(cq0, trace_id);
+
+    // Replay on CQ 0, then hand the sub-device to CQ 1, which reseeds from the mirror the replays advanced.
+    constexpr uint32_t k_replays = 2;
+    for (uint32_t i = 0; i < k_replays; i++) {
+        mesh_device->replay_mesh_trace(cq0, trace_id, false);
+        expected_runs += k_programs_in_trace;
+    }
+    distributed::Finish(cq0);
+    for (uint32_t i = 0; i < 2; i++) {
+        distributed::EnqueueMeshWorkload(cq1, workload, false);
+        expected_runs += 1;
+    }
+    distributed::Finish(cq1);
+
+    // And back: CQ 0 retakes the sub-device through the replay path, then CQ 1 retakes it right after that replay.
+    mesh_device->replay_mesh_trace(cq0, trace_id, false);
+    expected_runs += k_programs_in_trace;
+    distributed::Finish(cq0);
+    distributed::EnqueueMeshWorkload(cq1, workload, false);
+    expected_runs += 1;
+    distributed::Finish(cq1);
+
+    distributed::Synchronize(*mesh_device, std::nullopt);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, core, counter_addr, sizeof(uint32_t), counter);
+        EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
+    }
+    mesh_device->release_mesh_trace(trace_id);
+}
+
+// Single CQ: switching sub-device managers right behind a non-blocking trace replay must not disturb the replay. The
+// switch clears every worker's GO slots, and with one CQ nothing drains on the host first, so the clear has to be
+// ordered behind the replay on the device. The workers also move GO slots (slot 0 -> slot 1) across the switch.
+// A clear that overtakes the replay is not reliably visible in the final count (the stray runs it causes can replay
+// already-consumed launch messages), so the test also samples a worker's GO slot from the host while the slow replay
+// is still running: before the replay's programs have all run, the slot must not hold the clear.
+TEST_F(UnitMeshCQTraceFixture, TensixTestSubDeviceSwitchBehindTraceReplay) {
+    CreateDevices(16384);
+    auto mesh_device = this->devices_[0];
+    auto& cq = mesh_device->mesh_command_queue();
+
+    const CoreRange worker_range({0, 0}, {2, 2});
+    const CoreRange other_range({3, 3}, {3, 3});
+    auto manager_a =
+        mesh_device->create_sub_device_manager({SubDevice(std::array{CoreRangeSet(worker_range)})}, k_local_l1_size);
+    auto manager_b = mesh_device->create_sub_device_manager(
+        {SubDevice(std::array{CoreRangeSet(other_range)}), SubDevice(std::array{CoreRangeSet(worker_range)})},
+        k_local_l1_size);
+    mesh_device->load_sub_device_manager(manager_a);
+
+    const uint32_t counter_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> zero = {0};
+        slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
+    }
+
+    // A counter on RISCV_1, optionally alongside a delay on RISCV_0 so each launch stays on the workers a while.
+    auto make_counter_workload = [&](std::optional<uint32_t> delay_iters) {
+        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
+            CoreRangeSet(worker_range),
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .compile_args = {counter_addr}});
+        if (delay_iters.has_value()) {
+            auto delay_kernel = tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",
+                CoreRangeSet(worker_range),
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            std::array<uint32_t, 1> delay_rt_args = {*delay_iters};
+            tt_metal::SetRuntimeArgs(program, delay_kernel, CoreRangeSet(worker_range), delay_rt_args);
+        }
+        distributed::MeshWorkload workload;
+        workload.add_program(device_range_, std::move(program));
+        return workload;
+    };
+    constexpr uint32_t k_delay_iters = 5000000;  // long enough that the host samples the GO slot mid-replay
+    auto slow_workload = make_counter_workload(k_delay_iters);
+    auto workload_b = make_counter_workload(std::nullopt);
+    uint32_t expected_runs = 0;
+
+    // Compile under manager A, then capture several launches of the slow counter.
+    distributed::EnqueueMeshWorkload(cq, slow_workload, false);
+    expected_runs += 1;
+    constexpr uint32_t k_programs_in_trace = 4;
+    auto trace_id = mesh_device->begin_mesh_trace(cq);
+    for (uint32_t i = 0; i < k_programs_in_trace; i++) {
+        distributed::EnqueueMeshWorkload(cq, slow_workload, false);
+    }
+    mesh_device->end_mesh_trace(cq, trace_id);
+
+    // Under manager A the workers watch GO slot 0.
+    const CoreCoord probe_core = worker_range.start_coord;
+    const uint32_t go_slot0_addr =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+    uint32_t mid_replay_samples = 0;
+
+    constexpr uint32_t k_iters = 3;
+    for (uint32_t i = 0; i < k_iters; i++) {
+        mesh_device->replay_mesh_trace(cq, trace_id, false);
+        expected_runs += k_programs_in_trace;
+        mesh_device->load_sub_device_manager(manager_b);
+        // Read the slot before the counter: the counter only grows, so a short count means the replay was still
+        // running when the slot was read.
+        std::vector<uint32_t> go_word0;
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, probe_core, go_slot0_addr, sizeof(uint32_t), go_word0);
+        slow_dispatch::ReadFromL1(*mesh_device, probe_core, counter_addr, sizeof(uint32_t), counter);
+        if (counter[0] < expected_runs) {
+            mid_replay_samples++;
+            EXPECT_NE(go_word0[0] & 0xff, dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST)
+                << "GO slot cleared while the replay was still running (counter " << counter[0] << " of "
+                << expected_runs << ")";
+        }
+        distributed::EnqueueMeshWorkload(cq, workload_b, false);
+        expected_runs += 1;
+        // The trace belongs to the manager it was captured under.
+        mesh_device->load_sub_device_manager(manager_a);
+    }
+    distributed::Finish(cq);
+    if (mid_replay_samples == 0) {
+        log_warning(tt::LogTest, "The GO slot was never sampled mid-replay; the ordering check did not run");
+    }
+
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, core, counter_addr, sizeof(uint32_t), counter);
+        EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
+    }
+    mesh_device->release_mesh_trace(trace_id);
+}
+
 }  // namespace tt::tt_metal

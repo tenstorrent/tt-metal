@@ -86,10 +86,10 @@ void kernel_main() {
     // Dispatcher Kernel is able to finish.
     // Device::close() requires fast-dispatch kernels to finish.
     volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-    // SD enabled on all archs: notify completion via RUN_MSG_DONE to mailbox. FD notify path
+    // SD enabled on all archs: notify completion by catching go_processed up to go_count. FD notify path
     // posts to a dispatcher absent under SD and wedges the NOC.
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
-    go_message_in->signal = RUN_MSG_DONE;
+    *GET_MAILBOX_ADDRESS_DEV(go_processed) = go_message_in->go_count;
 #elif defined(FDS_SIGNALLING)
     // Under FDS signalling the kernel sends no early done. The watcher error ends the host's wait, and the
     // next device open resets the dispatch engines.

@@ -427,6 +427,15 @@ void SystemMemoryManager::set_bypass_mode(const bool enable, const bool clear) {
 
 bool SystemMemoryManager::get_bypass_mode() const { return this->bypass_enable; }
 
+void SystemMemoryManager::reset_worker_go_mirrors(std::optional<uint32_t> rebaselined_slots) {
+    for (uint32_t i = 0; i < worker_go_mirrors_.size(); ++i) {
+        worker_go_mirrors_[i].noc_addr_cq_id.reset();
+        if (rebaselined_slots.has_value()) {
+            worker_go_mirrors_[i].go_count = i < *rebaselined_slots ? 1 : 0;
+        }
+    }
+}
+
 std::vector<uint32_t>& SystemMemoryManager::get_bypass_data() { return this->bypass_buffer; }
 
 uint32_t SystemMemoryManager::get_issue_queue_size(const uint8_t cq_id) const {

@@ -95,6 +95,8 @@ public:
     void add_prefetch_relay_ringbuffer(
         uint32_t num_sub_cmds, const std::vector<CQPrefetchRelayRingbufferSubCmd>& sub_cmds, uint32_t offset_idx = 0);
 
+    // flags: CQ_DISPATCH_CMD_WRITE_LINEAR_FLAG_* (e.g. SKEW_SRC_TO_DST, which expects data to start with
+    // addr % L1 alignment pad bytes, counted in data_sizeB).
     template <bool flush_prefetch = true, bool inline_data = false>
     void add_dispatch_write_linear(
         uint8_t num_mcast_dests,
@@ -102,7 +104,8 @@ public:
         DeviceAddr addr,
         DeviceAddr data_sizeB,
         const void* data = nullptr,
-        uint32_t write_offset_index = 0);
+        uint32_t write_offset_index = 0,
+        uint8_t flags = 0);
 
     // Like add_dispatch_write_linear, but emits CQ_DISPATCH_CMD_WRITE_LINEAR_H (dispatch_h variant).
     template <bool flush_prefetch = true, bool inline_data = false>
@@ -118,6 +121,17 @@ public:
         uint32_t wait_count,
         uint32_t go_signal,
         uint32_t wait_stream,
+        uint8_t multicast_go_offset,
+        DispatcherSelect dispatcher_type);
+
+    // Writes a sub-device's done-return address (go_msg_t word 1) to its workers and reseeds the dispatcher go_count
+    // baseline. Sent on CQ-ownership change, before the new owner's first go.
+    void add_dispatch_set_go_signal_noc_addr(
+        uint8_t sync_index,
+        uint8_t go_count,
+        uint8_t master_x,
+        uint8_t master_y,
+        uint8_t offset,
         uint8_t multicast_go_offset,
         DispatcherSelect dispatcher_type);
 

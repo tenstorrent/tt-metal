@@ -8,12 +8,15 @@
 #include "system_memory_cq_interface.hpp"
 #include <umd/device/io_window/io_window.hpp>     // for tt::umd::IoWindow
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <utility>
 #include <vector>
+#include <hostdevcommon/common_values.hpp>  // DISPATCH_MAX_MESSAGE_ENTRIES
 #include "impl/context/context_types.hpp"
 
 using ChipId = int;
@@ -115,6 +118,24 @@ public:
 
     uint32_t get_channel_offset() const { return channel_offset; }
 
+    // Host mirror of one worker GO message slot (one per sub-device sync index) on this chip. It lives here rather
+    // than in a MeshDevice because a parent mesh and its submeshes drive the same chips' dispatchers and workers:
+    // the state it mirrors is physical, so every MeshDevice using this chip must see the same copy.
+    struct WorkerGoMirror {
+        // CQ whose dispatcher coords are in the workers' go_msg_t word 1 and whose dispatcher go counter matches the
+        // workers. A CQ must emit CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR (which reseeds its counter from go_count) before
+        // its first go whenever this is not its id.
+        std::optional<uint8_t> noc_addr_cq_id;
+        // The workers' go count for this slot: advances with every go a dispatcher sends to it. The reseed baseline.
+        uint8_t go_count = 0;
+    };
+
+    WorkerGoMirror& worker_go_mirror(uint32_t sync_index) { return worker_go_mirrors_.at(sync_index); }
+
+    // Forget which CQ configured each slot. With rebaselined_slots, a RESET_READ_PTR go was also sent to the first
+    // rebaselined_slots slots, leaving their go count at 1; the remaining slots were cleared to 0.
+    void reset_worker_go_mirrors(std::optional<uint32_t> rebaselined_slots);
+
 private:
     bool is_mock_device() const;
 
@@ -148,6 +169,8 @@ private:
     uint32_t free_region_size_ = 0;
     uint32_t free_region_bump_ = 0;
     char* free_region_host_ptr_ = nullptr;
+
+    std::array<WorkerGoMirror, DISPATCH_MAX_MESSAGE_ENTRIES> worker_go_mirrors_{};
 };
 
 }  // namespace tt::tt_metal

@@ -368,6 +368,7 @@ void RiscFirmwareInitializer::clear_launch_messages_on_eth_cores(tt::ChipId devi
         std::vector<std::byte> init_launch_msg_data(
             dev_msgs::launch_msg_buffer_num_entries * factory.size_of<dev_msgs::launch_msg_t>(), std::byte{0});
         dev_msgs::go_msg_t go_msg = factory.create<dev_msgs::go_msg_t>();
+        go_msg.view().go_count() = 0;  // GO counter starts at 0; FW boot acks by setting go_processed = go_count.
         go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
         CoreCoord virtual_eth_core =
@@ -1135,6 +1136,13 @@ void RiscFirmwareInitializer::initialize_firmware(
         uint64_t launch_msg_buffer_read_ptr_addr =
             hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
         uint32_t go_message_index_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
+        uint32_t go_processed_addr =
+            hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX) +
+            factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::go_processed);
+        // Sentinel != the INIT go_count(0) so the core reads "not done" until FW boot acks by setting
+        // go_processed = go_count. Written as an aligned 32-bit word (go_processed is padded to its own word).
+        uint32_t go_processed_init = 0xFF;
         if (core_type != HalProgrammableCoreType::TENSIX) {
             cluster_.write_core(
                 init_launch_msg_data.data(),
@@ -1145,6 +1153,7 @@ void RiscFirmwareInitializer::initialize_firmware(
             uint32_t zero = 0;
             cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), launch_msg_buffer_read_ptr_addr);
             cluster_.write_reg(&zero, tt_cxy_pair(device_id, virtual_core), go_message_index_addr);
+            cluster_.write_reg(&go_processed_init, tt_cxy_pair(device_id, virtual_core), go_processed_addr);
         } else {
             cluster_.noc_multicast_write(
                 init_launch_msg_data.data(),
@@ -1160,6 +1169,8 @@ void RiscFirmwareInitializer::initialize_firmware(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), launch_msg_buffer_read_ptr_addr);
             cluster_.noc_multicast_write(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), go_message_index_addr);
+            cluster_.noc_multicast_write(
+                &go_processed_init, sizeof(uint32_t), device_id, start_core, end_core.value(), go_processed_addr);
         }
 
         // Initialize fw_shared_globals_ready_addr Quasar DM0 to WAIT
@@ -1410,6 +1421,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     auto core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::TENSIX);
     auto launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
     auto go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+    go_msg.view().go_count() = 0;  // GO counter starts at 0; FW boot acks by setting go_processed = go_count.
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
     for (uint32_t y = 0; y < logical_grid_size.y; y++) {
@@ -1444,6 +1456,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dispatch_core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::DISPATCH);
         auto dispatch_launch_msg = dispatch_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
         auto dispatch_go_msg = dispatch_dev_msgs_factory.create<dev_msgs::go_msg_t>();
+        dispatch_go_msg.view().go_count() = 0;
         dispatch_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
         for (const CoreCoord& logical_dispatch_core :
@@ -1487,6 +1500,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::ACTIVE_ETH);
     launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+    go_msg.view().go_count() = 0;  // GO counter starts at 0; FW boot acks by setting go_processed = go_count.
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
 
     std::unordered_set<CoreCoord> multi_risc_active_eth_cores;
@@ -1514,6 +1528,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::IDLE_ETH);
     launch_msg = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
     go_msg = dev_msgs_factory.create<dev_msgs::go_msg_t>();
+    go_msg.view().go_count() = 0;  // GO counter starts at 0; FW boot acks by setting go_processed = go_count.
     go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
     for (const auto& eth_core : this->get_control_plane_().get_inactive_ethernet_cores(device_id)) {
         CoreCoord virtual_core =
@@ -1539,6 +1554,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         auto dram_core_info = populate_core_info_msg(device_id, HalProgrammableCoreType::DRAM);
         auto dram_launch_msg = dram_dev_msgs_factory.create<dev_msgs::launch_msg_t>();
         auto dram_go_msg = dram_dev_msgs_factory.create<dev_msgs::go_msg_t>();
+        dram_go_msg.view().go_count() = 0;
         dram_go_msg.view().signal() = dev_msgs::RUN_MSG_INIT;
         const metal_SocDescriptor& soc_d = cluster_.get_soc_desc(device_id);
         const uint64_t core_info_addr =

@@ -200,6 +200,10 @@ private:
     // Route watcher faults through the same exception path as the completion-queue reader thread.
     bool record_watcher_error_in_test_mode(ChipId device_id);
 
+    // Commands that must precede the RESET_READ_PTR go on device: clear every worker GO slot to go_count =
+    // go_processed = 0 and point each active slot's done-return address at this CQ.
+    void prepare_go_slots_for_reset(IDevice* device, uint32_t active_sub_devices);
+
     // Distributed context used to synchronize operations done by all active ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> active_distributed_context_;
 

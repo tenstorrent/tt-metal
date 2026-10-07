@@ -10,7 +10,8 @@ struct DevicePrintMemoryLayout {
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC)
     // BH has 2 processors on ETH
 #if !defined(DEVICE_PRINT_BUFFER_SIZE)
-    DevicePrintBuffer<408, 2> buffer;
+    // Sized so eth mailboxes_t, including go_messages[] of 8-byte go_msg_t, fits in the packed eth L1.
+    DevicePrintBuffer<372, 2> buffer;
 #else
     DevicePrintBuffer<DEVICE_PRINT_BUFFER_SIZE, 2> buffer;
 #endif

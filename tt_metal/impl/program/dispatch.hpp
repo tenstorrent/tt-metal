@@ -199,7 +199,6 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
@@ -210,7 +209,6 @@ void update_traced_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     uint8_t cq_id);
@@ -258,10 +256,18 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands);
+
+// Sub-device reconfig: once this CQ's workers have completed, multicast every worker's GO message slots to
+// {RESET_READ_PTR_FROM_HOST, go_count 0} with done_addr_words[i] as slot i's done-return address (0 past the span).
+void clear_worker_go_messages_on_device(
+    Device* device,
+    uint8_t cq_id,
+    const DispatchArray<uint32_t>& expected_num_workers_completed,
+    uint32_t num_sub_devices,
+    ttsl::Span<const uint32_t> done_addr_words);
 
 void set_num_worker_sems_on_dispatch(
     SystemMemoryManager& manager,
@@ -269,6 +275,17 @@ void set_num_worker_sems_on_dispatch(
     uint32_t num_worker_sems,
     ttsl::Span<const uint32_t> workers_per_sub_device);
 
+// Writes a sub-device's done-return address (go_msg_t word 1) to its workers and reseeds the dispatcher go_count
+// baseline. Sent on CQ-ownership change, before the new owner's first go. Reaches Tensix workers by multicast.
+void set_go_signal_noc_addr_on_dispatch(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint8_t sync_index,
+    uint8_t go_count,
+    uint8_t master_x,
+    uint8_t master_y,
+    uint8_t offset,
+    uint8_t multicast_go_offset);
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
     Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id);

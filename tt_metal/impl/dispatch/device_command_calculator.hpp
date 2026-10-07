@@ -119,6 +119,12 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
+    void add_dispatch_set_go_signal_noc_addr() {
+        this->add_prefetch_relay_inline();
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
     void add_dispatch_set_num_worker_sems() {
         this->add_prefetch_relay_inline();
         this->cmd_write_offsetB += sizeof(CQDispatchCmd);

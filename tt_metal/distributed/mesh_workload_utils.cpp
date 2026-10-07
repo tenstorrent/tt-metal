@@ -80,12 +80,9 @@ void populate_go_signal_sequence(DeviceCommand<HugepageWrite>& commands, const G
     }
 
     const uint8_t sub_device_index = *config.sub_device_id;
-    const uint32_t go_message = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        config.dispatch_core.x,
-        config.dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(config.cq_id));
+    // go_signal carries only word 0 ({signal, go_count}); go_count is a dispatcher-overridden placeholder. The
+    // done-return address (word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR on CQ-ownership change.
+    const uint32_t go_message = hal.make_go_msg_u32(0, dev_msgs::RUN_MSG_GO);
 
     // When running with dispatch_s enabled:
     //   - dispatch_d must notify dispatch_s that a go signal can be sent.

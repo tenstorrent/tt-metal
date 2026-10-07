@@ -31,7 +31,7 @@ void kernel_main() {
         // Signal completion to dispatcher before assert hangs the kernel
         // SD signaling: IDLE_ERISC, DRISC, and dispatch-engine DMs require RUN_MSG_DONE
 #if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DRISC) or defined(COMPILE_FOR_DISPATCH_ENGINE)
-        go_message_in->signal = RUN_MSG_DONE;
+        *GET_MAILBOX_ADDRESS_DEV(go_processed) = go_message_in->go_count;
 #else
         // FD: ACTIVE_ETH notifies dispatcher via NOC
         signal_completion_before_hang();

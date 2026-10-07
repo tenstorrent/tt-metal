@@ -81,15 +81,29 @@ int main() {
 
     DEVICE_PRINT_INITIALIZE_LOCK();
 
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    // Report init done by catching the processed counter up to the GO counter (done == go_count == go_processed).
+    mailboxes->go_processed = mailboxes->go_messages[0].go_count;
     mailboxes->launch_msg_rd_ptr = 0;
 
     WAYPOINT("GW");
     while (1) {
-        while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
+        while (mailboxes->go_messages[0].go_count == mailboxes->go_processed) {
             invalidate_l1_cache();
         }
         WAYPOINT("GD");
+
+        // A go_count advance may be a control tick (reset / replay / host reset) rather than a program GO; the
+        // go_msg.signal byte says which. DRISC doesn't participate in the dispatcher's control handshake, so consume
+        // a control tick (sync go_processed; reset the rd ptr) without running a program or notifying.
+        uint8_t signal = mailboxes->go_messages[0].signal;
+        if (signal != RUN_MSG_GO) {
+            if (signal == RUN_MSG_RESET_READ_PTR || signal == RUN_MSG_RESET_READ_PTR_FROM_HOST ||
+                signal == RUN_MSG_REPLAY_TRACE) {
+                mailboxes->launch_msg_rd_ptr = 0;
+            }
+            mailboxes->go_processed = mailboxes->go_messages[0].go_count;
+            continue;
+        }
 
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &mailboxes->launch[launch_msg_rd_ptr];
@@ -105,7 +119,8 @@ int main() {
         WAYPOINT("D");
         DEVICE_PRINT_KERNEL_FINISHED();
 
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        // Count this processed program GO (done == go_count == go_processed).
+        mailboxes->go_processed++;
 
         if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
             launch_msg->kernel_config.enables = 0;

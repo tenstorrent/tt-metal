@@ -449,7 +449,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear(
     DeviceAddr addr,
     DeviceAddr data_sizeB,
     const void* data,
-    uint32_t write_offset_index) {
+    uint32_t write_offset_index,
+    uint8_t flags) {
     // payload to prefetch relay inline will always be limited to the length of the cmddat queue, i.e. < 64 bits
     // Conversely if data_sizeB > 32-bits, then the data won't be inline
     uint32_t payload_sizeB = static_cast<uint32_t>(sizeof(CQDispatchCmdLarge) + (flush_prefetch ? data_sizeB : 0));
@@ -459,6 +460,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear(
         write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
         write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
         write_cmd->write_linear.write_offset_index = write_offset_index;
+        write_cmd->write_linear.flags = flags;
         write_cmd->write_linear.noc_xy_addr = noc_xy_addr;
         write_cmd->write_linear.addr = addr;
         write_cmd->write_linear.length = data_sizeB;
@@ -514,6 +516,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_linear_h(
         write_cmd->base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H;
         write_cmd->write_linear.num_mcast_dests = num_mcast_dests;
         write_cmd->write_linear.write_offset_index = write_offset_index;
+        write_cmd->write_linear.flags = 0;
         write_cmd->write_linear.noc_xy_addr = noc_xy_addr;
         write_cmd->write_linear.addr = addr;
         write_cmd->write_linear.length = data_sizeB;
@@ -573,6 +576,41 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         this->memcpy(mcast_cmd_dst, &mcast_cmd, sizeof(CQDispatchCmd));
     } else {
         initialize_mcast_cmd(mcast_cmd_dst);
+    }
+    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+}
+
+template <bool hugepage_write>
+void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_addr(
+    uint8_t sync_index,
+    uint8_t go_count,
+    uint8_t master_x,
+    uint8_t master_y,
+    uint8_t offset,
+    uint8_t multicast_go_offset,
+    DispatcherSelect dispatcher_type) {
+    uint32_t lengthB = sizeof(CQDispatchCmd);
+    TT_ASSERT(
+        lengthB <= (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE),
+        "Data for set go signal noc addr must fit within one page");
+    this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
+    auto initialize_cmd = [&](CQDispatchCmd* cmd) {
+        *cmd = {};
+        cmd->base.cmd_id = CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR;
+        cmd->set_go_signal_noc_addr.multicast_go_offset = multicast_go_offset;
+        cmd->set_go_signal_noc_addr.sync_index = sync_index;
+        cmd->set_go_signal_noc_addr.go_count = go_count;
+        cmd->set_go_signal_noc_addr.master_x = master_x;
+        cmd->set_go_signal_noc_addr.master_y = master_y;
+        cmd->set_go_signal_noc_addr.offset = offset;
+    };
+    CQDispatchCmd* cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
+    if constexpr (hugepage_write) {
+        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd cmd{};
+        initialize_cmd(&cmd);
+        this->memcpy(cmd_dst, &cmd, sizeof(CQDispatchCmd));
+    } else {
+        initialize_cmd(cmd_dst);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }
@@ -1367,13 +1405,13 @@ template void DeviceCommand<true>::add_dispatch_write_paged<true>(bool, uint8_t,
 template void DeviceCommand<false>::add_dispatch_write_paged<false>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 template void DeviceCommand<false>::add_dispatch_write_paged<true>(bool, uint8_t, uint16_t, uint32_t, uint32_t, uint32_t, const void*);
 
-template void DeviceCommand<true>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
-template void DeviceCommand<true>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
-template void DeviceCommand<false>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
+template void DeviceCommand<true>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<true, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<true, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<false, false>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
+template void DeviceCommand<false>::add_dispatch_write_linear<false, true>(uint8_t, uint32_t, DeviceAddr, DeviceAddr, const void*, uint32_t, uint8_t);
 // clang-format on
 }  // namespace tt::tt_metal
