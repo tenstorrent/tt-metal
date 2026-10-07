@@ -29,6 +29,7 @@ from eb_dump_lib import (
     bfp_table,
     digest,
     env_label,
+    f32_bits,
     f32_of_bf16,
     kernel_variants,
     out_bits,
@@ -213,7 +214,11 @@ def test_nob_cross(device, src, op, out_dt, order):
         av = f32_of_bf16(a)
         x, y = (ta, tb) if order == "ab" else (tb, ta)
         xv, yv = (av, bv_dev) if order == "ab" else (bv_dev, av)
-        run_chunk(device, diffs, lambda: out_bits(binop(op, x, y, out_dt)), xv, yv)
+        if c == 0:
+            back = f32_bits(tensor_vals(ta))
+            print(f"\nDUMP cross_{src}: device a bit-exact {bool(np.array_equal(back >> 16, a.astype(np.uint32)) and not (back & 0xFFFF).any())}, b values {nbv}", flush=True)
+        valid = min(P, 65536 - c * P) * nbv
+        run_chunk(device, diffs, lambda: out_bits(binop(op, x, y, out_dt)), xv, yv, valid)
         ttnn.deallocate(ta)
         done += 1
     cover = min(65536, done * P)

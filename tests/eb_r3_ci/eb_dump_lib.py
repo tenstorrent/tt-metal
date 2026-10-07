@@ -326,15 +326,17 @@ def make_diffs(tag, op):
     return [(env_label(a), env_label(b), Diff(f"{tag} [{env_label(a)} | {env_label(b)}]", op, ("A", "B"))) for a, b in pairs()]
 
 
-def run_chunk(device, diffs, fn, a_vals, b_vals):
+def run_chunk(device, diffs, fn, a_vals, b_vals, valid=None):
+    """valid: compare only the first `valid` outputs (a chunk padded by wrapping around)."""
     envs = unique_envs(pairs())
     outs = {}
     for lab, env in envs.items():
         set_env(device, env)
         outs[lab] = fn()
     set_env(device, {})
+    v = slice(None) if valid is None else slice(0, valid)
     for la, lb, d in diffs:
-        d.add(outs[la], outs[lb], a_vals, b_vals)
+        d.add(outs[la][v], outs[lb][v], None if a_vals is None else a_vals[v], None if b_vals is None else b_vals[v])
 
 
 def stage(tag, out, a=None, b=None, op=None, extra=""):

@@ -96,7 +96,7 @@ def test_block(device, op, bsrc, out_dt, shape_id):
             tb = ttnn.from_torch(torch.from_numpy(b_all[idx]).reshape(shape), dtype=DT[bsrc], layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
         av = f32_of_bf16(a)
         bv = tensor_vals(tb)
-        run_chunk(device, diffs, lambda: out_bits(_op(op, ta, tb, out_dt, mc)), av, bv)
+        run_chunk(device, diffs, lambda: out_bits(_op(op, ta, tb, out_dt, mc)), av, bv, min(per, total - c * per))
         ttnn.deallocate(ta)
         ttnn.deallocate(tb)
         done += 1
