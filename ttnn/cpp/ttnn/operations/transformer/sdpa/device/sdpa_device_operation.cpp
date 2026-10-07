@@ -69,7 +69,9 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto Sq = q_shape[2];
         const auto DH = q_shape[3];
         const auto Sk = k_shape[2];
-        if (attrs.is_causal) {
+        // Windowed causal is exempt: its diagonal is at global positions (windowed_q_token_offset + Q row),
+        // so a sequence-parallel Q shard with Sq < Sk is well defined; validate_windowed_mode bounds it.
+        if (attrs.is_causal && !is_windowed_mode(attrs.windowed_mode)) {
             TT_FATAL(
                 Sq == Sk, "Causal SDPA requires Q and K to have the same sequence length. Got Q: {}, K: {}", Sq, Sk);
         }
@@ -434,7 +436,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
     auto validate_windowed_mode = [&]() {
         TT_FATAL(tensors.cu_window_seqlens.has_value(), "Windowed SDPA requires cu_window_seqlens.");
-        TT_FATAL(!attrs.is_causal, "Windowed SDPA is non-causal; is_causal must be false.");
         TT_FATAL(
             !tensors.attn_mask.has_value(),
             "Windowed SDPA builds its mask from cu_window_seqlens; attn_mask must not be provided.");
@@ -445,8 +446,8 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         TT_FATAL(attrs.sliding_window_size.value_or(0) == 0, "Windowed SDPA does not support sliding_window_size.");
         TT_FATAL(!tensors.attention_sink.has_value(), "Windowed SDPA does not support attention_sink.");
 
-        // Windowed attention is otherwise plain non-causal SDPA, so apply the same Q/K/V shape and
-        // chunk-size validation as the regular path.
+        // Windowed attention is otherwise plain SDPA, so apply the same Q/K/V shape and chunk-size
+        // validation as the regular path.
         validate_shapes_and_chunks();
 
         const auto& cu = tensors.cu_window_seqlens.value();
@@ -520,7 +521,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     check_conditions();
     bool is_chunked_mode = attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value();
 
-    if (attrs.is_windowed) {
+    if (is_windowed_mode(attrs.windowed_mode)) {
         validate_windowed_mode();
     } else if (is_chunked_mode) {
         validate_chunked_mode();
@@ -673,7 +674,9 @@ Tensor sdpa(
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,
-            .is_windowed = cu_window_seqlens.has_value(),
+            .windowed_mode = !cu_window_seqlens.has_value() ? WindowedMode::None
+                             : is_causal                    ? WindowedMode::Causal
+                                                            : WindowedMode::Bidirectional,
             .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
