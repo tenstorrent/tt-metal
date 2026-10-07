@@ -1,8 +1,9 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["fixes", "confidence", "reason"],
+  "required": ["symptom_match", "fixes", "confidence", "reason"],
   "properties": {
+    "symptom_match": {"type": "boolean"},
     "fixes": {"type": "boolean"},
     "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
     "reason": {"type": "string", "maxLength": 300}
