@@ -71,6 +71,9 @@ class DFlashDrafter:
         self.up = up
         bf = ttnn.bfloat16
         self.fc = up(sd["fc.weight"].T.contiguous().reshape(1, 1, 20480, HIDDEN), wdtype, col(2))
+        self.fc_n = up(
+            sd["fc.weight"].T.contiguous().reshape(1, 1, 20480, HIDDEN), wdtype, col(3)
+        )  # N-sharded: replicated device feats -> all_gather
         nw = lambda w: up(w.reshape(1, 1, -1, 32), bf, rep, ttnn.ROW_MAJOR_LAYOUT)
         self.hidden_norm = nw(sd["hidden_norm.weight"])
         self.norm = nw(sd["norm.weight"])
@@ -148,6 +151,7 @@ class DFlashDrafter:
         self.in_ck = up(z(self.rows, U, BLK, HD).bfloat16(), bf, self.rowmap)
         self.in_sk = up(z(self.rows, U, BLK, HD).bfloat16(), bf, self.rowmap)
         self.zpad = up(z(U, 1, KPAD - WIN - BLK, HD).bfloat16(), bf, rep)
+        self.feat_src = None  # device [1,1,U*R,20480] replicated over columns (decode trace output); when set, append() reads it instead of in_feats
         self._tr = {}
         self._keep = []
 
@@ -178,7 +182,7 @@ class DFlashDrafter:
     # ------------------------------------------------------------------ append (context update)
     def set_append(self, feats, positions, valid):
         """feats [rows,U,R,20480] bf16; positions [rows,U,R] long; valid [rows,U,R] bool. Updates the host ring bookkeeping and the persistent inputs of append()."""
-        rows, U, R, _ = feats.shape
+        rows, U, R = positions.shape
         assert (U, R) == (self.U, self.R)
         self._keep = []
         S = torch.zeros(rows, U, WIN, R)
@@ -194,11 +198,12 @@ class DFlashDrafter:
                     if valid[r, u, i]:
                         self.ring_pos[r, u, int(positions[r, u, i]) % WIN] = int(positions[r, u, i])
         cos, sin = rope_cs(positions)
-        self._h2d(
-            feats.reshape(rows, 1, U * R, 20480).bfloat16(),
-            self.in_feats,
-            mapper=ttnn.ShardTensor2dMesh(self.mesh, self.mesh.shape, dims=(0, 3)),
-        )
+        if feats is not None:
+            self._h2d(
+                feats.reshape(rows, 1, U * R, 20480).bfloat16(),
+                self.in_feats,
+                mapper=ttnn.ShardTensor2dMesh(self.mesh, self.mesh.shape, dims=(0, 3)),
+            )
         self._h2d(cos.reshape(rows, 1, U * R, HD).bfloat16(), self.in_acos)
         self._h2d(sin.reshape(rows, 1, U * R, HD).bfloat16(), self.in_asin)
         self._h2d(S.bfloat16(), self.in_S)
@@ -207,8 +212,14 @@ class DFlashDrafter:
 
     def _append_forward(self):
         U, R = self.U, self.R
-        hp = ttnn.linear(self.in_feats, self.fc, dtype=ttnn.bfloat16, compute_kernel_config=_ck())
-        h = self._ar(hp)
+        if self.feat_src is not None:
+            hp = ttnn.linear(
+                self.feat_src, self.fc_n, dtype=ttnn.bfloat16, compute_kernel_config=_ck()
+            )  # [1,1,U*R,512] per column
+            h = ttnn.all_gather(hp, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            hp = ttnn.linear(self.in_feats, self.fc, dtype=ttnn.bfloat16, compute_kernel_config=_ck())
+            h = self._ar(hp)
         ttnn.deallocate(hp)
         hn = self._rms(h, self.hidden_norm)
         ttnn.deallocate(h)

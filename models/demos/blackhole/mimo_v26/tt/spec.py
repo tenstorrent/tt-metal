@@ -13,61 +13,10 @@ import time
 
 import torch
 
-import ttnn
-from models.demos.blackhole.mimo_v26.tt.decode import HIDDEN, Decoder
-from models.demos.blackhole.mimo_v26.tt.layer import EPS, _k_norm
+from models.demos.blackhole.mimo_v26.tt.decode import Decoder
 
 CAP = (0, 11, 23, 35, 47)
 BLK = 8
-
-
-class CapDecoder(Decoder):
-    """Decoder that also returns the outputs of the layers in `cap` (concatenated [1,1,U,5*4096]) as a persistent device tensor self.feat."""
-
-    def __init__(self, model, cap=CAP, **kw):
-        super().__init__(model, **kw)
-        self.cap = tuple(cap)
-        self.feat = None
-
-    def _forward(self):
-        m = self.m
-        e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)
-        h = ttnn.reshape(e, (1, 1, self.U, HIDDEN))
-        caps = {}
-        for li, lyr in enumerate(m.layers):
-            h2 = lyr.decode(h, self.pos["cur"], self.pos["idx"], live=self.live.t if self.live is not None else None)
-            ttnn.deallocate(h)
-            h = h2
-            if li in self.cap:
-                caps[li] = ttnn.clone(h)
-        self.feat = ttnn.concat(
-            [caps[c] for c in self.cap], dim=3
-        )  # (duplicates allowed: skeleton runs with < 5 distinct layers)
-        for c in caps.values():
-            ttnn.deallocate(c)
-        x = ttnn.rms_norm(h, epsilon=EPS, weight=m.w_norm, compute_kernel_config=_k_norm())
-        ttnn.deallocate(h)
-        lg = ttnn.linear(
-            x,
-            m.lm_head,
-            dtype=ttnn.bfloat16,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
-            ),
-        )
-        ttnn.deallocate(x)
-        vals = ttnn.max(lg, dim=3, keepdim=True)
-        idx = ttnn.argmax(ttnn.to_layout(lg, ttnn.ROW_MAJOR_LAYOUT), dim=3, keepdim=True)
-        ttnn.deallocate(lg)
-        return vals, idx, None
-
-    def feat_host(self):
-        """-> [rows, U, 5*4096] bf16 (column 0 of every mesh row)"""
-        rows, cols = tuple(self.mesh.shape)
-        dts = ttnn.get_device_tensors(self.feat)
-        return torch.stack(
-            [ttnn.to_torch(dts[r * cols]).reshape(-1, self.feat.shape[-1])[: self.U] for r in range(rows)]
-        ).bfloat16()
 
 
 class SpecEngine:
@@ -82,8 +31,9 @@ class SpecEngine:
             log,
         )
         self.rows = model.mesh.shape[0]
-        self.dec = CapDecoder(model, cap=cap, trace=trace, U=U)
+        self.dec = Decoder(model, trace=trace, U=U, block=BLK, capture=tuple(cap))
         self.trace = trace
+        self.dr.use_trace = trace
         self.stats = dict(rounds=[], t_draft=[], t_verify=[], t_append=[])
 
     def place(self, n):
@@ -143,25 +93,20 @@ class SpecEngine:
         d, _ = dr.draft(use_trace=self.trace)  # [rows,U,7]
         t_draft = time.perf_counter() - t0
         block = torch.cat([self.anchor[:, :, None], d], 2)  # [rows,U,8]
-        post = torch.zeros(rows, U, BLK, dtype=torch.long)
-        feats = torch.zeros(rows, U, BLK, 20480, dtype=torch.bfloat16)
         t0 = time.perf_counter()
-        for i in range(BLK):  # FALLBACK verify: 8 sequential plain decode steps
-            dec.set_inputs(block[:, :, i], self.pos + i, ~alive)
-            res = dec.run()
-            post[:, :, i] = res[0]
-            feats[:, :, i] = dec.feat_host()
+        post, _ = dec.verify(
+            block, self.pos, ~alive
+        )  # [rows,U,8] target argmax after every block row; dec.feat = captured hidden states (device)
         t_verify = time.perf_counter() - t0
-        # acceptance
-        match = (d == post[:, :, :7]).long()  # d_j == p_{j-1}
-        k = match.cumprod(2).sum(2)  # [rows,U]
+        k = Decoder.accept_prefix(post, block)  # [rows,U]
         t0 = time.perf_counter()
         valid = torch.zeros(rows, U, BLK, dtype=torch.bool)
         for r in range(rows):
             for u in range(U):
                 if alive[r, u]:
                     valid[r, u, : int(k[r, u]) + 1] = True
-        dr.set_append(feats, self.pos[:, :, None] + torch.arange(BLK), valid)
+        dr.set_append(None, self.pos[:, :, None] + torch.arange(BLK), valid)
+        dr.feat_src = dec.feat
         dr.append()
         t_append = time.perf_counter() - t0
         acc = []

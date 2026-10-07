@@ -26,6 +26,10 @@ U = int(E("SPEC_U", "4"))
 NEW = int(E("SPEC_NEW", "256"))
 START = int(E("SPEC_START", "0"))
 TRACE = E("SPEC_TRACE", "1") == "1"
+MODE = E(
+    "SPEC_MODE", "both"
+)  # plain | spec | both. NOTE finished users of a plain/spec run get position 0 of their slot overwritten (dead-slot rule), so a spec run after a plain run in the same process starts from a clobbered cache: use plain in one process, spec in another (SPEC_REF = tokens json of the plain run)
+REF = E("SPEC_REF", "")
 OUT = E("SPEC_OUT", "/tmp/spec.jsonl")
 CH = 256
 
@@ -91,31 +95,24 @@ def test_spec_exact(mesh_device):
     for (r_, u_), (t_, _) in ft.items():
         ids[r_, u_] = t_
     gen.prefill = lambda prompts_, S=None: (ids, None)
-    r = gen.generate(prompts, NEW, S=maxlen)
-    plain = r["tokens"]
-    steady = sorted(r["times"][5:])
-    rec(
-        "plain",
-        ms_per_token_median=round(steady[len(steady) // 2] * 1e3, 2) if steady else None,
-        steps=len(r["times"]),
-        lens=[len(t) for t in plain],
-        dram=dram(md),
-    )
-    gen.dec.release()
-    # ---- plain repeat (baseline: decode is not bit-reproducible run to run, LOG determinism entries)
-    gen2 = ChunkedGenerator(model, max_pos, pf, trace=TRACE, keep_logits=False, U=U, eos=eos)
-    gen2.prefill = lambda prompts_, S=None: (ids, None)
-    plain2 = gen2.generate(prompts, NEW, S=maxlen)["tokens"]
-    gen2.dec.release()
-    pp = []
-    for a, b in zip(plain, plain2):
-        n_ = min(len(a), len(b))
-        pp.append(next((k for k in range(n_) if a[k] != b[k]), None))
-    rec(
-        "plain_vs_plain",
-        identical=sum(1 for d_, a, b in zip(pp, plain, plain2) if d_ is None and len(a) == len(b)),
-        first_div=pp,
-    )
+    plain, plain2 = None, None
+    if MODE in ("plain", "both"):
+        r = gen.generate(prompts, NEW, S=maxlen)
+        plain = r["tokens"]
+        steady = sorted(r["times"][5:])
+        rec(
+            "plain",
+            ms_per_token_median=round(steady[len(steady) // 2] * 1e3, 2) if steady else None,
+            steps=len(r["times"]),
+            lens=[len(t) for t in plain],
+            dram=dram(md),
+        )
+        gen.dec.release()
+    if MODE == "plain":
+        json.dump(dict(plain=plain), open(OUT.replace(".jsonl", "_tokens.json"), "w"))
+        return
+    if REF:
+        plain = json.load(open(REF))["plain"]
     # ---- spec
     eng = SpecEngine(model, pf, dr, U, max_pos, eos, cap=cap, trace=TRACE)
     eng.start(prompts, NEW, res=pre)
@@ -148,7 +145,7 @@ def test_spec_exact(mesh_device):
         tok_s_user=round(toks / len(prompts) / wall, 2),
         dram=dram(md),
     )
-    json.dump(dict(plain=plain, plain2=plain2, spec=out), open(OUT.replace(".jsonl", "_tokens.json"), "w"))
+    json.dump(dict(plain=plain, spec=out), open(OUT.replace(".jsonl", "_tokens.json"), "w"))
     rec("texts", sample=[tok.decode(out[i], skip_special_tokens=True)[:300] for i in range(min(4, len(out)))])
     eng.dec.release()
     dr.release()
