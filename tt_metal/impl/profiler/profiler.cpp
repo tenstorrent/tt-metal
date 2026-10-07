@@ -3155,15 +3155,6 @@ bool getDeviceDebugDumpEnabled(MetalEnvImpl& env) {
     return env.get_rtoptions().get_experimental_noc_debug_dump_enabled();
 }
 
-// TODO: Transitional. Remove once all callers pass the env.
-bool getDeviceProfilerState(ContextId context_id) {
-    return getDeviceProfilerState(MetalEnvAccessor(MetalContext::instance(context_id).get_env()).impl());
-}
-
-bool getDeviceDebugDumpEnabled(ContextId context_id) {
-    return getDeviceDebugDumpEnabled(MetalEnvAccessor(MetalContext::instance(context_id).get_env()).impl());
-}
-
 }  // namespace tt::tt_metal
 
 #if !defined(TRACY_ENABLE) && defined(__clang__)
