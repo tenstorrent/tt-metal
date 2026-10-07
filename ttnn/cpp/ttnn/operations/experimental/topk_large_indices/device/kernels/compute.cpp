@@ -74,20 +74,26 @@ constexpr uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
 
 using ttnn::operations::experimental::topk_large_indices::program::ComputeBodyMode;
 
-template <uint32_t K>
+// FirstOfRow: a row's first chunk configures the unpacker and the math unit for the input; the later chunks of the
+// row find that configuration intact and set up only the copy.
+template <uint32_t K, bool FirstOfRow = true>
 FORCE_INLINE void copy_chunk(CircularBuffer& input, uint32_t dst, uint32_t active_elements) {
     constexpr uint32_t tiles_per_sequence = (K + elements_per_tile - 1) / elements_per_tile;
     const uint32_t input_cb = input.get_cb_id();
 
     input.wait_front(tiles_per_sequence);
-    topk_xl_copy_tile_init(input_cb);
+    if constexpr (FirstOfRow) {
+        topk_xl_copy_tile_init(input_cb);
+    } else {
+        topk_xl_copy_tile_init_short(input_cb);
+    }
     topk_xl_copy_tile<K>(input_cb, dst, 0, active_elements);
     input.pop_front(tiles_per_sequence);
 }
 
-template <uint32_t K>
+template <uint32_t K, bool FirstOfRow>
 FORCE_INLINE void sort_classic_chunk(CircularBuffer& input, uint32_t dst, uint32_t active_elements, bool ascending) {
-    copy_chunk<K>(input, dst, active_elements);
+    copy_chunk<K, FirstOfRow>(input, dst, active_elements);
 
     topk_xl_add_lsb_indices_init();
     topk_xl_add_lsb_indices<K, 0>(dst);
@@ -104,7 +110,7 @@ FORCE_INLINE void sort_classic_chunk(CircularBuffer& input, uint32_t dst, uint32
 template <uint32_t K, bool FullInit>
 FORCE_INLINE void sort_fused_chunk(
     CircularBuffer& input, uint32_t dst, uint32_t active_elements, bool ascending, uint32_t local_chunk_id) {
-    copy_chunk<K>(input, dst, active_elements);
+    copy_chunk<K, FullInit>(input, dst, active_elements);
 
     topk_xl_add_lsb_indices_init();
     topk_xl_add_lsb_indices_rt<K>(dst, local_chunk_id);
@@ -123,7 +129,7 @@ FORCE_INLINE void reduce_classic_row(CircularBuffer& input, uint32_t num_chunks,
     constexpr uint32_t incoming_slot = 2 * tiles_per_sequence;
 
     topk_xl_separate_indices_row_major_init_static<0, 0>();
-    sort_classic_chunk<K>(input, survivor_slot, num_chunks == 1 ? tail_elements : K, false);
+    sort_classic_chunk<K, true>(input, survivor_slot, num_chunks == 1 ? tail_elements : K, false);
 
     if (num_chunks == 1) {
         topk_xl_init<K, false>();
@@ -133,7 +139,7 @@ FORCE_INLINE void reduce_classic_row(CircularBuffer& input, uint32_t num_chunks,
 
     for (uint32_t chunk = 1; chunk < num_chunks; ++chunk) {
         const uint32_t active_elements = chunk + 1 == num_chunks ? tail_elements : K;
-        sort_classic_chunk<K>(input, incoming_slot, active_elements, true);
+        sort_classic_chunk<K, false>(input, incoming_slot, active_elements, true);
 
         topk_xl_init<K, false>();
         topk_xl_merge<K, false>(survivor_slot);
