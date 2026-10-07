@@ -170,7 +170,7 @@ followup() {
         local msha
         msha=$(gh pr view "$url" --json mergeCommit --jq '.mergeCommit.oid' 2>/dev/null || echo "")
         $FIXLIB mark --state merged --extra "$(jq -nc --arg f "$msha" '{fix_sha:$f}')" "${sigs[@]}"
-        slack_sig "🟣 *merged* #$num: *$(jq -r .title <<<"$g")*
+        slack_sig "$EMOJI_PR_MERGED *merged* #$num: *$(jq -r .title <<<"$g")*
 • \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g")) · merge commit:$msha
 • waiting for the next run that contains it to confirm it is green" "${sigs[@]}"
         continue ;;
@@ -201,7 +201,7 @@ followup() {
       gh pr comment "$url" --body "❌ **autofix:** the targeted CI legs finished and at least one failed. The fix did not hold; needs a human.
 $lines" >/dev/null
       $FIXLIB mark --state ci_failed --extra "{\"dispatched\": $new_disp}" "${sigs[@]}"
-      slack_sig "🛠️ draft PR #$num: *$(jq -r .title <<<"$g")*
+      slack_sig "$EMOJI_PR_OPENED draft PR #$num: *$(jq -r .title <<<"$g")*
 • \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
 • ❌ targeted CI failed, needs a human" "${sigs[@]}"
     else
@@ -210,7 +210,7 @@ $lines" >/dev/null
       gh pr comment "$url" --body "✅ **autofix:** all targeted CI legs passed. Still a draft: needs a human to review the diff and mark it ready.
 $lines" >/dev/null
       $FIXLIB mark --state ci_passed --extra "{\"dispatched\": $new_disp}" "${sigs[@]}"
-      slack_sig "🛠️ draft PR #$num: *$(jq -r .title <<<"$g")*
+      slack_sig "$EMOJI_PR_OPENED draft PR #$num: *$(jq -r .title <<<"$g")*
 • \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
 • ✅ targeted CI passed, ready for your review" "${sigs[@]}"
     fi
@@ -577,7 +577,7 @@ EOF
   gh api -X PATCH "repos/$REPO/pulls/$pr_num" -F "body=@$pdir/pr_body.md" >/dev/null \
     || log "  WARN: could not update the PR body with run links"
   log "  opened draft $pr_url"
-  slack_sig "🛠️ *opened* draft PR #$pr_num (needs human review): *$title*
+  slack_sig "$EMOJI_PR_OPENED *opened* draft PR #$pr_num (needs human review): *$title*
 • failing: \`$first_test\` ($workflow)
 • $appr, confidence $conf · targeted CI dispatched
 $pr_url" "${sigs[@]}"
