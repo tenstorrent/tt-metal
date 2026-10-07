@@ -9,6 +9,7 @@ totals. Device firmware time is a sum of op durations, not end-to-end TPOT.
 
 import argparse
 import csv
+import functools
 import hashlib
 import json
 import math
@@ -25,6 +26,18 @@ DURATIONS = {
     "writer_ns": "DEVICE NCRISC KERNEL DURATION [ns]",
     "compute_ns": "DEVICE TRISC1 KERNEL DURATION [ns]",
 }
+
+
+def drain_after_call(method, drain):
+    """Drain diagnostic records after each completed prefill chunk, not a batch."""
+
+    @functools.wraps(method)
+    def wrapped(*args, **kwargs):
+        result = method(*args, **kwargs)
+        drain()
+        return result
+
+    return wrapped
 
 
 def metric(row, name):

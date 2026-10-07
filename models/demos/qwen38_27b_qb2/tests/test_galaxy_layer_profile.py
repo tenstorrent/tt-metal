@@ -17,7 +17,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.qwen38_27b_qb2.tests.layer_profile_report import PROFILE_CASES
+from models.demos.qwen38_27b_qb2.tests.layer_profile_report import PROFILE_CASES, drain_after_call
 from models.demos.qwen38_27b_qb2.tests.test_galaxy_perf_sweep import drop_request_buffers, run_batch
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 
@@ -59,6 +59,7 @@ def test_galaxy_layer_profile():
         cells=[],
     )
     originals = []
+    prefill_originals = []
     try:
         source = Path(__file__).resolve().parents[1]
         report["source_sha256"] = {
@@ -68,6 +69,14 @@ def test_galaxy_layer_profile():
         mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
         gen = build_generator(source, mesh, layer_indices=[0, 3], topology=ttnn.Topology.Linear)
         assert [layer.kind for layer in gen.model.layers] == ["linear_attention", "full_attention"]
+        # Long contexts execute hundreds of prefill chunks before run_batch
+        # returns. Draining only between batches overflows the profiler buffer.
+        # Keep this instrumentation local to the diagnostic, outside every
+        # measured decode window, and leave the model implementation unchanged.
+        for name in ("prefill", "prefill_batch"):
+            method = getattr(gen.model, name)
+            prefill_originals.append((name, method))
+            setattr(gen.model, name, drain_after_call(method, lambda: ttnn.ReadDeviceProfiler(mesh)))
         report["device_ids"] = list(mesh.get_device_ids())
         report["precision"] = gen.model.precision
         ttnn.ReadDeviceProfiler(mesh)
@@ -133,6 +142,8 @@ def test_galaxy_layer_profile():
                 if gen is not None:
                     for layer, name, method in originals:
                         setattr(layer, name, method)
+                    for name, method in prefill_originals:
+                        setattr(gen.model, name, method)
                     gen.close()
             finally:
                 try:

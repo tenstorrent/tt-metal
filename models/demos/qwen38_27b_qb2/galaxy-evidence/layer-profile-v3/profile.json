@@ -1,0 +1,306 @@
+{
+  "passed": true,
+  "state": "completed",
+  "layers": [
+    0,
+    3
+  ],
+  "cases": [
+    {
+      "input_tokens": 8192,
+      "batch": 1
+    },
+    {
+      "input_tokens": 8192,
+      "batch": 16
+    },
+    {
+      "input_tokens": 131072,
+      "batch": 1
+    },
+    {
+      "input_tokens": 131072,
+      "batch": 8
+    },
+    {
+      "input_tokens": 262016,
+      "batch": 1
+    },
+    {
+      "input_tokens": 262016,
+      "batch": 4
+    }
+  ],
+  "optimization_priority": "128K/256K aggregate throughput; short-context regressions may be accepted",
+  "topology": "linear",
+  "scope": "Reduced two-layer diagnostic, not full-model throughput or accuracy qualification",
+  "measurement": "Eager warm device operations with Tracy stage signposts; no host-time TPOT claim",
+  "cells": [
+    {
+      "input_tokens": 8192,
+      "batch": 1,
+      "state": "completed",
+      "diagnostic_host_s": 0.04480653163045645,
+      "warm_repeat": {
+        "ttft_s": [
+          0.06630985019728541
+        ],
+        "decode_s": 0.007044422905892134,
+        "elapsed_s": 0.07336886413395405,
+        "output_sha256_per_replica": [
+          "aaf1a6c5dc5777e9c91e9ba7cd674bc9d62172db6065f8101ac346afc6ca1884"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 0
+      }
+    },
+    {
+      "input_tokens": 8192,
+      "batch": 16,
+      "state": "completed",
+      "diagnostic_host_s": 0.07280390989035368,
+      "warm_repeat": {
+        "ttft_s": [
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314,
+          0.7053129370324314
+        ],
+        "decode_s": 0.012509227730333805,
+        "elapsed_s": 0.7178342230618,
+        "output_sha256_per_replica": [
+          "180e9691453858f066754b364b0dde619c13539f6d2a5beca5233a50621eadcd"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 0
+      }
+    },
+    {
+      "input_tokens": 131072,
+      "batch": 1,
+      "state": "completed",
+      "diagnostic_host_s": 0.039265281055122614,
+      "warm_repeat": {
+        "ttft_s": [
+          1.235555546823889
+        ],
+        "decode_s": 0.00787888327613473,
+        "elapsed_s": 1.2434543101117015,
+        "output_sha256_per_replica": [
+          "aaf1a6c5dc5777e9c91e9ba7cd674bc9d62172db6065f8101ac346afc6ca1884"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 0
+      }
+    },
+    {
+      "input_tokens": 131072,
+      "batch": 8,
+      "state": "completed",
+      "diagnostic_host_s": 0.031407819129526615,
+      "warm_repeat": {
+        "ttft_s": [
+          9.768390151672065,
+          9.768390151672065,
+          9.768390151672065,
+          9.768390151672065,
+          9.768390151672065,
+          9.768390151672065,
+          9.768390151672065,
+          9.768390151672065
+        ],
+        "decode_s": 0.013668740633875132,
+        "elapsed_s": 9.782070699613541,
+        "output_sha256_per_replica": [
+          "d25487731cb0689836a19b93130aa15e82378baf943d1c7ea3bbfa95622b047e"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 0
+      }
+    },
+    {
+      "input_tokens": 262016,
+      "batch": 1,
+      "state": "completed",
+      "diagnostic_host_s": 0.01914568431675434,
+      "warm_repeat": {
+        "ttft_s": [
+          3.6649664249271154
+        ],
+        "decode_s": 0.008827886078506708,
+        "elapsed_s": 3.6738235750235617,
+        "output_sha256_per_replica": [
+          "aaf1a6c5dc5777e9c91e9ba7cd674bc9d62172db6065f8101ac346afc6ca1884"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 0
+      }
+    },
+    {
+      "input_tokens": 262016,
+      "batch": 4,
+      "state": "completed",
+      "diagnostic_host_s": 0.02678264118731022,
+      "warm_repeat": {
+        "ttft_s": [
+          14.506555223371834,
+          14.506555223371834,
+          14.506555223371834,
+          14.506555223371834
+        ],
+        "decode_s": 0.012861559633165598,
+        "elapsed_s": 14.519440568983555,
+        "output_sha256_per_replica": [
+          "879b51451ee09d5ccd186569b5e4ca9b4a7c22f060fe34d8f2bae8932be2ad85"
+        ],
+        "counters_per_replica": [
+          {
+            "seed_refreshes": 1,
+            "history_cursor_refreshes": 1,
+            "token_readbacks": 1,
+            "token_refreshes": 1,
+            "position_refreshes": 1,
+            "rope_refreshes": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1
+          }
+        ],
+        "trace_captures": 0
+      }
+    }
+  ],
+  "source_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/decoder.py": "47ee0afde624a4ffd7ac687986568e03e847fa4e7cc8672fc8b57b939617999a",
+    "tt/decoder_tp.py": "1c8815b901c1e6de4d28bf1249b528d6ed44185e39f6e2165556e283c013c283",
+    "tt/generator.py": "c30d9967baeaac24f55fe2be689fb6590106fc3e7711d02754664d8e15306bba",
+    "tt/generator_vllm.py": "3c3630ff075d8909598ee5b61ddd7b4504eb9e440aba5160ab1766e1c21cd5e7",
+    "tt/model.py": "5a30843e69d55cc21b66fe8a182772a154b72ca5e990b88c98bf5a0e31418c28",
+    "tt/precision.py": "e298d8ad7a78d7f22566d0d293c17c3257f8524569f511ad57c8417ae372b039",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f"
+  },
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "precision": {
+    "config_id": "head_bfp4_lofi",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "output": "bfloat4_b",
+      "gate": "bfloat4_b",
+      "up": "bfloat4_b",
+      "down": "bfloat4_b",
+      "head": "bfloat4_b"
+    },
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "output": "LoFi",
+      "gate": "LoFi",
+      "up": "LoFi",
+      "down": "LoFi",
+      "head": "LoFi"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2"
+  }
+}

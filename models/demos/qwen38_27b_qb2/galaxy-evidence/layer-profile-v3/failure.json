@@ -1,0 +1,27 @@
+{
+  "profile_passed": false,
+  "hardware_test_passed": true,
+  "completed_hardware_cases": 6,
+  "full_tracy_report_passed": false,
+  "report_error": "Device data missing: Op 1690624 not present in cpp_device_perf_report.csv for device 0 (trace_id=None)",
+  "device_evidence": "Profiler DRAM buffers were full; markers dropped during prefill/warmup.",
+  "host_evidence": {
+    "last_metadata_ns": 51975955478,
+    "diagnostic_windows_recorded": [
+      "P0_S8192_B1"
+    ],
+    "required_windows": 6,
+    "reason_for_early_capture_end": "unproven"
+  },
+  "interpretation": "No validated long-context per-stage timing or DRAM utilization claim can be made from this run.",
+  "fix_pending_hardware_validation": [
+    "Drain device profiler after each prefill chunk in the diagnostic harness.",
+    "Disable automatic Python function tracing and duplicate device events in Tracy.",
+    "Require complete per-op timing after report generation."
+  ],
+  "host_regressions": {
+    "passed": 11,
+    "receipt": "../profile-harness-host-v4.xml"
+  },
+  "remote_artifacts": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/layer-profile-v3"
+}

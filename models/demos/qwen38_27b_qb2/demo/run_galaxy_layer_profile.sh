@@ -32,7 +32,7 @@ unset QWEN_DECODE_BUCKETS QWEN_COMPACT_DECODE_MLP QWEN_BATCHED_DECODE_ROPE QWEN_
 unset QWEN_BATCHED_PREFILL QWEN_PREFILL_RESIDUAL_LAYOUT QWEN_PREFILL_BATCHED_HEAD
 unset QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD QWEN_PREFILL_STARTUP_WARMUP
 # The Metal wrapper supports Tracy and holds the same cooperative device lock.
-/bin/bash "$QWEN_TASK_ROOT/metal-galaxy/scripts/run_safe_pytest.sh" --profile \
+/bin/bash "$QWEN_TASK_ROOT/metal-galaxy/scripts/run_safe_pytest.sh" --profile-ops \
     "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/tests/test_galaxy_layer_profile.py" \
     -vv -s --timeout=3600 --junitxml="$QWEN_PROFILE_DIR/hardware.xml"
 # Tracy can mask pytest's exit status. Require the actual test receipt and JUnit
@@ -61,4 +61,6 @@ subprocess.run([
     "--csv", str(reports[0]), "--receipt", str(root / "profile.json"),
     "--output", str(root / "analysis"),
 ], check=True)
+analysis = json.loads((root / "analysis/profile-summary.json").read_text())
+assert analysis["measurements_complete"] is True, "Diagnostic windows lost device timings"
 PY

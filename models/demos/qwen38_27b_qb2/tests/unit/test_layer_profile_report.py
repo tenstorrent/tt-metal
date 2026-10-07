@@ -6,7 +6,12 @@ import json
 
 import pytest
 
-from models.demos.qwen38_27b_qb2.tests.layer_profile_report import PROFILE_CASES, analyze, write_report
+from models.demos.qwen38_27b_qb2.tests.layer_profile_report import (
+    PROFILE_CASES,
+    analyze,
+    drain_after_call,
+    write_report,
+)
 
 
 def fixture():
@@ -104,3 +109,33 @@ def test_long_context_priority_retains_capacity_and_short_context_control():
     assert (8192, 1) in PROFILE_CASES and (8192, 16) in PROFILE_CASES
     assert {(131072, 1), (131072, 8), (262016, 1), (262016, 4)} <= set(PROFILE_CASES)
     assert all((length + 128) * batch <= 1050592 for length, batch in PROFILE_CASES)
+
+
+def test_prefill_drain_bounds_records_for_each_chunk():
+    pending, outputs = [], []
+
+    def prefill(value, *, slot):
+        assert not pending, "Previous chunk was not drained"
+        pending.append((value, slot))
+        return value
+
+    def drain():
+        outputs.extend(pending)
+        pending.clear()
+
+    wrapped = drain_after_call(prefill, drain)
+    tokens = object()
+    for chunk in range(64):
+        assert wrapped(tokens, slot=chunk) is tokens
+    assert outputs == [(tokens, chunk) for chunk in range(64)]
+
+
+def test_failed_prefill_does_not_mask_failure_with_profiler_drain(expect_error):
+    def fail():
+        raise RuntimeError("prefill failed")
+
+    def unexpected_drain():
+        raise AssertionError("Drain must not run after failed prefill")
+
+    with expect_error(RuntimeError, "prefill failed"):
+        drain_after_call(fail, unexpected_drain)()

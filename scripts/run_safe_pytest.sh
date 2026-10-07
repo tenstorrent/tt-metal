@@ -30,6 +30,9 @@
 #               wrapper masks pytest's exit code, so a profiled run is reported
 #               PASS as long as profiling completed, regardless of the underlying
 #               test result. Hangs are still detected and still reset the device.
+#   --profile-ops  Like --profile, but omit automatic Python function tracing
+#               and duplicate device events in the Tracy UI. Native op metadata,
+#               signposts and device timing CSVs remain enabled.
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -71,6 +74,7 @@ fi
 DEV_MODE=false
 FAIL_FAST=true
 PROFILE_MODE=false
+PROFILE_OPS_ONLY=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -85,6 +89,11 @@ while [[ $# -gt 0 ]]; do
             PROFILE_MODE=true
             shift
             ;;
+        --profile-ops)
+            PROFILE_MODE=true
+            PROFILE_OPS_ONLY=true
+            shift
+            ;;
         *)
             break
             ;;
@@ -94,7 +103,7 @@ done
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided"
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] <test_path> [extra_pytest_args...]"
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile|--profile-ops] <test_path> [extra_pytest_args...]"
     exit 3
 fi
 
@@ -249,7 +258,11 @@ fi
 #   as a child and post-processes results into ops_perf_results*.csv on pass or
 #   fail. Its exit-code masking is handled at the result check below.
 if [[ "$PROFILE_MODE" == true ]]; then
-    PYTEST_CMD=(python -m tracy -r -m pytest "${TEST_PATH}")
+    PYTEST_CMD=(python -m tracy -r)
+    if [[ "$PROFILE_OPS_ONLY" == true ]]; then
+        PYTEST_CMD+=(-p --disable-device-data-push-to-tracy --dump-device-data-mid-run)
+    fi
+    PYTEST_CMD+=(-m pytest "${TEST_PATH}")
 else
     PYTEST_CMD=(pytest "${TEST_PATH}")
 fi
