@@ -94,6 +94,7 @@ class Decoder:
                 self.pos["idx"],
                 live=self.live.t if self.live is not None else None,
                 block=self.block,
+                upd=self.upd,
             )
             ttnn.deallocate(h)
             h = h2
