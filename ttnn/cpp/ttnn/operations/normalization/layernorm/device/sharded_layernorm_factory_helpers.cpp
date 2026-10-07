@@ -1184,6 +1184,9 @@ void add_compute_defines(m2::KernelSpec& kernel, const SpecConfig& c, bool is_al
     if (c.welford_fp32_alias) {
         kernel.compiler_options.defines.emplace("WELFORD_FP32_ALIAS", "1");
     }
+    if (c.pow2_reduce_scaler) {
+        kernel.compiler_options.defines.emplace("REDUCE_POW2_SCALER", "1");
+    }
     // The all-to-all workers read three extra runtime arguments and touch three extra buffers, so the
     // distinction has to be visible to the preprocessor rather than to `if constexpr` alone.
     if (is_all_to_all_worker) {

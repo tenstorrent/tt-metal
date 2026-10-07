@@ -932,6 +932,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     };
 
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
+    // Power-of-two reduce scalers give the same bits at fewer fidelity phases.
+    if (!use_welford && !pad.active && is_power_of_four(reduce_factor_w_group_1) &&
+        is_power_of_four(reduce_factor_w_group_2) && is_power_of_four(reduce_factor_c_group_1) &&
+        is_power_of_four(reduce_factor_c_group_2)) {
+        eltwise_binary_defines["REDUCE_POW2_SCALER"] = "1";
+    }
 
     std::string compute_kernel_path =
         (use_welford ? "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp"

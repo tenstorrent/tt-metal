@@ -70,12 +70,19 @@ inline void accumulate_compute_loop(
     constexpr bool pop_input = input_policy::pop;
     constexpr bool sync_full_block = input_policy::sync_full_block;
 
+#ifdef REDUCE_POW2_SCALER
+    constexpr bool pow2_scaler = true;
+#else
+    constexpr bool pow2_scaler = false;
+#endif
+
     auto accumulate_cb = [dfb_scalar, block_size, dfb_out, num_tiles, last_tile_partial](DataflowBuffer& dfb) {
         constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
         if constexpr (swap_operands) {
             reconfig_data_format(dfb_scalar.get_id(), dfb.get_id());
         }
-        reduce_init<reduce_type, reduce_dim>(dfb.get_id(), dfb_scalar.get_id(), dfb_out.get_id());
+        reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(
+            dfb.get_id(), dfb_scalar.get_id(), dfb_out.get_id());
         for (auto block : generic::blocks(num_tiles, block_size)) {
             const auto num_previous_tiles = pop_input ? 0 : block.start();
             const auto curr_block_size = sync_full_block ? block.full_block_size() : block.size();
@@ -84,7 +91,7 @@ inline void accumulate_compute_loop(
             for (auto j : block.local()) {
                 // If it's the last tile and it's partial, use the second tile in dfb_scalar
                 const auto scaler_tile_idx = block.to_global(j) == num_tiles - 1 && last_tile_partial ? 1 : 0;
-                reduce_tile<reduce_type, reduce_dim>(
+                reduce_tile<reduce_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(
                     dfb.get_id(), dfb_scalar.get_id(), num_previous_tiles + j, scaler_tile_idx, detail::dst0);
             }
             if constexpr (pop_input) {

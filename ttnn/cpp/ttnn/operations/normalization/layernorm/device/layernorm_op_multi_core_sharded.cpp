@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
+#include <cmath>
 #include <optional>
 #include <bit>
 #include <cstdint>
@@ -368,6 +369,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             config.activation_defines.emplace(key, val);
         }
     }
+    // The partial E[x] and E[x^2] reduces scale by winv: a power of two gives the same bits at fewer fidelity phases.
+    int winv_exponent = 0;
+    config.pow2_reduce_scaler = !use_welford && !is_pre_all_gather && !is_post_all_gather &&
+                                std::frexp(static_cast<float>(bfloat_winv), &winv_exponent) == 0.5f;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Program spec and run args

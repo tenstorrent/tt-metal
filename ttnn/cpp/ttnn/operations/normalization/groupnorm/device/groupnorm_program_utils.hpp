@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <bit>
 #include <vector>
 #include <cstdint>
 #include <initializer_list>
@@ -47,6 +48,11 @@ GroupNormPadCorrection make_group_norm_pad_correction(
 // A batch's padding rows sit in its LAST row-tile, so only the core holding that row-tile applies
 // the row mask. `m_index` is virtual_core.y for the interleaved factories, core_index /
 // num_shards_c for the sharded one.
+// The reduces scale by 1 / sqrt(reduce factor): a power of two when the factor is a power of four.
+inline bool is_power_of_four(uint32_t factor) {
+    return factor != 0 && (factor & (factor - 1)) == 0 && (std::countr_zero(factor) % 2) == 0;
+}
+
 inline bool group_norm_core_owns_pad_tile(uint32_t m_index, uint32_t num_cores_per_batch) {
     return (m_index % num_cores_per_batch) == (num_cores_per_batch - 1);
 }

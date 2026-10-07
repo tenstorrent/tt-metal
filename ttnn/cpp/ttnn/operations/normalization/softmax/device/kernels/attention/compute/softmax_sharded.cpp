@@ -4,6 +4,9 @@
 
 #include <cstdint>
 
+// The reduce scalers are 1.0: on Blackhole SUM and AVG run at the fewest fidelity phases that keep the bits
+#define REDUCE_POW2_SCALER
+
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/bcast.h"

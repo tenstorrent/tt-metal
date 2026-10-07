@@ -279,12 +279,19 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
 
+#ifdef REDUCE_POW2_SCALER
+    constexpr bool pow2_scaler = true;
+#else
+    constexpr bool pow2_scaler = false;
+#endif
+
     for (uint32_t i = 0; i < rows; i++) {
         reconfig_data_format_srca(in0_cb);
         tile_regs_acquire();
-        reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
+        reduce_init<pool_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(in0_cb, scale_cb, out_cb);
         for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+            reduce_tile<pool_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(
+                in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }
         reduce_uninit();
         if (do_eltwise_max) {
