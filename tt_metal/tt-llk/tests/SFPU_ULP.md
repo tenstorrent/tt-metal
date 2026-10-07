@@ -6,7 +6,7 @@ tolerance. For the ops enrolled here it is a **step budget**: "every element is 
 N representable values of the reference". Most unary budgets come from the exhaustive
 sweep, which checks an op against *every distinct finite value of a 16-bit input format*
 -- `±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0` -- or, for
-`Float32`, a strided sample of 65,279 of them across the whole range (`ulp_sweep.is_exhaustive`
+`Float32`, a strided sample of 65,280 across the whole range (`ulp_sweep.is_exhaustive`
 tells the two apart). The exceptions are the `Signbit`, isinf/isnan and threshold-family
 rows, measured on their functional drivers' hand-built stimuli (`MEASURED_ON_SWEEP`, after
 the format table below). The isinf/isnan sweep feeds `±inf` and NaN on purpose.
@@ -94,7 +94,12 @@ swept and then masked out of the statistics, so they still reach hardware.
 - **either side NaN** — an op undefined at an input lands here on its own;
 - **the two sides disagreeing about being non-finite** — a reciprocal overflowing where
   the golden is still finite; one such lane ranks at ~48,000 steps;
-- **subnormal inputs** — the hardware flushes them and the golden does not, so
+- **inputs the unpack does not deliver as fed** — below the smallest normal of the input
+  format *and* of the format the unpacker writes, or past the latter's largest value
+  where its exponent range is narrower: a Float32 input into a `Float16` output at
+  `dest_acc=No` lands in a `Float16` Dest, which flushes below 2**-14 and saturates past
+  65504 (about 44% of the strided lanes). Subnormal inputs are the first case: the
+  hardware flushes them and the golden does not, so
   `ceil(5.69e-39)` is 1 in the model and 0 on silicon: 16,129 bfloat16 steps. Measured,
   that class alone was the whole of `Ceil`'s, `Floor`'s and `Sqrt`'s apparent error.
   Judged on the input as generated *and* as the block-float quantizer hands it to the

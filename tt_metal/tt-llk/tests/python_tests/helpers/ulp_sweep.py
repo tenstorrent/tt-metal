@@ -56,7 +56,7 @@ _STIMULI_FORMAT: Dict[DataFormat, DataFormat] = {
 #: Float32 has 2**32 values and one run holds 2**16, so it is the one input the sweep
 #: samples rather than enumerates. Striding the total order gives every binade an equal
 #: share (each holds the same number of values); a consecutive walk of one run's 2**16
-#: would cover 1/128 of one binade's 2**23. One sample per bfloat16 cell, 65,279 of
+#: would cover 1/128 of one binade's 2**23. One sample per bfloat16 cell, 65,280 of
 #: them, but not at the cell's start: the walk starts on -inf, a multiple of 2**16, so
 #: every sample would be a bfloat16 value -- the Float16_b sweep again -- and an fp32
 #: path that reads the low 16 mantissa bits (a LUT index, a truncating convert) would go
@@ -173,7 +173,7 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     that the padding is the contiguous tail.
 
     Counted by :func:`swept_value_count`, not by how many values the format has: a
-    strided float32 walk generates 65,279 of 2**32, and asking the format would put the
+    strided float32 walk generates 65,280 of 2**32, and asking the format would put the
     padding boundary past the end of the tensor and mask nothing.
     """
     swept = swept_value_count(input_format)
@@ -187,7 +187,10 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
 def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     """*src* as the op receives it: what ``quantize_input_to_unpack_format`` hands the
     golden, and the unpack hands the kernel. The same tensor on every format but a block
-    float.
+    float -- and, not modelled here, a Float32 input at ``dest_acc=No``, which the unpack
+    and the golden both truncate to the 16-bit Dest. The lane checks below then judge the
+    value before truncation; harmless while truncation only moves toward zero, so at worst
+    a lane near a boundary is excused that the truncated value would not be.
 
     The lane checks that ask where an input *is* -- on a singularity, inside the op's
     claim, inside a tracked issue's lanes -- have to ask it of this value, not of the one
@@ -235,6 +238,25 @@ def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch
     return torch.where(src == 0, torch.zeros_like(src), src)
 
 
+def _unpack_format(input_format: DataFormat, output_format=None, dest_acc=None):
+    """The format whose values the unpacker writes for this cell, as the stimuli format
+    that carries them: a Float32 input into a Float16 output at ``dest_acc=No`` lands
+    in a Float16 Dest. Without *output_format* and *dest_acc*, the input's own."""
+    if output_format is None or dest_acc is None:
+        return stimuli_format_for(input_format)
+    from helpers.data_format_inference import infer_unpack_out
+    from helpers.sfpu_domains import unpacks_to_dest
+
+    return stimuli_format_for(
+        infer_unpack_out(
+            input_format,
+            output_format,
+            dest_acc,
+            unpacking_to_dest=unpacks_to_dest(input_format, dest_acc),
+        )
+    )
+
+
 def _normal_input(
     src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
 ) -> torch.Tensor:
@@ -254,28 +276,23 @@ def _normal_input(
     the 0 silicon sees. That one lane was 16,129 steps on every
     Bfp8_b-input cell of Floor and Signbit, and why Ceil and Trunc read 0 there.
     """
-    from helpers.data_format_inference import infer_unpack_out
-    from helpers.llk_params import DestAccumulation, format_dict
+    from helpers.llk_params import format_dict
 
-    cutoff = torch.finfo(format_dict[stimuli_format_for(input_format)]).smallest_normal
+    fed = torch.finfo(format_dict[stimuli_format_for(input_format)])
+    cutoff = fed.smallest_normal
     ceiling = math.inf
-    if output_format is not None and dest_acc is not None:
-        unpacked = infer_unpack_out(
-            input_format,
-            output_format,
-            dest_acc,
-            unpacking_to_dest=(
-                input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-            ),
-        )
-        dtype = format_dict.get(stimuli_format_for(unpacked))
-        if dtype is not None and dtype.is_floating_point:
-            cutoff = max(cutoff, torch.finfo(dtype).smallest_normal)
-            # The other end of the same unpack: a Float32 input past fp16's range
-            # saturates to +-65504 on the way into a Float16 Dest, while the golden,
-            # which takes the value as fed, sees an infinity (asinh(-3.4e38) read
-            # -inf against the kernel's -11.8).
-            ceiling = float(torch.finfo(dtype).max)
+    dtype = format_dict.get(_unpack_format(input_format, output_format, dest_acc))
+    if dtype is not None and dtype.is_floating_point:
+        unpacked = torch.finfo(dtype)
+        cutoff = max(cutoff, unpacked.smallest_normal)
+        # The other end of the same unpack: a Float32 input past fp16's range
+        # saturates to +-65504 on the way into a Float16 Dest, while the golden, which
+        # takes the value as fed, sees an infinity (asinh(-3.4e38) read -inf against
+        # the kernel's -11.8). Only where the unpack's exponent range is narrower: a
+        # bf16 Dest has fp32's, and fp32's largest values reach it as bf16's largest
+        # whether the unpack truncates or rounds -- nothing overflows there.
+        if math.frexp(unpacked.max)[1] < math.frexp(fed.max)[1]:
+            ceiling = float(unpacked.max)
     # In float32, and from `src` as generated. Casting to the golden's dtype first
     # rounds an fp16 subnormal *up* -- bf16 keeps 8 mantissa bits, so 6.09e-05 becomes
     # 6.10e-05 and clears a 6.10e-05 threshold. The whole subnormal band then passed
@@ -302,7 +319,7 @@ def measurable_mask(
 
     The sweep feeds every non-special value of the format, with no per-op domain
     clipping -- an op is measured wherever its format can reach. Four lane kinds come
-    back out, none of them a budget question:
+    back out, none of them a budget question (the last is two, on one boundary):
 
     * either side NaN. :func:`ulp_distance` returns ``UNMEASURABLE`` there, and an op
       undefined at an input (``log`` of a negative) lands here on its own.
@@ -318,7 +335,10 @@ def measurable_mask(
       accuracy. Measured, it is the whole of Ceil's, Floor's and Sqrt's apparent error:
       excluding it returns all three to the 0 their exactness claims, and moves nothing
       else. The flush is covered on its own terms elsewhere; a step count is the wrong
-      instrument for it.
+      instrument for it. The same boundary has a top on a narrower unpack: a Float32
+      input into a Float16 output at ``dest_acc=No`` lands in a Float16 Dest, which
+      flushes below 2**-14 and *saturates* past 65504 -- about 44% of the strided lanes,
+      whose golden sees the value as fed. Saturation, not a flush, and not the op's.
 
     Subnormal *outputs* stay in. Where the golden underflows and the hardware writes
     zero the count is large but the lane is a real one the op produced -- Silu at
@@ -357,13 +377,15 @@ def measurable_mask(
 #: NaN against -2.4 -- and pi is the widest bound measured so far, so it is the claim
 #: until one is wider.
 #:
-#: Keyed on the stimuli format because the claim is about what the format can reach.
-#: 2.6e28 is a bfloat16 value (and a Float32 one); float16 ends at 65504, and Sin and
-#: Cos measure 1-4 steps over the whole float16 format, so an fp16 input carries no
-#: limit and a non-finite answer anywhere in it is a failure. Keyed on the op alone, the
-#: pi claim silently covered the fp16 cells too -- the only Sin/Cos cells the table
-#: step-gates -- and a range-reduction regression on the ~46% of fp16 lanes past pi
-#: would have passed the gate and been emitted as a clean budget.
+#: Keyed on the format the kernel is handed (:func:`_unpack_format`), because the claim
+#: is about what that format can reach. 2.6e28 is a bfloat16 value (and a Float32 one);
+#: float16 ends at 65504, and Sin and Cos measure 1-4 steps over the whole float16
+#: format, so an fp16 input carries no limit and a non-finite answer anywhere in it is
+#: a failure. Keyed on the op alone, the pi claim silently covered the fp16 cells too,
+#: and a range-reduction regression on the ~46% of fp16 lanes past pi would have passed
+#: the gate and been emitted as a clean budget. Keyed on the input alone, it covered a
+#: Float32 input into a Float16 output at ``dest_acc=No`` too, which unpacks into a
+#: Float16 Dest and so reaches the kernel as fp16 values only.
 _CLAIM_LIMIT: Dict = {}
 
 
@@ -382,10 +404,17 @@ def _claim_limits() -> Dict:
     return _CLAIM_LIMIT
 
 
-def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+def _claimed(
+    op,
+    src: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
+) -> torch.Tensor:
     """Lanes where *op* claims a finite, accurate answer: the whole format, less the
     side of each ``_OP_SINGULARITIES`` point the op is undefined on, the point itself
-    for a pole, and any ``_CLAIM_LIMIT`` for the format *input_format* is swept in.
+    for a pole, and any ``_CLAIM_LIMIT`` for the format the kernel is handed
+    (:func:`_unpack_format`; *input_format*'s own without the other two).
     Judged on the input as received (:func:`received_inputs`): a Bfp8_b 0.996 that
     arrives as 1.0 is ``acosh``'s defined side.
 
@@ -408,7 +437,11 @@ def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
             claimed &= value <= point
         else:
             claimed &= value != point
-    limit = _claim_limits().get(op, {}).get(stimuli_format_for(input_format))
+    limit = (
+        _claim_limits()
+        .get(op, {})
+        .get(_unpack_format(input_format, output_format, dest_acc))
+    )
     if limit is not None:
         claimed &= value.abs() <= limit
     return claimed
@@ -513,7 +546,6 @@ def _known_lanes() -> Dict:
                 KnownNonfiniteLanes(
                     **{
                         **top_of_fp16,
-                        "inputs": (DataFormat.Float16,),
                         "low": 62272.0,
                         "high": 62336.0,
                         "why": "inf where 1.0507 x is 65440..65504, on a 16-bit Dest",
@@ -524,7 +556,6 @@ def _known_lanes() -> Dict:
                 KnownNonfiniteLanes(
                     **{
                         **top_of_fp16,
-                        "inputs": (DataFormat.Float16,),
                         "low": 255.5,
                         "high": 255.625,
                         "why": "inf where the answer is 65408 or 65472, on a 16-bit Dest",
@@ -562,6 +593,34 @@ def _known_lanes() -> Dict:
                         "magnitude": True,
                         "why": "inf where the answer is x - tanh(x), in the top fp16 values, on a 16-bit Dest",
                     }
+                ),
+            ),
+            # The same band reached through lgamma: lgamma(x) rounds to 65408..65504 in
+            # fp16 for x in [8168, 8180], bounded by the answer as the band is; measured,
+            # 8172 and 8176 read inf where the answer is 65440 and 65472.
+            MathOperation.Lgamma: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "low": 8168.0,
+                        "high": 8180.0,
+                        "why": "inf where lgamma(x) is a top fp16 value, on a 16-bit Dest",
+                    }
+                ),
+            ),
+            # #50465: i0 is a bare Taylor series with no large-|x| branch, so where i0
+            # first overflows fp16 -- i0(13.296875) is 65772, the Float16 golden inf --
+            # the truncated series answers finite. The one fp16 input in that gap; past
+            # it the series overflows too.
+            MathOperation.I0: (
+                KnownNonfiniteLanes(
+                    issue="#50465",
+                    inputs=(DataFormat.Float16,),
+                    output=DataFormat.Float16,
+                    low=13.296875,
+                    high=13.296875,
+                    magnitude=True,
+                    why="finite where i0(x) has just overflowed fp16: the series has no large-|x| branch",
                 ),
             ),
             # #57215: the Float16 store carries exactly 2**16 to inf (and every larger
@@ -734,7 +793,7 @@ def nonfinite_failures(
         nonfinite_mismatches(golden, result)
         & normal_input
         & ~excused
-        & _claimed(op, src, input_format)
+        & _claimed(op, src, input_format, output_format, dest_acc)
         & ~(
             known_nonfinite_lanes(
                 op,
@@ -807,9 +866,11 @@ KEY_AXES = ("in", "out", "approx", "dest")
 #: {op_name: {(in, out, approx, dest): max_ulp}}, filled during an emitting session.
 MEASURED: Dict[str, Dict[Tuple[str, str, str, str], Union[int, str]]] = {}
 
-#: Headroom over the measured worst lane. The sweep is exhaustive, so unlike a sampled
-#: measurement there is no unseen tail to leave room for -- but a budget at exactly the
-#: maximum fails on any movement at all, including a golden that gets more accurate.
+#: Headroom over the measured worst lane. A 16-bit input is swept exhaustively, so unlike a
+#: sampled measurement there is no unseen tail to leave room for -- but a budget at
+#: exactly the maximum fails on any movement at all, including a golden that gets more
+#: accurate. A strided Float32 input does leave a tail unseen; the headroom is the same,
+#: and only its 0 is treated as a sample (:func:`_verdict`).
 EMIT_HEADROOM = 1.1
 
 
@@ -984,9 +1045,9 @@ def _verdict(
     Headroom is 1.1x, except at zero on an input the sweep enumerates (*in_fmt*, see
     :func:`is_exhaustive`): it saw every value, so a measured 0 means the op is exactly
     rounded on this format, and widening it to 1 retires that claim. A strided Float32
-    input saw 65,279 of 2**32, and a finite sample cannot assert exactness, so its 0 is
-    written as 1 -- the table's rule for sampled rows -- unless the op is *exact*
-    (``EXACT_BY_CONSTRUCTION_OPS``), whose 0 is the construction's, not the sample's.
+    input saw 65,280 of 2**32, and a finite sample cannot assert exactness, so its 0 is
+    written as 1 -- the table's rule for sampled rows -- unless the op is *exact* on the
+    cell (:func:`_is_exact`), whose 0 is the construction's, not the sample's.
     """
     from helpers.format_config import DataFormat
     from helpers.sfpu_accuracy_budget import usable_budget_ceiling
@@ -1027,15 +1088,25 @@ def _verdict(
 
 def _decide(
     cells: Dict[Tuple[str, str, str, str], Union[int, str]],
-    exact: bool = False,
+    op_name: Optional[str] = None,
 ) -> Dict[Tuple, Tuple]:
-    """Each measured cell as ``(verdict, measured)``, verdict decided per output format;
-    an unmeasurable cell as ``(("unmeasurable", why), None)``."""
+    """Each measured cell as ``(verdict, measured)``, an unmeasurable one as
+    ``(("unmeasurable", why), None)``. The verdict is :func:`_verdict`'s for the cell's
+    output *and* input format -- a strided Float32 0 is written as 1 -- and for whether
+    *op_name* is exact on that cell (:func:`_is_exact`)."""
     return {
         key: (
             (("unmeasurable", v), None)
             if isinstance(v, str)
-            else (_verdict(v, key[1], key[0], exact), v)
+            else (
+                _verdict(
+                    v,
+                    key[1],
+                    key[0],
+                    op_name is not None and _is_exact(op_name, key[0], key[1], key[3]),
+                ),
+                v,
+            )
         )
         for key, v in cells.items()
     }
@@ -1086,9 +1157,9 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
-#: The run identity, stated once on the op's key line rather than on each of the ~2,000
-#: rows in the table (a quarter of the file). Rows this run did not supersede keep their own suffix,
-#: or are given one by :func:`_stamp_kept`.
+#: The run identity, stated once on the op's key line rather than on each of the ~4,200
+#: rows in the table (repeated, it was a quarter of the file). Rows this run did not
+#: supersede keep their own suffix, or are given one by :func:`_stamp_kept`.
 _MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
 
 #: A previous run's clause, built from :data:`_MEASURED_BY` so the wording lives in one
@@ -1281,10 +1352,52 @@ def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
     return _covered(line, emitted_cells)
 
 
-def _is_exact(op_name: str) -> bool:
-    from helpers.sfpu_accuracy_budget import EXACT_BY_CONSTRUCTION_OPS
+def rounds_at_pack(in_fmt: str, out_fmt: str, dest: Optional[str]) -> bool:
+    """Whether a cell's output holds fewer mantissa bits than its input still has in
+    Dest: there the operand an exact op returns -- a selected value, an integer -- is
+    rounded at pack, as Abs, Neg and Identity's 1-step Float32 -> Float16_b cells record.
+    Dest keeps the input's precision except where a 32-bit input meets a 16-bit Dest
+    (*dest* ``"No"``), which the unpack has narrowed already. A 16-bit input keeps it in
+    a 16-bit Dest too: Float16 -> Float16_b at ``dest: "No"`` reads 1 step on Abs and
+    ReluMin. Format names and the ``dest`` value as the table writes them; *dest* None
+    means either.
+    """
+    from helpers.ulp import _ULP_DTYPES, has_ulp_gate, ulp_dtype
 
-    return op_name in {op.name for op in EXACT_BY_CONSTRUCTION_OPS}
+    def mantissa_bits(name: str) -> int:
+        fmt = DataFormat[name]
+        return _ULP_DTYPES[ulp_dtype(fmt)].mantissa_bits if has_ulp_gate(fmt) else 0
+
+    if dest == "No" and DataFormat[in_fmt].is_32_bit():
+        return False
+    return mantissa_bits(out_fmt) < mantissa_bits(in_fmt)
+
+
+def _is_exact(
+    op_name: str,
+    in_fmt: Optional[str] = None,
+    out_fmt: Optional[str] = None,
+    dest: Optional[str] = None,
+) -> bool:
+    """Whether a measured 0 on this cell is *op_name*'s construction rather than its
+    sample: an op exact in every format, or an exact op on a cell the pack cannot round
+    (:func:`rounds_at_pack`). On a cell that does round, a passed-through value is
+    rounded, so a strided 0 says only that no sample hit a tie: the walk holds one
+    fp32 -> bf16 tie, which ReluMin and UnaryMin send to a constant (0 steps) and Abs
+    passes through (1 step). A cell that leaves `in` or `out` open cannot be judged
+    and is taken as exact, as the table's op-wide canary rows are."""
+    from helpers.sfpu_accuracy_budget import (
+        EXACT_BY_CONSTRUCTION_OPS,
+        EXACT_IN_EVERY_FORMAT_OPS,
+    )
+
+    if op_name in {op.name for op in EXACT_IN_EVERY_FORMAT_OPS}:
+        return True
+    if op_name not in {op.name for op in EXACT_BY_CONSTRUCTION_OPS}:
+        return False
+    if in_fmt is None or out_fmt is None:
+        return True
+    return not rounds_at_pack(in_fmt, out_fmt, dest)
 
 
 def write_table(path, suffix: str) -> Tuple[int, List[str]]:
@@ -1349,11 +1462,7 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
             kept = _stamp_kept(
                 [l for l in rows if not _replaceable(l, emitted_cells)], line
             )
-            out.extend(
-                _render(
-                    line, _collapse(_decide(MEASURED[name], _is_exact(name))), suffix
-                )
-            )
+            out.extend(_render(line, _collapse(_decide(MEASURED[name], name)), suffix))
             # Rows this run did not supersede -- a format it does not reach, an
             # arch-keyed entry, a floor `_render` cannot re-derive -- are the
             # measurement of a different run and stay as they are. Replacing a whole op

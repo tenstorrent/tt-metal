@@ -203,6 +203,16 @@ def test_a_16bit_walk_skips_its_offset_before_striding():
     assert picked.tolist() == every[1:7:2].tolist()
 
 
+@pytest.mark.parametrize("stride", [0, -1])
+def test_a_sweep_stride_must_be_positive(stride):
+    """Zero divides by zero in the float32 walk and a negative stride gives a negative
+    sample count, so the spec refuses both where they are written."""
+    from helpers.stimuli_generator import StimuliSpec
+
+    with _refuses("stride must be positive"):
+        StimuliSpec.ulp_sweep(low=-1.0, high=1.0, stride=stride)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The zero neighbourhood: signed zeros, subnormals, the flush
 # ─────────────────────────────────────────────────────────────────────────────

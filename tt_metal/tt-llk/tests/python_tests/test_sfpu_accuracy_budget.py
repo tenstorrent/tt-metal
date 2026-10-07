@@ -38,6 +38,7 @@ from helpers.sfpu_accuracy_budget import (
     _TABLE_PATH,
     DEFAULT,
     EXACT_BY_CONSTRUCTION_OPS,
+    EXACT_IN_EVERY_FORMAT_OPS,
     MEASURED_ARCH,
     TOLERANCE_CONTRACT,
     AccuracyContract,
@@ -69,6 +70,8 @@ from helpers.ulp_sweep import (
     _row_fields,
     _split_key_line,
     _verdict,
+    is_exhaustive,
+    rounds_at_pack,
     sweep_cells,
 )
 from helpers.utils import passed_test
@@ -978,15 +981,16 @@ def test_enrolled_ops_is_sorted_and_stable():
 
 
 #: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, four transcendentals whose *best*
+#: whose per-format tolerances moved into the table, five transcendentals whose *best*
 #: cell is already past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b) -- the
 #: measurements are on their rows, not repeated here to drift -- and Expm1Cw, which
 #: returns -1 where expm1 overflows (x past ~88.7) on every cell, so no cell has a lane
 #: count a step budget can describe. Recorded, not fixed; tracked: Erfc #51137, Digamma
-#: #51128, Softplus #51866 (input clamps, under #52178) and Lgamma #55356.
+#: #51128, Softplus #51866 (input clamps, under #52178), Lgamma #55356 and Polygamma
+#: #52278.
 #:
-#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1, Polygamma and SfpuElwmul are not
-#: here: per variant, some of their cells are inside the ceiling, and the rest fall
+#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1 and SfpuElwmul are not here: per
+#: variant, some of their cells are inside the ceiling, and the rest fall
 #: through to tolerance.
 ONLY_EVER_TOLERANCE = frozenset(
     {
@@ -995,6 +999,7 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
         MathOperation.Erfc,
+        MathOperation.Polygamma,
         MathOperation.Softplus,
         MathOperation.Lgamma,
         MathOperation.Digamma,
@@ -1704,6 +1709,14 @@ EXACT_SELECTIONS = (
 )
 
 
+def test_the_emitter_and_the_guards_agree_on_which_ops_are_exact_in_every_format():
+    """The emitter keeps a strided 0 on a cell that rounds at pack only for these; the
+    guards below judge by EXACT_IN_EVERY_FORMAT, derived from the finer lists."""
+    assert set(EXACT_IN_EVERY_FORMAT) == EXACT_IN_EVERY_FORMAT_OPS, sorted(
+        op.name for op in set(EXACT_IN_EVERY_FORMAT) ^ EXACT_IN_EVERY_FORMAT_OPS
+    )
+
+
 def test_the_emitter_and_the_guards_agree_on_which_ops_are_exact():
     """The emitter keeps a strided 0 only on EXACT_BY_CONSTRUCTION_OPS, and the guards
     here judge by their own finer lists; an op in one and not the other would be
@@ -1717,7 +1730,9 @@ def test_the_emitter_and_the_guards_agree_on_which_ops_are_exact():
 
 def _sampled_zero_budgets(path=_TABLE_PATH):
     """``(op_name, row_text)`` for every ``max_ulp: 0`` row whose measurement was a
-    sample: :func:`_run_of` it is not the exhaustive sweep."""
+    sample: :func:`_run_of` it is not the exhaustive sweep, or its input is one the
+    sweep strides (``is_exhaustive``) -- a Float32 row under an "exhaustive ... + strided
+    Float32" key line saw 65,280 of 2**32 values, whatever the clause's first word."""
     found, op, key_run = [], None, ""
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -1729,7 +1744,9 @@ def _sampled_zero_budgets(path=_TABLE_PATH):
         body, _, note = line.strip().partition("#")
         if not re.search(r"max_ulp:\s*0\b", body):
             continue
-        if _EXHAUSTIVE not in _run_of(note, key_run):
+        fields = _row_fields(body)
+        strided = "in" in fields and not is_exhaustive(DataFormat[fields["in"]])
+        if strided or _EXHAUSTIVE not in _run_of(note, key_run):
             found.append((op, body.strip()))
     return found
 
@@ -1747,10 +1764,7 @@ def _rounds_at_pack(body) -> bool:
     fields = _row_fields(body)
     if "in" not in fields or "out" not in fields:
         return False
-    in_fmt = DataFormat[fields["in"]]
-    if fields.get("dest") == "No" and in_fmt.is_32_bit():
-        return False
-    return _mantissa_bits(DataFormat[fields["out"]]) < _mantissa_bits(in_fmt)
+    return rounds_at_pack(fields["in"], fields["out"], fields.get("dest"))
 
 
 def test_only_a_32_bit_input_is_narrowed_before_a_16_bit_dest():
@@ -1791,8 +1805,9 @@ def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
 def _budgets_past_their_measurement(path=_TABLE_PATH):
     """Every ``max_ulp`` row in *path* whose budget is not the one its measurement
     allows, as messages. An exhaustive row carries exactly the budget the emitter
-    derives from its measurement -- ``_verdict``'s rule, 0 for 0 and otherwise
-    ``EMIT_HEADROOM`` rounded up -- so a budget widened by hand has to falsify the
+    derives from its measurement -- ``_verdict``'s rule: 0 for an exhaustive 0, 1 for a
+    strided Float32 0 on an op not exact on that cell, and otherwise ``EMIT_HEADROOM``
+    rounded up -- so a budget widened by hand has to falsify the
     comment beside it, which is the table header's rule for raising one. A sampled row
     may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``, and at 1 over
     a measured 0: a finite sample cannot assert exactness."""
@@ -1807,7 +1822,12 @@ def _budgets_past_their_measurement(path=_TABLE_PATH):
             # every value (kept) or on a stride of Float32 (written as 1, unless the op
             # is exact by construction).
             fields = _row_fields(body)
-            verdict = _verdict(measured, fields["out"], fields.get("in"), _is_exact(op))
+            verdict = _verdict(
+                measured,
+                fields["out"],
+                fields.get("in"),
+                _is_exact(op, fields.get("in"), fields["out"], fields.get("dest")),
+            )
             if ("ulp", budget) != verdict:
                 problems.append(
                     f"{where}: the emitter writes {verdict[1]} for that measurement, "
@@ -1843,7 +1863,12 @@ def test_a_demotion_note_names_the_budget_the_emitter_computes():
             continue
         measured, budget, ceiling = (int(g) for g in found.groups())
         fields = _row_fields(line)
-        expected = _verdict(measured, fields["out"], fields.get("in"), _is_exact(op))
+        expected = _verdict(
+            measured,
+            fields["out"],
+            fields.get("in"),
+            _is_exact(op, fields.get("in"), fields["out"], fields.get("dest")),
+        )
         if expected != ("tolerance", budget) or budget <= ceiling:
             wrong.append(f"{op}: {line.split('#', 1)[0].strip()} -> {expected}")
     assert not wrong, "\n".join(wrong)
@@ -2023,7 +2048,8 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
     (MathOperation.I0, None, None, None, None): (
         "a finite answer to an infinite golden from |x| ~ 92 up: the kernel is a bare "
         "Taylor series with no large-|x| branch (#50465, closed without a fix on main; "
-        "the fix is #52126)"
+        "the fix is #52126). The Float16 cells' one lane in the gap below, x = +-13.3, "
+        "is named in _KNOWN_NONFINITE_LANES, so those cells stay gated"
     ),
     (MathOperation.I1, None, None, None, None): (
         "saturates at +-1.16e37 where i1 overflows fp32, half the format: the input is "
@@ -2033,7 +2059,9 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         "no defect: the driver runs calculate_lgamma_stirling alone, which answers "
         "lgamma(1 - x) below 0.5 (the reflection correction is the next stage, "
         "lgamma.h), so at the negative-integer poles it answers finite until lgamma(1 - x) "
-        "itself overflows near |x| = 4e36. Its in-domain error is #55356"
+        "itself overflows near |x| = 4e36. Its in-domain error is #55356. Separately, "
+        "a 16-bit Float16 Dest answers inf at x = 8172 and 8176, where lgamma is a top "
+        "fp16 value: #58607, named lane by lane in _KNOWN_NONFINITE_LANES"
     ),
     (MathOperation.Polygamma, None, None, None, None): (
         "wrong for x < 0, where the Euler-Maclaurin tail is evaluated outside its "
@@ -2236,10 +2264,10 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         None,
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 25,
-    (MathOperation.I0, None, None, None, None): 20,
+    (MathOperation.I0, None, None, None, None): 18,
     (MathOperation.I1, None, None, None, None): 20,
-    (MathOperation.Lgamma, None, None, None, None): 20,
-    (MathOperation.Polygamma, None, None, None, None): 48,
+    (MathOperation.Lgamma, None, None, None, None): 19,
+    (MathOperation.Polygamma, None, None, None, None): 50,
     (MathOperation.Rpow, None, None, None, None): 22,
 }
 

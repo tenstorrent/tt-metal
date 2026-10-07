@@ -115,6 +115,46 @@ EXACT_BY_CONSTRUCTION_OPS = frozenset(
     }
 )
 
+#: The subset of EXACT_BY_CONSTRUCTION_OPS whose every result is exact in every format --
+#: a predicate's 1.0/0.0, a sign, or a constant -- so not even a cell whose output is
+#: narrower than its input has anything for the pack to round. Every other exact op
+#: returns an operand or an integer, which the pack rounds where the output cannot hold
+#: it (``ulp_sweep.rounds_at_pack``): there a sampled 0 is the sample, not the op.
+#: test_sfpu_accuracy_budget.py's EXACT_IN_EVERY_FORMAT must be exactly this set.
+EXACT_IN_EVERY_FORMAT_OPS = frozenset(
+    {
+        MathOperation.EqualZero,
+        MathOperation.Fill,
+        MathOperation.GreaterThanEqualZero,
+        MathOperation.GreaterThanZero,
+        MathOperation.Heaviside,
+        MathOperation.Isfinite,
+        MathOperation.Isinf,
+        MathOperation.Isnan,
+        MathOperation.Isneginf,
+        MathOperation.Isposinf,
+        MathOperation.LessThanEqualZero,
+        MathOperation.LessThanZero,
+        MathOperation.LogicalNot,
+        MathOperation.NotEqualZero,
+        MathOperation.SfpuElwEq,
+        MathOperation.SfpuElwGe,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwNe,
+        MathOperation.SfpuIsclose,
+        MathOperation.Sign,
+        MathOperation.Signbit,
+        MathOperation.UnaryEq,
+        MathOperation.UnaryGe,
+        MathOperation.UnaryGt,
+        MathOperation.UnaryLe,
+        MathOperation.UnaryLt,
+        MathOperation.UnaryNe,
+    }
+)
+
 #: The variant :func:`accuracy_contract` was last asked about and nothing has consumed
 #: yet, as ``(test_id, op, input_format, output_format, approx_mode, dest_acc, arch)``.
 #: *arch* is the one the contract was resolved for, so a reading names which
@@ -211,7 +251,8 @@ class AccuracyContract:
         """The contract as ``passed_test`` arguments for a *tolerance-only* caller.
 
         The unary functional driver gates on tolerance and PCC. A unary step budget is
-        measured by the exhaustive sweep over every value the format has, so it is far
+        measured by the sweep over every value of a 16-bit input, or a stride of Float32,
+        so it is far
         wider than the few thousand values that driver samples warrant, and feeding it
         back would loosen its gate rather than tighten it. An op on the ULP metric
         therefore keeps today's per-format tolerance here. The binary, ternary and

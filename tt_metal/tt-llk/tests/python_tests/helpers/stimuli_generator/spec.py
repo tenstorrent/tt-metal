@@ -207,7 +207,9 @@ class StimuliSpec:
     offset: int
         For "ulp_sweep" only: skip the first *offset* in-range values before
         filling the tensor.  This lets a range too large for one run be swept
-        in batches (offset = 0, N, 2N, …). Defaults to 0.
+        in batches (offset = 0, N, 2N, …) -- at stride 1. *offset* counts values,
+        not samples, so with a larger *stride* the next batch starts at
+        ``N * stride``; no caller batches a strided sweep. Defaults to 0.
     stride: int
         For "ulp_sweep" only: take one representable value from each run of
         *stride* consecutive ones rather than every value.  A range with more values
@@ -215,8 +217,8 @@ class StimuliSpec:
         total order instead spreads the sample evenly over every binade, because
         each binade holds the same number of representable values.  Float32 takes
         each sample at a different place in its run, so the low bits vary too.
-        *offset* is applied first, in values, not samples.  Defaults to 1
-        (consecutive).
+        *offset* is applied first, in values, not samples.  Must be positive;
+        defaults to 1 (consecutive).
     """
 
     distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM
@@ -242,6 +244,10 @@ class StimuliSpec:
                 f"StimuliSpec.distribution must be DistributionKind or callable, "
                 f"got {type(self.distribution).__name__!r}: {self.distribution!r}"
             )
+        # Here rather than in the walk: zero divides by zero there, and a negative
+        # stride yields a negative sample count instead of an error.
+        if self.stride <= 0:
+            raise ValueError(f"StimuliSpec.stride must be positive, got {self.stride}")
 
     # ── convenience constructors ──────────────────────────────────────────────
 

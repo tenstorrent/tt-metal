@@ -36,7 +36,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
-    DestAccumulation,
     DestSync,
     FastMode,
     format_dict,
@@ -51,6 +50,7 @@ from helpers.sfpu_accuracy_budget import (
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     sfpu_unary_ops,
+    unpacks_to_dest,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -149,9 +149,7 @@ def run_sweep(mathop, formats, approx_mode, dest_acc):
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        unpack_to_dest=unpacks_to_dest(formats.input_format, dest_acc),
     )
     # `sweep_cells` leaves out the cells TestConfig would promote to another Dest, so
     # every cell swept here must be built with the dest_acc it asks for; a cell built
@@ -237,9 +235,12 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
             "domain is the functional driver's, the full-format tail only an emit's"
         )
 
-    # No OverflowError skip: every golden goes through torch now (cosh/sinh were the
-    # last on `math.*`), so an exception from the reference fails the cell loudly
-    # rather than turning it into a skip nobody reads.
+    # No OverflowError skip. cosh/sinh were the last goldens that could raise on a finite
+    # input; they go through torch now. Some still call `math.*` (atan, asinh, the tanh
+    # family, gelu_derivative, xielu, the rounding ops), but none can raise on a finite
+    # argument: each is bounded, takes a non-positive argument, or guards with isfinite.
+    # A new `math.exp`-style golden would, and then fails the cell loudly rather than
+    # turning it into a skip nobody reads.
     src, golden, result = run_sweep(mathop, formats, approx_mode, dest_acc)
 
     mask = measurable_mask(src, golden, result, in_fmt, out_fmt, dest_acc)

@@ -214,7 +214,9 @@ def _enumerate_fp32_in_range(
         # is coprime with a power-of-two stride, so the phase only returns to 0 after
         # `stride` samples. The last cell may then reach past `high`.
         phase_step = int(stride * _CELL_PHASE_STEP) | 1
-        keys = keys + (index * phase_step) % stride
+        # At least 1: sample 0 would otherwise sit on `low` itself, and from -inf that
+        # is the one value the walk drops, leaving the most negative cell unsampled.
+        keys = keys + ((index * phase_step) % stride).clamp(min=1)
         keys = keys[keys <= base_hi]
     bits = torch.where(keys < 0, INT_MIN - keys, keys).to(torch.int32)
     return bits.view(torch.float32)
@@ -237,7 +239,8 @@ def _enumerate_representable(
     range instead (see _enumerate_fp32_in_range).
 
     `offset` lets a big range be covered in chunks across several calls
-    (offset = 0, max_elements, 2*max_elements, ...).
+    (offset = 0, max_elements, 2*max_elements, ...) at stride 1. It counts values, not
+    samples, so at a larger stride the next chunk starts at max_elements * stride.
 
     `stride` takes one value from each run of `stride` consecutive ones instead of
     every value, so a range with more values than one tensor holds is sampled across

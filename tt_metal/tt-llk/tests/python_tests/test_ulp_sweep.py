@@ -217,7 +217,7 @@ def test_a_demotion_names_the_budget_it_would_have_needed(table):
 
 def test_a_strided_zero_is_floored_to_one_and_an_exhaustive_one_is_not():
     """The sweep enumerates every 16-bit value, so a 0 there is the op being exactly
-    rounded. The Float32 walk visits 65,279 of 2**32, and a finite sample cannot assert
+    rounded. The Float32 walk visits 65,280 of 2**32, and a finite sample cannot assert
     exactness: Rsqrt's Float32 -> Float32 cell had been written as 0 from it."""
     from helpers.ulp_sweep import _verdict
 
@@ -427,9 +427,9 @@ def test_an_infinite_golden_on_the_singularity_point_is_not_a_nonfinite_failure(
 def test_the_unpack_format_bounds_which_inputs_count():
     """A Float32 input into a Float16 output at dest_acc=No unpacks into a Float16 Dest:
     below 2**-14 it is flushed, past 65504 it saturates. Neither lane is the op's, so
-    both masks drop them there -- and only there: at dest_acc=Yes the Dest is 32-bit."""
-    from helpers.llk_params import DestAccumulation
-
+    both masks drop them there -- and only there: at dest_acc=Yes the Dest is 32-bit.
+    A bfloat16 Dest saturates nothing: it has fp32's exponent range, so the walk's
+    largest sample (~3.392e38, past bf16's largest) reaches it as bf16's largest."""
     fp32, fp16 = DataFormat.Float32, DataFormat.Float16
     src = torch.tensor([1e-6, 1.0, 1e6], dtype=torch.float32)
     golden = torch.tensor([1.0, 1.0, float("inf")], dtype=torch.float16)
@@ -445,6 +445,14 @@ def test_the_unpack_format_bounds_which_inputs_count():
         _OP, src, golden, result, fp32, fp16, dest_acc=no
     ).any()
     assert nonfinite_failures(_OP, src, golden, result, fp32, fp16, dest_acc=yes)[2]
+
+    bf16 = DataFormat.Float16_b
+    largest = torch.tensor(
+        [float.fromhex("0x1.fe55920000000p+127")], dtype=torch.float32
+    )
+    assert float(largest[0]) > torch.finfo(torch.bfloat16).max
+    same = largest.to(torch.bfloat16)
+    assert measurable_mask(largest, same, same, fp32, bf16, no).tolist() == [True]
 
 
 def test_an_fp16_pack_clamp_is_a_saturated_store():
@@ -538,8 +546,9 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
     """`sin(2.6e28)` is a bfloat16 value. float16 ends at 65504, inside the range the
     kernel reduces -- Sin and Cos read 1-4 steps over the whole fp16 format -- so an
     fp16 input carries no limit, and a non-finite answer at its very top is a failure.
-    Keyed on the op alone, the pi claim covered the fp16 cells too, which are the only
-    Sin/Cos cells the table step-gates."""
+    Keyed on the op alone, the pi claim covered the fp16 cells too. The format that
+    counts is the one the kernel is handed: a Float32 input into a Float16 output at
+    ``dest_acc=No`` unpacks into a Float16 Dest, so it carries no limit either."""
     fmt = DataFormat.Float16
     top = torch.tensor([65504.0, 4.0], dtype=torch.float16)
     golden = torch.tensor([-1.0, -1.0], dtype=torch.float16)
@@ -557,6 +566,25 @@ def test_the_claim_limit_follows_what_the_stimuli_format_can_reach(op):
         DataFormat.Float16_b,
         DataFormat.Float16_b,
     ).tolist() == [False, False]
+    # Float32 into a Float16 output: 4.0 is past pi, excused at a 32-bit Dest, where
+    # the kernel is handed fp32, and a failure at a 16-bit one, where it is handed fp16.
+    wide = top.to(torch.float32)
+    for dest, past_pi_excused in (
+        (DestAccumulation.Yes, True),
+        (DestAccumulation.No, False),
+    ):
+        assert (
+            nonfinite_failures(
+                op,
+                wide,
+                golden,
+                result,
+                DataFormat.Float32,
+                DataFormat.Float16,
+                dest_acc=dest,
+            ).tolist()[1]
+            is not past_pi_excused
+        ), dest
 
 
 def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
@@ -967,13 +995,20 @@ def test_the_sweep_tile_count_holds_every_swept_value():
         assert swept_value_count(fmt) <= lanes, fmt.name
 
 
+#: The Float32 walk's sample count, written down independently of the code that makes
+#: it: one sample per finite bfloat16 bit pattern, 2**16 less the 256 inf/NaN ones.
+#: (65,279 distinct bf16 *values*: -0.0 and +0.0 are two cells but one value.)
+_FLOAT32_WALK_SAMPLES = 65280
+
+
 def test_the_float32_walk_is_pinned_end_to_end():
     """`swept_value_count` enumerates at most `_SWEEP_TENSOR` lanes, so the check above
     cannot fail for Float32 whatever `_FP32_STRIDE` is: a stride of 2**15 would stop the
-    walk near -1.2e-38, negatives only, and stay green. So the count, the ends, the
-    tensor size and what the in-cell phase buys are pinned here: one sample per bfloat16
-    cell, none of them a bfloat16 value, and both halves of the cell reached in every
-    binade (a stride of 2**16 + 1 put a whole binade at one point of its cells)."""
+    walk near +1.2e-38, having covered only the negatives, and stay green. So the count,
+    the ends, the tensor size and what the in-cell phase buys are pinned here: one
+    sample per bfloat16 cell, the most negative one included, none of them a bfloat16
+    value, and both halves of the cell reached in every binade (a stride of 2**16 + 1
+    put a whole binade at one point of its cells)."""
     import test_unary_sfpu_ulp as sweep
     from helpers.golden_generators import TILE_DIMENSIONS
     from helpers.stimuli_generator.strategies.structured import (
@@ -983,12 +1018,13 @@ def test_the_float32_walk_is_pinned_end_to_end():
 
     lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
     assert _SWEEP_TENSOR == lanes
-    assert swept_value_count(DataFormat.Float32) == 65279
     walk = _enumerate_representable(
         DataFormat.Float32, -math.inf, math.inf, _SWEEP_TENSOR, stride=_FP32_STRIDE
     )
-    assert walk.numel() == 65279
-    assert float(walk.min()) < -3.38e38 and float(walk.max()) > 3.39e38
+    assert walk.numel() == _FLOAT32_WALK_SAMPLES
+    assert swept_value_count(DataFormat.Float32) == walk.numel()
+    assert float(walk.min()) == -torch.finfo(torch.float32).max
+    assert float(walk.max()) > 3.39e38
 
     bits = walk.view(torch.int32)
     low = bits & 0xFFFF
