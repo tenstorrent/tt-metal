@@ -693,3 +693,27 @@
 - claim: Decode-sized (32 slots/row padded to 64 tokens, ragged live 32/20/7/1, L5 real weights, all-bf16 unified): PCC vs bf16 dump live tokens 0.99949-0.99995 (mm 0.99989-0.99998), 5 runs identical. Dead pad slots now routed round-robin over all experts (spread_pad_routing in tt/moe_prefill.py): worst chip load 256 rows vs max_buf 1248 (cf4) / 480 (cf1); the test asserts on capacity overflow. Timing hint N=64/row host-timed paired: unified 1.9 ms, mm 5.0 ms per layer
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_D_L5_decode_bf16uni_h35_6be783ac580.log
 - paths: models/demos/blackhole/mimo_v26, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+
+## E261007-0438-cd8
+- date: 2026-10-07T04:38:55
+- commit: 23b56c47ac7
+- branch: ssinghal/mimo
+- host: 30
+- track: moe
+- status: verified
+- claim: MERGED-COMMIT re-check, unified_routed_expert_moe with bf16 x/intermediates/output (MOE_UNI_BF16_X/INTERMED/OUT=1) via private relink lib artifacts/integ_23b56c47ac7/lib (LD_LIBRARY_PATH), host .30, 4x8, 256 real experts bfp8, N=512 tok/row, layer 5 vs track-0 dump: PCC vs bf16 dump ffn_out dump-routing 0.99946-0.99959 per row, exact router (set match 0.9888) 0.9994-0.99959, 5 runs bit-identical, no dropped tokens (worst chip 896/8416 rows). bf16-vs-fp32 floor 0.9985-0.99911. Gate >=0.999 PASS.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_moebf16uni_L5_h30_23b56c47ac7.log
+- paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
+- data: {"layer":5,"pcc":0.9994,"bit_identical_runs":5}
+
+## E261007-0438-ff0
+- date: 2026-10-07T04:38:56
+- commit: 23b56c47ac7
+- branch: ssinghal/mimo
+- host: 41
+- track: moe
+- status: verified
+- claim: MERGED-COMMIT re-check, same config as layer 5 entry, host .41, layer 1: PCC vs bf16 dump ffn_out dump-routing 0.99994 all rows, exact router (set match 0.9937) 0.99979-0.99991, 5 runs bit-identical, no dropped tokens (worst chip 1856/8416 rows). Gate >=0.999 PASS.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_moebf16uni_L1_h41_23b56c47ac7.log
+- paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
+- data: {"layer":1,"pcc":0.99979,"bit_identical_runs":5}
