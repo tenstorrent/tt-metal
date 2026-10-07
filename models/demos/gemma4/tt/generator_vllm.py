@@ -735,6 +735,16 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             projected_tt.deallocate(True)
         return ttnn.reshape(image_embeds_tt, (num_valid, text_hidden))
 
+    def _vision_to_host(self, embeds_tt):
+        """ttnn ``[num_valid, text_hidden]`` -> host bf16 tensor (device 0's replica)."""
+        if hasattr(self.mesh_device, "shape"):
+            host = ttnn.to_torch(ttnn.get_device_tensors(embeds_tt)[0])  # replicated: any device
+        else:
+            host = ttnn.to_torch(embeds_tt)
+        if hasattr(embeds_tt, "deallocate"):
+            embeds_tt.deallocate(True)
+        return host.to(torch.bfloat16)
+
     def encode_vision_batch(self, pixel_values_batch: torch.Tensor, image_position_ids_batch: torch.Tensor):
         """Run the vision tower + embedder for a batch of images, one image at a time,
         and return per-user valid projected soft tokens as a list of HOST
@@ -781,8 +791,9 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 in_dim, num_patches = int(self.vision_tower.patch_dim), 280
             else:
                 vision_args = self.vision_tower.args
-                in_dim = int(vision_args.hf_config.vision_config.hidden_size)
-                num_patches = max(1, int(getattr(vision_args.hf_config.vision_config, "image_seq_length", 256)))
+                vcfg = vision_args.hf_config.vision_config
+                in_dim = int(getattr(vcfg, "patch_size", 16)) ** 2 * 3  # raw patch, not hidden_size
+                num_patches = max(1, int(getattr(vcfg, "default_output_length", 280))) * int(getattr(vcfg, "pooling_kernel_size", 3)) ** 2
             pixel_values = torch.zeros(1, num_patches, in_dim, dtype=torch.bfloat16)
             image_position_ids = torch.zeros(1, num_patches, 2, dtype=torch.long)
         image_embeds_tt = self.encode_vision(pixel_values, image_position_ids)
@@ -919,15 +930,32 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         if len(ip_per_user) < batch_size:
             ip_per_user += [None] * (batch_size - len(ip_per_user))
 
-        # Collect image users that share the same patch geometry -> one DP encode.
-        image_idxs = [u for u in range(batch_size) if pv_per_user[u] is not None and ip_per_user[u] is not None]
+        # The plugin hands each slot a LIST of per-image tensors (one entry per
+        # multimodal feature of the request, None where a feature has no data);
+        # the demo hands a single [1, P, D] tensor. Encode every image of a slot
+        # in order and concatenate its valid soft tokens: the text stream carries
+        # the images' placeholder runs in the same order, so one scatter merges
+        # them all.
+        def _images(v):
+            if v is None:
+                return []
+            items = list(v) if isinstance(v, (list, tuple)) else [v]
+            return [t for t in items if t is not None]
+
+        image_idxs = []
         per_user_embeds: dict[int, torch.Tensor] = {}
-        if image_idxs:
-            pv_stack = torch.stack([pv_per_user[u] for u in image_idxs], dim=0)
-            ip_stack = torch.stack([ip_per_user[u] for u in image_idxs], dim=0)
-            encoded = self.encode_vision_batch(pv_stack, ip_stack)  # list aligned with image_idxs
-            for u, embeds in zip(image_idxs, encoded):
-                per_user_embeds[u] = embeds
+        for u in range(batch_size):
+            pvs, ips = _images(pv_per_user[u]), _images(ip_per_user[u])
+            if not pvs or len(pvs) != len(ips):
+                continue
+            chunks = []
+            for pv, ip in zip(pvs, ips):
+                pv = pv.unsqueeze(0) if pv.dim() == 2 else pv
+                ip = ip.unsqueeze(0) if ip.dim() == 2 else ip
+                embeds_tt = self.encode_vision(pv, ip)  # ttnn [num_valid, text_hidden]
+                chunks.append(self._vision_to_host(embeds_tt))
+            per_user_embeds[u] = torch.cat(chunks, dim=0)
+            image_idxs.append(u)
 
         for u in range(batch_size):
             user_tokens = tokens[u : u + 1]
