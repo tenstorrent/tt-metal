@@ -85,14 +85,44 @@ slack() {
            '{channel:$ch, text:$t, unfurl_links:false} + (if $th != "" then {thread_ts:$th} else {} end)' \
          | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
                 -H 'Content-Type: application/json; charset=utf-8' --data @- https://slack.com/api/chat.postMessage)
+  SLACK_LAST_TS=""
   if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
     # Keep every message's ts: the bot has no history scope, so this is the
     # only way to chat.update a message later.
-    jq -nc --arg ts "$(jq -r .ts <<<"$resp")" --arg th "$thread" --arg t "${1:0:160}" --arg at "$(ts)" \
+    SLACK_LAST_TS=$(jq -r .ts <<<"$resp")
+    jq -nc --arg ts "$SLACK_LAST_TS" --arg th "$thread" --arg t "${1:0:160}" --arg at "$(ts)" \
        '{at:$at, ts:$ts, thread:$th, text:$t}' >> "$FIX_HOME/slack_posts.jsonl"
   else
     log "  WARN: slack post failed: $resp"
   fi
+}
+
+# Replace the text of an earlier bot message in place (no new notification).
+slack_update() {
+  local ts="$1" text="$2" resp
+  [[ "$FIX_SLACK" == "1" && -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]] || { log "  (slack edit $ts) $text"; return 0; }
+  resp=$(jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg ts "$ts" --arg t "$(linkify <<<"$text")" \
+           '{channel:$ch, ts:$ts, text:$t}' \
+         | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                -H 'Content-Type: application/json; charset=utf-8' --data @- https://slack.com/api/chat.update)
+  [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]] && return 0
+  log "  WARN: slack edit of $ts failed: $(jq -r '.error // "?"' <<<"$resp")"
+  return 1
+}
+
+# ONE Slack message per fix. The first post about these signatures stores its
+# ts in the ledger; every later status (opened, CI result, merged, verified)
+# edits that message instead of adding a reply. Falls back to a new reply when
+# there is nothing to edit or the edit fails.
+slack_sig() {
+  local text="$1"; shift
+  local mts
+  mts=$($FIXLIB get "$@" | jq -r '[.[] | .slack_ts // empty] | first // ""')
+  if [[ -n "$mts" ]] && slack_update "$mts" "$text"; then return 0; fi
+  slack "$text"
+  [[ -n "${SLACK_LAST_TS:-}" ]] && $FIXLIB mark --state keep \
+    --extra "$(jq -nc --arg t "$SLACK_LAST_TS" '{slack_ts:$t}')" "$@"
+  return 0
 }
 
 run_url() { echo "https://github.com/$REPO/actions/runs/$1"; }
@@ -121,8 +151,10 @@ RECENT="&created=>$(date -u -d '-10 days' +%F)"
 followup() {
   local open
   open=$(jq -c '[.sigs | to_entries[] | select((.value.state=="pr_open" or .value.state=="ci_passed" or .value.state=="ci_failed") and .value.pr != null)
-                 | {sig: .key, pr: .value.pr, st: .value.state, wf: .value.workflow, dispatched: (.value.dispatched // [])}]
-                | group_by(.pr.url)[] | {pr: .[0].pr, st: .[0].st, wf: .[0].wf, dispatched: .[0].dispatched, sigs: map(.sig)}' \
+                 | {sig: .key, pr: .value.pr, st: .value.state, wf: .value.workflow, dispatched: (.value.dispatched // []),
+                    title: ((.value.verdict_title // "") | sub("^\\[autofix[^]]*\\] *"; "")), test: (.value.test | sub(".*::"; ""))}]
+                | group_by(.pr.url)[] | {pr: .[0].pr, st: .[0].st, wf: .[0].wf, dispatched: .[0].dispatched,
+                                         title: .[0].title, tests: (map(.test) | unique | join(", ")), sigs: map(.sig)}' \
          "$FIX_HOME/ledger.json" 2>/dev/null || true)
   [[ -z "$open" ]] && return 0
   while IFS= read -r g; do
@@ -138,8 +170,9 @@ followup() {
         local msha
         msha=$(gh pr view "$url" --json mergeCommit --jq '.mergeCommit.oid' 2>/dev/null || echo "")
         $FIXLIB mark --state merged --extra "$(jq -nc --arg f "$msha" '{fix_sha:$f}')" "${sigs[@]}"
-        slack "🟣 *merged* autofix #$num: $url
-merge commit:$msha · waiting for the next \`$(jq -r .wf <<<"$g")\` run that contains it to confirm it is green"
+        slack_sig "🟣 *merged* #$num: *$(jq -r .title <<<"$g")*
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g")) · merge commit:$msha
+• waiting for the next run that contains it to confirm it is green" "${sigs[@]}"
         continue ;;
       CLOSED) $FIXLIB mark --state rejected "${sigs[@]}"; log "  PR $url closed by a human — signature(s) rejected"; continue ;;
     esac
@@ -168,14 +201,18 @@ merge commit:$msha · waiting for the next \`$(jq -r .wf <<<"$g")\` run that con
       gh pr comment "$url" --body "❌ **autofix:** the targeted CI legs finished and at least one failed. The fix did not hold; needs a human.
 $lines" >/dev/null
       $FIXLIB mark --state ci_failed --extra "{\"dispatched\": $new_disp}" "${sigs[@]}"
-      slack "🛠 ❌ autofix draft #$num: targeted CI failed, needs a human: $url"
+      slack_sig "🛠️ draft PR #$num: *$(jq -r .title <<<"$g")*
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
+• ❌ targeted CI failed, needs a human" "${sigs[@]}"
     else
       gh api "repos/$REPO/statuses/$head" -f state=success -f context="$CI_STATUS_CONTEXT" \
          -f description="Targeted CI passed — still needs human review" >/dev/null
       gh pr comment "$url" --body "✅ **autofix:** all targeted CI legs passed. Still a draft: needs a human to review the diff and mark it ready.
 $lines" >/dev/null
       $FIXLIB mark --state ci_passed --extra "{\"dispatched\": $new_disp}" "${sigs[@]}"
-      slack "🛠 ✅ autofix draft #$num: targeted CI passed, ready for your review: $url"
+      slack_sig "🛠️ draft PR #$num: *$(jq -r .title <<<"$g")*
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
+• ✅ targeted CI passed, ready for your review" "${sigs[@]}"
     fi
   done <<<"$open"
 }
@@ -200,7 +237,7 @@ handle_green() {  # newly_green JSON from fixlib update
       if [[ "$st" == "OPEN" ]]; then
         gh pr comment "$prurl" --body "ℹ️ **autofix:** \`$test\` is passing on main again ($(jq -r .run.url <<<"$x")) without this PR. Closing as no longer needed; reopen if you still want the change." >/dev/null
         gh pr close "$prurl" >/dev/null
-        slack "🛠 autofix closed $prurl: \`$test\` is green on main again without it"
+        slack_sig "⚪ closed $prurl: \`$test\` is green on main again without it" "$(jq -r .sig <<<"$x")"
       fi
     fi
   done < <(jq -c '.newly_green[]' <<<"$ng")
@@ -219,10 +256,10 @@ handle_fix_events() {
     who="${pr:-commit:$fsha}"
     if [[ "$typ" == "verified" ]]; then
       log "  verified green after fix: $test"
-      slack "✅ *verified*: \`$test\` passed in <$rurl|run:$rnum>, which contains the fix $who. Nothing more to add."
+      slack_sig "✅ *verified*: \`$test\` passed in <$rurl|run:$rnum>, which contains the fix $who. Nothing more to add." "$(jq -r .sig <<<"$ev")"
     else
       log "  STILL FAILING after fix: $test"
-      slack "❌ *still failing after fix*: \`$test\` failed in <$rurl|run:$rnum> even though it contains $who. Back in the autofix queue."
+      slack_sig "❌ *still failing after fix*: \`$test\` failed in <$rurl|run:$rnum> even though it contains $who. Back in the autofix queue." "$(jq -r .sig <<<"$ev")"
     fi
   done < <(jq -c '.events[]?' <<<"$ng")
 }
@@ -431,12 +468,12 @@ $logs"
       fsha=$(grep -oE '\b[0-9a-f]{7,40}\b' <<<"$upstream" | head -1 || true)
       $FIXLIB mark --state fixed_upstream --attempt \
         --extra "$(jq -nc --arg p "$pdir" --arg r "$upstream" --arg f "$fsha" '{proposal:$p, reason:$r, fix_sha:$f}')" "${sigs[@]}"
-      slack "📌 *already fixed on main*: \`$first_test\` ($workflow)
-fixed by $upstream · commit:$fsha · waiting for the next run that contains it to confirm it is green"
+      slack_sig "📌 *already fixed on main*: \`$first_test\` ($workflow)
+fixed by $upstream · commit:$fsha · waiting for the next run that contains it to confirm it is green" "${sigs[@]}"
     else
       log "  no fix: $reason"
       $FIXLIB mark --state no_fix --attempt --extra "$(jq -nc --arg p "$pdir" --arg r "$reason" '{proposal:$p, reason:$r}')" "${sigs[@]}"
-      slack "🛠 autofix looked at \`$first_test\` ($workflow): *no safe fix*. $reason"
+      slack_sig "🛠 autofix looked at \`$first_test\` ($workflow): *no safe fix*. $reason" "${sigs[@]}"
     fi
     git -C "$FIX_WORKTREE" reset -q --hard && git -C "$FIX_WORKTREE" clean -fdq
     continue
@@ -448,7 +485,7 @@ fixed by $upstream · commit:$fsha · waiting for the next run that contains it 
     reason="guard rejected the diff: $(jq -r '.reasons | join("; ")' <<<"$guard")"
     log "  $reason"
     $FIXLIB mark --state no_fix --attempt --extra "$(jq -nc --arg p "$pdir" --arg r "$reason" '{proposal:$p, reason:$r}')" "${sigs[@]}"
-    slack "🛠 autofix drafted a fix for \`$first_test\` but the safety guard rejected it: $(jq -r '.reasons | join("; ")' <<<"$guard"). Proposal: \`$pdir\`"
+    slack_sig "🛠 autofix drafted a fix for \`$first_test\` but the safety guard rejected it: $(jq -r '.reasons | join("; ")' <<<"$guard"). Proposal: \`$pdir\`" "${sigs[@]}"
     git -C "$FIX_WORKTREE" reset -q --hard && git -C "$FIX_WORKTREE" clean -fdq
     continue
   fi
@@ -475,10 +512,10 @@ fixed by $upstream · commit:$fsha · waiting for the next run that contains it 
     $FIXLIB mark --state proposed_dryrun --attempt --count-daily \
       --extra "$(jq -nc --arg p "$pdir" --arg t "$title" '{proposal:$p, verdict_title:$t}')" "${sigs[@]}"
     log "  DRY RUN — proposal written to $pdir"
-    slack "🛠 *autofix (dry run)* would open a draft PR: *$title*
+    slack_sig "🛠 *autofix (dry run)* would open a draft PR: *$title*
 • failing: \`$first_test\` ($workflow, streak $(jq -r '[.[].streak] | max' <<<"$recs"))
 • $appr, confidence $conf, $(jq -r '.added + .deleted' <<<"$guard") lines in $files
-• proposal: \`$pdir\`"
+• proposal: \`$pdir\`" "${sigs[@]}"
     git -C "$FIX_WORKTREE" reset -q --hard && git -C "$FIX_WORKTREE" clean -fdq
     continue
   fi
@@ -540,10 +577,10 @@ EOF
   gh api -X PATCH "repos/$REPO/pulls/$pr_num" -F "body=@$pdir/pr_body.md" >/dev/null \
     || log "  WARN: could not update the PR body with run links"
   log "  opened draft $pr_url"
-  slack "🛠️ *opened* draft PR #$pr_num (needs human review): *$title*
+  slack_sig "🛠️ *opened* draft PR #$pr_num (needs human review): *$title*
 • failing: \`$first_test\` ($workflow)
 • $appr, confidence $conf · targeted CI dispatched
-$pr_url"
+$pr_url" "${sigs[@]}"
   git -C "$FIX_WORKTREE" checkout -q -f --detach origin/main
 done < <(jq -c '.groups[]' <<<"$elig")
 

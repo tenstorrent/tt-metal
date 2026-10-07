@@ -65,8 +65,13 @@ walkthrough of the whole flow.
 
 ## Slack: threaded, with emojis
 
-Every fixer message is a reply in the thread of the watcher's current digest
-message (`_slack.ts` in `~/.sdpa-watch/state.json`):
+**One message per fix, edited in place.** The first message about a failing
+test is posted as a reply in the thread of the watcher's current digest
+(`_slack.ts` in `~/.sdpa-watch/state.json`), and its ts is stored on the
+ledger record (`slack_ts`). Every later status edits that same message with
+`chat.update`, which sends no new notification: dry-run proposal → 🛠️ opened →
+CI ✅/❌ → 🟣 merged → ✅ verified, or 📌 already fixed on main → ✅ verified.
+A new reply is posted only when there is no earlier message to edit.
 
 | | |
 |---|---|
