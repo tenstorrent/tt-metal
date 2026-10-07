@@ -343,6 +343,44 @@ TEST_F(MeshBufferTest2x4, CircularBufferBackedByMeshBuffer) {
     EXPECT_ANY_THROW(cb_config.set_globally_allocated_address(*dram_buffer));
 }
 
+// An address-supplied MeshBuffer (one created over memory it does not own) has no backing buffer, so the MeshBuffer
+// overloads must work from the per-device buffers rather than get_backing_buffer().
+TEST_F(MeshBufferTest2x4, CircularBufferBackedByAddressSuppliedMeshBuffer) {
+    const DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {1, 1}, .num_cores = {4, 1}, .page_shape = {32, 16}, .element_size = 2};
+    const DeviceLocalBufferConfig sharded_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config)};
+    const ReplicatedBufferConfig mesh_config{.size = test_config.num_pages() * test_config.page_size()};
+
+    auto owner = MeshBuffer::create(mesh_config, sharded_config, mesh_device_.get());
+    auto view = MeshBuffer::create(mesh_config, sharded_config, mesh_device_.get(), owner->address());
+    ASSERT_NE(owner->get_backing_buffer(), nullptr);
+    ASSERT_EQ(view->get_backing_buffer(), nullptr);
+    ASSERT_EQ(view->address(), owner->address());
+
+    CircularBufferConfig cb_config(test_config.page_size(), {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}});
+    cb_config.set_page_size(tt::CBIndex::c_0, test_config.page_size()).set_globally_allocated_address(*view);
+    EXPECT_EQ(cb_config.globally_allocated_address(), view->address());
+    EXPECT_EQ(cb_config.max_size(), view->aligned_size_per_bank());
+    EXPECT_EQ(cb_config.max_size(), owner->aligned_size_per_bank());
+
+    // UpdateDynamicCircularBufferAddress: start the circular buffer on a different allocation, then point it at the
+    // address-supplied view.
+    auto other = MeshBuffer::create(mesh_config, sharded_config, mesh_device_.get());
+    ASSERT_NE(other->address(), view->address());
+    Program program = CreateProgram();
+    CircularBufferConfig initial_config(test_config.page_size(), {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}});
+    initial_config.set_page_size(tt::CBIndex::c_0, test_config.page_size()).set_globally_allocated_address(*other);
+    const CBHandle cb_handle = CreateCircularBuffer(program, test_config.shard_grid(), initial_config);
+    ASSERT_EQ(GetCircularBufferConfig(program, cb_handle).globally_allocated_address(), other->address());
+
+    UpdateDynamicCircularBufferAddress(program, cb_handle, *view);
+    EXPECT_EQ(GetCircularBufferConfig(program, cb_handle).globally_allocated_address(), view->address());
+    EXPECT_EQ(GetCircularBufferConfig(program, cb_handle).max_size(), view->aligned_size_per_bank());
+}
+
 // ReadShard must size the destination to the bytes enqueue_read_shards will write, for any element type.
 TEST_F(MeshBufferTest2x4, ReadShardSizesDestinationToDeviceLocalSize) {
     const DeviceLocalBufferConfig device_local_config{
