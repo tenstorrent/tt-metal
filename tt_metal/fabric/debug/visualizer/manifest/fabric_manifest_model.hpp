@@ -255,8 +255,7 @@ struct DownstreamEdge {
     std::optional<uint32_t> landing_compact;
     // The NoC core the connection writes to: the sibling's ERISC, or its tensix mux.
     tt::tt_metal::CoreCoord core;
-    StreamRef free_slots;
-    L1Region teardown_sem;
+    std::vector<Field> fields;
 };
 
 // One RISC the router's kernel runs on.
