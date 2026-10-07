@@ -67,6 +67,8 @@ def test_move_without_wait_warns_but_never_fails(tmp_path, move, vld):
     [
         # WH / BH form
         "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);",
+        "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD | p_stall::MATH);",
+        "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD);",
         # Quasar form: wait resources are the trailing arguments
         "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);",
     ],
@@ -86,6 +88,71 @@ def test_matching_wait_before_move_is_clean(tmp_path, wait):
     r = run(f)
     assert r.returncode == 0
     assert "warning" not in r.stdout
+
+
+@pytest.mark.parametrize(
+    "wait",
+    [
+        "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);",
+        "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::SRCB_VLD);",
+    ],
+)
+def test_valid_only_wait_warns_about_the_missing_drain(tmp_path, wait):
+    """SRC?_VLD without MATH: a bank-clearing math op still in flight makes the valid bit test
+    the old bank, so the wait passes vacuously. Distinct warning, still advisory."""
+    f = hdr(
+        tmp_path,
+        "vld_only.h",
+        f"""
+        inline void _llk_math_thing_()
+        {{
+            {wait}
+            TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+        }}
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 0
+    assert "MOVD2B behind a SRCB_VLD wait that does not drain math" in r.stdout
+    assert "no SRCB_VLD wait" not in r.stdout
+
+
+def test_valid_only_helper_call_warns_about_the_missing_drain(tmp_path):
+    f = hdr(
+        tmp_path,
+        "vld_only_helper.h",
+        """
+        inline void srcb_vld_wait()
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+        }
+
+        inline void _llk_math_thing_()
+        {
+            srcb_vld_wait();
+            TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+        }
+        """,
+    )
+    out = run(f).stdout
+    assert "MOVD2B behind a SRCB_VLD wait that does not drain math" in out
+    assert "_llk_math_thing_" in out
+
+
+def test_drain_without_valid_bit_does_not_cover(tmp_path):
+    """MATH alone drains but never waits for the bank: still 'no SRCB_VLD wait'."""
+    f = hdr(
+        tmp_path,
+        "math_only.h",
+        """
+        inline void _llk_math_thing_()
+        {
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH);
+            TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+        }
+        """,
+    )
+    assert "MOVD2B with no SRCB_VLD wait" in run(f).stdout
 
 
 def test_wrong_bank_wait_does_not_cover(tmp_path):
@@ -167,7 +234,7 @@ def test_one_function_wait_does_not_cover_another(tmp_path):
         {
         inline void _waits_()
         {
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCB_VLD);
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
             TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
         }
 

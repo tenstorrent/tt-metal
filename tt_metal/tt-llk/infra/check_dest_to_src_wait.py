@@ -7,9 +7,17 @@ Src auto-wait covers only instructions that READ a source register. Software has
 bank's valid bit first -- `SRCA_VLD` before `MOVD2A`, `SRCB_VLD` before `MOVD2B` -- or the move
 can overwrite a bank the unpacker still owns.
 
+The valid bit alone is not enough. `SRC?_VLD` tests the bank that `MatrixUnit.Src?Bank` names
+right now, and that pointer flips when a bank-clearing math instruction (`CLR_A` / `CLR_B` /
+`CLEARDVALID`) completes. With such an instruction still in flight, the wait samples the OLD
+bank, which is still valid, passes, and the move then writes the NEW bank -- the one the
+unpacker owns. So the same `STALLWAIT` must also drain math: `p_stall::MATH` together with the
+valid bit, which is what the `cmath_common.h` helpers issue.
+
 Scope is one function body (see check_mutex_balance.functions). A move is covered when, earlier
-in the same body, there is a `STALLWAIT` whose arguments name the matching `SRC?_VLD`, or a call
-to a function whose body contains such a wait (`srca_bank_wait()`, `move_d2a_fixed_face()`).
+in the same body, there is a `STALLWAIT` whose arguments name both `MATH` and the matching
+`SRC?_VLD`, or a call to a function whose body contains such a wait (`srca_bank_wait()`,
+`move_d2a_fixed_face()`). A wait that names the valid bit but not `MATH` gets its own warning.
 Moves inside a file-local `#define` count at the macro's use site.
 
 This is a WARNING, never a failure: the exit status is always 0. A wait can legitimately live
@@ -51,8 +59,18 @@ def _move_re(move, macros):
     return re.compile(r"\b(?:" + "|".join(names) + r")" + _CALL)
 
 
-def _wait_re(vld, providers):
-    stall = rf"\bTTI?_STALLWAIT\s*\([^;]*\b{vld}\b[^;]*\)"
+# A STALLWAIT that names the valid bit; `full` additionally requires MATH among its arguments.
+def _stall_re(vld, full):
+    args = r"[^;]*"
+    if full:
+        # MATH and the valid bit in either order (the token MATH, not STALL_MATH).
+        both = rf"(?:\bMATH\b{args}\b{vld}\b|\b{vld}\b{args}\bMATH\b)"
+        return rf"\bTTI?_STALLWAIT\s*\({args}{both}{args}\)"
+    return rf"\bTTI?_STALLWAIT\s*\({args}\b{vld}\b{args}\)"
+
+
+def _wait_re(vld, providers, full):
+    stall = _stall_re(vld, full)
     if not providers:
         return re.compile(stall)
     calls = r"\b(?:" + "|".join(re.escape(p) for p in sorted(providers)) + r")" + _CALL
@@ -132,8 +150,12 @@ def _name(lines, brace_line):
 
 
 def wait_providers(paths):
-    """Function names whose body waits on each valid bit -- a call to one covers a later move."""
-    providers = {vld: set() for _, vld in PAIRS}
+    """Function names whose body waits on each valid bit, split by whether the wait also drains
+    math: a call to a `full` provider covers a later move; a call to a `vld_only` provider is
+    the same as writing the valid-only wait inline."""
+    providers = {
+        kind: {vld: set() for _, vld in PAIRS} for kind in ("full", "vld_only")
+    }
     for path in paths:
         src = open(path, errors="ignore").read()
         if "STALLWAIT" not in src or "_VLD" not in src:
@@ -141,15 +163,24 @@ def wait_providers(paths):
         lines = _blank_noncode(src).split("\n")
         for brace_line, _end, body, _guard in functions(src):
             for _move, vld in PAIRS:
-                if re.search(rf"\bTTI?_STALLWAIT\s*\([^;]*\b{vld}\b", body):
-                    name = _name(lines, brace_line)
-                    if name:
-                        providers[vld].add(name)
+                if re.search(_stall_re(vld, full=True), body):
+                    kind = "full"
+                elif re.search(_stall_re(vld, full=False), body):
+                    kind = "vld_only"
+                else:
+                    continue
+                name = _name(lines, brace_line)
+                if name:
+                    providers[kind][vld].add(name)
     return providers
 
 
 def scan(path, providers):
-    """Yield (line, move, vld, signature) for each move with no matching wait earlier in its body."""
+    """Yield (line, move, vld, kind, signature) for each move whose body has no full wait earlier.
+
+    `kind` is "none" (no wait on the bank at all) or "vld_only" (a wait on the valid bit that
+    does not drain math).
+    """
     src = open(path, errors="ignore").read()
     if "MOVD2" not in src:
         return
@@ -157,7 +188,8 @@ def scan(path, providers):
     lines = src.split("\n")
     for move, vld in PAIRS:
         move_pat = _move_re(move, _move_macros(code, move))
-        wait_pat = _wait_re(vld, providers[vld])
+        full_pat = _wait_re(vld, providers["full"][vld], full=True)
+        vld_pat = _wait_re(vld, providers["vld_only"][vld], full=False)
         for brace_line, _end, body, _guard in functions(src):
             spans = _recorded_spans(body)
             moves = [
@@ -167,13 +199,19 @@ def scan(path, providers):
             ]
             if not moves:
                 continue
-            first_wait = wait_pat.search(body)
             first_move = moves[0]
-            if first_wait and first_wait.start() < first_move.start():
+            full = full_pat.search(body)
+            if full and full.start() < first_move.start():
                 continue
+            vld_only = vld_pat.search(body)
+            kind = (
+                "vld_only"
+                if vld_only and vld_only.start() < first_move.start()
+                else "none"
+            )
             line = brace_line + body.count("\n", 0, first_move.start())
             sig = _signature(lines, brace_line)
-            yield line + 1, move, vld, lines[sig].strip()[:76]
+            yield line + 1, move, vld, kind, lines[sig].strip()[:76]
 
 
 def main():
@@ -194,20 +232,33 @@ def main():
     for path in files:
         if not path.endswith((".h", ".hpp")):
             continue
-        for line, move, vld, head in scan(path, providers):
+        for line, move, vld, kind, head in scan(path, providers):
             n += 1
-            print(
-                f"{path}:{line}: warning: {move} with no {vld} wait before it in this function"
-            )
-            print(f"  in: {head}")
-            print(
-                f"  {move} does not wait for the Matrix Unit to own the bank it writes. Add"
-                f" TTI_STALLWAIT(p_stall::STALL_MATH, ... {vld}) before it, or confirm the"
-                " caller waits.\n"
-            )
+            if kind == "vld_only":
+                print(
+                    f"{path}:{line}: warning: {move} behind a {vld} wait that does not drain"
+                    " math (no p_stall::MATH)"
+                )
+                print(f"  in: {head}")
+                print(
+                    f"  With a bank-clearing math instruction in flight, {vld} is sampled on the"
+                    " old bank and passes; the move then writes the bank the unpacker owns."
+                    f" Wait on p_stall::MATH | p_stall::{vld} in the same STALLWAIT.\n"
+                )
+            else:
+                print(
+                    f"{path}:{line}: warning: {move} with no {vld} wait before it in this function"
+                )
+                print(f"  in: {head}")
+                print(
+                    f"  {move} does not wait for the Matrix Unit to own the bank it writes. Add"
+                    f" TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::{vld})"
+                    " before it, or confirm the caller waits.\n"
+                )
     if n:
         print(
-            f"{n} Dest->Src move(s) with no source-bank wait in the same function (warning only)."
+            f"{n} Dest->Src move(s) without a math-draining source-bank wait in the same"
+            " function (warning only)."
         )
     return 0
 
