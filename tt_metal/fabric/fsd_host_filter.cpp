@@ -205,6 +205,11 @@ void align_factory_descriptor_with_live(
 
     fsd.set_discovery_data(
         my_fsd_hostname, live.get_rank_for_hostname(live.my_host_name()), live.get_all_hostnames_unique());
+
+    // The factory file has no board id, so it cannot tell a rev C galaxy from a rev AB one. The live
+    // descriptor can, from the board id, and the grouping the mapper loads is chosen from this flag.
+    // Leaving it unset seats a rev C machine on the rev AB grouping, which then fails to place.
+    fsd.set_is_bh_galaxy_rev_c(live.is_bh_galaxy_rev_c());
 }
 
 void throw_on_fsd_chips_absent_from_live(
