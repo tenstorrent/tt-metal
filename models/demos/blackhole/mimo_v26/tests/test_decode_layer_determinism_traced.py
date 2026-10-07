@@ -19,6 +19,7 @@ from models.demos.blackhole.mimo_v26.tt.kv_pool import KVLayout  # noqa: E402
 from models.demos.blackhole.mimo_v26.tt.model import MiMoModel  # noqa: E402
 
 E = os.environ.get
+TAPS = E("DEC_TAPS", "attn_out,ffn_in,ffn_out,h_out").split(",")
 OUT = E("DEC_OUT", "/tmp/dec_ldet.jsonl")
 
 
@@ -84,7 +85,7 @@ def main():
         R = int(E("DEC_REPS", "30"))
         for rep in range(R):
             ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
-            runs.append([{k: host(mesh, v) for k, v in t.items()} for t in taps_dev])
+            runs.append([{k: host(mesh, v) for k, v in t.items() if k in TAPS} for t in taps_dev])
         live = alive
         # per layer/tap: in how many of the R-1 replays do LIVE slots of each mesh row differ from replay 0?
         stats = {}
