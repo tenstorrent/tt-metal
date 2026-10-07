@@ -284,12 +284,27 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 #else
     constexpr bool pow2_scaler = false;
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(REDUCE_ROW_BLOCK)
+    // One block call per row of at least 8 resident tiles (Blackhole's reduce_block, the scaler held for the row).
+    constexpr bool row_block =
+        reduce_dim == ReduceDim::REDUCE_ROW && (pool_type == PoolType::SUM || pool_type == PoolType::AVG);
+#else
+    constexpr bool row_block = false;
+#endif
 
     for (uint32_t i = 0; i < rows; i++) {
         reconfig_data_format_srca(in0_cb);
         tile_regs_acquire();
         reduce_init<pool_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(in0_cb, scale_cb, out_cb);
-        for (uint32_t j = 0; j < cols; j++) {
+        uint32_t j_start = 0;
+        if constexpr (row_block) {
+            if (cols >= 8) {
+                reduce_block<pool_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(
+                    in0_cb, scale_cb, i * cols, 0, reduce_dst_idx, cols, 0);
+                j_start = cols;
+            }
+        }
+        for (uint32_t j = j_start; j < cols; j++) {
             reduce_tile<pool_type, reduce_dim, DST_ACCUM_MODE, pow2_scaler>(
                 in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
         }

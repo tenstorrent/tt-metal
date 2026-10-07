@@ -188,6 +188,18 @@ constexpr bool reduce_pow2_scaler = true;
 constexpr bool reduce_pow2_scaler = false;
 #endif
 
+// Blackhole's reduce_block for one resident REDUCE_COL column of at least 8 tiles (one unpack context per chunk), in a
+// kernel that defines REDUCE_COL_BLOCK before this header.
+template <PoolType reduce_type, ReduceDim reduce_dim, bool is_sfpu, ReduceInputPolicy input_policy>
+constexpr bool uses_reduce_col_block() {
+#if defined(ARCH_BLACKHOLE) && defined(REDUCE_COL_BLOCK)
+    return !is_sfpu && !waits_per_tile(input_policy) && reduce_dim == ReduceDim::REDUCE_COL;
+#else
+    return false;
+#endif
+}
+constexpr uint32_t reduce_col_block_min_tiles = 8;
+
 // =============================================================================
 // Helper Function Implementations
 // =============================================================================
@@ -630,7 +642,22 @@ ALWI void reduce(
                     }
                 }
 
-                for (uint32_t ht = 0; ht < Ht; ++ht) {
+                uint32_t ht_start = 0;
+                if constexpr (uses_reduce_col_block<reduce_type, reduce_dim, is_sfpu, input_policy>()) {
+                    if (current_chunk == 1 && Ht >= reduce_col_block_min_tiles &&
+                        (waits_bulk(input_policy) || stride == 1)) {
+                        reduce_block<reduce_type, reduce_dim, DST_ACCUM_MODE, reduce_pow2_scaler>(
+                            input_dfb_id,
+                            scaler_dfb_id,
+                            waits_bulk(input_policy) ? 0 : batch_offset + wt,
+                            0,
+                            get_dst_index(accumulate),
+                            Ht,
+                            0);
+                        ht_start = Ht;
+                    }
+                }
+                for (uint32_t ht = ht_start; ht < Ht; ++ht) {
                     // Base dst_index: from accumulation config or 0 for multi-column output
                     uint32_t dst_idx = get_dst_index(accumulate);
                     for (uint32_t i = wt; i < chunk_end; ++i) {
