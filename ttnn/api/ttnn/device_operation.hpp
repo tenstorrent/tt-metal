@@ -624,7 +624,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // TODO: #37267 - Remove this short-circuit once we have a better way to handle inactive MeshDevices.
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
     // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
-    if (mesh_device->get_view().get_devices().empty()) {
+    if (mesh_device->is_remote_only()) {
         tracked_function.end(tensor_return_value);
         return tensor_return_value;
     }

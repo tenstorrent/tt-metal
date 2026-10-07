@@ -71,8 +71,11 @@ std::vector<tt::tt_metal::CoreCoord> pick_tilize_cores_in_upper_rows(
     return picked;
 }
 
-std::optional<CoreRange> find_combine_strip_avoiding(
-    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid, uint32_t strip_height, uint32_t max_y_inclusive) {
+std::optional<tt::tt_metal::CoreRange> find_combine_strip_avoiding(
+    const CoreCoordPairSet& avoid,
+    const tt::tt_metal::CoreCoord& worker_grid,
+    uint32_t strip_height,
+    uint32_t max_y_inclusive) {
     if (kMoEComputeCombineStripWidth > worker_grid.x || strip_height == 0) {
         return std::nullopt;
     }
@@ -91,7 +94,7 @@ std::optional<CoreRange> find_combine_strip_avoiding(
                 }
             }
             if (valid) {
-                return CoreRange(
+                return tt::tt_metal::CoreRange(
                     {static_cast<uint32_t>(sx), sy},
                     {static_cast<uint32_t>(sx) + kMoEComputeCombineStripWidth - 1, sy + strip_height - 1});
             }
@@ -100,16 +103,20 @@ std::optional<CoreRange> find_combine_strip_avoiding(
     return std::nullopt;
 }
 
-std::vector<tt::tt_metal::CoreCoord> pick_combine_cores_from_strip(const CoreRange& strip, uint32_t num_cores) {
-    const CoreRangeSet strip_range_set(strip);
+std::vector<tt::tt_metal::CoreCoord> pick_combine_cores_from_strip(
+    const tt::tt_metal::CoreRange& strip, uint32_t num_cores) {
+    const tt::tt_metal::CoreRangeSet strip_range_set(strip);
     return corerange_to_cores(strip_range_set, num_cores, /*row_wise=*/true);
 }
 
 // Search for any dense width x height rectangle that fits below the tilize rows. Used when the
 // legacy 2-wide eastern strip is too tall for short harvested grids (e.g. WH 7x9 + 16 combine
 // cores needs 8 rows at width 2, but only 7 rows are available below tilize).
-std::optional<CoreRange> find_dense_combine_rectangle_avoiding(
-    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid, uint32_t num_cores, uint32_t max_y_inclusive) {
+std::optional<tt::tt_metal::CoreRange> find_dense_combine_rectangle_avoiding(
+    const CoreCoordPairSet& avoid,
+    const tt::tt_metal::CoreCoord& worker_grid,
+    uint32_t num_cores,
+    uint32_t max_y_inclusive) {
     if (num_cores == 0) {
         return std::nullopt;
     }
@@ -150,7 +157,7 @@ std::optional<CoreRange> find_dense_combine_rectangle_avoiding(
                     }
                 }
                 if (valid) {
-                    return CoreRange(
+                    return tt::tt_metal::CoreRange(
                         {static_cast<uint32_t>(sx), sy},
                         {static_cast<uint32_t>(sx) + rect_width - 1, sy + rect_height - 1});
                 }
@@ -160,7 +167,8 @@ std::optional<CoreRange> find_dense_combine_rectangle_avoiding(
     return std::nullopt;
 }
 
-std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid) {
+std::optional<tt::tt_metal::CoreRange> find_tilize_2x2_block_avoiding(
+    const CoreCoordPairSet& avoid, const tt::tt_metal::CoreCoord& worker_grid) {
     constexpr uint32_t kTilizeBlockWidth = 2;
     constexpr uint32_t kTilizeBlockHeight = 2;
 
@@ -181,7 +189,7 @@ std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& 
             }
         }
         if (valid) {
-            return CoreRange(
+            return tt::tt_metal::CoreRange(
                 {static_cast<uint32_t>(sx), sy},
                 {static_cast<uint32_t>(sx) + kTilizeBlockWidth - 1, sy + kTilizeBlockHeight - 1});
         }
@@ -189,7 +197,8 @@ std::optional<CoreRange> find_tilize_2x2_block_avoiding(const CoreCoordPairSet& 
     return std::nullopt;
 }
 
-std::vector<tt::tt_metal::CoreCoord> pick_tilize_cores_from_2x2_legacy_order(const CoreRange& block, uint32_t num_cores) {
+std::vector<tt::tt_metal::CoreCoord> pick_tilize_cores_from_2x2_legacy_order(
+    const tt::tt_metal::CoreRange& block, uint32_t num_cores) {
     const uint32_t sx = block.start_coord.x;
     const uint32_t sy = block.start_coord.y;
 
@@ -227,7 +236,7 @@ uint32_t compute_moe_compute_tilize_num_cores(uint32_t hidden_tiles) {
 // (not just the matmul cores) is what guarantees the tilize/combine rectangles stay disjoint from it:
 // the tilize drain multicasts metadata/data to the matmul bbox rectangle, so any tilize/combine core
 // inside that rectangle would be spuriously signalled or have its L1 corrupted.
-void add_bbox_cells(CoreCoordPairSet& avoid, const CoreRange& bbox) {
+void add_bbox_cells(CoreCoordPairSet& avoid, const tt::tt_metal::CoreRange& bbox) {
     for (uint32_t y = bbox.start_coord.y; y <= bbox.end_coord.y; ++y) {
         for (uint32_t x = bbox.start_coord.x; x <= bbox.end_coord.x; ++x) {
             avoid.insert({x, y});
@@ -257,7 +266,7 @@ std::vector<tt::tt_metal::CoreCoord> build_matmul_ring_cores(
     }
 
     CoreCoordPairSet used = core_coords_to_pair_set(cores);
-    const CoreRange base_bbox = CoreRangeSet(cores).bounding_box();
+    const tt::tt_metal::CoreRange base_bbox = tt::tt_metal::CoreRangeSet(cores).bounding_box();
 
     std::set<uint32_t> matmul_cols;
     for (const auto& c : cores) {
@@ -337,8 +346,8 @@ std::vector<tt::tt_metal::CoreCoord> build_compact_matmul_cores(
 struct PlacedWorkers {
     std::vector<tt::tt_metal::CoreCoord> combine_cores;
     std::vector<tt::tt_metal::CoreCoord> tilize_cores;
-    CoreRange combine_bounding_box;
-    CoreRange tilize_bounding_box;
+    tt::tt_metal::CoreRange combine_bounding_box;
+    tt::tt_metal::CoreRange tilize_bounding_box;
 };
 
 // Place combine (dense 2-wide strip) and tilize (2x2 block on the top two rows) so that all three
@@ -357,7 +366,7 @@ struct PlacedWorkers {
 // accepted count is always a divisor of hidden_tiles. 1 always divides, so the loop always succeeds.
 std::optional<PlacedWorkers> place_combine_and_tilize(
     const tt::tt_metal::CoreCoord& worker_grid,
-    const CoreRange& matmul_bounding_box,
+    const tt::tt_metal::CoreRange& matmul_bounding_box,
     const CoreCoordPairSet& mux_pairs,
     uint32_t num_combine_cores,
     uint32_t target_tilize_num_cores,
@@ -391,7 +400,7 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
     if (combine_cores.size() != num_combine_cores) {
         return std::nullopt;
     }
-    const CoreRange combine_bounding_box = CoreRangeSet(combine_cores).bounding_box();
+    const tt::tt_metal::CoreRange combine_bounding_box = tt::tt_metal::CoreRangeSet(combine_cores).bounding_box();
     // selective_reduce_combine multicasts across combine_bounding_box as a full rectangle.
     // Reject sparse fallback placements so destination count and rectangle stay consistent.
     if (combine_bounding_box.size() != num_combine_cores) {
@@ -418,7 +427,7 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
         if (tilize_cores.size() != tilize_num_cores) {
             continue;
         }
-        const CoreRange tilize_bounding_box = CoreRangeSet(tilize_cores).bounding_box();
+        const tt::tt_metal::CoreRange tilize_bounding_box = tt::tt_metal::CoreRangeSet(tilize_cores).bounding_box();
         if (tilize_bounding_box.intersects(combine_bounding_box) ||
             tilize_bounding_box.intersects(matmul_bounding_box)) {
             continue;
@@ -439,7 +448,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
     uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set,
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set,
     uint32_t bh_ring_size) {
     /*
      * Core-selection strategy (all in LOGICAL coordinates; harvesting is transparent because
@@ -521,7 +530,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
     if (dram_ring.size() == ring_size && !dram_ring_hits_mux) {
         placed = place_combine_and_tilize(
             worker_grid,
-            CoreRangeSet(dram_ring).bounding_box(),
+            tt::tt_metal::CoreRangeSet(dram_ring).bounding_box(),
             mux_pairs,
             num_combine_cores,
             target_tilize_num_cores,
@@ -546,7 +555,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
             }
             std::optional<PlacedWorkers> candidate_placed = place_combine_and_tilize(
                 worker_grid,
-                CoreRangeSet(candidate).bounding_box(),
+                tt::tt_metal::CoreRangeSet(candidate).bounding_box(),
                 mux_pairs,
                 num_combine_cores,
                 target_tilize_num_cores,
@@ -573,13 +582,13 @@ MoEComputeCoreSelection select_moe_compute_cores(
 
     std::vector<tt::tt_metal::CoreCoord> combine_cores = std::move(placed->combine_cores);
     std::vector<tt::tt_metal::CoreCoord> tilize_cores = std::move(placed->tilize_cores);
-    const CoreRange combine_bounding_box = placed->combine_bounding_box;
-    const CoreRange tilize_bounding_box = placed->tilize_bounding_box;
+    const tt::tt_metal::CoreRange combine_bounding_box = placed->combine_bounding_box;
+    const tt::tt_metal::CoreRange tilize_bounding_box = placed->tilize_bounding_box;
 
-    const CoreRangeSet matmul_core_range_set = CoreRangeSet(matmul_cores);
-    const CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
-    const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
-    const CoreRangeSet combine_core_range_set = CoreRangeSet(combine_cores);
+    const tt::tt_metal::CoreRangeSet matmul_core_range_set = tt::tt_metal::CoreRangeSet(matmul_cores);
+    const tt::tt_metal::CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
+    const tt::tt_metal::CoreRangeSet tilize_core_range_set = tt::tt_metal::CoreRangeSet(tilize_cores);
+    const tt::tt_metal::CoreRangeSet combine_core_range_set = tt::tt_metal::CoreRangeSet(combine_cores);
 
     // Invariant: the three multicast rectangles must be mutually disjoint. Promoted to hard asserts so
     // a bad layout fails loudly at program-build time instead of hanging on device.
@@ -617,15 +626,17 @@ MoEComputeCoreSelection select_moe_compute_cores(
         tilize_cores.size(),
         tilize_bounding_box.str());
 
-    const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(matmul_core_range_set);
+    const tt::tt_metal::CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(matmul_core_range_set);
 
     // Stable x-major order matches the combine core indexing used by dm1's OUTPUT_SHARD_CORE_MAP.
     std::sort(combine_cores.begin(), combine_cores.end(), [](const auto& a, const auto& b) {
         return (a.x != b.x) ? a.x < b.x : a.y < b.y;
     });
 
-    const CoreRangeSet combine_matmul_core_range_set = combine_core_range_set.merge(matmul_core_range_set);
-    const CoreRangeSet all_worker_cores_range_set = tilize_matmul_core_range_set.merge(combine_core_range_set);
+    const tt::tt_metal::CoreRangeSet combine_matmul_core_range_set =
+        combine_core_range_set.merge(matmul_core_range_set);
+    const tt::tt_metal::CoreRangeSet all_worker_cores_range_set =
+        tilize_matmul_core_range_set.merge(combine_core_range_set);
 
     return {
         .tilize_cores = std::move(tilize_cores),
