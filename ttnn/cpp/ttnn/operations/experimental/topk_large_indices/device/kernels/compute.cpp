@@ -80,6 +80,8 @@ inline void _topk_large_indices_mark_neginf_indices_() {
 namespace {
 
 constexpr uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
+// The input's rows span two or more chunks; a program of one-chunk rows compiles neither the split nor the short init.
+constexpr bool multi_chunk_rows = get_compile_time_arg_val(6) != 0;
 
 using ttnn::operations::experimental::topk_large_indices::program::ComputeBodyMode;
 
@@ -91,7 +93,7 @@ FORCE_INLINE void copy_chunk(CircularBuffer& input, uint32_t dst, uint32_t activ
     const uint32_t input_cb = input.get_cb_id();
 
     input.wait_front(tiles_per_sequence);
-    if constexpr (FirstOfRow) {
+    if constexpr (FirstOfRow || !multi_chunk_rows) {
         topk_xl_copy_tile_init(input_cb);
     } else {
         topk_xl_copy_tile_init_short(input_cb);
@@ -340,7 +342,7 @@ void kernel_main() {
     CircularBuffer indices(indices_cb);
 
 #ifdef ARCH_BLACKHOLE
-    if constexpr (K == 512 && body_mode == ComputeBodyMode::FusedEndToEnd) {
+    if constexpr (K == 512 && body_mode == ComputeBodyMode::FusedEndToEnd && multi_chunk_rows) {
         if (num_chunks >= 2) {
             MATH((topk_large_indices_split::start()));
             PACK((topk_large_indices_split::wait_start()));
