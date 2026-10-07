@@ -110,7 +110,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -118,12 +120,12 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
-        std::nullopt,        // attn_mask
-        page_table_tensor,   // page_table
-        std::nullopt,        // attention_sink
+        std::nullopt,       // attn_mask
+        page_table_tensor,  // page_table
+        attention_sink,
         /*is_causal=*/true,  // Always causal for chunked version
         scale,
-        std::nullopt,  // sliding_window_size (not supported yet)
+        sliding_window_size,
         chunk_start_idx,
         std::nullopt,  // chunk_start_idx_tensor
         false,         // use_mla
@@ -148,7 +150,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -158,10 +162,10 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         input_tensor_v,
         std::nullopt,       // attn_mask
         page_table_tensor,  // page_table
-        std::nullopt,       // attention_sink
+        attention_sink,
         /*is_causal=*/true,
         scale,
-        std::nullopt,  // sliding_window_size
+        sliding_window_size,
         std::nullopt,
         chunk_start_idx_tensor,
         false,         // use_mla

@@ -100,6 +100,17 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_UINT32,
     LGAMMA_STIRLING_FP32,
     ADD_TOP_ROW,
+    RSHFT,
+    LSHFT,
+    LOGICAL_RSHFT,
+    LOGADDEXP,
+    LOGADDEXP2,
+};
+
+enum class DataLayout
+{
+    TILE      = 0,
+    ROW_MAJOR = 1
 };
 
 enum class ActivationType

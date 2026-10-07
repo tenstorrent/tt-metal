@@ -360,18 +360,15 @@ def test_error_functions(device, ttnn_op, low, high):
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over both signs
 #
-# The kernel's only departure from 1 ULP is at the small-output end, and it is
-# sharp on the input side: the device packs zero as soon as 1/x would land at
-# or below the smallest normal, which is |x| >= 2^126 exactly. Splitting the
-# sweep there is what keeps the comparison honest. Flushing both outputs at a
-# fixed threshold instead straddles pairs that are 1 ULP apart — at
-# x = 8.474e37 the golden is 1.1847e-38 and the device returns the adjacent
-# 1.1755e-38, and a threshold between them zeroes one side and reports the
-# 129 ULP of a value-against-zero comparison.
+# Split at |x| = 2^126, whose reciprocal is the smallest normal BF16.
+# Wormhole preserves that boundary result; the other architectures retain
+# their existing flush-to-zero behavior there. Larger magnitudes produce
+# subnormal reciprocals and are flushed to +0. Test the boundary separately
+# so the normal-domain comparison does not mask underflow errors.
 # ─────────────────────────────────────────────────────────────────────────────
 
-RECIPROCAL_FTZ_INPUT = 2.0**126
-RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
+RECIPROCAL_BOUNDARY_INPUT = 2.0**126
+RECIPROCAL_MAX_INPUT = RECIPROCAL_BOUNDARY_INPUT * (1 - 2.0**-8)  # largest bfloat16 below it
 
 
 @pytest.mark.parametrize(
@@ -383,9 +380,9 @@ RECIPROCAL_MAX_INPUT = RECIPROCAL_FTZ_INPUT * (1 - 2.0**-8)  # largest bfloat16 
     ids=["positive", "negative"],
 )
 def test_reciprocal(device, low, high):
-    """Every normal bfloat16 of one sign whose reciprocal the device can still
-    represent. This covers |x| < 1, where 1/x amplifies instead of shrinking
-    and the output runs all the way up to 2^126, as well as the shrinking half.
+    """Every normal bfloat16 of one sign below the underflow boundary.
+    This covers |x| < 1, where 1/x amplifies instead of shrinking and the
+    output runs all the way up to 2^126, as well as the shrinking half.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
@@ -397,25 +394,23 @@ def test_reciprocal(device, low, high):
     tt_result = ttnn.reciprocal(tt_in)
     result = ttnn.to_torch(tt_result)
 
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+    ulp_threshold = 0 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 1
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold)
 
 
 @pytest.mark.parametrize(
     "low, high",
     [
-        (RECIPROCAL_FTZ_INPUT, MAX_BF16),
-        (-MAX_BF16, -RECIPROCAL_FTZ_INPUT),
+        (RECIPROCAL_BOUNDARY_INPUT, MAX_BF16),
+        (-MAX_BF16, -RECIPROCAL_BOUNDARY_INPUT),
     ],
     ids=["positive", "negative"],
 )
-def test_reciprocal_flushes_to_zero(device, low, high):
-    """From |x| = 2^126 up the device returns exactly 0, and the sign goes with
-    the magnitude — the negative half returns +0, not -0.
-
-    The cutoff is a step early rather than a rounding artifact: 1/2^126 is the
-    smallest normal itself, so the device gives up before subnormals even
-    start, and every input in this range has a nonzero reciprocal that
-    bfloat16 can hold.
+def test_reciprocal_underflow_boundary(device, low, high):
+    """Wormhole returns +/-2^-126 at +/-2^126 and +0 beyond that boundary.
+    Other architectures retain their existing +0 result at the boundary.
+    Every exact reciprocal in this range is nonzero and BF16-representable
+    after rounding, but subnormal outputs are flushed on the device.
     """
     input_tensor = generate_bfloat16_bits_in_range(low, high)
 
@@ -423,8 +418,12 @@ def test_reciprocal_flushes_to_zero(device, low, high):
     result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
 
     assert (golden != 0).all(), "expected every reciprocal in this range to be representable"
-    assert_equal(torch.zeros_like(result), result)
-    assert not torch.signbit(result).any(), "flushed results must be +0 for both input signs"
+    expected = torch.zeros_like(result)
+    if device.arch() == ttnn.device.Arch.WORMHOLE_B0:
+        boundary = input_tensor.abs() == RECIPROCAL_BOUNDARY_INPUT
+        expected[boundary] = golden[boundary]
+    assert_equal(expected, result)
+    assert not torch.signbit(result[expected == 0]).any(), "flushed results must be +0 for both input signs"
 
 
 def test_reciprocal_zero_and_nonfinite(device):
@@ -720,3 +719,77 @@ def test_bessel_ops(device, ttnn_op, low, high):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("generated_first", [True, False])
+def test_asinh_with_sqrt_in_sfpu_chain(device, generated_first):
+    """asinh in one SFPU chain with stock sqrt, both orders.
+
+    Each chain step runs the kernel its own TT-NN op runs, and the second op stores exactly what it
+    stores standalone on the first op's device result, which the chain keeps in DEST.
+    """
+    generated = (ttnn.UnaryWithParam(ttnn.UnaryOpType.ASINH), lambda tensor: ttnn.asinh(tensor))
+    stock = (ttnn.UnaryWithParam(ttnn.UnaryOpType.SQRT), lambda tensor: ttnn.sqrt(tensor))
+    first, second = (generated, stock) if generated_first else (stock, generated)
+    input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    def words(tensor):
+        return ttnn.to_torch(tensor).view(torch.int16)
+
+    for step, standalone in (generated, stock):
+        assert torch.equal(
+            words(ttnn.unary_chain(tt_in, [step])), words(standalone(tt_in))
+        ), f"{step} is not its op's kernel"
+
+    result = words(ttnn.unary_chain(tt_in, [first[0], second[0]]))
+    middle = ttnn.to_torch(first[1](tt_in))
+    expected = words(second[1](to_tt_tensor(middle, device)))
+    # A finite normal first result sits in DEST exactly as stored, so both runs feed the second op the same input.
+    checked = torch.isfinite(middle) & (middle.abs() >= SMALLEST_NORMAL_BF16)
+    assert checked.sum() >= 64
+    mismatched = checked & (result != expected)
+    assert not mismatched.any(), (
+        f"{int(mismatched.sum())} of {int(checked.sum())} lanes differ from the standalone second op, "
+        f"first at its input {middle[mismatched][0].item()!r}"
+    )
+
+
+def test_asinh_bf16_unflushed_zero_and_subnormal_inputs(device):
+    """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
+
+    Each such input and +0 must store torch's result: its class as the BF16 pack stores it (NaN as
+    +inf, -0 as +0, a subnormal result as 0) and a finite result within 1 ULP of torch's float64
+    value. STOCK lists, per board, the inputs where the kernel stores its stock kernel's word
+    instead, as {word: [(first input, last input), ...]} over the input bits.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.asinh keeps its stock kernel on {board}")
+    STOCK = {}
+    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
+    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        t = torch.where(torch.isnan(t), torch.full_like(t, float("inf")), t)
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    actual = stored(ttnn.to_torch(ttnn.asinh(tt_x)))
+    x64 = x.flatten().to(torch.float64)
+    reference = ttnn.get_golden_function(ttnn.asinh)(x64).to(torch.float64).flatten()
+    rounded = stored(reference)
+    spacing = 2.0 ** (torch.floor(torch.log2(reference.abs().clamp(min=tiny))) - 7)
+    close = torch.isfinite(reference) & (actual != 0) & ((actual - reference).abs() < spacing)
+    ok = (actual == rounded) | close
+    bits = words.repeat(4).to(torch.int32) & 0xFFFF
+    for word, ranges in STOCK.get(board, {}).items():
+        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
+        for first, last in ranges:
+            ok |= (bits >= first) & (bits <= last) & (actual == value)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
