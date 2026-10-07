@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-// The row's tiles are resident: on Blackhole the reduce helper reduces each row sum with one block call
-#define REDUCE_ROW_BLOCK
-
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"  // sub

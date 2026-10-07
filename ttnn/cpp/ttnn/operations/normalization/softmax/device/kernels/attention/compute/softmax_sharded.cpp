@@ -4,9 +4,6 @@
 
 #include <cstdint>
 
-// The row sum's tiles are resident: on Blackhole the reduce helper reduces each row with one block call
-#define REDUCE_ROW_BLOCK
-
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/bcast.h"
