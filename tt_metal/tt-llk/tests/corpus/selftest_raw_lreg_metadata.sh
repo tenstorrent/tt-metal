@@ -37,6 +37,12 @@ if [[ ${1:-} == --target-cxx ]]; then
                 echo "FAIL: metadata added scalar stores at $arch $opt" >&2; exit 1;
             }
             echo "PASS: $cpu $opt compiled with 13 real effect markers (not a hardware test)"
+            "$target_cxx" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_TARGET_EFFECT \
+                -DTEST_DEFAULT_FALLBACK -DTEST_LUT_MODES "-DTEST_$arch" \
+                -S "$source_file" -o "$scratch/$arch.s"
+            count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
+            [[ $count == 25 ]] || { echo "FAIL: LUT modifier fixture emitted $count effects, expected 25" >&2; exit 1; }
+            echo "PASS: $cpu $opt LUT modifier combinations"
         done
     done
     "$target_cxx" -O2 -mcpu=tt-bh-tensix -DUSE_EFFECT -S \
@@ -52,6 +58,28 @@ if [[ ${1:-} == --target-cxx ]]; then
         echo "FAIL: raw write must preserve its old destination for inactive lanes" >&2; exit 1;
     }
     echo "PASS: raw destination preserved across typed load/store (assembly check)"
+    # Run all sides of the comparison. Report what existing builtins actually
+    # do; do not require them to fail or label an allocation scan silicon proof.
+    for issue in TTI TT; do
+        issue_flags=()
+        [[ $issue == TT ]] && issue_flags+=(-DUSE_MMIO)
+        for scheduling in default scheduled; do
+            schedule_flags=()
+            [[ $scheduling == scheduled ]] && schedule_flags+=(-fschedule-insns -fschedule-insns2)
+            for scheme in 0 1 2; do
+                "$target_cxx" -O2 -mcpu=tt-bh-tensix "${issue_flags[@]}" "${schedule_flags[@]}" \
+                    "-DSCHEME=$scheme" -S "$here/raw_lreg_full_annotation.cpp" -o "$scratch/gap.s"
+                if grep -Eq 'SFPLOAD[[:space:]]+L0, 1, 0, 0' "$scratch/gap.s"; then
+                    echo "OBSERVED: $issue $scheduling scheme=$scheme temporary overwrites L0"
+                    [[ $scheme != 2 ]] || { echo "FAIL: effect reservation lost raw L0" >&2; exit 1; }
+                elif grep -Eq 'SFPLOAD[[:space:]]+L[1-7], 1, 0, 0' "$scratch/gap.s"; then
+                    echo "OBSERVED: $issue $scheduling scheme=$scheme temporary avoids L0"
+                else
+                    echo "FAIL: unrecognized allocation; inspect comparator assembly" >&2; exit 1
+                fi
+            done
+        done
+    done
     if [[ $# == 4 ]]; then
         root=$(cd "$here/../../../.." && pwd)
         llk="$root/tt_metal/tt-llk/tt_llk_blackhole"
@@ -84,7 +112,7 @@ for compiler in "${CXX:-c++}" clang++; do
             QSR) target_extension=qsr ;;
         esac
         for compatibility in marker fallback legacy-target; do
-            flags=(-std=c++17 -Wall -Wextra -Werror -fsyntax-only "-DTEST_$arch")
+            flags=(-std=c++17 -Wall -Wextra -Werror -fsyntax-only -DTEST_LUT_MODES "-DTEST_$arch")
             if [[ $compatibility == fallback ]]; then
                 flags+=(-DTEST_FALLBACK)
             elif [[ $compatibility == legacy-target ]]; then
