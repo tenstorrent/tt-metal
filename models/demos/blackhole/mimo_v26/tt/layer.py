@@ -285,6 +285,16 @@ class MiMoDecoderLayer:
         tt/moe_decode.MiMoMoEDecode (router -> dead-slot routing spread -> dispatch -> experts -> combine -> all-reduce, no host reads). Without a mask the old
         untraceable path (zero pad rows, no spread, optional capacity check) is used."""
         if live is not None:
+            if getattr(self, "moe_dec", None) is None and os.environ.get("MIMO_MOE_DECODE", "unified") == "ring":
+                # RING decode MoE (tt/moe_ring.py): second, ring-layout bfp8 weight copy of this layer (NFS cache MIMO_WCACHE; build it once with tests/build_ring_cache.py)
+                from models.demos.blackhole.mimo_v26.tt.moe_ring import MiMoRingMoEDecode, RingExpertWeights
+
+                self.moe_dec = MiMoRingMoEDecode(
+                    self.mesh,
+                    self.gate,
+                    RingExpertWeights(self.mesh, self.L),
+                    router=os.environ.get("MIMO_ROUTER", "fast"),
+                )
             if getattr(self, "moe_dec", None) is None:
                 from models.demos.blackhole.mimo_v26.tt.moe_decode import MiMoMoEDecode
 
