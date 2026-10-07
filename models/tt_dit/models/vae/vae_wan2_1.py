@@ -35,6 +35,7 @@ from ...utils.conv3d import (
 )
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import (
+    bf16_tensor,
     fast_device_to_host,
     float_to_uint8,
     float_to_unit_range,
@@ -353,9 +354,9 @@ class WanCausalConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if dtype == ttnn.float32
-            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with bf16 data type and fp32_dest_acc on WH due to accuracy issues.
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2
+            ),  # Do not use HiFi3/4 with bf16 data type and fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -563,9 +564,9 @@ class WanResidualBlock(Module):
 
         self.matmul_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if (is_blackhole() or dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if (is_blackhole() or dtype == ttnn.float32) else ttnn.MathFidelity.HiFi2
+            ),  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -793,9 +794,9 @@ class WanConv2d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4
-            if dtype == ttnn.float32
-            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with bf16 data type and fp32_dest_acc on WH due to accuracy issues.
+            math_fidelity=(
+                ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2
+            ),  # Do not use HiFi3/4 with bf16 data type and fp32_dest_acc on WH due to accuracy issues.
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -1421,6 +1422,179 @@ class WanResidualUpBlock(Module):
         return x_BTHWC, logical_h, logical_w
 
 
+class WanAvgDown3D(Module):
+    """BTHWC inverse of ``WanDupUp3D``: the Wan2.2 residual *encoder* shortcut (HF ``AvgDown3D``).
+
+    HF (BCTHW): front-pad T to a multiple of ``factor_t``, space-to-channel over
+    ``(factor_t, factor_s, factor_s)`` with packed channel index ``c * factor + (dt*fs*fs + dh*fs + dw)``,
+    then mean over groups of ``group_size = C * factor / out_channels`` consecutive packed channels.
+    For every Wan2.2 encoder instance ``out_channels == in_channels * factor_t``, so the group is exactly
+    the ``fs x fs`` spatial window and output channel ``o`` is the spatial mean of input channel
+    ``o // factor_t`` at temporal offset ``dt = o % factor_t`` (``factor_t == 1``: a plain per-channel
+    2x2 average). Written with the channel axis innermost throughout: strided row / column slices and
+    adds for the spatial mean, a strided temporal slice per ``dt``, and the channel interleave as an
+    exact 0/1 permutation matmul, so no reshape ever drives the innermost dimension below ``C``
+    (the padded-copy trap ``WanDupUp3D._forward_generic`` documents). Sprint 7, lever A10.
+    """
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        factor_t: int,
+        factor_s: int = 2,
+        mesh_device: ttnn.MeshDevice | None = None,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+    ) -> None:
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.factor_t = factor_t
+        self.factor_s = factor_s
+        self.factor = factor_t * factor_s * factor_s
+        assert in_channels * self.factor % out_channels == 0
+        self.group_size = in_channels * self.factor // out_channels
+        self.identity = self.factor == 1 and in_channels == out_channels
+        if not self.identity:
+            assert self.group_size == factor_s * factor_s and out_channels == in_channels * factor_t, (
+                f"WanAvgDown3D implements the Wan2.2 instances only (group = spatial window): "
+                f"in={in_channels} out={out_channels} factor_t={factor_t} factor_s={factor_s}"
+            )
+        self._perm = None
+        if factor_t > 1 and mesh_device is not None:
+            # out[..., c*ft + dt] = cat[..., dt*C + c]  <=>  out = cat @ P, P[dt*C + c, c*ft + dt] = 1.
+            C, ft = in_channels, factor_t
+            perm = torch.zeros(ft * C, ft * C, dtype=torch.float32)
+            for dt in range(ft):
+                for c in range(C):
+                    perm[dt * C + c, c * ft + dt] = 1.0
+            self._perm = bf16_tensor(perm, device=mesh_device)
+            self._perm_compute = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
+            )
+
+    @staticmethod
+    def _tile_add(parts: list[ttnn.Tensor]) -> ttnn.Tensor:
+        acc = ttnn.to_layout(parts[0], ttnn.TILE_LAYOUT)
+        for p in parts[1:]:
+            acc = ttnn.add(acc, ttnn.to_layout(p, ttnn.TILE_LAYOUT))
+        return acc
+
+    def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        if self.identity:
+            return x_BTHWC
+        ft, fs = self.factor_t, self.factor_s
+        x = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        B, T, H, W, C = x.shape
+        pad_t = (ft - T % ft) % ft
+        if pad_t:
+            # HF pads the front of T with zeros; ttnn.pad works on the lowest 3 dims, so fold H, W.
+            x4 = ttnn.reshape(x, (B, T, H * W, C))
+            x4 = ttnn.pad(x4, [(0, 0), (pad_t, 0), (0, 0), (0, 0)], value=0.0)
+            T += pad_t
+            x = ttnn.reshape(x4, (B, T, H, W, C))
+        if fs > 1:
+            assert H % fs == 0 and W % fs == 0, f"spatial dims ({H}, {W}) not divisible by factor_s={fs}"
+            rows = [ttnn.slice(x, [0, 0, dh, 0, 0], [B, T, H, W, C], [1, 1, fs, 1, 1]) for dh in range(fs)]
+            acc = ttnn.to_layout(self._tile_add(rows), ttnn.ROW_MAJOR_LAYOUT)
+            H //= fs
+            cols = [ttnn.slice(acc, [0, 0, 0, dw, 0], [B, T, H, W, C], [1, 1, 1, fs, 1]) for dw in range(fs)]
+            acc = ttnn.multiply(self._tile_add(cols), 1.0 / (fs * fs))
+            W //= fs
+            x = ttnn.to_layout(acc, ttnn.ROW_MAJOR_LAYOUT)
+        if ft == 1:
+            return x
+        To = T // ft
+        slices = [ttnn.slice(x, [0, dt, 0, 0, 0], [B, T, H, W, C], [1, ft, 1, 1, 1]) for dt in range(ft)]
+        cat = ttnn.concat(slices, dim=-1)  # (B, To, H, W, ft*C): index dt*C + c
+        assert self._perm is not None, "WanAvgDown3D with factor_t > 1 needs mesh_device at construction"
+        cat_tile = ttnn.to_layout(ttnn.reshape(cat, (1, B * To * H * W, ft * C)), ttnn.TILE_LAYOUT)
+        out = ttnn.matmul(cat_tile, self._perm, compute_kernel_config=self._perm_compute)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.reshape(out, (B, To, H, W, ft * C))
+
+
+class WanResidualDownBlock(Module):
+    """Wan2.2 encoder down-stage: resnets + downsample + AvgDown3D residual shortcut (HF ``WanResidualDownBlock``)."""
+
+    def __init__(
+        self,
+        *,
+        in_dim: int,
+        out_dim: int,
+        num_res_blocks: int,
+        temperal_downsample: bool,
+        down_flag: bool,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: VaeHWParallelConfig,
+        ccl_manager: CCLManager,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        res_dims: ConvDims = ConvDims(),
+        tconv_dims: ConvDims = ConvDims(),
+        spatial_dims: ConvDims = ConvDims(),
+    ) -> None:
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.avg_shortcut = WanAvgDown3D(
+            in_dim,
+            out_dim,
+            factor_t=2 if temperal_downsample else 1,
+            factor_s=2 if down_flag else 1,
+            mesh_device=mesh_device,
+            dtype=dtype,
+        )
+        resnets = ModuleList()
+        current_dim = in_dim
+        for _ in range(num_res_blocks):
+            resnets.append(
+                WanResidualBlock(
+                    in_dim=current_dim,
+                    out_dim=out_dim,
+                    mesh_device=mesh_device,
+                    ccl_manager=ccl_manager,
+                    parallel_config=parallel_config,
+                    dtype=dtype,
+                    conv_dims=res_dims,
+                )
+            )
+            current_dim = out_dim
+        self.resnets = resnets
+        self.downsampler = None
+        if down_flag:
+            self.downsampler = WanResample(
+                dim=out_dim,
+                mode="downsample3d" if temperal_downsample else "downsample2d",
+                mesh_device=mesh_device,
+                ccl_manager=ccl_manager,
+                parallel_config=parallel_config,
+                dtype=dtype,
+                tconv_dims=tconv_dims,
+                spatial_dims=spatial_dims,
+            )
+
+    def forward(
+        self,
+        x_BTHWC: ttnn.Tensor,
+        logical_h: int,
+        feat_cache: list[ttnn.Tensor] | None = None,
+        feat_idx: list[int] = [0],
+        logical_w: int = 0,
+    ) -> tuple[ttnn.Tensor, int, int]:
+        assert x_BTHWC.layout == ttnn.TILE_LAYOUT, "WanResidualDownBlock expects TILE input"
+        x_copy_BTHWC = x_BTHWC
+        for resnet in self.resnets:
+            x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
+        if self.downsampler is not None:
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            x_BTHWC, logical_h, logical_w = self.downsampler(
+                x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w
+            )
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+        shortcut_BTHWC = ttnn.to_layout(self.avg_shortcut(x_copy_BTHWC), ttnn.TILE_LAYOUT)
+        return ttnn.add(x_BTHWC, shortcut_BTHWC), logical_h, logical_w
+
+
 class WanDecoder3d(Module):
     def __init__(
         self,
@@ -1849,7 +2023,7 @@ class WanEncoder3D(Module):
     ) -> None:
         super().__init__()
 
-        assert not is_residual, "is_residual is not supported"
+        self.is_residual = is_residual
         self.dim = dim
         self.z_dim = z_dim
         self.dim_mult = dim_mult
@@ -1896,6 +2070,30 @@ class WanEncoder3D(Module):
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
             stage_h, stage_w = stage_hw[i]
             res_dims = ConvDims(stage_t[i].T_res, stage_h, stage_w)
+
+            if is_residual:
+                # Wan2.2 (TI2V-5B VAE): one residual down block per stage, mirroring the HF module.
+                last = i == len(dim_mult) - 1
+                next_h, next_w = stage_hw[i + 1] if not last else (stage_h, stage_w)
+                self.down_blocks.append(
+                    WanResidualDownBlock(
+                        in_dim=in_dim,
+                        out_dim=out_dim,
+                        num_res_blocks=num_res_blocks,
+                        temperal_downsample=(temperal_downsample[i] if not last else False),
+                        down_flag=not last,
+                        mesh_device=mesh_device,
+                        ccl_manager=ccl_manager,
+                        parallel_config=parallel_config,
+                        dtype=dtype,
+                        res_dims=res_dims,
+                        tconv_dims=ConvDims(stage_t[i].T_tconv, next_h, next_w),
+                        spatial_dims=ConvDims(stage_t[i].T_spatial, stage_h, stage_w),
+                    )
+                )
+                if not last:
+                    scale /= 2.0
+                continue
 
             for _ in range(num_res_blocks):
                 self.down_blocks.append(
@@ -2014,6 +2212,10 @@ class WanEncoder3D(Module):
                     logical_w=logical_w,
                 )
                 x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+            elif isinstance(down_block, WanResidualDownBlock):
+                x_BTHWC, logical_h, logical_w = down_block(
+                    x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w
+                )
             elif isinstance(down_block, WanResidualBlock):
                 x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx, logical_w=logical_w)
             elif isinstance(down_block, WanAttentionBlock):
@@ -2237,6 +2439,19 @@ def get_neighbor_pad_num_links(ccl_manager, input_tensor, dim):
     for i in range(dim):
         upper_dims *= input_tensor.shape[i]
     return min(upper_dims, ccl_manager.num_links)
+
+
+def patchify_bcthw(x: torch.Tensor, patch_size: int) -> torch.Tensor:
+    """HuggingFace AutoencoderKLWan.patchify (B, C, T, H*p, W*p) -> (B, C*p*p, T, H, W); exact inverse of
+    ``unpatchify_bcthw`` (pixel (h*p + b, w*p + a) of channel c lands in patch channel (c*p + a)*p + b)."""
+    if patch_size <= 1:
+        return x
+    batch, channels, frames, height, width = x.shape
+    p = patch_size
+    assert height % p == 0 and width % p == 0, (height, width, p)
+    x = x.reshape(batch, channels, frames, height // p, p, width // p, p)  # (B, C, T, H, b, W, a)
+    x = x.permute(0, 1, 6, 4, 2, 3, 5).contiguous()  # (B, C, a, b, T, H, W)
+    return x.reshape(batch, channels * p * p, frames, height // p, width // p)
 
 
 def unpatchify_bcthw(x: torch.Tensor, patch_size: int) -> torch.Tensor:

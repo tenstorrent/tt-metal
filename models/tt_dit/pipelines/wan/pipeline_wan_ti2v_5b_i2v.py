@@ -38,12 +38,17 @@ import ttnn
 
 from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 
-from ...utils import tensor
-from ...utils.tensor import float32_tensor
+from ...models.vae.vae_wan2_1 import WanEncoder, patchify_bcthw
+from ...utils import cache, tensor
+from ...utils.conv3d import aligned_channels, conv3d_blocking_hash, conv_pad_height, conv_pad_width
+from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, float32_tensor
 from .pipeline_wan import WanPipelineConfig
 from .pipeline_wan_i2v import ImagePrompt, _parse_image_prompts
 from .pipeline_wan_ti2v_5b import WanTI2V5BPipeline
 from .ti2v_5b_i2v_math import blend_condition, first_frame_mask, normalize_latents, pad_timesteps_for_sequence_parallel
+
+I2V_DEVICE_ENCODER_ENV = "WAN5B_I2V_DEVICE_ENCODER"
+"""Set to 1 to encode the conditioning image with the residual VAE encoder on the mesh (sprint 7, A10)."""
 
 
 class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
@@ -75,10 +80,15 @@ class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
         self._masks_installed = False
         self._compiled_encode = None
         self.last_image_encode_seconds: float = 0.0
+        self.tt_vae_encoder: WanEncoder | None = None
 
         # Warm up ourselves, after our own state exists, and with an image_prompt -- otherwise
         # `condition_buffer` is never allocated (see pipeline_wan.py:436-438, :756-759).
         super().__init__(device=device, config=config, scheduler=scheduler, run_warmup=False, lora_enabled=lora_enabled)
+        # Sprint 7 (A10): the residual VAE encoder on device replaces the host torch encode of the
+        # seed frame (1.235 s at 1280x704). Opt-in while it is being gated: WAN5B_I2V_DEVICE_ENCODER=1.
+        if os.environ.get(I2V_DEVICE_ENCODER_ENV, "0") == "1":
+            self._build_device_encoder()
         if run_warmup:
             logger.info("Pipeline allocation run (I2V)...")
             self._warmup()
@@ -98,6 +108,84 @@ class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
         )
 
     # ------------------------------------------------------------------ conditioning
+
+    def _build_device_encoder(self) -> None:
+        """The Wan2.2 residual VAE encoder on the mesh (`WanEncoder(is_residual=True)`).
+
+        Single frame (T = 1), on the patchified image (`patch_size` 2: 12 channels at H/2 x W/2),
+        spatially split H x W across the mesh like the decoder. `latents_mean / std` are folded
+        into `quant_conv`, so the encoder emits the normalized latent `encode_condition_image`
+        promises. conv3d blockings come from the exact-shape table when present, else the
+        per-channel fallbacks (correct, not yet swept for these shapes).
+        """
+        cfg = self._vae.config
+        p = self._vae._patch_size
+        self.tt_vae_encoder = WanEncoder(
+            base_dim=cfg.base_dim,
+            in_channels=cfg.in_channels,
+            z_dim=cfg.z_dim,
+            dim_mult=cfg.dim_mult,
+            num_res_blocks=cfg.num_res_blocks,
+            attn_scales=cfg.attn_scales,
+            temperal_downsample=cfg.temperal_downsample,
+            is_residual=cfg.is_residual,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.vae_ccl_manager,
+            parallel_config=self.vae_parallel_config,
+            height=self._height // p,
+            width=self._width // p,
+            encoder_t_chunk_size=1,
+            latents_mean=cfg.latents_mean,
+            latents_std=cfg.latents_std,
+        )
+        subfolder = "vae_encoder_res_lnorm"
+        blocking_hash = conv3d_blocking_hash(self.tt_vae_encoder)
+        if blocking_hash:
+            subfolder = f"vae_encoder_res_{blocking_hash}_lnorm"
+        cache.load_model(
+            self.tt_vae_encoder,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder=subfolder,
+            parallel_config=self.vae_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+            get_torch_state_dict=lambda: self._vae.torch_state_dict(),
+        )
+        logger.info(f"I2V device encoder built (patch {p}, {self._width // p}x{self._height // p}, T=1)")
+
+    def _encode_condition_image_device(self, video_condition: torch.Tensor) -> torch.Tensor:
+        """`encode_condition_image` on the mesh: (1, 3, 1, H, W) pixels in [-1, 1] -> (1, 48, 1, h, w) normalized."""
+        p = self._vae._patch_size
+        x_BCTHW = patchify_bcthw(video_condition.to(torch.float32), p)  # (1, 12, 1, H/p, W/p)
+        frame_BTHWC = x_BCTHW.permute(0, 2, 3, 4, 1).contiguous()
+        pc = self.vae_parallel_config
+        # Three spatial down stages after patchify: pad to a multiple of 8 per device.
+        frame_BTHWC, logical_h = conv_pad_height(frame_BTHWC, pc.height_parallel.factor * 8)
+        frame_BTHWC, logical_w = conv_pad_width(frame_BTHWC, pc.width_parallel.factor * 8)
+        tt_frame = bf16_tensor_2dshard(
+            frame_BTHWC,
+            self.mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={pc.height_parallel.mesh_axis: 2, pc.width_parallel.mesh_axis: 3},
+        )
+        in_channels = frame_BTHWC.shape[-1]
+        padded_channels = aligned_channels(in_channels)
+        if padded_channels != in_channels:
+            tt_padded = ttnn.pad(
+                tt_frame, [(0, 0), (0, 0), (0, 0), (0, 0), (0, padded_channels - in_channels)], value=0.0
+            )
+            ttnn.deallocate(tt_frame)
+            tt_frame = tt_padded
+        encoded_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            tt_frame, logical_h, logical_w=logical_w, encoder_t_chunk_size=None
+        )
+        concat_dims = [None, None]
+        concat_dims[pc.height_parallel.mesh_axis] = 3
+        concat_dims[pc.width_parallel.mesh_axis] = 4
+        encoded = fast_device_to_host(encoded_BCTHW, self.mesh_device, concat_dims, ccl_manager=self.vae_ccl_manager)
+        ttnn.deallocate(encoded_BCTHW)
+        ttnn.synchronize_device(self.mesh_device)
+        return encoded[:, :, :, :new_logical_h, :new_logical_w].to(torch.float32)
 
     def encode_condition_image(
         self,
@@ -121,6 +209,9 @@ class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
         pixels = self.video_processor.preprocess(image, height=height, width=width)
         pixels = pixels.to(device=device, dtype=torch_vae.dtype)
         video_condition = pixels.unsqueeze(2)  # (1, 3, 1, H, W) -- just the seed frame
+
+        if self.tt_vae_encoder is not None:
+            return self._encode_condition_image_device(video_condition)
 
         # bf16 autocast on the host encode. Measured on this host (EPYC 9354P, avx512_bf16,
         # 1280x704): 3.386s -> 2.770s median of 3, a 0.616s saving at a latent PCC of 0.9999880
