@@ -278,7 +278,9 @@ jobs:
     if: >-
       ${{ !cancelled() && github.event_name == 'pull_request' &&
           needs.determine-scan-type.outputs.api-headers-changed == 'true' }}
-    runs-on: tt-ubuntu-2204-large-stable
+    # Mostly single-threaded (CMake configure, flatc, IWYU on a few headers); medium is
+    # the smallest self-hosted size that already runs CPU-only container jobs.
+    runs-on: tt-ubuntu-2204-medium-stable
     timeout-minutes: 30
     continue-on-error: true
     permissions:
