@@ -75,3 +75,15 @@ bh-glx-120-b0{2,3,4,5}u{02,08}, all in partition bh_sc5_B2B9_D12. Each one is a 
 - /data at 08:55: 102 GB free (100%). Below the 230 GB cold-cache guard: no e2e until others free space.
 - Next wake: log ends PCOPY_OK -> check `df -h /data`; >= 230 GB free -> step 3 (submit e2e); else hand off
   waiting on disk (probe: df avail >= 230 GB). Not PCOPY_OK -> read the log, rerun pverify.sh the same way.
+
+## Run 849 (2026-10-07 ~12:10 UTC)
+- pverify (run 817) rc=123: bad chunks were only transformer 30-37 (8, not 30). Chunks 0-29 and gemma verify OK.
+  All 8 failed 5 tries, each ending exactly at the 1800 s ssh timeout (09:30, 10:00, 10:31, 11:01, 11:32):
+  8 parallel 1 GiB streams over the ~3.4 MB/s tunnel need ~2500 s each. Not a disk error.
+  Remote file: 42.0 GB apparent, 39.8 GB allocated (sparse holes in 30-37).
+- Fix: pcopy.sh ssh timeout 3600 s, rerun with P=4 (~1260 s per stream). Only 30-37 are recopied
+  (pcopy.done has 32 transformer chunks), then full sha256 of both files. Log state/runs/849/t160-pcopy2.{log,rc}.
+- /data at 12:05: 45 GB free (100%). The 230 GB cold-cache guard blocks e2e. Not lowered.
+- Probe t160/retry_when.sh: 0 when the copy failed, or PCOPY_OK and /data >= 230 GB free.
+  On wake: copy failed -> read log; PCOPY_OK -> step 3 (submit e2e).
+- Allocations this run: none. squeue -u smarton was empty at 08:47; no jobs submitted since.
