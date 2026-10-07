@@ -4,6 +4,8 @@
 
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -c %s -o %t.o
 // RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
+// RUN: %{blackhole_objdump} -d %t.assert.o | FileCheck %s --check-prefix=ASSERT
 
 #include <cstdint>
 
@@ -31,6 +33,44 @@ extern "C" __attribute__((noinline, used)) void write_runtime_gpr_default_comple
 // CHECK: add a0,a0,[[OPA]]
 // CHECK: sw a0,0({{a[0-7]}})
 // CHECK-NEXT: ret
+
+#ifdef ENABLE_LLK_ASSERT
+
+// Known invalid values use the runtime operand factory so their checks must
+// emit ebreak. Keep these separate from release instruction-encoding checks.
+extern "C" void write_runtime_gpr_out_of_range()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr(64));
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr(256));
+}
+
+// ASSERT-LABEL: <write_runtime_gpr_out_of_range>:
+// ASSERT-NOT: sw
+// ASSERT: ebreak
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_gpr_misaligned()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr(5)));
+}
+
+// ASSERT-LABEL: <write_runtime_gpr_misaligned>:
+// ASSERT-NOT: sw
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_gpr_valid_boundaries()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr(63));
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr(60));
+}
+
+// ASSERT-LABEL: <write_runtime_gpr_valid_boundaries>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
+
+#endif
 
 extern "C" __attribute__((noinline, used)) void write_runtime_gpr_wait(std::uint32_t index)
 {

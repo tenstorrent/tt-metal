@@ -7,6 +7,7 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/gpr-reserved.cpp 2>&1 | FileCheck %s --check-prefix=GPR_RESERVED
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-mmio.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_ACCESS
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-runtime-index.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_INDEX
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_RANGE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-thread.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_THREAD
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-wide.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_WIDE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/rdcfg-word-crossing.cpp 2>&1 | FileCheck %s --check-prefix=RDCFG_CROSS
@@ -21,6 +22,8 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/operand-crossing-Bits128.cpp 2>&1 | FileCheck %s --check-prefix=GPR_SPAN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/anchor-direct-span.cpp 2>&1 | FileCheck %s --check-prefix=ANCHOR_GPR
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_ALIGN
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-index.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_INDEX
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/wrcfg-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=WRCFG_SOURCE_ALIGN
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-destination.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_DEST
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-index.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_INDEX
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/scalar-source-misaligned.cpp 2>&1 | FileCheck %s --check-prefix=SCALAR_SOURCE_ALIGN
@@ -44,6 +47,7 @@
 // GPR_RESERVED: error: static assertion failed: GPR index is reserved by hal::gpr()
 // RDCFG_ACCESS: error: static assertion failed: RDCFG requires Access::TensixCfgUnit
 // RDCFG_INDEX: error: static assertion failed: RDCFG requires a compile-time GPR index: use hal::gpr<Index>()
+// RDCFG_RANGE: error: static assertion failed: RDCFG GPR index must be in [0, 63]
 // RDCFG_THREAD: error: static assertion failed: RDCFG cannot read thread CFG (SETC16) fields
 // RDCFG_WIDE: error: static assertion failed: field wider than 32b cannot be selected through a single CFG word
 // RDCFG_CROSS: error: static assertion failed: field crosses a CFG word boundary
@@ -57,6 +61,8 @@
 // GPR_SPAN: error: static assertion failed: GPR write crosses the end of its CFG bank
 // ANCHOR_GPR: error: static assertion failed: GPR write extends past its anchor field
 // WRCFG_ALIGN: error: static assertion failed: 128-bit GPR cfg::write destination must be four-word aligned
+// WRCFG_INDEX: error: static assertion failed: WRCFG GPR index must be in [0, 63]
+// WRCFG_SOURCE_ALIGN: error: static assertion failed: 128-bit WRCFG source GPR must be four-word aligned
 // SCALAR_DEST: error: static assertion failed: Access::TensixScalarUnit supports THCON CFG destinations only
 // SCALAR_INDEX: error: static assertion failed: REG2FLOP GPR index must be in [0, 63]
 // SCALAR_SOURCE_ALIGN: error: static assertion failed: 128-bit REG2FLOP source GPR must be four-word aligned
@@ -99,6 +105,14 @@ void probe()
 void probe(std::uint32_t index)
 {
     cfg::read<cfg::Access::TensixCfgUnit, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(hal::gpr(index));
+}
+
+//--- rdcfg-index.cpp
+#include "fields.h"
+
+void probe()
+{
+    cfg::read<cfg::Access::TensixCfgUnit, cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(hal::gpr<64>());
 }
 
 //--- rdcfg-thread.cpp
@@ -196,6 +210,22 @@ void probe()
 void probe()
 {
     cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_cntx1_address, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<8>());
+}
+
+//--- wrcfg-index.cpp
+#include "fields.h"
+
+void probe()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::Thcon[cfg::Reg3].Base_address, cfg::Sec::S0>(hal::gpr<64>());
+}
+
+//--- wrcfg-source-misaligned.cpp
+#include "fields.h"
+
+void probe()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<cfg::Thcon[cfg::Reg0].TileDescriptor, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<5>()));
 }
 
 //--- scalar-destination.cpp
