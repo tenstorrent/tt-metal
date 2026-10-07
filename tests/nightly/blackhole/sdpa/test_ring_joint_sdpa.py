@@ -24,6 +24,7 @@ BH adaptation: uses init_device_compute_kernel_config instead of WormholeCompute
 
 import math
 import os
+import time
 from dataclasses import dataclass, replace
 from itertools import product
 from typing import Dict, List, Sequence, Tuple
@@ -4378,6 +4379,243 @@ def test_ring_mla_metadata_matches_scalar_rotation(kv_actual_isl, full_mesh):
             f"(max abs diff {(out_scalar - out_meta).abs().max().item()})"
         )
         logger.success(f"ring_mla rotation kv_actual_isl={kv_actual_isl}: metadata path == scalar path (bit-exact)")
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+# "toy" is the small shape the other metadata tests use. "mistral" is Mistral-Small-4's chunked prefill as
+# mla.py runs it: 640 rows per device, 8 heads per device, latent d_k = kv_lora_rank + rope = 320 with
+# d_v = 256, q_chunk 32 / k_chunk 640 at LoFi, and mla.py's default compute config (HiFi2, packer_l1_acc).
+KV_VALID_END_SHAPES = {
+    "toy": dict(chunk_local=64, local_heads=4, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=32, model_cfg=False),
+    "mistral": dict(chunk_local=640, local_heads=8, d_q=320, d_k=320, d_v=256, q_chunk=32, k_chunk=640, model_cfg=True),
+    # One-parameter steps from toy toward mistral, to find which one makes the clamped call hang.
+    "bis_chunk": dict(chunk_local=640, local_heads=4, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=32, model_cfg=False),
+    "bis_dims": dict(chunk_local=64, local_heads=8, d_q=320, d_k=320, d_v=256, q_chunk=32, k_chunk=32, model_cfg=False),
+    "bis_chunk_k640": dict(
+        chunk_local=640, local_heads=4, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=640, model_cfg=False
+    ),
+    "bis_chunk_dims": dict(
+        chunk_local=640, local_heads=8, d_q=320, d_k=320, d_v=256, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c640_h8_toydim": dict(
+        chunk_local=640, local_heads=8, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c640_h4_mdim": dict(
+        chunk_local=640, local_heads=4, d_q=320, d_k=320, d_v=256, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c128_mdim": dict(
+        chunk_local=128, local_heads=8, d_q=320, d_k=320, d_v=256, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c256_mdim": dict(
+        chunk_local=256, local_heads=8, d_q=320, d_k=320, d_v=256, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c384_mdim": dict(
+        chunk_local=384, local_heads=8, d_q=320, d_k=320, d_v=256, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c416_h8": dict(
+        chunk_local=416, local_heads=8, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c448_h8": dict(
+        chunk_local=448, local_heads=8, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_c320_h16": dict(
+        chunk_local=320, local_heads=16, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=32, model_cfg=False
+    ),
+    "bis_progcfg": dict(chunk_local=64, local_heads=4, d_q=64, d_k=64, d_v=32, q_chunk=32, k_chunk=32, model_cfg=True),
+}
+
+
+@pytest.mark.parametrize(
+    "shape_name, kv_actual_isl, new_actual_isl",
+    [
+        ("toy", 0, None),  # control: a full chunk, valid_end == padded_end so the clamp is a no-op
+        ("toy", 0, 96),
+        ("toy", 0, 224),
+        ("toy", 64, 96),
+        ("toy", 256, 160),
+        ("mistral", 0, None),  # control
+        ("mistral", 0, 1024),  # chunk 0 of the full55k run that hangs in the model: 1024 real of 5120
+        ("mistral", 1024, 2048),
+        ("mistral", 5120, 1280),
+        ("bis_chunk", 0, 1024),
+        ("bis_dims", 0, 96),
+        ("bis_chunk_k640", 0, 1024),
+        ("bis_chunk_dims", 0, 1024),
+        ("bis_progcfg", 0, 96),
+        ("bis_c640_h8_toydim", 0, 1024),
+        ("bis_c416_h8", 0, 672),
+        ("bis_c448_h8", 0, 704),
+        ("bis_c320_h16", 0, 512),
+        ("bis_c640_h4_mdim", 0, 1024),
+        ("bis_c128_mdim", 0, 192),
+        ("bis_c256_mdim", 0, 416),
+        ("bis_c384_mdim", 0, 608),
+    ],
+    ids=lambda v: str(v),
+)
+@pytest.mark.parametrize("garbage_pad", [False, True], ids=["zeropad", "garbagepad"])
+def test_ring_mla_kv_valid_end_matches_unclamped(shape_name, kv_actual_isl, new_actual_isl, garbage_pad):
+    """kv_valid_end_tensor (global real-token count) only stops attention at the last real tile: the output
+    on the real rows must match the metadata path without it. A mismatch between the reader, writer,
+    compute and all-gather over the clamped extent shows up as a hang or a wrong result here, without a
+    whole model in the way. garbage_pad fills the padded KV rows with large random values instead of zeros,
+    so a clamp that wrongly reads them changes the output."""
+    mesh_config = MESH_CONFIG
+    sp_size = mesh_config.sp_size
+    if sp_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices in ring, got SP={sp_size}")
+    sh = KV_VALID_END_SHAPES[shape_name]
+    tile = 32
+    chunk_size_local = sh["chunk_local"]
+    chunk_size_global = chunk_size_local * sp_size
+    if new_actual_isl is None:
+        new_actual_isl = chunk_size_global
+    assert kv_actual_isl % tile == 0 and new_actual_isl % tile == 0 and new_actual_isl <= chunk_size_global
+
+    b = 1
+    nhq = sh["local_heads"] * mesh_config.tp_size
+    nhk = 1
+    d_q, d_k, d_v = sh["d_q"], sh["d_k"], sh["d_v"]
+    logical_n = kv_actual_isl + new_actual_isl
+
+    torch.manual_seed(1234)
+    old_cache_kv = fa_rand(b, nhk, kv_actual_isl, d_k)
+    new_tokens_q = fa_rand(b, nhq, new_actual_isl, d_q)
+    new_tokens_kv = fa_rand(b, nhk, new_actual_isl, d_k)
+    q_host, kv_host, valid_rows, kv_valid_per_dev, num_cache_slabs = build_kv_pad_rotation_mla_inputs(
+        old_cache_kv, new_tokens_q, new_tokens_kv, kv_actual_isl, sp_size, chunk_size_local
+    )
+    cache_seq_per_dev = num_cache_slabs * chunk_size_local
+    if garbage_pad:
+        kv_per_dev = kv_host.reshape(1, nhk, sp_size, cache_seq_per_dev, d_k)
+        garbage = torch.randn_like(kv_per_dev) * 100
+        kv_host = torch.where(kv_valid_per_dev.reshape(1, 1, sp_size, cache_seq_per_dev, 1), kv_per_dev, garbage)
+        kv_host = kv_host.reshape(1, nhk, sp_size * cache_seq_per_dev, d_k)
+
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    mesh_device = runtime.mesh_device
+    sp_axis, tp_axis = runtime.sp_axis, runtime.tp_axis
+    try:
+        q_shard_dims = [None, None]
+        q_shard_dims[sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            q_shard_dims[tp_axis] = 1
+        kv_shard_dims = [None, None]
+        kv_shard_dims[sp_axis] = 2
+        persistent_shard_dims = [None, None]
+
+        q_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=q_shard_dims)
+        kv_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_shard_dims)
+        persistent_mapper = ttnn.ShardTensor2dMesh(
+            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_shard_dims
+        )
+        main_row_dim = q_shard_dims[0] if q_shard_dims[0] is not None else -1
+        main_col_dim = q_shard_dims[1] if q_shard_dims[1] is not None else -1
+        composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim))
+
+        tt_q = ttnn.from_torch(
+            q_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=q_mapper
+        )
+        tt_kv = ttnn.from_torch(
+            kv_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=kv_mapper
+        )
+
+        def make_persistent_output_buffer_kv():
+            return ttnn.from_torch(
+                torch.zeros(b, nhk, sp_size * cache_seq_per_dev, d_k),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=persistent_mapper,
+            )
+
+        if sh["model_cfg"]:
+            # What mla.py builds for chunked Mistral prefill.
+            grid = mesh_device.compute_with_storage_grid_size()
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(grid.x - 1, grid.y),
+                q_chunk_size=sh["q_chunk"],
+                k_chunk_size=sh["k_chunk"],
+                exp_approx_mode=False,
+                matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+            )
+            compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        else:
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                q_chunk_size=sh["q_chunk"],
+                k_chunk_size=sh["k_chunk"],
+                exp_approx_mode=False,
+            )
+            compute_kernel_config = runtime.compute_kernel_config
+        grid_cores = program_config.compute_with_storage_grid_size
+        grid_cores = (
+            grid_cores[0] * grid_cores[1] if isinstance(grid_cores, (tuple, list)) else grid_cores.x * grid_cores.y
+        )
+        logger.info(
+            f"kv_valid_end work: {chunk_size_local // 32} Q chunks x {sh['local_heads']} heads = "
+            f"{(chunk_size_local // 32) * sh['local_heads']} items on {grid_cores} SDPA cores"
+        )
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, slot_id=0, actual_start=kv_actual_isl)
+        tt_kv_valid_end = _make_ring_mla_scalar_tensor(mesh_device, logical_n)
+
+        def call(clamp, buf):
+            tt_out, _ = ttnn.transformer.ring_mla(
+                tt_q,
+                tt_kv,
+                persistent_output_buffer_kv=buf,
+                head_dim_v=d_v,
+                logical_n=logical_n,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                dim=2,
+                multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                subdevice_id=runtime.worker_sub_device_id,
+                ccl_core_grid_offset=(runtime.ccl_column, 0),
+                use_column_major_ccl=True,
+                slot_id=tt_slot_id,
+                kv_actual_isl_tensor=tt_kv_actual_isl,
+                kv_valid_end_tensor=tt_kv_valid_end if clamp else None,
+            )
+            return tt_out
+
+        def run(clamp):
+            tt_out = call(clamp, make_persistent_output_buffer_kv())
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, valid_rows, :d_v]
+
+        def time_ms(clamp, iters=50):
+            buf = make_persistent_output_buffer_kv()
+            call(clamp, buf)  # warm the program cache
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(iters):
+                call(clamp, buf)
+            ttnn.synchronize_device(mesh_device)
+            return (time.perf_counter() - t0) * 1000 / iters
+
+        logger.info(f"kv_valid_end: kv_actual_isl={kv_actual_isl} new_actual_isl={new_actual_isl} -> unclamped run")
+        out_ref = run(clamp=False)
+        logger.info("kv_valid_end: clamped run")
+        out_clamped = run(clamp=True)
+        passed, pcc = comp_pcc(out_ref, out_clamped, 0.9999)
+        max_diff = (out_ref - out_clamped).abs().max().item()
+        logger.info(f"kv_valid_end clamped vs unclamped: PCC={pcc}, max abs diff={max_diff}")
+        assert passed, f"kv_valid_end changed the real-row output: PCC={pcc}, max abs diff={max_diff}"
+        mesh_device.enable_program_cache()
+        ms_ref, ms_clamped = time_ms(False), time_ms(True)
+        logger.info(f"kv_valid_end timing: unclamped {ms_ref:.3f} ms/call, clamped {ms_clamped:.3f} ms/call")
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
