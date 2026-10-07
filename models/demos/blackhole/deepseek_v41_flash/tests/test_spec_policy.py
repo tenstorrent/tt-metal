@@ -146,5 +146,10 @@ def test_apply_rows_for_b64_opt_in_and_undo(monkeypatch):
 
 
 def test_dram_check():
-    assert sp.dram_check(301, 200)[0] and sp.dram_check(270, 110)[0]
-    assert not sp.dram_check(172, 84)[0] and not sp.dram_check(300, 10)[0]
+    assert sp.dram_check(301, 200, 4, {})[0] and sp.dram_check(190, 100, 1, {})[0]
+    assert not sp.dram_check(172, 84, 4, {})[0] and not sp.dram_check(300, 10, 4, {})[0]
+    assert sp.dram_check(527, 478, 8, {})[0]  # B=32 ISL 30k (measured, spec ran)
+    assert (
+        not sp.dram_check(172, 84, 8, {})[0] and not sp.dram_check(300, 290, 8, {})[0]
+    )  # B=32 ISL 60k (OOM) / below the 320 need
+    assert not sp.dram_check(527, 478, 8, {"DSV41_SPEC_NEED_FREE_MIB": "9999"})[0]

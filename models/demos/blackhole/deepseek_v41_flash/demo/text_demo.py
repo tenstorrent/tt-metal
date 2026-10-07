@@ -513,7 +513,9 @@ def _run_demo(
             ttnn.synchronize_device(mesh_device)
             mv = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
             ok, msg = spec_policy.dram_check(
-                mv.total_bytes_free_per_bank / 2**20, mv.largest_contiguous_bytes_free_per_bank / 2**20
+                mv.total_bytes_free_per_bank / 2**20,
+                mv.largest_contiguous_bytes_free_per_bank / 2**20,
+                users_per_row,
             )
             if not ok:
                 logger.warning(f"!!! spec decode: plain (context too long for spec): {msg}; the spec pass is skipped")
