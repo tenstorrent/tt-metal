@@ -201,6 +201,8 @@ inline void llk_pack_untilize(
     const std::uint32_t block_c_index = 0,
     const std::uint32_t tile_dst_rt_offset = 0) {
     static_assert(diagonal == false, "Diagonal is only supported on WH");
+    // The block index addresses even blocks; a block at any other tile column takes llk_pack_untilize_at_col.
+    static_assert(full_ct_dim % block_ct_dim == 0, "full_ct_dim must be divisible by block_ct_dim");
     const std::uint32_t output_id = get_output_id(output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
