@@ -83,6 +83,15 @@ class MiMoModel:
             )
             log(f"MODEL layer {L} built in {time.time() - t0:.1f}s cache={self.wc.stats}")
 
+    def reconfigure(self, layout):
+        """New KV pool (users per row / chunk) without touching the weights: every attention layer frees its caches and allocates new ones for the layout tables.
+        max_pos must stay the same (rope tables / prefill io are sized by it)."""
+        assert layout.max_pos == self.layout.max_pos, "reconfigure keeps max_pos"
+        tabs = layout.tables()
+        for lyr in self.layers:
+            lyr.attn.reconfigure(tabs["swa" if lyr.swa else "ga"])
+        self.layout, self.users = layout, 32
+
     def embed_tokens(self, tokens):
         """tokens torch int64 [rows, N] -> device [1,1,N,4096] bf16 tile per row."""
         rows, N = tokens.shape

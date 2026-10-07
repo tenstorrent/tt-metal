@@ -45,13 +45,14 @@ class LiveMask:
 
 
 class Decoder:
-    def __init__(self, model, trace=True, keep_logits=False, spread=True):
-        self.m, self.mesh, self.keep_logits, self.use_trace = model, model.mesh, keep_logits, trace
+    def __init__(self, model, trace=True, keep_logits=False, spread=True, U=SLOTS):
+        """U = decode slots (users) per mesh row, 1..32; every decode tensor has U rows."""
+        self.m, self.mesh, self.keep_logits, self.use_trace, self.U = model, model.mesh, keep_logits, trace, U
         self.rows = self.mesh.shape[0]
         self.rowmap = ttnn.ShardTensor2dMesh(self.mesh, self.mesh.shape, dims=(0, None))
-        self.pos = decode_pos_io(self.mesh)
+        self.pos = decode_pos_io(self.mesh, U)
         self.tok = ttnn.from_torch(
-            torch.zeros(self.rows, SLOTS, dtype=torch.int32),
+            torch.zeros(self.rows, U, dtype=torch.int32),
             device=self.mesh,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -67,7 +68,7 @@ class Decoder:
     def _forward(self):
         m = self.m
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)  # [1,32,4096] per device
-        h = ttnn.reshape(e, (1, 1, SLOTS, HIDDEN))
+        h = ttnn.reshape(e, (1, 1, self.U, HIDDEN))
         for lyr in m.layers:
             h2 = lyr.decode(h, self.pos["cur"], self.pos["idx"], live=self.live.t if self.live is not None else None)
             ttnn.deallocate(h)
@@ -153,3 +154,14 @@ class Decoder:
         if self._tr is not None:
             ttnn.release_trace(self.mesh, self._tr)
             self._tr = None
+        if self.out is not None:
+            for t in self.out:
+                if t is not None:
+                    ttnn.deallocate(t)
+            self.out = None
+
+    def close(self):
+        """release the trace and every U-dependent device buffer (tokens, positions, live mask)"""
+        self.release()
+        for t in (self.tok, self.pos["cur"], self.pos["idx"]) + ((self.live.t,) if self.live is not None else ()):
+            ttnn.deallocate(t)

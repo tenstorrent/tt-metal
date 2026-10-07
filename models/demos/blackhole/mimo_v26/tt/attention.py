@@ -204,6 +204,8 @@ class MiMoAttention:
             use_height_and_width_as_shard_shape=True,
         )
         self._rep = rep
+        self._up = up
+        self._dec_states = {}
 
     # ------------------------------------------------------------------ helpers
     def _rope(self, x, cos, sin):
@@ -303,6 +305,36 @@ class MiMoAttention:
         return self._all_reduce(part)
 
     # ------------------------------------------------------------------ decode (32 user slots per row)
+    def _dec_state(self, B):
+        """(page table device tensor [B, nb], kv shard config, attention-output shard config) for B decode slots; built lazily, freed by reconfigure."""
+        if B not in self._dec_states:
+            cores = ttnn.num_cores_to_corerangeset(B, ttnn.CoreCoord(8, 8), row_wise=True)
+            mk = lambda: ttnn.create_sharded_memory_config(
+                shape=(32, DQK),
+                core_grid=cores,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            pt = self._up(_pad8(self.page_table[:B]), ttnn.int32, self._rep, ttnn.ROW_MAJOR_LAYOUT)
+            self._dec_states[B] = (pt, mk(), mk())
+        return self._dec_states[B]
+
+    def reconfigure(self, page_table):
+        """New KV pool for a new user count / context: free the caches and the per-B decode states, allocate new caches for page_table ([slots, nb] int32).
+        Weights, rope tables, sinks are kept."""
+        for t in (self.k_cache, self.v_cache, self.pt_dec):
+            ttnn.deallocate(t)
+        for pt, _, _ in self._dec_states.values():
+            ttnn.deallocate(pt)
+        self._dec_states = {}
+        self.page_table = page_table.to(torch.int32)
+        nblocks = int(self.page_table.max()) + 1
+        zeros = torch.zeros(nblocks, 1, BLOCK, DQK)
+        self.k_cache = self._up(zeros, ttnn.bfloat16, self._rep)
+        self.v_cache = self._up(zeros, ttnn.bfloat16, self._rep)
+        self.pt_dec = self._up(_pad8(self.page_table), ttnn.int32, self._rep, ttnn.ROW_MAJOR_LAYOUT)
+
     def decode_io(self):
         """Persistent decode inputs, PER MESH ROW: cur_pos int32 RM [32] and rope_idx uint32 RM [1,32] on every device of row r (positions of row r's 32 slots).
         Refresh with decode_set (positions [32] = same for all rows, or [rows,32])."""
@@ -318,8 +350,9 @@ class MiMoAttention:
         return io["cur"], io["idx"]
 
     def decode(self, x, cur_pos, rope_idx):
-        """x: [1,1,32,4096] bf16 TILE per device. Returns [1,1,32,4096]."""
-        B = self.users
+        """x: [1,1,B,4096] bf16 TILE per device, B = decode slots per mesh row (1..32). Returns [1,1,B,4096]."""
+        B = x.shape[2]
+        pt_dec, kv_mem, att_mem = self._dec_state(B)
         qkv = ttnn.linear(
             x,
             self.wqkv,
@@ -344,15 +377,11 @@ class MiMoAttention:
         kr = self._rope(k, cos, sin)
         for t in (q, k, cos, sin, cosq, sinq):
             ttnn.deallocate(t)
-        kr = ttnn.to_memory_config(kr, self.kv_mem)
-        v = ttnn.to_memory_config(v, self.kv_mem)
+        kr = ttnn.to_memory_config(kr, kv_mem)
+        v = ttnn.to_memory_config(v, kv_mem)
         extra = {"cache_position_modulo": self.ring_blocks * BLOCK} if self.ring_blocks else {}
-        ttnn.experimental.paged_update_cache(
-            self.k_cache, kr, update_idxs_tensor=cur_pos, page_table=self.pt_dec, **extra
-        )
-        ttnn.experimental.paged_update_cache(
-            self.v_cache, v, update_idxs_tensor=cur_pos, page_table=self.pt_dec, **extra
-        )
+        ttnn.experimental.paged_update_cache(self.k_cache, kr, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra)
+        ttnn.experimental.paged_update_cache(self.v_cache, v, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra)
         ttnn.deallocate(kr)
         ttnn.deallocate(v)
         kw = dict(
@@ -365,10 +394,10 @@ class MiMoAttention:
         if self.cfg.window:
             kw.update(sliding_window_size=self.cfg.window, attention_sink=self.sink_dec, **extra)
         o = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-            qr, self.k_cache, self.v_cache, page_table_tensor=self.pt_dec, **kw
+            qr, self.k_cache, self.v_cache, page_table_tensor=pt_dec, **kw
         )
         ttnn.deallocate(qr)
-        o = ttnn.to_memory_config(o, self.att_mem)
+        o = ttnn.to_memory_config(o, att_mem)
         oc = ttnn.experimental.nlp_concat_heads_decode(o, num_heads=NQ // TP)
         ttnn.deallocate(o)
         oc = ttnn.to_memory_config(oc, ttnn.DRAM_MEMORY_CONFIG)

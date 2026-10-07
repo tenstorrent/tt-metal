@@ -20,11 +20,12 @@ def load_eos(path="/mnt/tt-data/MiMo-V2.6-Flash-RL/generation_config.json"):
 
 
 class Generator:
-    def __init__(self, model, max_pos, trace=True, keep_logits=False, eos=None, prefill_group=8, log=print):
+    def __init__(self, model, max_pos, trace=True, keep_logits=False, eos=None, prefill_group=8, log=print, U=SLOTS):
         self.model, self.max_pos, self.log = model, max_pos, log
         self.rows = model.mesh.shape[0]
         self.eos = set(eos) if eos is not None else load_eos()
-        self.dec = Decoder(model, trace=trace, keep_logits=keep_logits)
+        self.U, self.trace = U, trace
+        self.dec = Decoder(model, trace=trace, keep_logits=keep_logits, U=U)
         self.keep_logits = keep_logits
         self.prefill_group = prefill_group
 
@@ -36,7 +37,7 @@ class Generator:
         rows = self.rows
         n = len(prompts)
         U = -(-n // rows)
-        assert U <= SLOTS
+        assert U <= self.U, f"{n} prompts need {U} slots per row, generator has {self.U}"
         maxlen = max(len(p) for p in prompts)
         S = S or max(256, -(-maxlen // 128) * 128)
         assert maxlen <= S and S + 8 <= self.max_pos
@@ -65,9 +66,9 @@ class Generator:
         t0 = time.time()
         first, flg = self.prefill(prompts, S)
         t_pre = time.time() - t0
-        cur = torch.zeros(rows, SLOTS, dtype=torch.long)
-        pos = torch.zeros(rows, SLOTS, dtype=torch.long)
-        alive = torch.zeros(rows, SLOTS, dtype=torch.bool)
+        cur = torch.zeros(rows, self.U, dtype=torch.long)
+        pos = torch.zeros(rows, self.U, dtype=torch.long)
+        alive = torch.zeros(rows, self.U, dtype=torch.bool)
         out = [[] for _ in range(n)]
         slog = [[] for _ in range(n)]
         sbest = [[] for _ in range(n)]
@@ -103,3 +104,16 @@ class Generator:
         return dict(
             tokens=out, first_logits=flg, step_logits=slog, step_best=sbest, times=times, prefill_s=t_pre, place=place
         )
+
+    def reconfigure(self, U, layout):
+        """Switch to U users per mesh row: release the decode trace and U-dependent buffers, rebuild the KV pool for `layout` (KVLayout(users=U, ...)), new Decoder.
+        Weights stay on the device."""
+        import gc
+
+        keep_logits = self.keep_logits
+        self.dec.close()
+        del self.dec
+        gc.collect()
+        self.model.reconfigure(layout)
+        self.U = U
+        self.dec = Decoder(self.model, trace=self.trace, keep_logits=keep_logits, U=U)
