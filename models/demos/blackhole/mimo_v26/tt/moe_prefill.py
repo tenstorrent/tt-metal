@@ -279,3 +279,17 @@ class MiMoPrefillMoE:
         )
         ttnn.deallocate(comb)
         return summed
+
+
+def spread_pad_routing(n_rows, n_pad, topk=TOPK, num_experts=NUM_ROUTED, offset=0):
+    """Routing (idx [n_rows, n_pad, topk] int, w [n_rows, n_pad, topk] float) for DEAD padding slots of a decode batch (users padded up to the 64-token
+    multiple masked_bincount needs). Dead slots still dispatch: if they all pick the same experts (e.g. 0..7) one chip overflows its dispatch
+    buffer (seen: worst chip load 1280 rows vs max_buf 1248 at N=64, cf=4). Round-robin over all experts gives every expert at most
+    ceil(n_rows*n_pad*topk/num_experts) pad tokens. Their outputs are garbage-free (zero hidden) and must be ignored by the caller.
+    """
+    import torch
+
+    k = torch.arange(n_rows * n_pad * topk) + offset
+    idx = (k * 1).reshape(n_rows, n_pad, topk) % num_experts
+    # a token must not pick the same expert twice: consecutive k are distinct mod num_experts while topk <= num_experts
+    return idx.long(), torch.full((n_rows, n_pad, topk), 1.0 / topk)
