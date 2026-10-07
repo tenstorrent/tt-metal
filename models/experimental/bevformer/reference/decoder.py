@@ -57,6 +57,7 @@ from models.experimental.bevformer.model_config import (
     NUM_HEADS,
     DeformableAttentionConfig,
 )
+from models.experimental.bevformer.reference.encoder import FFN
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
 
@@ -100,21 +101,6 @@ class MultiheadAttention(nn.Module):
             query = query + query_pos
         out = self.attn(query=query, key=query, value=identity)[0]
         return identity + out
-
-
-class FFN(nn.Module):
-    """mmcv's ``FFN`` with two fully connected layers and no dropout: ``x + Linear(ReLU(Linear(x)))``.
-    ``layers`` keeps mmcv's nesting, so checkpoint keys match."""
-
-    def __init__(self, embed_dims=EMBED_DIMS, feedforward_channels=FEEDFORWARD_CHANNELS):
-        super().__init__()
-        self.layers = nn.Sequential(
-            nn.Sequential(nn.Linear(embed_dims, feedforward_channels), nn.ReLU(inplace=True)),
-            nn.Linear(feedforward_channels, embed_dims),
-        )
-
-    def forward(self, x):
-        return x + self.layers(x)
 
 
 class DetrTransformerDecoderLayer(nn.Module):

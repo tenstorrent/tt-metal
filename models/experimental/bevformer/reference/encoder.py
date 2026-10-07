@@ -50,7 +50,8 @@ from models.experimental.bevformer.reference.temporal_self_attention import Temp
 
 
 class FFN(nn.Module):
-    """mmcv's two-layer ``FFN`` with its identity shortcut; dropout is a no-op in inference."""
+    """mmcv's two-layer ``FFN`` with its identity shortcut, shared by the encoder and the decoder;
+    dropout is a no-op in inference. ``layers`` keeps mmcv's nesting, so checkpoint keys match."""
 
     def __init__(self, embed_dims=EMBED_DIMS, feedforward_channels=FEEDFORWARD_CHANNELS):
         super().__init__()

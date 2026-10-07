@@ -226,13 +226,12 @@ def tt_fpn_kwargs():
 
 def __getattr__(name):
     """The module attribute hook of PEP 562: resolves ``_TTNN_DTYPES`` against ttnn on first access
-    and caches the result, so ttnn is imported only by the code that uses them."""
+    and caches the result, so ttnn is imported only by the code that uses them. Without ttnn, the
+    ``ModuleNotFoundError`` reaches the importer as is, naming the missing module."""
     if name not in _TTNN_DTYPES:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    try:
-        import ttnn
-    except ImportError as error:
-        raise AttributeError(f"{name} is a ttnn dtype, and ttnn is not importable") from error
+    import ttnn
+
     value = globals()[name] = getattr(ttnn, _TTNN_DTYPES[name])
     return value
 
