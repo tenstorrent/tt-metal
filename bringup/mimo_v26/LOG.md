@@ -1350,3 +1350,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
 - data: {"runs":2,"bit_identical":0}
+
+## E261007-0852-5a7
+- date: 2026-10-07T08:52:57
+- commit: a4e1b2c0066
+- branch: ssinghal/mimo-attn
+- host: 41
+- track: decode
+- status: verified
+- claim: Users-per-row reconfigure, 4-layer closed loop vs CPU oracle (n=128 ragged GSM8K prompts enable_thinking=false, ref_chain_decode.py output decode_chain4_n128.pt, 12 tokens each): ONE process, one model build, Generator.reconfigure through U = 32,1,2,4,8,16,32 (B = 128,4,8,16,32,64,128; every decode tensor has U rows, KV pool rebuilt per U via MiMoAttention.reconfigure, weights never reloaded, traces released): teacher-forced token agreement with the oracle 100% and free-running tokens equal to the oracle 100% at every U, first-token logits PCC min 0.9996-0.9997, per-step logits PCC min 0.9987 (U=32) / 0.99934-0.99969 (U<=16). DRAM allocated per bank follows the pool: 259.0 MB (U=1) .. 266.6 MB (U=32); returning to U=32 after the full cycle gives 267.5 MB vs 266.6 MB at the first U=32 (+0.9 MB/bank over 6 reconfigures, ~0.4% of the pool, not yet attributed; U=4 return 260.0 vs 259.6 in attn_R2).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_R3_reconf_sweep4.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/model.py
+- data: {"layers":4,"U":[32,1,2,4,8,16,32],"token_agree":1.0,"dram_drift_mb_per_bank":0.9}
