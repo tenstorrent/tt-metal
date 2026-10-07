@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Numerical comparison independent of either accelerator runtime."""
 from dataclasses import asdict, dataclass
@@ -17,7 +18,9 @@ class TensorMetrics:
         return asdict(self)
 
 
-def compare_tensors(reference, actual, *, min_pcc=0.99, max_relative_rms=None, max_abs=None):
+def compare_tensors(
+    reference, actual, *, min_pcc=0.99, max_relative_rms=None, max_abs=None
+):
     """Compare all elements; invalid/empty/shape-mismatched tensors always fail.
 
     Equal constants have PCC 1; unequal constants have PCC 0, even when both
@@ -46,18 +49,32 @@ def compare_tensors(reference, actual, *, min_pcc=0.99, max_relative_rms=None, m
     error = out_scaled - ref_scaled
     abs_error = error.abs().max().item() * scale
     if not math.isfinite(abs_error):
-        return TensorMetrics(False, None, None, None, "error magnitude exceeds float64 range")
+        return TensorMetrics(
+            False, None, None, None, "error magnitude exceeds float64 range"
+        )
     ref_rms = ref_scaled.square().mean().sqrt().item()
     error_rms = error.square().mean().sqrt().item()
     relative = error_rms / ref_rms if ref_rms else (0.0 if error_rms == 0 else None)
     x, y = ref_scaled - ref_scaled.mean(), out_scaled - out_scaled.mean()
     norm = x.norm().item() * y.norm().item()
-    pcc = max(-1.0, min(1.0, torch.dot(x, y).item() / norm)) if norm else (1.0 if torch.equal(ref, out) else 0.0)
+    pcc = (
+        max(-1.0, min(1.0, torch.dot(x, y).item() / norm))
+        if norm
+        else (1.0 if torch.equal(ref, out) else 0.0)
+    )
     if relative is not None and not math.isfinite(relative):
-        return TensorMetrics(False, pcc, None, abs_error, "relative RMS exceeds float64 range")
+        return TensorMetrics(
+            False, pcc, None, abs_error, "relative RMS exceeds float64 range"
+        )
     passed = pcc >= min_pcc
     if max_relative_rms is not None:
         passed &= relative is not None and relative <= max_relative_rms
     if max_abs is not None:
         passed &= abs_error <= max_abs
-    return TensorMetrics(bool(passed), pcc, relative, abs_error, None if passed else "numerical threshold failed")
+    return TensorMetrics(
+        bool(passed),
+        pcc,
+        relative,
+        abs_error,
+        None if passed else "numerical threshold failed",
+    )

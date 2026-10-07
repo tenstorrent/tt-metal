@@ -1,10 +1,13 @@
-# VoxCPM2 (experimental port in progress)
+# VoxCPM2 experimental TTNN components
 
-This directory starts a TTNN port of [OpenBMB VoxCPM2](https://huggingface.co/openbmb/VoxCPM2).
+This directory contains a prototype TTNN component port of [OpenBMB VoxCPM2](https://huggingface.co/openbmb/VoxCPM2).
 The reference implementation is pinned to OpenBMB/VoxCPM source revision
 `f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629`. Checkpoint dimensions are read from
 its own `config.json`; an immutable checkpoint revision must be recorded with
-validation captures.
+validation captures. The tested checkpoint revision is
+`32279effe8c19989596f05d353d1447f51d9e915`. The reference code is distributed
+under [Apache-2.0](https://github.com/OpenBMB/VoxCPM/blob/f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629/LICENSE).
+Model weights remain external and are subject to the terms on the model card.
 
 ## Implementation status
 
@@ -26,13 +29,16 @@ error because correlation alone cannot detect a scale or offset error.
 
 ## Development environment
 
-Use the fork's built TTNN environment for device tests. Reference capture also
-requires the pinned official VoxCPM package and its CUDA dependencies. Checkpoint
+The dependency lock targets Linux x86-64 with Python 3.10–3.12, covering the
+tested Python 3.10 TT environment and Python 3.12 CUDA environment. Reference
+capture requires the pinned official VoxCPM package and CUDA dependencies;
+device replay requires a working Blackhole TTNN installation. Checkpoint
 weights and tensor captures must live outside Git, preferably on the data disk.
 
-Implementation and commands are expanded as component milestones land. Audio
-quality, voice cloning, streaming, multilingual behavior, and integrated TT
-speech synthesis remain unqualified beyond the specific component cases described in the accuracy report.
+Audio quality, voice cloning, streaming, multilingual behavior, and integrated
+TT speech synthesis remain unqualified beyond the specific component cases in
+the accuracy report. See [DESIGN.md](DESIGN.md) for the architecture, validation
+plan, and boundaries of this contribution.
 
 ## Landed components and remaining work
 
@@ -63,7 +69,7 @@ initial replay path accepts a single sample rate per batch.
 ## CUDA reference and TT component replay
 
 The independent dependency declaration is `pyproject.toml`. Install the native
-CUDA reference with `uv sync --extra reference` from this model directory when
+CUDA reference with `uv sync --locked --extra reference` from this model directory when
 network access is available. Build/install TTNN from this fork into the model
 venv before device replay, using the repository's build instructions. TTNN is an
 external built dependency, not an unrelated model's shared Python environment.
@@ -74,8 +80,30 @@ with Torch 2.8.0+cpu and the installed TTNN 0.65.1rc17.dev6333+h3.3 wheel; it di
 not use CUDA or another model's shared Python environment. This checks the model
 code against that installed runtime, not a fresh build of this fork revision.
 
-Run commands from the fork root with the model environment. The checkpoint must
-already be a local snapshot of `openbmb/VoxCPM2`; `--checkpoint-revision` must be
+For a separate TT host, create the model environment with
+`uv sync --locked --extra tt-runtime` from this directory, then install the
+TTNN wheel built for that host/Python using
+`uv pip install --python .venv/bin/python /path/to/ttnn.whl`. Follow the
+[repository build instructions](../../../INSTALLING.md) to produce a compatible
+wheel and kernel-source setup. Use the model venv directly for replay after
+installing this external runtime; a later `uv sync` can remove packages not in
+the lock. The CUDA reference extra is unnecessary for TT replay.
+
+Run commands from the fork root with the model environment. To prepare the
+pinned checkpoint after installing the reference extra:
+
+```bash
+uv run --locked --project models/experimental/voxcpm2 --extra reference \
+  python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="openbmb/VoxCPM2", revision="32279effe8c19989596f05d353d1447f51d9e915", local_dir="models/experimental/voxcpm2/checkpoint", allow_patterns=["*.json", "*.py", "*.safetensors", "*.pth"])'
+```
+
+This downloads into the model directory's `checkpoint/`; move it to the data
+disk or choose a different `local_dir` before running. The directory is ignored
+by Git. Hugging Face credentials, if required by the hosting service, stay in
+the user's standard Hugging Face environment/cache. For offline runs, provide a
+complete local snapshot; capture/replay do not download missing weights.
+
+The checkpoint must be a local snapshot of `openbmb/VoxCPM2`; `--checkpoint-revision` must be
 its exact Hugging Face commit, not `main`. Capture records file hashes and replay
 checks those bytes before uploading weights. Keep checkpoints and captures on
 the data disk; they are excluded from Git.
@@ -90,8 +118,8 @@ uv run --locked --project models/experimental/voxcpm2 --extra reference \
   --output "$HOME/data/voxcpm2/cuda-reference"
 
 # Use a device ID only after confirming/reserving its ownership.
-timeout 600 uv run --project models/experimental/voxcpm2 \
-  python -m models.experimental.voxcpm2.validation.replay_component \
+timeout 600 models/experimental/voxcpm2/.venv/bin/python \
+  -m models.experimental.voxcpm2.validation.replay_component \
   --reference "$HOME/data/voxcpm2/cuda-reference" \
   --checkpoint "$HOME/data/voxcpm2/checkpoint" \
   --component feat_encoder.forward --event-index 0 --device-id 0 \
@@ -110,6 +138,9 @@ The capture also writes `reference.wav`, source/device/version metadata, seeds,
 RNG states, valid KV prefixes, latent outputs, and checksummed tensor files.
 Missing/incomplete captures, non-CUDA oracles, changed checkpoint bytes,
 nonfinite tensors, shape mismatches, and missing outputs fail validation.
+Codec replay additionally saves the TT waveform/latent tensor as a `.pt` file
+beside the JSON report. A decoded waveform from captured CUDA latents is a codec
+comparison, not integrated TT text-to-speech generation.
 
 ## Checks performed
 

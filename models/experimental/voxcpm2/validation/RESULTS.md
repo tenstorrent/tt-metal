@@ -1,4 +1,4 @@
-# VoxCPM2 component accuracy — 2026-10-01
+# VoxCPM2 component accuracy
 
 All 16 TT replay cases covering 14 implemented component types passed the stated
 PCC >= 0.99 criterion. These tests replay native CUDA component inputs into TT
@@ -77,3 +77,34 @@ complete TT generation loop, integrated speech quality, streaming, multilingual
 coverage, additional voices/sample rates and steady-state performance. FP32 codec
 storage was not tested. These selected component cases do not establish the
 behavior of every input length or every denoising step.
+
+## Cleanup regression — 2026-10-07
+
+All 16 original component/event pairs passed PCC >= 0.99 again after formatting,
+unused-import and documentation cleanup. The same reserved physical Blackhole
+card 5, BF16/HiFi4 configuration and installed runtime were used. The configured
+unittest suite passed all 30 tests with no skips. The local host run passed 29
+tests with the device test explicitly skipped. Locked reference dependency
+installation, compilation and applicable repository pre-commit hooks also
+passed. Python computational ASTs were unchanged by cleanup, excluding
+docstrings/import declarations; no computation or precision policy was altered.
+The [regression summary](results/2026-10-07-cleanup-regression.json) records
+tested source-file hashes and metrics. Its parent revision is `04ba2da9`;
+the cleanup working tree is identified by those hashes.
+
+The dependency lock was narrowed to Linux x86-64 and Python 3.10–3.12, covering
+the tested hosts, to stay below the repository's 500 KiB file-size limit. This
+does not add hardware or Python-version coverage beyond the measured cases.
+
+A separate fresh seed-43 native CUDA generation produced a complete four-second
+48 kHz waveform for the same fox sentence, using ten diffusion timesteps per
+patch. TT decoded its CUDA-generated latents with PCC 0.999825983 and relative
+RMS error 6.8647%; both WAVs were saved for listening comparison. The
+[audio replay record](results/2026-10-07-audio-decode-pcc.json) retains the
+checkpoint and numerical conditions. This audio case preceded cosmetic cleanup
+and used implementation `04ba2da9`; the complete original-case regression above
+ran after cleanup. Neither run qualifies integrated TT synthesis.
+
+Fresh current-main TTNN builds, upstream CI/post-commit regressions and
+maintainer/codeowner acceptance have not been completed. Successful tests on
+the installed runtime must not be presented as those checks passing.
