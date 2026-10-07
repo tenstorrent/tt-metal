@@ -27,7 +27,7 @@ LEDGER = os.path.join(HOME, "ledger.json")
 ATTEMPTABLE = {"tracking"}
 # States that end when main goes green for the signature.
 OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed",
-               "awaiting_decision", "decided", "with_owner"}
+               "awaiting_decision", "decided"}
 # States the fix scan looks at: still failing, and no PR of ours on it.
 SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending", "awaiting_decision"}
 # States a re-appearing failure re-opens (a fresh regression after a fix).

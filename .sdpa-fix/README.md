@@ -128,8 +128,8 @@ patch. The bot then **opens nothing**:
    `DECISIONS_ONLY=1 fixer.sh`.
 3. The fixer applies it: a **patch** option becomes `decided`, and the agent
    implements only that option, guard, then a real draft PR (live even when
-   cron runs dryrun, because you chose it). **ask_owner** comments on the
-   culprit PR tagging its author (`with_owner`). **Reject** sets `rejected`.
+   cron runs dryrun, because you chose it). **Reject** sets `rejected`.
+   Options are always code changes; the bot never comments on other people's PRs.
 
 Setup: Socket Mode on, Interactivity on, an app-level token (`connections:write`)
 in `~/.sdpa-fix/slack_app_token` (chmod 600). Cron runs `decide.sh` every
