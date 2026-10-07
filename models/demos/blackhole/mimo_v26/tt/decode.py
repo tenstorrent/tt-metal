@@ -45,34 +45,66 @@ class LiveMask:
 
 
 class Decoder:
-    def __init__(self, model, trace=True, keep_logits=False, spread=True, U=SLOTS):
-        """U = decode slots (users) per mesh row, 1..32; every decode tensor has U rows."""
+    def __init__(self, model, trace=True, keep_logits=False, spread=True, U=SLOTS, block=1, capture=None):
+        """U = real decode users per mesh row. block = tokens per user per step: 1 = plain decode; 8 = spec-decode VERIFY with `block` virtual users per real user
+        (row v = block*u + t feeds token t of user u at position pos_u + t; U*block <= 32). Every decode tensor has B = U*block rows.
+        capture: layer indices whose outputs are kept as an extra trace output `feat` [1,1,B,len(capture)*4096] (bf16, on device; layer 47 = before the final norm).
+        """
         self.m, self.mesh, self.keep_logits, self.use_trace, self.U = model, model.mesh, keep_logits, trace, U
+        self.block, self.B, self.capture = block, U * block, tuple(capture) if capture else ()
+        assert self.B <= SLOTS, "U*block must be <= 32 rows per mesh row"
+        self.feat = None
+        self.upd = None
         self.rows = self.mesh.shape[0]
         self.rowmap = ttnn.ShardTensor2dMesh(self.mesh, self.mesh.shape, dims=(0, None))
-        self.pos = decode_pos_io(self.mesh, U)
+        self.pos = decode_pos_io(self.mesh, self.B)
         self.tok = ttnn.from_torch(
-            torch.zeros(self.rows, U, dtype=torch.int32),
+            torch.zeros(self.rows, self.B, dtype=torch.int32),
             device=self.mesh,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=self.rowmap,
         )
         self.live = LiveMask(self.mesh) if spread else None
+        self.upd = None
+        self.upd_mode = os.environ.get("MIMO_VERIFY_WRITE", "skip")
+        if block > 1 and self.upd_mode in ("seq", "skip"):
+            n_upd = U if self.upd_mode == "seq" else self.B
+            self.upd = [self._persist_u(torch.zeros(self.rows, n_upd, dtype=torch.int32)) for _ in range(block)]
         self.vocab_local = model.lm_head.shape[-1]
         self._tr = None
         self.out = None
         self.steps = 0
 
+    def _persist_u(self, t):
+        return ttnn.from_torch(
+            t.reshape(-1), device=self.mesh, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.rowmap
+        )
+
     # ------------------------------------------------------------------ one step (device)
     def _forward(self):
         m = self.m
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)  # [1,32,4096] per device
-        h = ttnn.reshape(e, (1, 1, self.U, HIDDEN))
-        for lyr in m.layers:
-            h2 = lyr.decode(h, self.pos["cur"], self.pos["idx"], live=self.live.t if self.live is not None else None)
+        h = ttnn.reshape(e, (1, 1, self.B, HIDDEN))
+        caps = []
+        for li, lyr in enumerate(m.layers):
+            h2 = lyr.decode(
+                h,
+                self.pos["cur"],
+                self.pos["idx"],
+                live=self.live.t if self.live is not None else None,
+                block=self.block,
+                upd=self.upd,
+            )
             ttnn.deallocate(h)
             h = h2
+            if li in self.capture:
+                caps.append(ttnn.clone(h))
+        feat = None
+        if caps:
+            feat = ttnn.concat(caps, dim=3) if len(caps) > 1 else caps[0]
+            for c in caps if len(caps) > 1 else []:
+                ttnn.deallocate(c)
         x = ttnn.rms_norm(h, epsilon=EPS, weight=m.w_norm, compute_kernel_config=_k_norm())
         ttnn.deallocate(h)
         lg = ttnn.linear(
@@ -89,18 +121,41 @@ class Decoder:
         if not self.keep_logits:
             ttnn.deallocate(lg)
             lg = None
-        return vals, idx, lg
+        return vals, idx, lg, feat
 
     # ------------------------------------------------------------------ host interface
     def set_inputs(self, tokens, positions, dead):
         """tokens int [rows,32]; positions int [rows,32] (position of the token being fed); dead bool [rows,32]. Dead slots are forced to token 0 / position 0."""
+        if (
+            self.block > 1
+        ):  # tokens [rows,U,block], positions [rows,U] = position of token 0 of each block, dead [rows,U]
+            assert tokens.dim() == 3 and tokens.shape[2] == self.block
+            positions = (positions.unsqueeze(-1) + torch.arange(self.block)).reshape(tokens.shape[0], -1)
+            tokens = tokens.reshape(tokens.shape[0], -1)
+            dead = dead.repeat_interleave(self.block, dim=1)
         tokens = torch.where(dead, torch.zeros_like(tokens), tokens)
         positions = torch.where(dead, torch.zeros_like(positions), positions)
+        upd_hosts = []
+        if self.upd is not None:
+            for t in range(self.block):
+                if self.upd_mode == "skip":
+                    ut = torch.full_like(positions, -1)
+                    ut[:, t :: self.block] = positions[:, t :: self.block]
+                else:
+                    ut = positions[:, t :: self.block]
+                h = ttnn.from_torch(
+                    ut.to(torch.int32).contiguous().reshape(-1),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=self.rowmap,
+                )
+                ttnn.copy_host_to_device_tensor(h, self.upd[t])
+                upd_hosts.append(h)
         host = ttnn.from_torch(
             tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.rowmap
         )
         ttnn.copy_host_to_device_tensor(host, self.tok)
-        keep = [host] + decode_pos_set(self.mesh, self.pos, positions)
+        keep = [host] + upd_hosts + decode_pos_set(self.mesh, self.pos, positions)
         if self.live is not None:
             keep.append(self.live.set(~dead))
         # host->device copies are asynchronous: keep the host tensors alive and wait until they landed (freed host memory read by the device = row-wide
@@ -125,9 +180,12 @@ class Decoder:
                     os.environ["MIMO_CHECK_CAP"] = chk
                 ttnn.synchronize_device(self.mesh)
             ttnn.execute_trace(self.mesh, self._tr, cq_id=0, blocking=True)
-            vals, idx, lg = self.out
+            vals, idx, lg, self.feat = self.out
         else:
-            vals, idx, lg = self._forward()
+            vals, idx, lg, feat = self._forward()
+            if self.feat is not None:
+                ttnn.deallocate(self.feat)
+            self.feat = feat
         self.steps += 1
         comp = ttnn.ConcatMesh2dToTensor(self.mesh, dims=(0, 3), mesh_shape=tuple(self.mesh.shape))
         v = ttnn.to_torch(vals, mesh_composer=comp).float()[:, 0, :, :]  # [rows,32,cols]
@@ -150,6 +208,25 @@ class Decoder:
                 ttnn.deallocate(t)
         return out
 
+    @staticmethod
+    def accept_prefix(argmax, tokens):
+        """Greedy spec-decode acceptance. tokens [rows,U,block] = [last accepted token, draft_1..draft_{block-1}], argmax [rows,U,block] = target greedy token after each block
+        position (from verify). Draft j is accepted iff argmax[j-1] == tokens[j] for all earlier drafts too. Returns n_acc [rows,U] (0..block-1); the tokens to emit this round
+        are argmax[..., :n_acc+1] (the accepted drafts equal argmax[..., :n_acc], the last one is the bonus token) and the next block starts with argmax[..., n_acc].
+        """
+        ok = argmax[..., :-1] == tokens[..., 1:]
+        return torch.cumprod(ok.long(), dim=-1).sum(-1)
+
+    def verify(self, tokens, positions, dead):
+        """Spec-decode verify: tokens [rows,U,block] (last accepted token + drafts), positions [rows,U] of token 0, dead [rows,U]. One traced step over U*block virtual users.
+        Returns (argmax [rows,U,block] long: the target's greedy next token after each block position, max logit [rows,U,block]); self.feat holds the captured hidden states.
+        """
+        assert self.block > 1
+        self.set_inputs(tokens, positions, dead)
+        out = self.run()
+        rows = tokens.shape[0]
+        return out[0].reshape(rows, self.U, self.block), out[1].reshape(rows, self.U, self.block)
+
     def release(self):
         if self._tr is not None:
             ttnn.release_trace(self.mesh, self._tr)
@@ -163,5 +240,9 @@ class Decoder:
     def close(self):
         """release the trace and every U-dependent device buffer (tokens, positions, live mask)"""
         self.release()
-        for t in (self.tok, self.pos["cur"], self.pos["idx"]) + ((self.live.t,) if self.live is not None else ()):
+        for t in (
+            (self.tok, self.pos["cur"], self.pos["idx"])
+            + tuple(self.upd or ())
+            + ((self.live.t,) if self.live is not None else ())
+        ):
             ttnn.deallocate(t)

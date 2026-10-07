@@ -1384,6 +1384,19 @@
 - claim: SMALL-U decode MoE, MiMoMoEDecode accepts [1,1,U,4096] per mesh row for U in {1,2,4,8,16,32} (fast router_select on U rows, internal pad to 64 tokens), real layers 1/5/16 chained in one trace (L1, L5 dump; L16 device capture), precise numerics (fp32 DEST/partials, HiFi3, bf16 act). NEW dead-slot routing 'sentinel' (dead and pad slots get expert id 256 = num experts, dispatch table -1: never dispatched/combined/reduced, outputs 0) vs old 'spread' (round-robin over all 256 experts, touches every expert every call, hence the flat 1.5-1.75 ms). Live outputs are BIT-IDENTICAL between sentinel and spread at every U (max abs diff 0); 5 eager runs identical, trace==eager, PCC vs dump unchanged (min 0.99143-0.99999 per layer; L1 dips at U=8..32 are routing flips vs the dump, same for both). Paired alternating traced time per layer (host-timed, 3 rounds, 30 replays; ms/layer, spread -> sentinel): U=1 1.750 -> 0.713; U=2 1.751 -> 0.967; U=4 1.754 -> 1.276; U=8 1.753 -> 1.440; U=16 1.760 -> 1.599; U=32 1.768 -> 1.708. Stage deltas (sentinel, ms/layer) U=1: router+mask 0.104, counts 0.091, dispatch 0.016, experts 0.193, combine 0.023, post_combine_reduce 0.189, all_reduce+slice 0.095; U=4: 0.105/0.090/0.018/0.624/0.054/0.188/0.197; U=8: 0.105/0.090/0.018/0.818/0.068/0.189/0.152; U=16: 0.108/0.088/0.020/0.978/0.077/0.181/0.146; U=32: 0.107/0.086/0.024/1.089/0.084/0.171/0.148. The unified op already skips zero-count experts (reader num_chunks(0)=0); fixed costs now: counts 0.09, post_combine_reduce 0.18, router+mask 0.1, all_reduce 0.1-0.2
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_J_smallU_h48_dead50c45f3.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
+
+## E261007-0930-424
+- date: 2026-10-07T09:30:19
+- commit: 360444d8e45
+- branch: ssinghal/mimo-race
+- host: 40
+- track: decode
+- status: verified
+- claim: RACE LOCALISED to the column ttnn.all_reduce (reduce_scatter+all_gather, cluster_axis=1) that ends the decode MoE, NOT dispatch/combine/experts: stage-instrumented MoE-only stress (tests/test_moe_race_stages.py: real layers 1-6 chained in one trace, 8 live slots/row, on-device bitwise compare of clones of every stage vs replay 0, 3000 replays = 18000 layer-calls per run, lib integ_73c014eb46d, hosts 40 sentinel / 47 spread): router spread, bincount hist, offsets, counts, region offsets and post_combine_reduce output (per-column partials, pre all-reduce) were bit-identical in ALL 18000 calls of both dead=sentinel and dead=spread runs, while the all_reduce output differed in 22 (sentinel) / 10 (spread) calls. Each glitch = ONE 32-column tile column (256..1024 elements, all rows x 32 cols) of the output of ONE device is wrong: zeros or stale tiny values (1e-7) while that device's pre-reduce inputs are identical and the reference output equals the host sum of the 8 column partials. Same location repeats (L4 device (3,1) cols 3008..3039). So one tile of the all_gather phase lands late or is skipped. Explains the full-model ffn_out glitches.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_B_detail_sentinel_h40_360444d8e45.log
+- paths: models/demos/blackhole/mimo_v26/tests/test_moe_race_stages.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
+- data: {"events_sentinel":22,"events_spread":10,"calls_per_run":18000,"pre_allreduce_diffs":0}
+
 ## E261007-1046-caa
 - date: 2026-10-07T10:46:40
 - commit: ae9dc9337e8
@@ -1544,3 +1557,49 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_dff_bf16_u4_30d012c92bb.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_dflash_device.py
 - data: {"top1_vs_fp32":[1.0,0.9866,0.9866,0.9911,1.0,0.9732,0.9732],"floor":[0.9955,0.9866,0.9821,1.0,0.9911,0.9732,0.9821],"n":224}
+## E261007-1343-2d2
+- date: 2026-10-07T13:43:02
+- commit: e54e59555a9
+- branch: ssinghal/mimo-race
+- host: 48
+- track: decode
+- status: verified
+- claim: ALL-REDUCE RACE rates and WORKAROUND test (MoE-only stage stress, real layers 1-6 in one trace, 8 live slots/row, lib integ_73c014eb46d): old ttnn.all_reduce(cluster_axis=1): host 48 spread 23 glitches/72000 layer-calls (3.2e-4), host 47 spread 8/36000 (2.2e-4, only the final output cloned), host 40 sentinel 22/18000; all_reduce as reduce_scatter+all_gather calls 87/36000, num_links=1 132/36000; every host shows it, glitching layer instances repeat (L2, L4, L5), devices vary (mostly mesh cols 0-3). Workaround all_gather(dim0, cluster_axis=1)+sum (MiMoMoEDecode._column_reduce): 0/36000 on host 40 dead=sentinel AND 0/36000 on host 48 dead=spread. Stand-alone all_reduce [1,1,64,4096] x24 chained x3000 replays (72000 calls, host 47, notes/allreduce_race_repro.py) shows 0 glitches: the race needs the MoE context. Full 48-layer traced decode determinism with the OLD all_reduce: 0 glitches in 300 replays (host 48, new lib) and 150 (old lib) so M14's 2-5/100 is not reproduced on 40/48 by the merged tree
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_P_stages_rs_spread_h48_e54e59555a9.log
+- paths: models/demos/blackhole/mimo_v26/tests/test_moe_race_stages.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
+- data: {"old_rate_h48":23,"old_calls_h48":72000,"old_rate_h47":8,"old_calls_h47":36000,"new_events":0,"new_calls":72000}
+
+## E261007-1453-b3d
+- date: 2026-10-07T14:53:36
+- commit: 22eff654928
+- branch: ssinghal/mimo-race
+- host: 40
+- track: decode
+- status: verified
+- claim: 48-layer traced decode determinism WITH the all_gather+sum column reduce (MIMO_MOE_AR=ag_sum, MIMO_DEAD=spread default, lib integ_73c014eb46d, host 40, 32 GSM8K users, 5 warm steps, ffn_out+attn_out of all 48 layers bitwise vs replay 0 on live slots of every mesh row/column): 1000 traced replays + 200 eager steps = 0 glitches (DEC_RESULT first=null). Caveat: the OLD all_reduce control also showed 0 glitches on this test in 300 replays (host 48), so this run does not by itself discriminate; the discriminating evidence is the MoE-only stress (0/36000 vs 23/72000). NOT done: paired ms/layer cost of the workaround at U=1,8,32, layer PCC/alpha check, GSM8K token-identity pair
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_K_full48_ag_sum_h40_22eff654928.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py
+- data: {"replays":1000,"eager":200,"glitches":0}
+
+## E261007-1453-eba
+- date: 2026-10-07T14:53:47
+- commit: 22eff654928
+- branch: ssinghal/mimo-race
+- host: 40
+- track: decode
+- status: verified
+- claim: RACE TRACK HANDOFF: worktree wt/race, branch ssinghal/mimo-race tip 414f0721e88 (+ this entry). Fix: MiMoMoEDecode._column_reduce (all_gather over columns + sum instead of ttnn.all_reduce), MIMO_MOE_AR=rs restores old. Evidence E261007-0930-424, E261007-1343-2d2, E261007-1453-b3d. Open: workaround cost (paired ms/layer U=1,8,32), PCC/alpha L1/L5/L16, GSM8K n=128 pair, other all_reduce sites (attention decode/prefill, dense FFN, prefill MoE: same op, NOT tested; stand-alone repro does not trigger), upstream repro needs the MoE context; hangs seen were dead=sentinel at >=12 layers and device left dirty after killing a hung job (reset needed), plus any allocation after end_trace_capture hangs the next replay
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_K_full48_ag_sum_h40_22eff654928.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py
+
+## E261007-1540-9df
+- date: 2026-10-07T15:40:21
+- commit: 277b07cd131
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: SPEC-DECODE VERIFY (decode-side hooks) GATE PASS: Decoder(block=8, capture=...) = ONE traced decode step over 8 virtual users per real user (row 8u+t feeds token t at position pos+t, page-table row repeated), U = 1, 2, 4 users per mesh row (8, 16, 32 virtual rows), 4-layer model (L0 dense GA, L1-3 SWA ring + MoE), ragged real GSM8K prompts (lengths 35..120), RANDOM draft tokens, verify run on a freshly prefilled cache (positions >= len hold pad junk, so a lost or invisible same-step KV write would show) vs 8 sequential plain decode steps feeding the same tokens: argmax of every virtual user equals the sequential argmax at every row/user/position (100%, token exact, U=1,2,4); captured hidden states of all 4 layers [1,1,B,4*4096] bit-identical to the sequential decode's (PCC 1.0); K and V rows written by verify bit-identical to the sequential cache; two identical verify steps bit-identical. Same at 48 layers with the 5-layer capture (0,11,23,35,47; layer 47 before the final norm) at U=1,2,4: argmax 100%, capture bit-identical, repeat bit-identical (attn_AA3_verify48.jsonl, run at a9898d08406, decode.py only gained the accept_prefix helper since). KEY FINDING: ONE batched paged_update_cache over the virtual rows LOSES KV updates (the op is a read-modify-write of whole cache tiles and the rows of one user share a tile; probe tests/probe_paged_update_rows3.py: batched mode keeps 1 of 8 rows, junk elsewhere); fixed by MIMO_VERIFY_WRITE=skip (default): 8 ordered calls, call t has update index -1 (skip) for all rows except those of token t; back-to-back updates of the same tile land correctly eager and traced (probe_paged_update_rows2.py). API: Decoder.verify(tokens[rows,U,8], positions[rows,U], dead) -> (argmax[rows,U,8], best), Decoder.accept_prefix(argmax, tokens), dec.feat on device; interface note bringup/mimo_v26/notes/spec_hooks.md. Repro: launch.py ... --env DEC_LAYERS=4 --env DEC_HOST_K=0 -- python models/demos/blackhole/mimo_v26/tests/test_verify_decode.py (48-layer: --env DEC_LAYERS=48 --env DEC_CAPTURE=0,11,23,35,47). Verify-step TIME not measured here.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_AA4_verify_gate4_final.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py
+- data: {"layers":4,"U":[1,2,4],"argmax_equal":1.0,"feat_bit_identical":1,"verify_repeat_bit_identical":1}

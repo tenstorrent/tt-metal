@@ -8,6 +8,7 @@ into the V weights; o_proj rows for the 64 pad dims are zero. RoPE = x*cos + (x@
 the pass-through dims). Sink input to the SDPA ops is sink/scale. SWA KV is a ring of `ring_blocks` pages (decode: cache_position_modulo, chunked prefill:
 page table aliasing logical block i -> ring block i % ring_blocks); global KV is a plain paged cache.
 """
+import os
 from dataclasses import dataclass
 
 import torch
@@ -305,9 +306,12 @@ class MiMoAttention:
         return self._all_reduce(part)
 
     # ------------------------------------------------------------------ decode (32 user slots per row)
-    def _dec_state(self, B):
-        """(page table device tensor [B, nb], kv shard config, attention-output shard config) for B decode slots; built lazily, freed by reconfigure."""
-        if B not in self._dec_states:
+    def _dec_state(self, B, block=1):
+        """(page table device tensor [B, nb], kv shard config, attention-output shard config) for B decode rows; built lazily, freed by reconfigure.
+        block > 1: VIRTUAL USERS (spec-decode verify): row v = block*u + t belongs to real user u, so the page-table row of user u is repeated `block` times.
+        """
+        key = (B, block)
+        if key not in self._dec_states:
             cores = ttnn.num_cores_to_corerangeset(B, ttnn.CoreCoord(8, 8), row_wise=True)
             mk = lambda: ttnn.create_sharded_memory_config(
                 shape=(32, DQK),
@@ -316,9 +320,10 @@ class MiMoAttention:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            pt = self._up(_pad8(self.page_table[:B]), ttnn.int32, self._rep, ttnn.ROW_MAJOR_LAYOUT)
-            self._dec_states[B] = (pt, mk(), mk())
-        return self._dec_states[B]
+            pt_rows = self.page_table[: B // block].repeat_interleave(block, 0) if block > 1 else self.page_table[:B]
+            pt = self._up(_pad8(pt_rows), ttnn.int32, self._rep, ttnn.ROW_MAJOR_LAYOUT)
+            self._dec_states[key] = (pt, mk(), mk())
+        return self._dec_states[key]
 
     def reconfigure(self, page_table):
         """New KV pool for a new user count / context: free the caches and the per-B decode states, allocate new caches for page_table ([slots, nb] int32).
@@ -349,10 +354,10 @@ class MiMoAttention:
         self.decode_set(io, positions)
         return io["cur"], io["idx"]
 
-    def decode(self, x, cur_pos, rope_idx):
+    def decode(self, x, cur_pos, rope_idx, block=1, upd=None):
         """x: [1,1,B,4096] bf16 TILE per device, B = decode slots per mesh row (1..32). Returns [1,1,B,4096]."""
         B = x.shape[2]
-        pt_dec, kv_mem, att_mem = self._dec_state(B)
+        pt_dec, kv_mem, att_mem = self._dec_state(B, block)
         qkv = ttnn.linear(
             x,
             self.wqkv,
@@ -377,11 +382,45 @@ class MiMoAttention:
         kr = self._rope(k, cos, sin)
         for t in (q, k, cos, sin, cosq, sinq):
             ttnn.deallocate(t)
-        kr = ttnn.to_memory_config(kr, kv_mem)
-        v = ttnn.to_memory_config(v, kv_mem)
         extra = {"cache_position_modulo": self.ring_blocks * BLOCK} if self.ring_blocks else {}
-        ttnn.experimental.paged_update_cache(self.k_cache, kr, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra)
-        ttnn.experimental.paged_update_cache(self.v_cache, v, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra)
+        if block > 1 and os.environ.get("MIMO_VERIFY_NOWRITE") == "1":
+            pass  # debug: reads only (cache already holds the block's K/V from a sequential run)
+        elif block > 1 and upd is not None and upd[0].shape[0] == B:
+            # verify, "skip" mode: paged_update_cache skips a batch entry whose update index is -1, so call t updates only the rows of token t (all rows are
+            # sources, no strided slicing); the 8 calls run in order, each one a read-modify-write of whole cache tiles of DISJOINT users' blocks.
+            kr = ttnn.to_memory_config(kr, kv_mem)
+            v = ttnn.to_memory_config(v, kv_mem)
+            for t in range(block):
+                ttnn.experimental.paged_update_cache(
+                    self.k_cache, kr, update_idxs_tensor=upd[t], page_table=pt_dec, **extra
+                )
+                ttnn.experimental.paged_update_cache(
+                    self.v_cache, v, update_idxs_tensor=upd[t], page_table=pt_dec, **extra
+                )
+        elif block > 1 and upd is not None:
+            # verify: the `block` virtual users of one real user write rows of the SAME cache tiles; one batched update would read-modify-write the same tiles
+            # concurrently, so write token t of all real users in separate calls (upd[t] = int32 [U] positions pos_u + t), in order, before any attention read.
+            U = B // block
+            pt_u, kv_mem_u, _ = self._dec_state(U, 1)
+            for t in range(block):
+                for cache, src in ((self.k_cache, kr), (self.v_cache, v)):
+                    st = ttnn.slice(src, [0, t, 0, 0], [1, B, src.shape[2], src.shape[3]], [1, block, 1, 1])
+                    st = ttnn.to_memory_config(st, kv_mem_u)
+                    ttnn.experimental.paged_update_cache(cache, st, update_idxs_tensor=upd[t], page_table=pt_u, **extra)
+                    ttnn.deallocate(st)
+                    for _ in range(
+                        int(os.environ.get("MIMO_VERIFY_GAP", "0"))
+                    ):  # debug: delay between back-to-back updates of the same tile
+                        ttnn.deallocate(ttnn.relu(self.cos_tab))
+        else:
+            kr = ttnn.to_memory_config(kr, kv_mem)
+            v = ttnn.to_memory_config(v, kv_mem)
+            ttnn.experimental.paged_update_cache(
+                self.k_cache, kr, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra
+            )
+            ttnn.experimental.paged_update_cache(
+                self.v_cache, v, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra
+            )
         ttnn.deallocate(kr)
         ttnn.deallocate(v)
         kw = dict(
