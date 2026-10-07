@@ -19,7 +19,14 @@ inline void calculate_logsigmoid(
     const uint dst_index_in1,  // Index for exp(-x)
     const uint dst_index_out)  // Index for output
 {
+    // The three lowest coefficients in Prgm0-2, written by every call: the exp that produces exp(-x) programs them in
+    // its init, which the caller runs again before that exp's next call.
+    sfpi::vConstFloatPrgm0 = 0.6924354434013367f;
+    sfpi::vConstFloatPrgm1 = 0.49275708198547363f;
+    sfpi::vConstFloatPrgm2 = 0.12142381817102432f;
+
     // logsigmoid(x) = -softplus(-x)
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr uint dst_tile_size_sfpi = 32;
 
@@ -39,9 +46,9 @@ inline void calculate_logsigmoid(
             // Polynomial approximation for softplus(-x) in the mid-range
             result = PolynomialEvaluator::eval(
                 x,
-                0.6924354434013367f,
-                0.49275708198547363f,
-                0.12142381817102432f,
+                sfpi::vConstFloatPrgm0,
+                sfpi::vConstFloatPrgm1,
+                sfpi::vConstFloatPrgm2,
                 0.0031102809589356184f,
                 -0.00330807245336473f,
                 -0.00028794066747650504f,
