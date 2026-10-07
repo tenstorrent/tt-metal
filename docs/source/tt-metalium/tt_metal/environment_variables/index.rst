@@ -73,3 +73,18 @@ The library uses the following fallback order to locate runtime artifacts:
 
      export TT_METAL_RUNTIME_ROOT=/opt/tt-metalium-runtime
      /usr/local/bin/my_cpp_app
+
+TT_METAL_SOCKET_HUGEPAGE_DIR
+--------------------------
+
+Optional absolute path to a writable hugetlbfs directory. Named socket buffers
+larger than one system page are allocated in a single hugepage there, for DMA
+on hosts without an IOMMU. The requested buffer must fit in the mount's page
+size, and free hugepages must be reserved before starting the service. Allocation
+failure is reported without falling back to noncontiguous memory. Small buffers
+retain their POSIX shared-memory backing.
+
+Socket descriptors carry the backing path and mapped size. Every connecting
+process must use a library with hugetlbfs NamedShm support; it does not need this
+environment variable. The socket resource tracker cleans up these files on
+normal exit and through its existing stale-process manifest cleanup.
