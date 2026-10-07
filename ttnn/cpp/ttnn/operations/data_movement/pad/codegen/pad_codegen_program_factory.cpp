@@ -78,7 +78,7 @@ uint32_t work_for_core(const CoreSplit& split, const CoreCoord& core) {
 }
 
 CBDescriptor make_cb(
-    const CoreRangeSet& cores, uint32_t index, DataFormat format, uint32_t page_size, uint32_t num_pages) {
+    const CoreRangeSet& cores, uint32_t index, tt::DataFormat format, uint32_t page_size, uint32_t num_pages) {
     return CBDescriptor{
         .total_size = num_pages * page_size,
         .core_ranges = cores,
@@ -128,7 +128,7 @@ uint32_t source_index_before(const Coord4& p, const Coord4& front, const Coord4&
 }
 
 ProgramDescriptor build_pad_tiled(
-    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, DataFormat format) {
+    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, tt::DataFormat format) {
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
@@ -216,7 +216,8 @@ ProgramDescriptor build_pad_tiled(
     return desc;
 }
 
-ProgramDescriptor build_pad_rm(const PadCodegenParams& attrs, const Tensor& input, Tensor& output, DataFormat format) {
+ProgramDescriptor build_pad_rm(
+    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, tt::DataFormat format) {
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
 
@@ -297,7 +298,7 @@ ProgramDescriptor build_pad_rm(const PadCodegenParams& attrs, const Tensor& inpu
 }
 
 ProgramDescriptor build_fill_partial_tile(
-    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, DataFormat format) {
+    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, tt::DataFormat format) {
     Buffer* buffer = output.buffer();
 
     const auto tile = input.tensor_spec().tile();
@@ -331,7 +332,6 @@ ProgramDescriptor build_fill_partial_tile(
             }
         }
     }
-    TT_FATAL(!tasks.empty(), "fill_partial_tile needs a partial border tile");
 
     const CoreSplit split = split_work(input, static_cast<uint32_t>(tasks.size()));
 
@@ -374,7 +374,7 @@ ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
     TT_FATAL(input.buffer() != nullptr, "PadCodegen input must be allocated on device!");
     TT_FATAL(tensor_return_value.buffer() != nullptr, "PadCodegen output must be allocated on device!");
 
-    const DataFormat format = datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat format = datatype_to_dataformat_converter(input.dtype());
     if (operation_attributes.fill_partial_tile) {
         return build_fill_partial_tile(operation_attributes, input, tensor_return_value, format);
     }

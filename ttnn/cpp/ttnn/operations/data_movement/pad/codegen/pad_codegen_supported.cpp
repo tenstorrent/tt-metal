@@ -182,8 +182,8 @@ struct RmDemotion {
 // than native on device; exact matches only.
 constexpr std::array<RmDemotion, 5> kRmDemotions = {{
     {32, 32, {0, 32, 16, 32}, kAllDtypes, kBf16 | kI32 | kU32},
-    {32, 32, {0, 32, 32, 32}, kF32 | kI32 | kU32, kBf16 | kI32 | kU32},
-    {32, 32, {0, 32, 4, 32}, kF32 | kI32 | kU32, kU32},
+    {32, 32, {0, 32, 32, 32}, kAllDtypes, kBf16 | kI32 | kU32},
+    {32, 32, {0, 32, 4, 32}, kAllDtypes, kI32 | kU32},
     {32, 32, {3, 25, 4, 6}, kAllDtypes, kBf16 | kI32 | kU32},
     {32, 64, {0, 32, 4, 32}, kAllDtypes, kBf16 | kI32 | kU32},
 }};
