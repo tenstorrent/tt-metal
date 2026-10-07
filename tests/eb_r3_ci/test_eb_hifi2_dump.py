@@ -20,7 +20,7 @@ import ttnn
 
 STAGE = os.environ.get("EB_DUMP_STAGE", "ref")
 DIR = os.environ.get("EB_DUMP_DIR", "/tmp/eb_hifi2_dump")
-MAX_DETAIL_CALLS = 512
+MAX_DETAIL_CALLS = 1024
 
 
 @pytest.fixture(scope="module")
@@ -92,20 +92,58 @@ DT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 OUT = {"bf16": ttnn.bfloat16, "fp32": ttnn.float32}
 
 
+def _cls_bits(bits, dt):
+    """0 zero, 1 denormal, 2 normal, 3 inf, 4 nan."""
+    if dt == np.uint16:
+        e, m = (bits >> 7) & 0xFF, bits & 0x7F
+    else:
+        e, m = (bits >> 23) & 0xFF, bits & 0x7FFFFF
+    c = np.full(bits.shape, 2, dtype=np.int8)
+    c[(e == 0) & (m == 0)] = 0
+    c[(e == 0) & (m != 0)] = 1
+    c[(e == 0xFF) & (m == 0)] = 3
+    c[(e == 0xFF) & (m != 0)] = 4
+    return c
+
+
+NAMES = ["zero", "denorm", "normal", "inf", "nan"]
+
+
 def _report_diff(tag, ref, got, a_bits, b_vals):
     d = np.nonzero(ref != got)[0]
     print(f"\nDUMP {tag}: elements {ref.size}, differ {d.size}", flush=True)
-    if d.size:
-        cats = {}
-        for k in d[:20000]:
-            r, g = int(ref[k]), int(got[k])
-            key = ("nan" if np.isnan(_val(r, ref.dtype)) else "num") + "/" + ("nan" if np.isnan(_val(g, ref.dtype)) else "num")
-            cats[key] = cats.get(key, 0) + 1
-        print(f"DUMP {tag} categories (first 20000): {cats}")
-        for k in d[:40]:
-            print(
-                f"DUMP {tag} k={k} a=0x{int(a_bits[k]):04x} b={b_vals[k]!r} hifi4=0x{int(ref[k]):x} hifi2=0x{int(got[k]):x}"
-            )
+    if not d.size:
+        return
+    a = _f32(np.asarray(a_bits, dtype=np.uint32)[d] << 16) if np.asarray(a_bits).dtype == np.uint16 else np.asarray(a_bits)[d]
+    b = np.asarray(b_vals, dtype=np.float32)[d]
+    ca = _cls_bits(_bits32(a), np.uint32)
+    cb = _cls_bits(_bits32(b), np.uint32)
+    cr = _cls_bits(ref[d], ref.dtype)
+    cg = _cls_bits(got[d], got.dtype)
+    with np.errstate(all="ignore"):
+        prod = a.astype(np.float64) * b.astype(np.float64)
+    lim = 3.3895313892515355e38 if ref.dtype == np.uint16 else 3.4028234663852886e38
+    pc = np.where(np.isnan(prod), 4, np.where(np.isinf(prod) | (np.abs(prod) > lim), 3, np.where(prod == 0, 0, np.where(np.abs(prod) < 1.1754943508222875e-38, 1, 2))))
+    key = ca * 625 + cb * 125 + pc * 25 + cr * 5 + cg
+    u, n = np.unique(key, return_counts=True)
+    print(f"DUMP {tag} classes (a, b, exact product, hifi4, hifi2): count")
+    for k, c in sorted(zip(u, n), key=lambda t: -t[1]):
+        k = int(k)
+        parts = [NAMES[(k // 625) % 5], NAMES[(k // 125) % 5], NAMES[(k // 25) % 5], NAMES[(k // 5) % 5], NAMES[k % 5]]
+        sel = d[key == k][:3]
+        ex = "; ".join(f"a=0x{int(np.asarray(a_bits)[j]):x} b={float(np.asarray(b_vals)[j])!r} h4=0x{int(ref[j]):x} h2=0x{int(got[j]):x}" for j in sel)
+        print(f"DUMP {tag}   {parts}: {int(c)}   e.g. {ex}")
+    fin = (ca == 2) & (cb == 2) & (cr == 2) & (cg == 2)
+    if fin.any():
+        r = _val_arr(ref[d][fin], ref.dtype); g = _val_arr(got[d][fin], got.dtype)
+        rel = np.abs(r.astype(np.float64) - g) / np.maximum(np.abs(r.astype(np.float64)), 1e-300)
+        print(f"DUMP {tag} finite normal operands and outputs: {int(fin.sum())} differ, max rel {rel.max():.3e}, median rel {np.median(rel):.3e}")
+
+
+def _val_arr(bits, dt):
+    if dt == np.uint16:
+        return _f32(bits.astype(np.uint32) << 16)
+    return _f32(bits)
 
 
 def _val(bits, dt):
@@ -156,7 +194,9 @@ def test_no_bcast(device, a_dt, b_dt, out_dt, order):
     tag = f"nob_{a_dt}_{b_dt}_{out_dt}_{order}"
     ref = _stage_io(tag, out)
     if ref is not None:
-        _report_diff(tag, ref, out, a, b)
+        av = ttnn.to_torch(ta).float().numpy().reshape(-1)
+        bv = ttnn.to_torch(tb).float().numpy().reshape(-1)
+        _report_diff(tag, ref, out, av, bv)
 
 
 ROW = [(b, o, order) for b in ("bfp8", "bfp4") for o in ("bf16", "fp32") for order in ("ab", "ba")]
@@ -180,7 +220,8 @@ def test_row_bcast(device, b_dt, out_dt, order):
     tag = f"row_{b_dt}_{out_dt}_{order}"
     ref = _stage_io(tag, out)
     if ref is not None:
-        _report_diff(tag, ref, out, a.reshape(-1), np.broadcast_to(b, (32, W)).reshape(-1))
+        bv = ttnn.to_torch(tb).float().numpy().reshape(-1)[:W]
+        _report_diff(tag, ref, out, _f32(a.reshape(-1).astype(np.uint32) << 16), np.broadcast_to(bv, (32, W)).reshape(-1))
 
 
 SCAL = [(b, o) for b in ("bfp8", "bfp4") for o in ("bf16", "fp32")]
@@ -224,7 +265,7 @@ def test_scalar_lhs(device, b_dt, out_dt):
             o = call(i)
             if np.frombuffer(hashlib.sha1(o.tobytes()).digest(), dtype=np.uint8).tobytes() != ref[i].tobytes():
                 bad.append(i)
-                if len(bad) <= MAX_DETAIL_CALLS:
+                if len(bad) <= 256 or len(bad) % 16 == 0:
                     np.save(os.path.join(DIR, f"{tag}_h2_{i}.npy"), o)
         np.save(bad_path, np.array(bad, dtype=np.int64))
         print(f"DUMP {tag}: calls {pats.size}, elements {pats.size * b.size}, calls that differ {len(bad)}", flush=True)
@@ -232,15 +273,18 @@ def test_scalar_lhs(device, b_dt, out_dt):
             print(f"DUMP {tag} differing scalars (first 64): {[hex(int(pats[i])) for i in bad[:64]]}")
         return
     bad = np.load(bad_path) if os.path.exists(bad_path) else np.array([], dtype=np.int64)
-    total = 0
-    for i in bad[:MAX_DETAIL_CALLS]:
+    bv = ttnn.to_torch(tb).float().numpy().reshape(-1)
+    H4, H2, AV, BV = [], [], [], []
+    for i in bad:
+        f2 = os.path.join(DIR, f"{tag}_h2_{int(i)}.npy")
+        if not os.path.exists(f2) or len(H4) >= MAX_DETAIL_CALLS:
+            continue
         h4 = call(int(i))
-        h2 = np.load(os.path.join(DIR, f"{tag}_h2_{int(i)}.npy"))
-        d = np.nonzero(h4 != h2)[0]
-        total += d.size
-        for k in d[:8]:
-            E, s, m = meta[k % table.size] if k < table.size else (None, None, None)
-            print(
-                f"DUMP {tag} scalar=0x{int(pats[i]):04x} b={b[k]!r} (E={E} s={s} m={m}) hifi4=0x{int(h4[k]):x} hifi2=0x{int(h2[k]):x}"
-            )
-    print(f"DUMP {tag}: detail of {min(len(bad), MAX_DETAIL_CALLS)} calls, {total} differing elements", flush=True)
+        h2 = np.load(f2)
+        H4.append(h4); H2.append(h2); AV.append(np.full(h4.shape, scalars[i], dtype=np.float32)); BV.append(bv)
+    print(f"DUMP {tag}: detail of {len(H4)} of {len(bad)} differing calls", flush=True)
+    if H4:
+        _report_diff(tag + "_detail", np.concatenate(H4), np.concatenate(H2), np.concatenate(AV), np.concatenate(BV))
+    sc = _cls_bits(_bits32(scalars[bad]), np.uint32) if len(bad) else np.array([])
+    u, n = np.unique(sc, return_counts=True)
+    print(f"DUMP {tag} differing calls by scalar class: {dict((NAMES[int(k)], int(c)) for k, c in zip(u, n))}")
