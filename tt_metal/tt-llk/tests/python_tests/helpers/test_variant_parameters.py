@@ -800,10 +800,10 @@ class PACK_BLOCK(TemplateParameter):
 class TINY_PACK_MODE(TemplateParameter):
     """Pack of a block of tiny tiles (Blackhole): 0 one block-contiguous run, 1 one closed run per tile, 2 one _llk_pack_ per tile."""
 
-    mode: int = 0
+    tiny_pack_mode: int = 0
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr int tiny_pack_mode = {self.mode};"
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
 
 
 @dataclass
