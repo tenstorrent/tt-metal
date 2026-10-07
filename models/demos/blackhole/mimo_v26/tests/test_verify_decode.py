@@ -86,6 +86,7 @@ def main():
             cap = tuple(range(NL))
             # 1. verify on a fresh prefill
             gen.prefill(prompts, S)
+            kv_pre = kv_rows(model, mesh, pos, U, blk)
             vd = Decoder(model, trace=trace, U=U, block=blk, capture=cap)
             av, bv = vd.verify(toks, pos, dead)
             kv_ver = kv_rows(model, mesh, pos, U, blk)
@@ -145,6 +146,15 @@ def main():
                     verify_cache=errv,
                     sequential_cache=errs_,
                 )
+            rec(
+                "verify_write_landed",
+                note="rel diff of verify cache row vs the row right after prefill (0 = the verify write never landed), row0, u-major then t",
+                rel=[
+                    round(float((kv_ver[0][0, u, t] - kv_pre[0][0, u, t]).norm() / kv_pre[0][0, u, t].norm()), 3)
+                    for u in range(U)
+                    for t in range(blk)
+                ],
+            )
             rec(
                 "kv_displacement_row0",
                 note="(best matching sequential position - intended, rel err) per user, t",
