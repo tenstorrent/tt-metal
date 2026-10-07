@@ -45,8 +45,15 @@ https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevf
 import torch
 import torch.nn as nn
 
-from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
-from models.experimental.bevformer.config.head_config import NUM_CLASSES, PC_RANGE
+from models.experimental.bevformer.model_config import (
+    CODE_SIZE,
+    CODE_XY,
+    CODE_Z,
+    EMBED_DIMS,
+    NUM_CLASSES,
+    NUM_QUERY,
+    PC_RANGE,
+)
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 
 
@@ -80,9 +87,9 @@ class BEVFormerHead(nn.Module):
         self,
         bev_h,
         bev_w,
-        num_query=900,
+        num_query=NUM_QUERY,
         num_classes=NUM_CLASSES,
-        embed_dims=256,
+        embed_dims=EMBED_DIMS,
         code_size=CODE_SIZE,
         pc_range=PC_RANGE,
         decoder=None,

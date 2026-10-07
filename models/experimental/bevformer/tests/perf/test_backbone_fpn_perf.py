@@ -20,7 +20,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import (
+from models.experimental.bevformer.tests.common import (
     assert_pcc,
     build_reference_backbone,
     build_reference_fpn,
@@ -30,7 +30,7 @@ from models.experimental.bevformer.tests.backbone_common import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.model_preprocessing_backbone import (
+from models.experimental.bevformer.tt.model_preprocessing import (
     create_fpn_parameters,
     create_resnet_parameters,
 )

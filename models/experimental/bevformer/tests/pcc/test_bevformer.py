@@ -17,26 +17,22 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.bevformer.reference.bevformer import BEVFormer, load_bevformer_checkpoint
-from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
-from models.experimental.bevformer.reference.fpn import FPN
-from models.experimental.bevformer.reference.head import BEVFormerHead
-from models.experimental.bevformer.reference.perception_transformer import PerceptionTransformer
-from models.experimental.bevformer.reference.resnet import ResNet
-from models.experimental.bevformer.tests.backbone_common import (
-    FPN_KWARGS,
-    RESNET_KWARGS,
+from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS
+from models.experimental.bevformer.reference.bevformer import BEVFormer, build_bevformer_base, load_bevformer_checkpoint
+from models.experimental.bevformer.tests.common import (
+    BEV_SHAPES,
+    assert_channels_close,
     assert_pcc,
     build_reference_backbone,
     build_reference_fpn,
+    build_reference_head,
+    build_reference_transformer,
+    center_channels,
+    frame_metas,
     random_image_batch,
     to_conv_layout,
 )
-from models.experimental.bevformer.tests.decoder_common import assert_channels_close
-from models.experimental.bevformer.tests.encoder_common import BEV_SHAPES, NUM_LAYERS
-from models.experimental.bevformer.tests.head_common import build_reference_head, center_channels
-from models.experimental.bevformer.tests.perception_common import build_reference_transformer, frame_metas
-from models.experimental.bevformer.tt.model_preprocessing_bevformer import create_bevformer_parameters
+from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_parameters
 from models.experimental.bevformer.tt.tt_bevformer import TtBEVFormer
 
 CHECKPOINT = os.environ.get("BEVFORMER_CHECKPOINT")
@@ -53,20 +49,13 @@ def build_reference_bevformer():
         model = BEVFormer(
             build_reference_backbone(),
             build_reference_fpn(),
-            build_reference_transformer(NUM_LAYERS),
+            build_reference_transformer(ENCODER_NUM_LAYERS),
             build_reference_head((bev_h, bev_w)),
             bev_h,
             bev_w,
         )
     else:
-        model = BEVFormer(
-            ResNet(**RESNET_KWARGS),
-            FPN(**FPN_KWARGS),
-            PerceptionTransformer(BEVFormerEncoder()),
-            BEVFormerHead(bev_h, bev_w),
-            bev_h,
-            bev_w,
-        )
+        model = build_bevformer_base(bev_h, bev_w)
         state_dict = torch.load(CHECKPOINT, map_location="cpu", weights_only=False)["state_dict"]
         load_bevformer_checkpoint(model, state_dict)
     return model.eval().requires_grad_(False)

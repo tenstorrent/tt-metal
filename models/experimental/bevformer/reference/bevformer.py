@@ -18,12 +18,20 @@ detector in ``tt/tt_bevformer.py`` is checked against:
 The caller carries the previous BEV between frames and makes the CAN bus relative to the previous
 frame (:func:`relative_can_bus`), as upstream's ``forward_test`` does.
 
-:func:`load_bevformer_checkpoint` loads a BEVFormer checkpoint, every key but the loss's
+:func:`build_bevformer_base` builds BEVFormer-base from ``model_config.py``, and
+:func:`load_bevformer_checkpoint` loads a BEVFormer checkpoint into it, every key but the loss's
 ``code_weights`` accounted for.
 """
 
 import torch
 import torch.nn as nn
+
+from models.experimental.bevformer.model_config import BEV_H, BEV_W, EMBED_DIMS, FPN_KWARGS, RESNET_KWARGS
+from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
+from models.experimental.bevformer.reference.fpn import FPN
+from models.experimental.bevformer.reference.head import BEVFormerHead
+from models.experimental.bevformer.reference.perception_transformer import PerceptionTransformer
+from models.experimental.bevformer.reference.resnet import ResNet
 
 
 class LearnedPositionalEncoding(nn.Module):
@@ -73,7 +81,7 @@ class BEVFormer(nn.Module):
     the BEV side that uses them.
     """
 
-    def __init__(self, img_backbone, img_neck, transformer, head, bev_h=200, bev_w=200, embed_dims=256):
+    def __init__(self, img_backbone, img_neck, transformer, head, bev_h=BEV_H, bev_w=BEV_W, embed_dims=EMBED_DIMS):
         super().__init__()
         self.bev_h, self.bev_w = bev_h, bev_w
         self.img_backbone = img_backbone
@@ -102,6 +110,18 @@ class BEVFormer(nn.Module):
         )
         cls_scores, bbox_preds = self.head(bev_embed)
         return cls_scores, bbox_preds, bev_embed
+
+
+def build_bevformer_base(bev_h=BEV_H, bev_w=BEV_W):
+    """BEVFormer-base with PyTorch's default init, ready for :func:`load_bevformer_checkpoint`."""
+    return BEVFormer(
+        ResNet(**RESNET_KWARGS),
+        FPN(**FPN_KWARGS),
+        PerceptionTransformer(BEVFormerEncoder()),
+        BEVFormerHead(bev_h, bev_w),
+        bev_h,
+        bev_w,
+    )
 
 
 def load_bevformer_checkpoint(model, state_dict):

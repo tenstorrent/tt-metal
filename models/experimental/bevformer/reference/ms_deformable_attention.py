@@ -21,7 +21,7 @@ import torch.nn.functional as F
 from typing import Optional
 
 
-from ..config import DeformableAttentionConfig
+from ..model_config import DeformableAttentionConfig
 
 
 def multi_scale_deformable_attn(
@@ -97,7 +97,6 @@ class MSDeformableAttention(nn.Module):
                 - num_levels (int): Number of feature pyramid levels
                 - num_points (int): Number of sampling points per head
                 - batch_first (bool): Whether batch dimension comes first
-                - im2col_step (int): Step size for im2col operation
             device: PyTorch device for computations (optional)
 
         Raises:
@@ -114,7 +113,6 @@ class MSDeformableAttention(nn.Module):
         self.num_heads = config.num_heads
         self.num_levels = config.num_levels
         self.num_points = config.num_points
-        self.im2col_step = config.im2col_step
         self.batch_first = config.batch_first
 
         self.head_dim = self.embed_dims // self.num_heads
@@ -271,5 +269,5 @@ class MSDeformableAttention(nn.Module):
         return (
             f"embed_dims={self.embed_dims}, num_heads={self.num_heads}, "
             f"num_levels={self.num_levels}, num_points={self.num_points}, "
-            f"im2col_step={self.im2col_step}, batch_first={self.batch_first}"
+            f"batch_first={self.batch_first}"
         )

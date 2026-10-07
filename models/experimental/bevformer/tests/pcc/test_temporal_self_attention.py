@@ -7,16 +7,16 @@ import torch
 
 import ttnn
 from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.encoder_common import (
+from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
+    assert_pcc,
     build_reference_encoder,
     ego_shift,
     random_bev,
     random_encoder_inputs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_temporal_self_attention_parameters
-from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_grid_sample_config
 from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention, tsa_grid_bias
 

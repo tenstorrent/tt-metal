@@ -22,7 +22,7 @@ https://github.com/fundamentalvision/BEVFormer/blob/master/projects/mmdet3d_plug
 
 import torch
 
-from models.experimental.bevformer.config.decoder_config import (
+from models.experimental.bevformer.model_config import (
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -31,7 +31,7 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_XY,
     CODE_Z,
 )
-from models.experimental.bevformer.config.head_config import (
+from models.experimental.bevformer.model_config import (
     BOX_CENTER,
     MAX_NUM,
     NUM_CLASSES,

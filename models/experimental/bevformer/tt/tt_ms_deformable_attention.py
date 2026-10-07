@@ -17,7 +17,7 @@ Key components:
 import ttnn
 
 import torch
-from ..config import DeformableAttentionConfig
+from ..model_config import DeformableAttentionConfig
 
 try:
     from tracy import signpost

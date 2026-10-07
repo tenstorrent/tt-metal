@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import (
+from models.experimental.bevformer.tests.common import (
     BACKBONE_OUTPUT_DTYPES,
     assert_pcc,
     build_reference_backbone,
@@ -24,7 +24,7 @@ from models.experimental.bevformer.tests.backbone_common import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.model_preprocessing_backbone import (
+from models.experimental.bevformer.tt.model_preprocessing import (
     create_fpn_parameters,
     create_resnet_parameters,
 )

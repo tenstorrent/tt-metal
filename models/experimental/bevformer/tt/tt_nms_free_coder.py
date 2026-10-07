@@ -14,7 +14,7 @@ threshold, it drops none: the head scales the centers into ``pc_range``, inside
 """
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import (
+from models.experimental.bevformer.model_config import (
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -23,14 +23,9 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_XY,
     CODE_Z,
 )
-from models.experimental.bevformer.config.head_config import (
-    BOX_CENTER,
-    MAX_NUM,
-    NUM_CLASSES,
-    PC_RANGE,
-    POST_CENTER_RANGE,
-)
-from models.experimental.bevformer.tt.tt_head import SCORE_DTYPE
+from models.experimental.bevformer.model_config import MAX_NUM, NUM_CLASSES, PC_RANGE, POST_CENTER_RANGE
+from models.experimental.bevformer.reference.nms_free_coder import filter_boxes
+from models.experimental.bevformer.model_config import SCORE_DTYPE
 
 # Bisection steps that narrow the k-th logit's bracket around the bfloat16 pivot, 2^-5 of the
 # pivot wide, down to one float32 value; 19 suffice, the rest is margin. See TtNMSFreeCoder.topk.
