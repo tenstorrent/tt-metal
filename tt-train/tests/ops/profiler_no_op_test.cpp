@@ -38,9 +38,20 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
     xt::xarray<float> input_tensor =
         ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
 
-    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
+    auto* device = &autograd::ctx().get_device();
+    auto input = core::from_xtensor(input_tensor, device, ttnn::Layout::ROW_MAJOR);
+    auto input_again = core::from_xtensor(input_tensor, device, ttnn::Layout::ROW_MAJOR);
 
+    const auto entries_start = device->num_program_cache_entries();
     auto result = ttml::metal::profiler_no_op(input, "identifier");
+    const auto entries_after_first = device->num_program_cache_entries();
+    ASSERT_GT(entries_after_first, entries_start) << "program cache not populated by the first launch";
 
-    // NOTE: ProfilerNoOp does not change the input, so we just check that the operation completed successfully.
+    // A second launch on a fresh tensor of the same shape must reuse the cached program: the framework patches the
+    // buffer addresses the program factory bound instead of building a new program.
+    auto result_again = ttml::metal::profiler_no_op(input_again, "identifier");
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << "second launch did not reuse the cached program";
+
+    // NOTE: ProfilerNoOp does not change the input, so beyond the cache check we only verify both launches completed.
 }
