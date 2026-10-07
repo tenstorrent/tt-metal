@@ -25,6 +25,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/reflection.hpp>

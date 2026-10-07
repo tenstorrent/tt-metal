@@ -31,6 +31,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <queue>
 
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"

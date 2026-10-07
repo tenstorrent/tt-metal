@@ -10,6 +10,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/float8.hpp>
 
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>

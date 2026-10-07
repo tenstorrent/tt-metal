@@ -36,6 +36,7 @@
 #include "fabric/fabric_builder_context.hpp"
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_align.hpp"
 #include <umd/device/types/blackhole_eth.hpp>
 #include <umd/device/types/xy_pair.hpp>

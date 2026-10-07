@@ -29,6 +29,7 @@
 
 #include <mutex>
 #include <unordered_map>
+#include <queue>
 
 #include <tt_stl/assert.hpp>
 #include "dispatch/kernels/cq_commands.hpp"

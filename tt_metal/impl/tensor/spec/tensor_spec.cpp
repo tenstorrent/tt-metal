@@ -8,6 +8,8 @@
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "layout/page_config_impl.hpp"
 #include "layout/tensor_layout_impl.hpp"
