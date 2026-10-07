@@ -18,8 +18,10 @@ from models.demos.blackhole.mimo_v26.tt.moe_weights import load_layer_experts
 from models.demos.blackhole.mimo_v26.tt.router import MiMoGate
 
 EPS = 1e-6
-EXPERT_OP = os.environ.get("MIMO_EXPERT_OP", "mm")  # loop | mm | unified (bf16-activation paths: loop, mm)
-# MIMO_DEAD default is spread: sentinel hangs the traced decode at >= 24 layers (LOG E261007-1202-527)
+EXPERT_OP = os.environ.get(
+    "MIMO_EXPERT_OP", "unified"
+)  # loop | mm | unified (unified needs the private ttnn lib, see LOG)
+# MIMO_DEAD default spread32: sentinel hangs the traced decode in deep traces (E261007-1202-527, E261007-1432-926); spread touches all experts
 ROUTER_MODE = os.environ.get("MIMO_ROUTER_MODE", "exact")
 
 
@@ -291,7 +293,7 @@ class MiMoDecoderLayer:
                     self.gate,
                     self.moe,
                     router=os.environ.get("MIMO_ROUTER", "exact"),
-                    dead=os.environ.get("MIMO_DEAD", "spread"),
+                    dead=os.environ.get("MIMO_DEAD", "spread32"),
                 )
             return self.moe_dec.forward(x, live)
         B = x.shape[2]
