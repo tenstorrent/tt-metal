@@ -7,7 +7,8 @@ from models.demos.gpt_oss.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
 from .attention_configs import GPTOSSAttentionProgramConfig
-from .fused_decode import residual_memory_config
+from .decode_boundary import PendingBoundary
+from .fused_decode import DECODE_BOUNDARY_FUSE_CONSUMER
 from .mlp import MLP
 from .rms_norm import RMSNorm
 
@@ -90,12 +91,23 @@ class DecoderLayer:
             fused_decode=self.mlp.indexed_decode,
         )
         self.mesh_device = mesh_device
-        # Fused decode (one token per device, TP over mesh columns): the residual stream stays width-sharded in L1
-        # between the fused all-reduces (fused_decode.py) and the MoE computes only the routed experts.
+        # Fused decode (one token per device, TP over mesh columns): between the projections the residual stream is
+        # the flat replicated vector of decode_boundary.py, and each boundary all-reduces the row-parallel partial
+        # sums, adds them to the residual and applies the next RMSNorm in one op; the MoE computes only the routed
+        # experts.
         self.fused_decode = self.mlp.indexed_decode
         if self.fused_decode:
-            self.residual_memory_config = residual_memory_config(mesh_device, hf_config.hidden_size)
-            self.decode_all_reduce = ccl_manager.get_decode_all_reduce(hf_config.hidden_size, mesh_config.tp_axis)
+            self.boundary = ccl_manager.get_decode_boundary(
+                hf_config.hidden_size, hf_config.rms_norm_eps, mesh_config.tp_axis
+            )
+            # The producing o_proj / MoE down ops send their partial sums themselves, and each boundary runs inside the
+            # op consuming its output (fused_decode.py).
+            self.boundary_sent = ccl_manager.decode_boundary_send(hf_config.hidden_size, "attn") is not None
+            self.boundary_fuse_consumer = DECODE_BOUNDARY_FUSE_CONSUMER and self.boundary_sent
+            self.input_norm_gamma = self.boundary.flat_gamma(self.input_layernorm)
+            self.post_norm_gamma = self.boundary.flat_gamma(self.post_attention_layernorm)
+            self.next_norm_gamma = None  # set_decode_next_norm (the model knows the next layer)
+            self.is_last_layer = False
             # The persistent buffers the streamed decode ops share across layers are allocated here, at model
             # construction, so none of them is created while a trace is live.
             attn_config = self.self_attn.config
@@ -107,38 +119,63 @@ class DecoderLayer:
             ccl_manager.get_decode_partial(hf_config.hidden_size)
             ccl_manager.get_decode_router_out()
 
+    def set_decode_next_norm(self, norm, is_last_layer):
+        """Fused decode: the layer's last boundary applies the next RMSNorm (the next layer's input norm, or the
+        model's final norm after the last layer)."""
+        self.next_norm_gamma = self.boundary.flat_gamma(norm)
+        self.is_last_layer = is_last_layer
+
+    def _consumer_input(self, pending):
+        """The input of a boundary's consumer op: the pending boundary itself when it runs fused into that op
+        (fused_decode.DECODE_BOUNDARY_FUSE_CONSUMER), else its normed output after running it on its own."""
+        if self.boundary_fuse_consumer:
+            return pending
+        return pending.run()[1]
+
     def _decode_forward(self, hidden_states, position_embeddings, position_idx, page_table, kv_cache):
-        """One decode token: sharded norm -> attention (+ fused all-reduce of the packed partial) -> residual add (packed
-        sum unpacked into row 0) -> sharded norm -> MoE (+ fused all-reduce) -> residual add. Returns the BF16 residual
-        stream in the width-sharded decode layout."""
-        if hidden_states.memory_config() != self.residual_memory_config:
-            # First layer: the embedding output enters the decode residual layout.
-            embeddings = hidden_states
-            hidden_states = ttnn.to_memory_config(embeddings, self.residual_memory_config)
-            embeddings.deallocate(True)
-        residual = hidden_states
-        attn_in = self.input_layernorm.forward_sharded(hidden_states)
-        attn_out = self.self_attn(
-            attn_in,
+        """One decode token through the inter-layer contract of decode_boundary.py.
+
+        hidden_states: the previous layer's pending boundary (all-reduce of its MoE partial sums + residual add + this
+        layer's input norm; decode_boundary.PendingBoundary), or for the first layer the [1, 1, 1, hidden] BF16
+        row-major embedding. Runs [boundary] -> attention -> [boundary: all-reduce of the o_proj partial sums + residual
+        add + post-attention norm] -> MoE, each boundary inside the op consuming its normed output (QKV, router).
+        Returns the pending MoE boundary for the next layer; the last layer runs it (with the final norm) and returns
+        the normed hidden in row 0 of the width-sharded [1, 1, 32, hidden] layout the LM-head path reads."""
+        if isinstance(hidden_states, PendingBoundary):
+            pending = hidden_states
+        else:
+            pending = PendingBoundary(self.boundary, hidden_states, self.input_norm_gamma, entry=True)
+        attn_partial = self.self_attn(
+            self._consumer_input(pending),
             rope_mats=position_embeddings,
             position_idx=position_idx,
             page_table=page_table,
             kv_cache=kv_cache,
             is_decode=True,
         )
-        attn_in.deallocate(True)
-        hidden_states = self.decode_all_reduce.residual_add(residual, attn_out)
-        attn_out.deallocate(True)
-        residual.deallocate(True)
+        residual = pending.residual_out
+        pending.x.deallocate(True)
+        pending.residual.deallocate(True)
 
-        residual = hidden_states
-        mlp_in = self.post_attention_layernorm.forward_sharded(hidden_states)
-        mlp_out = self.mlp(mlp_in, is_decode=True)
-        mlp_in.deallocate(True)
-        hidden_states = self.decode_all_reduce.residual_add(residual, mlp_out)
-        mlp_out.deallocate(True)
+        pending = PendingBoundary(
+            self.boundary, residual, self.post_norm_gamma, attn_partial, "attn", sent=self.boundary_sent
+        )
+        mlp_partial = self.mlp(self._consumer_input(pending), is_decode=True)
+        residual = pending.residual_out
+        pending.x.deallocate(True)
+        pending.residual.deallocate(True)
+
+        pending = PendingBoundary(
+            self.boundary, residual, self.next_norm_gamma, mlp_partial, "moe", sent=self.boundary_sent
+        )
+        if not self.is_last_layer:
+            return pending
+        residual, x = pending.run()
+        pending.residual.deallocate(True)
         residual.deallocate(True)
-        return hidden_states
+        rows = self.boundary.to_rows(x)
+        x.deallocate(True)
+        return rows
 
     def __call__(
         self,

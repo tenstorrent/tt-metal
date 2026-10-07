@@ -14,13 +14,14 @@ These ttnn.generic_op ops (kernels/stream_*.cpp) stream the weights per DRAM ban
 * Bias: every column carries one extra K tile whose first NBIAS rows hold the BF16 bias as a sum of residual terms
   rounded to the weight format (q1 = q(b), q2 = q(b - q1), ...); the activation's extra 1x32 tile holds the matching
   multipliers (ones, or the routing score for the expert down projection), so the matmul adds the bias.
-* Compute: worker cores next to each DRAM bank run custom_mm with 1x32 activation tiles (LoFi, FP32 accumulation;
-  the activation row is gathered from row 0 of the 32x32-tile input).
+* Compute: worker cores next to each DRAM bank run custom_mm with 1x32 activation tiles (LoFi, FP32 accumulation).
+  The activation is the flat normed hidden of the layer boundary (tt/decode_boundary.py: value h at byte 2 h, so its
+  32-value groups are the 1x32 tiles, read in one piece), or for o_proj the SDPA output gathered head by head.
 
-Ops: LinearStream (dense projection + bias: QKV straight into the head-split layout, o_proj straight into the
-all-reduce input, router + top-k + softmax), ExpertGateUpStream (routed gate|up + bias + SwiGLU, scaled by the routing
-score), ExpertDownStream (routed down + bias, summed over the routed experts, into the all-reduce input) and
-PackedResidualAdd (adds the packed all-reduce result into the residual stream).
+Ops: LinearStream (dense projection + bias: QKV straight into the head-split layout, o_proj straight into the flat
+partial sum the boundary all-reduces, router + top-k + softmax), ExpertGateUpStream (routed gate|up + bias + SwiGLU,
+scaled by the routing score) and ExpertDownStream (routed down + bias, summed over the routed experts, into the flat
+partial sum).
 """
 
 import struct
@@ -29,6 +30,8 @@ from pathlib import Path
 import torch
 
 import ttnn
+
+from ..fused_decode import DECODE_BOUNDARY_PREFETCH_ALL
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 NBIAS = 4  # residual terms carrying a bias (BFP4: relative error ~ 8^-NBIAS of the 16-value group maximum)
@@ -235,8 +238,7 @@ class _BankStreamOp:
 
 
 class ExpertGateUpStream(_BankStreamOp):
-    """(x, ids, scores, weights, act) -> act. x: [1, 1, 1 (32), hidden] BF16 tile tensor (row 0 = the token, any
-    L1 layout); ids / scores: UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their
+    """(x, ids, scores, weights, act) -> act. x: the flat BF16 normed hidden (tt/decode_boundary.py); ids / scores: UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their
     softmax weights; act: [k, I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
 
     def __init__(self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers):
@@ -303,9 +305,9 @@ class ExpertGateUpStream(_BankStreamOp):
 
 class ExpertDownStream(_BankStreamOp):
     """(act, ids, scores, weights, out) -> out. act: [k, I_pad] BF16 row-major (score-weighted SwiGLU outputs);
-    out: the packed BF16 [1, 1, 32, W] all-reduce input (hidden value h at row h / W, column h % W; see
-    PackedResidualAdd) receives sum_e w_e * (act_e @ Wd_e + bd_e) (one matmul per output column over the K = k
-    segments [w_e * act_e | w_e] of the routed experts)."""
+    out: the flat BF16 partial sum (tt/decode_boundary.py: value h at byte 2 h) receives
+    sum_e w_e * (act_e @ Wd_e + bd_e) (one matmul per output column over the K = k segments [w_e * act_e | w_e] of
+    the routed experts)."""
 
     def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers):
         super().__init__(mesh_device, readers)
@@ -323,7 +325,8 @@ class ExpertDownStream(_BankStreamOp):
     def weight_rows(self, num_experts):
         return num_experts * self.C * self.seg_tiles * TILE
 
-    def __call__(self, act, ids, scores, weights, out):
+    def __call__(self, act, ids, scores, weights, out, send=None):
+        """send = (boundary, site): fuse the boundary all-reduce's fabric send (decode_boundary.py sending_program)."""
         cb_in0, cb_w, cb_idx, cb_scr, cb_out = 0, 1, 2, 3, 16
         kt = self.num_sel * self.seg_tiles
         cbs = [
@@ -351,25 +354,30 @@ class ExpertDownStream(_BankStreamOp):
         reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
         reader_ct += ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [cb_in0, cb_out, cb_scr, self.seg_tiles, self.num_sel, NBIAS, self.cols, self.hidden // TILE]
-        writer_ct += [self.inter_pad * 2, out.shape[-1] // TILE]
+        writer_ct += [self.inter_pad * 2]
         for t in (act, scores, out):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        writer_ct += send[0].notify_args() if send else [0, 0, 0, 0]
         compute_ct = [cb_in0, cb_w, cb_out, kt, self.cols]
-        program = self._program("down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+
+        def build():
+            return self._program("down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+
+        program = send[0].sending_program(build, out, send[1], self.cores) if send else build()
         return ttnn.generic_op([weights, act, ids, scores, out], program)
 
 
 class LinearStream(_BankStreamOp):
     """Dense decode linear y = x @ W + b for one token, weights streamed per DRAM bank (stream_linear_layout).
 
-    x: BF16 32x32-tile tensor (any TensorAccessor layout; a DRAM source is staged in L1 first); the activation is
-    row (j / x_pages) of tile page (j % x_pages) for j < k_tiles (x_pages = k_tiles: row 0 of a [1, K] tensor;
-    x_pages = 2: the [heads, 64] SDPA output, head by head). out_mode:
+    x: x_pages = 0: the flat BF16 normed hidden of the layer boundary (tt/decode_boundary.py); otherwise a BF16
+    32x32-tile tensor (any TensorAccessor layout; a DRAM source is staged in L1 first) whose activation is row
+    (j / x_pages) of tile page (j % x_pages) for j < k_tiles (x_pages = 2: the [heads, 64] SDPA output, head by head).
+    out_mode:
       3: attention heads, out = (Q, K, V) BF16 [heads, head_tiles * 32] tile tensors, head h in row h,
-         heads = (q_cols, k_cols) output tiles of Q and K. With heads = (n_tiles, 0) and out = (packed,) * 3 this
-         writes the packed [32, head_tiles * 32] all-reduce input (output column n -> row n / head_tiles of tile
-         n % head_tiles, see PackedResidualAdd);
-      4: router top-k + softmax, out = (ids, scores) [1, 32] UINT16 / BF16 row-major buffers, heads = (k, n_experts).
+         heads = (q_cols, k_cols) output tiles of Q and K;
+      4: router top-k + softmax, out = (ids, scores) [1, 32] UINT16 / BF16 row-major buffers, heads = (k, n_experts);
+      5: out = the flat BF16 partial sum the boundary all-reduces (output column n -> bytes [64 n, 64 n + 64)).
     """
 
     def __init__(
@@ -394,8 +402,8 @@ class LinearStream(_BankStreamOp):
         self.n_tiles = n_tiles
         self.kx = k_tiles
         self.kt = k_tiles + 1
-        self.x_pages = x_pages or k_tiles
-        assert out_mode in (3, 4), f"out_mode {out_mode}"
+        self.x_pages = 0 if x_pages is None else x_pages
+        assert out_mode in (3, 4, 5), f"out_mode {out_mode}"
         self.out_mode = out_mode
         self.out_page_bytes = out_page_bytes
         self.heads = heads
@@ -408,13 +416,29 @@ class LinearStream(_BankStreamOp):
     def weight_rows(self):
         return self.C * self.kt * TILE
 
-    def __call__(self, x, weights, out):
-        outs = tuple(out) if self.out_mode == 3 else (out[0], out[1], out[1])
+    def __call__(self, x, weights, out, send=None):
+        """send = (boundary, site), out_mode 5: fuse the boundary all-reduce's fabric send (decode_boundary.py
+        sending_program). x may be a decode_boundary.PendingBoundary: the boundary producing x then runs inside this
+        op (DecodeBoundary.consumer_parts) while the weight readers stream ahead."""
+        pending = None
+        if not isinstance(x, ttnn.Tensor):
+            pending = x
+            fused_kernels, fused_cbs, fused_semaphores, fused_io = pending.boundary.consumer_parts(pending, self.cores)
+            x = pending.x
+        if self.out_mode == 3:
+            outs = tuple(out)
+        elif self.out_mode == 4:
+            outs = (out[0], out[1], out[1])
+        else:
+            outs = (out,) * 3
         cb_x, cb_w, cb_scr, cb_stage, cb_out = 0, 1, 3, 4, 16
         stage = self.x_pages if x.memory_config().buffer_type == ttnn.BufferType.DRAM else 0
+        # A fused boundary's consumer can buffer all its weight columns: the readers stream them while the boundary
+        # runs (fused_decode.DECODE_BOUNDARY_PREFETCH_ALL).
+        w_cols = max(3, self.cols) if pending is not None and DECODE_BOUNDARY_PREFETCH_ALL else 3
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, self.kt, tiny=True),
-            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * self.kt),
+            self._cb(cb_w, self.weight_dtype, self.tile_bytes, w_cols * self.kt),
             self._cb(cb_scr, ttnn.bfloat16, 64, 1),
         ]
         if stage:
@@ -430,79 +454,26 @@ class LinearStream(_BankStreamOp):
                 outs[1].buffer_address(),
                 outs[2].buffer_address(),
             ]
-        reader_ct = [cb_w, self.kt, self.cols, self.tile_bytes, self.page_bytes]
+        reader_ct = [cb_w, self.kt, self.cols, self.tile_bytes, self.page_bytes, w_cols]
         writer_ct = [cb_x, cb_out, cb_scr, self.kx, self.x_pages, NBIAS, self.cols, self.n_tiles, self.out_mode]
         writer_ct += [self.out_page_bytes, stage, cb_stage, self.heads[0], self.heads[1], self.head_tiles]
         for t in (x, *outs):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        writer_ct += send[0].notify_args() if send else [0, 0, 0, 0]
+        writer_ct += [1 if pending is not None else 0]
         compute_ct = [cb_x, cb_w, cb_out, self.kt, self.cols]
-        program = self._program("linear", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+
+        def build():
+            program = self._program("linear", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
+            if pending is not None:
+                program.kernels = list(program.kernels) + fused_kernels
+                program.cbs = list(program.cbs) + fused_cbs
+                program.semaphores = fused_semaphores
+            return program
+
+        assert not (send and pending), "an op is either a boundary producer or its consumer"
+        program = send[0].sending_program(build, out, send[1], self.cores) if send else build()
         unique = [t for i, t in enumerate(outs) if all(t is not o for o in outs[:i])]
-        ttnn.generic_op([weights, x, *unique], program)
+        extra = [t for t in fused_io if all(t is not u for u in (x, *unique))] if pending is not None else []
+        ttnn.generic_op([weights, x, *unique, *extra], program)
         return out
-
-
-class PackedResidualAdd:
-    """Residual add of a packed all-reduce result: (residual, packed) -> residual + unpack(packed).
-
-    The decode all-reduces run on a packed BF16 [1, 1, 32, W] partial instead of the [1, 1, 32, hidden] residual
-    layout (all_reduce_async time scales with the payload, and only row 0 of the residual layout carries data):
-    hidden value h sits at row h / W, column h % W, with W the residual shard width (hidden / residual cores). The
-    residual is BF16 [1, 1, 32, hidden], L1 width-sharded on `cores` cores in row-major order, so residual core c
-    needs exactly row c of the packed sum. Each core adds it into row 0 of its shard (rows 1..31 add zero) and
-    writes a new residual tensor in the same layout (kernels/stream_residual_add_*.cpp)."""
-
-    def __init__(self, mesh_device, residual_memory_config):
-        self.mesh_device = mesh_device
-        self.memory_config = residual_memory_config
-        shard_spec = residual_memory_config.shard_spec
-        self.cores = shard_spec.grid
-        self.core_list = ttnn.corerange_to_cores(self.cores, row_wise=True)
-        self.tiles = shard_spec.shape[1] // TILE
-
-    def __call__(self, residual, packed):
-        out = ttnn.empty(
-            residual.shape,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=self.memory_config,
-        )
-        cb_res, cb_p, cb_out = 0, 1, 16
-        cbs = [
-            ttnn.cb_descriptor_from_sharded_tensor(cb_res, residual),
-            ttnn.CBDescriptor(
-                total_size=self.tiles * 2048,
-                core_ranges=self.cores,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(buffer_index=cb_p, data_format=ttnn.bfloat16, page_size=2048)
-                ],
-            ),
-            ttnn.cb_descriptor_from_sharded_tensor(cb_out, out),
-        ]
-        reader_rt = ttnn.RuntimeArgs()
-        for row, core in enumerate(self.core_list):
-            reader_rt[core.x][core.y] = [packed.buffer_address(), row]
-        reader_ct = [cb_res, cb_p, self.tiles] + ttnn.TensorAccessorArgs(packed).get_compile_time_args()
-        kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "stream_residual_add_reader.cpp"),
-                core_ranges=self.cores,
-                compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0
-                ),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "stream_residual_add_compute.cpp"),
-                core_ranges=self.cores,
-                compile_time_args=[cb_res, cb_p, cb_out, self.tiles],
-                runtime_args=[],
-                config=ttnn.ComputeConfigDescriptor(
-                    math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
-                ),
-            ),
-        ]
-        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        return ttnn.generic_op([residual, packed, out], program)

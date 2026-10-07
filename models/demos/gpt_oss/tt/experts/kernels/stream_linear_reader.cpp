@@ -4,7 +4,7 @@
 // Dense weight streamer (NCRISC, NOC0) for the decode streamed linear op (experts/stream.py: LinearStream).
 // This core's weight columns are one contiguous range of its DRAM bank (groups of G columns, K-major); it is read
 // as `num_blocks` blocks of `block_tiles` tiles (one K block of one column group) in `page_bytes` packets, with one
-// block in flight ahead of compute.
+// block in flight ahead of compute, into a ring of `num_buffers` blocks (the circular buffer's depth).
 //
 // runtime args: [w_addr, bank_id, vc, reader_offset_bytes]
 
@@ -23,6 +23,7 @@ void kernel_main() {
     constexpr uint32_t cols = get_compile_time_arg_val(2);  // blocks
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t num_buffers = get_compile_time_arg_val(5);
 
     constexpr uint32_t col_bytes = kt * tile_bytes;
     constexpr uint32_t pages_per_col = col_bytes / page_bytes;
@@ -32,7 +33,6 @@ void kernel_main() {
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
-    constexpr uint32_t num_buffers = 3;
     constexpr uint32_t extra_in_flight = 1;
     cb_reserve_back(cb_w, kt * (extra_in_flight + 1));
     uint32_t l1_write = get_write_ptr(cb_w);

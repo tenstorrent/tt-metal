@@ -169,10 +169,8 @@ class Experts:
                 topk_expert_indices,
                 topk_expert_weights,
                 weights=self.decode_weights,
-                config=self.config,
-                mesh_config=self.mesh_config,
-                ccl_manager=self.ccl_manager,
                 stream=self.decode_stream,
+                send=self.ccl_manager.decode_boundary_send(self.config.hidden_size, "moe"),
             )
         # Determine mode based on sequence length
         if is_decode:

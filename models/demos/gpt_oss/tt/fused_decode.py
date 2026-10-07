@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Layouts, decode policy and fused collectives of the fused decode layer (one token per user, TP across mesh columns).
+"""Layouts and decode policy of the fused decode layer (one token per user, TP across mesh columns).
 
-Decode keeps the residual stream in L1, width-sharded over RESIDUAL_CORES cores ([32, hidden / cores] shards): the two
-RMSNorms run on those shards (sharded multi-core rms_norm) and the two all-reduces return into them. The projections
-are the DRAM-streaming ops of experts/stream.py, which read the norm output row straight from these shards and write
-their results straight into the next op's layout (Q/K/V heads, the all-reduce input, the routed ids / scores).
+Between the projections, decode keeps the residual stream as a flat BF16 vector on one core, replicated on every TP
+device (decode_boundary.py, which also defines the inter-layer residual contract): each layer boundary all-reduces
+the row-parallel partial sums over the fabric, adds them to the residual and applies the next RMSNorm in one op. The
+projections are the DRAM-streaming ops of experts/stream.py, which read the flat norm output in one read and write
+their results straight into the next op's layout (Q/K/V heads, the flat partial sum, the routed ids / scores).
 """
 
 import ttnn
@@ -26,10 +27,11 @@ def fused_decode_layout_supported(
     (grid: the device compute-with-storage grid, x by y; dram_banks: the device's DRAM bank count).
 
     The fused layer serves one token per device with TP over a single mesh row and no expert parallelism. Its
-    layouts (residual / all-reduce 30 cores, Q/K/V head buffers, the streamed weights' per-DRAM-bank column split
-    and worker cores) are sized for the gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only
-    streamed weight copies (about +3.2 GB of DRAM per device) were budgeted for that model. Every other layout keeps
-    the original decode path."""
+    layouts (the flat 3-page residual and boundary all-reduce of decode_boundary.py on a 4-device ring, the 30-core
+    LM-head input, Q/K/V head buffers, the streamed weights' per-DRAM-bank column split and worker cores) are sized
+    for the gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only streamed weight copies
+    (about +3.2 GB of DRAM per device) were budgeted for that model. Every other layout keeps the original decode
+    path."""
     return (
         is_blackhole
         and tuple(mesh_shape) == (1, 4)
@@ -91,12 +93,25 @@ def sdpa_decode_program_config(sliding_window):
     )
 
 
-# Residual: 2880 = 90 tiles, 30 cores x 3 tiles. The decode all-reduce runs on the packed [32, 96] BF16 partial on
-# one core (DecodeAllReduce): 4.1 us with 1 link vs 8.4 us for the 90-tile residual-layout payload (2 links). With a
-# single-core payload it must use 1 link: at 2 links the second link gets no cores and its reader reads past its
-# runtime args (watcher assert in all_reduce_async worker_reader.cpp).
+# Layer boundary all-reduce (decode_boundary.py): "fabric" = the boundary op's own fabric multicast of the flat partial
+# sums; "ttnn" = ttnn.experimental.all_reduce_async on the flat partial, then the boundary's add + norm (the measured
+# alternative, work_log.md).
+DECODE_BOUNDARY_CCL = "fabric"
+# Fused matmul + all-reduce send: the producing o_proj / MoE down stream op runs the boundary's fabric sender
+# (decode_boundary.py DecodeBoundary.sending_program); the boundary op then only waits, adds and normalizes.
+DECODE_BOUNDARY_FUSED_SEND = True
+# Consumer fusion: each boundary runs inside the op that consumes its normed output (the next QKV stream, the router
+# stream), whose weight readers stream ahead while it waits / computes (decode_boundary.py consumer_parts). Needs
+# DECODE_BOUNDARY_FUSED_SEND with the fabric all-reduce.
+DECODE_BOUNDARY_FUSE_CONSUMER = True
+# The fused consumer's weight circular buffer holds all its columns (not 3), so its readers never stall on the boundary.
+DECODE_BOUNDARY_PREFETCH_ALL = True
+# Fabric links the fused send uses (2: one sender per link, the packets of the partial split between them).
+DECODE_BOUNDARY_LINKS = 1
+
+# The LM-head path after the last layer reads the normed hidden in row 0 of a [32, hidden] BF16 tensor, L1
+# width-sharded on RESIDUAL_CORES cores (2880 = 90 tiles, 30 cores x 3 tiles).
 RESIDUAL_CORES = 30
-DECODE_CCL_LINKS = 1
 
 
 def width_sharded_memory_config(mesh_device, width, cores, rows=32):
@@ -118,82 +133,3 @@ def width_sharded_memory_config(mesh_device, width, cores, rows=32):
 
 def residual_memory_config(mesh_device, hidden_size):
     return width_sharded_memory_config(mesh_device, hidden_size, RESIDUAL_CORES)
-
-
-def sharded_norm_program_config(memory_config):
-    """LayerNormShardedMultiCoreProgramConfig matching a width-sharded [32, W] activation."""
-    shard_spec = memory_config.shard_spec
-    grid = shard_spec.grid.bounding_box().grid_size()
-    block_w = shard_spec.shape[1] // ttnn.TILE_SIZE
-    subblock_w = max(d for d in range(1, 5) if block_w % d == 0)
-    return ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=grid,
-        subblock_w=subblock_w,
-        block_h=shard_spec.shape[0] // ttnn.TILE_SIZE,
-        block_w=block_w,
-        inplace=False,
-    )
-
-
-def packed_partial_memory_config(mesh_device, hidden_size):
-    """The packed [32, W] BF16 all-reduce payload (W = hidden / RESIDUAL_CORES; hidden value h at row h / W, column
-    h % W, see experts/stream.py PackedResidualAdd), on one core."""
-    return width_sharded_memory_config(mesh_device, hidden_size // RESIDUAL_CORES, 1)
-
-
-class DecodeAllReduce:
-    """Fused single-op all-reduce of the per-device decode partial sums across the TP axis, plus the residual add.
-
-    The partial is the packed [1, 1, 32, W] BF16 tensor (packed_partial_memory_config): all_reduce_async time scales
-    with the payload, and the [32, hidden] residual layout would carry 32x more tiles than the one token needs
-    (probes: 4.1 us for the 3-tile packed BF16 payload vs 8.4 us for the 90-tile BF8 residual-layout payload).
-    residual_add unpacks the sum into row 0 of the residual stream.
-
-    One persistent scratch buffer and global semaphore per call site ("attn", "moe"), shared by every layer:
-    within a layer the attention and MoE all-reduces alternate, and each is an all-rank synchronization, so a
-    device cannot reach layer i+1's use of a slot before every device has finished layer i's use of it.
-    """
-
-    def __init__(self, mesh_device, hidden_size, cluster_axis, topology=ttnn.Topology.Ring):
-        from .experts.stream import PackedResidualAdd
-
-        self.mesh_device = mesh_device
-        self.cluster_axis = cluster_axis
-        self.topology = topology
-        self.num_devices = mesh_device.shape[cluster_axis]
-        self.memory_config = packed_partial_memory_config(mesh_device, hidden_size)
-        packed_width = hidden_size // RESIDUAL_CORES
-        buffer_memory_config = width_sharded_memory_config(mesh_device, packed_width * self.num_devices, 1)
-        grid = mesh_device.compute_with_storage_grid_size()
-        semaphore_cores = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
-        )
-        self.slots = {
-            name: (
-                ttnn.empty(
-                    [1, 1, 32, packed_width * self.num_devices],
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    memory_config=buffer_memory_config,
-                ),
-                ttnn.create_global_semaphore(mesh_device, semaphore_cores, 0),
-            )
-            for name in ("attn", "moe")
-        }
-        self.residual_add = PackedResidualAdd(mesh_device, residual_memory_config(mesh_device, hidden_size))
-
-    def __call__(self, partial, slot):
-        """partial: the packed BF16 [1, 1, 32, W] partial (self.memory_config). Returns the packed BF16 sum."""
-        scratch, semaphore = self.slots[slot]
-        return ttnn.experimental.all_reduce_async(
-            partial,
-            scratch,
-            cluster_axis=self.cluster_axis,
-            mesh_device=self.mesh_device,
-            multi_device_global_semaphore=semaphore,
-            memory_config=self.memory_config,
-            dtype=ttnn.bfloat16,
-            topology=self.topology,
-            num_links=DECODE_CCL_LINKS,
-        )

@@ -4,21 +4,21 @@
 // Activation gather + output scatter (BRISC, NOC1) for the decode streamed linear op (experts/stream.py:
 // LinearStream).
 //
-// 1. Gathers the activation row into 1x32 BF16 tiles: tile j is row (j / x_pages) of 32x32 BF16 tile page
-//    (j % x_pages) of the source tensor (any layout TensorAccessor resolves: a width-sharded norm output read
-//    row 0 tile by tile, or the [heads, head_dim] SDPA output read head by head). A row of a 32x32 tile is 16
-//    values in face 0/2 and 16 in face 1/3. A last 1x32 tile carries `nbias` ones (they multiply the bias rows of
-//    each weight column's extra K tile).
+// 1. Gathers the activation row into 1x32 BF16 tiles. x_pages = 0: the source is a flat BF16 vector (the layer
+//    boundary's normed hidden, tt/decode_boundary.py: value h at byte 2 h), read in one piece; otherwise tile j is
+//    row (j / x_pages) of 32x32 BF16 tile page (j % x_pages) of the source tensor (the [heads, head_dim] SDPA output
+//    read head by head; a row of a 32x32 tile is 16 values in face 0/2 and 16 in face 1/3). A last 1x32 tile carries
+//    `nbias` ones (they multiply the bias rows of each weight column's extra K tile).
 // 2. Scatters each 1x32 output tile (output column n = col0 + c, columns >= n_tiles are bank padding and dropped):
 //    out_mode 3: BF16 attention heads: column n belongs to Q (n < q_cols), K (n < q_cols + k_cols) or V, head
 //                h = n' / head_tiles, half t = n' % head_tiles; written into row h of tile t of that [heads, head_dim]
-//                tensor (the decode head-split layout). With k_cols = 0 and head_tiles = W / 32 this is the packed
-//                [32, W] all-reduce input (column n -> row n / head_tiles of tile n % head_tiles);
+//                tensor (the decode head-split layout);
 //    out_mode 4: router top-k: the single output tile holds the n_logits = k_cols expert logits; the top q_cols = k
 //                experts (ties to the lower id) and the softmax over their logits are written as the first k
 //                entries of the UINT16 ids (out) and BF16 scores (k_addr) row-major buffers. This core has no FPU:
 //                the softmax runs in Q16 fixed point (exp2 = integer shift x degree-5 polynomial, ~1e-5 relative),
-//                then rounds to BF16.
+//                then rounds to BF16;
+//    out_mode 5: flat BF16 output (the boundary's partial-sum input): column n -> one 64-byte write at byte 64 n.
 //
 // runtime args: [x_addr, out_addr, col0, k_addr, v_addr]
 
@@ -53,6 +53,14 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr uint32_t notify_ct = v_args.next_compile_time_args_offset();
+    constexpr uint32_t notify = get_compile_time_arg_val(notify_ct);  // 1: increment the boundary sender's semaphore
+    constexpr uint32_t notify_x = get_compile_time_arg_val(notify_ct + 1);
+    constexpr uint32_t notify_y = get_compile_time_arg_val(notify_ct + 2);
+    constexpr uint32_t notify_sem = get_compile_time_arg_val(notify_ct + 3);
+    // 1: x is the normed output of a boundary fused into this op (tt/decode_boundary.py: consumer_parts); wait for
+    // the boundary core's notification (program semaphore 0) before reading it.
+    constexpr uint32_t wait_x = get_compile_time_arg_val(notify_ct + 4);
 
     constexpr uint32_t tiny_bytes = 64;
     constexpr uint32_t half_row = 32;
@@ -66,6 +74,9 @@ void kernel_main() {
 
     cb_reserve_back(cb_x, kx + 1);
     const uint32_t x_l1 = get_write_ptr(cb_x);
+    if constexpr (wait_x) {
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0)), 1);
+    }
     uint32_t x_stage = 0;
     if constexpr (x_stage_pages > 0) {
         // DRAM source: 32-byte reads must be 64-byte aligned there, so stage the whole tiles in L1 first and pick
@@ -77,11 +88,15 @@ void kernel_main() {
         }
         noc_async_read_barrier();
     }
-    for (uint32_t j = 0; j < kx; ++j) {
-        const uint32_t row = j / x_pages;
+    constexpr uint32_t gather_pages = x_pages > 0 ? x_pages : 1;
+    if constexpr (x_pages == 0) {
+        noc_async_read(s_x.get_noc_addr(0), x_l1, kx * tiny_bytes);
+    }
+    for (uint32_t j = 0; x_pages > 0 && j < kx; ++j) {
+        const uint32_t row = j / gather_pages;
         const uint32_t off = row < 16 ? row * half_row : 2 * face_bytes + (row - 16) * half_row;  // faces 0/1, 2/3
         const uint64_t src =
-            x_stage_pages > 0 ? get_noc_addr(x_stage + (j % x_pages) * 2048) : s_x.get_noc_addr(j % x_pages);
+            x_stage_pages > 0 ? get_noc_addr(x_stage + (j % gather_pages) * 2048) : s_x.get_noc_addr(j % gather_pages);
         noc_async_read(src + off, x_l1 + j * tiny_bytes, half_row);
         noc_async_read(src + off + face_bytes, x_l1 + j * tiny_bytes + half_row, half_row);
     }
@@ -108,6 +123,8 @@ void kernel_main() {
                     reinterpret_cast<volatile tt_l1_ptr uint16_t*>(exp_chunks));
                 noc_async_write(exp_chunks, s_out.get_noc_addr(0), chunk);
                 noc_async_write(exp_chunks + chunk, s_k.get_noc_addr(0), chunk);
+            } else if constexpr (out_mode == 5) {
+                noc_async_write(src, s_out.get_noc_addr(n / 32, (n % 32) * tiny_bytes), tiny_bytes);
             } else {
                 const uint32_t m = n < q_cols ? n : (n < q_cols + k_cols ? n - q_cols : n - q_cols - k_cols);
                 const uint32_t h = m / head_tiles;
@@ -123,4 +140,10 @@ void kernel_main() {
         cb_pop_front(cb_out, 1);
     }
     noc_async_write_barrier();
+    if constexpr (notify) {
+        // Fused all-reduce send (tt/decode_boundary.py: DecodeBoundary.sending_program): this core's columns of the
+        // partial sum are written; tell the boundary core's sender.
+        noc_semaphore_inc(get_noc_addr(notify_x, notify_y, get_semaphore(notify_sem)), 1);
+        noc_async_atomic_barrier();
+    }
 }

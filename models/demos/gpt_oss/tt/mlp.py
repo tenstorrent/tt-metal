@@ -175,11 +175,15 @@ class MLP:
             Expert output tensor [batch, seq_len, hidden_size]
         """
         if is_decode and self.indexed_decode:
-            # Fused decode (experts/stream.py): the router (top-k + softmax fused) and the experts read the
-            # width-sharded norm output directly; the routed ids / weights live in shared buffers.
+            # Fused decode (experts/stream.py): the router (top-k + softmax fused) and the experts read the flat
+            # norm output of the layer boundary; the routed ids / weights live in shared buffers. Returns this
+            # device's flat MoE partial sum (the next boundary all-reduces it).
+            # hidden_states may be the pending post-attention boundary, which then runs inside the router op
+            # (decode_boundary.py consumer_parts); the experts read its normed output.
             expert_indices, expert_weights = self.router.decode_indexed(hidden_states)
+            x = hidden_states if isinstance(hidden_states, ttnn.Tensor) else hidden_states.x
             return self.experts(
-                hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
+                x, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
             )
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(

@@ -48,17 +48,19 @@ def decode_forward(
         position_idx: Current position index
         page_table: Page table for paged attention (optional)
         ccl_manager: Communication manager
-        fused: Fused decode path (fused_decode.py); returns the all-reduced BF16 output in the residual layout
+        fused: Fused decode path (fused_decode.py): hidden_states is the flat normed hidden of the layer boundary
+            (decode_boundary.py, one token); returns this device's flat o_proj partial sum, which the next boundary
+            all-reduces
 
     Returns:
         Attention output [batch, 1, hidden_size]
     """
-    # batch_size, seq_len, hidden_size = hidden_states.shape
-    _, seq_len, batch_size, hidden_size = hidden_states.shape
-
-    # Validate decode mode
-    if seq_len != 1:
-        raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
+    if fused:
+        batch_size, hidden_size = 1, config.hidden_size
+    else:
+        _, seq_len, batch_size, hidden_size = hidden_states.shape
+        if seq_len != 1:
+            raise ValueError(f"Decode mode requires seq_len=1, got {seq_len}")
 
     # QKV projection. With TP>1 the per-device QKV is small enough to fit in
     # an L1 width-sharded layout that nlp_create_qkv_heads_decode consumes
@@ -81,7 +83,7 @@ def decode_forward(
         # rope_mats / transformation_mat are laid out for rotary_embedding_llama_fused_qk: cos/sin rows for the Q
         # users then the K users (Model use_qk_fused).
         assert rope_mats[0].shape[1] == 2 * batch_size, "fused decode needs the fused-QK RoPE layout (use_qk_fused)"
-        # Streamed QKV + bias (experts/stream.py) from the width-sharded norm output, written straight into the shared
+        # Streamed QKV + bias (experts/stream.py) from the flat norm output, written straight into the shared
         # Q / K / V head tensors: Q and K on disjoint cores (V shares Q's), the layout the fused QK RoPE and the fused
         # K/V cache update require (what nlp_create_qkv_heads_decode(overlap_qk_coregrid=False) produced).
         qkv_stream = ccl_manager.get_decode_linear_stream(
@@ -200,10 +202,9 @@ def decode_forward(
 
     if fused:
         # Streamed o_proj + bias (on the first TP device only) reading the heads straight out of the DRAM SDPA output
-        # (concat heads = head-major row order) and writing the packed BF16 all-reduce input (fused_decode.py
-        # DecodeAllReduce); the fused all-reduce returns the packed sum, which the layer adds into the residual.
+        # (concat heads = head-major row order) and writing this device's flat partial sum (decode_boundary.py),
+        # which the layer's next boundary all-reduces.
         partial = ccl_manager.get_decode_partial(hidden_size)
-        packed_tiles = partial.shape[-1] // ttnn.TILE_SIZE
         o_stream = ccl_manager.get_decode_linear_stream(
             "o_proj",
             num_local_heads * head_dim // ttnn.TILE_SIZE,
@@ -211,13 +212,13 @@ def decode_forward(
             OPROJ_DECODE_WEIGHT_DTYPE,
             readers=OPROJ_STREAM_READERS,
             x_pages=head_dim // ttnn.TILE_SIZE,
-            out_mode=3,
-            heads=(hidden_size // ttnn.TILE_SIZE, 0),
-            head_tiles=packed_tiles,
+            out_mode=5,
         )
-        o_stream(tt_sdpa_tensor, weights.o_proj_stream, (partial,) * 3)
+        o_stream(
+            tt_sdpa_tensor, weights.o_proj_stream, partial, send=ccl_manager.decode_boundary_send(hidden_size, "attn")
+        )
         tt_sdpa_tensor.deallocate(True)
-        return ccl_manager.get_decode_all_reduce(hidden_size, mesh_config.tp_axis)(partial, "attn")
+        return partial
 
     tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     # Concat heads and apply output projection

@@ -174,7 +174,7 @@ class TopKRouter:
     def decode_indexed(self, hidden_states):
         """Fused decode routing for one token.
 
-        hidden_states: the width-sharded [1, 1, 1 (32), hidden] norm output.
+        hidden_states: the flat norm output of the layer boundary (decode_boundary.py).
         Returns persistent [1, 32] UINT16 expert ids and BF16 softmax weights holding the top-k in their first k
         entries (shared by every layer; not to be deallocated)."""
         router = self.ccl_manager.get_decode_linear_stream(

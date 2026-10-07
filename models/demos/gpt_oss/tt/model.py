@@ -148,8 +148,9 @@ class Model:
             mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
         )
 
-        # Fused decode layers (tt/fused_decode.py): decode keeps a width-sharded BF16 residual stream through the
-        # layers, rotates Q and K in one op, and hands the final norm a sharded activation.
+        # Fused decode layers (tt/fused_decode.py): decode carries the flat replicated residual of
+        # tt/decode_boundary.py through the layers (each layer boundary all-reduces + adds + applies the next norm,
+        # the last one the final norm) and rotates Q and K in one op.
         self.fused_decode = fused_decode_supported(
             mesh_device, self.mesh_config, hf_config, use_throughput_experts, max_local_batch_size
         )
@@ -218,6 +219,10 @@ class Model:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "norm"),
             mesh_config=self.mesh_config,
         )
+        if self.fused_decode:
+            for i, layer in enumerate(self.layers):
+                last = i + 1 == len(self.layers)
+                layer.set_decode_next_norm(self.norm if last else self.layers[i + 1].input_layernorm, last)
         # Pad lm_head vocab dimension to padded_vocab_size BEFORE column-parallel sharding.
         # TTSampling._create_indices_tensors uses padded_per_device as the stride for device
         # offset calculation: global_idx = device_id * padded_per_device + local_idx.
@@ -439,9 +444,10 @@ class Model:
 
         # Final norm and lm_head
         if self.fused_decode and mode == Mode.DECODE:
-            # Fused decode layers return the width-sharded BF16 residual stream; lm_head reads interleaved BF8, the
-            # activation dtype (and LoFi BFP8 x BFP8 matmul) of the unfused decode path.
-            normed = self.norm.forward_sharded(hidden_states)
+            # The last fused decode layer's boundary already applied the final norm (tt/decode_boundary.py) and
+            # returns it in row 0 of the width-sharded BF16 layout; lm_head reads interleaved BF8, the activation
+            # dtype (and LoFi BFP8 x BFP8 matmul) of the unfused decode path.
+            normed = hidden_states
             hidden_states = ttnn.to_memory_config(normed, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
             normed.deallocate(True)
         else:
@@ -551,11 +557,12 @@ class Model:
             tokens_for_embed = tokens[:, :, :, :actual_batch]
         else:
             tokens_for_embed = tokens
-        # The fused decode layers carry a BF16 residual stream, so the decode embedding stays BF16 (no BF8 cast).
+        # The fused decode layers carry a flat BF16 residual stream (tt/decode_boundary.py): the decode embedding stays
+        # BF16 and row-major, so the first boundary copies the token's row in one read.
         input_embeds = ttnn.embedding(
             tokens_for_embed,
             self.embedding_weight,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT if self.fused_decode else ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16 if self.fused_decode else ttnn.bfloat8_b,
         )
         input_embeds = ttnn.unsqueeze(input_embeds, 0)

@@ -13,7 +13,7 @@ class CCLManager:
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
-        self._decode_all_reduce = {}
+        self._decode_boundary = {}
         self._decode_expert_stream = {}
         self._decode_stream_buffers = {}
 
@@ -90,18 +90,27 @@ class CCLManager:
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
 
-    def get_decode_all_reduce(self, hidden_size, cluster_axis):
-        """Persistent fused all-reduce shared by every decoder layer's decode path (see fused_decode.py)."""
-        from .fused_decode import DecodeAllReduce
+    def get_decode_boundary(self, hidden_size, eps=None, cluster_axis=None):
+        """Layer boundary op (all-reduce + residual add + RMSNorm, decode_boundary.py) shared by every decoder
+        layer's decode path, with its persistent receive buffers and semaphores. Created by the first decoder layer
+        (eps, cluster_axis); the producer ops look it up by hidden size."""
+        from .decode_boundary import DecodeBoundary
 
-        key = (hidden_size, cluster_axis)
-        if key not in self._decode_all_reduce:
-            self._decode_all_reduce[key] = DecodeAllReduce(self.mesh_device, hidden_size, cluster_axis, self.topology)
-        return self._decode_all_reduce[key]
+        if hidden_size not in self._decode_boundary:
+            self._decode_boundary[hidden_size] = DecodeBoundary(self.mesh_device, hidden_size, eps, cluster_axis)
+        return self._decode_boundary[hidden_size]
+
+    def decode_boundary_send(self, hidden_size, site):
+        """`send` argument of the producer stream ops: fuse the boundary's fabric send (None: the boundary sends)."""
+        from .fused_decode import DECODE_BOUNDARY_CCL, DECODE_BOUNDARY_FUSED_SEND
+
+        if DECODE_BOUNDARY_FUSED_SEND and DECODE_BOUNDARY_CCL == "fabric":
+            return (self.get_decode_boundary(hidden_size), site)
+        return None
 
     def get_decode_expert_stream(self, hidden, inter_pad, top_k, swiglu_limit, alpha):
         """Routed-expert stream ops (experts/stream.py) and their persistent buffers, shared by every decoder layer's
-        decode path: the [k, I_pad] BF16 row-major activation and the packed all-reduce input (get_decode_partial)."""
+        decode path: the [k, I_pad] BF16 row-major activation and the flat partial sum (get_decode_partial)."""
         key = (hidden, inter_pad, top_k)
         if key not in self._decode_expert_stream:
             from .experts.stream import ExpertDownStream, ExpertGateUpStream
@@ -130,17 +139,15 @@ class CCLManager:
         )
 
     def get_decode_partial(self, hidden):
-        """Packed BF16 [1, 1, 32, W] all-reduce input (fused_decode.packed_partial_memory_config: hidden value h at
-        row h / W, column h % W), written by the streamed o_proj and MoE down of every layer; the rows past
-        hidden / W are never written and stay zero."""
-        from .fused_decode import RESIDUAL_CORES, packed_partial_memory_config
+        """Flat BF16 partial sum (decode_boundary.py: value h at byte 2 h of a [1, 1, 32, 32 * pages] tile tensor on
+        the boundary core) written by the streamed o_proj and MoE down of every layer and all-reduced by the layer
+        boundaries; the padding past hidden is never written and stays zero."""
+        from .decode_boundary import flat_memory_config, flat_shape
 
         key = ("partial", hidden)
         if key not in self._decode_stream_buffers:
             self._decode_stream_buffers[key] = self._persistent_zeros(
-                (1, 1, 32, hidden // RESIDUAL_CORES),
-                ttnn.bfloat16,
-                packed_partial_memory_config(self.mesh_device, hidden),
+                tuple(flat_shape(hidden)), ttnn.bfloat16, flat_memory_config(self.mesh_device, hidden)
             )
         return self._decode_stream_buffers[key]
 
