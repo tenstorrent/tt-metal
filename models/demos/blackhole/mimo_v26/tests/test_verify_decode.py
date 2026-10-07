@@ -110,6 +110,9 @@ def main():
             rec(
                 "kv_rows",
                 U=U,
+                k_rel_err_r0=rel(kv_ver[0], kv_seq[0])[0].round(decimals=3).tolist(),
+                k_rel_err_r1=rel(kv_ver[0], kv_seq[0])[1].round(decimals=3).tolist(),
+                lens_r0=[int(pos[0, u]) for u in range(U)],
                 k_rel_err_max_per_t=rel(kv_ver[0], kv_seq[0]).amax((0, 1)).tolist(),
                 v_rel_err_max_per_t=rel(kv_ver[1], kv_seq[1]).amax((0, 1)).tolist(),
             )
