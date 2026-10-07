@@ -90,6 +90,17 @@ def main():
             vd = Decoder(model, trace=trace, U=U, block=blk, capture=cap)
             av, bv = vd.verify(toks, pos, dead)
             kv_ver = kv_rows(model, mesh, pos, U, blk)
+            dev0 = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).flatten().tolist()
+            rec(
+                "verify_device_inputs_row0",
+                cur=dev0(vd.pos["cur"]),
+                idx=dev0(vd.pos["idx"]),
+                upd=[dev0(u_) for u_ in (vd.upd or [])],
+                pt=ttnn.to_torch(
+                    ttnn.get_device_tensors(model.layers[0].attn._dec_states[(U * blk, blk)][0])[0]
+                ).tolist(),
+                tok=dev0(vd.tok),
+            )
             kvw_ver = kv_rows(model, mesh, pos, U, 4 * blk, lo=-8)  # window pos-8 .. pos+24 of the verify cache
             fv = feat_host(mesh, vd.feat)  # [rows, U*blk, NL*4096]
             av2, _ = vd.verify(toks, pos, dead)
