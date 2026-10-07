@@ -375,7 +375,7 @@ ProgramDescriptor CsaCompressionProgramFactory::create_descriptor(
     compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute.core_ranges = compression_cores;
     compute.compile_time_args = {kCandidateKvCb, kCandidateScoreCb, kPooledCb, kCaBiasCb, kCbBiasCb};
-    compute.config = ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4, .fp32_dest_acc_en = true};
+    compute.config = ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .fp32_dest_acc_en = true};
 
     std::vector<uint32_t> writer_compile_args = {kPooledCb};
     TensorAccessorArgs(outputs[0].buffer()).append_to(writer_compile_args);

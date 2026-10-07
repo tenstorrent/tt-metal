@@ -27,7 +27,7 @@ public:
     void RunDramProgram(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::string& kernel_path,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -48,7 +48,7 @@ public:
     void TestDramOutput(
         const std::string& kernel_path,
         const std::vector<std::string>& expected_messages,
-        stl::Span<const uint32_t> runtime_args = {}) {
+        ttsl::Span<const uint32_t> runtime_args = {}) {
         for (auto& mesh_device : this->devices_) {
             RunDramProgram(mesh_device, kernel_path, runtime_args);
             EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));
