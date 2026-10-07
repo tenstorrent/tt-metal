@@ -1195,8 +1195,8 @@ void ReadMeshDeviceProfilerResults(
         MetalContext::instance(context_id).profiler_state_manager();
 
     if (useFastDispatch(&mesh_device, &mesh_device, context_id)) {
-        for (IDevice* device : mesh_device.get_devices()) {
-            auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
+        for (auto device_id : mesh_device.get_device_ids()) {
+            auto profiler_it = profiler_state_manager->device_profiler_map.find(device_id);
             TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
             DeviceProfiler& profiler = profiler_it->second;
 
