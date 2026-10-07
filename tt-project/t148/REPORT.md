@@ -68,7 +68,7 @@ medium/20 49.11, slow/20 49.13, slow/18 50.07, veryfast/23 47.14 dB.
 
 Compared with slow/crf20, ultrafast/crf20 costs about 2.5 dB (49 vs 51.4 dB). It matches the ref's own export
 (veryfast/23) to within 0.3 dB, and stays 1.2 dB lower on fast-motion frames. All of these are above 47 dB, while
-the decode differences are 33-35 dB, so the export is not what limits quality. The cost is 2.5x the file size.
+the decode differences are 33-35 dB, so the export is not what limits quality. The cost is about 2x the file size.
 
 ## 5. Visual
 
@@ -84,5 +84,5 @@ PASS. On fast-motion frames, conv VAE decode plus ultrafast/crf20 export show no
 the 5 seeds. Base keeps 32-35 dB and SSIM 0.95-0.96 vs DiffVAE on the fastest frames. VBench motion and subject
 dims are within 0.007, and the face crops look the same. The export preset costs about 2.5 dB vs slow/crf20 at
 about 49 dB, which is invisible, so keeping ultrafast for its roughly 1.5 s encode saving is the right call. One
-optional follow-up: ultrafast/crf20 writes 2.5x the bytes of slow/crf20. If file size ever matters,
+optional follow-up: ultrafast/crf20 writes about 2x the bytes of slow/crf20. If file size ever matters,
 veryfast/crf20 is the cheap middle point (+0.5 s encode on 64 cores, overlapped by the async export).
