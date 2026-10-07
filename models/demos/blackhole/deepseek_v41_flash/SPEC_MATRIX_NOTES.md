@@ -49,7 +49,7 @@ per-token logit comparison against a CPU reference was not done. Identical-count
 
 ## Reproduce
 ```
-W=/mnt/tt-data/ssinghal/wt/spec_int ; $W/tools/spec_lt.sh <host> <logname> "<ENV>" -o junit_suite_name=x models/demos/blackhole/deepseek_v41_flash/demo/text_demo.py -k <expr>
+# from your checkout root (D=models/demos/blackhole/deepseek_v41_flash): $D/tools/spec_lt.sh <host> <logname> "<ENV>" -o junit_suite_name=x models/demos/blackhole/deepseek_v41_flash/demo/text_demo.py -k <expr>
 ENV (all cells): DSV41_LAYERS=0-39 DSV41_ENGRAM_RAM=1 DSV41_MEMLOG=1 DSV41_TRACE_REGION=1900000000 DSV41_BUILD_STAGGER_S=480 DSV41_BUILD_SLOTS=10
 B=4 fixed:   DSV41_SPEC=3 -k gsm8k_b4              B=4 adaptive: DSV41_SPEC=5 DSV41_SPEC_ADAPT=1 DSV41_SPEC_SET=0,3,5 DSV41_SPEC_POLICIES=cycle:adapt+k3+k5+k0:4
 B=8/16:      DSV41_SPEC=5 DSV41_SPEC_ADAPT=1 DSV41_SPEC_SET=1,3,5 DSV41_SPEC_POLICIES=cycle:adapt+k1+k3+k5:4 -k gsm8k_b8 | gsm8k_b16
