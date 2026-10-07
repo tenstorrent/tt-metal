@@ -45,14 +45,20 @@ class LiveMask:
 
 
 class Decoder:
-    def __init__(self, model, trace=True, keep_logits=False, spread=True, U=SLOTS):
-        """U = decode slots (users) per mesh row, 1..32; every decode tensor has U rows."""
+    def __init__(self, model, trace=True, keep_logits=False, spread=True, U=SLOTS, block=1, capture=None):
+        """U = real decode users per mesh row. block = tokens per user per step: 1 = plain decode; 8 = spec-decode VERIFY with `block` virtual users per real user
+        (row v = block*u + t feeds token t of user u at position pos_u + t; U*block <= 32). Every decode tensor has B = U*block rows.
+        capture: layer indices whose outputs are kept as an extra trace output `feat` [1,1,B,len(capture)*4096] (bf16, on device; layer 47 = before the final norm).
+        """
         self.m, self.mesh, self.keep_logits, self.use_trace, self.U = model, model.mesh, keep_logits, trace, U
+        self.block, self.B, self.capture = block, U * block, tuple(capture) if capture else ()
+        assert self.B <= SLOTS, "U*block must be <= 32 rows per mesh row"
+        self.feat = None
         self.rows = self.mesh.shape[0]
         self.rowmap = ttnn.ShardTensor2dMesh(self.mesh, self.mesh.shape, dims=(0, None))
-        self.pos = decode_pos_io(self.mesh, U)
+        self.pos = decode_pos_io(self.mesh, self.B)
         self.tok = ttnn.from_torch(
-            torch.zeros(self.rows, U, dtype=torch.int32),
+            torch.zeros(self.rows, self.B, dtype=torch.int32),
             device=self.mesh,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -68,11 +74,25 @@ class Decoder:
     def _forward(self):
         m = self.m
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)  # [1,32,4096] per device
-        h = ttnn.reshape(e, (1, 1, self.U, HIDDEN))
-        for lyr in m.layers:
-            h2 = lyr.decode(h, self.pos["cur"], self.pos["idx"], live=self.live.t if self.live is not None else None)
+        h = ttnn.reshape(e, (1, 1, self.B, HIDDEN))
+        caps = []
+        for li, lyr in enumerate(m.layers):
+            h2 = lyr.decode(
+                h,
+                self.pos["cur"],
+                self.pos["idx"],
+                live=self.live.t if self.live is not None else None,
+                block=self.block,
+            )
             ttnn.deallocate(h)
             h = h2
+            if li in self.capture:
+                caps.append(ttnn.clone(h))
+        feat = None
+        if caps:
+            feat = ttnn.concat(caps, dim=3) if len(caps) > 1 else caps[0]
+            for c in caps if len(caps) > 1 else []:
+                ttnn.deallocate(c)
         x = ttnn.rms_norm(h, epsilon=EPS, weight=m.w_norm, compute_kernel_config=_k_norm())
         ttnn.deallocate(h)
         lg = ttnn.linear(
@@ -89,11 +109,18 @@ class Decoder:
         if not self.keep_logits:
             ttnn.deallocate(lg)
             lg = None
-        return vals, idx, lg
+        return vals, idx, lg, feat
 
     # ------------------------------------------------------------------ host interface
     def set_inputs(self, tokens, positions, dead):
         """tokens int [rows,32]; positions int [rows,32] (position of the token being fed); dead bool [rows,32]. Dead slots are forced to token 0 / position 0."""
+        if (
+            self.block > 1
+        ):  # tokens [rows,U,block], positions [rows,U] = position of token 0 of each block, dead [rows,U]
+            assert tokens.dim() == 3 and tokens.shape[2] == self.block
+            positions = (positions.unsqueeze(-1) + torch.arange(self.block)).reshape(tokens.shape[0], -1)
+            tokens = tokens.reshape(tokens.shape[0], -1)
+            dead = dead.repeat_interleave(self.block, dim=1)
         tokens = torch.where(dead, torch.zeros_like(tokens), tokens)
         positions = torch.where(dead, torch.zeros_like(positions), positions)
         host = ttnn.from_torch(
@@ -125,9 +152,12 @@ class Decoder:
                     os.environ["MIMO_CHECK_CAP"] = chk
                 ttnn.synchronize_device(self.mesh)
             ttnn.execute_trace(self.mesh, self._tr, cq_id=0, blocking=True)
-            vals, idx, lg = self.out
+            vals, idx, lg, self.feat = self.out
         else:
-            vals, idx, lg = self._forward()
+            vals, idx, lg, feat = self._forward()
+            if self.feat is not None:
+                ttnn.deallocate(self.feat)
+            self.feat = feat
         self.steps += 1
         comp = ttnn.ConcatMesh2dToTensor(self.mesh, dims=(0, 3), mesh_shape=tuple(self.mesh.shape))
         v = ttnn.to_torch(vals, mesh_composer=comp).float()[:, 0, :, :]  # [rows,32,cols]
@@ -149,6 +179,16 @@ class Decoder:
             for t in (vals, idx) + ((lg,) if lg is not None else ()):
                 ttnn.deallocate(t)
         return out
+
+    def verify(self, tokens, positions, dead):
+        """Spec-decode verify: tokens [rows,U,block] (last accepted token + drafts), positions [rows,U] of token 0, dead [rows,U]. One traced step over U*block virtual users.
+        Returns (argmax [rows,U,block] long: the target's greedy next token after each block position, max logit [rows,U,block]); self.feat holds the captured hidden states.
+        """
+        assert self.block > 1
+        self.set_inputs(tokens, positions, dead)
+        out = self.run()
+        rows = tokens.shape[0]
+        return out[0].reshape(rows, self.U, self.block), out[1].reshape(rows, self.U, self.block)
 
     def release(self):
         if self._tr is not None:

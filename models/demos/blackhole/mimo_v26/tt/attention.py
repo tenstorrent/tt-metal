@@ -305,9 +305,12 @@ class MiMoAttention:
         return self._all_reduce(part)
 
     # ------------------------------------------------------------------ decode (32 user slots per row)
-    def _dec_state(self, B):
-        """(page table device tensor [B, nb], kv shard config, attention-output shard config) for B decode slots; built lazily, freed by reconfigure."""
-        if B not in self._dec_states:
+    def _dec_state(self, B, block=1):
+        """(page table device tensor [B, nb], kv shard config, attention-output shard config) for B decode rows; built lazily, freed by reconfigure.
+        block > 1: VIRTUAL USERS (spec-decode verify): row v = block*u + t belongs to real user u, so the page-table row of user u is repeated `block` times.
+        """
+        key = (B, block)
+        if key not in self._dec_states:
             cores = ttnn.num_cores_to_corerangeset(B, ttnn.CoreCoord(8, 8), row_wise=True)
             mk = lambda: ttnn.create_sharded_memory_config(
                 shape=(32, DQK),
@@ -316,9 +319,10 @@ class MiMoAttention:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            pt = self._up(_pad8(self.page_table[:B]), ttnn.int32, self._rep, ttnn.ROW_MAJOR_LAYOUT)
-            self._dec_states[B] = (pt, mk(), mk())
-        return self._dec_states[B]
+            pt_rows = self.page_table[: B // block].repeat_interleave(block, 0) if block > 1 else self.page_table[:B]
+            pt = self._up(_pad8(pt_rows), ttnn.int32, self._rep, ttnn.ROW_MAJOR_LAYOUT)
+            self._dec_states[key] = (pt, mk(), mk())
+        return self._dec_states[key]
 
     def reconfigure(self, page_table):
         """New KV pool for a new user count / context: free the caches and the per-B decode states, allocate new caches for page_table ([slots, nb] int32).
@@ -349,10 +353,10 @@ class MiMoAttention:
         self.decode_set(io, positions)
         return io["cur"], io["idx"]
 
-    def decode(self, x, cur_pos, rope_idx):
+    def decode(self, x, cur_pos, rope_idx, block=1):
         """x: [1,1,B,4096] bf16 TILE per device, B = decode slots per mesh row (1..32). Returns [1,1,B,4096]."""
         B = x.shape[2]
-        pt_dec, kv_mem, att_mem = self._dec_state(B)
+        pt_dec, kv_mem, att_mem = self._dec_state(B, block)
         qkv = ttnn.linear(
             x,
             self.wqkv,
