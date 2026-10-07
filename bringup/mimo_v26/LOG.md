@@ -843,3 +843,15 @@
 - claim: KV POOL LAYOUT PROPOSAL for the decode agent (not yet exercised on device): see bringup/mimo_v26/notes/kv_pool.md and tt/kv_pool.py (KVLayout). Per-layer per-device [nblocks,1,64,192] bf16 K and V (V padded), slots 0..U-1 own blocks, slots U..31 alias a scratch region; GA table [32, max_pos/64] contiguous per slot; SWA ring R = CH/64+8 blocks, logical block i -> ring block i%R, decode modulo R*64; one table per layer KIND shared by all layers; per-row lengths. 64k DRAM per chip for all caches: U=4 2.06 GiB, U=8 4.03 GiB (arithmetic, not measured).
 - evidence: -
 - paths: bringup/mimo_v26/notes/kv_pool.md, models/demos/blackhole/mimo_v26/tt/kv_pool.py
+
+## E261007-0524-d40
+- date: 2026-10-07T05:24:24
+- commit: afd3e45361a
+- branch: ssinghal/mimo-asm
+- host: 35,48,43
+- track: asm
+- status: verified
+- claim: FIRST TRACED CHUNKED PREFILL (tt/prefill.py ChunkedPrefill: whole-model chunk forward captured in ONE trace, row-sharded device inputs rope_idx/fill_pt/sdpa_pt/chunk_start/tokens, paged KV pool of tt/kv_pool.py with scratch slot for idle rows), L0..L5, unified bf16 experts, vs track-0 CPU dumps; replay bit-identical to the eager-warmup+trace run in all 3 runs. (a) s2048b1 CH=2048 (row 0 only, other rows idle->scratch): hidden after L5 at all 2048 positions PCC 0.99972, first-token logits PCC 0.99945 top1 1/1; KV vs dump K min 0.99974 (GA L5)/0.99993+ others, V[:128] min 0.9993 (GA L5), V pad dims exactly 0; hand-off (per layer decode of 3 dump steps reading the pool) min PCC 0.99986 L0-L5; chunk step 55.7 ms (6 layers, 2048 tok/row, replay incl. host input copy). (b) s512b4 CH=256 (2 chunks/user, 1 user per row, 4 rows): hidden L5 0.99931, logits PCC 0.99817 top1 3/4 (near-tie), KV K min 0.99963 V min 0.99915, hand-off decode min 0.99959 L2 / 0.99991 L5, step 12.6-12.9 ms. (c) s128b16 CH=128 (4 chunks, 4 users/row): hidden L5 0.99974, logits 0.99977 top1 16/16, KV K min 0.99953 V 0.9991, hand-off decode min 0.99893 (L2 s0), L5 step2 0.98713 (same near-tie value as chain test), step 11.0 ms. Ring for SWA = CH/64+8 blocks, decode modulo R*64 works with chunked-prefill-written rings. Pad tokens of ragged last chunks repeat the prompt cyclically. NOT yet: ragged multi-user rows (>1 user per row per chunk queue exercised only in (c)), 8192/64k, 48 layers, DRAM gate, two ISLs in one process.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_s2048b1_ch2048_afd3e45361a.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
+- data: {"s2048_hidden_l5":0.99972,"step_ms_6L_2048":55.7,"handoff_min":0.99959}
