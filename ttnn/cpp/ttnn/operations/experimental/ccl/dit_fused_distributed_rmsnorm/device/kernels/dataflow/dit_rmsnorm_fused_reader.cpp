@@ -111,6 +111,10 @@ void kernel_main() {
     const uint32_t rope_sin_addr = get_common_arg_val<uint32_t>(4);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+    // Column split: this worker owns tile-cols [col_start, col_start + num_tile_cols) of a
+    // row that is row_stride tiles wide (col_start = 0, row_stride = num_tile_cols unsplit).
+    const uint32_t col_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t row_stride = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t recip_addr = get_common_arg_val<uint32_t>(5);
 
     Noc noc;
@@ -256,7 +260,7 @@ void kernel_main() {
         // sum-of-squares starts as soon as input lands; cos/sin are issued AFTER (see
         // below) so their DRAM read latency overlaps PRE — they aren't consumed until
         // the POST RoPE phase.
-        const uint32_t input_tile_idx = tile_row * num_tile_cols;
+        const uint32_t input_tile_idx = tile_row * row_stride + col_start;
         // Input read placement is schedule-driven (see input_schedule above):
         //   INPUT_FIRST: read everything HERE so PRE starts ASAP — streaming = both
         //     passes (PRE + POST re-read), resident = the whole row once.
@@ -398,7 +402,7 @@ void kernel_main() {
                     uint32_t weight_wr_ptr = cb_weight.get_write_ptr();
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                         // face_00 row 0 + face_01 row 0, as for the per-batch read above.
-                        const uint32_t w_page = col_tile + i;
+                        const uint32_t w_page = col_start + col_tile + i;
                         noc.async_read(
                             weight_accessor,
                             CoreLocalMem<uint32_t>(weight_wr_ptr),
@@ -428,7 +432,7 @@ void kernel_main() {
                     uint32_t bias_wr_ptr = cb_bias.get_write_ptr();
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                         // face_00 row 0 + face_01 row 0, as for the per-batch read above.
-                        const uint32_t b_page = col_tile + i;
+                        const uint32_t b_page = col_start + col_tile + i;
                         noc.async_read(
                             bias_accessor,
                             CoreLocalMem<uint32_t>(bias_wr_ptr),

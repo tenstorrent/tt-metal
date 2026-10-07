@@ -146,6 +146,11 @@ struct DitFusedDistributedRmsnormSizing {
     // physical stick is stats_per_token * 128 B.
     uint32_t stats_per_token = 1;
     uint32_t stick_bytes = 128;  // stats_per_token * 128
+    // Column split: k worker cores per tile-row, each owning a contiguous slice of the
+    // row's tile-cols and contributing a PARTIAL sum-of-squares stick to the AG. Shape-only
+    // upper bound (the factory may fall back to 1 for configs it does not implement);
+    // the stats page is sized for it.
+    uint32_t col_split = 1;
 };
 
 DitFusedDistributedRmsnormSizing compute_sizing(

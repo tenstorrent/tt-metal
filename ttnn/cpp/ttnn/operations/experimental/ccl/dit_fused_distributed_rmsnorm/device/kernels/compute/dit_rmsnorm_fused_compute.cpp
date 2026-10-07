@@ -130,6 +130,11 @@ void kernel_main() {
     // later phases. Until then only RMS is exercised, so this stays inert.
     constexpr uint32_t norm_type = get_compile_time_arg_val(36);
     static_assert(norm_type == 0u, "Welford LayerNorm (norm_type=1) is not yet implemented in the compute kernel");
+    // CT 43/44: column split. col_split workers share a tile-row (num_tile_cols is this
+    // worker's slice); each gathered tile then carries col_split partial sticks in rows
+    // 0..col_split-1 (rest zero). h_full is the GLOBAL reduce width (W_global).
+    constexpr uint32_t col_split = get_compile_time_arg_val(43);
+    constexpr uint32_t h_full = get_compile_time_arg_val(44);
 
     constexpr uint32_t stats_dest_cb = (is_tp_1 != 0) ? stats_gathered_cb : stats_local_cb;
     // Per-row post reduce reads ring_size tiles. With packed AG enabled the
@@ -421,9 +426,41 @@ void kernel_main() {
                                 static_assert(
                                     stats_tiles_cols == 1 || stats_tiles_cols % 2 == 0,
                                     "eltwise stats-sum needs even ring_size");
-                                constexpr uint32_t recip_h_full_bits = __builtin_bit_cast(
-                                    uint32_t, 1.0f / static_cast<float>(num_tile_cols * 32u * stats_tiles_cols));
-                                if constexpr (packed_ag_enabled != 0) {
+                                constexpr uint32_t recip_h_full_bits =
+                                    __builtin_bit_cast(uint32_t, 1.0f / static_cast<float>(h_full));
+                                if constexpr (packed_ag_enabled != 0 && col_split > 1) {
+                                    // Column split: each of the ring_size gathered tiles holds the
+                                    // col_split partial sticks of THIS row from one device in rows
+                                    // 0..col_split-1 (all other rows zero). A column-reduce over the
+                                    // ring_size tiles (accumulated in one DST tile) sums all
+                                    // ring_size*col_split partials into row 0; transpose_dest moves
+                                    // row 0 -> col 0, then *1/H + eps + rsqrt as below.
+                                    cb_stats_transposed_gathered.wait_front(stats_tiles_cols);
+                                    reconfig_data_format(stats_transposed_gathered_cb, reduce_scalar_sum_cb);
+                                    pack_reconfig_data_format(reduce_result_cb);
+                                    reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(
+                                        stats_transposed_gathered_cb, reduce_scalar_sum_cb, reduce_result_cb);
+                                    tile_regs_acquire();
+                                    for (uint32_t d = 0; d < stats_tiles_cols; d++) {
+                                        reduce_tile<PoolType::SUM, ReduceDim::REDUCE_COL>(
+                                            stats_transposed_gathered_cb, reduce_scalar_sum_cb, d, 0, 0);
+                                    }
+                                    reduce_uninit();
+                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                    transpose_dest<true>(0);
+                                    binop_with_scalar_tile_init();
+                                    mul_unary_tile(0, recip_h_full_bits);
+                                    add_unary_tile(0, eps_bits);
+                                    rsqrt_tile_init();
+                                    rsqrt_tile(0);
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    cb_reduce_result.reserve_back(1);
+                                    pack_tile(0, reduce_result_cb);
+                                    cb_reduce_result.push_back(1);
+                                    tile_regs_release();
+                                    cb_stats_transposed_gathered.pop_front(stats_tiles_cols);
+                                } else if constexpr (packed_ag_enabled != 0) {
                                     // All-gather path: the worker writer lands each device's stats in
                                     // ROW 0 of stats_transposed_gathered_cb (two contiguous 64 B face-rows).
                                     // FPU-add the ring_size row-0 tiles, then transpose the summed

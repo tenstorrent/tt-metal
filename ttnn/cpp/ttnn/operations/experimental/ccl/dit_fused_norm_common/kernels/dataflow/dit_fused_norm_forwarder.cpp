@@ -78,6 +78,15 @@ constexpr auto forward_route =
 constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
     stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
 
+// Largest fabric payload per packet (whole sticks). A round whose group payload exceeds it
+// is sent as several fused write+atomic packets into consecutive byte ranges of the same
+// DRAM page; every peer then sees num_packets incs per round (symmetric across devices).
+// Callers that never exceed one packet may leave it undefined (single-packet behaviour).
+#ifndef FWD_MAX_PAYLOAD_BYTES
+#define FWD_MAX_PAYLOAD_BYTES 0xFFFFFFFFu
+#endif
+constexpr uint32_t kMaxPayloadBytes = FWD_MAX_PAYLOAD_BYTES;
+
 void kernel_main() {
     size_t arg_idx = 0;
     const uint32_t stats_dram_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -163,17 +172,31 @@ void kernel_main() {
         {
             DeviceZoneScopedN("F_FABRIC");
             size_t l1_read_addr = packet_addr;
-            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
-                dram_dest,
-                pkt_hdr_fwd,
-                pkt_hdr_bwd,
-                fabric_connection,
-                l1_read_addr,
-                pc * stick_bytes,
-                out_ready_sem_noc,
-                /*val=*/1,
-                /*flush=*/true);
-            cumulative_incs += (ring_size - 1);
+            const uint32_t round_bytes = pc * stick_bytes;
+            uint32_t sent = 0;
+            uint32_t num_packets = 0;
+            while (sent < round_bytes) {
+                const uint32_t chunk =
+                    (round_bytes - sent) > kMaxPayloadBytes ? kMaxPayloadBytes : (round_bytes - sent);
+                if (num_packets > 0) {
+                    // Packet headers are reused: the previous send's header/payload reads must
+                    // have left L1 before we rewrite the header.
+                    noc_async_writes_flushed();
+                }
+                fused_write_atomic_and_advance_local_read_address_for_fabric_write(
+                    dram_dest + sent,
+                    pkt_hdr_fwd,
+                    pkt_hdr_bwd,
+                    fabric_connection,
+                    l1_read_addr,
+                    chunk,
+                    out_ready_sem_noc,
+                    /*val=*/1,
+                    /*flush=*/true);
+                sent += chunk;
+                num_packets++;
+            }
+            cumulative_incs += (ring_size - 1) * num_packets;
             if (cumulative_incs > 0) {
                 // out_ready is a GlobalSemaphore.
                 noc_semaphore_wait_min(out_ready_sem_ptr, cumulative_incs);

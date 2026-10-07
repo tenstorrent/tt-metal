@@ -92,6 +92,19 @@ void kernel_main() {
     const uint32_t fwd_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_forwarder_index = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t my_slot = get_arg_val<uint32_t>(arg_idx++);
+    // Column split: col_split workers serve one row-group (consecutive forwarder slots);
+    // this worker is part j = my_slot % col_split and owns tile-cols [col_start, +num_tile_cols).
+    // Split layout in the packet / DRAM page, per row-group (rg_slot = my_slot / col_split):
+    //   [rg_base, rg_base + k*64)       face_00 row-0 halves of the k partial sticks
+    //   [rg_base + k*64, rg_base + k*128) face_01 row-0 halves
+    // so a row's k partials land with ONE k*64 B read per half per device in rows 0..k-1 of
+    // a gathered tile (compute column-reduces them). col_split == 1 is the original layout.
+    const uint32_t col_split = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t col_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t rg_slot = my_slot / col_split;
+    const uint32_t part_j = my_slot - rg_slot * col_split;
+    const uint32_t rg_base = rg_slot * col_split * stick_bytes;
+    const uint32_t half_bytes = col_split * kFaceRowBytes;
 
     Noc noc;
 
@@ -123,6 +136,18 @@ void kernel_main() {
         w_reduce_factor,
         static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
 
+    if (col_split > 1) {
+        // Gathered tiles: only rows 0..k-1 of faces 0/1 are rewritten per round; the
+        // compute column-reduces the WHOLE tile, so zero everything once up front.
+        const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+        uint32_t zaddr = cb_stats_gathered.get_write_ptr();
+        const uint32_t zend = zaddr + num_stats * ring_size * gathered_tile_bytes;
+        for (; zaddr < zend; zaddr += MEM_ZEROS_SIZE) {
+            noc_async_read(zeros_noc_addr, zaddr, MEM_ZEROS_SIZE);
+        }
+        noc_async_read_barrier();
+    }
+
     uint32_t go_target = 0;
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         const uint32_t round = tile_row - tile_row_start;
@@ -137,21 +162,38 @@ void kernel_main() {
             const uint32_t dst = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + my_slot * stick_bytes;
             // The forwarder's packet buffer is a grid-uniform CB, so its address is our own.
             UnicastEndpoint fwd_core;
-            for (uint32_t s = 0; s < num_stats; s++) {
-                const uint32_t src = src0 + s * stat_tile_bytes;
-                const uint32_t sub = dst + s * kStatBytes;
-                noc.async_write(  // face_00 row0
-                    CoreLocalMem<uint32_t>(src),
+            if (col_split > 1) {
+                // num_stats == 1 (RMS only)
+                const uint32_t pbase = fwd_packet_buf_addr + (round & 1u) * packet_slot_bytes + rg_base;
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(src0),
                     fwd_core,
                     kFaceRowBytes,
                     {},
-                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub});
-                noc.async_write(  // face_01 row0
-                    CoreLocalMem<uint32_t>(src + kFace01Off),
+                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = pbase + part_j * kFaceRowBytes});
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(src0 + kFace01Off),
                     fwd_core,
                     kFaceRowBytes,
                     {},
-                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
+                    {.noc_x = fwd_x, .noc_y = fwd_y, .addr = pbase + half_bytes + part_j * kFaceRowBytes});
+            } else {
+                for (uint32_t s = 0; s < num_stats; s++) {
+                    const uint32_t src = src0 + s * stat_tile_bytes;
+                    const uint32_t sub = dst + s * kStatBytes;
+                    noc.async_write(  // face_00 row0
+                        CoreLocalMem<uint32_t>(src),
+                        fwd_core,
+                        kFaceRowBytes,
+                        {},
+                        {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub});
+                    noc.async_write(  // face_01 row0
+                        CoreLocalMem<uint32_t>(src + kFace01Off),
+                        fwd_core,
+                        kFaceRowBytes,
+                        {},
+                        {.noc_x = fwd_x, .noc_y = fwd_y, .addr = sub + kFaceRowBytes});
+                }
             }
             noc.async_write_barrier();
             // Arrival handshake: the stick must be visible in the forwarder's packet buffer
@@ -174,23 +216,42 @@ void kernel_main() {
         // this yields interleaved [mean_d, var_d] per device, as combine_welford_partials wants.
         cb_stats_gathered.reserve_back(num_stats * ring_size);
         const uint32_t gbase = cb_stats_gathered.get_write_ptr();
-        for (uint32_t d = 0; d < ring_size; d++) {
-            const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
-            for (uint32_t s = 0; s < num_stats; s++) {
-                const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
-                const uint32_t src_off = my_slot * stick_bytes + s * kStatBytes;
-                noc.async_read(  // -> face_00 row0
+        if (col_split > 1) {
+            for (uint32_t d = 0; d < ring_size; d++) {
+                const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
+                const uint32_t tile_dst = gbase + d * gathered_tile_bytes;
+                noc.async_read(  // k face_00 halves -> face_00 rows 0..k-1
                     stats_dram,
                     CoreLocalMem<uint32_t>(tile_dst),
-                    kFaceRowBytes,
-                    {.page_id = page_idx, .offset_bytes = src_off},
+                    half_bytes,
+                    {.page_id = page_idx, .offset_bytes = rg_base},
                     {});
-                noc.async_read(  // -> face_01 row0
+                noc.async_read(  // k face_01 halves -> face_01 rows 0..k-1
                     stats_dram,
                     CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
-                    kFaceRowBytes,
-                    {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
+                    half_bytes,
+                    {.page_id = page_idx, .offset_bytes = rg_base + half_bytes},
                     {});
+            }
+        } else {
+            for (uint32_t d = 0; d < ring_size; d++) {
+                const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
+                for (uint32_t s = 0; s < num_stats; s++) {
+                    const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
+                    const uint32_t src_off = my_slot * stick_bytes + s * kStatBytes;
+                    noc.async_read(  // -> face_00 row0
+                        stats_dram,
+                        CoreLocalMem<uint32_t>(tile_dst),
+                        kFaceRowBytes,
+                        {.page_id = page_idx, .offset_bytes = src_off},
+                        {});
+                    noc.async_read(  // -> face_01 row0
+                        stats_dram,
+                        CoreLocalMem<uint32_t>(tile_dst + kFace01Off),
+                        kFaceRowBytes,
+                        {.page_id = page_idx, .offset_bytes = src_off + kFaceRowBytes},
+                        {});
+                }
             }
         }
         noc.async_read_barrier();
@@ -213,7 +274,7 @@ void kernel_main() {
                 cb_output.wait_front(block_size);
                 uint32_t rd = cb_output.get_read_ptr();
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    const uint32_t c = col_tile + i;
+                    const uint32_t c = col_start + col_tile + i;
                     const uint32_t h = c / head_dim_tiles;
                     const uint32_t t_col = c - h * head_dim_tiles;
                     const uint32_t out_idx =

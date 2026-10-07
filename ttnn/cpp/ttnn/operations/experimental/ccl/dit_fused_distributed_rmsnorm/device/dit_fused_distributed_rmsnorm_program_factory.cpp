@@ -271,6 +271,28 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
     return std::min<uint32_t>(num_tile_rows, cap);
 }
 
+// Column split (k worker cores per tile-row): upper bound on k (k=5 needs uneven slices).
+constexpr uint32_t kColSplitMax = 4u;
+constexpr uint32_t kColSplitMinSliceTiles = 12u;
+// Shape-only column-split factor: spend the grid cores left over after one worker per
+// row-group (+ forwarders) on splitting each tile-row's columns. Equal slices only
+// (largest divisor of num_tile_cols <= the budget) so every worker runs one kernel binary.
+uint32_t pick_col_split(uint32_t num_tile_cols, uint32_t num_workers, uint32_t grid_cores, uint32_t num_forwarders) {
+    if (num_workers <= 1u) {
+        return 1u;
+    }
+    const uint32_t budget = grid_cores > num_forwarders ? grid_cores - num_forwarders : 0u;
+    uint32_t k = std::min<uint32_t>(kColSplitMax, budget / num_workers);
+    k = std::min<uint32_t>(k, num_tile_cols);
+    // Keep >= kColSplitMinSliceTiles tiles per worker: below that the extra cores only add
+    // DRAM/NoC contention (TP4 sweep: 32 tile-cols k=2 17.3us vs k=4 17.8us).
+    k = std::min<uint32_t>(k, std::max<uint32_t>(1u, num_tile_cols / kColSplitMinSliceTiles));
+    while (k > 1u && (num_tile_cols % k) != 0u) {
+        k--;
+    }
+    return std::max<uint32_t>(1u, k);
+}
+
 // Sizing derivation used in both spec computation (to size the stats scratch
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
@@ -330,9 +352,19 @@ DitFusedDistributedRmsnormSizing compute_sizing(
         // Token-tiles (each stick_bytes wide) that fit one fabric packet.
         const uint32_t sticks_per_packet =
             std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / s.stick_bytes);
+        // Column split (RMS only): k partial sticks per row-group. A forwarder's round then
+        // carries rg_per_fwd * k sticks, possibly more than one fabric packet -> the page
+        // holds a whole number of packets (the forwarder sends it as several packets).
+        const auto grid = input.device()->compute_with_storage_grid_size();
+        s.col_split = (args.norm_type == DitFusedNormType::LAYERNORM)
+                          ? 1u
+                          : pick_col_split(W / TILE_WIDTH, s.num_workers, grid.x * grid.y, num_forwarders);
+        const uint32_t rg_per_fwd = tt::div_up(s.num_workers, num_forwarders);
+        const uint32_t packets_per_page =
+            std::max<uint32_t>(1u, tt::div_up(rg_per_fwd * s.col_split, sticks_per_packet));
         // window_size is the logical fp32 page width / TILE_HEIGHT; keep the page
-        // formula page_size = TILE_HEIGHT * window_size * 4 == sticks_per_packet * stick_bytes.
-        s.window_size = sticks_per_packet * s.stats_per_token;
+        // formula page_size = TILE_HEIGHT * window_size * 4 == packets * sticks_per_packet * stick_bytes.
+        s.window_size = packets_per_page * sticks_per_packet * s.stats_per_token;
         s.num_chunks_per_device = num_forwarders * max_rounds;
         s.total_pages = args.ring_size * s.num_chunks_per_device;
         s.page_size_bytes = TILE_HEIGHT * s.window_size * sizeof(float);
@@ -502,57 +534,6 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     }
     use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
 
-    // Forwarder model: one coalescing forwarder core per independent routing
-    // plane (num_forwarders = min(num_links, num_workers)). Each forwarder owns a
-    // contiguous worker group and holds the fwd+bwd fabric connections for its link.
-    const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
-    const uint32_t num_forwarders = use_mux ? std::min<uint32_t>(num_links_requested, num_workers) : 0u;
-    const uint32_t total_cores_needed = num_workers + num_forwarders;
-    TT_FATAL(
-        total_cores_needed <= max_cores,
-        "dit_fused_distributed_rmsnorm needs {} cores ({} workers + {} forwarders) but only {} available",
-        total_cores_needed,
-        num_workers,
-        num_forwarders,
-        max_cores);
-
-    const uint32_t num_tile_rows_per_worker = tt::div_up(num_tile_rows, num_workers);
-    const uint32_t workers_per_forwarder = use_mux ? tt::div_up(num_workers, num_forwarders) : num_workers;
-    const uint32_t max_rounds = num_tile_rows_per_worker;  // forwarder round == tile-row
-
-    // [worker_0..N-1, forwarder_0..F-1] on the device grid (row-major).
-    const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_wise=*/true);
-    std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
-    std::vector<CoreCoord> forwarder_cores;
-    forwarder_cores.reserve(num_forwarders);
-for (uint32_t f = 0; f < num_forwarders; f++) {
-        forwarder_cores.push_back(all_cores_vec[num_workers + f]);
-    }
-
-    CoreRangeSet worker_core_set;
-    for (const auto& c : worker_cores) {
-        worker_core_set = worker_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
-    }
-    CoreRangeSet forwarder_core_set;
-    for (const auto& c : forwarder_cores) {
-        forwarder_core_set = forwarder_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
-    }
-    // Grid-wide set: the packet CB + sync semaphores are created here so their
-    // L1 address is identical on every worker and forwarder core — a worker
-    // learns its forwarder's packet base / sem addr from its OWN
-    // CircularBuffer(packet_cb).get_write_ptr() / Semaphore(id), no cross-core address args.
-    const CoreRangeSet all_core_set({core_grid});
-
-    // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf);
-    // contiguous tile-row split (worker w owns [w*rpw, min((w+1)*rpw, N))).
-    auto worker_forwarder = [&](uint32_t w) -> uint32_t { return use_mux ? (w / workers_per_forwarder) : 0u; };
-    auto worker_slot = [&](uint32_t w) -> uint32_t { return use_mux ? (w % workers_per_forwarder) : 0u; };
-    auto worker_num_rows = [&](uint32_t w) -> uint32_t {
-        const uint32_t s = std::min(w * num_tile_rows_per_worker, num_tile_rows);
-        const uint32_t e = std::min(s + num_tile_rows_per_worker, num_tile_rows);
-        return e - s;
-    };
-
     // The compute kernel processes one tile-row at a time (a sweep over chunk 1-4 showed
     // chunk=1 best-or-tied everywhere: fabric/AG is only ~2us exposed so bigger chunks buy
     // no amortization, and chunk>1 was ~10% slower on the large shapes). So chunk is fixed
@@ -720,7 +701,6 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Forwarder AG: DRAM pages per device = num_forwarders * max_rounds (one page
     // per forwarder per row-round). Page idx = my_device*num_chunks_per_device +
     // forwarder*max_rounds + round.
-    const uint32_t num_chunks_per_device = use_mux ? (num_forwarders * max_rounds) : 0u;
     TT_FATAL(
         !streaming_low_l1 || (num_tile_cols % block_size == 0),
         "dit_fused_distributed_rmsnorm streaming low-L1 path requires num_tile_cols ({}) divisible by block_size "
@@ -741,6 +721,79 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         "(the block-major streaming POST path has no tail handling yet)",
         num_tile_cols,
         block_size);
+
+    // Forwarder model: one coalescing forwarder core per independent routing
+    // plane (num_forwarders = min(num_links, num_workers)). Each forwarder owns a
+    // contiguous worker group and holds the fwd+bwd fabric connections for its link.
+    //
+    // Column split: num_workers above is the ROW-GROUP count (contiguous tile-row split).
+    // Each row-group is served by col_split worker cores, worker w = rg * col_split + j
+    // owning tile-cols [j * slice_cols, (j + 1) * slice_cols) of the row-group's rows.
+    // Each worker contributes a PARTIAL sum-of-squares stick; POST sums all
+    // ring_size * col_split partials of its row. Configs whose kernels index columns
+    // in ways the split path does not implement fall back to col_split = 1 (the
+    // original one-worker-per-row path, bit-identical layout).
+    const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
+    const uint32_t num_forwarders = use_mux ? std::min<uint32_t>(num_links_requested, num_workers) : 0u;
+    DitFusedDistributedRmsnormSizing stats_sizing{};
+    if (use_mux) {
+        stats_sizing = compute_sizing(args, input_tensor);
+    }
+    const bool col_split_unsupported = !use_mux || is_layernorm || fuse_rope || per_token_weight || per_token_bias ||
+                                       per_batch_weight || per_batch_bias || streaming_low_l1 || block_major_post ||
+                                       args.per_head_norm;
+    const uint32_t col_split = col_split_unsupported ? 1u : stats_sizing.col_split;
+    TT_FATAL(num_tile_cols % col_split == 0, "col_split {} must divide num_tile_cols {}", col_split, num_tile_cols);
+    const uint32_t slice_cols = num_tile_cols / col_split;
+    const uint32_t num_row_groups = num_workers;
+    const uint32_t num_worker_cores = num_row_groups * col_split;
+    const uint32_t total_cores_needed = num_worker_cores + num_forwarders;
+    TT_FATAL(
+        total_cores_needed <= max_cores,
+        "dit_fused_distributed_rmsnorm needs {} cores ({} workers + {} forwarders) but only {} available",
+        total_cores_needed,
+        num_worker_cores,
+        num_forwarders,
+        max_cores);
+
+    const uint32_t num_tile_rows_per_worker = tt::div_up(num_tile_rows, num_row_groups);
+    const uint32_t rg_per_forwarder = use_mux ? tt::div_up(num_row_groups, num_forwarders) : num_row_groups;
+    const uint32_t workers_per_forwarder = rg_per_forwarder * col_split;
+    const uint32_t max_rounds = num_tile_rows_per_worker;  // forwarder round == tile-row
+
+    // [worker_0..N-1, forwarder_0..F-1] on the device grid (row-major).
+    const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_wise=*/true);
+    std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_worker_cores);
+    std::vector<CoreCoord> forwarder_cores;
+    forwarder_cores.reserve(num_forwarders);
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        forwarder_cores.push_back(all_cores_vec[num_worker_cores + f]);
+    }
+    CoreRangeSet worker_core_set;
+    for (const auto& c : worker_cores) {
+        worker_core_set = worker_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
+    }
+    CoreRangeSet forwarder_core_set;
+    for (const auto& c : forwarder_cores) {
+        forwarder_core_set = forwarder_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
+    }
+    // Grid-wide set: the packet CB + sync semaphores are created here so their
+    // L1 address is identical on every worker and forwarder core — a worker
+    // learns its forwarder's packet base / sem addr from its OWN
+    // CircularBuffer(packet_cb).get_write_ptr() / Semaphore(id), no cross-core address args.
+    const CoreRangeSet all_core_set({core_grid});
+
+    // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf);
+    // row-group rg = w / col_split owns [rg*rpw, min((rg+1)*rpw, N)).
+    auto worker_forwarder = [&](uint32_t w) -> uint32_t { return use_mux ? (w / workers_per_forwarder) : 0u; };
+    auto worker_slot = [&](uint32_t w) -> uint32_t { return use_mux ? (w % workers_per_forwarder) : 0u; };
+    auto worker_num_rows = [&](uint32_t w) -> uint32_t {
+        const uint32_t rg = w / col_split;
+        const uint32_t s = std::min(rg * num_tile_rows_per_worker, num_tile_rows);
+        const uint32_t e = std::min(s + num_tile_rows_per_worker, num_tile_rows);
+        return e - s;
+    };
+    const uint32_t num_chunks_per_device = use_mux ? (num_forwarders * max_rounds) : 0u;
 
     // ------------------------------------------------------------------------
     // Persistent DRAM stats scratch (all-gather path only).
@@ -824,7 +877,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // PRE, once for the POST re-read — and compute pops each block as it goes,
     // so the CB just needs enough depth for the reader to run a few blocks
     // ahead of compute within each pass.
-    const uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
+    const uint32_t chunk_input_tiles = chunk_size_rows * slice_cols;
     // Shallower streaming depth on the AG path (use_mux): the per-shard stats +
     // ring-gather + combine CBs consume L1 that the is_tp_1 path doesn't, so a
     // streamed wide TP>1 shard (LayerNorm) would overflow at depth 4. Depth 2 is
@@ -870,12 +923,14 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // its own). page == one fabric packet (sticks_per_packet * 128 B), depth 2.
         const uint32_t sticks_per_packet =
             std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes);
-        unit_packet_bytes = sticks_per_packet * stick_bytes;
+        // One packet-CB slot = the forwarder group's whole round (possibly several fabric
+        // packets; the forwarder splits it at sticks_per_packet boundaries).
+        unit_packet_bytes = tt::div_up(workers_per_forwarder, sticks_per_packet) * sticks_per_packet * stick_bytes;
         TT_FATAL(
-            sticks_per_packet >= workers_per_forwarder,
-            "dit_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
-            sticks_per_packet,
-            workers_per_forwarder);
+            unit_packet_bytes <= stats_sizing.page_size_bytes,
+            "dit_fused_distributed_rmsnorm: stats page holds {} B but a forwarder group round needs {} B",
+            stats_sizing.page_size_bytes,
+            unit_packet_bytes);
         tt::tt_metal::CircularBufferConfig packet_cfg =
             tt::tt_metal::CircularBufferConfig(2u * unit_packet_bytes, {{packet_cb_id, fp32_format}})
                 .set_page_size(packet_cb_id, unit_packet_bytes);
@@ -898,9 +953,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     //    popped per row (streamed, not all-batches-resident) — so a wide per-batch shard fits L1
     //    at TP=1 (the full unsharded width) instead of holding batch*num_tile_cols tiles.
     // chunk_size_rows==1, so per-token's chunk_size_rows*num_tile_cols is also just num_tile_cols.
-    const uint32_t weight_cb_tiles = has_weight ? num_tile_cols : 1;
+    const uint32_t weight_cb_tiles = has_weight ? slice_cols : 1;
     create_cb(weight_cb_id, program, worker_core_set, weight_tile_sz, weight_cb_tiles, weight_format);
-    const uint32_t bias_cb_tiles = has_bias ? num_tile_cols : 1;
+    const uint32_t bias_cb_tiles = has_bias ? slice_cols : 1;
     create_cb(bias_cb_id, program, worker_core_set, bias_tile_sz, bias_cb_tiles, bias_format);
     // Recip LUT CB: one contiguous page of reduce_width fp32 (== recip_lut_bytes). A 4 B
     // stub when unused (the reader/compute gate on use_recip and never touch it).
@@ -986,7 +1041,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // so wide low-TP shards fit L1; the resident/input-streaming paths keep the
     // whole (padded) row for sub-phase-major handoff.
     const uint32_t intermediate_cb_tiles =
-        block_major_post ? (2u * block_size) : (tt::div_up(num_tile_cols, block_size) * block_size);
+        block_major_post ? (2u * block_size) : (tt::div_up(slice_cols, block_size) * block_size);
     create_cb(
         intermediate_cb_id,
         program,
@@ -1050,7 +1105,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         weight_cb_id,
         rope_cos_cb_id,
         rope_sin_cb_id,
-        num_tile_cols,
+        slice_cols,
         block_size,
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
@@ -1078,8 +1133,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         recip_lut_cb_id,
         // CT 19/20: broadcast affine read counts (always num_tile_cols: only TRUE broadcast
         // [1,1,H] uses the one-shot resident read).
-        weight_bcast_tiles,
-        bias_bcast_tiles,
+        col_split > 1u ? slice_cols : weight_bcast_tiles,
+        col_split > 1u ? slice_cols : bias_bcast_tiles,
         // CT 21: per-batch RoPE stride (tiles). 0 -> broadcast cos/sin across the input batch
         // (reader reindexes by within-batch seq row); >0 -> each batch offsets by this many tiles.
         rope_batch_stride_tiles,
@@ -1178,7 +1233,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // my_slot are per-core runtime args (set in the rt loop).
         std::vector<uint32_t> writer_compile_args = {
             output_cb_id,
-            num_tile_cols,
+            slice_cols,
             block_size,
             stats_transposed_local_cb_id,
             stats_transposed_gathered_cb_id,
@@ -1218,9 +1273,15 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Forwarder kernels (AG path): one per forwarder core (per-core CT args).
     // ------------------------------------------------------------------------
     std::vector<KernelHandle> forwarder_kernel_ids(num_forwarders, 0);
+    // FWD_MAX_PAYLOAD_BYTES: split a round larger than one fabric packet (column split).
+    std::map<std::string, std::string> fwd_defines;
+    if (use_mux) {
+        fwd_defines["FWD_MAX_PAYLOAD_BYTES"] = std::to_string(
+            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / stick_bytes) * stick_bytes);
+    }
     for (uint32_t f = 0; f < num_forwarders; f++) {
         const uint32_t group_begin = f * workers_per_forwarder;
-        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_worker_cores);
         const uint32_t group_size = group_end - group_begin;
         std::vector<uint32_t> fwd_ct = {
             packet_cb_id,
@@ -1253,7 +1314,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
             "dit_fused_norm_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
-            WriterDataMovementConfig(fwd_ct));
+            WriterDataMovementConfig(fwd_ct, fwd_defines));
     }
 
     // ------------------------------------------------------------------------
@@ -1275,7 +1336,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         rope_cos_cb_id,
         rope_sin_cb_id,
         rotated_input_cb_id,
-        num_tile_cols,
+        slice_cols,
         block_size,
         /*stats_tiles_cols=*/args.ring_size,
         static_cast<uint32_t>(has_weight),
@@ -1322,6 +1383,10 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         static_cast<uint32_t>(per_batch_weight),
         static_cast<uint32_t>(per_batch_bias),
         rows_per_batch_tiles,
+        // CT 43/44: column split factor (partial sticks per device per row) and the GLOBAL
+        // reduce width (W * ring_size) for 1/H_full — num_tile_cols is the worker's slice.
+        col_split,
+        H_full,
     };
 
     // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
@@ -1381,8 +1446,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     for (uint32_t f = 0; f < num_forwarders; f++) {
         forwarder_virtual[f] = mesh_device->worker_core_from_logical_core(forwarder_cores[f]);
     }
-    std::vector<CoreCoord> worker_virtual(num_workers);
-    for (uint32_t i = 0; i < num_workers; i++) {
+    std::vector<CoreCoord> worker_virtual(num_worker_cores);
+    for (uint32_t i = 0; i < num_worker_cores; i++) {
         worker_virtual[i] = mesh_device->worker_core_from_logical_core(worker_cores[i]);
     }
 
@@ -1398,13 +1463,15 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     } else {
         SetCommonRuntimeArgs(program, writer_kernel_id, {output_addr, trans_mat_addr_rt});
     }
-    for (uint32_t i = 0; i < num_workers; i++) {
+    for (uint32_t i = 0; i < num_worker_cores; i++) {
         const auto& core = worker_cores[i];
-        const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
+        const uint32_t rg = i / col_split;
+        const uint32_t col_start = (i % col_split) * slice_cols;
+        const uint32_t tile_row_start = std::min(rg * num_tile_rows_per_worker, num_tile_rows);
         const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
         const uint32_t this_core_rows = tile_row_end - tile_row_start;
 
-        SetRuntimeArgs(program, reader_kernel_id, core, {tile_row_start, tile_row_end});
+        SetRuntimeArgs(program, reader_kernel_id, core, {tile_row_start, tile_row_end, col_start, num_tile_cols});
 
         std::vector<uint32_t> writer_rt_args = {tile_row_start, tile_row_end};
         if (use_mux) {
@@ -1414,6 +1481,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
             writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].y));
             writer_rt_args.push_back(f);
             writer_rt_args.push_back(worker_slot(i));
+            writer_rt_args.push_back(col_split);
+            writer_rt_args.push_back(col_start);
         }
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
 
@@ -1438,7 +1507,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         for (uint32_t f = 0; f < num_forwarders; f++) {
         const auto& core = forwarder_cores[f];
         const uint32_t group_begin = f * workers_per_forwarder;
-        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_worker_cores);
         std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
         for (uint32_t w = group_begin; w < group_end; w++) {
             fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
