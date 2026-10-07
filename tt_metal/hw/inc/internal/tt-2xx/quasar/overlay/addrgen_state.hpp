@@ -79,12 +79,22 @@ struct AddrgenPosition {
     uint32_t bank_current;
 };
 
-// Register read, then a fence. Back-to-back rd_reg instructions hung the address generator on emu-quasar-2x3 (the same
-// reads spaced apart returned correct values); a fence between them avoids it. Only save pays this.
+// Address-generator register reads (rd_reg) need a fence (seen hanging on emu-quasar-2x3; the HW team confirmed a
+// fence is needed). Only a fence after every read has been safe everywhere: one fence after a series of reads passed
+// some kernels but hung the save in AddrgenLoopProbe's spill cases (2026-10-06), and a fence before the series hung
+// too. So each read is followed by its own fence. Only save pays this (~70 of a reload's ~300 cycles).
+template <AddrGen ADDRGEN>
+inline __attribute__((always_inline)) uint64_t read_reg_addrgen(uint32_t reg_offset) {
+    return __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, reg_offset / 8);
+}
+
+inline __attribute__((always_inline)) void fence_reg_reads_addrgen() { asm volatile("fence" ::: "memory"); }
+
+// A register read and its fence: the form every read here uses.
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t read_reg_fenced(uint32_t reg_offset) {
-    const uint64_t value = __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, reg_offset / 8);
-    asm volatile("fence" ::: "memory");
+    const uint64_t value = read_reg_addrgen<ADDRGEN>(reg_offset);
+    fence_reg_reads_addrgen();
     return value;
 }
 

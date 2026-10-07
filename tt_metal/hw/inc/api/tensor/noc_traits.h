@@ -304,7 +304,7 @@ struct noc_traits_t<tensor_accessor::ShardPage<Accessor>> : tensor_accessor::det
 };
 
 template <>
-struct noc_traits_t<AbstractTensorAccessorWrapper> {
+struct noc_traits_t<AbstractTensorAccessorWrapper> : tensor_accessor::detail::PushIssue {
     struct src_args_type {
         uint32_t page_id{};
         uint32_t offset_bytes = 0;
@@ -313,6 +313,18 @@ struct noc_traits_t<AbstractTensorAccessorWrapper> {
         uint32_t page_id{};
         uint32_t offset_bytes = 0;
     };
+#if defined(TT_TA_ADDRGEN_PUSH)
+    static uint64_t src_addr_or_cmd_buf(
+        const AbstractTensorAccessorWrapper& src, const Noc& noc, const src_args_type& args) {
+        return src.transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(
+            args.page_id, args.offset_bytes, noc.get_noc_id());
+    }
+    static uint64_t dst_addr_or_cmd_buf(
+        const AbstractTensorAccessorWrapper& dst, const Noc& noc, const dst_args_type& args) {
+        return dst.transfer_noc_addr<tensor_accessor::TransferDir::Write, true>(
+            args.page_id, args.offset_bytes, noc.get_noc_id());
+    }
+#endif
     template <Noc::AddressType address_type>
     static auto src_addr(
         const AbstractTensorAccessorWrapper& src, const Noc& noc, const src_args_type& args)
