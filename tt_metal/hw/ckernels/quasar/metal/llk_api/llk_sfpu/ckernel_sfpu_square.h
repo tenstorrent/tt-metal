@@ -4,10 +4,7 @@
 
 #pragma once
 
-#include <cstdint>
-#include <type_traits>
-
-#include "ckernel_ops.h"
+#include "ckernel_addrmod.h"
 #include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"

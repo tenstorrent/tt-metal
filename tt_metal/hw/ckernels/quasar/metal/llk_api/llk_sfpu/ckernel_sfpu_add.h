@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <type_traits>
 
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
