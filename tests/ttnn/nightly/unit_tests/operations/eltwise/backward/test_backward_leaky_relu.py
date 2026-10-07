@@ -61,7 +61,7 @@ def test_bw_leaky_relu_default(input_shapes, device):
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
-LEAKY_RELU_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+LEAKY_RELU_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 LEAKY_RELU_BW_SMALLEST_NORMAL = 2.0**-126
 LEAKY_RELU_BW_NEGATIVE_SLOPE = 0.01
 
