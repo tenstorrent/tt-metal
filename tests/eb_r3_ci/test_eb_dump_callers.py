@@ -194,7 +194,7 @@ def test_rope_hf(device):
 @pytest.mark.parametrize("heads", [1, 8])
 def test_indexer(device, heads):
     """k [1, 1, 65536, 128] one-hot rows (key t holds pattern t), q [1, heads, 64, 128] all ones: q.k = the pattern; gates
-    w [1, 1, 64, heads] from the special and normal set; causal start past the last key, so no key is masked."""
+    w [1, 1, 64, heads] from the special and normal set; causal start T - 64, so only keys past T - 64 + s are masked."""
     t0 = time.time()
     T, Dm, Sq = 65536, 128, 64
     B = b16_set()
@@ -205,10 +205,10 @@ def test_indexer(device, heads):
     for ws in range(2):
         w = B[(np.arange(Sq * heads) * (1 + 6 * ws) + 11 * ws) % B.size].reshape(1, 1, Sq, heads)
         tw = _dev(w, w.shape, device)
-        for fid, fp32 in (("HiFi4", False), ("HiFi2", False), ("LoFi", False), ("HiFi4", True)):
+        for fid, fp32 in (("HiFi4", False), ("HiFi2", False), ("LoFi", False)):  # the op requires a 16-bit DEST
             tag = f"indexer_h{heads}_w{ws}_{fid}_{'d32' if fp32 else 'd16'}"
             _guard(tag, lambda: stage(tag, out_bits(ttnn.experimental.indexer_score_dsa(
-                tq, tk, tw, chunk_start_idx=T, program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
+                tq, tk, tw, chunk_start_idx=T - Sq, program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0),
                 compute_kernel_config=_ckc(device, fid, fp32))), extra=f"({time.time() - t0:.1f} s)"))
 
 
