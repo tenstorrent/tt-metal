@@ -17,7 +17,8 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest = false,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void llk_unpack_A_sdpa_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -30,7 +31,7 @@ inline void llk_unpack_A_sdpa_init(
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
 
-    _llk_unpack_A_sdpa_init_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+    _llk_unpack_A_sdpa_init_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, src_dvalid>(
         transpose_of_faces,
         within_face_16x16_transpose,
         face_r_dim,

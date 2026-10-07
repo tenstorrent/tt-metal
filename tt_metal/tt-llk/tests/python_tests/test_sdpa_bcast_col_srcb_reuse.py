@@ -24,12 +24,13 @@
 #     _llk_unpack_A_sdpa_set_srcb_dummy_valid_() which injects the dummy SrcB SET_DVALID the math preamble's
 #     STALLWAIT(SRCB_VLD) waits on before its MOVD2B. That helper must be issued BEFORE the operand unpacks.
 #
-# This advance test exercises the MUL (softmax-scale) instantiation, LoFi, on 8x32 tiles.
+# This advance test exercises the MUL (softmax-scale) instantiation at LoFi, HiFi2 and HiFi4, with either hand-off, on 8x32 tiles.
 #
 # Blackhole-only (@blackhole_only): the primitive headers live under the Blackhole experimental/ tree.
 
 from conftest import blackhole_only
 from helpers.device import BootMode
+from helpers.llk_params import MathFidelity
 from helpers.param_config import parametrize
 from helpers.sdpa_bcast_utils import (
     SDPA_BCAST_FORMATS,
@@ -40,11 +41,19 @@ from helpers.sdpa_bcast_utils import (
 @blackhole_only
 @parametrize(
     formats=SDPA_BCAST_FORMATS,
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
+    per_face_handoff=[True, False],
 )
 def test_sdpa_bcast_col_srcb_reuse(
     formats,
+    math_fidelity,
+    per_face_handoff,
     boot_mode=BootMode.DEFAULT,
 ):
     run_sdpa_bcast_col_srcb_reuse(
-        "sources/sdpa_bcast_col_srcb_reuse_test.cpp", formats, boot_mode
+        "sources/sdpa_bcast_col_srcb_reuse_test.cpp",
+        formats,
+        boot_mode,
+        math_fidelity=math_fidelity,
+        per_face_handoff=per_face_handoff,
     )

@@ -46,11 +46,17 @@ from helpers.param_config import input_output_formats
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import IN_FACE_DIMS, NUM_FACES, TILE_COUNT
+from helpers.test_variant_parameters import (
+    IN_FACE_DIMS,
+    MATH_FIDELITY,
+    NUM_FACES,
+    PER_FACE_HANDOFF,
+    TILE_COUNT,
+)
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-# LoFi-only, bf16-natural path. Keep the grid tiny for the advance test.
+# bf16-natural path. Keep the grid tiny for the advance test.
 SDPA_BCAST_FORMATS = input_output_formats([DataFormat.Float16_b])
 
 # The op's tile: 8 rows x 32 cols == two 8x16 faces. num_faces == 2 is the only value
@@ -84,8 +90,16 @@ def _bcast_col_untilized(tilized_tile, fmt, generator):
     ).reshape(SDPA_FACE_R_DIM, 32)
 
 
-def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAULT):
-    """Drive `cpp_source` (an SDPA bcast-col SrcB-reuse kernel) and assert against the golden."""
+def run_sdpa_bcast_col_srcb_reuse(
+    cpp_source,
+    formats,
+    boot_mode=BootMode.DEFAULT,
+    math_fidelity=MathFidelity.LoFi,
+    per_face_handoff=True,
+):
+    """Drive `cpp_source` (an SDPA bcast-col SrcB-reuse kernel) and assert against the golden. The kernel runs at
+    `math_fidelity`, with the per-face hand-off or (per_face_handoff False, Blackhole) the per-tile one.
+    """
     # A single-axis @parametrize passes the value as a 1-tuple; unwrap it.
     if isinstance(formats, tuple):
         (formats,) = formats
@@ -128,7 +142,7 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
     # untilized; the two products are then formed by the eltwise golden and summed row-major (the
     # MOP's two ELWMULs accumulate into DEST).
     #
-    # EltwiseBinaryGolden rather than a raw torch multiply: the products come off the FPU at LoFi,
+    # EltwiseBinaryGolden rather than a raw torch multiply: the products come off the FPU at the variant's fidelity,
     # which truncates the SrcA/SrcB mantissas before multiplying, and the generator models that
     # fidelity masking. Both operands are already quantized here (stimuli in input_format, the
     # scale straight out of BroadcastGolden), so input_format is left unset -- the same call shape
@@ -150,7 +164,7 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
             operands[t * rows : (t + 1) * rows, :].flatten(),
             scale.flatten(),
             formats.output_format,
-            MathFidelity.LoFi,
+            math_fidelity,
         )
 
     configuration = TestConfig(
@@ -162,6 +176,8 @@ def run_sdpa_bcast_col_srcb_reuse(cpp_source, formats, boot_mode=BootMode.DEFAUL
             # immediate takes the "n" asm constraint), and it emits `constexpr num_faces`, which the
             # unpack/pack sides read just as happily as the math thread.
             NUM_FACES(SDPA_NUM_FACES, SDPA_NUM_FACES, SDPA_NUM_FACES),
+            MATH_FIDELITY(math_fidelity),
+            PER_FACE_HANDOFF(per_face_handoff),
         ],
         runtimes=[
             TILE_COUNT(1),

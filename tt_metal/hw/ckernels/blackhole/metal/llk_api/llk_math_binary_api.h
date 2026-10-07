@@ -96,9 +96,12 @@ inline void llk_math_eltwise_binary_init(
     if constexpr (
         src_dvalid == SrcDvalid::PerTile &&
         (src_b_bcast_type == BroadcastType::COL || src_b_bcast_type == BroadcastType::ROW)) {
-        // A row or column broadcast takes the per-tile hand-off only from a full 32x32 B tile, as the unpack init does
+        // A row or column broadcast takes the per-tile hand-off from a 32x32 B tile or one of A's shape, as unpack does
         const std::uint32_t operand_b_id = get_operand_id(operand_B);
-        if (get_operand_face_r_dim(operand_b_id) != FACE_R_DIM || get_operand_num_faces(operand_b_id) != 4) {
+        const std::uint32_t b_face_r_dim = get_operand_face_r_dim(operand_b_id);
+        const std::uint32_t b_num_faces = get_operand_num_faces(operand_b_id);
+        if ((b_face_r_dim != FACE_R_DIM || b_num_faces != 4) &&
+            (b_face_r_dim != tensor_shape.face_r_dim || b_num_faces != tensor_shape.total_num_faces())) {
             llk_math_eltwise_binary_init_impl<
                 eltwise_binary_type,
                 src_b_bcast_type,
@@ -188,9 +191,12 @@ inline void llk_math_eltwise_binary(
     if constexpr (
         src_dvalid == SrcDvalid::PerTile &&
         (src_b_bcast_type == BroadcastType::COL || src_b_bcast_type == BroadcastType::ROW)) {
-        // A row or column broadcast takes the per-tile hand-off only from a full 32x32 B tile, as the unpack init does
+        // A row or column broadcast takes the per-tile hand-off from a 32x32 B tile or one of A's shape, as unpack does
         const std::uint32_t operand_b_id = get_operand_id(operand_B);
-        if (get_operand_face_r_dim(operand_b_id) != FACE_R_DIM || get_operand_num_faces(operand_b_id) != 4) {
+        const std::uint32_t b_face_r_dim = get_operand_face_r_dim(operand_b_id);
+        const std::uint32_t b_num_faces = get_operand_num_faces(operand_b_id);
+        if ((b_face_r_dim != FACE_R_DIM || b_num_faces != 4) &&
+            (b_face_r_dim != tensor_shape.face_r_dim || b_num_faces != tensor_shape.total_num_faces())) {
             llk_math_eltwise_binary_impl<
                 eltwise_binary_type,
                 src_b_bcast_type,
