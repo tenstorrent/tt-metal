@@ -190,6 +190,14 @@ void reset_state(std::uint32_t& counter)
 int main()
 {
     disable_branch_prediction();
+#if defined(LLK_TRISC_BP_OFF)
+    // Experiment: set the TRISC branch predictor disable bits to the mask (bit 0 = TRISC0) every boot; they persist.
+    {
+        volatile std::uint32_t* cfg = ckernel::get_cfg_pointer();
+        cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] =
+            (cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] & ~DISABLE_RISC_BP_Disable_trisc_MASK) | (LLK_TRISC_BP_OFF << DISABLE_RISC_BP_Disable_trisc_SHAMT);
+    }
+#endif
 
     std::uint32_t counter = 0;
 

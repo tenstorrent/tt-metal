@@ -1428,6 +1428,10 @@ class TestConfig:
             os.environ.get("LLK_ZONE_OLD") == "1"
         ):  # experiment: zone start record written inside the window
             OPTIONS_COMPILE += "-DLLK_ZONE_OLD "
+        # experiment: TRISC branch predictor disable mask, written every boot (default 0 = all on)
+        OPTIONS_COMPILE += (
+            f"-DLLK_TRISC_BP_OFF={int(os.environ.get('LLK_TRISC_BP_OFF', '0'))} "
+        )
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
