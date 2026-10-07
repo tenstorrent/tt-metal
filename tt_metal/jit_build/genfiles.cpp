@@ -131,7 +131,7 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
 }
 
 // DFBBindingToken template argument for a dfb::AccessPattern code (STRIDED 0, ALL 1, BLOCKED 2).
-static const char* dfb_access_name(uint8_t code) {
+const char* dfb_access_name(uint8_t code) {
     switch (code) {
         case 0: return "dfb::AccessPattern::STRIDED";
         case 1: return "dfb::AccessPattern::ALL";
