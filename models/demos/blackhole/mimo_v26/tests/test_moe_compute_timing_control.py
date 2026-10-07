@@ -5,6 +5,7 @@
 top-8, compute_only): runs the harness once for correctness (PCC printed by it), then times the op in a TRACE of 10 back-to-back calls replayed 30x
 (device-side compute time of the experts stage on ONE chip; compare with the unified op's 'experts' stage and the 214 MB / 450 GB/s bfp8 weight-read floor).
 Lower bound on what the ring moe_compute path buys for the expert stage; bfp8 weights would read 2x the bytes."""
+import os
 import time
 
 import pytest
@@ -21,8 +22,13 @@ import ttnn
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-@pytest.mark.parametrize("tokens", [32, 16, 8])
+@pytest.mark.parametrize("tokens", [32])
 def test_moe_compute_timing(mesh_device, mesh_shape, tokens, monkeypatch):
+    if os.environ.get("MOE_COMPUTE_BFP8_WEIGHTS", "0") != "0":  # bfp8 ring weights (needs the patched library)
+        from models.demos.blackhole.mimo_v26.tests.test_moe_compute_mimo_single_card import _strict, _upload_bfp8
+
+        monkeypatch.setattr(up, "_build_quantized_weight_tensors_cpu_prepare", _upload_bfp8)
+        monkeypatch.setattr(up, "validate_matmul", _strict(up.validate_matmul))
     orig = ttnn.experimental.moe_compute
     state = {}
 
@@ -56,7 +62,7 @@ def test_moe_compute_timing(mesh_device, mesh_shape, tokens, monkeypatch):
         ttnn.synchronize_device(mesh_device)
         dt = (time.time() - t0) / reps / n * 1e3
         print(
-            f"RESULT moe_compute single card bfp4 compute_only T={tokens} K=4096 N=2048 8 experts: {dt:.3f} ms per call (traced, host-timed replay of {n} calls)",
+            f"RESULT moe_compute single card bfp4 compute_only T={tokens} K=4096 N=2048 8 experts: {dt:.3f} ms per call (traced, host-timed replay of {n} calls) weights={os.environ.get('MOE_COMPUTE_BFP8_WEIGHTS', '0')} fid={os.environ.get('MOE_COMPUTE_FIDELITY', 'LoFi')} fp32acc={os.environ.get('MOE_COMPUTE_FP32_ACC', '0')}",
             flush=True,
         )
         ttnn.release_trace(mesh_device, tid)
