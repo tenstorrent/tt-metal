@@ -224,9 +224,7 @@ def test_cohere2_decoder_inference(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape
-            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         )
 
     assert all_tests_pass, f"Cohere2 layer {layer_num} PCC below 0.99 on some iteration. Check Warnings!"

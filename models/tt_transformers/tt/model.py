@@ -9,9 +9,9 @@ import torch
 from tqdm import tqdm
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.layernorm import LayerNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.common.sampling.tt_sampling import TOPK_MAX_WIDTH, TTSampling
 from models.tt_transformers.tt.ccl import TT_CCL

@@ -9,6 +9,7 @@ from models.tt_transformers.tt.common import Mode
 TILE = 32
 SHARD_HEIGHT = TILE
 
+
 class LayerNorm(LightweightModule):
     """
     LayerNorm supporting replication over a MeshDevice and sharding within devices.

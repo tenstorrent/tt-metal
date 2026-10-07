@@ -17,7 +17,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.layernorm import LayerNorm
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
@@ -3071,8 +3070,7 @@ class ModelArgs:
         ):
             _sw_pattern = text_config.get("sliding_window_pattern", 4) or 4
             self.layer_types = [
-                "sliding_attention" if bool((i + 1) % _sw_pattern) else "full_attention"
-                for i in range(self.n_layers)
+                "sliding_attention" if bool((i + 1) % _sw_pattern) else "full_attention" for i in range(self.n_layers)
             ]
             self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
 
@@ -4747,7 +4745,9 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False, rope_layer_type=None, skip_qkv_permute=False):
+    def __init__(
+        self, attention, head_dim, rotary_emb, use_hf_rope=False, rope_layer_type=None, skip_qkv_permute=False
+    ):
         from transformers import DynamicCache
 
         super().__init__()
@@ -4756,7 +4756,7 @@ class HfAttentionWrapper:
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
         self.use_hf_rope = use_hf_rope
-        # skip for cohere2 
+        # skip for cohere2
         self.skip_qkv_permute = skip_qkv_permute
         # transformers 5.x Gemma3 rotary picks `{layer_type}_inv_freq`. When the caller chose a
         # specific rope module (e.g. global vs local), pin the layer_type to match it instead of

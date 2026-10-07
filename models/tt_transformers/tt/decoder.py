@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.layernorm import LayerNorm
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.common.layernorm import LayerNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
