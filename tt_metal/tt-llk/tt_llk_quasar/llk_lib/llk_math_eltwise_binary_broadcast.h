@@ -62,8 +62,15 @@ inline void _llk_math_eltwise_binary_broadcast_mop_config_(const TensorShape& te
                 for (std::uint32_t i = 0; i < replay_buf_len; ++i)
                 {
                     // First phase overwrites unless this tile folds into the previous dest result.
-                    const std::uint32_t phase_acc = (acc_to_dest || i > 0) ? 1u : 0u;
-                    TTI_ELWMUL(p_elwise::CLR_NONE, phase_acc, SRCB_BROADCAST_TYPE, ADDR_MOD_3, 0);
+                    // TTI encodings must be immediates, so the accumulate bit is a literal in each branch.
+                    if (acc_to_dest || i > 0)
+                    {
+                        TTI_ELWMUL(p_elwise::CLR_NONE, 1, SRCB_BROADCAST_TYPE, ADDR_MOD_3, 0);
+                    }
+                    else
+                    {
+                        TTI_ELWMUL(p_elwise::CLR_NONE, 0, SRCB_BROADCAST_TYPE, ADDR_MOD_3, 0);
+                    }
                 }
             });
     }
