@@ -13,7 +13,8 @@ GlobalSemaphore create_global_semaphore(
     MeshDevice* mesh_device,
     const CoreRangeSet& cores,
     uint32_t initial_value,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    bool range_lockstep = false);
 
 tt::tt_metal::DeviceAddr get_global_semaphore_address(const GlobalSemaphore& global_semaphore);
 

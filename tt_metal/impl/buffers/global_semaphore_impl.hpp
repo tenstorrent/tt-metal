@@ -27,7 +27,8 @@ public:
         distributed::MeshDevice& device,
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
-        BufferType buffer_type);
+        BufferType buffer_type,
+        bool range_lockstep = false);
 
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
@@ -56,7 +57,10 @@ public:
 
 private:
     void setup_buffer(
-        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address);
+        std::optional<uint32_t> initial_value,
+        BufferType buffer_type,
+        std::optional<uint64_t> address,
+        bool range_lockstep);
 
     std::shared_ptr<distributed::MeshBuffer> buffer_;
     distributed::MeshDevice* device_;
