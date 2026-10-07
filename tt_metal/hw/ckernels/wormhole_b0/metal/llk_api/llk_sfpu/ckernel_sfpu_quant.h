@@ -70,10 +70,14 @@ constexpr std::uint32_t INT8_SIGN_MASK = 0x00000080u;
 // The SFPU adder rounds to nearest even. Adding RNE_MAGIC (1.5 * 2^23) to any |v| < 2^22 gives
 // m = RNE(v) + RNE_MAGIC in [2^23, 2^24), where the fp32 spacing is 1.
 // The integer subtraction bits(m) - bits(t) with t = RNE_MAGIC - zero_point gives RNE(v) + zero_point.
+// A large zero point would push t out of [2^23, 2^24). Quant splits it into zp_hi (a multiple of 4) and
+// zp_lo in [-2, 2], adds zp_hi in the MAD and uses t = RNE_MAGIC - zp_lo. An even zp_hi does not change the rounding.
 // Requant uses t = RNE_MAGIC since its zero point is already in v.
 // Clamp m to [t + LO, t + HI] before subtracting to saturate where LO/HI are [-128, 127]
 // for int32/int8 and [0, 255] for uint8.
 constexpr std::uint32_t RNE_MAGIC_FP32 = 0x4b400000u;  // 12582912.0f = 1.5 * 2^23
+// floating point respresentation of zero_point + ZP_SPLIT is a multiple of 4 for |zero_point| <= 2^24
+constexpr std::uint32_t ZP_SPLIT_FP32 = 0x4c400000u;  // 50331648.0f = 1.5 * 2^25
 
 // T_LREG holds t on entry. LREG12 = t + LO and LREG13 = t + HI. Within this range, the FP32 bit pattern
 // differs from bits(t) by the integer offset. T_LREG = -bits(t) with +128 for the int8 output. LREG0 is scratch.
@@ -314,11 +318,21 @@ void quant_init(const uint zero_point) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "quant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
-    // LREG5 = RNE_MAGIC (the MAD addend); LREG2 = t = RNE_MAGIC - zero-point, exact for an integer zero
-    // point, which _rne_clamp_init_ turns into the clamp bounds and then -bits(t) (+128).
+    // LREG5 = RNE_MAGIC + zp_hi (the MAD addend); LREG2 = t = RNE_MAGIC - zp_lo, which _rne_clamp_init_
+    // turns into the clamp bounds and then -bits(t) (+128).
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _sfpu_load_imm32_(p_sfpu::LREG5, RNE_MAGIC_FP32);
+    _sfpu_load_imm32_(p_sfpu::LREG1, ZP_SPLIT_FP32);
+    // LREG0 = zp_hi = fl(zero-point + ZP_SPLIT) - ZP_SPLIT
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*mod1*/);
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0 /*mod1*/);
+    TTI_SFPNOP;
+    // LREG2 = zp_lo = zero-point - zp_hi
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG2, p_sfpu::LREG2, 0 /*mod1*/);
+    TTI_SFPNOP;
     TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LCONST_neg1, p_sfpu::LREG5, p_sfpu::LREG2, 0 /*mod1*/);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0 /*mod1*/);
     TTI_SFPNOP;
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG2>();
     if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
@@ -332,7 +346,7 @@ void quant_init(const uint zero_point) {
         OUTPUT_FORMAT == DataFormat::Int8 ? QUANT_REPLAY_LEN_INT8_OUT : QUANT_REPLAY_LEN;
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
-        // m = RNE(A * B) + RNE_MAGIC: the single rounding step of the MAD rounds to nearest even
+        // m = RNE(A * B + zp_hi) + RNE_MAGIC: the single rounding step of the MAD rounds to nearest even
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
         TTI_SFPNOP;
         TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // m = max(m, t + LO)
