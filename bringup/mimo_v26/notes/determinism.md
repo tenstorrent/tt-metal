@@ -8,7 +8,7 @@ Ruled out (evidence in mimo-logs/attn_*):
 * ttnn.all_reduce over mesh columns: 96 chained in one trace x 300 replays x {default, ring nl1, linear nl1, ring nl2}: 0 mismatches (attn_N1_ar, tests/test_allreduce_stress.py).
 * attention decode (SDPA/paged update) and lm_head: not involved, the first diverging tensor is always a MoE layer `ffn_out`.
 * async host->device input copy lifetime (fixed anyway: host tensors kept alive + synchronize, Decoder.set_inputs).
-* dispatch/combine num_links=1 (workers 2): still glitches (attn_M15_links1_workers2: L3 row 3, 3 of 100 replays). links2/workers1 and 1/1: see LOG.
+* dispatch/combine num_links=1 (workers 2): still glitches (attn_M15_links1_workers2: L3 row 3, 3 of 100 replays). links=2 workers=1: 0 glitches in 100 replays (attn_M15_links2_workers1: first = None; the default 2/2 showed 2-5 glitching replays per 100, so p~5% that this is luck): MIMO_DISP_WORKERS=1 is the lead, needs a 300+ replay confirmation and a full-model token-identity run. links=1/workers=1: result in attn_M15_links1_workers1.log.
 
 Localization recipe (reproduces in ~8 min on one host, 48-layer model, weights cache warm):
   launch.py ... --env ATTN_STACK_S=2400 --env DEC_REPS=100 --env DEC_TAPS=ffn_out -- python models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py
