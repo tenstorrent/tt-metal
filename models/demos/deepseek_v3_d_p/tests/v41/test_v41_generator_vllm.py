@@ -10,7 +10,10 @@ captures made on the slot serve the new request, an odd prompt whose compressor 
 Request 0 is the text the model knows by heart (A Tale of Two Cities), teacher-forced on its next tokens and judged
 by ``book_top1`` as the decode test; request 1 is a different stretch of the same text, free-running, present so the
 batch has two rows. ``V41_GEN_STEPS`` decode steps (default 16), ``V41_GEN_PROMPT`` tokens (255), ``V41_GEN_LAYERS``
-(``all``; the generator reads it as ``TT_V41_LAYERS``). Results go to the log as ``V41_GENERATOR_RESULT {json}`` and to ``V41_GEN_OUT``.
+(``all``; the generator reads it as ``TT_V41_LAYERS``). ``V41_GEN_TRACE_PREFILL=1`` lists the prompt length in
+``TT_V41_TRACE_PREFILL_LENGTHS`` so every request's prefill is a replay of a capture made at warm-up (the odd prompt's
+compressor carry then comes out of the replay); the trace region's bytes are recorded. Results go to the log as
+``V41_GENERATOR_RESULT {json}`` and to ``V41_GEN_OUT``.
 """
 
 import json
@@ -21,6 +24,7 @@ import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41.galaxy_meshes import galaxy_meshes
@@ -28,6 +32,16 @@ from models.demos.deepseek_v3_d_p.tests.v41.test_v41_decode import TRACE_REGION
 from models.demos.deepseek_v3_d_p.tests.v41.test_v41_depth import _dram_bytes, parse_layers
 from models.demos.deepseek_v3_d_p.tt.v41.generator_vllm import DeepseekV41ForCausalLM
 from models.demos.deepseek_v3_d_p.tt.v41.weights import resolve_checkpoint
+
+
+def _trace_bytes(mesh_device) -> int | None:
+    """Per-chip bytes allocated in the trace region (the captures), as ``_dram_bytes`` for DRAM."""
+    try:
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.TRACE)
+        return int(view.total_bytes_allocated_per_bank * view.num_banks)
+    except Exception as e:
+        logger.warning(f"trace region statistics unavailable: {e}")
+        return None
 
 
 def _page_table(first_blocks: list[int], width: int = 8) -> torch.Tensor:
@@ -38,7 +52,11 @@ def _page_table(first_blocks: list[int], width: int = 8) -> torch.Tensor:
 
 
 @pytest.mark.timeout(int(os.environ.get("V41_GEN_TIMEOUT", 2 * 3600)))
-@pytest.mark.parametrize("mesh_device, device_params", galaxy_meshes(trace_region_size=TRACE_REGION), indirect=True)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    galaxy_meshes(trace_region_size=int(os.environ.get("V41_GEN_TRACE_REGION", TRACE_REGION))),
+    indirect=True,
+)
 def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     layers = parse_layers(os.environ.get("V41_GEN_LAYERS", "all"))
     prompt = int(os.environ.get("V41_GEN_PROMPT", 255))
@@ -46,6 +64,8 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     chunk = int(os.environ.get("TT_V41_CHUNK", 1024))
     monkeypatch.setenv("TT_V41_CHUNK", str(chunk))
     monkeypatch.setenv("TT_V41_LAYERS", ",".join(str(l) for l in layers))
+    trace_prefill = os.environ.get("V41_GEN_TRACE_PREFILL", "0") == "1"
+    monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", str(prompt) if trace_prefill else "")
     if resolve_checkpoint() is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
     max_seq_len = prompt + steps + 64
@@ -57,6 +77,7 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
         "chunk": chunk,
         "max_model_len": max_seq_len,
         "mesh": list(mesh_device.shape),
+        "trace_prefill": trace_prefill,
     }
 
     t0 = time.time()
@@ -75,7 +96,12 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     )
     result["warmup_s"] = round(time.time() - t0, 1)
     result["dram_after_warmup_bytes"] = _dram_bytes(mesh_device)
-    logger.info(f"generator: built in {result['build_s']} s, warmed up in {result['warmup_s']} s")
+    result["trace_after_warmup_bytes"] = _trace_bytes(mesh_device)
+    result["prefill_traces"] = len(model.prefill_traces)
+    logger.info(
+        f"generator: built in {result['build_s']} s, warmed up in {result['warmup_s']} s; "
+        f"{result['prefill_traces']} prefill traces, trace region {result['trace_after_warmup_bytes']} B"
+    )
 
     text = orc.text_tokens(2 * prompt + 2 * steps + 2)[0]
     book_a, other = text[: prompt + steps + 1], text[prompt + steps + 1 :]
@@ -152,4 +178,6 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     if out:
         with open(out, "w") as f:
             json.dump(result, f, indent=1)
+    for trace in model.prefill_traces.values():
+        trace.release()
     model.decoder.release()

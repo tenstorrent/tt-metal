@@ -35,11 +35,16 @@ from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS, TtV41Decoder
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules
-from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
+from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer, V41PrefillTrace
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 
 WARMUP_PROMPT = 255  # tokens of the warm-up prompt (a full window; odd, so the ratio-2 carry path runs first)
 WARMUP_DECODE_STEPS = 16  # at most; the slot is done once both parities are captured and replayed once
+# Traced prefill: ``TT_V41_TRACE_PREFILL_LENGTHS`` lists prompt lengths (tokens, comma-separated) whose prefill is
+# captured per slot at warm-up (the trace phase) and replayed for every prompt of exactly that length; other
+# lengths run eagerly, or are captured on their first request when ``TT_V41_TRACE_PREFILL_ON_MISS=1``.
+TRACE_PREFILL_LENGTHS = "TT_V41_TRACE_PREFILL_LENGTHS"
+TRACE_PREFILL_ON_MISS = "TT_V41_TRACE_PREFILL_ON_MISS"
 
 
 def _round_up(x: int, m: int) -> int:
@@ -88,6 +93,15 @@ class DeepseekV41ForCausalLM:
         for state in self.free:
             decoder.prepare(state)  # every slot's buffers before the first capture (TtV41Decoder.prepare)
         self.warmed_up = False
+        # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace
+        self.prefill_traces: dict[tuple[int, int], V41PrefillTrace] = {}
+        self.prefill_buffers: dict = {}
+        self.prefill_traced = False
+        spec = os.environ.get(TRACE_PREFILL_LENGTHS, "").strip()
+        self.trace_lengths = sorted({int(x) for x in spec.split(",") if x.strip()})
+        self.trace_on_miss = os.environ.get(TRACE_PREFILL_ON_MISS, "0") == "1"
+        bad = [n for n in self.trace_lengths if n + ROWS > model.max_seq_len or n < C.SLIDING_WINDOW]
+        assert not bad, f"{TRACE_PREFILL_LENGTHS} {bad}: outside [{C.SLIDING_WINDOW}, max_seq_len - {ROWS}]"
 
     def embed_input_ids(self, input_ids):
         raise NotImplementedError("the TT plugin runs prefill_forward / decode_forward")
@@ -196,11 +210,36 @@ class DeepseekV41ForCausalLM:
             prompt = tokens[i, :n].to(torch.int64)
             state = self._slot_for_prefill(self._request_key(page_table, i))
             t0 = time.time()
-            logits = self.model.prefill_into(prompt, state)
+            trace = self.prefill_traces.get((id(state), n))
+            if trace is None and self.trace_on_miss:
+                trace = self._capture_prefill(state, n)
+                logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens captured in {time.time() - t0:.1f} s")
+                t0 = time.time()
+            if trace is not None:
+                logits, _ = trace.run(prompt)
+            else:
+                logits = self.model.prefill_into(prompt, state)
             self.decoder.begin(prompt, state)
-            logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s")
+            mode = "replay" if trace is not None else "eager"
+            logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s ({mode})")
             out[i, 0] = logits[-1]
         return out
+
+    def _capture_prefill(self, state: V41PrefillState, n: int) -> V41PrefillTrace:
+        """Capture the prefill of ``n``-token prompts into ``state`` (the slot's own cache tensors, so the slot's
+        decode captures read what the replay wrote). The first capture at a length compiles its kernels (two
+        untraced runs); later slots at that length need one untraced run for the steady-state resources."""
+        first = not any(k[1] == n for k in self.prefill_traces)
+        trace = V41PrefillTrace(
+            self.model,
+            self._warmup_prompt(n),
+            1,
+            state=state,
+            buffers=self.prefill_buffers,
+            warmup=2 if first else 1,
+        )
+        self.prefill_traces[(id(state), n)] = trace
+        return trace
 
     def decode_forward(self, **kwargs) -> torch.Tensor:
         """``tokens`` [B, 1], ``start_pos`` [B], ``page_table`` [B, blocks] -> fp32 logits ``[B, 1, vocab]``; rows
@@ -222,8 +261,23 @@ class DeepseekV41ForCausalLM:
 
     # --- warm-up (the plugin's model_runner.warmup_model) ---------------------------------------------------------------
     def warmup_model_prefill(self, enable_trace: bool, **kwargs) -> None:
-        """Compile the prefill (one prompt per slot) on the first call; the second (trace) call is a no-op: prefill
-        runs eagerly."""
+        """Compile the prefill (one prompt per slot) on the first call; the second (trace) call, which the plugin
+        makes after the decode captures, captures the prefill of every ``TT_V41_TRACE_PREFILL_LENGTHS`` length on
+        every slot (the captures' persistent tensors are consumed right after each replay, so they may share
+        addresses with the decode captures' intermediates; the slot states and carry buffers predate every
+        capture). Other lengths keep running eagerly."""
+        if enable_trace:
+            if self.prefill_traced:
+                return
+            for n in self.trace_lengths:
+                for state in self.free:
+                    t0 = time.time()
+                    self._capture_prefill(state, n)
+                    logger.info(
+                        f"DeepSeek-V4.1-Flash warm-up: prefill of {n} tokens captured in {time.time() - t0:.1f} s"
+                    )
+            self.prefill_traced = True
+            return
         if self.warmed_up:
             return
         prompt = self._warmup_prompt()
@@ -255,11 +309,14 @@ class DeepseekV41ForCausalLM:
             assert self.decoder.traced(state), "the decode step was not captured"
         self.warmed_up = True
 
-    def _warmup_prompt(self) -> torch.Tensor:
-        """The first WARMUP_PROMPT tokens of the text the tests use (``oracle.text_tokens``, with this tokenizer)."""
+    def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:
+        """The first ``n`` tokens of the text the tests use (``oracle.text_tokens``, with this tokenizer), the text
+        repeated when ``n`` outruns it."""
         import bz2
 
         book = bz2.open(orc._HERE.parents[3] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2", "rt").read()
-        text = book[book.index("It was the best of times") :][: 12 * WARMUP_PROMPT]
-        ids = self.tokenizer(text, add_special_tokens=False)["input_ids"][:WARMUP_PROMPT]
+        text = book[book.index("It was the best of times") :]
+        text = (text * (12 * n // len(text) + 1))[: 12 * n]
+        ids = self.tokenizer(text, add_special_tokens=False)["input_ids"][:n]
+        assert len(ids) == n, f"warm-up text yields {len(ids)} tokens, {n} needed"
         return torch.tensor(ids, dtype=torch.int64)

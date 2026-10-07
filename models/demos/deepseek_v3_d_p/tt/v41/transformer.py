@@ -414,17 +414,36 @@ class V41PrefillTrace:
     Device tensors allocated after the capture may overlap its freed intermediates: only host work may run
     between replays; ``release()`` before other device work."""
 
-    def __init__(self, model: TtV41Transformer, tokens: torch.Tensor, logit_positions: int = 1):
+    def __init__(
+        self,
+        model: TtV41Transformer,
+        tokens: torch.Tensor,
+        logit_positions: int = 1,
+        state: V41PrefillState | None = None,
+        buffers: dict | None = None,
+        warmup: int = 2,
+    ):
         """``tokens``: a prompt of the traced length (warm-up and capture run it; Engram row subsets must hold its
-        rows)."""
+        rows). ``state``: capture into this state (a request pool's slot, so its decode captures and this one share
+        the slot's cache tensors) instead of a new one; the warm-up runs go through it too, and ``run`` resets it.
+        ``buffers``: the fixed device input buffers, shared between traces of one model (allocated by the first
+        ``_stage``; per-chunk shapes, so one set serves every length). ``warmup``: untraced runs before the capture
+        (2: compile, then steady-state persistent resources; fewer when the length ran untraced already)."""
         self.model, self.total, self.logit_positions = model, int(tokens.numel()), logit_positions
         request = model._request(tokens, logit_positions)
-        self.buffers = {}
-        for _ in range(2):  # compile, then steady-state persistent resources (semaphores, constants)
-            model._run(request, model._new_state(), self.buffers, lambda c, forward: forward())
+        self.buffers = {} if buffers is None else buffers
+        self.state = model._new_state() if state is None else state
+        for _ in range(warmup):
+            model.reset_state(self.state)
+            model._run(request, self.state, self.buffers, lambda c, forward: forward())
         ttnn.synchronize_device(model.mesh_device)
-        self.state, self.controllers = model._new_state(), []
+        model.reset_state(self.state)
+        self.controllers = []
         self.scored = model._run(request, self.state, self.buffers, self._capture)
+        # the capture's own outputs that the chunk loop records on the state from inside the captured forward:
+        # the compressor carry slices of a trailing odd token (``set_compressor_carry``). A replay rewrites them at
+        # the same addresses but runs no host bookkeeping, so ``run`` restores the handles after the replay.
+        self.carry = dict(self.state.compressor_carry)
 
     def _capture(self, c: int, forward: Callable):
         controller = SubDeviceTraceController(self.model.mesh_device)
@@ -456,6 +475,7 @@ class V41PrefillTrace:
             request, self.state, self.buffers, lambda c, forward: self.controllers[c].replay(blocking=False) or []
         )
         ttnn.synchronize_device(model.mesh_device)
+        self.state.compressor_carry.update(self.carry)
         return model._logits(self.scored), self.state
 
     def release(self) -> None:
