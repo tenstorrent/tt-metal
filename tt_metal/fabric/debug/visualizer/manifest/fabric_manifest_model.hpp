@@ -106,22 +106,6 @@ enum class NocCmdBuf : uint32_t {
     AT_CMD_BUF = FabricEriscDatamoverConfig::AT_CMD_BUF,
 };
 
-// The NoC and command buffer a write goes out on.
-struct NocWriteConfig {
-    tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
-    NocCmdBuf cmd_buf = NocCmdBuf::WR_CMD_BUF;
-};
-
-// The NoC and command buffers a receiver forwards on: each packet through the data command buffer, and the credit
-// increment that announces it through the sync command buffer.
-struct NocForwardConfig {
-    tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
-    NocCmdBuf data_cmd_buf = NocCmdBuf::WR_CMD_BUF;
-    NocCmdBuf sync_cmd_buf = NocCmdBuf::WR_CMD_BUF;
-
-    bool operator==(const NocForwardConfig&) const = default;
-};
-
 // A router's L1 credit counter arrays, shared by every VC that uses counter credits. The to_sender arrays are
 // indexed by this router's sender compact index, and the receiver arrays by the peer router's sender compact index
 // (the receiver counts credits for the peer's sender channels).
@@ -246,14 +230,9 @@ struct ReceiverChannel {
     // The VC whose downstream edges the channel's step is given. Null when no ERISC runs the step, or when the step
     // forwards to no sibling.
     std::optional<uint32_t> forwards_on;
-    bool forwarding_disabled = false;
-    bool intermesh_ingress = false;
-    NocForwardConfig forward_noc;
-    NocWriteConfig local_write_noc;
     L1Region ring_buffer;
-    StreamRef pkts_sent;
-    // VC2 only.
-    std::optional<StreamRef> free_slots;
+    // Arguments the kernel is fed for the channel, read through the field table.
+    std::vector<Field> fields;
 };
 
 // A router's channels.
@@ -280,6 +259,14 @@ struct DownstreamEdge {
     L1Region teardown_sem;
 };
 
+// One RISC the router's kernel runs on.
+struct Erisc {
+    // Physical processor the kernel runs on.
+    tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
+    // Per-ERISC fields passed to the kernel.
+    std::vector<Field> fields;
+};
+
 // Information about a router.
 struct Router {
     RouterIdentity identity;
@@ -292,13 +279,24 @@ struct Router {
     std::vector<std::vector<DownstreamEdge>> intra_chip_downstream_edges;
     // Router-wide fields passed to the kernel
     std::vector<Field> fields;
-    // Per-ERISC fields passed to the kernel, indexed by ERISC id
-    std::vector<std::vector<Field>> erisc_fields;
+    // Indexed by ERISC id.
+    std::vector<Erisc> eriscs;
+};
+
+// How the chip's routers sync at startup through their local_sync words, as the router kernels are fed it
+// (KernelCreationContext).
+struct LocalSync {
+    uint32_t master_eth_chan = 0;
+    uint32_t num_routers = 0;
+    // Bit N is set for the router on Ethernet channel N.
+    uint32_t router_channels_mask = 0;
 };
 
 // Information about a chip.
 struct Chip {
     ZPortRole z_port_role = ZPortRole::NONE;
+    // Null when the chip has no routers.
+    std::optional<LocalSync> local_sync;
     std::vector<Router> routers;
 };
 
