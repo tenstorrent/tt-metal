@@ -107,6 +107,26 @@ public:
         // on the path that does not go through a mesh allocator.
         const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators = std::nullopt);
 
+    // The address allocate_buffer() would choose for a single-bank shard of `size`, without
+    // allocating. Empty when nothing fits. Uniform per-core placement uses it to pick one address
+    // that is free on every core it covers before claiming it on each with allocate_at().
+    std::optional<DeviceAddr> find_address(
+        DeviceAddr size,
+        DeviceAddr page_size,
+        bool bottom_up,
+        AllocatorDependencies::AllocatorID allocator_id,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+
+    // Claim a single-bank shard of `size` at exactly `address`. Fails, rather than skipping as
+    // mark_allocated() does, when the address is taken in this allocator, in one it depends on,
+    // or by `additional_occupied_ranges`.
+    void allocate_at(
+        DeviceAddr address,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        AllocatorDependencies::AllocatorID allocator_id,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges = {});
+
     void deallocate_buffer(
         DeviceAddr address, AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0});
     void deallocate_all();

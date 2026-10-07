@@ -14,7 +14,7 @@ GlobalSemaphore create_global_semaphore(
     const CoreRangeSet& cores,
     uint32_t initial_value,
     BufferType buffer_type = BufferType::L1,
-    bool range_lockstep = false);
+    bool experimental_scoped = false);
 
 tt::tt_metal::DeviceAddr get_global_semaphore_address(const GlobalSemaphore& global_semaphore);
 

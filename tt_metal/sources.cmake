@@ -89,9 +89,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/offline_kernel_compile.hpp
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
+    api/tt-metalium/experimental/per_core_allocation/global_semaphore.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
     api/tt-metalium/experimental/range_lockstep_allocation/buffer.hpp
-    api/tt-metalium/experimental/range_lockstep_allocation/global_semaphore.hpp
     api/tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/prefetcher_pipe.hpp

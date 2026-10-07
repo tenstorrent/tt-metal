@@ -21,6 +21,34 @@
 
 namespace tt::tt_metal {
 
+namespace {
+
+// First window that fits, from the bottom or the top. Ranges are sorted and half-open.
+std::optional<DeviceAddr> choose_from_available_ranges(
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& available_ranges, DeviceAddr size_per_bank, bool bottom_up) {
+    if (bottom_up) {
+        for (const auto& r : available_ranges) {
+            DeviceAddr s = r.first;
+            if (s + size_per_bank <= r.second) {
+                return s;
+            }
+        }
+    } else {
+        for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
+            const auto& r = available_ranges[static_cast<size_t>(i)];
+            // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
+            // is unsigned, so a request wider than r.second wraps to a huge value that compares
+            // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
+            if (r.second - r.first >= size_per_bank) {
+                return r.second - size_per_bank;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
 BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
 BankManager::AllocatorDependencies::AllocatorDependencies(
@@ -516,27 +544,7 @@ uint64_t BankManager::allocate_buffer(
 
     // Choose an address from the allowed ranges respecting alignment and direction
     // Addresses should already be aligned to alignment_bytes_
-    std::optional<DeviceAddr> chosen;
-    if (bottom_up) {
-        for (const auto& r : available_ranges) {
-            DeviceAddr s = r.first;
-            if (s + size_per_bank <= r.second) {
-                chosen = s;
-                break;
-            }
-        }
-    } else {
-        for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
-            const auto& r = available_ranges[static_cast<size_t>(i)];
-            // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
-            // is unsigned, so a request wider than r.second wraps to a huge value that compares
-            // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
-            if (r.second - r.first >= size_per_bank) {
-                chosen = r.second - size_per_bank;
-                break;
-            }
-        }
-    }
+    std::optional<DeviceAddr> chosen = choose_from_available_ranges(available_ranges, size_per_bank, bottom_up);
 
     if (!chosen.has_value()) {
         auto mem_stats = alloc->get_statistics();
@@ -593,6 +601,56 @@ uint64_t BankManager::allocate_buffer(
     // Allocation in this allocator invalidates caches in allocators that depend on this allocator
     this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
     return address.value();
+}
+
+std::optional<DeviceAddr> BankManager::find_address(
+    DeviceAddr size,
+    DeviceAddr page_size,
+    bool bottom_up,
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
+    TT_FATAL(this->get_allocator_from_id(allocator_id), "Allocator not initialized!");
+    const DeviceAddr size_per_bank =
+        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, /*num_banks=*/1, alignment_bytes_);
+    auto available_ranges = this->compute_available_addresses(
+        allocator_id, size_per_bank, /*address_limit=*/0, additional_occupied_ranges, std::nullopt);
+    return choose_from_available_ranges(available_ranges, size_per_bank, bottom_up);
+}
+
+void BankManager::allocate_at(
+    DeviceAddr address,
+    DeviceAddr size,
+    DeviceAddr page_size,
+    BankManager::AllocatorDependencies::AllocatorID allocator_id,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges) {
+    auto* alloc = this->get_allocator_from_id(allocator_id);
+    TT_FATAL(alloc, "Allocator not initialized!");
+    const DeviceAddr size_per_bank =
+        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, /*num_banks=*/1, alignment_bytes_);
+    TT_FATAL(address % alignment_bytes_ == 0, "Address {} is not aligned to {} B", address, alignment_bytes_);
+
+    // allocate_at_address() checks only this allocator's own free list, so check the dependencies
+    // and the caller's ranges here: the window must sit inside one range that survives them all.
+    const auto available_ranges = this->compute_available_addresses(
+        allocator_id, size_per_bank, /*address_limit=*/0, additional_occupied_ranges, std::nullopt);
+    const bool fits = std::any_of(available_ranges.begin(), available_ranges.end(), [&](const auto& r) {
+        return r.first <= address && address < r.second && r.second - address >= size_per_bank;
+    });
+    TT_FATAL(
+        fits,
+        "Cannot place {} B at address {} in allocator {}: the range is occupied here, in an allocator this one "
+        "depends on, or by the caller's additional ranges",
+        size_per_bank,
+        address,
+        allocator_id.get());
+
+    auto placed = alloc->allocate_at_address(address, size_per_bank);
+    TT_FATAL(placed.has_value(), "Allocator failed to place at address {}", address);
+    allocated_buffers_[allocator_id.get()].insert(placed.value());
+    if (tracking_high_water_mark_) {
+        allocation_high_water_mark_ = std::max(allocation_high_water_mark_, placed.value() + size_per_bank);
+    }
+    this->invalidate_allocated_ranges_cache_for_dependent_allocators(allocator_id);
 }
 
 void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDependencies::AllocatorID allocator_id) {

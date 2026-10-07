@@ -132,6 +132,54 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> allgather_remote_ranges(
     return remote;
 }
 
+// Uniform per-core placement (per_core_allocation::set_uniform_address) on a mesh.
+//
+// Each device's per-core allocators see only that device, so the ranges every device (and every
+// co-owning rank's devices) holds on the buffer's cores are merged first. The first local device
+// picks an address clear of the merged set and the other devices take that address. Co-owners
+// merge the same set, so they pick the same address; that is checked rather than assumed.
+std::vector<std::pair<DeviceAddr, DeviceAddr>> uniform_per_core_occupied_ranges(
+    MeshDevice& mesh_device,
+    const std::vector<AllocatorImpl*>& device_allocators,
+    const std::vector<CoreCoord>& cores) {
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges;
+    for (auto* dev_alloc : device_allocators) {
+        auto device_ranges = dev_alloc->get_uniform_per_core_occupied_ranges(cores);
+        ranges.insert(ranges.end(), device_ranges.begin(), device_ranges.end());
+    }
+    const auto& coowners = mesh_device.impl().coowner_ranks();
+    if (!coowners.empty()) {
+        std::vector<DeviceAddr> flat;
+        flat.reserve(ranges.size() * 2);
+        for (const auto& [start, end] : ranges) {
+            flat.push_back(start);
+            flat.push_back(end);
+        }
+        auto remote = allgather_remote_ranges(flat, coowners, *mesh_device.impl().coowner_context());
+        ranges.insert(ranges.end(), remote.begin(), remote.end());
+    }
+    return ranges;
+}
+
+void check_coowners_agree_on_uniform_address(MeshDevice& mesh_device, DeviceAddr address) {
+    if (mesh_device.impl().coowner_ranks().empty()) {
+        return;
+    }
+    const auto& ctx = *mesh_device.impl().coowner_context();
+    std::vector<DeviceAddr> addresses(static_cast<size_t>(*ctx.size()), 0);
+    ctx.all_gather(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&address), sizeof(address)),
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(addresses.data()), addresses.size() * sizeof(DeviceAddr)));
+    for (DeviceAddr other : addresses) {
+        TT_FATAL(
+            other == address,
+            "Co-owners of this mesh placed one uniform per-core buffer at different addresses ({:#x} here, {:#x} on "
+            "another rank)",
+            address,
+            other);
+    }
+}
+
 void validate_mesh_buffer_config(const MeshBufferConfig& config, const MeshDevice& mesh_device) {
     if (std::holds_alternative<ReplicatedBufferConfig>(config)) {
         // Nothing to validate.
@@ -219,6 +267,27 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     // Per-core allocation path: each device allocates independently
     if (per_core_allocation::is_per_core_allocation(device_local_config.sharding_args)) {
         TT_FATAL(!address.has_value(), "Per-core allocation does not support explicit address");
+        const bool uniform = per_core_allocation::is_uniform_address(device_local_config.sharding_args);
+        // Uniform per-core: the ranges every device holds on the buffer's cores, so the first
+        // device's address suits them all (see uniform_per_core_occupied_ranges).
+        std::optional<DeviceAddr> uniform_address;
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> uniform_occupied;
+        // Held from gathering the ranges to placing on the last device, so no other hybrid
+        // allocation on this mesh lands in between.
+        std::optional<HybridAllocationScope> uniform_scope;
+        if (uniform) {
+            const auto& shard_spec = device_local_config.sharding_args.shard_spec();
+            TT_FATAL(shard_spec.has_value(), "A uniform per-core buffer requires a shard spec naming its cores");
+            const auto& tensor_shard_spec = shard_spec->tensor_shard_spec;
+            const auto cores = corerange_to_cores(
+                tensor_shard_spec.grid, std::nullopt, tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+            std::vector<AllocatorImpl*> device_allocators;
+            for (auto* device : mesh_device->get_view().get_devices()) {
+                device_allocators.push_back(device->allocator_impl().get());
+            }
+            uniform_scope.emplace(mesh_device->allocator_impl().get(), device_allocators);
+            uniform_occupied = uniform_per_core_occupied_ranges(*mesh_device, device_allocators, cores);
+        }
         mesh_buffer = std::shared_ptr<MeshBuffer>(
             new MeshBuffer(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
         // Per-core: each device allocates independently. The mesh-level lockstep allocator queries
@@ -228,15 +297,36 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
                 continue;
             }
             auto* device = mesh_device->impl().get_device(coord);
-            auto buffer = BufferImpl::create(
-                device,
-                device_local_size,
-                device_local_config.page_size,
-                device_local_config.buffer_type,
-                device_local_config.sharding_args,
-                device_local_config.bottom_up,
-                device_local_config.sub_device_id);
+            std::shared_ptr<Buffer> buffer;
+            if (uniform) {
+                // The first device avoids every device's ranges; the rest take its address.
+                buffer = BufferImpl::create_uniform_per_core(
+                    device,
+                    uniform_address,
+                    uniform_address.has_value() ? std::vector<std::pair<DeviceAddr, DeviceAddr>>{} : uniform_occupied,
+                    device_local_size,
+                    device_local_config.page_size,
+                    device_local_config.buffer_type,
+                    device_local_config.sharding_args,
+                    device_local_config.bottom_up,
+                    device_local_config.sub_device_id);
+                uniform_address = buffer->address();
+            } else {
+                buffer = BufferImpl::create(
+                    device,
+                    device_local_size,
+                    device_local_config.page_size,
+                    device_local_config.buffer_type,
+                    device_local_config.sharding_args,
+                    device_local_config.bottom_up,
+                    device_local_config.sub_device_id);
+            }
             device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
+        }
+        if (uniform_address.has_value()) {
+            check_coowners_agree_on_uniform_address(*mesh_device, *uniform_address);
+            // One address on every core and device, so the mesh can report it.
+            mesh_buffer->address_ = *uniform_address;
         }
     } else if (!address.has_value()) {
         // In HYBRID mode, set device-level allocators on the mesh allocator so it

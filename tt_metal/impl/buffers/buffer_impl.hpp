@@ -12,6 +12,8 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -51,6 +53,20 @@ public:
         DeviceAddr page_size,
         BufferType buffer_type,
         const BufferShardingArgs& sharding_args = std::nullopt,
+        std::optional<bool> bottom_up = std::nullopt,
+        std::optional<SubDeviceId> sub_device_id = std::nullopt);
+
+    // Uniform per-core allocation (see per_core_allocation::set_uniform_address) for a mesh. With
+    // `required_address` the buffer takes exactly that address on every core; without it the
+    // allocator picks one that also avoids `additional_occupied_ranges`, the other devices' ranges.
+    static std::shared_ptr<Buffer> create_uniform_per_core(
+        IDevice* device,
+        std::optional<DeviceAddr> required_address,
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> additional_occupied_ranges,
+        DeviceAddr size,
+        DeviceAddr page_size,
+        BufferType buffer_type,
+        const BufferShardingArgs& sharding_args,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
@@ -99,6 +115,13 @@ public:
 
     bool per_core_allocation_ = false;
     std::unordered_map<CoreCoord, DeviceAddr> per_core_addresses_;
+
+    // Per-core allocation at one address shared by every core. A mesh makes its devices agree by
+    // having the first pick the address clear of every device's ranges, and the rest require it.
+    // Both are consumed by the allocation and cleared afterwards.
+    bool uniform_per_core_address_ = false;
+    std::optional<DeviceAddr> required_per_core_address_;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> uniform_additional_occupied_ranges_;
 
     // Lockstep only across the cores this buffer occupies, rather than every core on the device.
     bool range_lockstep_allocation_ = false;

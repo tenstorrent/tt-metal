@@ -24,7 +24,7 @@ void py_module(nb::module_& mod) {
         nb::arg("cores"),
         nb::arg("initial_value"),
         nb::arg("buffer_type") = nb::cast(tt::tt_metal::BufferType::L1),
-        nb::arg("range_lockstep") = false,
+        nb::arg("experimental_scoped") = false,
         R"doc(
             Create a GlobalSemaphore Object on a device.
 
@@ -33,9 +33,10 @@ void py_module(nb::module_& mod) {
                 cores (CoreRangeSet): The cores on which the global semaphore will be used for synchronization.
                 initial_value (int): The initial value of the global semaphore.
                 buffer_type (BufferType): The type of buffer to use for the global semaphore.
-                range_lockstep (bool): Experimental. Scope the L1 reservation to ``cores`` instead of keeping
-                    the address clear on every core. Only safe when nothing touches the semaphore on a core
-                    outside ``cores``.
+                experimental_scoped (bool): Experimental. Reserve the semaphore's address only on ``cores``
+                    (one address shared by all of them) so other cores can reuse it. Requires the HYBRID
+                    allocator and an L1 ``buffer_type``; without HYBRID it is reserved on every core as
+                    usual. Only safe when nothing touches the semaphore on a core outside ``cores``.
             )doc");
 
     mod.def(
