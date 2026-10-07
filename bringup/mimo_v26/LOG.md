@@ -152,3 +152,36 @@
 - claim: Router on REAL ffn_in (track-0 dump s128b16, 2048 tokens, real gate+bias), 1x1 device, vs fp32 CPU routing of the same bf16 input; set match L1..L5: exact 0.9937/0.9883/0.9912/0.9946/0.9888 (flips 11-24 of 2048, ALL with fp32 gap<0.01, max gap 3e-4); plain TTMoEGate bf16 path 0.289/0.297/0.637/0.597/0.578; hilo kernel+shift 0.822/0.840/0.806/0.793/0.732. Gap<0.01 share of tokens 0.88/0.96/0.86/0.80/0.85 (routing is knife-edge; weights ~0.125 each). Floor bf16-chain dump vs fp32-chain dump: 0.970/0.881/0.873/0.894/0.856 (flips 99-100% gap<0.01). exact vs fp32-chain oracle dump: 0.969/0.879/0.873/0.895/0.855 = at the floor. Decision: exact router; the 99% set-match vs fp32 oracle gate is not achievable from bf16 upstream noise (floor 86-97%) but exact vs same-input fp32 is 98.8-99.5% with flips only at near-ties. hilo stage diagnostic (1x1, T=64, 5 repeats): logits, score, folded, kernel idx all bit-identical; the 4x8 non-determinism seen before is not reproduced here; hilo dropped (worse agreement, cause open)
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_router_real_ab01b0c449b.log
 - paths: models/demos/blackhole/mimo_v26
+
+## E261007-0251-c0a
+- date: 2026-10-07T02:51:00
+- commit: d89ecbbb0cb
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: Real-weight MoE layer on 4x8 (all 256 real experts fp4->bf16->bfp8, unified op, hifi2), real ffn_in of track-0 dump (2048 tok), vs bf16-chain dump ffn_out, PCC per mesh row. L1: dump routing 0.99982-0.99983; device exact router (set match 0.9937 vs dump) 0.99967-0.99979 (vs fp32-chain dump 0.99897-0.99967; floor bf16 vs fp32 dump 0.99926-0.99982); deterministic. L5: dump routing 0.9915-0.9949 (FAILS 0.999); exact router (match 0.9888) 0.9915-0.9949; floor bf16 vs fp32 dump 0.9985-0.9991. Own CPU recompute with the same reader (fp32 math, real experts, dump routing) matches dump ffn_out at PCC 0.99999 (L1 0.999997), so reader/fp4 decode/semantics confirmed vs track 0
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_real_layer5_d89ecbbb0cb.log
+- paths: models/demos/blackhole/mimo_v26
+
+## E261007-0251-bf9
+- date: 2026-10-07T02:51:00
+- commit: d89ecbbb0cb
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: Real skew from routing_idx (2048 tokens, 4 mesh rows x 512): L1 per-expert count max 1151 (expert 250 gets 56% of tokens) mean 64 (17 experts zero), max/mean 18.0; L5 max 356 (expert 27) max/mean 5.6, 2 zero. Worst chip load (rows, 32-padded) L1 1856 [per mesh row 1568/1088/736/1856], L5 896; max_buf at N=512/row: cf=1 2272, cf=2 4320, cf=3 6368, cf=4 8416 -> no overflow even at cf=1 for this small chunk (long chunks and later layers not yet measured)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_real_layer1_d89ecbbb0cb.log
+- paths: models/demos/blackhole/mimo_v26
+
+## E261007-0251-559
+- date: 2026-10-07T02:51:01
+- commit: 4d8cda87b37
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: L5 MoE accuracy limiter is ACTIVATION precision: ffn_in has outliers (absmax 134 at L5 vs 13 at L1). The prefill ops hard-wire bfp8 activations (unified: dispatched x tilized to Bfp8_b in cb_in0_x, intermediates Bfp8_b; fused: bf16 output PCC 0.9955-0.9973; config fp32acc/fidelity ignored by unified). CPU emulation (bfp8 round trip of x only) L1 0.99997, L5 0.99839; h only L5 0.99987. Device probe 1x1 plain ttnn per-expert FFN bfp8 weights HiFi2 fp32acc, first 128 tokens L5: bf16 activations PCC 0.99989 vs bfp8 activations 0.99838. So bfp8 weights are fine; bfp8 activations in unified/fused cost L5 PCC (0.993-0.997 vs gate 0.999). Options need coordinator: C++ patch for bf16 x/intermediates in unified/fused (private build), or a bf16-activation expert path (routed_expert_ffn / per-expert matmul) at some perf cost, or accept
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_probe_L5_bf16_4d8cda87b37.log
+- paths: models/demos/blackhole/mimo_v26
