@@ -281,7 +281,7 @@ def cmd_mark(a):
                 r.setdefault("attempts", []).append(dict(extra, at=now_iso(), state=a.state))
             for k, v in extra.items():
                 if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr", "fix_author",
-                         "decision", "decision_choice"):
+                         "decision", "decision_choice", "decision_thread"):
                     r[k] = v
                 elif k == "checked":
                     r.setdefault("checked", {}).update(v)
