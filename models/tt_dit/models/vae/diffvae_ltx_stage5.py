@@ -278,13 +278,16 @@ def _build_bricked_rope_tables(
     mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
     w_shard: tuple[int, int] | None = None,
+    h_shard: tuple[int, int] | None = None,
 ) -> _RopeTables:
     """Fused RoPE in bricked site order, one row per (site, head). The factored frame/time form
     does not survive bricking. Built once per stage, sliced per band on ``T_br``."""
     head_dim = sum(dim_split)
     brick_time, brick_height, brick_width = brick
 
-    def table_for_shard(volume: tuple[int, int, int], w_offset: int) -> tuple[torch.Tensor, torch.Tensor]:
+    def table_for_shard(
+        volume: tuple[int, int, int], w_offset: int, h_offset: int = 0
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """``(sites * heads, head_dim)`` cos and sin for one W-shard, ghosts zero."""
         t_br, h_br, w_br = brick_grid(volume, brick)
         site = torch.arange(SITES_PER_BRICK)
@@ -296,6 +299,7 @@ def _build_bricked_rope_tables(
         w = (torch.arange(w_br).view(1, 1, w_br, 1) * brick_width + dw).expand(t_br, h_br, w_br, SITES_PER_BRICK)
         ghost = (t >= volume[0]) | (h >= volume[1]) | (w >= volume[2])
         w = w + w_offset
+        h = h + h_offset
         t, h, w, ghost = t.reshape(-1), h.reshape(-1), w.reshape(-1), ghost.reshape(-1)
 
         def lanes(fn, axis: int, positions: torch.Tensor) -> torch.Tensor:
@@ -312,22 +316,26 @@ def _build_bricked_rope_tables(
         sp, sp_axis = w_shard
         assert grid.w % sp == 0, f"W={grid.w} must split evenly over sp={sp}"
         w_local = grid.w // sp
-        local_volume = (grid.t, grid.h, w_local)
-        cos_parts, sin_parts = zip(*(table_for_shard(local_volume, p * w_local) for p in range(sp)))
+        hs, h_axis = h_shard if h_shard is not None else (1, None)
+        h_local = grid.h // hs
+        local_volume = (grid.t, h_local, w_local)
+        cos_parts, sin_parts = zip(
+            *(table_for_shard(local_volume, p * w_local, r * h_local) for r in range(hs) for p in range(sp))
+        )
         fused = _RopeParts(
             cos=sharded_from_torch(
-                torch.stack(cos_parts).reshape(1, 1, -1, head_dim).contiguous(),
+                torch.stack(cos_parts).reshape(hs, 1, -1, head_dim).contiguous(),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
-                mesh_axes=[None, None, sp_axis, None],
+                mesh_axes=[h_axis, None, sp_axis, None],
             ),
             sin=sharded_from_torch(
-                torch.stack(sin_parts).reshape(1, 1, -1, head_dim).contiguous(),
+                torch.stack(sin_parts).reshape(hs, 1, -1, head_dim).contiguous(),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
-                mesh_axes=[None, None, sp_axis, None],
+                mesh_axes=[h_axis, None, sp_axis, None],
             ),
         )
         volume = local_volume
@@ -475,11 +483,14 @@ class _NeighborhoodAttention3D(Module):
         tp_axis: int | None = None,
         fused_qkv: bool = False,
         tp_proj: bool = True,
+        h_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
+        # The 2-D split's H axis: this chip holds an H/hs x W/sp tile with every head.
+        self.h_axis = h_axis
         # Resolved by the stage and handed down, so the three levels cannot pick different backends.
         self.kernel = resolve_na_kernel(na3d_backend)
         self.sp_axis = sp_axis
@@ -577,10 +588,11 @@ class _NeighborhoodAttention3D(Module):
             w_local = grid.w // sp
         else:
             w_local = grid.w
+        h_local = grid.h // mesh_axis_size(self.mesh_device, self.h_axis) if self.h_axis is not None else grid.h
         sites_local = (
-            brick_count((grid.t, grid.h, w_local), brick) * SITES_PER_BRICK
+            brick_count((grid.t, h_local, w_local), brick) * SITES_PER_BRICK
             if brick is not None
-            else grid.t * grid.h * w_local
+            else grid.t * h_local * w_local
         )
         # Frames are a separate axis so the factored RoPE pieces can broadcast. Bricked RoPE is
         # fused (one row per site and head), so the T axis collapses.
@@ -588,9 +600,9 @@ class _NeighborhoodAttention3D(Module):
         heads_shape = (
             (1, 1, sites_local * heads, cfg.head_dim)
             if brick is not None
-            else (1, grid.t, grid.h * w_local * heads, cfg.head_dim)
+            else (1, grid.t, h_local * w_local * heads, cfg.head_dim)
         )
-        volume_shape = (grid.batch, grid.t, grid.h, w_local, heads, cfg.head_dim)
+        volume_shape = (grid.batch, grid.t, h_local, w_local, heads, cfg.head_dim)
 
         def to_volume(x: ttnn.Tensor) -> ttnn.Tensor:
             """Untilize into the volume shape NA3D gathers from, consuming ``x``."""
@@ -663,6 +675,7 @@ class _NeighborhoodAttention3D(Module):
             heads_presharded=self.tp_proj,
             brick=brick,
             stride=cfg.gna_stride,
+            h_axis=self.h_axis,
         )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
@@ -689,10 +702,12 @@ class DiffusionNABlock(Module):
         tp_axis: int | None = None,
         fused_qkv: bool = False,
         tp_proj: bool = True,
+        h_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
+        self.h_axis = h_axis
         self.kernel = resolve_na_kernel(na3d_backend)
         self.sp_axis = sp_axis
         self.tp_axis = tp_axis
@@ -718,6 +733,7 @@ class DiffusionNABlock(Module):
             tp_axis=tp_axis,
             fused_qkv=fused_qkv,
             tp_proj=tp_proj,
+            h_axis=h_axis,
         )
         self.norm2 = RMSNorm(config.dim, **norm)
         # One fused [up | gate] GEMM whose epilogue emits silu(gate) * up; replicated (TP is over heads).
@@ -758,7 +774,8 @@ class DiffusionNABlock(Module):
         if self.kernel.w_sharded:
             sp = mesh_axis_size(self.mesh_device, self.sp_axis)
             w_local = grid.w // sp
-            rows = sites_per_t_brick((grid.t, grid.h, w_local), brick) if brick is not None else grid.h * w_local
+            h_local = grid.h // mesh_axis_size(self.mesh_device, self.h_axis) if self.h_axis is not None else grid.h
+            rows = sites_per_t_brick((grid.t, h_local, w_local), brick) if brick is not None else h_local * w_local
         else:
             rows = sites_per_t_brick((grid.t, grid.h, grid.w), brick) if brick is not None else grid.h * grid.w
         frame_step = brick[0] if brick is not None else 1
@@ -903,9 +920,17 @@ class DiffVAEStage5(Module):
         # The ONE place the backend is resolved; the blocks and their attention are handed the record.
         self.kernel = resolve_na_kernel(na3d_backend or "linear_order")
         self.sp_axis = sp_axis
+        self._w_sharded = self.kernel.w_sharded
+        # DIFFVAE_S5_2D=1: the 2-D split. H goes over the axis TP would use, every chip keeps all
+        # heads, and the band loop runs the whole volume; no head all-gather, no replicated MLP.
+        two_d = os.environ.get("DIFFVAE_S5_2D") == "1" and self._w_sharded and tp_axis is not None
+        self.h_axis = tp_axis if two_d else None
+        if two_d:
+            tp_axis, tp_proj, slab_frames = None, False, None
+        #: Chips along the 2-D split's H axis; 1 otherwise.
+        self.hs = mesh_axis_size(mesh_device, self.h_axis) if self.h_axis is not None else 1
         # TP-over-heads on a second mesh axis: only the per-head attention shards over it.
         self.tp_axis = tp_axis
-        self._w_sharded = self.kernel.w_sharded
         self._keep_bricked = self.kernel.keep_bricked
         self._brick: tuple[int, int, int] | None = None
         # Frames per band, or None for the whole volume; see bands().
@@ -944,6 +969,7 @@ class DiffVAEStage5(Module):
                 tp_axis=tp_axis,
                 fused_qkv=fused_qkv,
                 tp_proj=tp_proj,
+                h_axis=self.h_axis,
             )
             for _ in range(cfg.num_blocks)
         )
@@ -991,7 +1017,21 @@ class DiffVAEStage5(Module):
         return self._brick
 
     def _local_volume(self, grid: Grid, t: int | None = None) -> tuple[int, int, int]:
-        return (grid.t if t is None else t, grid.h, grid.w // self.sp)
+        return (grid.t if t is None else t, grid.h // self.hs, grid.w // self.sp)
+
+    def _h_partition(self, x: ttnn.Tensor, grid: Grid) -> ttnn.Tensor:
+        """``(1, batch, T*H*W_local, C)`` W-band -> this chip's H-band of it. **Consumes** ``x``."""
+        channels = int(x.shape[-1])
+        batch = int(x.shape[1])
+        w_local = grid.w // self.sp
+        rm = consume(x, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
+        vol = ttnn.reshape(rm, (batch * grid.t, grid.h, w_local, channels))
+        band = ttnn.mesh_partition(vol, dim=1, cluster_axis=self.h_axis)
+        ttnn.deallocate(rm)
+        flat = ttnn.reshape(band, (1, batch, grid.t * (grid.h // self.hs) * w_local, channels))
+        out = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(band)
+        return out
 
     def _brick_activation(
         self, x: ttnn.Tensor, volume: tuple[int, int, int], brick: tuple[int, int, int]
@@ -1037,6 +1077,7 @@ class DiffVAEStage5(Module):
                     mesh_device=self.mesh_device,
                     dtype=self.dtype,
                     w_shard=w_shard,
+                    h_shard=(self.hs, self.h_axis) if self.h_axis is not None else None,
                 )
             else:
                 assert w_shard is None, "a W-sharded stage 5 keeps bricked; the factored table is replicated only"
@@ -1081,6 +1122,24 @@ class DiffVAEStage5(Module):
         for index, band in enumerate(bands):
             rows = (band.hi - band.lo) * grid.h * grid.w
             assert rows % sp == 0, f"band rows {rows} not divisible by sp={sp}"
+            if self.h_axis is not None:
+                # One draw per (H, W) tile as its own leading slot, so each partition is whole rows
+                # even where a chip's row count is not a tile multiple.
+                assert grid.batch == 1
+                full = ttnn.randn(
+                    [self.hs, sp, rows // (sp * self.hs), self.padded_patch_channels],
+                    device=self.mesh_device,
+                    dtype=self.dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    seed=seed + index,
+                )
+                local = ttnn.mesh_partition(full, dim=0, cluster_axis=self.h_axis)
+                ttnn.deallocate(full)
+                full = ttnn.mesh_partition(local, dim=1, cluster_axis=self.sp_axis)
+                ttnn.deallocate(local)
+                out.append(self.conv_in_x_t(full))
+                ttnn.deallocate(full)
+                continue
             full = ttnn.randn(
                 [1, grid.batch, rows, self.padded_patch_channels],
                 device=self.mesh_device,
@@ -1108,7 +1167,22 @@ class DiffVAEStage5(Module):
             t, h, w = rows.shape[2:]
             flat = rows.permute(0, 2, 3, 4, 1).reshape(1, batch, t * h * w, cfg.patch_channels)
             flat = torch.nn.functional.pad(flat, (0, self.padded_patch_channels - cfg.patch_channels))
-            if self._w_sharded:
+            if self.h_axis is not None:
+                # (t, h, w) rows -> (h-device, w-device, t, h_local, w_local): each chip its tile.
+                hs, h_local, w_local = self.hs, h // self.hs, w // sp
+                reordered = (
+                    flat.reshape(batch, t, hs, h_local, sp, w_local, self.padded_patch_channels)
+                    .permute(2, 0, 4, 1, 3, 5, 6)
+                    .reshape(hs, batch, sp * t * h_local * w_local, self.padded_patch_channels)
+                )
+                uploaded = sharded_from_torch(
+                    reordered.contiguous(),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=self.dtype,
+                    mesh_axes=[self.h_axis, None, self.sp_axis, None],
+                )
+            elif self._w_sharded:
                 # Reorder the (t, h, w) rows to (device, t, h, w_local) so a sharded upload hands
                 # device p its W-band.
                 w_local = w // sp
@@ -1211,6 +1285,8 @@ class DiffVAEStage5(Module):
                 context = wshard(context, (grid.t, grid.h, grid.w), sp_axis=self.sp_axis)
             elif self._w_sharded:
                 context = ttnn.to_layout(context, ttnn.TILE_LAYOUT)
+            if self.h_axis is not None:
+                context = self._h_partition(context, grid)
 
         _label = "stage5: device randn + embed x_t" if x_t is None else "stage5: host patchify + embed x_t"
         with timing_tree.span(self.mesh_device, _label, category=timing_tree.HOST_COMPUTE):
@@ -1274,16 +1350,22 @@ class DiffVAEStage5(Module):
             padded_pc = self.padded_patch_channels
             # fast_device_to_host needs a 2D mesh and H divisible over the replicated axis.
             can_fast = len(tuple(self.mesh_device.shape)) == 2 and (other == 1 or grid.h % other == 0)
+            # The 2-D split arrives already H-partitioned over the other axis, the layout the
+            # fast pull's mesh_partition would make.
+            presplit = self.h_axis is not None
+            assert can_fast or not presplit, "the 2-D split needs the fast pull"
             if can_fast:
                 with timing_tree.span(
                     self.mesh_device, "stage5 tail: device->host pull", category=timing_tree.HOST_XFER
                 ):
                     rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
                     ttnn.deallocate(out)
-                    vol = ttnn.reshape(rm, (1, grid.t, grid.h, w_local, padded_pc))
+                    vol = ttnn.reshape(rm, (1, grid.t, grid.h // self.hs, w_local, padded_pc))
                     concat_dims = [None, None]
                     concat_dims[self.sp_axis] = 3
-                    shard_other = other > 1
+                    shard_other = other > 1 and not presplit
+                    if presplit:
+                        concat_dims[other_axis] = 2
                     if shard_other:
                         vol = ttnn.mesh_partition(vol, dim=2, cluster_axis=other_axis)
                         concat_dims[other_axis] = 2

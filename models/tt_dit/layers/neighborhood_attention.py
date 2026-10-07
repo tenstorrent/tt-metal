@@ -105,6 +105,7 @@ def neighborhood_attention_3d(
     brick: tuple[int, int, int] | None = None,
     stride: tuple[int, int, int] | None = None,
     device_plan: NA3DDevicePlan | None = None,
+    h_axis: int | None = None,
 ) -> ttnn.Tensor:
     """Run the executor ``kernel`` names, with the arguments that executor understands.
 
@@ -131,7 +132,9 @@ def neighborhood_attention_3d(
             already_bricked=brick is not None,
             brick=brick,
             stride=stride,
+            h_axis=h_axis,
         )
+    assert h_axis is None, f"{kernel.name} does not split H"
     if kernel.bricked:
         return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=stride)
     return neighborhood_attention_3d_linear_order(
