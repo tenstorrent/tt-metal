@@ -242,6 +242,16 @@ void kernel_main() {
     constexpr uint32_t tilized_cb_row_offset = get_compile_time_arg_val(35);
     constexpr uint32_t tilized_cb_second_reader_offset = get_compile_time_arg_val(36);
     constexpr bool split_reader_cb_shared = get_compile_time_arg_val(37) == 1;
+#if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
+    // one math MOP per row of a sub block of 8 tiles or more at in0_block_w above 1; not with a fused activation, whose
+    // SFPU init runs once
+    constexpr bool row_mop =
+        out_subblock_h * out_subblock_w >= 8 && in0_block_w > 1 &&
+        (DST_ACCUM_MODE || (unpack_src_format[out_cb_id] != (uint8_t)DataFormat::Float32 &&
+                            unpack_src_format[matmul_partials_cb] != (uint8_t)DataFormat::Float32));
+#else
+    constexpr bool row_mop = false;
+#endif
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -290,7 +300,7 @@ void kernel_main() {
     DataflowBuffer dfb_untilize_mode_out(untilize_mode_out_cb_id);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
-    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_block_init<row_mop>(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -337,7 +347,8 @@ void kernel_main() {
                                 in0_num_subblocks_read_last);
                         }
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
-                        matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                        matmul_block_init<row_mop>(
+                            in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
@@ -389,7 +400,8 @@ void kernel_main() {
                     }
 
                     reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
-                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                    matmul_block_init<row_mop>(
+                        mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
                 dfb_mm_in0.wait_front(in0_block_num_tiles);
@@ -434,7 +446,7 @@ void kernel_main() {
                             dfb_matmul_partials.pop_front(out_subblock_num_tiles);
                             // Reconfigure srcA back
                             reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
-                            matmul_block_init(
+                            matmul_block_init<row_mop>(
                                 mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             // just acquire
@@ -451,7 +463,7 @@ void kernel_main() {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
                             // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
-                            matmul_block(
+                            matmul_block<row_mop>(
                                 mm_in0_cb_id,
                                 in1_cb_id,
                                 in0_index,
