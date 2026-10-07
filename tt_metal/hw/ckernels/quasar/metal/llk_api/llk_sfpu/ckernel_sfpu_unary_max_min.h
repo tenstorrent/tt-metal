@@ -30,8 +30,7 @@ constexpr std::uint32_t UNARY_MAX_MIN_INT32_MIN_BITS = 0x80000000u;
  * @tparam APPROXIMATION_MODE: unused; keeps the dispatcher's (..., APPROX, ITERATIONS) tail.
  * @tparam SIGN_MAGNITUDE_FORMAT: Int32 only; Dest holds sign-magnitude instead of two's complement.
  * @param value: fp32 bits for float FMT, two's-complement int32 for Int32 (not INT32_MIN with SM).
- * @note No SFPNOP after SFPSWAP: the scoreboard stalls the dependent SFPSTORE/SFPCAST, which are not
- *       among the TEN-4581 / TEN-4605 misses.
+ * @note No SFPNOP after SFPSWAP: SFPSWAP always stalls the next SFPU instruction (TEN-4581).
  */
 template <
     bool IS_MAX_OP,
