@@ -17,7 +17,7 @@ namespace detail {
 // Each outgoing event consumes one successor ack before changing signal_source. The next ack
 // proves the preceding relay read its source, even with CallerManaged. Incoming data_ready is
 // separate, so a receiver can acknowledge its predecessor before waiting for its successor.
-// Payload and readiness are ordinary writes on the same NoC/VC; no fence is needed between them.
+// Flush each payload write from the source NIU before publishing readiness on the same NoC/VC.
 template <
     uint8_t NOC_ID,
     typename DataReadyBinding,
