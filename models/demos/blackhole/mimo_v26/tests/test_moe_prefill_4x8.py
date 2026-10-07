@@ -62,8 +62,24 @@ def test_moe_prefill_4x8(mesh_device):
             )
         return W[e]
 
+    def dram_alloc_mb():
+        try:
+            mv = ttnn.get_memory_view(md.get_devices()[0], ttnn.BufferType.DRAM)
+            return (
+                mv.total_bytes_allocated_per_bank * mv.num_banks / 2**20
+                if hasattr(mv, "num_banks")
+                else mv.total_bytes_allocated_per_bank / 2**20
+            )
+        except Exception as ex:  # API differs between builds
+            return float("nan") if not str(ex) else -1.0
+
+    m0 = dram_alloc_mb()
     t0 = time.time()
     weights = build_expert_weights(md, w_of)
+    print(
+        f"RESULT dram weights of 8 experts/chip, 1 layer: {dram_alloc_mb() - m0:.1f} MB per chip (alloc view, may be per-bank dependent)",
+        flush=True,
+    )
     print(f"RESULT weights built {time.time() - t0:.1f}s ({NUM_ROUTED} experts, bfp8)", flush=True)
     um = MiMoPrefillMoE(md, weights, ckc=make_ckc(fid, packer_l1_acc=(op != "fused")), expert_op=op, cf=cf)
 
@@ -141,6 +157,18 @@ def test_moe_prefill_4x8(mesh_device):
         )
         assert worst <= sh.max_buf, "dispatch capacity overflow"
         um.last_counts = None
+    ts = []
+    for _ in range(6):
+        t0 = time.time()
+        p_ = run()
+        ttnn.synchronize_device(md)
+        ts.append((time.time() - t0) * 1e3)
+        ttnn.deallocate(p_)
+        ttnn.deallocate(um.last_counts)
+    print(
+        f"RESULT time hint (eager, host-timed, not a perf claim) op={op} N={N}: step0 {ts[0]:.1f} ms, steps1-5 median {sorted(ts[1:])[2]:.1f} ms",
+        flush=True,
+    )
     dev_out = outs[0].sum(dim=1)  # sum the 8 column partials -> [ROWS, N, D]
     print(f"RESULT determinism run0 vs run1 bit-identical: {bool(torch.equal(outs[0], outs[1]))}", flush=True)
 
