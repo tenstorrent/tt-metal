@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
 #include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -1394,6 +1395,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
+    if (std::getenv("EB_R3_LOG_RULE") != nullptr) {  // CI log, not in the PR
+        std::fprintf(
+            stderr,
+            "EB_R3_RULE hifi2=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d scalar_lhs=%d kernel=%s\n",
+            static_cast<int>(exact_mul_at_hifi2),
+            static_cast<int>(is_sfpu_op),
+            static_cast<int>(a_dtype),
+            static_cast<int>(b_dtype),
+            static_cast<int>(c_data_format),
+            static_cast<int>(fp32_dest_acc_en),
+            static_cast<int>(operation_attributes.scalar_is_lhs),
+            compute_desc.kernel_source.c_str());
+    }
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_device_cores;
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
