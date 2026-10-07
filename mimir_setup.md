@@ -1,8 +1,20 @@
+Clone `chippy` and `grendelemulation` under `/proj_sw/user_dev/$USER`. That directory is shared across machines, and both repos must be reachable from the soc machines (`soc-l-#`) and from the machine running tt-metal.
+
+The `export CHIPPY_DIR` and `export GRENDELEMU_DIR` lines below only apply to the current terminal. Set them again in every terminal that uses them (on the soc machines and on the tt-metal machine), or add them to `~/.bashrc`.
+
 ## Setup 'chippy'
 
-`git clone git@yyz-gitlab.local.tenstorrent.com:syseng-platform/chippy.git`
+```
+cd /proj_sw/user_dev/$USER
+git clone git@yyz-gitlab.local.tenstorrent.com:syseng-platform/chippy.git
+cd chippy
+git checkout kstevens/metal_bringup
+export CHIPPY_DIR=/proj_sw/user_dev/$USER/chippy
+```
 
-Log into one of the soc machines (e.g. `soc-l-#`) or another machine with GGC 13 available.
+The metal bring-up scripts (`validation/metal_bringup/`) only exist on the `kstevens/metal_bringup` branch, not on `main`.
+
+Log into one of the soc machines (e.g. `soc-l-#`) or another machine with GCC 13 available.
 
 ```
 source /tools_soc/tt/bin/bashrc
@@ -22,6 +34,23 @@ cmake --build $CHIPPY_DIR/../chippy-build --target grendel
 
 ## Build tt-metal
 
+UMD must be on the `kstevens/grendel-emu-additions` branch. The submodule commit recorded in tt-metal is older, so `git submodule update` will move UMD off this branch; re-run the checkout below if that happens.
+
+```
+cd tt_metal/third_party/umd
+git fetch origin
+git checkout kstevens/grendel-emu-additions
+cd -
+```
+
+With `TT_UMD_BUILD_GRENDEL_JTAG=ON`, the Clang build needs libstdc++ 13 at `/usr/lib/gcc/x86_64-linux-gnu/13`. The `gcc/13` module does not satisfy this. On Ubuntu 22.04, install it with:
+
+```
+sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+sudo apt update
+sudo apt install -y g++-13
+```
+
 Need to add additional defines to build. After building the first time, can just run usual `./build_metal.sh` commands unless the CMAKE files are removed (e.g. with a `--clean` or `git clean`).
 
 ```
@@ -35,16 +64,16 @@ cmake -DTT_UMD_BUILD_GRENDEL_JTAG=ON \
 cmake --build build --target install
 ```
 
-*NOTE:* Probably don't need this, but keeping it here in case I'm wrong.
-`  -DCMAKE_CXX_FLAGS=--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/12 \`
-
-
 ## Launch Emulation Server
 
-`git clone git@yyz-gitlab.local.tenstorrent.com:tensix/soc/grendelemulation.git`
+```
+cd /proj_sw/user_dev/$USER
+git clone git@yyz-gitlab.local.tenstorrent.com:tensix/soc/grendelemulation.git
+export GRENDELEMU_DIR=/proj_sw/user_dev/$USER/grendelemulation
+```
 
 1. Log into one of the soc machines (e.g. `soc-l-#`)
-2. Setup your environment. Choose either the `mimir` directory (single mimir chiplet - 1 emulation module) or `mmk` (2 mimir chiplets + 1 keraunos - 4 emualtion modules) directory depending on your needs.
+2. Setup your environment. Choose either the `mimir` directory (single mimir chiplet - 1 emulation module) or `mmk` (2 mimir chiplets + 1 keraunos - 4 emulation modules) directory depending on your needs.
 ```
 source /tools_soc/tt/bin/bashrc
 cd $GRENDELEMU_DIR/models/mimir
@@ -77,9 +106,11 @@ cd $CHIPPY_DIR
 uv run --project validation python validation/metal_bringup/<script> <emu_host> <emu_port>
 ```
 
+The first run downloads packages from `syseng-pypi.yyz2.tenstorrent.com`. If it fails with `invalid peer certificate: UnknownIssuer`, the machine (or container) does not trust the Tenstorrent IT root CA. Install it with the "Ubuntu / Debian" script on the [Tenstorrent Enterprise IT Root CA Certificate](https://tenstorrent.atlassian.net/wiki/spaces/IT/pages/1287454725) page. The script writes the cert to `/usr/local/share/ca-certificates/tenstorrent-enterprise-it-root-ca-2025-06.crt` and runs `sudo update-ca-certificates`. Inside a docker container this only changes the container, and must be redone if the container is recreated.
+
 ## Run tt-metal test
 
-Choose between `mimir_1x1.yaml` & `mimir_x2_package.yaml` depending on needs.
+Choose between `mimir_1x1.yaml` & `mimir_2x_package.yaml` depending on needs.
 
 ```
 export TT_METAL_HOME=<dir>
@@ -87,5 +118,5 @@ export TT_METAL_EMU_SERVER=<host>:<port>
 export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/<yaml_file>
 ```
 
-Run Mimir tests. E.g.
+Run Mimir tests from `$TT_METAL_HOME`. E.g.
 `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_context --gtest_filter=*MimirEmu*`
