@@ -16,15 +16,14 @@ namespace ttsl {
 
 namespace detail {
 
-// Matches std::function's inline buffer on libstdc++, so sizeof is unchanged when one replaces the
-// other. Captures larger than this are heap allocated.
-inline constexpr std::size_t kMoveOnlyFunctionInlinePointers = 2;
+// Inline buffer plus one vtable pointer makes sizeof 32, the same as std::function on libstdc++.
+// Captures larger than this are heap allocated.
+inline constexpr std::size_t kMoveOnlyFunctionInlinePointers = 3;
 
+// The invoker lives in the per-type vtable rather than in each object, which is what leaves room
+// for a third pointer of buffer at that size.
 template <typename Signature>
-using MoveOnlyFunctionBase = zoo::Function<
-    // has_value() needs zoo::RTTI. Without it, zoo compares destroy pointers, which ICF can merge.
-    zoo::AnyContainer<zoo::Policy<void* [kMoveOnlyFunctionInlinePointers], zoo::Destroy, zoo::Move, zoo::RTTI>>,
-    Signature>;
+using MoveOnlyFunctionBase = zoo::VTableFunction<kMoveOnlyFunctionInlinePointers, Signature>;
 
 template <typename T>
 struct is_in_place_type : std::false_type {};
@@ -71,7 +70,7 @@ bool is_empty_callable(const T& f) noexcept {
 //     being undefined;
 //   - only the unqualified R(Args...) signature is provided, not the const, reference or noexcept
 //     qualified forms;
-//   - it requires RTTI.
+//   - it does not compile under -fno-rtti.
 //
 // TODO(#57444): replace with std::move_only_function once every supported standard library ships
 // it; libc++ does not as of LLVM 20. Calling an empty instance then becomes undefined.
@@ -142,7 +141,11 @@ public:
 
     ~move_only_function() = default;
 
-    explicit operator bool() const noexcept { return Base::has_value(); }
+    // Compares the invoker with the empty state's thrower rather than using zoo's isDefault(), whose
+    // destroy-pointer comparison identical-code folding can defeat.
+    explicit operator bool() const noexcept {
+        return Base::container()->template vTable<Callable>()->executor_ != &Callable::throwStdBadFunctionCall;
+    }
 
     R operator()(Args... args) { return Base::operator()(std::forward<Args>(args)...); }
 
@@ -153,14 +156,11 @@ public:
     friend bool operator==(const move_only_function& f, std::nullptr_t) noexcept { return !f; }
 
 private:
-    using Executor = zoo::Executor<R(Args...)>;
+    using Callable = zoo::CallableViaVTable<R(Args...)>;
 
-    // The base keeps the target and its invoker separately and its move leaves both in the source;
-    // reset() empties only the target, so the invoker has to be reset too.
-    static void clear(move_only_function& f) noexcept {
-        f.Base::reset();
-        static_cast<Executor&>(f).executor_ = Executor::DefaultExecutor;
-    }
+    // The base move leaves the source's vtable in place, so it still looks engaged and calling it
+    // runs the moved-out callable. reset() installs the empty vtable, invoker included.
+    static void clear(move_only_function& f) noexcept { f.Base::reset(); }
 };
 
 }  // namespace ttsl
