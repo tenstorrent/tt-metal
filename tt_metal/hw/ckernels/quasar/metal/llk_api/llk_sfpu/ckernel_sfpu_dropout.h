@@ -28,6 +28,7 @@ constexpr std::uint32_t DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF;
  * @note Load LREG1 = scale and LREG2 = probability before this runs; @ref calculate_dropout does that.
  * @note The PRNG read advances the per-lane PRNG and honours LaneEnable, so it must stay outside any
  *       CC-narrowed region.
+ * @note The store uses @c ADDR_MOD_6, which @ref dropout_init programs to advance Dest by one row pair.
  */
 inline void _calculate_dropout_sfp_rows_() {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);  // x from dest
@@ -37,14 +38,25 @@ inline void _calculate_dropout_sfp_rows_() {
     TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpiadd::MOD1_SUB_CC_GTE0);  // CC = (prob - rand >= 0)
     TTI_SFPMOV(p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);                              // dropped lanes -> 0.0
     TTI_SFPENCC(0 /* imm12 */, 0 /* mod1 */);                                               // re-enable all lanes
-    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);  // store result
+    TTI_SFPSTORE(
+        p_sfpu::LREG0,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_6,
+        0 /* done */,
+        0 /* dest_reg */);  // store, then Dest += SFP_ROWS
 }
 
 // The p = 0 body for one SFPU row pair: out = x * scale, no PRNG compare (see calculate_dropout).
+// The store uses ADDR_MOD_6, which dropout_init programs to advance Dest by one row pair.
 inline void _calculate_dropout_scale_sfp_rows_() {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);   // x from dest
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* mod1 */);           // x * scale
-    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg */);  // store result
+    TTI_SFPSTORE(
+        p_sfpu::LREG0,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_6,
+        0 /* done */,
+        0 /* dest_reg */);  // store, then Dest += SFP_ROWS
 }
 
 // Loads a 32-bit runtime value into an LREG as two 16-bit halves.
@@ -60,7 +72,8 @@ inline void _dropout_load_u32_(const std::uint32_t lreg, const std::uint32_t val
  * @tparam ITERATIONS: SFPU row-pair iterations covering one face.
  * @param probability: Drop probability scaled to an integer, p * INT_MAX, range 0 .. DROPOUT_PROBABILITY_MAX.
  * @param scale: fp32 bit pattern of the scale applied to surviving data (normally 1 / (1 - p)).
- * @note Call @ref dropout_init once before this to seed the PRNG.
+ * @note Call @ref dropout_init once before this. It seeds the PRNG and programs @c ADDR_MOD_6, which
+ *       the stores use to advance Dest.
  * @note Overwrites LREG0-LREG3. Issues its body inline (no replay buffer), so replay-backed math
  *       ops recorded in their init stay valid across dropout calls.
  */
@@ -76,8 +89,6 @@ inline void calculate_dropout(const std::uint32_t probability, const std::uint32
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             _calculate_dropout_scale_sfp_rows_();
-            // dest_reg++, by the two Dest rows just consumed
-            ckernel::math::_incr_counters_<0x0 /* srca */, 0x0 /* srcb */, ckernel::math::SFP_ROWS, 0x0 /* cr */>();
         }
         return;
     }
@@ -85,21 +96,26 @@ inline void calculate_dropout(const std::uint32_t probability, const std::uint32
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         _calculate_dropout_sfp_rows_();
-        // dest_reg++, by the two Dest rows just consumed
-        ckernel::math::_incr_counters_<0x0 /* srca */, 0x0 /* srcb */, ckernel::math::SFP_ROWS, 0x0 /* cr */>();
     }
 }
 
 /**
- * @brief Seed the hardware PRNG that feeds the SFPU lanes.
+ * @brief Seed the hardware PRNG and program the store-side Dest walk.
  *
  * @tparam APPROXIMATION_MODE: Accepted for Compute API parity; unused.
  * @param seed: Seed value handed to the Tensix PRNG seeder.
- * @note Call once before @ref calculate_dropout.
+ * @note Call once before @ref calculate_dropout. Programs @c ADDR_MOD_6 with a Dest increment of
+ *       one SFPU row pair; any other SFPU init that writes @c ADDR_MOD_6 must run before this one.
  */
 template <bool APPROXIMATION_MODE>
 inline void dropout_init(const std::uint32_t seed) {
     init_prng_seed(seed);
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = ckernel::math::SFP_ROWS},
+    }
+        .set(ADDR_MOD_6);
 }
 
 }  // namespace sfpu
