@@ -1478,3 +1478,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_X1_timing4_sentinel.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/layer.py
 - data: {"sentinel_ffn_ms_4layers":3.3,"spread_ffn_ms_4layers":6.5}
+
+## E261007-1343-2d2
+- date: 2026-10-07T13:43:02
+- commit: e54e59555a9
+- branch: ssinghal/mimo-race
+- host: 48
+- track: decode
+- status: verified
+- claim: ALL-REDUCE RACE rates and WORKAROUND test (MoE-only stage stress, real layers 1-6 in one trace, 8 live slots/row, lib integ_73c014eb46d): old ttnn.all_reduce(cluster_axis=1): host 48 spread 23 glitches/72000 layer-calls (3.2e-4), host 47 spread 8/36000 (2.2e-4, only the final output cloned), host 40 sentinel 22/18000; all_reduce as reduce_scatter+all_gather calls 87/36000, num_links=1 132/36000; every host shows it, glitching layer instances repeat (L2, L4, L5), devices vary (mostly mesh cols 0-3). Workaround all_gather(dim0, cluster_axis=1)+sum (MiMoMoEDecode._column_reduce): 0/36000 on host 40 dead=sentinel AND 0/36000 on host 48 dead=spread. Stand-alone all_reduce [1,1,64,4096] x24 chained x3000 replays (72000 calls, host 47, notes/allreduce_race_repro.py) shows 0 glitches: the race needs the MoE context. Full 48-layer traced decode determinism with the OLD all_reduce: 0 glitches in 300 replays (host 48, new lib) and 150 (old lib) so M14's 2-5/100 is not reproduced on 40/48 by the merged tree
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_P_stages_rs_spread_h48_e54e59555a9.log
+- paths: models/demos/blackhole/mimo_v26/tests/test_moe_race_stages.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
+- data: {"old_rate_h48":23,"old_calls_h48":72000,"old_rate_h47":8,"old_calls_h47":36000,"new_events":0,"new_calls":72000}
