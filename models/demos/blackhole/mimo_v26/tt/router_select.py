@@ -34,7 +34,12 @@ def router_select(rank, score, k, eps, scale):
     """rank, score: fp32 TILE [1,1,T,E] (E % 32 == 0, T <= 32; rank = score + bias).
     Returns (weights bf16 RM [T,1,1,k], indices uint16 RM [T,1,1,k]) in DRAM."""
     _, _, T, E = (int(v) for v in rank.shape)
-    assert T <= 32 and E % 32 == 0 and rank.dtype == ttnn.float32 and score.dtype == ttnn.float32
+    assert T <= 32 and E % 32 == 0 and rank.dtype == ttnn.float32 and score.dtype == ttnn.float32, (
+        T,
+        E,
+        rank.dtype,
+        score.dtype,
+    )
     mesh = rank.device()
     mk = lambda dt: ttnn.allocate_tensor_on_device(
         ttnn.Shape([T, 1, 1, k]), dt, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
