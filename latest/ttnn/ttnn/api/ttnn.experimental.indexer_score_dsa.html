@@ -256,7 +256,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.concatenate_heads.html">ttnn.transformer.concatenate_heads</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_mla_prefill.html">ttnn.transformer.flash_mla_prefill</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_multi_latent_attention_decode.html">ttnn.transformer.flash_multi_latent_attention_decode</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.fused_recurrent_gated_delta_rule.html">ttnn.transformer.fused_recurrent_gated_delta_rule</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.gated_delta_attn_seq.html">ttnn.transformer.gated_delta_attn_seq</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.joint_scaled_dot_product_attention.html">ttnn.transformer.joint_scaled_dot_product_attention</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.paged_flash_multi_latent_attention_decode.html">ttnn.transformer.paged_flash_multi_latent_attention_decode</a></li>
@@ -353,7 +352,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.experimental.indexer_score_dsa">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score_dsa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weights</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">key_compression_ratio</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_shard_axes</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_sp_axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_chunk_local</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_cache_tp_sharded</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score_dsa" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">indexer_score_dsa</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weights</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunk_start_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">program_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_kernel_config</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cache_batch_idx</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kv_len</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_shard_axes</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_sp_axis</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_chunk_local</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">block_cyclic_cache_tp_sharded</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.indexer_score_dsa" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.</p>
@@ -372,14 +371,9 @@ raw-dot, per-GQA-group indexer, use <code class="docutils literal notranslate"><
 pre-folded).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>chunk_start_idx</strong></span><span class="tt-api-param-desc">absolute global position of rank 0’s query row 0
 (rank 0 = lowest seq_shard_axes[0] (SP) coord; causality: key t
-visible to query s iff t &lt; floor((chunk_start + s + 1) /
-key_compression_ratio)). OMIT on a mesh -&gt; deduced from compressed K
-as T*key_compression_ratio - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
+visible to query s iff t &lt;= chunk_start + s). OMIT on a mesh -&gt;
+deduced as T - sp_ring*Sq (sp_ring = mesh extent along the SP axis,
 whole mesh if unset). Single device: set to history + rank*Sq per rank.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>key_compression_ratio</strong></span><span class="tt-api-param-desc">query tokens represented by one K-cache row. 1
-(default) preserves legacy behavior; 4 enables compressed-key DSA.
-K sequence/output/kv_len are compressed rows, while query and
-chunk_start_idx geometry remain token units.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>program_config</strong></span><span class="tt-api-param-desc">work-unit knobs (q_chunk_size, k_chunk_size,
 head_group_size; elements, tile-aligned). Defaults always fit
 L1; raise head_group_size (0 = all resident) for performance.</span></p></li>
@@ -420,8 +414,7 @@ order (invP per tile) so scores come out token-ordered and the causal
 mask/pool stay exact. Unset (or sp==1) = contiguous K (no remap). Pair
 with block_cyclic_chunk_local. Interface matches ttnn.transformer.sparse_sdpa.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>block_cyclic_chunk_local</strong></span><span class="tt-api-param-desc">optional int, REQUIRED with block_cyclic_sp_axis.
-The per-shard chunk length in QUERY-TOKEN rows (chunk_size_global / sp);
-the physical K chunk is this value / key_compression_ratio. Cross-checked
+The per-shard chunk length (chunk_size_global / sp). Cross-checked
 against q: must equal q_isl (Sq, seq sharded only on the SP axis) or
 tp*q_isl (tp = mesh_size/sp). The tp*q_isl case with tp&gt;1 (seq sharded
 across BOTH axes) has two forms: seq_shard_axes=[] uses flat row-major
