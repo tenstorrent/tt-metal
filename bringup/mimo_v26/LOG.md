@@ -75,3 +75,25 @@
 - claim: DECISION (coordinator): checkpoint downloaded from HF XiaomiMiMo/MiMo-V2.6-Flash-RL into /mnt/tt-data/MiMo-V2.6-Flash-RL (user approved download and location 2026-10-07; whole repo, ~173 GB, log /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log). MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL. Hosts approved by user for use (health-check each first): 30 35 40 41 43 44 46 47 48.
 - evidence: -
 - paths: bringup/mimo_v26
+
+## E261007-0157-4f4
+- date: 2026-10-07T01:57:27
+- commit: 1227f2c3d8a
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: Decode-like shape through the same ops/weights: N=64 tokens per row (min allowed, %64) unified op PCC 0.99925; host-timed eager step 1.8 ms (hint only, not a perf claim); N=2048 3.4 ms hint. So one per-expert bfp8 copy can serve prefill AND decode via dispatch/unified|fused|hybrid/combine (hybrid_routed_expert_moe = same layout, untested). moe_compute ring layout cannot be the shared copy: bfp4-only here, and RING_WEIGHTS mode of the unified op exists only in the DSV4 repo C++. DRAM at bfp8 per layer per chip: analytic 3*4096*2048*1088/1024 B*8 = 214 MB (+ND-shard N padding), x47 layers ~10.1 GB (analytic; ttnn memory view API returned 0, not measured)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_unified_n64_1227f2c3d8a.log
+- paths: models/demos/blackhole/mimo_v26, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
+
+## E261007-0157-eef
+- date: 2026-10-07T01:57:27
+- commit: a061d266de2
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: Router modes on SYNTHETIC data only (random x, bias~10.4 std .03; NOT a routing claim): all three MiMoGate modes execute on device (1x1). set agreement plain 0.031, hilo shift0 0.082, hilo with calibrated shift 0.879, exact (fp32 matmul+sigmoid+ttnn.topk) 0.980. Shows hi/lo without the bias shift is useless at bias 10 (op sums bf16 score+b_hi); shift is mandatory. Real-token numbers pending checkpoint/track-0 dump
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_router_synth_smoke_1227f2c3d8a.log
+- paths: models/demos/blackhole/mimo_v26, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
