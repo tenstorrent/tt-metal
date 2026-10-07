@@ -5,14 +5,14 @@ description: Run device jobs safely on the shared Blackhole Galaxy hosts - host 
 
 # Lab operations (shared hosts, shared NFS, many agents)
 
-Last validated against commit: <none yet>
+Last validated against commit: <none yet> (cache-dir text: ec8191781a8 vs launch.py)
 Evidence: `bringup/GUIDE_dsv4_lessons.md`. Kit tools in `models/common/bringup_kit/` (README there): `launch.py` (pinned commit, locked, detached, watched launch),
 `host_health.py` (pre-flight; bad hosts in `bad_hosts.txt`), `hangwatch.py`, `results.py` (parse demo logs), `status_report.py`. Use them instead of hand-rolled ssh/nohup.
 Not hardware-validated yet: `host_health.py --canary`, and the tt-smi reset step of hangwatch (check the reset rc in the log and run a smoke test after).
 The DSV4 originals (`tools/devrun.sh`, `grid.py`) live only in the DSV4 repo `/mnt/tt-data/ssinghal/tests/tt-metal` (read-only for you).
 
 ## 0. Hard rules
-1. One device job per host. All device runs go through the flock on `/tmp/dsv4_dev.lock`; `launch.py` does this and points `TT_METAL_HOME`/`PYTHONPATH` at YOUR worktree. `TT_METAL_CACHE=/mnt/tt-data/ssinghal/tt-metal-cache/h<host digits>`.
+1. One device job per host. All device runs go through the flock on `/tmp/dsv4_dev.lock`; `launch.py` does this and points `TT_METAL_HOME`/`PYTHONPATH` at YOUR worktree. `TT_METAL_CACHE` defaults to `/mnt/tt-data/ssinghal/tt-metal-cache/kit` (one shared cache for all hosts; override with `launch.py --cache-dir`).
 2. Two trees are off limits for edits: the DSV4 repo `/mnt/tt-data/ssinghal/tests/tt-metal` (its benchmarks and spec-decode agents run from it; a stray write to its `ttnn/ttnn/_ttnn.so` once broke every job there), and the integration checkout of the MiMo area `/mnt/tt-data/ssinghal/mimo/tt-metal` while a job runs from it. Work in your own worktree on your own branch. Never run build/install/cp commands whose output path is relative to a tree you do not own; check `pwd` first.
 3. Never kill, reset or "clean up" a process or device you did not start. Not even a suspected duplicate: ask the coordinator/owner (an agent once killed a believed duplicate that held a build slot). Kill only your own pid; log it.
 4. Check the host first: `pgrep -af python_env | grep -v grep`, `flock -n /tmp/dsv4_dev.lock true && echo idle`. Hosts: 10.82.97.{30..35,40..48} (ssh by last octet; .36-.39 unreachable). Authoritative bad list: `models/common/bringup_kit/bad_hosts.txt`. Bad: .31 faulty (wrong first tokens in some mesh rows; discard its numbers), .42 hangs at the first device op (check `tt-smi`, triage before use). Update this list in LOG when it changes.
