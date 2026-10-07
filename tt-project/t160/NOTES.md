@@ -87,3 +87,11 @@ bh-glx-120-b0{2,3,4,5}u{02,08}, all in partition bh_sc5_B2B9_D12. Each one is a 
 - Probe t160/retry_when.sh: 0 when the copy failed, or PCOPY_OK and /data >= 230 GB free.
   On wake: copy failed -> read log; PCOPY_OK -> step 3 (submit e2e).
 - Allocations this run: none. squeue -u smarton was empty at 08:47; no jobs submitted since.
+
+## Run 851 (2026-10-07, after the 12:17 UTC failure)
+- Run 849's recopy failed rc=123: chunks 30-37 hit "No space left on device" (/data full, others' data).
+- 12:56 UTC: /data has 435 GB free again. squeue -u smarton empty, no leftover copy procs on exabox.
+- Restarted: P=4 bash t160/pcopy.sh via ttp detach, log state/runs/851/t160-pcopy3.{log,rc}.
+  Only 30-37 are missing (pcopy.done has 0-29, 38, 39). ETA ~45-60 min incl. sha256 checks.
+- Probe retry_when.sh now points at run 851. On wake: PCOPY_OK and >= 230 GB free -> step 3 (submit e2e).
+- Allocations this run: none.
