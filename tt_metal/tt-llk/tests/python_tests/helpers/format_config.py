@@ -258,12 +258,25 @@ def e8m0_scale_factors(scales_e8m0_array):
     """E8M0 scale codes decoded to float32 multipliers, NaN where the code is 0xFF.
 
     0xFF is the reserved NaN scale rather than an exponent, so it decodes to NaN
-    and that NaN propagates into whatever the caller does with the block. Where
-    it ends up differs by format: MXFP8 keeps it in the element encoding (0x7E
-    for E5M2, 0x7F for E4M3), while MXFP4 and MxInt zero their elements --
-    fp4 has no NaN nibble and MxInt no NaN at all -- so for those the 0xFF
-    scale is the only surviving record that the block was NaN. Either way the
-    block reads back as NaN, because unpacking takes that from the scale.
+    and that NaN propagates into whatever the caller does with the block.
+    Unpacking takes NaN-ness from the scale and applies it to all 32 datums,
+    overriding whatever the elements decoded to -- so a block scaled 0xFF reads
+    back entirely NaN even where every element decoded to zero.
+
+    **Only an all-NaN block gets 0xFF**, because the packer sets it from
+    ``np.all(np.isnan(block))``. What a *partial* NaN block keeps therefore
+    depends on whether the element format can hold one, and the two answers
+    differ:
+
+    * MXFP8 keeps it in the element encoding (0x7E for E5M2, 0x7F for E4M3), so
+      a lone NaN survives as a lone NaN.
+    * MXFP4 and MxInt have nowhere to put it -- fp4 has no NaN nibble and MxInt
+      no NaN at all -- so the packer's NaN-to-zero coercion loses it outright
+      and it reads back as 0.0, not NaN.
+
+    That loss is the format's, not the model's: the RTL excludes NaN from the
+    max-exponent tree the same way (``special_exp_flush``). It does mean NaN is
+    recorded at block granularity only, all-or-nothing, for those formats.
 
     A harmless code is substituted before exponentiating because ``exp2(128)``
     overflows float32. Computing it and masking afterwards gives the same

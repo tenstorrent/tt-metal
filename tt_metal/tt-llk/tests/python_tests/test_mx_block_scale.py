@@ -26,6 +26,14 @@ from helpers.pack import (
     pack_mxint4,
     pack_mxint8,
 )
+from helpers.unpack import (
+    unpack_mxfp4,
+    unpack_mxfp8p,
+    unpack_mxfp8r,
+    unpack_mxint2,
+    unpack_mxint4,
+    unpack_mxint8,
+)
 from helpers.utils import floor_log2
 
 # One 32-datum block: 1 face of 2 rows x 16 columns.
@@ -145,6 +153,54 @@ def _pack_values(fmt, values):
 def test_an_all_nan_block_takes_the_reserved_nan_scale(fmt):
     """Every datum NaN is the one case the 0xFF scale encodes."""
     assert _pack_values(fmt, [float("nan")] * BLOCK_SIZE)[0] == E8M0_NAN
+
+
+#: Unpacker per format, and whether its ELEMENT encoding can hold a NaN.
+#: MXFP8 can (0x7E for E5M2, 0x7F for E4M3); fp4 has no NaN nibble and MxInt
+#: has no NaN at all.
+UNPACKERS = {
+    DataFormat.MxInt8: (unpack_mxint8, False),
+    DataFormat.MxInt4: (unpack_mxint4, False),
+    DataFormat.MxInt2: (unpack_mxint2, False),
+    DataFormat.MxFp4: (unpack_mxfp4, False),
+    DataFormat.MxFp8P: (unpack_mxfp8p, True),
+    DataFormat.MxFp8R: (unpack_mxfp8r, True),
+}
+
+
+@pytest.mark.parametrize("fmt", list(FORMATS), ids=lambda f: f.name)
+def test_a_partial_nan_block_survives_only_where_the_element_can_hold_it(fmt):
+    """0xFF is all-or-nothing, so a lone NaN has to survive in the element.
+
+    The scale records NaN at *block* granularity only -- the packer sets 0xFF
+    from ``all(isnan(block))`` -- so a block that is NaN in one datum and finite
+    elsewhere gets an ordinary exponent and the scale carries nothing. Whether
+    the NaN then round-trips is entirely down to the element encoding, and the
+    two families differ. The loss is the format's, not the model's: the RTL
+    excludes NaN from the max-exponent tree the same way.
+    """
+    unpacker, element_holds_nan = UNPACKERS[fmt]
+    values = [float("nan")] + [1.0] * (BLOCK_SIZE - 1)
+    packed = _pack_values(fmt, values)
+    assert packed[0] != E8M0_NAN, "a partial NaN block must not take the NaN scale"
+
+    decoded = unpacker(packed, **PACK_GEOMETRY).flatten().float()
+    if element_holds_nan:
+        assert torch.isnan(decoded[0]), "MXFP8 keeps a lone NaN in the element"
+        assert not torch.isnan(decoded[1:]).any(), "and only that one"
+    else:
+        assert decoded[0] == 0.0, "coerced to zero, and the scale cannot record it"
+        assert not torch.isnan(decoded).any()
+
+
+@pytest.mark.parametrize("fmt", list(FORMATS), ids=lambda f: f.name)
+def test_an_all_nan_block_reads_back_entirely_nan(fmt):
+    """The other half: with 0xFF the scale overrides whatever the elements hold,
+    so every datum reads NaN even for a format whose elements were zeroed."""
+    unpacker, _ = UNPACKERS[fmt]
+    packed = _pack_values(fmt, [float("nan")] * BLOCK_SIZE)
+    assert packed[0] == E8M0_NAN
+    assert torch.isnan(unpacker(packed, **PACK_GEOMETRY)).all()
 
 
 @pytest.mark.parametrize(
