@@ -42,3 +42,7 @@ Code landed via ttp/t212-land (cherry-picks onto 5e4e0cd643a, head a40d78b8bae) 
 - Marker: score/driver.marker "T212S_DRIVER_DONE stage=.. rc=..". Log: score/driver.log, score/out/run.log.
 - Next step on wake: read cmp.json; report PCC/PSNR per seed and mean decode time (unported: 16.47 s, #214).
   Then delete score/out/*.yuv (~450 MB each) on blx01, keep cmp.json/run.log, copy them into tt-project/t212/score.
+
+## Score vs #214 reference (blx01 job 824, 2026-10-07 19:35 UTC)
+Per-seed PCC 0.99995-0.99996, PSNR 55.1-55.8 dB (seeds 0-4). Mean decode 10.313 s vs 16.47 s unported (-37%).
+No drops in job 824. Files: tt-project/t212/score. blx01 score/ deleted.
