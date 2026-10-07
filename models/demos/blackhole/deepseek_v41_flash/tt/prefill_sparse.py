@@ -209,7 +209,11 @@ class DSV41PrefillIndexer:
     # ---- numerics shared with the decode indexer -----------------------------------------------------------------------------
     def _fp4(self, x):
         """fp4 (e2m1 / per-32 e8m0) quantise-dequantise of a bf16 tile tensor [..., 128]."""
-        if pf_tune.FP4 == "fast":
+        if pf_tune.FP4 == "fused" and x.shape[-2] % 32 == 0 and x.dtype == ttnn.bfloat16:
+            from models.demos.blackhole.deepseek_v41_flash.tt import pf_fp4
+
+            return pf_fp4.fp4_fused(x)  # one generic_op, bit-identical to fp4_fast
+        if pf_tune.FP4 in ("fast", "fused"):
             return pf_tune.fp4_fast(x)
         shp = list(x.shape)
         n = 1
