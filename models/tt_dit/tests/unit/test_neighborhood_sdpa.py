@@ -725,6 +725,49 @@ def test_key_phase_pins_brick_and_gather(monkeypatch):
             assert plan["gather_brick_count"] == 112, (h_index, w_index, plan["gather_bricks"])
 
 
+@pytest.mark.parametrize("flag, expected", [(None, True), ("1", True), ("0", False)])
+def test_key_phase_default_on(monkeypatch, flag, expected):
+    """The key phase is the default on the 1080p 2-D split; ``DIFFVAE_NA_KEY_PHASE=0`` turns it off.
+
+    The brick is (2, 4, 4) either way: the search picks it on the query grid too."""
+    from models.tt_dit.layers.neighborhood_attention_plan import (
+        _BRICK_CHOICE_CACHE,
+        KEY_PHASE_BRICK,
+        _choose_sharded_brick,
+        key_phase_applies,
+    )
+
+    if flag is None:
+        monkeypatch.delenv("DIFFVAE_NA_KEY_PHASE", raising=False)
+    else:
+        monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", flag)
+    volume, context_window = (145, 272, 480), (11, 11, 11)
+    assert key_phase_applies(volume, context_window, 60, 8, 68, 4) is expected
+    _BRICK_CHOICE_CACHE.clear()
+    brick = _choose_sharded_brick(volume, context_window, (1, 1, 1), 60, 8, height_local=68, h_shard_count=4)
+    _BRICK_CHOICE_CACHE.clear()
+    assert brick == KEY_PHASE_BRICK
+
+
+def test_key_phase_skipped_where_brick_does_not_fit(monkeypatch):
+    """A 45-row H shard (720p, 4-way H split) is not whole 4-site bricks: even when asked for, the
+    key phase stays off and the search picks a brick that divides the shard."""
+    from models.tt_dit.layers.neighborhood_attention_plan import (
+        _BRICK_CHOICE_CACHE,
+        KEY_PHASE_BRICK,
+        _choose_sharded_brick,
+        key_phase_applies,
+    )
+
+    monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", "1")
+    volume, context_window = (145, 180, 320), (11, 11, 11)
+    assert not key_phase_applies(volume, context_window, 40, 8, 45, 4)
+    _BRICK_CHOICE_CACHE.clear()
+    brick = _choose_sharded_brick(volume, context_window, (1, 1, 1), 40, 8, height_local=45, h_shard_count=4)
+    _BRICK_CHOICE_CACHE.clear()
+    assert brick != KEY_PHASE_BRICK and 45 % brick[1] == 0 and 40 % brick[2] == 0
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
 def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
     """A volume with few time frames must not select a brick deeper than the volume.
@@ -752,14 +795,16 @@ def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
     )
 
 
-def test_choose_sharded_brick_divides_h_shard():
+def test_choose_sharded_brick_divides_h_shard(monkeypatch):
     """Under the 2-D split the brick must divide the H shard as well as the W shard.
 
     Host only: the planner needs no device. At 1080p stage 5 the W-only search picks (2, 8, 2),
-    whose 8-site H extent does not divide the 68-row H shard of a 4-way H split.
+    whose 8-site H extent does not divide the 68-row H shard of a 4-way H split. The key phase
+    is off so the search itself runs.
     """
     from models.tt_dit.layers.neighborhood_attention_plan import _BRICK_CHOICE_CACHE, _choose_sharded_brick
 
+    monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", "0")
     _BRICK_CHOICE_CACHE.clear()
     volume, context_window, stride = (145, 272, 480), (11, 11, 11), (1, 1, 1)
     width_local, shard_count, h_shard_count = 60, 8, 4

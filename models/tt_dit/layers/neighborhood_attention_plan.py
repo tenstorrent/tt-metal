@@ -738,8 +738,9 @@ KEY_PHASE_BRICK = (2, 4, 4)
 
 
 def key_phase_enabled() -> bool:
-    """``DIFFVAE_NA_KEY_PHASE=1``: offset the K/V brick grid of the 2-D stage-5 split from the query grid."""
-    return os.environ.get("DIFFVAE_NA_KEY_PHASE") == "1"
+    """Whether the 2-D stage-5 split offsets its K/V brick grid from the query grid: on unless
+    ``DIFFVAE_NA_KEY_PHASE=0``."""
+    return os.environ.get("DIFFVAE_NA_KEY_PHASE") != "0"
 
 
 def key_phase_geometry(volume, context_window, brick, owned_height, owned_width):
@@ -758,6 +759,50 @@ def key_phase_geometry(volume, context_window, brick, owned_height, owned_width)
         -(-(low[axis] + owned[axis] + (reach[axis] if axis else 0)) // brick[axis]) * brick[axis] for axis in range(3)
     )
     return resident, low
+
+
+_KEY_PHASE_FIT_CACHE: dict = {}
+
+
+def key_phase_applies(volume, context_window, width_local, shard_count, height_local, h_shard_count) -> bool:
+    """Whether the 2-D split takes the key phase: enabled, and ``KEY_PHASE_BRICK`` tiles every
+    H x W shard with one gather count. Where it does not, the brick search runs without it."""
+    if not key_phase_enabled():
+        return False
+    key = (volume, context_window, width_local, shard_count, height_local, h_shard_count)
+    if key not in _KEY_PHASE_FIT_CACHE:
+        _KEY_PHASE_FIT_CACHE[key] = _key_phase_fits(*key)
+    return _KEY_PHASE_FIT_CACHE[key]
+
+
+def _key_phase_fits(volume, context_window, width_local, shard_count, height_local, h_shard_count) -> bool:
+    brick = KEY_PHASE_BRICK
+    if any(extent > limit for extent, limit in zip(brick, volume)):
+        return False
+    if height_local % brick[1] or width_local % brick[2]:
+        return False
+    if halo_sites(context_window[1], brick[1]) > height_local or halo_sites(context_window[2], brick[2]) > width_local:
+        return False
+    resident, low = key_phase_geometry(volume, context_window, brick, height_local, width_local)
+    try:
+        counts = {
+            ttnn.transformer.neighborhood_plan(
+                volume,
+                context_window,
+                (1, 1, 1),
+                brick,
+                query_chunk_bricks=_query_chunk_bricks((1, 1, 1), brick),
+                shard_extent=resident,
+                shard_origin=(-low[0], h_index * height_local - low[1], index * width_local - low[2]),
+                query_extent=(volume[0], height_local, width_local),
+                query_origin=low,
+            )["gather_brick_count"]
+            for h_index in range(h_shard_count)
+            for index in range(shard_count)
+        }
+    except (ValueError, RuntimeError):
+        return False
+    return len(counts) == 1
 
 
 def cached_bricked_plan(
@@ -965,7 +1010,9 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
     if cached is not None:
         return cached
 
-    if height_local is not None and key_phase_enabled():
+    if height_local is not None and key_phase_applies(
+        volume, context_window, width_local, shard_count, height_local, h_shard_count
+    ):
         return KEY_PHASE_BRICK
 
     default = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))

@@ -39,6 +39,7 @@ import ttnn
 
 from ..utils import timing_tree
 from .neighborhood_attention_plan import (
+    KEY_PHASE_BRICK,
     NA3DDevicePlan,
     _choose_sharded_brick,
     _tiles_per_kv_chunk,
@@ -46,7 +47,7 @@ from .neighborhood_attention_plan import (
     cached_bricked_plan,
     cached_device_plan,
     halo_sites,
-    key_phase_enabled,
+    key_phase_applies,
     key_phase_geometry,
 )
 from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_bricked, to_bricked_grid, to_natural
@@ -544,7 +545,12 @@ def neighborhood_attention_3d_bricked_w_sharded(
     resident = (time_extent, height_extent + 2 * halo_h, width_local + 2 * halo)
     # Under a key phase the op sees K/V on a grid offset from the query grid (``phased``); they are
     # still exchanged as whole bricks of the query grid (``resident``) and re-bricked after.
-    key_phase = h_axis is not None and stride == (1, 1, 1) and key_phase_enabled()
+    key_phase = (
+        h_axis is not None
+        and stride == (1, 1, 1)
+        and tuple(brick) == KEY_PHASE_BRICK
+        and key_phase_applies(volume, context_window, width_local, shard_count, height_extent, h_shard_count)
+    )
     op_resident, key_phase_low = resident, None
     if key_phase:
         op_resident, key_phase_low = key_phase_geometry(volume, context_window, brick, height_extent, width_local)
