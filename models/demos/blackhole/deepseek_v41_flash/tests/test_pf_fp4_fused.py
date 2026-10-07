@@ -38,3 +38,29 @@ def test_fp4_fused_matches(device, shape, scale):
         ttnn.synchronize_device(device)
         print(f"  {name}: {(time.perf_counter() - t0) / 10 * 1e3:.3f} ms / call (host wall)", flush=True)
     assert ndiff == 0
+
+
+# the chunk shapes of the indexer in the grid cells: q [U, 64 heads, C, 128] and the pooled keys [U, 1, C/4, 128]
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 64, 2048, 128),  # 60k B=4 (U=1, C=2048); also the 2048-row chunk of the ratio-4 indexer at long context
+        (4, 64, 1024, 128),  # 4k B=16
+        (8, 64, 512, 128),  # 4k B=32
+        (1, 64, 1024, 128),
+        (1, 1, 512, 128),
+        (4, 1, 256, 128),
+        (8, 1, 128, 128),
+        (1, 1, 32, 128),
+    ],
+)
+def test_fp4_fused_chunk_shapes(device, shape):
+    torch.manual_seed(1)
+    x = (torch.randn(*shape) * torch.logspace(-2, 2, shape[-2]).reshape(1, 1, -1, 1)).to(torch.bfloat16)
+    x[..., 3, :32] = 0
+    x[..., 5, 32:64] = 6.0 * 2.0**4
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    r, g = ttnn.to_torch(pf_tune.fp4_fast(t)), ttnn.to_torch(pf_fp4.fp4_fused(t))
+    ndiff = int((r != g).sum())
+    print(f"FP4 fused chunk shape {shape}: {ndiff} of {r.numel()} elements differ", flush=True)
+    assert ndiff == 0
