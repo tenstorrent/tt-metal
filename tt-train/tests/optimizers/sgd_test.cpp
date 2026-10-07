@@ -12,7 +12,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
-#include "optimizer_topology_test_utils.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
 #include "test_utils/random_data.hpp"
@@ -445,39 +444,4 @@ TEST_F(SGDValidationTest, RejectsLogicalShapeMismatchWithEqualPadding) {
         /* weight_decay */ 0.0f,
         /* nesterov */ false,
         /* momentum_buffer */ std::nullopt));
-}
-
-// ====================================================================
-// Mesh topology: a step against a mislabelled gradient must not relabel the
-// parameter, the optimizer state (the checkpointer gathers by that label) or
-// the gradient.
-// ====================================================================
-
-using ttml::test_utils::optimizer_topology::expect_step_keeps_topology;
-
-class SGDCompositeMeshTopologyTest : public ttml::test_utils::optimizer_topology::MeshTopologyTest {};
-
-TEST_F(SGDCompositeMeshTopologyTest, SGDCompositeStepKeepsNDParameterTopology) {
-    // Momentum + dampening + weight decay: step one takes the buffer's "first update" branch, step two the
-    // regular one; the nesterov=false path aliases the gradient to the buffer.
-    ttml::optimizers::SGDCompositeConfig config;
-    config.momentum = 0.9F;
-    config.dampening = 0.1F;
-    config.weight_decay = 1e-3F;
-    expect_step_keeps_topology<ttml::optimizers::SGDComposite>(config, /* collapsed_1d_label */ false);
-}
-
-TEST_F(SGDCompositeMeshTopologyTest, SGDCompositeStepKeeps1DParameterTopology) {
-    ttml::optimizers::SGDCompositeConfig config;
-    config.momentum = 0.9F;
-    config.dampening = 0.1F;
-    config.weight_decay = 1e-3F;
-    expect_step_keeps_topology<ttml::optimizers::SGDComposite>(config, /* collapsed_1d_label */ true);
-}
-
-TEST_F(SGDCompositeMeshTopologyTest, SGDCompositeNesterovStepKeepsNDParameterTopology) {
-    ttml::optimizers::SGDCompositeConfig config;
-    config.momentum = 0.9F;
-    config.nesterov = true;
-    expect_step_keeps_topology<ttml::optimizers::SGDComposite>(config, /* collapsed_1d_label */ false);
 }

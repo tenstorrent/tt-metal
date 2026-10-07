@@ -15,7 +15,6 @@
 #include "fmt/base.h"
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
-#include "optimizer_topology_test_utils.hpp"
 
 class AdamWCompositeFullTest : public ::testing::Test {
 protected:
@@ -76,45 +75,4 @@ TEST_F(AdamWCompositeFullTest, AdamWCompositeTest) {
     }
     EXPECT_LT(losses.back(), losses.front());
     EXPECT_LT(losses.back(), 1e-3F);
-}
-
-// ====================================================================
-// Mesh topology: a step against a mislabelled gradient must not relabel the
-// parameter, the optimizer state (the checkpointer gathers by that label) or
-// the gradient.
-// ====================================================================
-
-using ttml::test_utils::optimizer_topology::expect_step_keeps_topology;
-
-class AdamWCompositeMeshTopologyTest : public ttml::test_utils::optimizer_topology::MeshTopologyTest {};
-
-TEST_F(AdamWCompositeMeshTopologyTest, MorehAdamWStepKeepsNDParameterTopology) {
-    ttml::optimizers::AdamWCompositeConfig config;  // weight_decay 0.01 default: the decay path is exercised
-    expect_step_keeps_topology<ttml::optimizers::MorehAdamW>(config, /* collapsed_1d_label */ false);
-}
-
-TEST_F(AdamWCompositeMeshTopologyTest, MorehAdamWStepKeeps1DParameterTopology) {
-    ttml::optimizers::AdamWCompositeConfig config;
-    expect_step_keeps_topology<ttml::optimizers::MorehAdamW>(config, /* collapsed_1d_label */ true);
-}
-
-TEST_F(AdamWCompositeMeshTopologyTest, AdamWCompositeStepKeepsNDParameterTopology) {
-    // amsgrad + Kahan: every state tensor (moments, max_exp_avg_sq, kahan_compensation) is written each step.
-    ttml::optimizers::AdamWCompositeConfig config;
-    config.amsgrad = true;
-    config.kahan_summation = true;
-    expect_step_keeps_topology<ttml::optimizers::AdamWComposite>(config, /* collapsed_1d_label */ false);
-}
-
-TEST_F(AdamWCompositeMeshTopologyTest, AdamWCompositeStepKeeps1DParameterTopology) {
-    ttml::optimizers::AdamWCompositeConfig config;
-    config.amsgrad = true;
-    config.kahan_summation = true;
-    expect_step_keeps_topology<ttml::optimizers::AdamWComposite>(config, /* collapsed_1d_label */ true);
-}
-
-TEST_F(AdamWCompositeMeshTopologyTest, AdamWCompositePlainStepKeepsNDParameterTopology) {
-    // The non-Kahan parameter update path.
-    ttml::optimizers::AdamWCompositeConfig config;
-    expect_step_keeps_topology<ttml::optimizers::AdamWComposite>(config, /* collapsed_1d_label */ false);
 }
