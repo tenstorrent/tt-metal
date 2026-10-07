@@ -173,6 +173,21 @@ class MiMoPrefillMoE:
             ttnn.deallocate(p_)
         return o
 
+    def _row_sync(self, tag):
+        """MIMO_SYNC=<letters> (c=after counts, d=after dispatch, e=after experts, k=after combine): tiny all_gather over the mesh ROW axis = a barrier between the 4 chips of a dispatch
+        group at that point (experiment for the deep-trace combine hang / decode glitch)."""
+        if tag not in os.environ.get("MIMO_SYNC", ""):
+            return
+        if getattr(self, "_sync_src", None) is None:
+            self._sync_src = ttnn.from_torch(
+                torch.zeros(1, 1, 32, 32).bfloat16(),
+                device=self.md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+            )
+        free(ttnn.all_gather(self._sync_src, dim=0, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+
     def forward(self, x_rm, scores, indices, keep_counts=False, upto=99):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (router outputs; N = tokens of this mesh row)."""
         md = self.md
@@ -193,6 +208,7 @@ class MiMoPrefillMoE:
         free(hist)
         if keep_counts:
             self.last_counts = counts
+        self._row_sync("c")
         if upto == 1:  # stage-timing hook: counts only
             return offsets, counts, region_offsets
         disp, meta = dp.dispatch(
@@ -218,6 +234,7 @@ class MiMoPrefillMoE:
             use_l1_small_for_semaphores=True,
         )
         free(offsets)
+        self._row_sync("d")
         if upto == 2:  # stage-timing hook: after dispatch
             return disp, meta, counts, region_offsets
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
@@ -287,6 +304,7 @@ class MiMoPrefillMoE:
                 activation=ttnn.RoutedExpertActivation.Silu,
             )
         free(disp)
+        self._row_sync("e")
         if upto == 3:  # stage-timing hook: after the expert op
             return out, meta, counts, region_offsets
         out5 = ttnn.reshape(out, [1, 1, sh.max_buf, out.shape[-1]])
@@ -309,6 +327,7 @@ class MiMoPrefillMoE:
         )
         free(out)
         free(meta)
+        self._row_sync("k")
         if upto == 4:  # stage-timing hook: after combine
             return comb
         if not keep_counts:
