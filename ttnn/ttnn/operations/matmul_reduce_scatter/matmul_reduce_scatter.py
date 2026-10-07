@@ -54,7 +54,7 @@ SUPPORTED = {
     "alignment": ["tile_aligned"],
     "cluster_axis": [0, 1],
     "scatter_dim": [-1, -2],
-    "topology": [Topology.Linear],
+    "topology": [Topology.Linear, Topology.Ring],
     "num_links": [1, 2],
 }
 
@@ -120,8 +120,10 @@ def _check_dram_interleaved(t, what):
         raise ValueError(f"matmul_reduce_scatter: {what} must be DRAM interleaved")
 
 
-def _groups(mesh_shape, cluster_axis):
-    """{coord: (position p, previous coord or None, next coord or None)} for every device."""
+def _groups(mesh_shape, cluster_axis, ring=False):
+    """{coord: (position p, previous coord or None, next coord or None)} for every device.
+
+    ring: the line closes (position 0's previous is position G-1 and vice versa) -- the wrap hop."""
     rows, cols = mesh_shape
     out = {}
     if cluster_axis == 0:
@@ -130,7 +132,11 @@ def _groups(mesh_shape, cluster_axis):
         lines = [[(r, c) for c in range(cols)] for r in range(rows)]
     for line in lines:
         for p, coord in enumerate(line):
-            out[coord] = (p, line[p - 1] if p > 0 else None, line[p + 1] if p + 1 < len(line) else None)
+            n = len(line)
+            if ring:
+                out[coord] = (p, line[(p - 1) % n], line[(p + 1) % n])
+            else:
+                out[coord] = (p, line[p - 1] if p > 0 else None, line[p + 1] if p + 1 < n else None)
     return out
 
 
@@ -151,6 +157,24 @@ def _links(mesh_device, groups, num_links):
             f"(fabric={ttnn.get_fabric_config()})"
         )
     return {k: v[:num_links] for k, v in links.items()}, num_links
+
+
+def _check_ring_fabric(cluster_axis):
+    """Ring needs a fabric config that wraps cluster_axis (TORUS_Y: axis 0, TORUS_X: axis 1, TORUS_XY / 1D_RING: both);
+    the wrap hop's links are checked by _links like every other hop."""
+    fc = ttnn.get_fabric_config()
+    F = ttnn.FabricConfig
+    wraps = {
+        F.FABRIC_2D_TORUS_XY: (0, 1),
+        F.FABRIC_1D_RING: (0, 1),
+        F.FABRIC_2D_TORUS_X: (1,),
+        F.FABRIC_2D_TORUS_Y: (0,),
+    }.get(fc, ())
+    if cluster_axis not in wraps:
+        raise ValueError(
+            f"matmul_reduce_scatter: topology=Ring needs a fabric config that wraps cluster_axis={cluster_axis} "
+            f"(got {fc})"
+        )
 
 
 _PLAN_CACHE = {}
@@ -183,19 +207,37 @@ def _get_sems(mesh_device, cluster_axis, num_links):
     return _SEM_CACHE[key][1]
 
 
-def _get_plan(mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtype, w_dtype, fp32_acc, fidelity):
+def _get_plan(
+    mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtype, w_dtype, fp32_acc, fidelity, ring=False
+):
     """Host plan + the persistent DRAM relay scratch, cached per plan key (global semaphores: `_get_sems`).
 
     The L1 hand-off buffer is NOT cached here: a persistent L1 allocation per plan key would accumulate across the
     distinct shapes a model (or a test session) runs on one mesh and eventually clash with a later plan's CB region
     (and permanently steal L1 from every other op). It is allocated per call (`_allocate_handoff`); the generic_op
     program cache patches its CB address on a hit (UpdateDynamicCircularBufferAddress)."""
-    key = (id(mesh_device), cluster_axis, num_links, M, K, N, scatter_dim, a_dtype, w_dtype, fp32_acc, str(fidelity))
+    key = (
+        id(mesh_device),
+        cluster_axis,
+        ring,
+        num_links,
+        M,
+        K,
+        N,
+        scatter_dim,
+        a_dtype,
+        w_dtype,
+        fp32_acc,
+        str(fidelity),
+    )
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key][1]
     mesh_shape = tuple(mesh_device.shape)
     G = mesh_shape[cluster_axis]
-    groups = _groups(mesh_shape, cluster_axis)
+    ring = ring and G >= 3  # a 2-device ring is the line (one link pair; both directions would share a channel)
+    if ring:
+        _check_ring_fabric(cluster_axis)
+    groups = _groups(mesh_shape, cluster_axis, ring)
     links, L = _links(mesh_device, groups, num_links)
     pl = _plan_placement(mesh_device, L)
     num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
@@ -253,6 +295,7 @@ def _get_plan(mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtyp
         handoff_shape=ttnn.Shape([len(compute_cores) * shard_tiles * 32, 32]),
         handoff_mem=handoff_mem,
         sems=sems,
+        ring=ring,
     )
     _PLAN_CACHE[key] = (mesh_device, plan)
     return plan
@@ -325,6 +368,7 @@ def matmul_reduce_scatter(
         weight.dtype,
         bool(cfg.fp32_dest_acc_en),
         cfg.math_fidelity,
+        ring=topology == Topology.Ring,
     )
     blk = plan["blk"]
     out_shape = a_shape[:-2] + [blk.blk_m_tiles * 32, blk.blk_n_tiles * 32]
@@ -349,5 +393,6 @@ def matmul_reduce_scatter(
         links=plan["links"],
         num_links=plan["num_links"],
         compute_config=cfg,
+        ring=plan["ring"],
     )
     return ttnn.generic_op([input_tensor, weight, plan["relay_scratch"], handoff_l1, output], desc)

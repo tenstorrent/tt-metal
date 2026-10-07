@@ -7,7 +7,9 @@
 //
 // Every segment of cb_xport_sum (relay sums, or a line end's own partials) is one packet into the downstream chip's
 // relay_scratch page (slot * segs_per_block + seg). Increment streams (fused write + atomic inc on every inc_every-th
-// segment of a stream and on its last): relay blocks count on the downstream port's arrival counter; the last block
+// segment of a block and on the block's last -- never deferred across a block boundary: in a ring the downstream
+// port's next block depends on this chip's later blocks only through the ring, so a deferred increment would close a
+// wait cycle): relay blocks count on the downstream port's arrival counter; the last block
 // (the downstream chip's own) on the arrival counter (A forward / B backward) of the downstream final core that owns
 // the segment (alternating halves h = (seg / L) & 1).
 // Ready fence (as fabric_reduce_scatter): first tell the peer port that writes into this chip that it may, then
@@ -99,8 +101,7 @@ void kernel_main() {
         const uint64_t relay_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
         const uint64_t final_noc0 = get_noc_addr(final_x0, final_y0, final_sem_addr);
         const uint64_t final_noc1 = get_noc_addr(final_x1, final_y1, final_sem_addr);
-        const uint32_t relay_total = num_blocks > 0 ? (num_blocks - 1) * full : 0;
-        uint32_t sent_relay = 0, sent_f0 = 0, sent_f1 = 0;
+        uint32_t sent_f0 = 0, sent_f1 = 0;
         uint32_t h = 0, unflushed = 0, rpos = 0;
         for (uint32_t k = 0; k < num_blocks; ++k) {
             const uint32_t base = get_arg_val<uint32_t>(entries_idx + k) * segs_per_block;
@@ -125,8 +126,7 @@ void kernel_main() {
                     inc = (sent % inc_every) == 0 || sent == (h1 ? full_f1 : full_f0);
                     ctr = h1 ? final_noc1 : final_noc0;
                 } else {
-                    ++sent_relay;
-                    inc = (sent_relay % inc_every) == 0 || sent_relay == relay_total;
+                    inc = ((i + 1) % inc_every) == 0 || i + 1 == full;
                     ctr = relay_noc;
                 }
                 if (inc) {

@@ -58,7 +58,7 @@
 Phase 0 — no generality refinement is needed to unlock it, so Refinements 1–2 are ordered purely by difficulty
 (hardest first).
 
-### [ ] Refinement 1 — Ring topology (both ring directions)
+### [x] Refinement 1 — Ring topology (both ring directions)
 
 **Goal**: add `Topology.Ring` to `SUPPORTED["topology"]`. The cells that move from `xfail_expected` to passing on
 this board are the Ring cells of `eval/golden_tests/matmul_reduce_scatter/test_ring_mock.py` (the 8-device snake

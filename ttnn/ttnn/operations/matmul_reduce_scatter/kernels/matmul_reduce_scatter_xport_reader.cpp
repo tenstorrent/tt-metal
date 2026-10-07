@@ -10,7 +10,10 @@
 //     gather: the segment's pieces from the owning compute cores' hand-off slot (1-2 contiguous NoC reads, the
 //             hand-off is TileRowMajor) -> cb_partial_target (cb_xport_partial, or cb_xport_sum on a line-end port);
 //     arrival A / B (relay port: A = what upstream sent into relay_scratch slot j; final: A = forward slot p,
-//             B = backward slot G), each gated by its arrival counter (one increment per inc_every segments).
+//             B = backward slot G), each gated by its arrival counter (one increment per inc_every segments of a
+//             block and one at the block's last segment, so ceil(full / inc_every) per upstream block). A ring port's
+//             first entry has no upstream (has_upstream = 0: the chip's own partial starts that block's chain): only
+//             the gather is pushed; the add kernel copies it through.
 //   One read barrier + one CB push per xport_group segments (and at the CB wrap / block end); after the block's
 //   last barrier, one multicast ack (sem_block_ack += 1) over the compute rectangle releases the hand-off slot.
 // Before exit: re-arm sem_block_ready.
@@ -58,8 +61,8 @@ void kernel_main() {
     const uint32_t m_lines = get_arg_val<uint32_t>(arg++);
     const uint32_t n_lines = get_arg_val<uint32_t>(arg++);
     const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);
-    const uint32_t entries_idx = arg;  // num_blocks x [hand-off slot, scratch slot A, scratch slot B]
-    arg += 3 * num_blocks;
+    const uint32_t entries_idx = arg;  // num_blocks x [hand-off slot, scratch slot A, scratch slot B, has_upstream]
+    arg += 4 * num_blocks;
     const uint32_t mcoord_idx = arg;  // NoC coordinate of each m-line (y if m_on_y else x)
     arg += m_lines;
     const uint32_t ncoord_idx = arg;  // NoC coordinate of each n-line
@@ -70,12 +73,15 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* arr_b = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arr_b_addr);
     const uint64_t ack_mcast = get_noc_multicast_addr(ack_x0, ack_y0, ack_x1, ack_y1, ack_sem_addr);
 
-    uint32_t wpos = 0, batch = 0;
+    uint32_t wpos = 0, apos = 0, batch = 0;  // write positions (segments) in the target / arrival CB rings
     uint32_t w_own = 0, w_a = 0, w_b = 0;
+    const uint32_t incs_per_block = (full + inc_every - 1) / inc_every;
+    uint32_t inc_base = 0;  // arrival increments of the upstream blocks already consumed
     for (uint32_t k = 0; k < num_blocks; ++k) {
-        const uint32_t hslot_off = get_arg_val<uint32_t>(entries_idx + 3 * k) * slot_bytes;
-        const uint32_t base_a = get_arg_val<uint32_t>(entries_idx + 3 * k + 1) * segs_per_block;
-        const uint32_t base_b = get_arg_val<uint32_t>(entries_idx + 3 * k + 2) * segs_per_block;
+        const uint32_t hslot_off = get_arg_val<uint32_t>(entries_idx + 4 * k) * slot_bytes;
+        const uint32_t base_a = get_arg_val<uint32_t>(entries_idx + 4 * k + 1) * segs_per_block;
+        const uint32_t base_b = get_arg_val<uint32_t>(entries_idx + 4 * k + 2) * segs_per_block;
+        const bool up = get_arg_val<uint32_t>(entries_idx + 4 * k + 3) != 0;
         noc_semaphore_wait_min(ready, num_compute_cores * (k + 1));
         uint32_t idx = 0;
         for (uint32_t seg = first_seg; seg < segs_per_block; seg += seg_stride, ++idx) {
@@ -87,20 +93,28 @@ void kernel_main() {
                 cb_reserve_back(cb_partial_target, seg_pages);
                 w_own = get_write_ptr(cb_partial_target);
                 if constexpr (has_a) {
-                    cb_reserve_back(cb_arrival_a, seg_pages);
-                    w_a = get_write_ptr(cb_arrival_a);
+                    if (up) {
+                        cb_reserve_back(cb_arrival_a, seg_pages);
+                        w_a = get_write_ptr(cb_arrival_a);
+                    }
                 }
                 if constexpr (has_b) {
-                    cb_reserve_back(cb_arrival_b, seg_pages);
-                    w_b = get_write_ptr(cb_arrival_b);
+                    if (up) {
+                        cb_reserve_back(cb_arrival_b, seg_pages);
+                        w_b = get_write_ptr(cb_arrival_b);
+                    }
                 }
             } else {
                 cb_reserve_back(cb_partial_target, seg_pages * (batch + 1));
                 if constexpr (has_a) {
-                    cb_reserve_back(cb_arrival_a, seg_pages * (batch + 1));
+                    if (up) {
+                        cb_reserve_back(cb_arrival_a, seg_pages * (batch + 1));
+                    }
                 }
                 if constexpr (has_b) {
-                    cb_reserve_back(cb_arrival_b, seg_pages * (batch + 1));
+                    if (up) {
+                        cb_reserve_back(cb_arrival_b, seg_pages * (batch + 1));
+                    }
                 }
             }
             // gather: pieces of block row `row`, columns [c0, c0 + valid), from the owning compute cores
@@ -122,31 +136,46 @@ void kernel_main() {
                 dst += run * tile_bytes;
                 c += run;
             }
-            if constexpr (has_a) {
-                noc_semaphore_wait_min(arr_a, (k * full + idx) / inc_every + 1);
-                noc_async_read(scr.get_noc_addr(base_a + seg), w_a + batch * seg_bytes, bytes);
-            }
-            if constexpr (has_b) {
-                noc_semaphore_wait_min(arr_b, (k * full + idx) / inc_every + 1);
-                noc_async_read(scr.get_noc_addr(base_b + seg), w_b + batch * seg_bytes, bytes);
+            if (up) {
+                if constexpr (has_a) {
+                    noc_semaphore_wait_min(arr_a, inc_base + idx / inc_every + 1);
+                    noc_async_read(scr.get_noc_addr(base_a + seg), w_a + batch * seg_bytes, bytes);
+                }
+                if constexpr (has_b) {
+                    noc_semaphore_wait_min(arr_b, inc_base + idx / inc_every + 1);
+                    noc_async_read(scr.get_noc_addr(base_b + seg), w_b + batch * seg_bytes, bytes);
+                }
             }
             ++batch;
             const bool block_end = seg + seg_stride >= segs_per_block;
-            if (batch == group || wpos + batch == cap_segs || block_end) {
+            if (batch == group || wpos + batch == cap_segs || (up && apos + batch == cap_segs) || block_end) {
                 noc_async_read_barrier();
                 cb_push_back(cb_partial_target, seg_pages * batch);
                 if constexpr (has_a) {
-                    cb_push_back(cb_arrival_a, seg_pages * batch);
+                    if (up) {
+                        cb_push_back(cb_arrival_a, seg_pages * batch);
+                    }
                 }
                 if constexpr (has_b) {
-                    cb_push_back(cb_arrival_b, seg_pages * batch);
+                    if (up) {
+                        cb_push_back(cb_arrival_b, seg_pages * batch);
+                    }
                 }
                 wpos += batch;
                 if (wpos == cap_segs) {
                     wpos = 0;
                 }
+                if (up) {
+                    apos += batch;
+                    if (apos == cap_segs) {
+                        apos = 0;
+                    }
+                }
                 batch = 0;
             }
+        }
+        if (up) {
+            inc_base += incs_per_block;
         }
         // every piece of this block has landed: release the hand-off slot on the compute cores
         noc_semaphore_inc_multicast(ack_mcast, 1, num_compute_cores);

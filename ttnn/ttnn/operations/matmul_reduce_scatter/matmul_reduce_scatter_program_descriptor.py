@@ -211,14 +211,27 @@ def _plan_transport(blk: Blocking):
 
 
 def _schedule_mmrs(p, G, ring=False):
-    """Per-port block lists (send order) and compute order for line position p.
+    """Per-port block lists (send order), per-entry `has_upstream` flags and compute order for group position p.
 
-    fwd: blocks sent toward p+1, farthest first; bwd: toward p-1. compute_order interleaves fwd/bwd one-by-one
-    starting with fwd and ends with the own block p (the finals need it last)."""
-    if ring:
-        raise NotImplementedError("matmul_reduce_scatter: Ring schedule (R3) is not built")
-    fwd = list(range(G - 1, p, -1))
-    bwd = list(range(0, p))
+    fwd: blocks sent toward p+1, farthest first; bwd: toward p-1. The last entry of each list is the downstream
+    chip's own block. Linear: fwd `G-1 .. p+1`, bwd `0 .. p-1`; every entry has an upstream iff the chip has a
+    neighbour behind it in that direction. Ring (G >= 3, design R3): each block's reduction chain is a line centred on
+    its owner -- fwd `p+hf .. p+1`, bwd `p-hb .. p-1` (mod G), hf = ceil((G-1)/2), hb = G-1-hf; the first entry of each
+    list (the farthest block of that direction) has no upstream (the chip's own partial starts the chain), the rest are
+    relays. compute_order interleaves fwd/bwd one-by-one starting with fwd and ends with the own block p (the finals
+    need it last). Upstream-less entries always precede relay entries (the transport add kernel copies them first)."""
+    if ring and G >= 3:
+        hf = (G - 1 + 1) // 2
+        hb = G - 1 - hf
+        fwd = [(p + d) % G for d in range(hf, 0, -1)]
+        bwd = [(p - d) % G for d in range(hb, 0, -1)]
+        fwd_up = [i > 0 for i in range(len(fwd))]
+        bwd_up = [i > 0 for i in range(len(bwd))]
+    else:  # Linear (a 2-device ring is the line)
+        fwd = list(range(G - 1, p, -1))
+        bwd = list(range(0, p))
+        fwd_up = [p > 0] * len(fwd)
+        bwd_up = [p < G - 1] * len(bwd)
     order = []
     for i in range(max(len(fwd), len(bwd))):
         if i < len(fwd):
@@ -226,7 +239,7 @@ def _schedule_mmrs(p, G, ring=False):
         if i < len(bwd):
             order.append(bwd[i])
     order.append(p)
-    return fwd, bwd, order
+    return fwd, bwd, order, fwd_up, bwd_up
 
 
 def _count_segs(first, stride, total):
@@ -328,8 +341,10 @@ def create_mesh_program_descriptor(
     links,
     num_links,
     compute_config,
+    ring=False,
 ):
-    """groups: {coord: (p, prev_coord|None, next_coord|None)}; links: {(coord, peer): [link ids]}."""
+    """groups: {coord: (p, prev_coord|None, next_coord|None)} (ring: wrap neighbours included);
+    links: {(coord, peer): [link ids]}; ring: Topology.Ring schedule (design R3)."""
     sem_arr_fwd, sem_arr_bwd, sem_ready_fence, sem_block_ready = sems[:4]
     sem_block_ack = sems[4:7]  # one ack counter per consumer kind: fwd ports, bwd ports, finals
     G = blk.G
@@ -354,8 +369,10 @@ def create_mesh_program_descriptor(
     a_pages = cm * blk.Kt if blk.a_resident else OPERAND_DEPTH * cm * blk.k_block_tiles
     w_pages = blk.Kt * cn if blk.w_resident else OPERAND_DEPTH * blk.k_block_tiles * cn
     xport_pages = xp.cap_segs * xp.seg_tiles
-    # transport add block: the largest divisor of the transport CB ring <= the DEST batch (blocks never straddle the wrap)
-    xport_add_block = next(d for d in _divisors_desc(xport_pages) if d <= XPORT_ADD_BLOCK_MAX)
+    # transport add block: the DEST batch, within one segment (the add walks segments x seg_tiles, row-blocked, so a
+    # segment is never held back for the next one's tiles and no block straddles the CB wrap)
+    xport_add_block = min(XPORT_ADD_BLOCK_MAX, xp.seg_tiles)
+    sched = {q: _schedule_mmrs(q, G, ring) for q in range(G)}
 
     # compute-rectangle virtual bounds for the ack multicast (NoC0: start = min corner)
     x0, y0 = virt(rect.start)
@@ -369,7 +386,7 @@ def create_mesh_program_descriptor(
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, (p, prev, nxt) in groups.items():
-        fwd, bwd, order = _schedule_mmrs(p, G)
+        fwd, bwd, order, fwd_up, bwd_up = sched[p]
         cidx = {j: i for i, j in enumerate(order)}
         program = ttnn.ProgramDescriptor()
         kernels = []
@@ -384,7 +401,7 @@ def create_mesh_program_descriptor(
         # per compute-order index: block, consumer kind (0 fwd ports, 1 bwd ports, 2 finals), cumulative acks
         order_rt, cum = [], [0, 0, 0]  # cumulative acks per consumer kind (each kind acks in order)
         for j in order:
-            kind = 2 if j == p else (0 if j > p else 1)
+            kind = 2 if j == p else (0 if j in fwd else 1)
             cum[kind] += 2 * L if kind == 2 else L
             order_rt += [j, kind, cum[kind]]
 
@@ -580,6 +597,7 @@ def create_mesh_program_descriptor(
                     has_a,
                     has_b,
                     xport_add_block,
+                    xp.seg_tiles,
                 ],
                 runtime_args=rt,
                 # every cross-device addition accumulates in fp32 (requirement, independent of the user's config)
@@ -594,27 +612,31 @@ def create_mesh_program_descriptor(
             ttnn.RuntimeArgs(),
         )
         senders = []
-        for d, blocks, peer, up, port_list in (
-            ("fwd", fwd, nxt, prev, pl.fwd_ports),
-            ("bwd", bwd, prev, nxt, pl.bwd_ports),
+        for d, blocks, ups, peer, port_list in (
+            ("fwd", fwd, fwd_up, nxt, pl.fwd_ports),
+            ("bwd", bwd, bwd_up, prev, pl.bwd_ports),
         ):
             if peer is None:
                 continue  # no neighbour in this direction: nothing to send, nobody sends a ready to it
-            relay = up is not None
+            assert blocks, "a port with a neighbour always has blocks to send (G >= 2 line, G >= 3 ring)"
+            assert ups == sorted(ups), "upstream-less entries must precede relay entries"
+            n_up = sum(ups)
+            relay = n_up > 0  # mixed (ring) or all-relay (line interior): the add kernel produces cb_xport_sum
+            peer_p = groups[peer][0]
             opp_ports = pl.bwd_ports if d == "fwd" else pl.fwd_ports
             for l in range(L):
                 core = port_list[l]
                 full = _count_segs(l, L, xp.segs_per_block)
-                entries = [(cidx[j] % HANDOFF_DEPTH, j, 0) for j in blocks]
+                entries = [(cidx[j] % HANDOFF_DEPTH, j, 0, int(u)) for j, u in zip(blocks, ups)]
                 rt = xport_reader_rt(
                     l, L, full, entries, sem_arr_fwd, sem_arr_fwd, sem_block_ack[0 if d == "fwd" else 1]
                 )
                 (rd_relay if relay else rd_end)[core.x][core.y] = rt
                 (relay_ports if relay else end_ports).append(core)
-                if relay:
-                    add_relay[core.x][core.y] = [len(blocks) * full * xp.seg_tiles]
-                # sender
-                slots = [G if (d == "bwd" and j == p - 1) else j for j in blocks]
+                if relay:  # [segments copied through (upstream-less entries), segments added (relay entries)]
+                    add_relay[core.x][core.y] = [(len(blocks) - n_up) * full, n_up * full]
+                # sender: landing slot j, except the receiver's own block arriving backward -> slot G
+                slots = [G if (d == "bwd" and j == peer_p) else j for j in blocks]
                 rc = virt(opp_ports[l])  # peer chip's opposite-direction port (same placement on every chip)
                 pc = virt(port_list[l])  # downstream port of the same (direction, link)
                 f0, f1 = virt(pl.finals[2 * l]), virt(pl.finals[2 * l + 1])
@@ -629,7 +651,7 @@ def create_mesh_program_descriptor(
                     full,
                     sem_arr_fwd,
                     sem_arr_fwd if d == "fwd" else sem_arr_bwd,
-                    _incs(len(blocks) * full) if relay else 0,
+                    n_up * _incs(full),  # arrival increments the upstream sends into this port (per block, see sender)
                     sem_ready_fence,
                     1,
                     rc[0],
@@ -650,15 +672,18 @@ def create_mesh_program_descriptor(
                 snd_rt[core.x][core.y] = args
                 senders.append(core)
 
-        has_fa, has_fb = int(prev is not None), int(nxt is not None)
+        # finals receive the own block forward iff the previous chip's fwd list (ending with p) is non-empty, backward
+        # iff the next chip's bwd list is
+        has_fa = int(prev is not None and len(sched[groups[prev][0]][0]) > 0)
+        has_fb = int(nxt is not None and len(sched[groups[nxt][0]][1]) > 0)
         rd_final, add_final, wr_final = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for i, core in enumerate(finals):  # final (l, h): segments l + h L, stride 2 L
             first = i // 2 + (i % 2) * L
             n = _count_segs(first, 2 * L, xp.segs_per_block)
             rd_final[core.x][core.y] = xport_reader_rt(
-                first, 2 * L, n, [(cidx[p] % HANDOFF_DEPTH, p, G)], sem_arr_fwd, sem_arr_bwd, sem_block_ack[2]
+                first, 2 * L, n, [(cidx[p] % HANDOFF_DEPTH, p, G, 1)], sem_arr_fwd, sem_arr_bwd, sem_block_ack[2]
             )
-            add_final[core.x][core.y] = [n * xp.seg_tiles]
+            add_final[core.x][core.y] = [0, n]
             wr_final[core.x][core.y] = [
                 out_addr,
                 xp.segs_per_block,
