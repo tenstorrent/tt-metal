@@ -180,3 +180,41 @@ def test_nat2(device, op, mem, kind, act):
     for t in (ta, tb, out):
         ttnn.deallocate(t)
     assert torch.allclose(got, ref, rtol=0.05, atol=0.06), float((got - ref).abs().max())
+
+
+NAT3_SH = {
+    "bs4_t64": ((1, 1, 512, 512), 2, 2, ttnn.ShardStrategy.BLOCK),
+    "bs4_t256": ((1, 1, 1024, 1024), 2, 2, ttnn.ShardStrategy.BLOCK),
+    "bs8_t256": ((1, 1, 1024, 2048), 2, 4, ttnn.ShardStrategy.BLOCK),
+    "bs64_t256": ((1, 1, 4096, 4096), 8, 8, ttnn.ShardStrategy.BLOCK),
+    "ws2_t64": ((1, 1, 64, 2048), 1, 2, ttnn.ShardStrategy.WIDTH),
+    "ws4_t64": ((1, 1, 256, 1024), 1, 4, ttnn.ShardStrategy.WIDTH),
+    "ws8_t256": ((1, 1, 1024, 2048), 1, 8, ttnn.ShardStrategy.WIDTH),
+}
+NAT3_DT = [("bf16", "bf16", "bf16"), ("bfp8", "bfp8", "bfp8"), ("bfp4", "bfp4", "bfp4"), ("bf16", "bfp8", "bf16")]
+NAT3 = [(op, m, k, "-".join(d)) for op in ("add", "mul") for m in NAT3_SH for k in ("col", "scalar") for d in NAT3_DT]
+DT3 = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
+
+
+@pytest.mark.parametrize("op, mem, kind, dts", NAT3, ids=["-".join(c) for c in NAT3])
+def test_nat3(device, op, mem, kind, dts):
+    """#58726: native routing for a block or width sharded a with a column or scalar b, small grids and large shards, no
+    activation."""
+    shape, gy, gx, st = NAT3_SH[mem]
+    mc = ttnn.create_sharded_memory_config(shape, core_grid=ttnn.CoreGrid(y=gy, x=gx), strategy=st)
+    da, db, do = dts.split("-")
+    _seed("nat3", op, mem, kind, dts)
+    a = torch.randn(shape, dtype=torch.bfloat16)
+    b = torch.randn({"col": (1, 1, shape[2], 1), "scalar": (1, 1, 1, 1)}[kind], dtype=torch.bfloat16)
+    ta = ttnn.from_torch(a, dtype=DT3[da], layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    tb = ttnn.from_torch(b, dtype=DT3[db], layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    f = {"add": ttnn.add, "mul": lambda x, y, **k: ttnn.multiply(x, y, fast_and_approximate_mode=True, **k)}[op]
+    for _ in range(3):
+        out = f(ta, tb, dtype=DT3[do], memory_config=mc)
+    af, bf = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+    ref = af + bf if op == "add" else af * bf
+    got = ttnn.to_torch(out).float()
+    for t in (ta, tb, out):
+        ttnn.deallocate(t)
+    tol = 2.0 if "bfp4" in dts else (0.3 if "bfp8" in dts else 0.1)
+    assert torch.allclose(got, ref, rtol=0.1, atol=tol), float((got - ref).abs().max())
