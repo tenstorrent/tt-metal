@@ -419,8 +419,7 @@ void check_peers_are_symmetric(const json& manifest, const std::vector<RouterEnt
     }
 }
 
-// Shape stays within what the hardware and the builder's limits allow. Its exact counts are checked when the
-// router is collected, against the compile-time arguments the kernel receives.
+// Shape stays within what the hardware and the builder's limits allow.
 void check_router_shape(const std::vector<RouterEntry>& routers) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const uint32_t max_eriscs = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
@@ -589,12 +588,6 @@ void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
 const std::set<std::string> k_region_keys = {"address", "size", "schema", "cleared_by_host"};
 const std::set<std::string> k_array_region_keys = {
     "address", "size", "num_elements", "size_per_element", "schema", "cleared_by_host"};
-
-void expect_value_region(const json& region, const std::string& schema, uint32_t size) {
-    EXPECT_EQ(keys_of(region), k_region_keys);
-    EXPECT_EQ(region.at("schema"), schema);
-    EXPECT_EQ(region.at("size"), size);
-}
 
 // Stream ids past the hardware's registers are the builder's "not allocated" sentinel.
 void expect_stream(const json& stream, bool must_be_allocated) {
@@ -938,10 +931,7 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
     }
 }
 
-// A router's edges, on VC0 and VC1 only, and only VC0 in 1D. In 2D, edge n goes to the sibling at compact index
-// n - 1 among the router's other directions; 1D has only edge 1. Each lands on a sender channel, on the edge's VC, of
-// a different router on the same chip and plane: one whose producer is this router, or, through the tensix mux, one
-// the mux carries. Its free-slots register is allocated when a serviced receiver forwards on its VC.
+// A router's edges, on VC0 and VC1 only, and only VC0 in 1D.
 void check_router_edges(const json& manifest, const std::vector<RouterEntry>& routers) {
     const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
 
@@ -952,16 +942,6 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
         const auto plane = control_plane().get_routing_plane_id(entry.node, entry.eth_chan);
         const auto facing = control_plane().get_eth_chan_direction(entry.node, entry.eth_chan);
 
-        std::set<std::string> forwarded_vcs;
-        for (const auto& [vc_key, vc_receivers] : router.at("channels").at("receivers").items()) {
-            for (const auto& [ch_key, receiver] : vc_receivers.items()) {
-                const auto& forwards_on = receiver.at("forwards_on");
-                if (!forwards_on.is_null()) {
-                    forwarded_vcs.insert(forwards_on.get<std::string>());
-                }
-            }
-        }
-
         const auto& edges = router.at("intra_chip_downstream_edges");
         for (const auto& [vc_key, vc_edges] : edges.items()) {
             SCOPED_TRACE(vc_key);
@@ -969,9 +949,7 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
             EXPECT_FALSE(vc_edges.empty());
             for (const auto& [edge_key, edge] : vc_edges.items()) {
                 SCOPED_TRACE(edge_key);
-                EXPECT_EQ(
-                    keys_of(edge),
-                    (std::set<std::string>{"downstream_channel", "through_tensix_mux", "free_slots", "teardown_sem"}));
+                EXPECT_EQ(keys_of(edge), (std::set<std::string>{"downstream_channel", "through_tensix_mux", "fields"}));
                 ASSERT_TRUE(edge_key.starts_with("edge"));
                 const auto n = std::stoul(edge_key.substr(4));
 
@@ -1003,8 +981,7 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
                     EXPECT_EQ(channel.at("producer"), entry.path) << target;
                 }
 
-                expect_stream(edge.at("free_slots"), forwarded_vcs.contains(vc_key));
-                expect_value_region(edge.at("teardown_sem"), schema_name_of<uint32_t>(), sizeof(uint32_t));
+                expect_fields(edge.at("fields"), manifest::k_downstream_edge_fields, manifest.at("vocabulary"), is_2d);
             }
         }
     }
