@@ -112,9 +112,7 @@ def load_model(
         ttnn.distributed_context_barrier()
         return
 
-    if get_torch_state_dict is None or _read_only_enabled():
-        # A deployment on a near-full shared filesystem cannot afford an unplanned cache write: one
-        # missed key is tens of GB. Failing here names the key that did not match what is on disk.
+    if get_torch_state_dict is None:
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
@@ -125,7 +123,11 @@ def load_model(
     # before any rank might proceed to create that dir to save.
     ttnn.distributed_context_barrier()
 
-    if create_cache:
+    if create_cache and _read_only_enabled():
+        # A deployment on a near-full shared filesystem cannot afford an unplanned cache write: one
+        # missed transformer key is tens of GB. The weights are already loaded; only the save is skipped.
+        logger.warning(f"TT_DIT_CACHE_READ_ONLY is set; not writing the missing cache at '{cache_dir}'.")
+    elif create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
         # Opt-in (TT_DIT_CACHE_VERIFY=1): only a cache that reads back exactly is marked complete.
