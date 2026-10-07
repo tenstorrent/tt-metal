@@ -110,22 +110,49 @@ readback. These are native generator timings, excluding HTTP/router overhead.
 Default model knobs match the initial Galaxy baseline. This sweep does not
 qualify model accuracy or the future optimized configuration.
 
-Current job: `qwen38-perf-sweep-tp4-v1-20261006.service`, loading the TP4 model
+Current job: `qwen38-perf-sweep-tp4-v1-20261006.service`, measuring the TP4 grid
 after the first replica/fabric attempts. Results are under
 `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
 the artifact entrypoint and updates after each completed cell. Five host tests
 validate the metric accounting and reject cold captures as warm measurements.
-The first six cells are measured and preserved in
+The first thirteen cells are measured and preserved in
 [`galaxy-evidence/perf-sweep-tp4-v1/index.html`](galaxy-evidence/perf-sweep-tp4-v1/index.html)
-(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; 21 cells remain and
+(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; 14 cells remain and
 the host job continues. At ISL 128, C=1/2/4/8/16 measured
 38.79/31.08/24.85/20.48/12.15 tokens/s/user, with aggregate decode throughput
 38.79/62.16/99.39/163.84/194.40 tokens/s. This baseline has substantial batch
 overhead and does not meet the optimized high-batch targets.
 
+At 8K, C1 delivers 37.98 tokens/s/user with 1.236 s TTFT; C16 delivers
+11.67 tokens/s/user (186.76 aggregate) with 19.98 s TTFT. At 32K, C1 delivers
+36.59 tokens/s/user with 5.316 s TTFT. This baseline prefills users serially,
+which explains the near-linear TTFT growth with concurrency. The code also
+splits B16 GDN into two scan launches, pads single-token decode to a 32-row
+chunk, and copies the resulting recurrent state back. These are profiling
+targets; source inspection does not establish their measured cost.
+
 Initialize with `--replicas 8`
 for the follow-up: throughput is measured on all eight replicas rather than
 inferred by multiplying the TP4 result.
+
+### Reduced P0 device profile
+
+`demo/run_galaxy_layer_profile.sh TASK_ROOT NEW_RESULTS` uses the same baseline
+knobs, the pinned checkpoint, one TP4 submesh, and layers 0/3 (GDN/GQA) at 8K
+context and B1/B16. After repeated warmup it profiles an eager decode step with
+Tracy signposts around layer, norm, attention and FFN/residual stages. It runs
+through the Metal safe pytest wrapper and the shared device lock. The launcher
+requires the actual passing JUnit, completed receipt and per-op CSV because the
+Tracy wrapper can mask pytest failures. Collection and shell syntax validation
+pass; device results are still pending.
+
+The persistent `qwen38-layer-profile-v1-20261006.service` waits for the corrected
+eight-replica qualification job. Receipts and Tracy reports go to
+`TASK_ROOT/layer-profile-v1/`. The enclosing deadline is eight hours including
+queue time; the test itself allows thirty minutes. This reduced eager trace is
+for operation attribution. Its host time includes profiling and Python dispatch
+and must not be presented as full-model traced TPOT. P0 still needs measured
+operation totals reconciled with full-model TPOT and TP8 collective costs.
 
 ## Capacity
 
