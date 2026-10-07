@@ -79,7 +79,7 @@ def test_moe_race_stages(mesh_device):
         moe = MiMoPrefillMoE(
             md, wts, ckc=make_ckc("hifi2", fp32acc=True, packer_l1_acc=True), expert_op="unified", cf=4
         )
-        dec[L] = MiMoMoEDecode(md, gate, moe, router=ROUTER, dead=os.environ.get("MIMO_DEAD", "sentinel"))
+        dec[L] = MiMoMoEDecode(md, gate, moe, router=ROUTER, dead=os.environ.get("MIMO_DEAD", "spread"))
         xdev[L] = ttnn.from_torch(
             x,
             device=md,
@@ -109,6 +109,8 @@ def staged(d, x, mask, taps):
     mc = ttnn.DRAM_MEMORY_CONFIG
 
     def tap(name, t):
+        if name not in os.environ.get("MIMO_TAPS", "sw,si,hist,offsets,counts,roff,part,final").split(","):
+            return  # no clone: the extra clone ops may change the timing
         taps[name] = ttnn.clone(t, memory_config=mc)
 
     B = x.shape[2]
