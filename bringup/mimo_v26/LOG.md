@@ -876,3 +876,14 @@
 - claim: MTP-3 CPU oracle reference/mtp_ref.py (hypotheses in MTP_NOTES.md; no full model): load_mtp(k), mtp_layer (eh_proj on concat of enorm(embed(tok t+1+k)) / hnorm(h_prev), input_layernorm, SWA attention window 128 with sinks, pre_mlp_layernorm, dense FFN, final_layernorm) and evaluate(h_last pre-model.norm [B,S,4096], tokens [B,S+n+1], n_layers) = top-1 accuracy of predicting token t+2+k for 16 variants (concat order eh|he x h_src pre|post x head_norm final|final+norm x chain pre|post) with the shared lm_head. Only crash-tested on a stand-in hidden state (tests/test_mtp_ref.py passes, 76 s); NO accuracy measured: needs device-captured L47 h_out (pre model.norm) with the token stream. Status inferred: structure is a hypothesis.
 - evidence: models/demos/blackhole/mimo_v26/tests/test_mtp_ref.py
 - paths: models/demos/blackhole/mimo_v26/reference/mtp_ref.py, models/demos/blackhole/mimo_v26/tests/test_mtp_ref.py
+
+## E261007-0542-8b2
+- date: 2026-10-07T05:42:28
+- commit: 6ce28192ecf
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: CORRECTION (coordinator): briefs/COMMON.md listed 'bfp8 attention weights default' among decisions already made. The user's decisions covered only routed experts bfp8. bfp8 qkv/o is the coordinator's working assumption inherited from the study (o_proj is bf16 in the checkpoint, qkv fp8 128x128 block). Evidence so far: attention PCC with bfp8 vs bf16 weights differs by about 0.0001 on L1/L5 at S=128 (attn agent E261007-0247-b41 and earlier); device-vs-oracle layers 6-47 run median 2-4x above the bf16-vs-fp32 oracle floor, which excludes weight quantisation (E261007-0540-c3b). To be put to the user; a bf16 o_proj switch is kept available (cost ~0.2 GB/chip extra).
+- evidence: -
+- paths: bringup/mimo_v26/briefs
