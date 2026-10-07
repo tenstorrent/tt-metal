@@ -33,6 +33,8 @@ VARIANTS = {
     "base": ({"MIMO_NORM": "sharded", "MIMO_ROPE_HOIST": "0", "MIMO_ROUTER": "exact"}, "full"),
     "hoist": ({"MIMO_NORM": "sharded", "MIMO_ROPE_HOIST": "1", "MIMO_ROUTER": "exact"}, "full"),
     "hoist_fast": ({"MIMO_NORM": "sharded", "MIMO_ROPE_HOIST": "1", "MIMO_ROUTER": "fast"}, "full"),
+    "hf_nomm1d": ({"MIMO_ROUTER": "fast", "MIMO_QKV_CORES": "0", "MIMO_WO_CORES": "0"}, "full"),
+    "hf_mm1d": ({"MIMO_ROUTER": "fast", "MIMO_QKV_CORES": "60", "MIMO_WO_CORES": "32"}, "full"),
     "full_plainnorm": ({"MIMO_NORM": "plain"}, "full"),
     "full_shardednorm": ({"MIMO_NORM": "sharded"}, "full"),
 }
