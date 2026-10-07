@@ -950,6 +950,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     bool exact_mul_at_hifi2 = false;
+    bool fpu_op_without_activations = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1026,6 +1027,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
             });
         }
+
+        fpu_op_without_activations = !is_sfpu_op && std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+                                     lhs_activations.empty() && rhs_activations.empty() && post_activations.empty();
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1393,13 +1397,26 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
+    // Blackhole: a section of the sharded no-broadcast FPU op is unpacked with one call, and packed with one into bf16 or fp32.
+    const bool block_section = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
+                               !is_where_op && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+                               num_tiles_per_cycle > 1 &&
+                               std::getenv("EB_R3_NO_BLOCK") == nullptr;  // CI measurement toggle, not in the PR
+    const bool block_pack =
+        block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32) &&
+        std::getenv("EB_R3_NO_BLOCK_PACK") == nullptr;  // CI measurement toggle, not in the PR
+    compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
+    compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = block_pack ? "1" : "0";
+
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     if (std::getenv("EB_R3_LOG_RULE") != nullptr) {  // CI log, not in the PR
         std::fprintf(
             stderr,
-            "EB_R3_RULE hifi2=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d scalar_lhs=%d kernel=%s\n",
+            "EB_R3_RULE hifi2=%d block=%d block_pack=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d scalar_lhs=%d kernel=%s\n",
             static_cast<int>(exact_mul_at_hifi2),
+            static_cast<int>(block_section),
+            static_cast<int>(block_pack),
             static_cast<int>(is_sfpu_op),
             static_cast<int>(a_dtype),
             static_cast<int>(b_dtype),

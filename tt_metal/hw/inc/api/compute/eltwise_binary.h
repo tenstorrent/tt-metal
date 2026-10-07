@@ -37,6 +37,12 @@ constexpr SrcDvalid BINARY_REUSE_SRC_DVALID = BINARY_SRC_DVALID;
 template <EltwiseBinaryReuseDestType reuse_dest>
 constexpr SrcDvalid binary_src_dvalid =
     reuse_dest == EltwiseBinaryReuseDestType::NONE ? BINARY_SRC_DVALID : BINARY_REUSE_SRC_DVALID;
+// ELTWISE_BINARY_BLOCK_UNPACK true: the *_block forms unpack their tile pairs with one call.
+#if defined(ELTWISE_BINARY_BLOCK_UNPACK)
+constexpr bool BINARY_BLOCK_UNPACK = (ELTWISE_BINARY_BLOCK_UNPACK);
+#else
+constexpr bool BINARY_BLOCK_UNPACK = false;
+#endif
 #ifdef TRISC_UNPACK
 ALWI void binary_unpack_AB_init(std::uint32_t icb0, std::uint32_t icb1) {
     llk_unpack_AB_init<BroadcastType::NONE, BINARY_SRC_DVALID>(icb0, icb1, Transpose::None);
@@ -75,6 +81,24 @@ ALWI void binary_math(std::uint32_t icb0, std::uint32_t icb1, std::uint32_t idst
         binary_src_dvalid<reuse_dest>>(icb0, icb1, idst, true /* clear_fp32_dst_acc */);
 }
 #endif  // TRISC_MATH
+
+template <EltwiseBinaryType eltwise_binary_type, bool is_fp32_dest_acc_en>
+ALWI void binary_block(
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles) {
+    UNPACK((llk_unpack_AB_block(icb0, icb1, start_itile0, start_itile1, ntiles)));
+    MATH(
+        constexpr MathFidelity math_fidelity =
+            (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);
+    for (std::uint32_t i = 0; i < ntiles; ++i) {
+        MATH((binary_math<eltwise_binary_type, is_fp32_dest_acc_en, math_fidelity, EltwiseBinaryReuseDestType::NONE>(
+            icb0, icb1, start_idst + i)));
+    }
+}
 }  // namespace detail
 #endif  // ARCH_BLACKHOLE
 
@@ -427,6 +451,13 @@ ALWI void mul_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<EltwiseBinaryType::ELWMUL, is_fp32_dest_acc_en>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         mul_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
@@ -465,6 +496,13 @@ ALWI void add_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<EltwiseBinaryType::ELWADD, is_fp32_dest_acc_en>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         add_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
@@ -503,6 +541,13 @@ ALWI void sub_block(
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (detail::BINARY_BLOCK_UNPACK) {
+        detail::binary_block<EltwiseBinaryType::ELWSUB, is_fp32_dest_acc_en>(
+            icb0, icb1, start_itile0, start_itile1, start_idst, ntiles);
+        return;
+    }
+#endif
     for (std::uint32_t i = 0; i < ntiles; ++i) {
         sub_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }

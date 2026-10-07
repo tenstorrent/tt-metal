@@ -381,3 +381,80 @@ inline void _llk_unpack_AB_(
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
 }
+
+/**
+ * @brief Unpack a block of consecutive tile pairs from L1 into SrcA and SrcB with one config context acquire: the base addresses are
+ *        written once and advanced by the tile strides in the instruction stream, and the MOP programmed by the init runs once per tile.
+ *
+ * @tparam BType: Broadcast type for source B, must be NONE.
+ * @param address_a: L1 address of the first source A tile (16 B units).
+ * @param address_b: L1 address of the first source B tile (16 B units).
+ * @param num_tiles: Number of consecutive tile pairs, at least 1.
+ * @param stride_a: Distance between the starts of consecutive source A tiles (16 B units), the operand's page size.
+ * @param stride_b: Distance between the starts of consecutive source B tiles (16 B units), the operand's page size.
+ * @note Call @ref _llk_unpack_AB_init_ with BroadcastType::NONE (either hand-off) before this function; it uses SCRATCH_SEC0 and SCRATCH_SEC1.
+ */
+template <BroadcastType BType = BroadcastType::NONE>
+inline void _llk_unpack_AB_block_(
+    const std::uint32_t address_a, const std::uint32_t address_b, const std::uint32_t num_tiles, const std::uint32_t stride_a, const std::uint32_t stride_b)
+{
+    static_assert(BType == BroadcastType::NONE, "_llk_unpack_AB_block_ supports BroadcastType::NONE only");
+    LLK_ASSERT(num_tiles > 0, "A block has at least one tile");
+    LLK_ASSERT(is_valid_L1_address(address_a) && is_valid_L1_address(address_b), "L1 addresses must be in valid L1 memory region");
+    LLK_ASSERT(
+        is_valid_L1_address(address_a + (num_tiles - 1) * stride_a) && is_valid_L1_address(address_b + (num_tiles - 1) * stride_b),
+        "L1 addresses of the last tiles must be in valid L1 memory region");
+
+    // Strides into SCRATCH_SEC0/1 from the instruction stream, ordered behind the CFGSHIFTMASKs of an earlier block
+    TT_SETDMAREG(0, LOWER_HALFWORD(stride_a), 0, LO_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, UPPER_HALFWORD(stride_a), 0, HI_16(p_gpr_unpack::TMP0));
+    TT_SETDMAREG(0, LOWER_HALFWORD(stride_b), 0, LO_16(p_gpr_unpack::TMP1));
+    TT_SETDMAREG(0, UPPER_HALFWORD(stride_b), 0, HI_16(p_gpr_unpack::TMP1));
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::TMP1, p_cfg::WRCFG_32b, SCRATCH_SEC1_val_ADDR32);
+
+    volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
+    wait_for_next_context(2);
+
+    // Every tile, the first one included, adds the stride before its unpack
+    if (unp_cfg_context == 0)
+    {
+        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address_a - stride_a;
+        cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b - stride_b;
+    }
+    else
+    {
+        cfg[THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address_a - stride_a;
+        cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = address_b - stride_b;
+    }
+    semaphore_post(semaphore::UNPACK_SYNC);
+
+    // Hold the CFGSHIFTMASKs and the UNPACRs until the base address stores from the RISC have landed
+    TTI_STALLWAIT(p_stall::STALL_UNPACK | p_stall::STALL_CFG, p_stall::TRISC_CFG);
+
+    if (unp_cfg_context == 0)
+    {
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b00, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b01, THCON_SEC1_REG3_Base_address_ADDR32);
+            // reset counters; also the instruction between the config writes and the UNPACRs that consume them
+            TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+            ckernel::ckernel_template::run();
+        }
+    }
+    else
+    {
+        for (std::uint32_t tile = 0; tile < num_tiles; ++tile)
+        {
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b00, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b01, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+            TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+            ckernel::ckernel_template::run();
+        }
+    }
+
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
