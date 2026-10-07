@@ -1972,3 +1972,15 @@
 - paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
 - supersedes: E261007-1703-80a
 - data: {"verify_ms_u1":105.2,"round_ms_u1":130,"tok_s_user_u1":33.9,"plain_tok_s_user_u1":13.6,"verify_ms_u4":126.6,"round_ms_u4":168.5,"tok_s_user_u4":25.7,"plain_tok_s_user_u4":10.8,"accepted_u1":4.40,"accepted_u4":4.33}
+
+## E261007-2009-686
+- date: 2026-10-07T20:09:34
+- commit: 697008e0aad
+- branch: ssinghal/mimo-spec
+- host: 41
+- track: spec
+- status: verified
+- claim: DEVICE-RESIDENT SPEC ROUND (tt/spec_dev.py, design in notes/spec_hooks.md): drafter inputs (RoPE by embedding lookup of device positions, window mask from the device ring position map), verify inputs (tokens, positions, ordered cache-update indices, MoE live mask) assigned in place into the decode graph's persistent tensors, cross-column argmax, accept (eq + triangular matmul), bonus, EOS/max flags, drafter ring append masks from iota==position mod 1024, token stream scatter, state update: ALL device ops in ONE trace (drafter + dec._forward + accept + append + state); the host only enqueues chunks of 4 rounds (non-blocking) and reads (alive, cnt, out) once per chunk. Round-1 check vs the host driver from the same state: drafts, verify argmax, k, new pos/anchor all equal (E devdebug entry in the log file spec_dbg_u1_697008e0aad). 48 layers, GSM8K enable_thinking=false, 256 new tokens, host .41, steady chunks (first chunk excluded), unpaired: U=1 (4 users): strict identical 4/4, accepted 4.402/round (unchanged), ROUND 102.6 ms (host-driven was ~130), host enqueue time 0.139 ms per chunk of 4 rounds => 42.9 tok/s/user vs plain 13.6 (3.2x); U=2 (8 users): identical 8/8 vs a clean plain run, accepted 4.557, round 113.3 ms => 40.2 tok/s/user vs plain 12.0 (83.3 ms/token), enqueue 0.151 ms per chunk; U=4 (16 users): identical 14/16 (the same two exact bf16 one-ulp ties as E261007-1703-420, same positions), accepted 4.327 (unchanged), round 126.6 ms (host-driven 168.5) => 34.2 tok/s/user vs plain 10.8 (3.2x), enqueue 0.153 ms per chunk. Streams read back once per chunk of 4 rounds; selective per-user EOS exercised (ragged ends 58..256 tokens in the same batch). One silent hang at device init of the first U=2 attempt (20 min log silence, hangwatch killed + reset, retry fine): not reproduced.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_dev_u4_697008e0aad.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec_dev.py, models/demos/blackhole/mimo_v26/tt/dflash.py
+- data: {"round_ms_u1":102.6,"round_ms_u2":113.3,"round_ms_u4":126.6,"tok_s_user_u1":42.9,"tok_s_user_u2":40.2,"tok_s_user_u4":34.2,"enqueue_ms_per_chunk":0.15,"identical_u1":"4/4","identical_u2":"8/8","identical_u4":"14/16+2 ties"}
