@@ -99,6 +99,10 @@ class MiMoPrefillMoE:
         self.md = md
         self.gate_projs, self.up_projs, self.down_projs = weights
         self.ckc = ckc or make_ckc()
+        if expert_op == "mm":
+            # MiMo scale-bias study: HiFi2/LoFi truncate mantissa products (~1-2% systematic expert shrink, invisible to PCC). The mm path needs HiFi4 with fp32
+            # accumulation whatever the caller passed; MIMO_MM_FID=hifi2 restores the old behaviour for A/B.
+            self.ckc = make_ckc(os.environ.get("MIMO_MM_FID", "hifi4"), fp32acc=True, packer_l1_acc=True)
         self.expert_op = expert_op
         self.cf = cf
         self._shared = {}

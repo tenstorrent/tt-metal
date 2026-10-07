@@ -315,7 +315,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // over a K block costs ~2% typical per-slot error (MiMo scale-bias study).
     const bool kFp32DestAccEn = [] {
         const char* v = std::getenv("MOE_UNI_FP32_DEST");
-        return v != nullptr && v[0] == '1';
+        return v == nullptr || v[0] != '0';  // default ON
     }();
     const uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
@@ -392,8 +392,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //   MOE_UNI_FIDELITY=lofi|hifi2|hifi4 -> compute math fidelity (default LoFi)
     // bfp8 activations cost real accuracy on layers with outlier channels (MiMo L5: PCC 0.993 vs 0.9999 with bf16).
     const auto env_flag = [](const char* n) {
-        const char* v = std::getenv(n);
-        return v != nullptr && v[0] == '1';
+        const char* v = std::getenv(
+            n);  // default ON; MOE_UNI_*=0 restores the original (bfp8 / bf16-partials / bf16-DEST / LoFi) behaviour
+        return v == nullptr || v[0] != '0';
     };
     const tt::DataFormat intermed_df =
         env_flag("MOE_UNI_BF16_INTERMED") ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
@@ -1177,10 +1178,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     compute_kernel_desc.compile_time_args = std::move(compute_ct_args);
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
     compute_kernel_desc.defines = std::move(compute_defines);
-    MathFidelity mimo_fidelity = MathFidelity::LoFi;
+    MathFidelity mimo_fidelity = MathFidelity::HiFi4;  // default HiFi4 (LoFi/HiFi2 truncate mantissa products: ~2%
+                                                       // systematic expert-output shrink)
     if (const char* fv = std::getenv("MOE_UNI_FIDELITY")) {
         const std::string f(fv);
-        mimo_fidelity = f == "hifi2" ? MathFidelity::HiFi2 : f == "hifi4" ? MathFidelity::HiFi4 : MathFidelity::LoFi;
+        mimo_fidelity = f == "hifi2" ? MathFidelity::HiFi2 : f == "lofi" ? MathFidelity::LoFi : MathFidelity::HiFi4;
     }
     compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = mimo_fidelity,
