@@ -385,6 +385,18 @@ class MiMoAttention:
         extra = {"cache_position_modulo": self.ring_blocks * BLOCK} if self.ring_blocks else {}
         if block > 1 and os.environ.get("MIMO_VERIFY_NOWRITE") == "1":
             pass  # debug: reads only (cache already holds the block's K/V from a sequential run)
+        elif block > 1 and upd is not None and upd[0].shape[0] == B:
+            # verify, "skip" mode: paged_update_cache skips a batch entry whose update index is -1, so call t updates only the rows of token t (all rows are
+            # sources, no strided slicing); the 8 calls run in order, each one a read-modify-write of whole cache tiles of DISJOINT users' blocks.
+            kr = ttnn.to_memory_config(kr, kv_mem)
+            v = ttnn.to_memory_config(v, kv_mem)
+            for t in range(block):
+                ttnn.experimental.paged_update_cache(
+                    self.k_cache, kr, update_idxs_tensor=upd[t], page_table=pt_dec, **extra
+                )
+                ttnn.experimental.paged_update_cache(
+                    self.v_cache, v, update_idxs_tensor=upd[t], page_table=pt_dec, **extra
+                )
         elif block > 1 and upd is not None:
             # verify: the `block` virtual users of one real user write rows of the SAME cache tiles; one batched update would read-modify-write the same tiles
             # concurrently, so write token t of all real users in separate calls (upd[t] = int32 [U] positions pos_u + t), in order, before any attention read.

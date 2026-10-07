@@ -67,8 +67,10 @@ class Decoder:
         )
         self.live = LiveMask(self.mesh) if spread else None
         self.upd = None
-        if block > 1 and os.environ.get("MIMO_VERIFY_WRITE", "seq") == "seq":
-            self.upd = [self._persist_u(torch.zeros(self.rows, U, dtype=torch.int32)) for _ in range(block)]
+        self.upd_mode = os.environ.get("MIMO_VERIFY_WRITE", "skip")
+        if block > 1 and self.upd_mode in ("seq", "skip"):
+            n_upd = U if self.upd_mode == "seq" else self.B
+            self.upd = [self._persist_u(torch.zeros(self.rows, n_upd, dtype=torch.int32)) for _ in range(block)]
         self.vocab_local = model.lm_head.shape[-1]
         self._tr = None
         self.out = None
@@ -135,8 +137,13 @@ class Decoder:
         upd_hosts = []
         if self.upd is not None:
             for t in range(self.block):
+                if self.upd_mode == "skip":
+                    ut = torch.full_like(positions, -1)
+                    ut[:, t :: self.block] = positions[:, t :: self.block]
+                else:
+                    ut = positions[:, t :: self.block]
                 h = ttnn.from_torch(
-                    positions[:, t :: self.block].to(torch.int32).contiguous().reshape(-1),
+                    ut.to(torch.int32).contiguous().reshape(-1),
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=self.rowmap,
