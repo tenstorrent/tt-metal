@@ -40,15 +40,7 @@ class MeshDeviceViewImpl;
 
 class MeshDeviceView {
 public:
-    // Constructors for MeshDeviceView for fully and partially local meshes.
-    explicit MeshDeviceView(
-        const MeshShape& shape,
-        const std::vector<IDevice*>& devices,
-        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
-    explicit MeshDeviceView(
-        const MeshShape& shape,
-        const std::vector<MaybeRemote<IDevice*>>& devices,
-        const std::vector<tt::tt_fabric::FabricNodeId>& fabric_node_ids);
+    explicit MeshDeviceView(std::unique_ptr<MeshDeviceViewImpl> impl);
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
     [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
