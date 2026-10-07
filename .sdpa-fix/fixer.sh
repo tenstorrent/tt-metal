@@ -43,7 +43,7 @@ declare -F refresh_oauth_credential >/dev/null && declare -F fetch_failure_logs 
   && declare -F job_log_excerpt >/dev/null \
   || { log "FATAL: could not import helpers from watch.sh"; exit 1; }
 
-if [[ "${FOLLOWUP_ONLY:-0}" != "1" ]]; then
+do_auth() {
 # ---------- auth (same two modes as the watcher) ----------
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 if [[ -s "${OAUTH_TOKEN_FILE:-}" ]]; then
@@ -60,7 +60,8 @@ for m in "$TRIAGE_MODEL" "$FIX_MODEL"; do
   fi
 done
 
-fi
+}
+[[ "${FOLLOWUP_ONLY:-0}" == "1" ]] || do_auth
 
 SLACK_BOT_TOKEN=""
 [[ -f "${SLACK_BOT_TOKEN_FILE:-}" ]] && SLACK_BOT_TOKEN="$(tr -d '[:space:]' < "$SLACK_BOT_TOKEN_FILE")"
@@ -275,6 +276,72 @@ apply_decisions() {
 # ======================================================================
 # Phase A — follow up on open draft PRs (live mode)
 # ======================================================================
+# Start the planned targeted runs on <branch>; prints the dispatched list as
+# JSON (run_id / run_url / head filled in when GitHub shows the run).
+dispatch_runs() {  # $1 plan json (list of {workflow, job, inputs}), $2 branch, $3 expected head sha
+  local plan="$1" branch="$2" want="$3" out="[]" p wf t0 rid
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    wf=$(jq -r .workflow <<<"$p")
+    if [[ "$(jq -r '.inputs == null' <<<"$p")" == "true" ]]; then out=$(jq -c --argjson p "$p" '. + [$p]' <<<"$out"); continue; fi
+    mapfile -t fargs < <(jq -r '.inputs | to_entries[] | "-f", "\(.key)=\(.value)"' <<<"$p")
+    t0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    if ! gh workflow run "$wf" -R "$REPO" --ref "$branch" "${fargs[@]}" 2>>"$AGENT_ERR"; then
+      log "  WARN: dispatch of $wf rejected"
+      out=$(jq -c --argjson p "$p" '. + [$p + {run_id: null, run_url: null, rejected: true}]' <<<"$out"); continue
+    fi
+    rid=""
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      sleep 10
+      rid=$(gh api "repos/$REPO/actions/workflows/$wf/runs?branch=$(jq -rn --arg b "$branch" '$b|@uri')&event=workflow_dispatch&per_page=10" \
+              --jq "[.workflow_runs[] | select(.created_at >= \"$t0\")] | sort_by(.created_at) | last | .id // empty" 2>/dev/null || true)
+      [[ -n "$rid" ]] && break
+    done
+    out=$(jq -c --argjson p "$p" --arg r "$rid" --arg u "${rid:+$(run_url "$rid")}" --arg h "$want" \
+            '. + [($p | del(.conclusion)) + {run_id: (if $r=="" then null else $r end), run_url: (if $u=="" then null else $u end), head: $h}]' <<<"$out")
+  done < <(jq -c '.[]' <<<"$plan")
+  printf '%s' "$out"
+}
+
+# Validation must be on the head that would merge. If the PR head moved since
+# the targeted runs were dispatched (new commit, branch update), cancel the
+# stale runs still in flight, dispatch the same legs on the current head,
+# swap the run links in the PR body, and wait for the new results.
+revalidate_if_stale() {  # $1 group json; returns 0 when it re-dispatched
+  local g="$1" url num branch head disp stale=0 d rid rh new body
+  url=$(jq -r .pr.url <<<"$g"); num=$(jq -r .pr.number <<<"$g"); branch=$(jq -r '.pr.branch // empty' <<<"$g")
+  [[ -n "$branch" ]] || return 1
+  head=$(gh pr view "$url" --json headRefOid --jq .headRefOid 2>/dev/null) || return 1
+  disp=$(jq -c '[.dispatched[] | select(.inputs != null)]' <<<"$g")
+  [[ "$(jq length <<<"$disp")" == "0" ]] && return 1
+  while IFS= read -r d; do
+    rid=$(jq -r '.run_id // empty' <<<"$d"); [[ -z "$rid" ]] && continue
+    rh=$(jq -r '.head // empty' <<<"$d")
+    [[ -z "$rh" ]] && rh=$(gh api "repos/$REPO/actions/runs/$rid" --jq .head_sha 2>/dev/null || echo "")
+    if [[ -n "$rh" && "$rh" != "$head" ]]; then
+      stale=1
+      if [[ "$(gh api "repos/$REPO/actions/runs/$rid" --jq .status 2>/dev/null)" != "completed" ]]; then
+        gh run cancel "$rid" -R "$REPO" >/dev/null 2>&1 && log "  PR #$num: cancelled stale run $rid (head ${rh:0:10})"
+      fi
+    fi
+  done < <(jq -c '.[]' <<<"$disp")
+  (( stale )) || return 1
+  log "  PR #$num: head moved to ${head:0:10}, re-dispatching targeted CI"
+  new=$(dispatch_runs "$(jq -c '[.[] | {workflow, job, inputs}]' <<<"$disp")" "$branch" "$head")
+  mapfile -t sigs < <(jq -r '.sigs[]' <<<"$g")
+  $FIXLIB mark --state pr_open --extra "$(jq -nc --argjson d "$new" '{dispatched: $d, gate_note: ""}')" "${sigs[@]}"
+  # Swap the old run links in the PR body for the new ones.
+  body=$(gh pr view "$url" --json body --jq .body)
+  while IFS=$'\t' read -r old_u new_u; do
+    [[ -n "$old_u" && -n "$new_u" ]] && body="${body//$old_u/$new_u}"
+  done < <(jq -rn --argjson o "$disp" --argjson n "$new" '[$o, $n] | transpose[] | "\(.[0].run_url // "")\t\(.[1].run_url // "")"')
+  printf '%s' "$body" > "$FIX_HOME/runs/pr$num.body.md"
+  gh api -X PATCH "repos/$REPO/pulls/$num" -F "body=@$FIX_HOME/runs/pr$num.body.md" >/dev/null || true
+  slack_sig "$EMOJI_PR_OPENED autofix #$num: targeted CI re-running on the latest head (commit:$head)
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g")) · $(jq -r '[.[] | .run_url // empty] | map("<\(.)|run>") | join(", ")' <<<"$new")" "${sigs[@]}"
+  return 0
+}
+
 # Babysit an autofix PR whose targeted CI has reported: once it is out of
 # draft, approved and GitHub says it can merge (all required checks green),
 # say so in bold; if PR-gate checks fail on the current head, name them
@@ -293,11 +360,23 @@ merge_readiness() {
   if [[ -n "$failed" ]]; then
     key="$head:$failed"
     [[ "$(jq -r .gate_note <<<"$g")" == "$key" ]] && return 0
-    $FIXLIB mark --state keep --extra "$(jq -nc --arg k "$key" '{gate_note:$k}')" "${sigs[@]}"
-    log "  PR #$num: checks failing on ${head:0:10}: $failed"
-    slack_sig "$EMOJI_PR_OPENED *autofix #$num — PR checks ❌, needs a look*: $(jq -r .title <<<"$g")
+    local tries jobs
+    tries=$($FIXLIB get "${sigs[0]}" | jq -r --arg s "${sigs[0]}" '.[$s].repair_tries // 0')
+    jobs=$(gh pr view "$url" --json statusCheckRollup --jq '[.statusCheckRollup[]
+             | select(((.conclusion // .state) // "") | test("FAILURE|ERROR|TIMED_OUT|CANCELLED"))
+             | {name: (.name // .context), job: ((.detailsUrl // "") | capture("/job/(?<j>[0-9]+)") | .j)}] | unique' 2>/dev/null || echo '[]')
+    log "  PR #$num: checks failing on ${head:0:10}: $failed (repair attempts so far: $tries)"
+    if (( tries < 2 )); then
+      $FIXLIB mark --state repair --extra "$(jq -nc --arg k "$key" --arg h "$head" --argjson j "$jobs" --argjson t "$((tries + 1))" \
+                                              '{gate_note:$k, repair:{head:$h, failed:$j}, repair_tries:$t}')" "${sigs[@]}"
+      slack_sig "$EMOJI_PR_OPENED autofix #$num: PR checks ❌ ($failed), the bot is repairing it (attempt $((tries + 1)) of 2)
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))" "${sigs[@]}"
+    else
+      $FIXLIB mark --state keep --extra "$(jq -nc --arg k "$key" '{gate_note:$k}')" "${sigs[@]}"
+      slack_sig "$EMOJI_PR_OPENED *autofix #$num — PR checks ❌ after 2 repairs, needs a look*: $(jq -r .title <<<"$g")
 • \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
 • failing on the current head: $failed" "${sigs[@]}"
+    fi
     return 0
   fi
   if [[ "$st" == "ci_passed" && "$mss" =~ ^(CLEAN|HAS_HOOKS|UNSTABLE)$ ]]; then
@@ -338,6 +417,8 @@ followup() {
         continue ;;
       CLOSED) $FIXLIB mark --state rejected "${sigs[@]}"; log "  PR $url closed by a human — signature(s) rejected"; continue ;;
     esac
+    # The targeted runs must be on the current head, whatever the state.
+    revalidate_if_stale "$g" && continue
     # Dispatched CI already reported on: babysit the PR towards merge.
     if [[ "$(jq -r .st <<<"$g")" != "pr_open" ]]; then merge_readiness "$g"; continue; fi
     all_done=1; any_fail=0; lines=""
@@ -382,7 +463,16 @@ $lines" >/dev/null
 followup
 apply_decisions
 refresh_decisions
-[[ "${FOLLOWUP_ONLY:-0}" == "1" ]] && { log "==== follow-up-only tick done ===="; exit 0; }
+if [[ "${FOLLOWUP_ONLY:-0}" == "1" ]]; then
+  # Repairs, decisions and revisions waiting? Then this tick also runs the
+  # agent for them (as DECISIONS_ONLY) instead of leaving them for the hourly run.
+  if [[ -z "$(jq -r '[.sigs[] | select(.state == "repair" or .state == "decided" or .state == "revise")] | .[0].state // empty' "$FIX_HOME/ledger.json")" ]]; then
+    log "==== follow-up-only tick done ===="; exit 0
+  fi
+  log "  pending repair / decision work — running the agent stage now"
+  do_auth
+  DECISIONS_ONLY=1
+fi
 
 # ======================================================================
 # Phase B — triage every newly analyzed run of every watched pipeline
@@ -667,6 +757,10 @@ while IFS= read -r grp; do
   recs=$($FIXLIB get "${sigs[@]}")
   # A human chose an option for this failure: implement exactly that, live.
   choice=$(jq -c 'to_entries[0].value | if .state == "decided" then {choice: .decision_choice, decision} else empty end' <<<"$recs")
+  # A PR already exists for this failure (repair, or a decision taken on it):
+  # work on that PR's branch and push there; never open a second PR.
+  existing_pr=$(jq -c 'to_entries[0].value | if (.state == "repair" or .state == "decided" or .state == "revise") and .pr != null then .pr else empty end' <<<"$recs")
+  repair=$(jq -c 'to_entries[0].value | if .state == "repair" then .repair else empty end' <<<"$recs")
   # The human wrote an instruction under "Other…": build a NEW poll from it.
   note=$(jq -c 'to_entries[0].value | if .state == "revise" then {note: .decision_note, decision, history: (.decision_history // [])} else empty end' <<<"$recs")
   sig8="${sigs[0]:0:8}"
@@ -675,6 +769,7 @@ while IFS= read -r grp; do
 
   # --- GitHub-side de-dup: our own marker or branch already exists ---
   dup=""
+  if [[ -z "$existing_pr" ]]; then
   for s in "${sigs[@]}"; do
     hit=$(gh pr list -R "$REPO" --state all --search "autofixsig$s" --json url,number,state \
             --jq '.[0] // empty' 2>/dev/null || true)
@@ -687,6 +782,7 @@ while IFS= read -r grp; do
     log "  already on GitHub: $dup — adopting, not re-creating"
     $FIXLIB mark --state pr_open --extra "{\"pr\": $dup}" "${sigs[@]}"
     continue
+  fi
   fi
 
   # Human PRs that may already address it (informational for agent + body).
@@ -708,6 +804,11 @@ while IFS= read -r grp; do
                2>/dev/null || true)
 
   prepare_worktree
+  if [[ -n "$existing_pr" ]]; then
+    pr_branch=$(jq -r .branch <<<"$existing_pr")
+    git -C "$FIX_WORKTREE" fetch -q origin "$pr_branch"
+    git -C "$FIX_WORKTREE" checkout -q -f -B "$pr_branch" FETCH_HEAD
+  fi
   pdir="$FIX_HOME/proposals/$(date -u +%Y%m%d-%H%M)-$sig8"
   mkdir -p "$pdir"
   printf '%s' "$recs" | jq . > "$pdir/records.json"
@@ -744,6 +845,39 @@ $(jq -r '.history[] | select(.note != null) | "Earlier the human wrote: \(.note.
 Now the human wrote: $(jq -r .note.text <<<"$note")
 
 Prepare a NEW decision from this. Do not edit any file. Return decision.needed=true with up to 3 options: option A follows the human's instruction as closely as is allowed; keep earlier options only if still useful. If the instruction asks for something the hard rules forbid, say so in the question and offer the closest allowed options. recommended = the option you would pick now."
+  fi
+  if [[ -n "$repair" ]]; then
+    rlogs=""
+    while IFS=$'\t' read -r rname rjob; do
+      [[ -z "$rjob" ]] && continue
+      rlogs+="=== CHECK: $rname ===
+$(job_log_excerpt "$rjob" | tail -c 12000)
+
+"
+    done < <(jq -r '.failed[] | "\(.name)\t\(.job // "")"' <<<"$repair")
+    budget=""
+    if jq -e '.failed[] | select(.name == "verify-time-budgets")' <<<"$repair" >/dev/null; then
+      vjob=$(jq -r '.failed[] | select(.name == "verify-time-budgets") | .job' <<<"$repair")
+      while read -r bteam btype bsku balloc bbud bhead bmark brest; do
+        for byaml in $(grep -oE '[a-z0-9_]+\.yaml' <<<"$brest" | sort -u); do
+          budget+="
+Over budget: team=$bteam type=$btype sku=$bsku allocated=$balloc budget=$bbud headroom=$bhead ($byaml)
+Per group on $bsku (limit vs real runtime, minutes, last 7 days, successful runs):
+$(python3 "$FIX_HOME/fixlib.py" runtime-stats --yaml "$byaml" --sku "$bsku" --runs 6 2>>"$AGENT_ERR" \
+    | jq -r '.groups[] | "- \(.group): limit \(.timeout), max \(.max_min // "?"), p90 \(.p90_min // "?"), runs \(.n), slack \(.slack_min // "?"), owner \(.owner)"')"
+        done
+      done < <(gh api "repos/$REPO/actions/jobs/$vjob/logs" 2>/dev/null | tr -d '\000' | sed 's/^[0-9T:.Z-]* //' | grep -E ' -?[0-9]+ ! ')
+    fi
+    prompt+="
+
+# PR repair
+This failure already has autofix PR #$(jq -r .number <<<"$existing_pr") on branch $(jq -r .branch <<<"$existing_pr"); the worktree is on that branch.
+Its checks fail on head $(jq -r .head <<<"$repair"): $(jq -r '[.failed[].name] | join(", ")' <<<"$repair").
+Make these checks pass with the smallest change ON TOP of this branch. Mechanical fixes (lint, formatting, a wrong path, a typo, a value this PR itself set) → make them (fixed=true). A policy call (changing a time limit or budget of another job, reducing test scope) → decision.needed with options built from the data below; never edit .github/.
+For a time-budget overrun, the options should be offsets: lower the limit of groups whose real max runtime leaves at least 3x headroom under the new limit, preferring groups with the SAME owner as the group this PR raises (no other team gives anything up); or shrink this PR's own increase. State the runtimes in each option's summary.
+
+Failing check log excerpts:
+$rlogs$budget"
   fi
   if [[ -n "$choice" ]]; then
     prompt+="
@@ -868,7 +1002,7 @@ $(jq -r .question <<<"$dec")" "$dec"
   files=$(jq -r '.files | join(", ")' <<<"$guard")
   conf=$(jq -r .confidence "$pdir/verdict.json"); appr=$(jq -r .approach "$pdir/verdict.json")
 
-  if [[ "$FIX_MODE" != "live" && -z "$choice" ]]; then
+  if [[ "$FIX_MODE" != "live" && -z "$choice" && -z "$existing_pr" ]]; then
     $FIXLIB mark --state proposed_dryrun --attempt --count-daily \
       --extra "$(jq -nc --arg p "$pdir" --arg t "$title" '{proposal:$p, verdict_title:$t}')" "${sigs[@]}"
     log "  DRY RUN — proposal written to $pdir"
@@ -877,6 +1011,28 @@ $(jq -r .question <<<"$dec")" "$dec"
 • $appr, confidence $conf, $(jq -r '.added + .deleted' <<<"$guard") lines in $files
 • proposal: \`$pdir\`" "${sigs[@]}"
     git -C "$FIX_WORKTREE" reset -q --hard && git -C "$FIX_WORKTREE" clean -fdq
+    continue
+  fi
+
+  # ---------------- existing PR: push the change onto its branch ----------------
+  if [[ -n "$existing_pr" ]]; then
+    epr=$(jq -r .number <<<"$existing_pr"); ebr=$(jq -r .branch <<<"$existing_pr")
+    git -C "$FIX_WORKTREE" commit -q --no-verify -F - <<EOF
+$v_title
+
+$(jq -r '.why // .root_cause' "$pdir/verdict.json")
+
+Co-Authored-By: Claude ($FIX_MODEL) <noreply@anthropic.com>
+EOF
+    git -C "$FIX_WORKTREE" -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -q origin "HEAD:$ebr"
+    gh pr comment "$epr" -R "$REPO" --body "**autofix:** pushed \`$(git -C "$FIX_WORKTREE" rev-parse --short=10 HEAD)\`: $v_title
+$(jq -r '.fix // .change_summary' "$pdir/verdict.json")
+$( [[ -n "$choice" ]] && jq -r '.choice.key as $k | .decision.options[] | select(.key == $k) | "Chosen in Slack: **\(.key) · \(.label)**"' <<<"$choice")
+Targeted CI re-runs on the new head." >/dev/null
+    $FIXLIB mark --state pr_open --attempt --extra "$(jq -nc --arg p "$pdir" '{proposal:$p}')" "${sigs[@]}"
+    log "  pushed $(git -C "$FIX_WORKTREE" rev-parse --short=10 HEAD) to #$epr ($ebr)"
+    slack_sig "$EMOJI_PR_OPENED autofix #$epr: pushed a fix ($v_title), targeted CI re-running" "${sigs[@]}"
+    git -C "$FIX_WORKTREE" checkout -q -f --detach origin/main
     continue
   fi
 

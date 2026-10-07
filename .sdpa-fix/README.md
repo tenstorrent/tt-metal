@@ -160,6 +160,27 @@ autofix PR whose targeted CI has reported:
 
 The bot never merges.
 
+**Validation is always on the head that would merge.** If the PR head moves
+after targeted runs were dispatched (new commit, branch updated from main),
+the follow-up cancels the stale runs still in flight, dispatches the same legs
+on the new head, swaps the run links in the PR body, and waits again.
+
+**Failing PR checks are repaired, at most twice.** The PR goes to `repair`,
+with the failing check names, job ids and head. The next 10-minute tick runs
+the agent (follow-up ticks escalate when repair / decision work waits) **on the
+PR's own branch**, with the failing jobs' logs:
+- a mechanical fix (lint, formatting, a wrong path, a value the PR set) is
+  pushed to the same PR with a comment, and re-validation starts;
+- a policy call becomes a decision poll, and the chosen option is pushed to the
+  same PR, never a second PR.
+
+For `verify-time-budgets` the agent also gets every over-budget bucket and,
+per group, the limit next to the real max / p90 runtime of the last week and
+its owner (`fixlib.py runtime-stats --yaml X --sku S`). Its options are
+offsets: lower groups with at least 3x headroom, preferring the same owner as
+the raised group, or shrink the PR's own increase. After 2 failed repairs it
+asks in bold.
+
 ## No duplicate PRs
 
 Deduplication is by regression **signature** = `sha1(workflow :: job-without-SKU :: test-id)`,
