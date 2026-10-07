@@ -46,12 +46,51 @@ while read -r tag v tests conf kexp; do
   K=(); [[ -n ${kexp:-} && ${kexp:-} != - ]] && K=(-k "$kexp")
   OUT=$OUTD/out_${tag}_${i}_$v; rm -rf $OUT; mkdir -p $OUT
   echo "== $tag $v ($i) $tests $(date -u +%T)"
+  if [[ $tag == bits* ]]; then  # outputs as raw bits, no profiler
+    B=$OUTD/bits_$v; mkdir -p $B
+    JSDPA_OUT=$B V12_OUT=$B SYNC_OUT=$B TT_METAL_LLK_ASSERTS=${BITS_ASSERTS:-1} timeout -s INT -k 60 ${CI_LIMIT:-900} python -m pytest "${C[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
+    rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
+    if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then tail -40 $OUTD/log_${tag}_${i}_$v.txt; fi
+    continue
+  fi
   timeout -s INT -k 60 ${CI_LIMIT:-900} python -m tracy -r -p --no-web-server -o $OUT -m pytest "${C[@]}" -p mm_prof_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
   rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
   if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then tail -40 $OUTD/log_${tag}_${i}_$v.txt; fi
   echo "== compute ELFs of $v:"; elfsum $TT_METAL_CACHE
 done < "$1"
 place $S/variants/head
+if ls -d $OUTD/bits_* >/dev/null 2>&1; then
+  echo "== bits: every saved output of each variant against the head's"
+  python - "$OUTD" <<'PY'
+import glob, os, sys, torch
+d = sys.argv[1]
+head = {os.path.basename(f): f for f in glob.glob(os.path.join(d, "bits_head", "*.pt"))}
+for vd in sorted(glob.glob(os.path.join(d, "bits_*"))):
+    v = os.path.basename(vd)[5:]
+    for f in sorted(glob.glob(os.path.join(vd, "*.pt"))):
+        n = os.path.basename(f)
+        a = torch.load(f)
+        if v == "head":
+            continue
+        if n not in head:
+            print(f"   {v} {n}: no head output"); continue
+        b = torch.load(head[n])
+        ta = a if isinstance(a, tuple) else (a,)
+        tb = b if isinstance(b, tuple) else (b,)
+        same = all(torch.equal(x, y) for x, y in zip(ta, tb))
+        diff = sum(int((x != y).sum()) for x, y in zip(ta, tb))
+        total = sum(x.numel() for x in ta)
+        print(f"   {v} {n}: {'bit-identical' if same else 'DIFFERENT'} ({diff} of {total} elements differ)")
+    if v == "head":
+        names = sorted(head)
+        for n in names:
+            if n.endswith("_full.pt"):
+                h = n[:-8] + "_half.pt"
+                if h in head:
+                    x, y = torch.load(head[n]), torch.load(head[h])
+                    print(f"   head {n[:-8]} full against half: {'bit-identical' if torch.equal(x, y) else 'DIFFERENT (%d of %d)' % (int((x != y).sum()), x.numel())}")
+PY
+fi
 for tag in $(awk '!/^#/ && NF {print $1}' "$1" | sort -u); do
   echo "== reduce $tag (base head)"; PROF_BASE=head python $S/tools/prof_reduce.py $OUTD $tag 2>&1
 done
