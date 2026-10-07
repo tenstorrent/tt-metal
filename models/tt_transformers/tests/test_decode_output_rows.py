@@ -28,6 +28,9 @@ def make_model(model_class, tp, *, row_sharded=False):
         args=SimpleNamespace(num_devices=tp),
         mesh_config=SimpleNamespace(tp=tp, get_config=lambda mode: SimpleNamespace(tp=tp)),
         users_row_sharded=row_sharded,
+        # Gemma4Model.process_output_decode reads the class property _lane_sharded; a bound method on a
+        # namespace stub cannot see class properties, so the stub provides the single-device value.
+        _lane_sharded=False,
         concat_device_output=lambda tensor: tensor,
         concat_host_output=lambda tensor, *args: tensor,
     )
@@ -40,6 +43,14 @@ def make_model(model_class, tp, *, row_sharded=False):
 def make_logits(rows, offset=0):
     # Distinct row/token values and a padded width catch row splitting and early trimming.
     return torch.arange(rows * 128, dtype=torch.float32).reshape(1, 1, rows, 128) + offset
+
+
+def expected_decode_rows(model_class, rows, limit):
+    # Gemma4 serves narrow decode buckets and pads the logits to the caller's batch B (the stride the
+    # vLLM plugin indexes DP ranks by); the other models return the rows the tensor carries.
+    if model_class is Gemma4Model and rows.shape[0] < limit:
+        rows = torch.cat([rows, rows.new_zeros(limit - rows.shape[0], *rows.shape[1:])])
+    return rows
 
 
 def device_output(model_class, logits, tp):
@@ -58,7 +69,7 @@ def test_decode_preserves_available_rows_and_full_vocab(model_class, tp, rows, l
     model = make_model(model_class, tp)
     logits = make_logits(rows)
     actual = model.process_output_decode(device_output(model_class, logits, tp), B=limit)
-    expected = logits[0, 0, :limit, :100].unsqueeze(1)
+    expected = expected_decode_rows(model_class, logits[0, 0, :limit, :100].unsqueeze(1), limit)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
 
@@ -72,7 +83,8 @@ def test_pending_outputs_keep_their_own_rows(model_class, widths):
     pending = [device_output(model_class, output, 4) for output in logits]
     for output, expected in zip(pending, logits):
         actual, log_probs = Generator.process_decode_output_host(generator, [(output, None)], is_tokens=False)
-        torch.testing.assert_close(actual, expected[0, 0, :, :100].unsqueeze(1), rtol=0, atol=0)
+        rows = expected_decode_rows(model_class, expected[0, 0, :, :100].unsqueeze(1), 32)
+        torch.testing.assert_close(actual, rows, rtol=0, atol=0)
         assert log_probs is None
 
 
