@@ -470,6 +470,8 @@ class TtMoEGatePrefill(LightweightModule):
         cache_path: Path | None,
         cache_name_prefix: str | None,
         device: ttnn.MeshDevice | None = None,  # None=cache, mesh_device=load
+        *,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ) -> dict | None:
         """
         Shared logic for converting gate weights to TTNN with caching.
@@ -514,6 +516,7 @@ class TtMoEGatePrefill(LightweightModule):
                 mesh_shape=mesh_device.shape,
             ),
             cache_file_name=_cache_name("weight"),
+            cache_dump_mode=cache_dump_mode,
         )
 
         # Cache bias unbroadcasted (required by moe_grouped_topk)
@@ -523,6 +526,7 @@ class TtMoEGatePrefill(LightweightModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_dump_mode=cache_dump_mode,
         )
 
         if device is None:
@@ -566,10 +570,18 @@ class TtMoEGatePrefill(LightweightModule):
         mesh_device: ttnn.MeshDevice,
         cache_path: Path,
         cache_name_prefix: str,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """Build TTNN cache for gate weights without device copy."""
         TtMoEGatePrefill._convert_and_cache_gate_weights(
-            torch_weight, torch_bias, config, mesh_device, cache_path, cache_name_prefix, device=None
+            torch_weight,
+            torch_bias,
+            config,
+            mesh_device,
+            cache_path,
+            cache_name_prefix,
+            device=None,
+            cache_dump_mode=cache_dump_mode,
         )
 
     def __init__(
@@ -583,11 +595,14 @@ class TtMoEGatePrefill(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         is_balanced: bool = False,
         hash_table: torch.Tensor = None,
+        cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
     ):
         """
         Args:
             weight: Gate weight in HF convention: (n_routed_experts, dim).
                     Transposed internally to (dim, n_routed_experts) for the TTNN matmul path.
+            cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). Pass
+                ttnn.DumpTensorMode.LOCAL when each rank builds different layers (pipeline parallel).
             is_balanced: If True, uses zigzag (balanced) sequence placement across SP devices.
                 Affects per-device real token count computation for padding awareness.
             hash_table: DeepSeek-V4 hash routing tid2eid table, shape (vocab_size, n_activated_experts).
@@ -613,11 +628,25 @@ class TtMoEGatePrefill(LightweightModule):
 
         if weight is not None and bias is not None:
             weights = self._convert_and_cache_gate_weights(
-                weight, bias, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                weight,
+                bias,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=cache_dump_mode,
             )
         elif weight_cache_path is not None:
             weights = self._convert_and_cache_gate_weights(
-                None, None, config, mesh_device, weight_cache_path, cache_name_prefix, device=mesh_device
+                None,
+                None,
+                config,
+                mesh_device,
+                weight_cache_path,
+                cache_name_prefix,
+                device=mesh_device,
+                cache_dump_mode=cache_dump_mode,
             )
         else:
             weights = self._convert_and_cache_gate_weights(

@@ -166,15 +166,20 @@ ttnn::Tensor prepare_w2_no_n_pad(
                  static_cast<int32_t>(start_col + full_block_width)}));
             start_col += full_block_width;
         }
+        // A core whose W2 width is a multiple of the group width has an empty last group
+        // (e.g. 12 of 13 tiles on a 7-core ring). Skip it: ttnn::concat garbles the tensor
+        // following a zero-width input.
         const uint32_t last_group_width = last_group_tiles * TILE_SIZE;
-        each_shard.push_back(slice_basic(
-            tt_w2,
-            {0, 0, 0, static_cast<int32_t>(start_col)},
-            {static_cast<int32_t>(L),
-             static_cast<int32_t>(E),
-             static_cast<int32_t>(N),
-             static_cast<int32_t>(start_col + last_group_width)}));
-        start_col += last_group_width;
+        if (last_group_width > 0) {
+            each_shard.push_back(slice_basic(
+                tt_w2,
+                {0, 0, 0, static_cast<int32_t>(start_col)},
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(N),
+                 static_cast<int32_t>(start_col + last_group_width)}));
+            start_col += last_group_width;
+        }
         if (last_group_pad_tiles > 0) {
             each_shard.push_back(zeros_like_dtype({L, E, N, last_group_pad_tiles * TILE_SIZE}, tt_w2));
         }
@@ -704,14 +709,16 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
             start_col += full_block_width;
         }
         const uint32_t last_group_width = last_group_tiles * TILE_SIZE;
-        b2_each_shard.push_back(slice_basic(
-            b2_tiled,
-            {0, 0, 0, static_cast<int32_t>(start_col)},
-            {static_cast<int32_t>(L),
-             static_cast<int32_t>(E),
-             static_cast<int32_t>(TILE_SIZE),
-             static_cast<int32_t>(start_col + last_group_width)}));
-        start_col += last_group_width;
+        if (last_group_width > 0) {  // see prepare_w2_no_n_pad: zero-width concat inputs are unsafe
+            b2_each_shard.push_back(slice_basic(
+                b2_tiled,
+                {0, 0, 0, static_cast<int32_t>(start_col)},
+                {static_cast<int32_t>(L),
+                 static_cast<int32_t>(E),
+                 static_cast<int32_t>(TILE_SIZE),
+                 static_cast<int32_t>(start_col + last_group_width)}));
+            start_col += last_group_width;
+        }
         if (last_group_pad_tiles > 0) {
             b2_each_shard.push_back(zeros_like_dtype({L, E, TILE_SIZE, last_group_pad_tiles * TILE_SIZE}, tt_b2));
         }

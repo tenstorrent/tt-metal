@@ -67,6 +67,7 @@ CMakePresets.json @tenstorrent/metalium-developers-infra
 **/CMakeLists.txt @tenstorrent/metalium-developers-infra
 scripts/detect_undocumented_ttnn_ops.py @tenstorrent/metalium-developers-external-experience
 scripts/run_safe_pytest.sh @tenstorrent/metalium-developers-convolutions
+scripts/setup_harvesting.py @jvegaTT @ntarafdar @cfjchu @tenstorrent/metalium-developers-infra
 third_party/CMakeLists.txt @tenstorrent/metalium-developers-infra
 
 # Testing scripts and infra
@@ -288,7 +289,6 @@ tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yug
 tests/tt_metal/tt_fabric/physical_discovery/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr
 tests/tt_metal/tt_fabric/test_infra/ @ubcheema @aagarwalTT @SeanNijjar @nnyamagoudar-TT
 tests/tt_metal/tt_fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/metalium-developers-infra
-tests/tt_metal/tt_metal/api/emule/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 tests/tt_metal/tt_metal/debug_tools/ @tenstorrent/metalium-developers-triage
 tests/tt_metal/tt_metal/llk/ @tenstorrent/low-level-team-wh-bh @tenstorrent/low-level-team-quasar
