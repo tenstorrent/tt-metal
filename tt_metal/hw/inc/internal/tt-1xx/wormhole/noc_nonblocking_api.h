@@ -151,6 +151,15 @@ inline __attribute__((always_inline)) uint32_t NOC_STATUS_READ_REG(uint32_t noc,
     return *ptr;
 }
 
+// Orders the NIU counter reads that follow after this RISC's earlier NOC_CMD_CTRL write to `cmd_buf`.
+// The per-transaction-ID counters (NIU_MST_REQS_OUTSTANDING_ID, NIU_MST_WRITE_REQS_OUTGOING_ID) are
+// incremented when NOC_CMD_CTRL is written, but a load from a different address can be emitted before
+// that store, so a counter read right after issuing can see the transaction before it is counted.
+// A load from the same address as the store cannot pass it, and NIU registers are processed in order.
+inline __attribute__((always_inline)) void ncrisc_noc_order_after_cmd_ctrl_write(uint32_t noc, uint32_t cmd_buf) {
+    (void)NOC_CMD_BUF_READ_REG(noc, cmd_buf, NOC_CMD_CTRL);
+}
+
 inline __attribute__((always_inline)) uint32_t NOC_CFG_READ_REG(uint32_t noc, uint32_t reg_id) {
     uint32_t offset = (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_CFG(reg_id);
     volatile uint32_t* ptr = (volatile uint32_t*)offset;

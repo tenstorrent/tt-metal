@@ -2217,6 +2217,11 @@ FORCE_INLINE
 void noc_async_writes_departed(uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH, false, noc);
     WAYPOINT("NWDW");
+    // Ordering, not completion: the outgoing counters below are incremented when NOC_CMD_CTRL is
+    // written, and a counter read can overtake that store and see 0. These polls compare against
+    // issued counts that already include every write, so they cannot pass early, and once they pass
+    // every write is counted. (The command buffers used are not known here, so NOC_CMD_CTRL can't be
+    // read back instead.)
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         do {
             invalidate_l1_cache();
@@ -2820,6 +2825,10 @@ FORCE_INLINE
 void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NBTW");
     RECORD_NOC_EVENT(NocEventType::READ_BARRIER_WITH_TRID, false, noc);
+#if !defined(ARCH_QUASAR)
+    // Make sure the reads just issued are counted before polling the per-trid counter.
+    ncrisc_noc_order_after_cmd_ctrl_write(noc, read_cmd_buf);
+#endif
     while (!ncrisc_noc_read_with_transaction_id_flushed(noc, trid)) {
         continue;
     }
@@ -2996,6 +3005,13 @@ FORCE_INLINE
 void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     WAYPOINT("NWTW");
     RECORD_NOC_EVENT(NocEventType::WRITE_BARRIER_WITH_TRID, false, noc);
+#if !defined(ARCH_QUASAR)
+    // Make sure the writes just issued are counted before polling the per-trid counter.
+    ncrisc_noc_order_after_cmd_ctrl_write(noc, write_cmd_buf);
+    if constexpr (write_reg_cmd_buf != write_cmd_buf) {
+        ncrisc_noc_order_after_cmd_ctrl_write(noc, write_reg_cmd_buf);
+    }
+#endif
     while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid)) {
         continue;
     }
@@ -3021,6 +3037,13 @@ FORCE_INLINE
 void noc_async_write_flushed_with_trid(uint32_t trid, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT(NocEventType::WRITE_FLUSH_WITH_TRID, false, noc);
     WAYPOINT("NFTW");
+#if !defined(ARCH_QUASAR)
+    // Make sure the writes just issued are counted before polling the per-trid counter.
+    ncrisc_noc_order_after_cmd_ctrl_write(noc, write_cmd_buf);
+    if constexpr (write_reg_cmd_buf != write_cmd_buf) {
+        ncrisc_noc_order_after_cmd_ctrl_write(noc, write_reg_cmd_buf);
+    }
+#endif
     while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc, trid)) {
         continue;
     }
