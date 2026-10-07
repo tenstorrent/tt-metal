@@ -8,6 +8,8 @@
 #   NO_FIX=1               triage + ledger only, skip the fix stage
 #   FORCE_SIG=<sig>        run the fix agent on this one signature (any kind)
 #   DECISIONS_ONLY=1       only apply decisions clicked in Slack (set by decide.py)
+#   FOLLOWUP_ONLY=1        only babysit open PRs + apply decisions; no Claude calls
+#                          (cron */10, so "ready to merge" is noticed quickly)
 set -euo pipefail
 
 FIX_HOME="$HOME/.sdpa-fix"
@@ -41,6 +43,7 @@ declare -F refresh_oauth_credential >/dev/null && declare -F fetch_failure_logs 
   && declare -F job_log_excerpt >/dev/null \
   || { log "FATAL: could not import helpers from watch.sh"; exit 1; }
 
+if [[ "${FOLLOWUP_ONLY:-0}" != "1" ]]; then
 # ---------- auth (same two modes as the watcher) ----------
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 if [[ -s "${OAUTH_TOKEN_FILE:-}" ]]; then
@@ -56,6 +59,8 @@ for m in "$TRIAGE_MODEL" "$FIX_MODEL"; do
     exit 1
   fi
 done
+
+fi
 
 SLACK_BOT_TOKEN=""
 [[ -f "${SLACK_BOT_TOKEN_FILE:-}" ]] && SLACK_BOT_TOKEN="$(tr -d '[:space:]' < "$SLACK_BOT_TOKEN_FILE")"
@@ -270,12 +275,47 @@ apply_decisions() {
 # ======================================================================
 # Phase A — follow up on open draft PRs (live mode)
 # ======================================================================
+# Babysit an autofix PR whose targeted CI has reported: once it is out of
+# draft, approved and GitHub says it can merge (all required checks green),
+# say so in bold; if PR-gate checks fail on the current head, name them
+# (once per head commit). Never merges anything itself.
+merge_readiness() {
+  local g="$1" url num st v draft mss head failed key
+  url=$(jq -r .pr.url <<<"$g"); num=$(jq -r .pr.number <<<"$g"); st=$(jq -r .st <<<"$g")
+  mapfile -t sigs < <(jq -r '.sigs[]' <<<"$g")
+  v=$(gh pr view "$url" --json isDraft,mergeStateStatus,headRefOid,reviewDecision,statusCheckRollup --jq '
+        {draft: .isDraft, mss: .mergeStateStatus, head: .headRefOid, review: (.reviewDecision // ""),
+         failed: ([.statusCheckRollup[] | select(((.conclusion // .state) // "") | test("FAILURE|ERROR|TIMED_OUT|CANCELLED"))
+                   | (.name // .context)] | unique)}' 2>/dev/null) || return 0
+  draft=$(jq -r .draft <<<"$v"); mss=$(jq -r .mss <<<"$v"); head=$(jq -r .head <<<"$v")
+  failed=$(jq -r '.failed | join(", ")' <<<"$v")
+  [[ "$draft" == "true" ]] && return 0
+  if [[ -n "$failed" ]]; then
+    key="$head:$failed"
+    [[ "$(jq -r .gate_note <<<"$g")" == "$key" ]] && return 0
+    $FIXLIB mark --state keep --extra "$(jq -nc --arg k "$key" '{gate_note:$k}')" "${sigs[@]}"
+    log "  PR #$num: checks failing on ${head:0:10}: $failed"
+    slack_sig "$EMOJI_PR_OPENED *autofix #$num — PR checks ❌, needs a look*: $(jq -r .title <<<"$g")
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
+• failing on the current head: $failed" "${sigs[@]}"
+    return 0
+  fi
+  if [[ "$st" == "ci_passed" && "$mss" =~ ^(CLEAN|HAS_HOOKS|UNSTABLE)$ ]]; then
+    $FIXLIB mark --state ready_to_merge "${sigs[@]}"
+    log "  PR #$num is ready to merge ($mss, review ${v:+$(jq -r .review <<<"$v")})"
+    slack_sig "$EMOJI_PR_OPENED *autofix #$num — ready to merge*: $(jq -r .title <<<"$g")
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
+• targeted CI ✅ · PR checks ✅ · review: $(jq -r '.review | ascii_downcase | gsub("_"; " ")' <<<"$v")" "${sigs[@]}"
+  fi
+}
+
 followup() {
   local open
-  open=$(jq -c '[.sigs | to_entries[] | select((.value.state=="pr_open" or .value.state=="ci_passed" or .value.state=="ci_failed") and .value.pr != null)
+  open=$(jq -c '[.sigs | to_entries[] | select((.value.state=="pr_open" or .value.state=="ci_passed" or .value.state=="ci_failed" or .value.state=="ready_to_merge") and .value.pr != null)
                  | {sig: .key, pr: .value.pr, st: .value.state, wf: .value.workflow, dispatched: (.value.dispatched // []),
+                    gate_note: (.value.gate_note // ""),
                     title: ((.value.verdict_title // "") | sub("^\\[autofix[^]]*\\] *"; "")), test: (.value.test | sub(".*::"; ""))}]
-                | group_by(.pr.url)[] | {pr: .[0].pr, st: .[0].st, wf: .[0].wf, dispatched: .[0].dispatched,
+                | group_by(.pr.url)[] | {pr: .[0].pr, st: .[0].st, wf: .[0].wf, dispatched: .[0].dispatched, gate_note: .[0].gate_note,
                                          title: .[0].title, tests: (map(.test) | unique | join(", ")), sigs: map(.sig)}' \
          "$FIX_HOME/ledger.json" 2>/dev/null || true)
   [[ -z "$open" ]] && return 0
@@ -298,8 +338,8 @@ followup() {
         continue ;;
       CLOSED) $FIXLIB mark --state rejected "${sigs[@]}"; log "  PR $url closed by a human — signature(s) rejected"; continue ;;
     esac
-    # Dispatched CI already reported on: only the merge/close check above applies.
-    [[ "$(jq -r .st <<<"$g")" == "pr_open" ]] || continue
+    # Dispatched CI already reported on: babysit the PR towards merge.
+    if [[ "$(jq -r .st <<<"$g")" != "pr_open" ]]; then merge_readiness "$g"; continue; fi
     all_done=1; any_fail=0; lines=""
     local disp new_disp="[]"
     disp=$(jq -c '.dispatched' <<<"$g")
@@ -342,6 +382,7 @@ $lines" >/dev/null
 followup
 apply_decisions
 refresh_decisions
+[[ "${FOLLOWUP_ONLY:-0}" == "1" ]] && { log "==== follow-up-only tick done ===="; exit 0; }
 
 # ======================================================================
 # Phase B — triage every newly analyzed run of every watched pipeline

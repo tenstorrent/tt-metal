@@ -146,6 +146,20 @@ in `~/.sdpa-fix/slack_app_token` (chmod 600). Cron runs `decide.sh` every
 token. Log: `logs/decide.log`. `FORCE_SIG=<sig> sdpa-fix-dry` runs the fix
 agent on one failure by hand.
 
+## Babysitting PRs to merge
+
+`FOLLOWUP_ONLY=1 fixer.sh` runs from cron every 10 minutes. It makes no
+Claude calls; it follows open PRs and applies Slack decisions. For every
+autofix PR whose targeted CI has reported:
+- **out of draft, all required checks green, GitHub mergeable**
+  (`mergeStateStatus` CLEAN / HAS_HOOKS / UNSTABLE) → `ready_to_merge`, and the
+  message turns into ***autofix #N — ready to merge*** (targeted CI ✅,
+  PR checks ✅, review state);
+- **PR checks failing on the current head** → ***autofix #N — PR checks ❌,
+  needs a look*** with the failing check names, once per head commit.
+
+The bot never merges.
+
 ## No duplicate PRs
 
 Deduplication is by regression **signature** = `sha1(workflow :: job-without-SKU :: test-id)`,

@@ -27,7 +27,7 @@ LEDGER = os.path.join(HOME, "ledger.json")
 ATTEMPTABLE = {"tracking"}
 # States that end when main goes green for the signature.
 OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed",
-               "awaiting_decision", "decided", "revise"}
+               "awaiting_decision", "decided", "revise", "ready_to_merge"}
 # States the fix scan looks at: still failing, and no PR of ours on it.
 SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending", "awaiting_decision"}
 # States a re-appearing failure re-opens (a fresh regression after a fix).
@@ -283,7 +283,7 @@ def cmd_mark(a):
             for k, v in extra.items():
                 if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr", "fix_author",
                          "decision", "decision_choice", "decision_thread", "decision_note",
-                         "decision_history"):
+                         "decision_history", "gate_note"):
                     r[k] = v
                 elif k == "checked":
                     r.setdefault("checked", {}).update(v)
