@@ -319,7 +319,10 @@ template <
     // Offset of V within each single-CB row; separate V buffers require zero.
     std::uint32_t v_tile_offset = 0,
     // QK contraction width; zero uses the full num_tiles_k row.
-    std::uint32_t qk_contract_tiles = 0>
+    std::uint32_t qk_contract_tiles = 0,
+    // Fidelity of the running-max correction O <- O * (corr - 1) + O; the default follows MATH_FIDELITY.
+    // At LoFi, cancellation when corr is small can leave earlier chunks over-weighted.
+    std::uint32_t corr_fidelity_sel = SDPA_FIDELITY_PROGRAM_DEFAULT>
 void compute_sdpa_chunk(
     std::uint32_t cb_q,
     std::uint32_t cb_k,
@@ -404,10 +407,24 @@ void compute_sdpa_chunk(
 #else
         constexpr bool skip_addrmod = false;
 #endif
-        sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v, skip_addrmod>(cb_q);
+        if constexpr (corr_fidelity_sel == SDPA_FIDELITY_PROGRAM_DEFAULT) {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v, skip_addrmod>(cb_q);
+        } else {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init_fidelity<
+                sdpa_fidelity_from_sel<corr_fidelity_sel>(),
+                num_tiles_v>(cb_q);
+        }
         MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
         sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
-        sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, 1>(mm2_dst_offset);
+        if constexpr (corr_fidelity_sel == SDPA_FIDELITY_PROGRAM_DEFAULT) {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, 1>(mm2_dst_offset);
+        } else {
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_fidelity<
+                sdpa_fidelity_from_sel<corr_fidelity_sel>(),
+                num_tiles_v,
+                true,
+                1>(mm2_dst_offset);
+        }
         // FPU has consumed the tile
         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
         // Reset to 0

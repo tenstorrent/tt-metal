@@ -272,13 +272,14 @@ void run_sdpa_tail(
 }
 
 // Run the chunk API through its partial-output path, including online softmax
-// across two chunks. Layout 0 preserves the original shared K/V defaults; layout 1
+// across chunks. Layout 0 preserves the original shared K/V defaults; layout 1
 // preserves separate V; layout 2 stores [K, padding, V, padding] in each row.
+template <bool test_correction_fidelity = false>
 void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, bool full_sync) {
     auto& cq = mesh.mesh_command_queue();
     const CoreCoord core{0, 0};
     constexpr std::uint32_t rounds = 3;
-    constexpr std::uint32_t chunks = 2;
+    constexpr std::uint32_t chunks = test_correction_fidelity ? 3 : 2;
     constexpr std::uint32_t chunk_tiles = 2;
     constexpr std::uint32_t qk_tiles = 2;
     constexpr std::uint32_t v_tiles = 2;
@@ -318,7 +319,7 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
             CircularBufferConfig(tiles * full_tile_bytes, {{cb, tt::DataFormat::Float16_b}})
                 .set_page_size(cb, full_tile_bytes));
     }
-    const std::vector<std::uint32_t> args{rounds, chunks, layout, row_tiles, v_offset};
+    const std::vector<std::uint32_t> args{rounds, chunks, layout, row_tiles, v_offset, test_correction_fidelity};
     const auto reader = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_sdpa_merged_kv.cpp",
@@ -338,7 +339,7 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
         "tests/tt_metal/tt_metal/test_kernels/compute/sdpa_merged_kv.cpp",
         core,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = test_correction_fidelity ? MathFidelity::LoFi : MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = full_sync,
             .math_approx_mode = false,
@@ -357,15 +358,36 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
         return (row / 16 * 2 + col / 16) * 256 + row % 16 * 16 + col % 16;
     };
     auto q_value = [](std::uint32_t round, std::uint32_t row, std::uint32_t dim) {
+        if constexpr (test_correction_fidelity) {
+            return dim == row + round ? 1.0f : 0.0f;
+        }
         return static_cast<float>(static_cast<int>((round * 3 + row * 7 + dim * 5) % 17) - 8) / 16.0f;
     };
     auto k_value = [](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
+        if constexpr (test_correction_fidelity) {
+            // Uniform scores within a chunk remove LoFi matmul approximation
+            // from the reference. The second chunk raises the scaled max by
+            // 3.25; the third keeps it fixed while exercising the next QK/OV.
+            return static_cast<float>(dim % 4) / 4.0f + static_cast<float>(round) / 4.0f +
+                   (token < chunk_tiles * 32 ? 0.0f : 6.5f);
+        }
         // This exactly representable chunk bias changes the running maximum
         // for some query rows, exercising the previous-output correction too.
         const auto chunk_index = token / (chunk_tiles * 32);
         return static_cast<float>((round * 5 + token * 7 + dim * 3) % 17) / 16.0f + static_cast<float>(chunk_index);
     };
     auto v_value = [&](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
+        if constexpr (test_correction_fidelity) {
+            // Exactly LoFi-representable V keeps the correction observable:
+            // chunk 1 contributes nothing, so it cannot hide an incorrect
+            // rescaling of chunk 0. Powers of two also keep the first partial
+            // O exactly BF16-representable. Chunk 2 adds a small contribution.
+            const auto chunk_index = token / (chunk_tiles * 32);
+            if (chunk_index == 0) {
+                return static_cast<float>(8u << ((dim + round) % 4));
+            }
+            return chunk_index == 1 ? 0.0f : static_cast<float>(1 + (dim + round) % 2) / 8.0f;
+        }
         return layout == 0 ? k_value(round, token, dim)
                            : 0.5f + static_cast<float>((round * 11 + token * 3 + dim * 7) % 23) / 16.0f;
     };
@@ -528,6 +550,20 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvAndDefaultLayouts) {
             SCOPED_TRACE(::testing::Message() << "layout=" << layout << ", full_sync=" << full_sync);
             run_sdpa_merged_kv(*devices_.at(0), layout, full_sync);
         }
+    }
+}
+
+TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkCorrectionFidelityOverride) {
+    // QK and OV remain LoFi; only the previous-output correction uses HiFi4.
+    // exp(-3.25) is about 0.03877, so O + O * (corr - 1) nearly cancels.
+    // The first chunk's approximate exp leaves low mantissa bits in O: HiFi4
+    // retains them, while LoFi truncates the product's copy of O to four fraction bits.
+    // That cancellation error exceeds the existing 3% attention checks.
+    // Three chunks and three invocations exercise restoration after both the
+    // override and the no-max-change correction, across both DST sync modes.
+    for (const bool full_sync : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "full_sync=" << full_sync);
+        run_sdpa_merged_kv<true>(*devices_.at(0), 2, full_sync);
     }
 }
 
