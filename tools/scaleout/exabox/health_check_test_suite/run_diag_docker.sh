@@ -9,8 +9,8 @@
 
 set -euo pipefail
 
-# Pinned to the same image the scheduled fleet run uses.
-DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.80.0-dev20261006-45-g1d758e27faf"
+# Same image the scheduled fleet run uses.
+DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/exabox-tools:latest"
 
 # The suite as it ships in the image. --entrypoint "" means nothing else sets
 # the environment up, so run_diag.sh does it itself off its own location.
@@ -58,9 +58,10 @@ Wrapper options:
                          the console transcript. Created if absent and chmod
                          0777 so the image user can write to it.
                          (default: ./test_output_<date>-<time>)
-  -i, --image IMAGE      Container image, pulled if it is not present locally
-                         (default: the pinned upstream-tests-bh tag; see
-                         DEFAULT_IMAGE at the top of this script)
+  -i, --image IMAGE      Container image, checked against the registry on every
+                         run so a moved tag is picked up (default:
+                         exabox-tools:latest; see DEFAULT_IMAGE at the top of
+                         this script). --docker-arg --pull=never skips the check.
       --docker-arg ARG   Extra argument for \`docker run\`, repeatable. Use for
                          one-offs such as --docker-arg --shm-size=4g
   -h, --help             This text
@@ -212,6 +213,7 @@ exec > >(tee -a "${OUTPUT_DIR}/console.log") 2>&1
 
 DOCKER_ARGS=(
     --rm
+    --pull always
     --entrypoint ""
     --network host
     --cap-add SYSLOG
@@ -478,11 +480,6 @@ bash "${HC_RUN_DIAG}" "${HC_TIER}" \
 # ─────────────────────────────────────────────────────────────────────────────
 
 command -v docker >/dev/null 2>&1 || die "docker is not on PATH"
-
-if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-    say "image not present locally; pulling"
-    docker pull "${IMAGE}" || die "docker pull ${IMAGE} failed"
-fi
 
 say "tier:       ${TIER}"
 say "image:      ${IMAGE}"

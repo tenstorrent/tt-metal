@@ -8,6 +8,8 @@ print_usage() {
     echo "  --empty-entrypoint        (Optional) Pass --entrypoint=\"\" to docker run"
     echo "  --volume <path>           (Optional) Extra host path to mount into the container (repeatable)"
     echo "  --docker-arg <arg>        (Optional) Extra argument passed verbatim to 'docker run' (repeatable)"
+    echo "                            The image is checked against the registry on every run (--pull=always);"
+    echo "                            pass --docker-arg --pull=never for an image that only exists locally"
     echo "                            e.g. --docker-arg --cap-add=SYS_PTRACE --docker-arg --shm-size=2g"
     echo "  --mpi-interface <iface>   (Optional) Network interface to pin MPI to (default: ens5f0np0)"
     echo "                            Passed to --prtemca oob_tcp_if_include and --mca btl_tcp_if_include."
@@ -332,7 +334,7 @@ default() {
         fi
 
         # Build docker command
-        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --init --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
+        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --init --pull=always --quiet --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
         # Single segment without per-rank args
         if [[ "$tag_host" == true ]]; then
@@ -409,7 +411,7 @@ default() {
             fi
 
             # Build docker command for this group
-            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --init --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
+            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --init --pull=always --quiet --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
             # Combine this group's MPI args with docker command
             if [[ "$tag_host" == true ]]; then
