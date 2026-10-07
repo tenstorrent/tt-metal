@@ -992,7 +992,6 @@ manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRou
         .location = location_,
         .chip_facts = chip_facts,
         .control_plane = fabric_context_.get_control_plane(),
-        .stream_assignment = builder_context.get_stream_assignment(local_node_.mesh_id),
         .addresses_to_clear = addresses_to_clear,
         .kernel = kernel_inputs_,
     };
