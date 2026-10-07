@@ -10,6 +10,7 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "select_rows_common.hpp"
 
 namespace {
 
@@ -24,11 +25,21 @@ constexpr uint32_t span_bytes = 64;
 }  // namespace
 
 // Gather this worker's column tiles of each indexed row into row-major output rows.
-template <uint32_t rows, uint32_t input_row_tiles, uint32_t width_tiles, uint32_t tiles_per_core>
+template <
+    uint32_t rows,
+    uint32_t rows_per_output,
+    uint32_t input_row_tiles,
+    uint32_t width_tiles,
+    uint32_t tiles_per_core,
+    uint32_t record,
+    uint32_t has_actual_end,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
 TT_KERNEL void dataflow(uint32_t first_tile) {
     const auto input = TensorAccessor(tensor::input);
-    const auto indices = TensorAccessor(tensor::indices);
     const auto output = TensorAccessor(tensor::output);
+    const auto output_second = TensorAccessor(tensor::output_second);
     DataflowBuffer staging(dfb::staging);
     Noc noc;
 
@@ -37,9 +48,8 @@ TT_KERNEL void dataflow(uint32_t first_tile) {
     const uint32_t base = staging.get_write_ptr();
     const uint32_t spans = base + span_bytes;
     const uint32_t gathered = spans + 2 * tiles_per_core * span_bytes;
-    noc.async_read(indices, CoreLocalMem<uint32_t>(base), rows * sizeof(uint32_t), {.page_id = 0}, {});
-    noc.async_read_barrier();
-    const auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
+    uint32_t words[rows];
+    select_rows::resolve_rows<rows, record, has_actual_end, sp_rank, sp_size, local_rows>(noc, base, words);
 
     const uint32_t end_tile = first_tile + tiles_per_core < width_tiles ? first_tile + tiles_per_core : width_tiles;
     const uint32_t tiles = end_tile - first_tile;
@@ -73,12 +83,23 @@ TT_KERNEL void dataflow(uint32_t first_tile) {
         noc.async_read_barrier();
     }
     for (uint32_t index = 0; index < rows; ++index) {
-        noc.async_write(
-            staging,
-            output,
-            tiles * tile_row_bytes,
-            {.offset_bytes = gathered - base + index * tiles_per_core * tile_row_bytes},
-            {.page_id = index, .offset_bytes = first_tile * tile_row_bytes});
+        // Rows past the first output's share go to the second output.
+        const uint32_t source = gathered - base + index * tiles_per_core * tile_row_bytes;
+        if (index >= rows_per_output) {
+            noc.async_write(
+                staging,
+                output_second,
+                tiles * tile_row_bytes,
+                {.offset_bytes = source},
+                {.page_id = index - rows_per_output, .offset_bytes = first_tile * tile_row_bytes});
+        } else {
+            noc.async_write(
+                staging,
+                output,
+                tiles * tile_row_bytes,
+                {.offset_bytes = source},
+                {.page_id = index, .offset_bytes = first_tile * tile_row_bytes});
+        }
     }
     noc.async_write_barrier();
     staging.push_back(1);

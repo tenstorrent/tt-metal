@@ -134,4 +134,42 @@ inline Topology derive_interval(uint32_t start, uint32_t end, uint32_t rank, uin
     t.split = length > tail_begin;
     return t;
 }
+// Row indices of a history selection record, as chronological_selections stores them; returns their count. The
+// outgoing and local final histories index this rank's projected rows; the predecessor and final histories index
+// the rank-major gathered table (three rows per rank, or six for the packed selections).
+inline uint32_t selection_history_rows(
+    const Topology& topology, uint32_t record, uint32_t sp_size, uint32_t local_rows, uint32_t* rows) {
+    using namespace selection;
+    const uint32_t outgoing_base = (topology.local_split ? topology.head_rows : local_rows) - history_rows;
+    const uint32_t history_end = topology.valid_rows == 0 ? history_rows : topology.valid_rows;
+    const uint32_t local_final_base = history_end - history_rows;
+    const uint32_t predecessor_rank = (topology.rank + sp_size - 1) % sp_size;
+    uint32_t first = 0;
+    uint32_t second = 0;
+    uint32_t count = history_rows;
+    if (record == outgoing_history) {
+        first = outgoing_base;
+    } else if (record == predecessor_history) {
+        first = predecessor_rank * history_rows;
+    } else if (record == final_history) {
+        first = topology.final_owner * history_rows;
+    } else if (record == local_final_history) {
+        first = local_final_base;
+    } else if (record == outgoing_and_local_final_history) {
+        first = outgoing_base;
+        second = local_final_base;
+        count = packed_history_rows;
+    } else {  // predecessor_and_final_history
+        first = predecessor_rank * packed_history_rows;
+        second = topology.final_owner * packed_history_rows + history_rows;
+        count = packed_history_rows;
+    }
+    for (uint32_t i = 0; i < history_rows; ++i) {
+        rows[i] = first + i;
+        if (count == packed_history_rows) {
+            rows[history_rows + i] = second + i;
+        }
+    }
+    return count;
+}
 }  // namespace kda_chronology

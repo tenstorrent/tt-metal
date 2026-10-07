@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections, _layout
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 
@@ -46,6 +46,13 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
     finals = device(torch.arange(21, 21 + partitions).reshape(-1, 1, 1).expand(-1, 32, 32))
     prefix = device(torch.full((1, 32, 32), 99))
 
+    qkv_tiled = device(qkv_host)
+
+    def derived(table, record, **kwargs):
+        return ttnn.experimental.kda.select_history_rows(
+            table, record, actual_start, sp_axis, rows, actual_end=actual_end, **kwargs
+        )
+
     def run():
         selections = ChronologicalSelections(
             ttnn.experimental.kda.chronological_selections(
@@ -60,6 +67,10 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
             selections.select_local_final_history(qkv),
             selections.select_outgoing_and_local_final_history(qkv, width=32),
             selections.select_predecessor_and_final_history(packed_histories),
+            # The same selections with their rows derived on device instead of read from the table.
+            *derived(qkv_tiled, _layout.OUTGOING_AND_LOCAL_FINAL_HISTORY, width=32),
+            *derived(packed_histories, _layout.PREDECESSOR_AND_FINAL_HISTORY, rows_per_output=3),
+            *derived(qkv_tiled, _layout.LOCAL_FINAL_HISTORY, width=32),
         )
 
     for _ in range(2):
@@ -123,12 +134,18 @@ def test_chronological_selections(mesh_device, device_params, sp_axis, bounded):
                         dim=1,
                     ),
                 ]
+                expected += [
+                    expected[5],
+                    expected[6][:, :3],
+                    expected[6][:, 3:],
+                    expected[4],
+                ]
                 for selector, (wanted, actual) in enumerate(zip(expected, shards, strict=True)):
                     assert torch.equal(
                         wanted.bfloat16(), actual[index]
                     ), f"selector={selector} start={start} length={length} rank={rank}"
     finally:
         ttnn.release_trace(mesh_device, trace)
-        for tensor in (*outputs, qkv, histories, finals, prefix, actual_start, actual_end):
+        for tensor in (*outputs, qkv, qkv_tiled, histories, finals, prefix, actual_start, actual_end):
             if tensor is not None:
                 ttnn.deallocate(tensor)

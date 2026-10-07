@@ -267,7 +267,7 @@ def select_final_state(
     rank_final: ttnn.Tensor,
     prefix_final_state: ttnn.Tensor,
     *,
-    selections: ChronologicalSelections,
+    selections: ChronologicalSelections | None,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     local_rows: int,
@@ -451,7 +451,7 @@ def _scan_sp_grouped_chunks(
     groups: int,
     memory: ttnn.MemoryConfig,
     sequence_parallel_axis: int,
-    selections: ChronologicalSelections,
+    selections: ChronologicalSelections | None,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
@@ -697,8 +697,6 @@ class KDARecurrence:
         ``beta`` is the activated token-major beta, or with ``beta_logits_column_offset`` a wider BF16 tensor whose
         columns from that offset hold beta's pre-sigmoid logits; chunk preparation then applies the sigmoid.
         """
-        if self._sequence_parallel != (selections is not None):
-            raise ValueError("chronological selections must be provided exactly for sequence-parallel recurrence")
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,

@@ -22,7 +22,16 @@ struct SelectTileRowsOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-Tensor select_tile_rows(
-    const Tensor& input, const Tensor& indices, uint32_t width, const tt::tt_metal::MemoryConfig& memory_config);
+std::vector<Tensor> select_tile_rows(
+    const Tensor& input,
+    const std::optional<Tensor>& indices,
+    uint32_t width,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    std::optional<uint32_t> record = std::nullopt,
+    const std::optional<Tensor>& actual_start = std::nullopt,
+    const std::optional<Tensor>& actual_end = std::nullopt,
+    uint32_t sequence_parallel_axis = 0,
+    uint32_t local_rows = 0,
+    uint32_t rows_per_output = 0);
 
 }  // namespace ttnn::experimental::prim
