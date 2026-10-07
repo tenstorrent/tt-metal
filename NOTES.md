@@ -27,3 +27,6 @@
    Audio: decode the PCM with ffmpeg (-f s16le) and compare between arms. Timings: E2E_WALL_S gen#N, STAGE_SPLIT, "VAE decode", "Audio decode".
 4. Land via a -land branch from origin/ttp/t48-ltx25-integrated (cherry-pick both code commits), `ttp push --detach`.
    Default off unless bit-identical AND mean gain >=100 ms.
+
+## Drop log
+- 2026-10-07 05:02 UTC, blx01, broker job 732 (smarton, task t188), chips 16-23 (tray 3) left PCIe; broker holding/recovering (bridge resets 734/735 failed). t183 not submitted.
