@@ -18,6 +18,10 @@ Drops seen:
 - Same incident continued: tray-2 bridge-resets 214/215/219 failed, health-gate 217 failed, broker power-cycled the
   box (job 220, 02:26:22 boot) -> killed our waiting driver (no job of ours was running). Startup health gate passed
   02:29:19 (32 chips, fabric OK). Driver relaunched 02:29 -> broker job 224 running since 02:30:09.
+- 2026-10-06 02:31:46 UTC, broker job 224 (OURS, t141 e2e), chips 8-15 (tray 2, incl. chip 12) left the PCIe bus
+  during warmup stage 1 (~1.5 min in). Broker killed it (-9); bridge-resets 226/227 and health-gate 228 failed,
+  broker escalating. Drop #1 for this config (216 never ran). Logs kept as /var/tmp/fasth3/t141/*.224 and out_224/.
+  Driver relaunched 02:35:25 (waits for health, then submits). Second drop in a row of this config -> skip per rule.
 
 Next (after DONE e2e 0):
 1. scp run.log + mp4/png to tt-project/t-e2e/t141/ on g15blx02 (gzip run.log).
