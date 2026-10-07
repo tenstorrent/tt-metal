@@ -124,21 +124,28 @@ def test_bw_rpow_negative_base_is_nan_everywhere(exponent, input_value, device):
     )
 
 
-@pytest.mark.parametrize("input_value", (-4.0, -0.25, 0.5, 6.0))
+@pytest.mark.parametrize("input_value", (-4.0, -0.25, 0.5, 6.0, float("nan")))
 def test_bw_rpow_zero_base_splits_at_zero(input_value, device):
     # 0 ** input is 0 above zero and +inf below it, so the derivative the op promises is
     # 0 above zero and -inf below it. Both halves are exact values, not approximations,
-    # and -inf is precisely what compare_pcc would normalize away.
+    # and -inf is precisely what compare_pcc would normalize away. A NaN input gives NaN,
+    # as in torch.
     shape = torch.Size([1, 1, 32, 32])
     torch_input = torch.full(shape, input_value, dtype=torch.float32)
     torch_grad = torch.ones(shape, dtype=torch.float32)
 
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
     grad_tensor = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_out = ttnn.to_torch(ttnn.rpow_bw(grad_tensor, input_tensor, 0.0)[0]).float()
 
-    if input_value < 0.0:
+    if math.isnan(input_value):
+        assert torch.isnan(
+            tt_out
+        ).all(), f"rpow_bw with base 0 at input NaN returned {tt_out.flatten()[0].item()}, expected NaN"
+    elif input_value < 0.0:
         expected = float("-inf")
         assert (
             torch.isinf(tt_out).all() and (tt_out < 0).all()

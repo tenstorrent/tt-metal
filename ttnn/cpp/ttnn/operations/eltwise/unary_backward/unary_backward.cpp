@@ -860,10 +860,13 @@ std::vector<Tensor> rpow_bw(
     }
     if (exponent == 0.0f) {
         // 0 ** input is 0 above zero and +inf below it, so the derivative is 0 above zero
-        // and -inf below it.
+        // and -inf below it. ltz is false for NaN, so a NaN input lands in the 0 arm; the
+        // last where gives it NaN, as torch does. It runs after the multiply so the NaN
+        // does not depend on the multiply propagating it.
         Tensor deriv = ttnn::where(
             ttnn::ltz(input, output_mem_config), -std::numeric_limits<float>::infinity(), 0.0f, output_mem_config);
         Tensor grad_result = ttnn::multiply(grad, deriv, std::nullopt, output_mem_config);
+        grad_result = ttnn::where(ttnn::isnan(input, output_mem_config), std::nanf(""), grad_result, output_mem_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     }
