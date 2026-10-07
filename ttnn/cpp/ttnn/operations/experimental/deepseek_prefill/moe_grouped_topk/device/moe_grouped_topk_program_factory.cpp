@@ -303,6 +303,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
         {"summed_experts_per_group", operation_attributes.summed_experts_per_group},
         {"cb_winning_group_scores", cb_winning_group_scores},
         {"cb_winning_group_indices", cb_winning_group_indices},
+        {"winning_groups_by_id", static_cast<uint32_t>(operation_attributes.stable_sort && sort_keys_tf32)},
         {"num_group_tiles", num_group_tiles},
         {"cb_sorted_group_order", cb_sorted_group_order},
         {"cb_in_scores", cb_in_scores},
