@@ -31,7 +31,18 @@ calling the encoder. Only inference is kept: dropout is dropped.
 import torch
 import torch.nn as nn
 
-from models.experimental.bevformer.config.head_config import PC_RANGE
+from models.experimental.bevformer.model_config import (
+    EMBED_DIMS,
+    ENCODER_NUM_LAYERS,
+    FEEDFORWARD_CHANNELS,
+    NUM_CAMS,
+    NUM_HEADS,
+    NUM_LEVELS,
+    NUM_POINTS_IN_PILLAR,
+    PC_RANGE,
+    SCA_NUM_POINTS,
+    TSA_NUM_POINTS,
+)
 
 from .point_sampling_3d_2d import bev_reference_points, camera_geometry
 from .spatial_cross_attention import SpatialCrossAttention
@@ -41,7 +52,7 @@ from .temporal_self_attention import TemporalSelfAttention
 class FFN(nn.Module):
     """mmcv's two-layer ``FFN`` with its identity shortcut; dropout is a no-op in inference."""
 
-    def __init__(self, embed_dims=256, feedforward_channels=512):
+    def __init__(self, embed_dims=EMBED_DIMS, feedforward_channels=FEEDFORWARD_CHANNELS):
         super().__init__()
         self.layers = nn.Sequential(
             nn.Sequential(nn.Linear(embed_dims, feedforward_channels), nn.ReLU(inplace=True)),
@@ -59,13 +70,13 @@ class BEVFormerLayer(nn.Module):
 
     def __init__(
         self,
-        embed_dims=256,
-        num_heads=8,
-        num_levels=4,
-        num_points=8,
-        num_cams=6,
-        feedforward_channels=512,
-        tsa_num_points=4,
+        embed_dims=EMBED_DIMS,
+        num_heads=NUM_HEADS,
+        num_levels=NUM_LEVELS,
+        num_points=SCA_NUM_POINTS,
+        num_cams=NUM_CAMS,
+        feedforward_channels=FEEDFORWARD_CHANNELS,
+        tsa_num_points=TSA_NUM_POINTS,
     ):
         super().__init__()
         self.attentions = nn.ModuleList(
@@ -114,15 +125,15 @@ class BEVFormerEncoder(nn.Module):
 
     def __init__(
         self,
-        num_layers=6,
-        embed_dims=256,
-        num_heads=8,
-        num_levels=4,
-        num_points=8,
-        num_cams=6,
-        feedforward_channels=512,
-        tsa_num_points=4,
-        num_points_in_pillar=4,
+        num_layers=ENCODER_NUM_LAYERS,
+        embed_dims=EMBED_DIMS,
+        num_heads=NUM_HEADS,
+        num_levels=NUM_LEVELS,
+        num_points=SCA_NUM_POINTS,
+        num_cams=NUM_CAMS,
+        feedforward_channels=FEEDFORWARD_CHANNELS,
+        tsa_num_points=TSA_NUM_POINTS,
+        num_points_in_pillar=NUM_POINTS_IN_PILLAR,
         pc_range=PC_RANGE,
     ):
         super().__init__()

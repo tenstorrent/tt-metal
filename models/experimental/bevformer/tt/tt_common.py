@@ -14,15 +14,6 @@ import math
 
 import ttnn
 
-# The dtype of the head's class logits, which the coder ranks: in bfloat16 many of the
-# num_query * num_classes scores tie, and the top-k order departs from the reference's.
-SCORE_DTYPE = ttnn.float32
-
-# The dtype of the deformable attentions' reference points and sampling grids, in the encoder and
-# the decoder: in bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the 200x200 BEV
-# grid.
-GRID_DTYPE = ttnn.float32
-
 
 def layer_norm(x, params, residual=None):
     """``ttnn.layer_norm(x + residual)`` with the eps of the module ``params`` were preprocessed from.

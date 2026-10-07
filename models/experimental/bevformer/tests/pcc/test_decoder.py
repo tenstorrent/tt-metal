@@ -7,20 +7,20 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.decoder_common import (
+from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
     assert_channels_close,
+    assert_pcc,
     build_reference_decoder,
     build_reg_branches,
     layer_metrics,
     random_decoder_inputs,
 )
-from models.experimental.bevformer.tt.model_preprocessing_decoder import (
+from models.experimental.bevformer.tt.model_preprocessing import (
     create_decoder_parameters,
     create_reg_branch_parameters,
 )
-from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 CASES = [

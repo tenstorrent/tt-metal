@@ -11,7 +11,7 @@ boxes: it keeps a data-dependent number of them, so it ends the pipeline.
 """
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import (
+from models.experimental.bevformer.model_config import (
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -20,9 +20,9 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_XY,
     CODE_Z,
 )
-from models.experimental.bevformer.config.head_config import MAX_NUM, NUM_CLASSES, PC_RANGE, POST_CENTER_RANGE
+from models.experimental.bevformer.model_config import MAX_NUM, NUM_CLASSES, PC_RANGE, POST_CENTER_RANGE
 from models.experimental.bevformer.reference.nms_free_coder import filter_boxes
-from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE
+from models.experimental.bevformer.model_config import SCORE_DTYPE
 
 # Candidates the exact float32 top-k ranks; see TtNMSFreeCoder.topk.
 NUM_CANDIDATES = 512

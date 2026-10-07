@@ -6,30 +6,28 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.encoder_common import (
+from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS, GRID_DTYPE, SPATIAL_SHAPES
+from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    NUM_LAYERS,
-    SPATIAL_SHAPES,
+    assert_pcc,
     build_reference_encoder,
     camera_rows,
     ego_shift,
     random_encoder_inputs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
-from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 
 CASES = [
     # (name, bev_shape, num_layers, batch_size, yaw_step_deg)
-    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1, 0.0),
+    ("base", BEV_SHAPES["base"], ENCODER_NUM_LAYERS, 1, 0.0),
     ("base-1-layer", BEV_SHAPES["base"], 1, 1, 0.0),
-    ("tiny", BEV_SHAPES["tiny"], NUM_LAYERS, 1, 0.0),
+    ("tiny", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 1, 0.0),
     # bs=2 with a per-sample shift and the second sample's rig turned, so a batch mix-up in the
     # stacked previous BEV, the reference points, the shift or the rebatch shows.
-    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2, 40.0),
+    ("tiny-bs2", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 2, 40.0),
     # Non-square, so a swapped (h, w) in the BEV grid, its reference points or the shift shows.
-    ("50x100", (50, 100), NUM_LAYERS, 1, 0.0),
+    ("50x100", (50, 100), ENCODER_NUM_LAYERS, 1, 0.0),
 ]
 
 

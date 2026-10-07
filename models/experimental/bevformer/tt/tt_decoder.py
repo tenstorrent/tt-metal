@@ -11,7 +11,7 @@ default the decoder takes and returns the reference's sequence-first
 entry and the stacked layer outputs on exit; ``batch_first=True`` skips those permutes.
 Unlike the reference, it also returns each layer's box codes, the reg branches' raw output,
 so ``TtBEVFormerHead`` builds its box predictions without running the branches again.
-Parameters come from ``model_preprocessing_decoder.create_decoder_parameters``. Forward runs
+Parameters come from ``model_preprocessing.create_decoder_parameters``. Forward runs
 on device only.
 
 Reference points are float32, as is the sampling grid built from them (``GRID_DTYPE``).
@@ -23,8 +23,9 @@ import dataclasses
 import math
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import CODE_XY, CODE_Z
-from models.experimental.bevformer.tt.tt_common import GRID_DTYPE, layer_norm
+from models.experimental.bevformer.model_config import CODE_XY, CODE_Z
+from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 

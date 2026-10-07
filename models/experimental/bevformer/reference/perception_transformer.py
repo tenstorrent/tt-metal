@@ -37,10 +37,7 @@ import torch
 import torch.nn as nn
 from torchvision.transforms.functional import rotate
 
-CAN_BUS_DIMS = 18
-# Upstream's default for every grid, tiny's 50x50 included, where it lies outside the grid; it is
-# not derived from bev_h and bev_w.
-ROTATE_CENTER = (100, 100)
+from models.experimental.bevformer.model_config import CAN_BUS_DIMS, EMBED_DIMS, NUM_CAMS, NUM_LEVELS, ROTATE_CENTER
 
 
 def bev_grid_length(pc_range, bev_h, bev_w):
@@ -90,7 +87,14 @@ class PerceptionTransformer(nn.Module):
         rotate_center (tuple[int]): Pixel the previous BEV rotates about, (x, y).
     """
 
-    def __init__(self, encoder, embed_dims=256, num_feature_levels=4, num_cams=6, rotate_center=ROTATE_CENTER):
+    def __init__(
+        self,
+        encoder,
+        embed_dims=EMBED_DIMS,
+        num_feature_levels=NUM_LEVELS,
+        num_cams=NUM_CAMS,
+        rotate_center=ROTATE_CENTER,
+    ):
         super().__init__()
         self.encoder = encoder
         self.embed_dims = embed_dims

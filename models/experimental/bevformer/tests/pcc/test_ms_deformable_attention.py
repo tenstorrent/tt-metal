@@ -9,11 +9,9 @@ import pytest
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
-from models.experimental.bevformer.config import DeformableAttentionConfig
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
-from models.experimental.bevformer.config.encoder_config import (
-    get_preset_config,
-)
+from models.experimental.bevformer.tests.common import PRESETS
 
 from models.experimental.bevformer.tests.test_utils import (
     check_with_tolerances,
@@ -69,22 +67,16 @@ def test_ms_deformable_attention_forward(
     """Test TTMSDeformableAttention against PyTorch reference implementation using configurations."""
     torch.manual_seed(seed)
 
-    # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = preset_config.dataset_config
-    model_config = preset_config.model_config
+    preset = PRESETS[config_name]
 
     # Extract parameters from configs
-    embed_dims = model_config.embed_dims
-    num_heads = model_config.num_heads
-    num_levels = model_config.num_levels
-    num_points = model_config.num_points
+    embed_dims = preset.embed_dims
+    num_heads = preset.num_heads
+    num_levels = preset.num_levels
+    num_points = preset.num_points
 
     # Use spatial shapes from dataset config (limited to num_levels)
-    spatial_shapes_list = dataset_config.spatial_shapes[:num_levels]
+    spatial_shapes_list = preset.spatial_shapes[:num_levels]
     spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 

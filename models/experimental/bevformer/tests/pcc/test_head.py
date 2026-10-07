@@ -7,12 +7,18 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.bevformer.config.head_config import NUM_CLASSES
+from models.experimental.bevformer.model_config import NUM_CLASSES
 from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder, denormalize_bbox
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.decoder_common import BEV_SHAPES, assert_channels_close, random_bev_features
-from models.experimental.bevformer.tests.head_common import assert_boxes_close, build_reference_head, center_channels
-from models.experimental.bevformer.tt.model_preprocessing_head import create_head_parameters
+from models.experimental.bevformer.tests.common import (
+    BEV_SHAPES,
+    assert_boxes_close,
+    assert_channels_close,
+    assert_pcc,
+    build_reference_head,
+    center_channels,
+    random_bev_features,
+)
+from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
 

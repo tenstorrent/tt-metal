@@ -7,7 +7,7 @@
 
 Runs the decoder batch-first over the encoder's ``(bs, bev_h * bev_w, embed_dims)`` BEV
 features, then each layer's classification branch. Parameters come from
-``model_preprocessing_head.create_head_parameters``. Forward runs on device only.
+``model_preprocessing.create_head_parameters``. Forward runs on device only.
 
 The reg branches run once per layer, inside the decoder, which returns their box codes.
 The reference sets a box's center to ``sigmoid(delta + inverse_sigmoid(points))``, with
@@ -19,7 +19,7 @@ the center channels, scaled to metres.
 import torch
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import (
+from models.experimental.bevformer.model_config import (
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -29,8 +29,9 @@ from models.experimental.bevformer.config.decoder_config import (
     CODE_XY,
     CODE_Z,
 )
-from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE, layer_norm
-from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.model_config import SCORE_DTYPE
+from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 # TtBEVFormerHead rebuilds the box code by concatenating its parts in channel order:

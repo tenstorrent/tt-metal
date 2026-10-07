@@ -20,8 +20,8 @@ from types import SimpleNamespace
 import torch
 import ttnn
 
-from ..config import DeformableAttentionConfig
-from .tt_common import GRID_DTYPE
+from ..model_config import DeformableAttentionConfig
+from ..model_config import GRID_DTYPE
 from .tt_ms_deformable_attention import TTMSDeformableAttention
 
 

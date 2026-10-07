@@ -6,14 +6,19 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.config.decoder_config import CODE_SIZE, CODE_XY, CODE_Z
-from models.experimental.bevformer.config.head_config import NUM_CLASSES, POST_CENTER_RANGE
+from models.experimental.bevformer.model_config import (
+    CODE_SIZE,
+    CODE_XY,
+    CODE_Z,
+    DECODER_NUM_LAYERS,
+    GRID_DTYPE,
+    NUM_CLASSES,
+    NUM_QUERY,
+    POST_CENTER_RANGE,
+    SCORE_DTYPE,
+)
 from models.experimental.bevformer.reference.nms_free_coder import NMSFreeCoder
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.decoder_common import NUM_LAYERS, NUM_QUERY
-from models.experimental.bevformer.tests.head_common import assert_boxes_close
-from models.experimental.bevformer.tt.tt_common import SCORE_DTYPE
-from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
+from models.experimental.bevformer.tests.common import assert_boxes_close, assert_pcc
 from models.experimental.bevformer.tt.tt_nms_free_coder import TtNMSFreeCoder
 
 NUM_SCORES = NUM_QUERY * NUM_CLASSES
@@ -38,9 +43,9 @@ def _head_outputs(logits, batch_size, generator):
     """Head-like ``(L, bs, num_query, *)`` class logits, ``logits`` shuffled apart per layer and
     sample, so decoding the wrong layer shows, and box predictions whose centers spread past
     ``POST_CENTER_RANGE`` on every axis, so the range filter drops some of the top-k boxes."""
-    shape = (NUM_LAYERS, batch_size, NUM_QUERY)
+    shape = (DECODER_NUM_LAYERS, batch_size, NUM_QUERY)
     cls_scores = torch.stack(
-        [logits[torch.randperm(NUM_SCORES, generator=generator)] for _ in range(NUM_LAYERS * batch_size)]
+        [logits[torch.randperm(NUM_SCORES, generator=generator)] for _ in range(DECODER_NUM_LAYERS * batch_size)]
     ).view(*shape, NUM_CLASSES)
 
     bbox_preds = torch.randn(*shape, CODE_SIZE, generator=generator)

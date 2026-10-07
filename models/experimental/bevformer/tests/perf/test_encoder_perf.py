@@ -24,11 +24,10 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.encoder_common import (
+from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS, GRID_DTYPE, SPATIAL_SHAPES
+from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
-    NUM_LAYERS,
-    SPATIAL_SHAPES,
+    assert_pcc,
     build_reference_encoder,
     camera_rows,
     ego_shift,
@@ -36,7 +35,6 @@ from models.experimental.bevformer.tests.encoder_common import (
     random_encoder_inputs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
-from models.experimental.bevformer.tt.tt_common import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
 
 
@@ -53,7 +51,7 @@ def _to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
 
 @torch.no_grad()
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("num_layers", [NUM_LAYERS, 1])
+@pytest.mark.parametrize("num_layers", [ENCODER_NUM_LAYERS, 1])
 @pytest.mark.parametrize(
     "device_params",
     # Headroom for the encoder's recorded commands, not a measured size.

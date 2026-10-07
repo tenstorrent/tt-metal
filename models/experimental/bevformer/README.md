@@ -31,7 +31,7 @@ The multi-camera features the encoder reads come from BEVFormer-base's image bac
 - **ResNet101-DCN** (`tt/tt_resnet.py`): caffe-style ResNet101 with DCNv2 (modulated deformable convolution, `tt/tt_modulated_deform_conv.py`) in layer3 and layer4. It emits C3, C4 and C5 at strides 8, 16 and 32.
 - **FPN** (`tt/tt_fpn.py`): maps C3-C5 to four 256-channel levels, the fourth from an extra stride-2 conv on the last output.
 
-It runs 6 cameras at 1600x900, padded to 1600x928. Weights are prepared in the constructors (`tt/model_preprocessing_backbone.py` preprocesses them), so the forward runs on device only.
+It runs 6 cameras at 1600x900, padded to 1600x928. Weights are prepared in the constructors (`tt/model_preprocessing.py` preprocesses them), so the forward runs on device only.
 
 ### Encoder
 
@@ -99,7 +99,7 @@ and the head, for one image shape and batch size (the backbone's convs are pinne
 - `prepare_frame(img_metas, frame)` prepares or refills the frame's buffers; the caller carries the
   previous BEV between frames, as upstream does.
 - The BEV queries and their learned positional encoding depend on the weights only and are
-  uploaded once (`tt/model_preprocessing_bevformer.py`).
+  uploaded once (`tt/model_preprocessing.py`).
 - `reference/bevformer.py`'s `load_bevformer_checkpoint` loads the BEVFormer-base checkpoint
   strictly, every key but the loss's `code_weights`.
 
@@ -115,7 +115,7 @@ six DETR layers of self-attention, single-level deformable cross-attention over 
   through the refinement.
 - The BEV size is folded into the sampling-offset Linear when the module is built, so the
   decoder is built for one `(bev_h, bev_w)` and its forward runs on device only.
-- Parameters come from `tt/model_preprocessing_decoder.py` and are single use: building a decoder
+- Parameters come from `tt/model_preprocessing.py` and are single use: building a decoder
   consumes them, so each decoder instance needs its own `create_decoder_parameters` call.
 - Inputs and outputs are sequence-first by default, as in the reference; `batch_first=True` takes
   and returns batch-first tensors and skips the permutes.
@@ -130,7 +130,7 @@ six DETR layers of self-attention, single-level deformable cross-attention over 
 and, per decoder layer, the classification branch.
 
 - The object queries, their positional embeddings and the initial reference points depend on
-  the weights only, so `tt/model_preprocessing_head.py` computes them once. The parameters also
+  the weights only, so `tt/model_preprocessing.py` computes them once. The parameters also
   carry the head's BEV shape and `pc_range`, and are single use, like the decoder's.
 - The box predictions are the decoder's box codes with cx, cy and cz replaced by its refined
   float32 points, scaled from [0, 1] to `pc_range` metres. The class logits are float32, the
@@ -154,13 +154,13 @@ range filter.
 
 ```
 models/experimental/bevformer/
-├── config/             # Configuration files and model parameters
-│   └── encoder_config/ # Dataset presets (camera rigs, point-cloud ranges) for the tests
+├── model_config.py     # BEVFormer-base's configuration and the port's precision and memory choices
 ├── reference/          # PyTorch reference implementation
-├── tests/              # All tests together
+├── tests/
+│   ├── common.py       # Test helpers: camera rigs, dataset presets, dummy weights, random inputs
 │   ├── pcc/            # Unit tests for individual components
 │   └── perf/           # Traced device-perf harnesses (backbone and FPN, encoder)
-└── tt/                 # TTNN optimized implementation
+└── tt/                 # TTNN implementation; model_preprocessing.py prepares every part's parameters
 ```
 
 ## Section 1: Test Files
@@ -207,7 +207,7 @@ Runs camera images through the backbone and the FPN, end to end.
 pytest models/experimental/bevformer/tests/pcc/test_backbone_fpn.py
 ```
 
-The backbone and FPN tests use seeded random weights (`tests/backbone_weights.py`), tuned to the output statistics of the trained backbone, and assert PCC 0.99.
+The backbone and FPN tests use seeded random weights (`tests/common.py`), tuned to the output statistics of the trained backbone, and assert PCC 0.99.
 
 #### test_decoder.py
 Tests the six-layer detection decoder.
@@ -221,7 +221,7 @@ Tests the six-layer detection decoder.
   inputs
 - That a second eager run adds no programs to the program cache
 
-It uses seeded random weights (`tests/decoder_common.py`): BEVFormer's sampling-offset grid init
+It uses seeded random weights (`tests/common.py`): BEVFormer's sampling-offset grid init
 with random weights on top, spread as in the BEVFormer-base checkpoint for the sampling offsets,
 the cross- and self-attention logits and the reg branches' refinement rows. The BEV features are
 random but spatially smooth, as the encoder's are, and the reference points include the grid
@@ -244,7 +244,7 @@ Tests the detection head, and the coder on the head's outputs.
 
 The dummy decoder and reg-branch weights are scaled to the BEVFormer-base checkpoint's
 statistics (sampling offsets, attention logits, reference-point refinements, box channel spread);
-`tests/decoder_common.py` lists them.
+`tests/common.py` lists them.
 
 **Usage:**
 ```bash
@@ -277,13 +277,13 @@ Tests the six-layer encoder over two consecutive frames.
   as its previous BEV and an ego shift, so the device's error is carried forward as in the
   detector; PCC 0.997 on both frames' outputs
 
-It uses seeded random weights (`tests/encoder_common.py`): upstream's offset-grid init with random
+It uses seeded random weights (`tests/common.py`): upstream's offset-grid init with random
 weights on top, scaled to the offset spread and attention-logit spread the BEVFormer-base
 checkpoint's encoder shows, except the self-attention offsets: at the checkpoint's spread, random
 offset weights make the six layers amplify a bfloat16-sized input perturbation on their own,
 which the trained encoder does not. The camera features are random but spatially smooth, as the FPN's
 are, at the FPN's four level sizes for 928x1600 images; the camera geometry is nuScenes' rig
-(`tests/camera_rig.py`).
+(`tests/common.py`).
 
 **Usage:**
 ```bash
@@ -402,16 +402,20 @@ All tests generate:
 
 ## Configuration
 
-The encoder, decoder and head take plain constructor arguments; their defaults are BEVFormer-base's:
+`model_config.py` holds BEVFormer-base's configuration in one place, shared by the reference and
+the port:
 
-- Encoder (`reference/encoder.py`): six layers, `embed_dims` 256, 8 heads, 4 FPN levels, the spatial
-  cross-attention's `num_points=8` over `num_points_in_pillar=4` heights, the temporal
-  self-attention's `tsa_num_points=4`, FFN 512, six cameras.
-- `pc_range` (`config/head_config.py`): [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0], the nuScenes range
-  the BEV grid, the encoder's pillars and the head's boxes share.
-- The backbone and FPN's memory and precision settings live in `config/backbone_config.py`, the
-  decoder's and head's constants in `config/decoder_config.py` and `config/head_config.py`.
+- The architecture: six cameras at 1600x928, the ResNet101-DCN and FPN arguments and the FPN levels'
+  sizes, the 200x200 BEV grid, `embed_dims` 256, the encoder's six layers (8 heads, the spatial
+  cross-attention's 8 points over 4 pillar heights, the temporal self-attention's 4 points, FFN 512),
+  the decoder's six layers and 900 queries, the CAN-bus and rotation constants. The reference modules
+  take these as their defaults, and `reference/bevformer.py`'s `build_bevformer_base` builds the
+  detector from them.
+- `pc_range`, [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]: the nuScenes range the BEV grid, the encoder's
+  pillars and the head's boxes share.
+- The box code and the coder's box layout, ranges and top-k size.
+- The port's precision and memory choices: the float32 sampling grids and class logits, and the
+  backbone and FPN's per-layer DRAM, sharding and fp32-accumulation settings.
 
-`config/encoder_config/` holds dataset presets (camera rigs, image sizes, point-cloud ranges) and the
-deformable-attention model sizes the multi-scale deformable attention and point-sampling tests use;
-the encoder tests take only its camera rigs and point-cloud ranges.
+The dataset presets (camera rigs, image sizes, point-cloud ranges) that the deformable-attention,
+point-sampling and encoder tests use are test fixtures, in `tests/common.py`.

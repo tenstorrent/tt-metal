@@ -6,9 +6,10 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import assert_pcc
-from models.experimental.bevformer.tests.encoder_common import BEV_SHAPES, NUM_LAYERS, SPATIAL_SHAPES, EMBED_DIMS
-from models.experimental.bevformer.tests.perception_common import (
+from models.experimental.bevformer.model_config import EMBED_DIMS, ENCODER_NUM_LAYERS, SPATIAL_SHAPES
+from models.experimental.bevformer.tests.common import (
+    BEV_SHAPES,
+    assert_pcc,
     build_reference_transformer,
     fpn_rows,
     frame_metas,
@@ -19,11 +20,11 @@ from models.experimental.bevformer.tt.tt_perception_transformer import TtPercept
 
 CASES = [
     # (name, bev_shape, num_layers, batch_size, yaw_step_deg, num_frames)
-    ("base", BEV_SHAPES["base"], NUM_LAYERS, 1, 0.0, 2),
+    ("base", BEV_SHAPES["base"], ENCODER_NUM_LAYERS, 1, 0.0, 2),
     # bs=2: each sample has its own CAN bus, rotation and shift, and the second sample's rig is
     # turned, so a batch mix-up in any of them shows. A third frame refills the frame's buffers
     # once more, which must reuse every program the second compiled.
-    ("tiny-bs2", BEV_SHAPES["tiny"], NUM_LAYERS, 2, 40.0, 3),
+    ("tiny-bs2", BEV_SHAPES["tiny"], ENCODER_NUM_LAYERS, 2, 40.0, 3),
 ]
 
 
