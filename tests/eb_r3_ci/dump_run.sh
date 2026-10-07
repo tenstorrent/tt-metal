@@ -17,7 +17,7 @@ while IFS= read -r line; do
   pairs=${line%%|||*}; rest=${line#*|||}; args=${rest%%|||*}; extra=""; [[ "$rest" == *"|||"* ]] && extra=${rest#*|||}
   echo "##### $(date -u +%T) pairs=[$pairs] args=[$args] env=[$extra]"
   export EB_DUMP_PAIRS="$pairs"
-  eval "$extra timeout -s INT -k 60 ${EB_RUN_LIMIT:-6600} python3 -u -m pytest -p no:cacheprovider -q -s -rfE $args" < /dev/null 2>&1 | sed -u -E 's/^tests\/eb_r3_ci\/[^ ]* //' | awk "$F"
+  eval "$extra timeout -s INT -k 60 ${EB_RUN_LIMIT:-6600} python3 -u -m pytest -p no:cacheprovider --timeout=0 -q -s -rfE $args" < /dev/null 2>&1 | sed -u -E 's/^tests\/eb_r3_ci\/[^ ]* //' | awk "$F"
   # the two sides of each comparison ran different code: variants grouped by defines without the toggle lines
   python3 /work/tests/eb_r3_ci/elf_ab.py "$TT_METAL_CACHE" ${EB_ELFAB:-"eltwise_binary_no_bcast=EB_R3_|BINARY_NG_BLOCK" "eltwise_binary_col_bcast=EB_R3_|BCAST_OTHER_CHUNK" "eltwise_binary_scalar_bcast=EB_R3_|BCAST_OTHER_CHUNK" "eltwise_binary_row_bcast=EB_R3_" "eltwise_binary_row_col_bcast=EB_R3_" "eltwise_binary_scalar=EB_R3_" "eltwise_binary=EB_R3_" "eb_dump_reuse=EB_DUMP_PER_TILE"} < /dev/null 2>&1 | grep -v " variants 0,"
 done < "$SPEC"

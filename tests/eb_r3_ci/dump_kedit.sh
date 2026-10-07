@@ -35,7 +35,7 @@ for side in main pr; do
   echo "##### $side $(date -u +%T)"
   export TT_METAL_CACHE=$O/cache_$side; mkdir -p $TT_METAL_CACHE
   st=save; [[ $side == pr ]] && st=cmp
-  EB_DUMP_STAGE=$st timeout -s INT -k 60 ${EB_RUN_LIMIT:-3000} python3 -u -m pytest -p no:cacheprovider -q -s -rfE "$@" < /dev/null 2>&1 | sed -u -E 's/^tests\/eb_r3_ci\/[^ ]* //' | awk "$F"
+  EB_DUMP_STAGE=$st timeout -s INT -k 60 ${EB_RUN_LIMIT:-3000} python3 -u -m pytest -p no:cacheprovider --timeout=0 -q -s -rfE "$@" < /dev/null 2>&1 | sed -u -E 's/^tests\/eb_r3_ci\/[^ ]* //' | awk "$F"
 done
 restore
 # the toggled kernels compiled to different code on the two sides (same kernel hash, different executable sections)
