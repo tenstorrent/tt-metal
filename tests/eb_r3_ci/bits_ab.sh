@@ -25,6 +25,7 @@ PY
   timeout -s INT -k 60 ${EB_RUN_LIMIT:-3000} python3 -m pytest -p eb_bits_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE "$@" > $O/log_$v.txt 2>&1
   echo "--- $v rc=$?: $(grep -E 'passed|failed|error' $O/log_$v.txt | tail -1)"
   grep -E "^(FAILED|ERROR)" $O/log_$v.txt | cut -c1-220 | head -40
+  [[ -n "${EB_SHOW_ERR:-}" ]] && grep -E "error:|TT_THROW|TT_FATAL|Timeout|timed out|^E  " $O/log_$v.txt | sort | uniq -c | sort -rn | head -12 | cut -c1-500
 done
 for e in "${FILES[@]}"; do KFILE=${e%%|*}; cp "$O/$(echo $KFILE | tr / _).orig" "$KFILE"; done
 python3 - <<'PY'

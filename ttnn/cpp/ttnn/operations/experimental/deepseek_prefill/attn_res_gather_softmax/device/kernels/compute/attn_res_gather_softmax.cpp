@@ -228,8 +228,17 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
     // because the device operation rejects a dtype mismatch among them — one
     // `bcast_init` configures the unpacker for all of them.
     bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_partial, cb_row);
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::COL,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE,
+          ckernel::detail::bcast_src_dvalid<EltwiseBinaryType::ELWMUL>>(cb_partial, cb_row, 1 /*acc_to_dest*/)));
+#else
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         cb_partial, cb_row, 1 /*acc_to_dest*/)));
+#endif
     reconfig_data_format(cb_partial, cb_row);
     pack_reconfig_data_format(cb_out);
 }

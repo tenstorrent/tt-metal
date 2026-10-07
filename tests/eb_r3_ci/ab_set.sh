@@ -36,6 +36,7 @@ for v in main optin optin main; do
   echo "--- run $run $v rc=$?: $(grep -E 'passed|failed|skipped|error' $O/log_${run}_$v.txt | tail -1)"
   grep -E "^(FAILED|ERROR)" $O/log_${run}_$v.txt | cut -c1-200 | head -10
   grep -q -E 'passed|failed|skipped|error' $O/log_${run}_$v.txt || tail -15 $O/log_${run}_$v.txt | cut -c1-200
+  [[ -n "${EB_SHOW_ERR:-}" ]] && grep -E "error:|TT_THROW|TT_FATAL|Timeout|timed out|^E  " $O/log_${run}_$v.txt | sort | uniq -c | sort -rn | head -12 | cut -c1-500
 done
 restore
 python3 /work/tests/eb_r3_ci/prof_reduce.py $O set 2>&1
