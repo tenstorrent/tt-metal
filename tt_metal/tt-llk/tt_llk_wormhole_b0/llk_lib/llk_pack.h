@@ -294,7 +294,6 @@ inline void _llk_pack_mop_config_(
  * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
- * @param tile_size: Size of one output tile in bytes.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
@@ -304,7 +303,6 @@ template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t face_r_dim          = FACE_R_DIM,
     const std::uint32_t num_faces           = 4,
     const bool partial_face                 = false,
@@ -312,7 +310,7 @@ inline void _llk_pack_reconfig_data_format_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face);
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, face_r_dim, num_faces, partial_face);
 }
 
 /**
@@ -325,7 +323,6 @@ inline void _llk_pack_reconfig_data_format_(
  * @tparam pack_mode: Packing layout, values = <Default/Untilize>
  * @param pack_src_format: Source (dest register) data format.
  * @param pack_dst_format: Destination (L1) data format.
- * @param tile_size: Size of one output tile in bytes.
  * @param face_r_dim: Number of rows per face.
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
@@ -336,7 +333,6 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t face_r_dim  = FACE_R_DIM,
     const std::uint32_t num_faces   = 4,
     const bool partial_face         = false,
@@ -345,7 +341,7 @@ inline void _llk_pack_hw_configure_(
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
 /**

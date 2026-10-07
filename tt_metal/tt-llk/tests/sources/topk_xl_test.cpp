@@ -605,8 +605,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t pack_src_format = formats.pack_src;
     const std::uint32_t pack_dst_format = formats.pack_dst; // UInt32: raw 32-bit words.
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        pack_src_format, pack_dst_format, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(pack_src_format, pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(pack_dst_format, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
 

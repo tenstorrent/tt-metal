@@ -211,12 +211,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // ---- Run 0: pack the (discarded) regular tilize result to scratch ----
     int run = 0;
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
-        formats_array[run].pack_src,
-        formats_array[run].pack_dst,
-        POLLUTER_FACE_R_DIM * TILE_C_DIM * POLLUTER_NUM_FACES /* tile_size */,
-        POLLUTER_FACE_R_DIM,
-        TILE_C_DIM,
-        POLLUTER_NUM_FACES);
+        formats_array[run].pack_src, formats_array[run].pack_dst, POLLUTER_FACE_R_DIM, TILE_C_DIM, POLLUTER_NUM_FACES);
     _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(
         formats_array[run].pack_dst, POLLUTER_FACE_R_DIM, TILE_C_DIM, POLLUTER_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
@@ -233,7 +228,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats_array[run].pack_src,
         formats_array[run].pack_dst,
-        params.TILE_SIZE_PACK,
         params.in0_tile_r_dim < FACE_R_DIM ? params.in0_tile_r_dim : FACE_R_DIM,
         TILE_C_DIM,
         params.num_faces,

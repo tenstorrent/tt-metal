@@ -216,7 +216,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // two 16-row DEST faces. With the default full-tile config it instead reads DEST rows 0-15 as one face, so
     // the second half of the buffer comes back as the ZEROACC'd rows 8-15 rather than output columns 16-31.
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, num_faces, true /* partial_face */);
+        formats.pack_src, formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, num_faces, true /* partial_face */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, num_faces);
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();

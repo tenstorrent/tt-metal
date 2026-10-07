@@ -135,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const bool UNTILIZE = false;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst);
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
     // pack_rows_to_addr_init(num_rows) -> llk_pack_rows_init(num_rows) -> _llk_pack_rows_init_(num_rows)
     _llk_pack_rows_init_(params.NUM_ROWS_TO_PACK);

@@ -87,12 +87,10 @@ struct p_gpr_pack
     constexpr static std::uint32_t DEST_OFFSET_LO = 4;  // dest lower bank offsets
     constexpr static std::uint32_t DEST_OFFSET_HI = 8;  // dest upper bank offsets
     constexpr static std::uint32_t OUTPUT_ADDR    = 12; // output address that packer is writing to
-    constexpr static std::uint32_t TILE_HEADER    = 16; // tile header - ID + tile size
 
     constexpr static std::uint32_t TEMP_TILE_OFFSET    = 20; // Temp var which holds tile offset in dest
     constexpr static std::uint32_t NUM_MSGS_RECEIVED   = 24; // holds tile count and word size
     constexpr static std::uint32_t ONE_MSG_RECEIVED    = 25; // by default holds 1 tile count and word size for streaming per tile
-    constexpr static std::uint32_t HEADER_ADDR         = 26; // Holds the address of the header (used by pack shift kernel only)
     constexpr static std::uint32_t TMP0                = 28; // Temp data
     constexpr static std::uint32_t TMP1                = 29; // Temp data
     constexpr static std::uint32_t TMP_LO              = 30; // Temp data, upper 16-bit always 0

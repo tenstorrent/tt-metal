@@ -481,7 +481,6 @@ template <bool is_fp32_dest_acc_en>
 __attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     const std::uint32_t tile_c_dim,
     const std::uint32_t num_faces,
     const bool partial_face)
@@ -557,8 +556,6 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     bool is_fp8_e4m3 = (pack_dst_format & 0x1F) == static_cast<DataFormatType>(DataFormat::Fp8_e4m3);
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(is_fp8_e4m3);
 
-    TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_pack::TILE_HEADER));
-
     reconfigure_exp_threshold<is_fp32_dest_acc_en>(pack_output_dst_format);
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
@@ -576,7 +573,6 @@ template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
-    const std::uint32_t tile_size,
     [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t tile_c_dim                  = TILE_C_DIM,
     const std::uint32_t num_faces                   = 4,
@@ -647,12 +643,6 @@ inline void configure_pack(
 
     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
-
-    regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
-    regfile[p_gpr_pack::TILE_HEADER + 1] = 0;
-    regfile[p_gpr_pack::TILE_HEADER + 2] = 0;
-    regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
-    sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

@@ -206,7 +206,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Standard pack of DEST tile 0. The header packs only logical row 0 into a `partial` tile
     // row via raw PACR; the numeric content of that row equals row 0 of this full-tile pack, and
     // the .py validates only that defined row.
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();

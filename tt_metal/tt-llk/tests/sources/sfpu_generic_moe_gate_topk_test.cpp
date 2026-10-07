@@ -165,9 +165,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    constexpr std::uint32_t TILE_SIZE = FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES;
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES);
     _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>();
 
@@ -180,7 +179,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // have to be packed as UInt16 (same trick as the bitonic topk test).
     const std::uint32_t index_format = ckernel::to_underlying(DataFormat::UInt16);
     _llk_pack_reconfig_data_format_wrapper_<is_fp32_dest_acc_en, false /* is_tile_dim_reconfig_en */>(
-        index_format, index_format, TILE_SIZE, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, false /* partial_face */, false /* narrow_tile */, 1 /* num_tiles */);
+        index_format, index_format, FACE_R_DIM, TILE_C_DIM, TILE_NUM_FACES, false /* partial_face */, false /* narrow_tile */, 1 /* num_tiles */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(index_format);
     _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(MOE_GATE_INDICES_DST_TILE, L1_ADDRESS(params.buffer_Res[1]));
 

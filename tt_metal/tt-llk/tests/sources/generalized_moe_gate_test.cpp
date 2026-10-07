@@ -556,8 +556,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Every DEST tile is packed as uint16: the test compares bit patterns, so nothing may be
     // reformatted on the way out. Small ids are bf16 denormals and a float pack path would flush them.
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        ID_FORMAT, ID_FORMAT, params.TILE_SIZE_PACK, FACE_R_DIM, TILE_C_DIM, params.num_faces);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(ID_FORMAT, ID_FORMAT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(ID_FORMAT, FACE_R_DIM, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
 

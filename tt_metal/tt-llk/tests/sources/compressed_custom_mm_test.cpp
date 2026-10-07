@@ -125,7 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // the packer emits full 32x32 tiles, so only the top in0_face_r_dim rows of each face carry the result and the
     // rest is whatever DEST held.
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true /* partial_face */);
+        formats.pack_src, formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true /* partial_face */);
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, params.in0_face_r_dim, TILE_C_DIM, params.num_faces);
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2);

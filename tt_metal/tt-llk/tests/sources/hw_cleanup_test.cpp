@@ -135,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * HW_CLEANUP_NUM_FACES /* tile_size */, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
+        formats.pack_src, formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
     _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
         formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
     _llk_pack_dest_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
@@ -149,7 +149,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Re-init pack after the poisoning cleanup (what a real following MicroOp
     // must do), then pack the identity-datacopied tile out to L1.
     _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * HW_CLEANUP_NUM_FACES /* tile_size */, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
+        formats.pack_src, formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES);
     _llk_pack_init_<ckernel::PackMode::Default, false /* zero_output */>(
         formats.pack_dst, FACE_R_DIM, ckernel::TILE_C_DIM, HW_CLEANUP_NUM_FACES, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
     _llk_pack_dest_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
