@@ -92,8 +92,16 @@ class DeepseekV41ForCausalLM:
             os.environ.setdefault(
                 "DSV41_CKPT", ckpt
             )  # tt/model_args.py reads it at import time: set before the model modules are imported
-        if int(os.environ.get("DSV41_SPEC", "0")) > 0:
-            raise ValueError("DSV41_SPEC (speculative decoding) is not part of the vLLM interface; unset it")
+        # The vLLM interface is PLAIN decode: no spec runners are ever built here, and a spec-capable pool (DSV41_RING_ROWS=288, chosen by tt/spec_policy at build time) would only cost DRAM.
+        # Force it (the serving catalog entry need not carry DSV41_SPEC=0); MoE compute precision defaults to what the tt-metal demo measurements use.
+        if int(os.environ.get("DSV41_SPEC", "0") or 0) > 0:
+            logger.warning(
+                f"DSV41_SPEC={os.environ['DSV41_SPEC']} ignored: speculative decoding is not part of the vLLM interface (plain decode)"
+            )
+        os.environ["DSV41_SPEC"] = "0"
+        os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
+        os.environ.setdefault("MOE_COMPUTE_BFP8_WEIGHTS", "1")
+        max_seq_len = cls.bounded_max_seq_len(max_seq_len, B)
         from models.demos.blackhole.deepseek_v41_flash.tt.common import create_tt_model, default_page_params
         from models.demos.blackhole.deepseek_v41_flash.tt.generator import Generator
         from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -112,6 +120,22 @@ class DeepseekV41ForCausalLM:
             mesh_device, B, max_seq_len, paged, layer_ids=layer_ids, log=lambda m: logger.info(m)
         )
         return cls(Generator([model], [args], mesh_device, tokenizer=args.tokenizer), max_batch_size, max_seq_len)
+
+    # Longest context the model is built for per padded batch size (the KV pool + index-key slabs + prefill tables must fit DRAM). Measured (40 layers, fp8 pool): B=128 at 65536 runs out of DRAM while building
+    # the prefill-sparse tables (PrefillKV, 2.2 GB request with 145 MB/bank free); the longest validated B=128 context is 33280 (the default tt-inference-server sweep needs 32768 + 128).
+    # DSV41_VLLM_MAX_CTX overrides (a larger value is at the caller's risk). Prompts longer than the bound fail loudly in prefill_forward.
+    MAX_CTX_BY_BATCH = {128: 33280}
+
+    @classmethod
+    def bounded_max_seq_len(cls, max_seq_len, padded_batch):
+        env = os.environ.get("DSV41_VLLM_MAX_CTX")
+        cap = int(env) if env else min((v for k, v in cls.MAX_CTX_BY_BATCH.items() if padded_batch >= k), default=None)
+        if cap is not None and int(max_seq_len) > cap:
+            logger.warning(
+                f"DSV4.1 vLLM: max_model_len {max_seq_len} > {cap} (the longest context validated for batch {padded_batch}); the model is built for {cap} and longer prompts are rejected"
+            )
+            return cap
+        return int(max_seq_len)
 
     def __init__(self, generator, max_num_seqs, max_seq_len, *, vllm_config=None):
         self.generator = generator  # tt/generator.Generator (auto_chunk); the model is generator.m
