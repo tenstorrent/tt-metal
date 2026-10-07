@@ -407,6 +407,9 @@ def main():
     p.add_argument("--timeout", type=int, default=90)
     args = p.parse_args()
 
+    args.out_dir = os.path.abspath(args.out_dir)
+    args.manifest = os.path.abspath(args.manifest)
+
     os.makedirs(args.out_dir, exist_ok=True)
 
     print("discover_catalog: collecting candidate pool...", file=sys.stderr)

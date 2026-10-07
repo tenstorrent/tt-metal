@@ -172,6 +172,9 @@ def main():
     if not 1 <= args.group <= args.splits:
         p.error(f"--group must be in [1, {args.splits}] (got {args.group})")
 
+    args.manifest = os.path.abspath(args.manifest)
+    args.out = os.path.abspath(args.out)
+
     with open(args.manifest) as f:
         manifest = json.load(f)
     ops = manifest["ops"]
