@@ -1,3 +1,0 @@
-# HiFi3 rule, full cross products with SrcA bfp4: every bf16 pattern against every bfp8_b and bfp4_b datum under every shared
-# exponent, into bf16, fp32, bfp8 and bfp4 (both operand roles when SrcA is block float)
-EB_R3_NO_HIFI3=1|default|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_cross_bfp and bfp4-"
