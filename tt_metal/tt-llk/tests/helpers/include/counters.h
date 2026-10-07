@@ -648,7 +648,10 @@ struct perf_counter_scoped
         {
             // Let the peers reach their exit barrier before the measured zone opens.
             std::uint32_t settle;
-            asm volatile("li %0, 256\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle));
+            #ifndef LLK_SETTLE
+#define LLK_SETTLE 256
+#endif
+            asm volatile("li %0, %1\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle) : "i"(LLK_SETTLE));
         }
         if constexpr (RUN_TYPE == PerfRunType::L1_TO_L1)
         {
