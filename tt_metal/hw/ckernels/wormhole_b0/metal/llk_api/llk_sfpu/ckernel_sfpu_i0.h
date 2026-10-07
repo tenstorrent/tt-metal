@@ -113,16 +113,20 @@ inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x) {
     // Computed first so that 1/|x| can be derived as rsqrt_y^2 without a
     // separate sfpu_reciprocal call.
     //
-    // Kept unconditional (not dtype-split): dropping the Newton step costs
-    // ~343 FP32 ULP against a budget in the teens, but only moves ~0.2% of
-    // BF16 outputs by 1 ULP -- not worth a third dtype branch in the
-    // kernel's most precision-sensitive block to save 4 BF16 instructions.
+    // The Newton refinement is 32-bit DEST only. Without it the result is
+    // ~343 FP32 ULP off, far outside the budget in the teens, so float32
+    // keeps it; on a 16-bit DEST dropping it changes no measured maximum
+    // (0.9071 ULP against the float32 golden over every bfloat16 input,
+    // 1.0 on test_bessel_ops' bfloat16 ruler, both unchanged) and saves 6%
+    // of the bf16 kernel's time per tile on Blackhole.
     const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
     sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
     sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
     rsqrt_y = rsqrt_y * (2.2825186f + c0 * (2.2533049f + c0));
-    c0 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1) + rsqrt_y;
+    if constexpr (is_fp32_dest_acc_en) {
+        c0 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
+        rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1 /* exp */) + rsqrt_y;
+    }
 
     // 1/|x| = (1/sqrt(|x|))^2 — reuses the refined rsqrt instead of a fresh reciprocal.
     const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
@@ -203,17 +207,19 @@ inline void calculate_i0() {
                                  1.4051053479e-14f);
         }
 
-        // ─── Asymptotic overwrite for OOD lanes (|x| > 6) ────────────────
-        v_if(abs_x > I0_THRESHOLD) { val = calculate_i0_asymptotic_<is_fp32_dest_acc_en>(abs_x); }
+        // ─── Asymptotic overwrite for OOD lanes (|x| > 6); +inf past 88.5 ──
+        v_if(abs_x > I0_THRESHOLD) {
+            val = calculate_i0_asymptotic_<is_fp32_dest_acc_en>(abs_x);
+            v_if(abs_x > I0_MAX_INPUT) { val = abs_x * std::numeric_limits<float>::infinity(); }
+            v_endif;
+        }
         v_endif;
 
-        // ─── Overflow, +/-inf and NaN → +inf (NaN stays NaN) ─────────────
-        // See the file-level comment for the SFPMUL/NaN-propagation
-        // assumption this relies on, and why it replaces two branches
-        // (overflow-assign + bit-pattern NaN-restore) with one.
-        v_if(abs_x > I0_MAX_INPUT) { val = abs_x * std::numeric_limits<float>::infinity(); }
-        v_endif;
-
+        // Overflow and +/-inf → +inf is handled inside the asymptotic block
+        // above (|x| > 88.5 implies |x| > 6), one predicate round-trip fewer
+        // per iteration; NaN lanes fail both compares and keep the NaN that
+        // region 1's arithmetic propagates. See the file-level comment for
+        // the SFPMUL/NaN assumption behind the multiply-by-infinity form.
         // Same key as the asymptotic branch: a bf16-in/float32-out call
         // (ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>), a supported
         // mixed-dtype combination) runs DEST in 32-bit mode with INP_FLOAT32

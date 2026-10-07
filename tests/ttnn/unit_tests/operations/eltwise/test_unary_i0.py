@@ -269,13 +269,14 @@ def test_i0_mixed_dtype_output(device):
     because the *output* is float32, independent of the bfloat16 input -- so the
     kernel must compute and store at float32 precision here: the asymptotic
     branch's exp variant and Q degree, and the final store, all follow the DEST
-    width rather than the input dtype. The draw spans [-10, 10] so that both
-    regions are exercised, since only the asymptotic branch has a
-    dtype-dependent variant.
+    width rather than the input dtype. The draw spans the kernel's whole finite
+    domain, [-88.5, 88.5], so the asymptotic branch -- the only one with a
+    dtype-dependent variant -- is exercised out to its fitted boundary, where the
+    exp and Q fits both have their error peaks.
     """
     torch.manual_seed(0)
     shape = [1, 1, 32, 32]
-    torch_input = torch.rand(shape, dtype=torch.float32) * 20 - 10
+    torch_input = torch.rand(shape, dtype=torch.float32) * (2 * I0_MAX_INPUT) - I0_MAX_INPUT
     torch_output = torch.special.i0(_quantise(torch_input, ttnn.bfloat16))
 
     input_tensor = ttnn.from_torch(

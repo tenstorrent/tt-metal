@@ -3016,7 +3016,11 @@ class UnarySFPUGolden:
         # mathematics: I0 is even and unbounded, so I0(+/-inf) = +inf, as the kernel returns.
         if math.isnan(x):
             return x
-        if math.isinf(x):
+        # The kernel returns +inf past I0_MAX_INPUT = 88.5 (Q's fitted boundary), while
+        # torch.special.i0 stays finite until exp() saturates at 88.7228. Mirror the kernel's
+        # cutoff so stimuli drawn in (88.5, 88.7228] compare inf against inf, not inf against
+        # a finite golden -- see ckernel_sfpu_i0.h for why the band is accepted.
+        if math.isinf(x) or abs(x) > 88.5:
             return self.handle_infinite_numbers(math.inf)
         return self._torch_unary(x, torch.special.i0)
 

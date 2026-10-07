@@ -476,8 +476,8 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Selu: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-5.0, high=5.0)
     ),
-    # i0: two-region kernel (Maclaurin |x| <= 6, asymptotic + overflow clamp
-    # beyond); span past both so region 2 and overflow get exercised too.
+    # i0: two-region kernel (Maclaurin |x| <= 6, asymptotic beyond, +inf past
+    # 88.5); span past both so region 2 and the overflow branch get exercised too.
     MathOperation.I0: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-95.0, high=95.0)
     ),
