@@ -1209,7 +1209,6 @@
     unset HF_HUB_OFFLINE
     export TT_DIT_ALLOW_HF_DOWNLOAD=1
     export MINIMAX_H3_REQUIRE_WEIGHTS=1
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export MINIMAX_H3_DRAM_PROBE=1
     pytest --timeout 10800 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
   model: minimax-h3
