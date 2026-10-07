@@ -274,7 +274,7 @@ class ttKDA:
         if not self._is_sequence_parallel:
             batch, rows, width = qkv.shape
             new_state = (
-                selections.select_local_final_history(qkv, 1)
+                selections.select_local_final_history(qkv)
                 if selections is not None
                 else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
             )

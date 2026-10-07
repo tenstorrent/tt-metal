@@ -536,9 +536,9 @@ _ADD_TOP_ROW_FORMATS = [DataFormat.Float32, DataFormat.Int32]
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("tile_indices", _TILE_INDEX_VARIANTS)
-@pytest.mark.parametrize(
-    "data_format", _ADD_TOP_ROW_FORMATS, ids=[f.name for f in _ADD_TOP_ROW_FORMATS]
+@parametrize(
+    data_format=_ADD_TOP_ROW_FORMATS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_add_top_row_quasar(
     data_format,

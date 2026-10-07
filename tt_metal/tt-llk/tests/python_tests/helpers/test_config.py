@@ -1679,6 +1679,9 @@ class TestConfig:
                 f"Failed to parse text size from riscv-tt-elf-size output for {elf_path}:\n{result.stdout}"
             ) from e
 
+    def _compile_kernel_part(self, name, compile_command, source):
+        run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+
     def build_elfs(self):
 
         VARIANT_DIR = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
@@ -1813,9 +1816,9 @@ class TestConfig:
 
                 logger.trace(" ".join(shlex.quote(part) for part in compile_command))
 
-                run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
+                self._compile_kernel_part(
+                    name,
                     compile_command,
-                    TestConfig.TESTS_WORKING_DIR,
                     (
                         f"{self._barrier_reservation_include()}"
                         f"{self._kernel_source_include()}#include  <trisc.cpp>\n"

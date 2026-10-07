@@ -1948,7 +1948,7 @@ ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory:
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
     const tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
