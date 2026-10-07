@@ -441,8 +441,7 @@ json downstream_edges_json(
                 vc,
                 edge.landing_channel);
             entry["through_tensix_mux"] = edge.core != router_virtual_core(cluster, physical_chip_id, target);
-            entry["free_slots"] = stream_ref_json(edge.free_slots);
-            entry["teardown_sem"] = l1_region_json(edge.teardown_sem);
+            entry["fields"] = fields_json(edge.fields);
             vc_json[fmt::format("edge{}", edge.edge)] = std::move(entry);
         }
         out[fmt::format("vc{}", vc)] = std::move(vc_json);
