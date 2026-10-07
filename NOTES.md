@@ -30,3 +30,4 @@
 
 ## Drop log
 - 2026-10-07 05:02 UTC, blx01, broker job 732 (smarton, task t188), chips 16-23 (tray 3) left PCIe; broker holding/recovering (bridge resets 734/735 failed). t183 not submitted.
+- 2026-10-07 05:30 UTC: light wake, blx01 unreachable over ssh (No route to host; likely rebooting after tray 3 drop). A/B not submitted.
