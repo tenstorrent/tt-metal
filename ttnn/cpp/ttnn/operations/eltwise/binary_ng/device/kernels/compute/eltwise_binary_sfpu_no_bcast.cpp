@@ -31,6 +31,20 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+#if defined(ARCH_BLACKHOLE)
+template <uint32_t cb>
+constexpr bool l1_format_is_32bit() {
+#if defined(UCK_CHLKC_PACK)
+    constexpr uint32_t format = pack_dst_format[cb];
+#else
+    constexpr uint32_t format = unpack_src_format[cb];
+#endif
+    return format == static_cast<uint32_t>(DataFormat::Float32) || format == static_cast<uint32_t>(DataFormat::Int32) ||
+           format == static_cast<uint32_t>(DataFormat::UInt32);
+}
+#endif
+
+template <bool operand_blocks = false>
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
     uint32_t cb_pre_lhs_id,
@@ -57,29 +71,58 @@ FORCE_INLINE void process_sfpu_tiles(
     tile_regs_acquire();
     // Startup and preprocessing preserve the LHS-format SrcA invariant.
     copy_init(cb_post_lhs.get_cb_id());
-    for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
-    }
-    reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-    copy_init(cb_post_rhs.get_cb_id());
-    for (uint32_t i = 0; i < n; ++i) {
-        copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
+#if defined(ARCH_BLACKHOLE)
+    if constexpr (operand_blocks) {
+        // Each operand's tiles go to consecutive slots, one copy_block per operand (one unpack-to-dest handshake).
+        copy_block(cb_post_lhs.get_cb_id(), 0, 0, n);
+        reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+        copy_init(cb_post_rhs.get_cb_id());
+        copy_block(cb_post_rhs.get_cb_id(), 0, n, n);
+        for (uint32_t i = 0; i < n; ++i) {
 #if HAS_ACTIVATIONS(POST)
-        BINARY_SFPU_INIT;
+            BINARY_SFPU_INIT;
 #endif
 #ifdef ISCLOSE_OP
-        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+            BINARY_SFPU_OP(i, n + i, i, rtol_bits, atol_bits);
 #else
-        BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+            BINARY_SFPU_OP(i, n + i, i);
 #endif
-        PROCESS_POST_ACTIVATIONS(i * 2);
-    }
-    reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
-    tile_regs_commit();
+            PROCESS_POST_ACTIVATIONS(i);
+        }
+        reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+        tile_regs_commit();
 
-    tile_regs_wait();
-    for (uint32_t i = 0; i < n; ++i) {
-        pack_tile(i * 2, cb_out.get_cb_id());
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb_out.get_cb_id());
+        }
+    } else
+#endif
+    {
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
+        }
+        reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+        copy_init(cb_post_rhs.get_cb_id());
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
+#if HAS_ACTIVATIONS(POST)
+            BINARY_SFPU_INIT;
+#endif
+#ifdef ISCLOSE_OP
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
+            PROCESS_POST_ACTIVATIONS(i * 2);
+        }
+        reconfig_data_format_srca(cb_post_rhs.get_cb_id(), cb_post_lhs.get_cb_id());
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i * 2, cb_out.get_cb_id());
+        }
     }
     tile_regs_release();
 
@@ -107,6 +150,14 @@ void kernel_main() {
         "binary_ng: SFPU SrcA startup operand disagrees with the preprocessing restore reference");
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
+#if defined(ARCH_BLACKHOLE)
+    // 32-bit operands into a 32-bit DEST: copy_block takes one unpack-to-dest handshake per operand
+    constexpr bool operand_blocks =
+        DST_ACCUM_MODE && l1_format_is_32bit<cb_post_lhs_id>() && l1_format_is_32bit<cb_post_rhs_id>();
+#else
+    constexpr bool operand_blocks = false;
+#endif
+
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
@@ -120,7 +171,7 @@ void kernel_main() {
     // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_sfpu_tiles(
+        process_sfpu_tiles<operand_blocks>(
             num_tiles_per_cycle,
             cb_pre_lhs_id,
             cb_post_lhs_id,
@@ -132,7 +183,7 @@ void kernel_main() {
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles(
+        process_sfpu_tiles<operand_blocks>(
             remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_pre_rhs_id, cb_post_rhs_id, cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 }

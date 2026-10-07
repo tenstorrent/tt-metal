@@ -147,6 +147,24 @@ inline void llk_unpack_A_block(
 
     // Three or more tiles: one context acquire per block; one or two are cheaper per tile after a copy_init.
     if constexpr ((BType == BroadcastType::NONE) && !acc_to_dest && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)) {
+        // Unpack to dest into a 32-bit DEST: two or more four-face tiles take one handshake, as the math thread decides it.
+        if constexpr (DST_ACCUM_MODE && unpack_to_dest) {
+            if (ntiles >= 2 &&
+                should_unpack_to_dest(unpack_to_dest, unpack_src_format[operand_id], unpack_dst_format[operand_id]) &&
+                get_operand_num_faces(operand_id) == 4) {
+                WAYPOINT("UPAW");
+                _llk_unpack_A_block_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, DST_ACCUM_MODE>(
+                    address,
+                    ntiles,
+                    offset_address,
+                    unpack_src_format[operand_id],
+                    unpack_dst_format[operand_id],
+                    4,
+                    get_operand_face_r_dim(operand_id));
+                WAYPOINT("UPAD");
+                return;
+            }
+        }
         // A run-time count of one or two tiles takes straight calls: a loop beside the block path loses its registers.
         if (!__builtin_constant_p(ntiles)) {
             if (ntiles == 1) {
