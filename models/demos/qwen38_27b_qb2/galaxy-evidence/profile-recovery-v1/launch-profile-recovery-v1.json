@@ -1,0 +1,24 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-profile-recovery-v1-20261007",
+    "--property=RuntimeMaxSec=600",
+    "--property=TimeoutStopSec=30",
+    "--property=MemoryMax=4G",
+    "--property=CPUQuota=200%",
+    "--property=WorkingDirectory=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-galaxy",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/profile-recovery-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/profile-recovery-v1.log",
+    "--setenv=TT_METAL_HOME=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+    "--setenv=PYTHONPATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-galaxy:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=LD_LIBRARY_PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-build/lib",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.tests.recover_layer_profile",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/layer-profile-v5",
+    "--output",
+    "/home/ttuser/qwen38-artifacts-20261007/profile-recovery-v1"
+  ]
+}

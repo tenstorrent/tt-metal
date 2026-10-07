@@ -1,0 +1,37 @@
+{
+  "hardware_passed": true,
+  "hardware_cells_completed": 6,
+  "postprocessing_passed": false,
+  "systemd_result": "oom-kill",
+  "memory_limit_gib": 128,
+  "host_timing_csv_bytes": 67507433703,
+  "recovery_passed": false,
+  "recovery_error": "Incomplete diagnostic signpost windows",
+  "exported_model_markers": [
+    {
+      "MessageName": "TT_SIGNPOST: P0_S8192_B1_MODEL_BEGIN",
+      "total_ns": "38321471436"
+    },
+    {
+      "MessageName": "TT_SIGNPOST: P0_S8192_B1_MODEL_END",
+      "total_ns": "38345661370"
+    },
+    {
+      "MessageName": "TT_SIGNPOST: P0_S8192_B16_MODEL_BEGIN",
+      "total_ns": "89109987309"
+    },
+    {
+      "MessageName": "TT_SIGNPOST: P0_S8192_B16_MODEL_END",
+      "total_ns": "89153867083"
+    },
+    {
+      "MessageName": "TT_SIGNPOST: P0_S131072_B1_MODEL_BEGIN",
+      "total_ns": "140711980893"
+    },
+    {
+      "MessageName": "TT_SIGNPOST: P0_S131072_B1_MODEL_END",
+      "total_ns": "140736003064"
+    }
+  ],
+  "scope": "Do not publish stage timings from this incomplete capture"
+}

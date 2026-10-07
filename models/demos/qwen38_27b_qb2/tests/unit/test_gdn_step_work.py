@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.demos.qwen38_27b_qb2.experiments.gdn_step.op import work_items
+from models.demos.qwen38_27b_qb2.experiments.gdn_step.op import circular_buffer_pages, work_items
 
 
 @pytest.mark.parametrize("heads", [1, 12, 96, 120, 121, 192, 768])
@@ -55,3 +55,18 @@ def test_accuracy_checks_each_head_and_rejects_scaling():
     assert not accuracy(expected * 1.1, expected)["passed"]
     damaged[-1, 0] = float("nan")
     assert not accuracy(damaged, expected)["passed"]
+
+
+@pytest.mark.parametrize("depth", [0, 3, -1, 2.0, True])
+def test_reject_unsupported_input_lookahead(depth, expect_error):
+    with expect_error(ValueError, "Input buffer items"):
+        circular_buffer_pages(1, depth)
+
+
+@pytest.mark.parametrize("splits", [1, 2, 4])
+def test_prefetch_capacity_preserves_output_ownership_and_l1_bound(splits):
+    single = circular_buffer_pages(splits, 1)
+    double = circular_buffer_pages(splits, 2)
+    assert double[:6] == [2 * pages for pages in single[:6]]
+    assert double[6:] == single[6:]  # The writer remains the sole output consumer.
+    assert sum(double) * 4096 < 512 * 1024

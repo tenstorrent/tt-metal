@@ -65,10 +65,16 @@ def accuracy(actual, expected):
         correlations.append(float(torch.corrcoef(torch.stack([a, b]))[0, 1]))
     error = actual - expected
     relative_rms = float(error.square().mean().sqrt() / expected.square().mean().sqrt().clamp_min(1e-12))
+    per_user_rms = [
+        float(error[0, user].square().mean().sqrt() / expected[0, user].square().mean().sqrt().clamp_min(1e-12))
+        for user in range(actual.shape[1])
+    ]
     return dict(
-        passed=all(math.isfinite(pcc) and pcc >= 0.999 for pcc in correlations) and relative_rms <= 0.02,
+        passed=all(math.isfinite(pcc) and pcc >= 0.999 for pcc in correlations)
+        and all(math.isfinite(rms) and rms <= 0.02 for rms in per_user_rms),
         pcc_per_user=correlations,
         relative_rms=relative_rms,
+        relative_rms_per_user=per_user_rms,
         max_abs_error=float(error.abs().max()),
     )
 

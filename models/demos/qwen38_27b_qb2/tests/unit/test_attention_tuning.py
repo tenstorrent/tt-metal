@@ -49,6 +49,11 @@ def test_accuracy_rejects_scaled_output_and_one_bad_user():
     damaged = expected.clone()
     damaged[:, 3] = -damaged[:, 3]
     assert not accuracy(damaged, expected)["passed"]
+    damaged = expected.clone()
+    damaged[:, 3] *= 1.03
+    result = accuracy(damaged, expected)
+    assert result["relative_rms"] < 0.02  # Batch averaging can hide one bad user.
+    assert not result["passed"]
 
 
 def test_fast_but_inaccurate_candidate_cannot_win_and_drift_is_explicit():

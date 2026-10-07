@@ -1,0 +1,17 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-kernel-diagnostics-v1-20261007",
+    "--property=RuntimeMaxSec=5400",
+    "--property=TimeoutStopSec=180",
+    "--property=MemoryMax=128G",
+    "--property=CPUQuota=800%",
+    "--property=WorkingDirectory=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-galaxy",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/kernel-diagnostics-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/kernel-diagnostics-v1.log",
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/run-kernel-diagnostics-v1.sh"
+  ],
+  "script": "/home/ttuser/qwen38-artifacts-20261007/run-kernel-diagnostics-v1.sh"
+}

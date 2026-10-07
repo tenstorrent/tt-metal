@@ -1,0 +1,131 @@
+{
+  "state": "failed",
+  "passed": false,
+  "diagnostic_complete": false,
+  "promoted_to_model": false,
+  "scope": "Synthetic attention math diagnosis; no model accuracy or deployment qualification",
+  "reference": "Full causal FP32 attention on quantized device KV, same input seed across math modes",
+  "acceptance": "Every case at HiFi4/FP32/accurate-exp must pass the unchanged per-user PCC and relative-RMS limits",
+  "source_sha256": {
+    "test_attention_precision.py": "7c9914973792e6f93ba0dd02326e132d82bb0333c053cf769159c8f0d7eaf7d5",
+    "test_long_context_attention.py": "ff47705a1371404f10be02782a4607e5ab527abe740ec340cb8c035b0fd1226d",
+    "attention_tuning.py": "724dc54fd50e34310b0763ac1ac19958781851ac49c31f46fcc4488fbe4dc4b7"
+  },
+  "cases": [
+    {
+      "input_tokens": 8192,
+      "batch": 1,
+      "native_capacity": 8320,
+      "aligned_capacity": 8704,
+      "native_chunk": 128,
+      "extra_pool_tokens": 384,
+      "pool_tokens": 8704,
+      "positions": [
+        8191
+      ],
+      "precision_mode": "native",
+      "seed": 20269199,
+      "state": "numerical_failure",
+      "page_table_sha256": "02b54a665084a35128b331d8032839e98644bbc3e69084649b95d0e7f8560be4",
+      "candidates": [
+        {
+          "chunk": 128,
+          "traced_call_us": [
+            47.68146201968193,
+            47.72632848471403,
+            47.75566980242729,
+            47.77189809828997,
+            47.744959592819214
+          ],
+          "median_traced_call_us": 47.744959592819214,
+          "accuracy_per_rank": [
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "relative_rms_per_user": [
+                0.027003495022654533
+              ],
+              "max_abs_error": 0.0019282139837741852
+            },
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "relative_rms_per_user": [
+                0.027003495022654533
+              ],
+              "max_abs_error": 0.0019282139837741852
+            },
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "relative_rms_per_user": [
+                0.027003495022654533
+              ],
+              "max_abs_error": 0.0019282139837741852
+            },
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "relative_rms_per_user": [
+                0.027003495022654533
+              ],
+              "max_abs_error": 0.0019282139837741852
+            }
+          ],
+          "accuracy_passed": false
+        }
+      ],
+      "grid": [
+        12,
+        10
+      ],
+      "active_chunk": 128,
+      "passed": false
+    },
+    {
+      "input_tokens": 8192,
+      "batch": 1,
+      "native_capacity": 8320,
+      "aligned_capacity": 8704,
+      "native_chunk": 128,
+      "extra_pool_tokens": 384,
+      "pool_tokens": 8704,
+      "positions": [
+        8191
+      ],
+      "precision_mode": "hifi4_fp32",
+      "seed": 20269199,
+      "state": "measuring",
+      "page_table_sha256": "02b54a665084a35128b331d8032839e98644bbc3e69084649b95d0e7f8560be4",
+      "candidates": [],
+      "grid": [
+        12,
+        10
+      ],
+      "active_chunk": 128
+    }
+  ],
+  "updated_at": "2026-10-07T14:45:49Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "error": {
+    "type": "AttributeError",
+    "message": "module 'ttnn' has no attribute 'BlackholeComputeKernelConfig'"
+  }
+}

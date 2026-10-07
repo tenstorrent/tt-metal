@@ -80,6 +80,17 @@ live. Prototype two-item buffering, then tagged lookahead, without adding a
 second DRAM state pass. Also measure repeated FP32 operand reconfiguration and
 pack/reload costs before redesigning state layout.
 
+The two-item prototype has now passed all 30 geometry variants and the long-run
+and trace-rebinding checks. At four partitions, B8/B16/B32/B64 latency decreases
+by 25.4%/29.2%/31.0%/32.1% against the same partition count with one buffered
+item. All still miss P1's target; full-model integration remains pending. See
+`../galaxy-evidence/kernel-diagnostics-v1/README.md` for measurements and scope.
+
+The explicit attention math comparison also completed. HiFi4/FP32 reduces
+error but all four geometries still exceed the unchanged 2% relative-RMS gate;
+accurate exponentiation produced the same outputs in this experiment. This
+does not establish the cause of the model's GPQA gap.
+
 ## Experiment order and acceptance
 
 1. Resolve attention numerical-baseline failure without loosening tolerances.

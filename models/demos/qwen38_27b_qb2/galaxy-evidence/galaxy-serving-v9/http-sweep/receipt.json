@@ -1,0 +1,14 @@
+{
+  "raw_file": "sweep.json",
+  "raw_sha256": "ade209bb62483dc7f6a600f5d86489701ed08faf48d35d5b2d7c3a08c5a117b3",
+  "raw_bytes": 674139,
+  "compressed_file": "sweep.json.gz",
+  "state": "failed",
+  "error_type": "ReadError",
+  "completed_cells": 9,
+  "failed_cell": {
+    "input_tokens": 8192,
+    "concurrency": 128
+  },
+  "scope": "Partial HTTP sweep; 32K-256K cases not run"
+}

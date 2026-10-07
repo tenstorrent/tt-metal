@@ -1,0 +1,18 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-attention-precision-v2-20261007",
+    "--property=RuntimeMaxSec=2400",
+    "--property=TimeoutStopSec=180",
+    "--property=MemoryMax=128G",
+    "--property=CPUQuota=800%",
+    "--property=WorkingDirectory=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-galaxy",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/attention-precision-v2.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/attention-precision-v2.log",
+    "/bin/bash",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-galaxy/models/demos/qwen38_27b_qb2/demo/run_attention_precision.sh",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-precision-v2"
+  ]
+}

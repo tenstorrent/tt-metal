@@ -1,0 +1,251 @@
+{
+  "state": "completed",
+  "passed": true,
+  "scope": "Standalone FP32 GDN recurrence, not full-model qualification",
+  "raw_sha256": "0a435592ee6b5d7e0bffd623e2ebf54050fc078fddb8588528bb1c2590143063",
+  "cases": [
+    {
+      "batch": 1,
+      "value_splits": 1,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 66.6356086730957,
+      "p1_target_us": 13.072,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 8,
+      "value_splits": 1,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 83.47376249730587,
+      "p1_target_us": 34.576,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 16,
+      "value_splits": 1,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 154.2293932288885,
+      "p1_target_us": 59.152,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 32,
+      "value_splits": 1,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 277.0270872861147,
+      "p1_target_us": 108.304,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 64,
+      "value_splits": 1,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 454.2808933183551,
+      "p1_target_us": 206.608,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 1,
+      "value_splits": 2,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 39.16290123015642,
+      "p1_target_us": 13.072,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 8,
+      "value_splits": 2,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 85.76531894505024,
+      "p1_target_us": 34.576,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 16,
+      "value_splits": 2,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 152.67994720488787,
+      "p1_target_us": 59.152,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 32,
+      "value_splits": 2,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 246.03934958577156,
+      "p1_target_us": 108.304,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 64,
+      "value_splits": 2,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 432.30276089161634,
+      "p1_target_us": 206.608,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 1,
+      "value_splits": 4,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 25.858581066131592,
+      "p1_target_us": 13.072,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 8,
+      "value_splits": 4,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 87.5988882035017,
+      "p1_target_us": 34.576,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 16,
+      "value_splits": 4,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 140.05016069859266,
+      "p1_target_us": 59.152,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 32,
+      "value_splits": 4,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 242.03469045460224,
+      "p1_target_us": 108.304,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 64,
+      "value_splits": 4,
+      "input_buffer_items": 1,
+      "median_traced_call_us": 462.84171286970377,
+      "p1_target_us": 206.608,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 1,
+      "value_splits": 1,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 66.59083999693394,
+      "p1_target_us": 13.072,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 8,
+      "value_splits": 1,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 83.48035626113415,
+      "p1_target_us": 34.576,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 16,
+      "value_splits": 1,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 132.17235915362835,
+      "p1_target_us": 59.152,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 32,
+      "value_splits": 1,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 223.8102536648512,
+      "p1_target_us": 108.304,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 64,
+      "value_splits": 1,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 355.86231853812933,
+      "p1_target_us": 206.608,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 1,
+      "value_splits": 2,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 39.04582001268864,
+      "p1_target_us": 13.072,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 8,
+      "value_splits": 2,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 73.11159279197454,
+      "p1_target_us": 34.576,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 16,
+      "value_splits": 2,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 118.41416358947754,
+      "p1_target_us": 59.152,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 32,
+      "value_splits": 2,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 184.89563837647438,
+      "p1_target_us": 108.304,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 64,
+      "value_splits": 2,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 319.02494840323925,
+      "p1_target_us": 206.608,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 1,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 25.822529569268227,
+      "p1_target_us": 13.072,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 8,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 65.36479108035564,
+      "p1_target_us": 34.576,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 16,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 99.22176133841276,
+      "p1_target_us": 59.152,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 32,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 166.8943278491497,
+      "p1_target_us": 108.304,
+      "p1_latency_target_met": false
+    },
+    {
+      "batch": 64,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "median_traced_call_us": 314.1374560073018,
+      "p1_target_us": 206.608,
+      "p1_latency_target_met": false
+    }
+  ],
+  "long_horizon_checkpoints": 96,
+  "decay_only_cases": 6,
+  "multiwave_rebinding_cases": 6
+}

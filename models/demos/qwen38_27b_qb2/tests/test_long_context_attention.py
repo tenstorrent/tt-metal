@@ -72,7 +72,9 @@ def measure(mesh, invoke):
                 ttnn.release_trace(mesh, trace)
 
 
-def run_case(mesh, case, report, path):
+def run_case(mesh, case, report, path, *, chunks=CHUNKS, precision="native", require_native_accuracy=True):
+    if precision not in ("native", "hifi4_fp32", "hifi4_fp32_accurate_exp"):
+        raise ValueError(f"Unsupported precision diagnostic {precision}")
     batch, capacity = case["batch"], case["aligned_capacity"]
     case["seed"] = 20261006 + case["input_tokens"] + batch
     rng = torch.Generator().manual_seed(case["seed"])
@@ -118,6 +120,16 @@ def run_case(mesh, case, report, path):
     save(path, report)
 
     def operation(chunk):
+        config = {}
+        if precision != "native":
+            # This pinned runtime exposes the shared BH/WH config under the
+            # Wormhole name; the newer Blackhole alias is not exported by ttnn.
+            config["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
         return ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             key,
@@ -126,12 +138,17 @@ def run_case(mesh, case, report, path):
             page_table_tensor=tt_table,
             scale=256**-0.5,
             program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=[grid.x, grid.y], q_chunk_size=32, k_chunk_size=chunk
+                compute_with_storage_grid_size=[grid.x, grid.y],
+                q_chunk_size=32,
+                k_chunk_size=chunk,
+                exp_approx_mode=precision != "hifi4_fp32_accurate_exp",
             ),
+            **config,
         )
 
     # Measure the native-selected chunk first, then revisit it to expose drift.
-    for chunk in [case["native_chunk"], *[k for k in CHUNKS if k != case["native_chunk"]]]:
+    case["precision_mode"] = precision
+    for chunk in [case["native_chunk"], *[k for k in chunks if k != case["native_chunk"]]]:
         case["active_chunk"] = chunk
         save(path, report)
         samples, actuals = measure(mesh, lambda: operation(chunk))
@@ -147,11 +164,17 @@ def run_case(mesh, case, report, path):
         save(path, report)
         print("ATTENTION_CANDIDATE", case["input_tokens"], batch, json.dumps(candidate), flush=True)
         if chunk == case["native_chunk"]:
-            assert candidate["accuracy_passed"], "Native chunk failed full-context numerical reference"
+            if require_native_accuracy:
+                assert candidate["accuracy_passed"], "Native chunk failed full-context numerical reference"
+            elif not candidate["accuracy_passed"]:
+                case.update(state="numerical_failure", passed=False)
+                save(path, report)
+                return
     samples, actuals = measure(mesh, lambda: operation(case["native_chunk"]))
     assert all(accuracy(actual, expected)["passed"] for actual in actuals), "Repeated baseline correctness changed"
     case.update(
         state="completed",
+        passed=True,
         baseline_repeat_us=samples,
         selection=select_candidate(case["candidates"], case["native_chunk"], samples),
     )

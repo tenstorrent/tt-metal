@@ -24,7 +24,18 @@ def work_items(heads, grid_x, grid_y, value_splits=1):
     return [(i % grid_x, i // grid_x, i, cores, (items - 1 - i) // cores + 1) for i in range(cores)]
 
 
-def step(q, k, v, gates, state, output, *, value_splits=1):
+def circular_buffer_pages(value_splits, input_buffer_items):
+    """Bound input lookahead while retaining one writer-owned output window."""
+    if type(value_splits) is not int or value_splits not in (1, 2, 4):
+        raise ValueError("Value splits must be 1, 2, or 4")
+    if type(input_buffer_items) is not int or input_buffer_items not in (1, 2):
+        raise ValueError("Input buffer items must be 1 or 2")
+    columns = 4 // value_splits
+    inputs = [4, 4, columns, 1, 1, 4 * columns]
+    return [pages * input_buffer_items for pages in inputs] + [columns, 4 * columns, columns, 1, 1]
+
+
+def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1):
     """Mutate state[heads,128,128]; write output[heads,128], all FP32 DRAM.
 
     The caller preallocates output and retains all tensors through trace
@@ -33,6 +44,7 @@ def step(q, k, v, gates, state, output, *, value_splits=1):
     the complete runtime arguments on cache hits; its regression is exercised
     with two independently allocated tensor sets in the hardware test.
     """
+    pages_per_cb = circular_buffer_pages(value_splits, input_buffer_items)
     import ttnn
 
     mesh = state.device()
@@ -95,9 +107,7 @@ def step(q, k, v, gates, state, output, *, value_splits=1):
             core_ranges=cores,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.float32, page_size=4096)],
         )
-        for cb, pages in enumerate(
-            [4, 4, value_columns, 1, 1, 4 * value_columns, value_columns, 4 * value_columns, value_columns, 1, 1]
-        )
+        for cb, pages in enumerate(pages_per_cb)
     ]
     descriptor = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
     return ttnn.generic_op(tensors, descriptor)
