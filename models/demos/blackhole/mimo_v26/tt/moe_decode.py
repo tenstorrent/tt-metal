@@ -22,13 +22,17 @@ SLOTS = 64  # masked_bincount needs tokens % 64 == 0: 32 decode slots + 32 pad r
 
 
 class MiMoMoEDecode:
-    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None, router="exact"):
+    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None, router="exact", dead="sentinel"):
         """router: \"exact\" (original, 64-row ttnn path) or \"fast\" (router_select kernel on the 32 live slots; identical expert sets on all 47 layers)."""
         self.router = router
+        self.dead = dead  # "sentinel": dead slots get expert id 256 (= num experts, dispatch table -1): never dispatched, so cost scales with live tokens; "spread": old round-robin
+        self._zpad = {}
         self.mesh, self.gate, self.moe, self.do_ar = mesh, gate, moe, all_reduce
         rep = ttnn.ReplicateTensorToMesh(mesh)
         # spread routing for the 64 slots of one mesh row, expert ids exact in bf16 (<= 256), weights 1/8
         sidx, sw = spread_pad_routing(1, SLOTS)
+        if dead == "sentinel":
+            sidx, sw = torch.full_like(sidx, 256), torch.zeros_like(sw)
         self.sp_idx = ttnn.from_torch(
             sidx.reshape(1, 1, SLOTS, TOPK).bfloat16(),
             device=mesh,
@@ -102,10 +106,29 @@ class MiMoMoEDecode:
         xp = ttnn.pad(x, [(0, 0), (0, 0), (0, SLOTS - B), (0, 0)], 0.0)
         if self.router == "fast":
             assert B <= 32
-            xr = x if B == 32 else ttnn.pad(x, [(0, 0), (0, 0), (0, 32 - B), (0, 0)], 0.0)
-            w32, i32 = self.gate.route_v(xr, "sel_mm1x8")
-            wts = ttnn.concat([w32, self.zw], dim=0)  # pad rows 32..63: replaced by the spread routing through the mask
-            idx = ttnn.concat([i32, self.zi], dim=0)
+            w32, i32 = self.gate.route_v(x, "sel_mm1x8")  # router_select handles any T <= 32 rows
+            npad = SLOTS - B
+            if npad not in self._zpad:
+                rep = ttnn.ReplicateTensorToMesh(self.mesh)
+                self._zpad[npad] = (
+                    ttnn.from_torch(
+                        torch.zeros(npad, 1, 1, TOPK).bfloat16(),
+                        device=self.mesh,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=rep,
+                    ),
+                    ttnn.from_torch(
+                        torch.zeros(npad, 1, 1, TOPK).to(torch.int32),
+                        device=self.mesh,
+                        dtype=ttnn.uint16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=rep,
+                    ),
+                )
+            zw, zi = self._zpad[npad]
+            wts = ttnn.concat([w32, zw], dim=0)  # rows B..63: replaced by the dead-slot routing through the mask
+            idx = ttnn.concat([i32, zi], dim=0)
         else:
             wts, idx = self.gate.route(xp, "exact")
         wts2, idx2 = self._spread(wts, idx, mask)
