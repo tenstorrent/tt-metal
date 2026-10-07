@@ -183,7 +183,48 @@ void kernel_main() {
     // pushes, deep-barriered per block. Streaming reads this twice (PRE then a POST
     // re-read); resident reads it once (compute holds the whole row). The schedule
     // logic below decides WHEN each pass runs relative to the side-input pushes.
+    // Resident path: the input CB holds kInputCbChunks whole rows, so one row's
+    // reservation is contiguous. Issue up to kInputTridDepth blocks ahead, each
+    // tagged with its own NoC transaction id, and push block b as soon as ITS
+    // reads land (per-trid barrier) while later blocks are still in flight.
+    // Compute still sees per-block pushes (cumulative wait), so PRE pipelines.
+    constexpr uint32_t kNumInputBlocks = (num_tile_cols + block_size - 1) / block_size;
+    // Depth 8 measured best (4-15 swept): deeper lands every block at once and delays PRE.
+    // Trids 1..depth; 0 stays the untagged default.
+    constexpr uint32_t kInputTridDepthMax = 8u;
+    constexpr uint32_t kInputTridDepth = kNumInputBlocks < kInputTridDepthMax ? kNumInputBlocks : kInputTridDepthMax;
+    auto read_input_pass_deep = [&](uint32_t input_tile_idx) {
+        cb_input.reserve_back(num_tile_cols);
+        const uint32_t base = cb_input.get_write_ptr();
+        uint32_t next = 0;
+        for (uint32_t b = 0; b < kNumInputBlocks; b++) {
+            for (; next < kNumInputBlocks && next < b + kInputTridDepth; next++) {
+                const uint32_t c0 = next * block_size;
+                const uint32_t n = ((num_tile_cols - c0) >= block_size) ? block_size : (num_tile_cols - c0);
+                const NocOptVals o{.trid = 1u + (next % kInputTridDepth)};
+                for (uint32_t i = 0; i < n; i++) {
+                    noc.async_read<NocOptions::TXN_ID>(
+                        input_accessor,
+                        CoreLocalMem<uint32_t>(base + (c0 + i) * input_tile_bytes),
+                        input_page_bytes,
+                        {.page_id = input_tile_idx + c0 + i},
+                        {},
+                        o);
+                }
+            }
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1u + (b % kInputTridDepth)});
+            const uint32_t c0 = b * block_size;
+            cb_input.push_back(((num_tile_cols - c0) >= block_size) ? block_size : (num_tile_cols - c0));
+        }
+        noc_async_read_set_trid(0, noc.get_noc_id());
+    };
+
     auto read_input_pass = [&](uint32_t input_tile_idx) {
+        // Streaming input_cb holds only a few blocks, so it cannot take a whole-row reservation.
+        if constexpr (!streaming_low_l1) {
+            read_input_pass_deep(input_tile_idx);
+            return;
+        }
         for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
             const uint32_t tiles_in_block =
                 ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
