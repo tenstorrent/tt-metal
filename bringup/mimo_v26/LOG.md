@@ -1175,3 +1175,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dflash_teacher_forced.json
 - paths: models/demos/blackhole/mimo_v26/reference/dflash_ref.py, models/demos/blackhole/mimo_v26/reference/probes/dflash_teacher_forced.py, models/demos/blackhole/mimo_v26/reference/DFLASH_NOTES.md
 - data: {"per_pos_top1":[0.596,0.460,0.374,0.297,0.248,0.214,0.178],"expected_accept_len_gold_proxy":2.81,"answer_region_accept_len":3.43,"n_anchors":1680}
+
+## E261007-0624-041
+- date: 2026-10-07T06:24:45
+- commit: 32d4799dbee
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: correctness
+- status: verified
+- claim: Attention scale table for the attention owner: /mnt/tt-data/ssinghal/mimo-logs/ref_attn_alpha_L6-47.json (per layer 6-47: attn_alpha = best scalar with device attn_out ~ alpha*oracle attention [fp32, bfp8 qkv/o, on the device attn_in], rel, rel_after_alpha, and ffn_alpha under forced device routing): attn alpha 1.040/1.024/1.021 at L6/7/8, ~1.00 L9-L17, ~0.99 L18-L47 (device 1% low). probes/device_vs_oracle.py now also records scale_alpha, rel_after_alpha, rel_over_floor and a flag (>=5x floor or |alpha-1|>=1%) for attn_out/ffn_out/h_out so the per-layer check detects scale bias (PCC is scale-invariant; L16 ffn: pcc 0.99999, alpha 0.989, 10.2x floor, flagged). tt-model-reference and tt-moe-correctness skills carry the one-line rule.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_attn_alpha_L6-47.json
+- paths: models/demos/blackhole/mimo_v26/reference/probes/device_vs_oracle.py, models/demos/blackhole/mimo_v26/reference/probes/device_scale_bias.py
