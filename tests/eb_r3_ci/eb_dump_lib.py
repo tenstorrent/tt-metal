@@ -335,3 +335,25 @@ def run_chunk(device, diffs, fn, a_vals, b_vals):
     set_env(device, {})
     for la, lb, d in diffs:
         d.add(outs[la], outs[lb], a_vals, b_vals)
+
+
+def stage(tag, out, a=None, b=None, op=None, extra=""):
+    """save: keep out; cmp: compare with the saved main-side output and report."""
+    STAGE = os.environ.get("EB_DUMP_STAGE", "save")
+    DIR = os.environ.get("EB_DUMP_DIR", "/tmp/eb_kedit")
+    os.makedirs(DIR, exist_ok=True)
+    path = os.path.join(DIR, tag.replace(" ", "_").replace("/", "_") + ".npy")
+    if STAGE == "save":
+        np.save(path, out)
+        print(f"\nDUMP {tag}: saved {out.size} outputs {extra}", flush=True)
+        return
+    if not os.path.exists(path):
+        print(f"\nDUMP {tag}: NO MAIN-SIDE OUTPUT", flush=True)
+        return
+    ref = np.load(path)
+    if ref.shape != out.shape or ref.dtype != out.dtype:
+        print(f"\nDUMP {tag}: SHAPE/DTYPE MISMATCH main {ref.shape} {ref.dtype} pr {out.shape} {out.dtype}", flush=True)
+        return
+    d = Diff(f"{tag} [main | PR]", op, ("main", "PR"))
+    d.add(ref, out, a, b)
+    d.report(extra)

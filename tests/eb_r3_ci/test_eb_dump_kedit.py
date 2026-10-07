@@ -15,10 +15,9 @@ import pytest
 import torch
 import ttnn
 
-from eb_dump_lib import PATS, Diff, b16_set, b16_small, bf16_from_bits, f32_of_bf16, kernel_variants, out_bits, set_env
+from eb_dump_lib import PATS, b16_set, b16_small, bf16_from_bits, f32_of_bf16, kernel_variants, out_bits, set_env, stage
 
 STAGE = os.environ.get("EB_DUMP_STAGE", "save")
-DIR = os.environ.get("EB_DUMP_DIR", "/tmp/eb_kedit")
 
 
 @pytest.fixture(scope="module")
@@ -27,26 +26,6 @@ def device():
     yield dev
     kernel_variants(f" {STAGE}")
     ttnn.close_device(dev)
-
-
-def stage(tag, out, a=None, b=None, op=None, extra=""):
-    """save: keep out; cmp: compare with the saved main-side output and report."""
-    os.makedirs(DIR, exist_ok=True)
-    path = os.path.join(DIR, tag.replace(" ", "_").replace("/", "_") + ".npy")
-    if STAGE == "save":
-        np.save(path, out)
-        print(f"\nDUMP {tag}: saved {out.size} outputs {extra}", flush=True)
-        return
-    if not os.path.exists(path):
-        print(f"\nDUMP {tag}: NO MAIN-SIDE OUTPUT", flush=True)
-        return
-    ref = np.load(path)
-    if ref.shape != out.shape or ref.dtype != out.dtype:
-        print(f"\nDUMP {tag}: SHAPE/DTYPE MISMATCH main {ref.shape} {ref.dtype} pr {out.shape} {out.dtype}", flush=True)
-        return
-    d = Diff(f"{tag} [main | PR]", op, ("main", "PR"))
-    d.add(ref, out, a, b)
-    d.report(extra)
 
 
 def _hs(shape, y, x):
