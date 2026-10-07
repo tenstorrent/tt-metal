@@ -36,7 +36,8 @@ ALWI void process_tile(
     tt::CBIndex cb_out,
     uint32_t freq,
     uint32_t tile_start,
-    uint32_t num_tiles_per_cycle) {
+    uint32_t num_tiles_per_cycle,
+    uint32_t& other_pos) {
     using namespace ckernel;
 
 #if BCAST_INPUT
@@ -90,7 +91,12 @@ ALWI void process_tile(
 #if BCAST_OTHER_CHUNK > 1
     // Sharded operand and output: up to a DEST section of tiles against the one broadcast tile per acquire.
     for (uint32_t j = tile_start; j < freq;) {
-        const uint32_t n = (freq - j) < BCAST_OTHER_CHUNK ? (freq - j) : BCAST_OTHER_CHUNK;
+        uint32_t n = (freq - j) < BCAST_OTHER_CHUNK ? (freq - j) : BCAST_OTHER_CHUNK;
+#if HAS_ACTIVATIONS(OTHER_OP)
+        // The section's tiles are read by index from its intermediate CB of BCAST_OTHER_CHUNK pages: stop at the CB end.
+        n = n < BCAST_OTHER_CHUNK - other_pos ? n : BCAST_OTHER_CHUNK - other_pos;
+        other_pos = (other_pos + n) % BCAST_OTHER_CHUNK;
+#endif
         PREPROCESS(OTHER_OP, CircularBuffer(CB_PRE_OTHER), CircularBuffer(CB_POST_OTHER), CircularBuffer(cb_out), n);
         EXP_CB_POST_OTHER.wait_front(n);
         exp_dfb_out.reserve_back(n);
@@ -194,6 +200,7 @@ void kernel_main() {
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
+    uint32_t other_pos = 0;
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
@@ -208,7 +215,8 @@ void kernel_main() {
             cb_out,
             tile_freq,
             tile_start,
-            num_tiles_per_cycle);
+            num_tiles_per_cycle,
+            other_pos);
     }
 
     if (remaining_iterations > 0) {
@@ -222,6 +230,7 @@ void kernel_main() {
             cb_out,
             remaining_iterations,
             tile_start,
-            num_tiles_per_cycle);
+            num_tiles_per_cycle,
+            other_pos);
     }
 }
