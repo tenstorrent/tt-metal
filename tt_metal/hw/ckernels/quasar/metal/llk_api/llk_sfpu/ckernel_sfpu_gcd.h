@@ -118,9 +118,8 @@ inline void _emit_gcd_step_() {
 /**
  * @brief Record the iteration pair and the prologue into the replay buffer.
  *
- * @note Called by @ref calculate_gcd on entry, before the row loop; every
- *       @ref _calculate_gcd_sfp_rows_ call replays what this records. Overwrites math-thread
- *       replay slots 0-30.
+ * @note Called once by @ref calculate_gcd_init; every @ref _calculate_gcd_sfp_rows_ call
+ *       replays what this records. Overwrites math-thread replay slots 0-30.
  */
 inline void _record_gcd_replay_() {
     lltt::record(GCD_REPLAY_START, GCD_REPLAY_LEN);
@@ -145,7 +144,7 @@ inline void _record_gcd_replay_() {
  * @note Leaves the result in GCD_LREG_B and clobbers GCD_LREG_A, GCD_LREG_TMP, GCD_LREG_KBIAS.
  *       No conversion back for sign-magnitude Dest: the result is non-negative, where both
  *       encodings agree.
- * @note Call @ref _record_gcd_replay_ before this function - the iterations run out of the
+ * @note Call @ref calculate_gcd_init before this function - the iterations run out of the
  *       replay buffer.
  */
 template <bool SIGN_MAGNITUDE_FORMAT = false>
@@ -175,6 +174,17 @@ inline void _calculate_gcd_sfp_rows_() {
 }
 
 /**
+ * @brief Record the gcd replay bodies (one Stein iteration pair and the per-row prologue).
+ *
+ * Every recorded instruction is an immediate, so the recording needs no runtime state and
+ * @ref calculate_gcd only replays it.
+ *
+ * @note Overwrites math-thread replay slots 0-30. Call before @ref calculate_gcd, and again
+ *       before resuming gcd after any op that records into those slots.
+ */
+inline void calculate_gcd_init() { _record_gcd_replay_(); }
+
+/**
  * @brief Elementwise gcd(|in0|, |in1|) over two Int32 Dest tiles, written to a third.
  *
  * gcd(0, b) = |b|, gcd(a, 0) = |a|, gcd(0, 0) = 0. The output tile may alias either input.
@@ -188,8 +198,8 @@ inline void _calculate_gcd_sfp_rows_() {
  * @param dst_index_out: Dest tile index the result is written to
  * @note Operand magnitudes must fit in GCD_MAX_INPUT_BITS bits; -2^31 is out of contract because
  *       Quasar SFPABS saturates it to 2^31 - 1.
- * @note Overwrites math-thread replay slots 0-30 on every call; re-run the init of any other
- *       replay-buffer user afterwards. Has no init of its own, but its loads and stores rely on the
+ * @note Call @ref calculate_gcd_init first, and again after any op that records into math-thread
+ *       replay slots 0-30; this function only replays them. Its loads and stores rely on the
  *       ADDR_MOD_7 that _llk_math_eltwise_sfpu_init_ programs. Enables CC on entry and leaves
  *       CC.En = 1, CC.Res = 1 (the firmware default) on exit.
  * @note Clobbers LREG0-LREG3.
@@ -206,7 +216,6 @@ inline void calculate_gcd(
     const std::uint32_t out_offset = dst_index_out * tile_stride;
 
     TTI_SFPENCC(GCD_ENCC_IMM12_ENABLE, GCD_ENCC_MOD_SET_EN);  // CC.En = 1, CC.Res = 1
-    _record_gcd_replay_();
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
