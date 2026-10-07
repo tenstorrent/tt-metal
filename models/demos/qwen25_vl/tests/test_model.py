@@ -52,6 +52,7 @@ from models.tt_transformers.tt.load_checkpoints import (
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
+    qwen25_vl_mesh_device,
     reset_seeds,
     ensure_gc,
     num_layers,
@@ -60,6 +61,7 @@ def test_vision_model_inference(
     seq_len,
     image_grid_thw,
 ):
+    mesh_device = qwen25_vl_mesh_device
     test_id = request.node.callspec.id
     if is_ci_env and "two_layers" not in test_id:
         pytest.skip("CI only runs the two_layers test")

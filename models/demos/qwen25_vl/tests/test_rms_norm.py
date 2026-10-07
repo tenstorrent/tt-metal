@@ -42,9 +42,11 @@ def test_rms_norm_inference(
     max_seq_len,
     batch_size,
     mesh_device,
+    qwen25_vl_mesh_device,
     reset_seeds,
     ensure_gc,
 ):
+    mesh_device = qwen25_vl_mesh_device
     dtype = ttnn.bfloat16
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=max_seq_len)
