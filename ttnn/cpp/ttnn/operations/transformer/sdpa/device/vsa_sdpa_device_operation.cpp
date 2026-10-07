@@ -95,7 +95,7 @@ void validate_common(const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
     if (raw_selection) {
         TT_FATAL(attrs.streaming, "vsa_sdpa raw-selection inputs (list_len/exempt_ids/dense_rows) need streaming=True");
         TT_FATAL(attrs.list_len <= W, "list_len ({}) exceeds the indices width ({})", attrs.list_len, W);
-        TT_FATAL(attrs.exempt_ids.size() <= 32, "at most 32 exempt block ids (got {})", attrs.exempt_ids.size());
+        TT_FATAL(attrs.exempt_ids.size() <= 128, "at most 128 exempt block ids (got {})", attrs.exempt_ids.size());
         for (uint32_t b : attrs.exempt_ids) {
             TT_FATAL(b < n_kv_blocks, "exempt block id {} out of range ({} blocks)", b, n_kv_blocks);
         }

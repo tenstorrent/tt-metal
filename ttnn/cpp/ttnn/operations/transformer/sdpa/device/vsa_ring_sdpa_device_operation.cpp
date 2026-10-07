@@ -116,7 +116,10 @@ void validate_vsa_contract(const VsaRingSdpaParams& attrs, const VsaRingSdpaInpu
         "vsa_ring_sdpa: list_len ({}) exceeds the indices width ({})",
         attrs.vsa.list_len,
         is[3]);
-    TT_FATAL(attrs.vsa.exempt_ids.size() <= 32, "vsa_ring_sdpa: at most 32 exempt block ids");
+    TT_FATAL(
+        attrs.vsa.exempt_ids.size() <= 128,
+        "vsa_ring_sdpa: at most 128 exempt block ids (got {})",
+        attrs.vsa.exempt_ids.size());
     for (uint32_t b : attrs.vsa.exempt_ids) {
         TT_FATAL(b < n_kv_blocks, "vsa_ring_sdpa: exempt block id {} out of range ({} blocks)", b, n_kv_blocks);
     }
