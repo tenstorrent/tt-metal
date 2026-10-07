@@ -59,11 +59,11 @@ def length_tensor(mesh, value):
     return ttnn.to_device(host_length(mesh, value), mesh)
 
 
-def open_ring_mesh(fabric, **mesh_options):
-    if ttnn.GetNumAvailableDevices() < RING:
-        pytest.skip("Requires two connected Blackholes")
+def open_ring_mesh(fabric, ring=RING, **mesh_options):
+    if ttnn.GetNumAvailableDevices() < ring:
+        pytest.skip(f"Requires {ring} connected Blackholes")
     ttnn.set_fabric_config(*fabric)
-    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, RING), trace_region_size=16777216, **mesh_options)
+    mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(1, ring), trace_region_size=16777216, **mesh_options)
     mesh.enable_program_cache()
     grid = mesh.compute_with_storage_grid_size()
     cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})

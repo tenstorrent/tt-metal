@@ -52,13 +52,24 @@
 
 # --- unit ---
 - id: bh-sdpa-ring-recipes
-  name: ring and exp ring joint SDPA precision recipes on two devices
+  name: ring joint SDPA precision recipes on two devices
   cmd: >-
     pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa_recipes.py
-    tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa_recipes.py
   skus:
     bh_p300:
-      timeout: 30
+      timeout: 20
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  budget_type: e2e
+
+# Exp ring runs two links per ring direction, so it needs a ring of four devices (see the test).
+- id: bh-sdpa-exp-ring-recipes
+  name: exp ring joint SDPA precision recipes on four devices
+  cmd: >-
+    pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa_recipes.py
+  skus:
+    bh_quietbox_2:
+      timeout: 20
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: e2e
