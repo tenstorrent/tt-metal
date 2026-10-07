@@ -1,8 +1,26 @@
 # Single-token GDN candidate
 
 This experiment implements the P1 recurrence from the Galaxy plan. It is **not
-imported by the qualified model**. Device compilation, accuracy, and performance
-are pending; CPU scheduling tests alone do not qualify the kernel.
+imported by the qualified model**. The first TP4 hardware run passes compilation
+and accuracy, including 4,096 changing-input steps, but misses the P1 latency
+target at every tested batch. CPU tests alone do not qualify the kernel.
+
+Measured on `10.228.203.98` on 2026-10-07, five samples of 100 warm trace
+replays (recurrence and dispatch only):
+
+| Users per TP4 | Median call (us) | P1 target (us) |
+| ---: | ---: | ---: |
+| 1 | 68.67 | 13.07 |
+| 8 | 92.51 | 34.58 |
+| 16 | 157.21 | 59.15 |
+| 64 | 454.64 | 206.61 |
+
+All four ranks pass input immutability, allocation rebinding, cancellation,
+per-head accuracy and near-identity decay checks. At step 4,096 the maximum
+relative RMS error is 3.05e-7 for state and 4.48e-7 for output. Raw results and
+kernel hashes are in `../../galaxy-evidence/gdn-step-candidate-v1/`. This is
+accuracy evidence for the standalone recurrence, not a model speedup or
+reference-evaluation result. Integration and further latency work remain.
 
 Each work item owns one user/value-head state matrix. Q and K arrive normalized,
 Q scaled by `128**-0.5`, and gates already transformed to decay and beta. V is
