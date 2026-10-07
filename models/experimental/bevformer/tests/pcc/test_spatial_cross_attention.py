@@ -143,7 +143,10 @@ def test_spatial_cross_attention_forward(
 
     # Convert tensors to ttnn format for ttnn model
     tt_bev_queries = ttnn.from_torch(bev_queries, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # SCA takes camera features batch-first; the encoder owns the permute.
+    tt_camera_features = ttnn.from_torch(
+        camera_features.permute(2, 0, 1, 3), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
     tt_reference_points_cam = ttnn.from_torch(
         reference_points_cam, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )

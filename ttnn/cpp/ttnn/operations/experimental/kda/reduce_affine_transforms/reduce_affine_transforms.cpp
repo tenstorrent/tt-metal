@@ -27,7 +27,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const auto kernel_config = init_device_compute_kernel_config(
         a.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

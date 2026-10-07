@@ -424,3 +424,23 @@ def test_quasar_reshape_nd_input_last_dim_change_is_not_a_view(device):
     assert list(tt_output.shape) == [2, 64, 31], f"got {list(tt_output.shape)}"
     actual = ttnn.to_torch(tt_output).to(torch.bfloat16)
     _assert_reshape(torch_output, actual, ttnn.bfloat16)
+
+
+_qsr_prim_fold = ttnn._ttnn.operations.experimental.quasar._prim_fold
+_qsr_is_tile_native_fold_supported = ttnn._ttnn.operations.experimental.quasar._is_tile_native_fold_supported
+
+
+def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
+    # quasar validate_fold does % (W * stride_h) / % stride_h; zero stride SIGFPEs without the guard.
+    shape = (1, 32, 32, 32)
+    t = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+    )
+    for sh, sw in [(2, 0), (0, 2), (0, 0)]:
+        assert not _qsr_is_tile_native_fold_supported(t, sh, sw), f"predicate must reject stride ({sh},{sw})"
+        with expect_error(RuntimeError, r"stride_[hw] .* must be > 0"):
+            _qsr_prim_fold(t, sh, sw)
