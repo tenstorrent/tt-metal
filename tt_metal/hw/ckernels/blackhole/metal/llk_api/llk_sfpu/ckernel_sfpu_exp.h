@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 #include "ckernel_addrmod.h"
 #include "ckernel_ops.h"
@@ -487,6 +488,29 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
     return out;
 }
 
+// The clamped approximate exponential over N vectors (8 or 32): every LOADMACRO carries its DEST row offset as an
+// immediate (ADDR_MOD_7 does not increment) and rotates the loaded value through LREG0 to LREG3.
+template <int VEC, int N>
+sfpi_inline void _exp_approx_clamped_sanitise_vector_() {
+    // Macro sequence 1: load, SFPSWAP against LREG14 (-88.5), store back. The SWAP takes two cycles, so an SFPNOP
+    // follows every LOADMACRO but the last.
+    TTI_SFPLOADMACRO(4 | (VEC & 3), 0, ADDR_MOD_7, 2 * VEC);
+    if constexpr (VEC + 1 < N) {
+        TTI_SFPNOP;
+    }
+}
+
+template <int... VEC>
+sfpi_inline void _exp_approx_clamped_sanitise_pass_(std::integer_sequence<int, VEC...>) {
+    (_exp_approx_clamped_sanitise_vector_<VEC, static_cast<int>(sizeof...(VEC))>(), ...);
+}
+
+template <int... VEC>
+sfpi_inline void _exp_approx_clamped_exp_pass_(std::integer_sequence<int, VEC...>) {
+    // Macro sequence register 0: load, MAD, round, shift, store.
+    (TTI_SFPLOADMACRO(VEC & 3, 0, ADDR_MOD_7, 2 * VEC), ...);
+}
+
 template <bool SCALE_EN, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _ckernel_sfpu_exp_accurate_(sfpi::vFloat val, const std::uint32_t exp_base_scale_factor) {
     if constexpr (SCALE_EN) {
@@ -531,9 +555,21 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             sfpi::dst_reg++;
         }
 #else
-        // Code below is hand-unrolled for 8 iterations
-        // so it doesn't respect ITERATIONS. TODO: tt-llk#1486
-        // static_assert(ITERATIONS == 8);
+        static_assert(
+            ITERATIONS == 8 || ITERATIONS == 32,
+            "The clamped approximate exponential processes 8 vectors (one face) or 32 (a whole tile) per call.");
+        if constexpr (ITERATIONS == 32) {
+            _exp_approx_clamped_sanitise_pass_(std::make_integer_sequence<int, 32>{});
+            _exp_approx_clamped_exp_pass_(std::make_integer_sequence<int, 32>{});
+            // The last macro stores four instructions after its LOADMACRO; drain it before the caller's next SFPU op.
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            TTI_SFPNOP;
+            return;
+        }
+
+        // Code below is hand-unrolled for 8 iterations (one face).
 
         // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is
         // more negative than that, swap the input value with -88.5 and store back to DEST
@@ -735,18 +771,25 @@ constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uin
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
 constexpr auto hi16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) >> 16); };
 
+// common_init, constants and upper_macros false (the clamped approximate exp): a later tile of the ttnn unary chain,
+// without the common part, LREG12-14, or macro instructions 2 and 3 and sequence 1.
 template <
     bool APPROXIMATION_MODE,
     uint32_t scale,
     bool CLAMP_NEGATIVE,
-    bool is_fp32_dest_acc_en>
+    bool is_fp32_dest_acc_en,
+    bool common_init = true,
+    bool constants = true,
+    bool upper_macros = true>
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
     // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
-    sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    if constexpr (common_init) {
+        sfpu::_init_sfpu_config_reg();
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+        math::reset_counters(p_setrwc::SET_ABD_F);
+    }
     if constexpr (APPROXIMATION_MODE && CLAMP_NEGATIVE) {
         // Algorithm is adapted from:
         //      A Fast, Compact Approximation of the Exponential Function
@@ -766,27 +809,29 @@ void exp_init() {
         //          LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
         //          LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
-        constexpr float LN2_RECIP = 1.4426950408889634f;
-        constexpr float A = 256.0f * LN2_RECIP;
-        constexpr float B_minus_C = 32500.818359375f;
-        constexpr float THRESHOLD = -88.5f;
+        if constexpr (constants) {
+            constexpr float LN2_RECIP = 1.4426950408889634f;
+            constexpr float A = 256.0f * LN2_RECIP;
+            constexpr float B_minus_C = 32500.818359375f;
+            constexpr float THRESHOLD = -88.5f;
 
-        constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
+            constexpr float scale_fp32 = __builtin_bit_cast(float, scale);
 
-        constexpr float A_scaled = A * scale_fp32;
-        constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
+            constexpr float A_scaled = A * scale_fp32;
+            constexpr float THRESHOLD_scaled = THRESHOLD / scale_fp32;
 
-        TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
-        TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
+            TTI_SFPLOADI(0, 0xA, lo16(THRESHOLD_scaled));
+            TTI_SFPLOADI(0, 0x8, hi16(THRESHOLD_scaled));
+            TTI_SFPCONFIG(0, 14, 0);  // SFPCONFIG Dest 14 = LREG[14] =            -88.5               = 0xc2b10000
 
-        TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
-        TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
-        TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
+            TTI_SFPLOADI(0, 0xA, lo16(A_scaled));
+            TTI_SFPLOADI(0, 0x8, hi16(A_scaled));
+            TTI_SFPCONFIG(0, 12, 0);  // SFPCONFIG Dest 12 = LREG[12] = A     =    369.329925537109375 = 0x43b8aa3b
 
-        TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
-        TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
-        TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
+            TTI_SFPLOADI(0, 0xA, lo16(B_minus_C));
+            TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
+            TTI_SFPCONFIG(0, 13, 0);  // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
+        }
 
 #ifndef DISABLE_SFPLOADMACRO
         // Next, set up the macro instructions which will be necessary
@@ -820,50 +865,55 @@ void exp_init() {
         // instruction register 1, which is Macro Instruction Register 5
         TTI_SFPMAD(12, 0, 13, 13, 0);  // MACRO Instruction 1 <--- lreg X = lreg[12] (A) * lreg[0] (y) + lreg[13] (B-C)
 
-        // Backdoor load of Macro Instruction 2
-        // ROUND instruction to convert FP32 result into an integer value (int16)
-        //                Stochastic = 0,  Imm(Descale),  SrcB(unused),   SrcC(input value),  Lreg_dest = 14 to install
-        //                in Programmable Macro Instruction reg 2'b10,  instr_mod1 = 14 to treat input as fp32, output
-        //                as unsigned int16, use imm as descale
-        TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 14);  // Round to unsigned Int16
+        if constexpr (upper_macros) {
+            // Backdoor load of Macro Instruction 2
+            // ROUND instruction to convert FP32 result into an integer value (int16)
+            //                Stochastic = 0,  Imm(Descale),  SrcB(unused),   SrcC(input value),  Lreg_dest = 14 to
+            //                install in Programmable Macro Instruction reg 2'b10,  instr_mod1 = 14 to treat input as
+            //                fp32, output as unsigned int16, use imm as descale
+            TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 14);  // Round to unsigned Int16
 
-        // Backdoor load of Macro Instruction 3
-        // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent;
-        TTI_SFPSHFT(
-            15,
-            0,
-            15,
-            1);  // imm = 15 to shift left by 15 bits; lreg_c = 0 (will use macro reg); lreg_dest = 15 to install in
-                 // Programmable Macro Instruction reg 2'b11, which is Macro Instruction Register 7
+            // Backdoor load of Macro Instruction 3
+            // If using the unsigned int rounding mode, then shift by 15; SHL to move integer bits to exponent;
+            TTI_SFPSHFT(
+                15,
+                0,
+                15,
+                1);  // imm = 15 to shift left by 15 bits; lreg_c = 0 (will use macro reg); lreg_dest = 15 to install in
+                     // Programmable Macro Instruction reg 2'b11, which is Macro Instruction Register 7
 
-        // So at this point, we have the following instructions loaded into our macro registers:
-        //
-        // 00: (no macro instruction, just execute whatever is issued from Tensix) <-- these are fixed / not
-        // programmable 01: ( Rsvd                                                            ) <-- these are fixed /
-        // not programmable 02: ( NOP                                                             ) <-- these are fixed
-        // / not programmable 03: ( SFPSTORE                                                        ) <-- these are
-        // fixed / not programmable 04: TTI_SFPSWAP       (0, 0, 11, 1) 05: TTI_SFPMAD        (12, 0, 13, 13, 0) 06:
-        // TTI_SFP_STOCH_RND (1, 0, 0, 0, 14, 14) 07: TTI_SFPSHFT       (15,0,15,1)
+            // So at this point, we have the following instructions loaded into our macro registers:
+            //
+            // 00: (no macro instruction, just execute whatever is issued from Tensix) <-- these are fixed / not
+            // programmable 01: ( Rsvd                                                            ) <-- these are fixed
+            // / not programmable 02: ( NOP                                                             ) <-- these are
+            // fixed / not programmable 03: ( SFPSTORE                                                        ) <--
+            // these are fixed / not programmable 04: TTI_SFPSWAP       (0, 0, 11, 1) 05: TTI_SFPMAD        (12, 0, 13,
+            // 13, 0) 06: TTI_SFP_STOCH_RND (1, 0, 0, 0, 14, 14) 07: TTI_SFPSHFT       (15,0,15,1)
 
-        // Now we want to set up our two sequences
+            // Now we want to set up our two sequences
 
-        // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
-        //       Delay slot:                  0     1        2
-        //                                                                                                                                                                                                 Use
-        //                                                                                                                                                                                                 Loaded  Result          Macro
-        //                                                                                                                                                                                                 Value   Value   Delay   Instruction
-        //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
-        TTI_SFPLOADI(
-            0,
-            0xA,
-            0x0004);  // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed by 0
-                      // ; not using staging flop as dest; not using load reg as srcb : 8'b0_______0_______000_____100
-                      // = 0x04 slot2 : MAD    UNIT, unused : 8'b0_______0_______000_____000          = 0x00
-        TTI_SFPLOADI(
-            0, 0x8, 0x1300);  // slot3 : ROUND  UNIT, unused : 8'b0_______0_______000_____000          = 0x00 slot4 :
-                              // STORE  UNIT, want STORE instruction which is in macro instruction mux[3], delayed by 2
-                              // ; not using staging flop as src ; : 8'b0_______0_______010_____011          = 0x13
-        TTI_SFPCONFIG(0, 5, 0);  // SFPCONFIG Dest 5 = Macro Sequence Register 1
+            // Sequence 1 setup: we want to Load, SWAP, <delay>, Store
+            //       Delay slot:                  0     1        2
+            //                                                                                                                                                                                                 Use
+            //                                                                                                                                                                                                 Loaded  Result          Macro
+            //                                                                                                                                                                                                 Value   Value   Delay   Instruction
+            //                                                                                                                                                                                                 SRCB    Stage   Slot    Select
+            TTI_SFPLOADI(
+                0,
+                0xA,
+                0x0004);  // slot1 : SIMPLE UNIT, want SWAP  instruction which is in macro instruction mux[4], delayed
+                          // by 0 ; not using staging flop as dest; not using load reg as srcb :
+                          // 8'b0_______0_______000_____100 = 0x04 slot2 : MAD    UNIT, unused :
+                          // 8'b0_______0_______000_____000          = 0x00
+            TTI_SFPLOADI(
+                0,
+                0x8,
+                0x1300);  // slot3 : ROUND  UNIT, unused : 8'b0_______0_______000_____000          = 0x00 slot4 :
+                          // STORE  UNIT, want STORE instruction which is in macro instruction mux[3], delayed by 2
+                          // ; not using staging flop as src ; : 8'b0_______0_______010_____011          = 0x13
+            TTI_SFPCONFIG(0, 5, 0);  // SFPCONFIG Dest 5 = Macro Sequence Register 1
+        }
 
         // Sequence 0 setup: we want to Load, MAD, <delay>, ROUND, SHIFT, Store
         //       Delay slot:                  0    1        2      3      4

@@ -3,7 +3,7 @@
 
 
 import pytest
-from conftest import skip_for_blackhole
+from conftest import skip_for_wormhole
 from helpers.constraints import distinct_dest_accumulation_modes
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
@@ -285,7 +285,15 @@ _UINT_COMP_OPS = [
 ]
 
 
-def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensions):
+def _extra_slice_config(
+    formats,
+    mathop,
+    dest_acc,
+    unpack_to_dest,
+    input_dimensions,
+    approx_mode=ApproximationMode.No,
+    clamp_negative=False,
+):
     tile_count_A, tile_count_B, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
     )
@@ -295,12 +303,12 @@ def _extra_slice_config(formats, mathop, dest_acc, unpack_to_dest, input_dimensi
         run_types=ALL_PERF_RUN_TYPES,
         templates=[
             MATH_OP(mathop=mathop),
-            APPROX_MODE(ApproximationMode.No),
+            APPROX_MODE(approx_mode),
             ITERATIONS(32),
             FAST_MODE(FastMode.No),
             STABLE_SORT(StableSort.No),
             FUSED_SORT(FusedSort.No),
-            CLAMP_NEGATIVE(False),
+            CLAMP_NEGATIVE(clamp_negative),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),
@@ -350,7 +358,6 @@ def _comp_dest_acc(formats):
     return DestAccumulation.No
 
 
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.UInt16], same=True),
@@ -370,7 +377,6 @@ def test_perf_eltwise_unary_sfpu_comp_uint16(
     ).run(perf_report)
 
 
-@skip_for_blackhole
 @pytest.mark.perf
 @parametrize(
     formats=input_output_formats([DataFormat.UInt32], same=True),
@@ -387,6 +393,28 @@ def test_perf_eltwise_unary_sfpu_comp_uint32(
         dest_acc,
         formats.input_format.is_32_bit(),
         input_dimensions,
+    ).run(perf_report)
+
+
+# The approximate exp with its input clamping on, the compute API default, which the main sweep does not measure.
+@skip_for_wormhole
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b], same=True),
+    mathop=[MathOperation.Exp],
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_exp_clamped(
+    perf_report, formats, mathop, input_dimensions
+):
+    _extra_slice_config(
+        formats,
+        mathop,
+        DestAccumulation.No,
+        False,
+        input_dimensions,
+        approx_mode=ApproximationMode.Yes,
+        clamp_negative=True,
     ).run(perf_report)
 
 

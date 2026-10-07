@@ -34,6 +34,19 @@ ALWI void rpow_tile_init() { MATH(SFPU_UNARY_INIT_FN(rpow, sfpu::sfpu_binary_pow
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rpow_tile(uint32_t idst, uint32_t base_val, VectorMode vector_mode = VectorMode::RC) {
+#ifdef ARCH_BLACKHOLE
+    if (is_fp32_dest_acc_en && vector_mode == VectorMode::RC) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_rpow,
+            (APPROX, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+            idst,
+            VectorMode::None,
+            base_val));
+        return;
+    }
+#endif
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

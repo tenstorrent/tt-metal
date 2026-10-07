@@ -71,6 +71,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void _relu_max_float_impl_(const int iterations, const float threshold)
 {
     sfpi::vConstFloatPrgm1 = threshold;
+#pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
         sfpi::vFloat v   = sfpi::dst_reg[0];
@@ -163,6 +164,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
         // difference cannot overflow. Wormhole compares differently and needs no split.
         if (threshold_sign == ThresholdSign::Negative)
         {
+#pragma GCC unroll 8
             for (int d = 0; d < iterations; d++)
             {
                 sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
@@ -184,6 +186,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
         else if (threshold_sign == ThresholdSign::Zero)
         {
             // The sign test is the whole compare, which is the form relu_tile_int32 takes.
+#pragma GCC unroll 8
             for (int d = 0; d < iterations; d++)
             {
                 sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
@@ -198,6 +201,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
         }
         else
         {
+#pragma GCC unroll 8
             for (int d = 0; d < iterations; d++)
             {
                 sfpi::vInt a = sfpi::dst_reg[0].mode<INT_DEST_LAYOUT>();
@@ -220,6 +224,7 @@ inline void _relu_min_impl_(const int iterations, VecType threshold, const Thres
     }
     else
     {
+#pragma GCC unroll 8
         for (int d = 0; d < iterations; d++)
         {
             VecType a = sfpi::dst_reg[0];

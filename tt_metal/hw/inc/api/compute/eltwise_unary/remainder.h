@@ -28,7 +28,11 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void remainder_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX, 32), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_remainder, (APPROX), idst, VectorMode::RC));
+#endif
 }
 
 /**
@@ -54,6 +58,16 @@ ALWI void remainder_tile_init(uint32_t param0, uint32_t param1) {
  */
 // clang-format on
 ALWI void remainder_tile_uint32(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_remainder_uint32_scalar,
+        (APPROX /*APPROXIMATION_MODE*/, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None,
+        param0 /*divisor*/));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -62,6 +76,7 @@ ALWI void remainder_tile_uint32(uint32_t idst, uint32_t param0) {
         idst,
         VectorMode::RC,
         param0 /*divisor*/));
+#endif
 }
 
 /**

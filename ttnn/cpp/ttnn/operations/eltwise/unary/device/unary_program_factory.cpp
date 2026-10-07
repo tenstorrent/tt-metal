@@ -74,6 +74,173 @@ bool pack_first_op_scalars(
 
 bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
+// Blackhole SFPU state beyond the part every init writes alike (LaneConfig, ADDR_MOD_7 = 0, counter reset).
+enum SfpuState : uint32_t {
+    kPrgm0 = 1u << 0,  // LREG12-14, the programmable constants
+    kPrgm1 = 1u << 1,
+    kPrgm2 = 1u << 2,
+    kMacroTemplates01 = 1u << 3,  // SFPLOADMACRO instruction templates, sequences and Misc
+    kMacroTemplates23 = 1u << 4,
+    kMacroSequence0 = 1u << 5,
+    kMacroSequence1 = 1u << 6,
+    kMacroSequences23 = 1u << 7,
+    kMacroMisc = 1u << 8,
+    kReplay = 1u << 9,
+    kAddrMod6 = 1u << 10,
+    kAddrMod4 = 1u << 11,
+    kLregs = 1u << 12,  // LREG0-7
+};
+constexpr uint32_t kPrgm = kPrgm0 | kPrgm1 | kPrgm2;
+
+struct ChainOpState {
+    uint32_t reads;  // programmed by the op's init and read by its call
+    uint32_t init;   // written by the op's init
+    uint32_t call;   // overwritten by the op's call
+    // eltwise_sfpu.cpp's chain forms: the first tile's init, a later tile's init for the state other ops wrote, the
+    // call; empty or null: the op's own init and call
+    std::string first_init;
+    std::string (*later_init)(uint32_t lost) = nullptr;
+    std::string func;
+};
+
+// The ops of the chains ttnn and the models build (sigmoid's fast-exp mode, the unary and binary backward chains,
+// the softcapping chains), for float inputs with math_approx_mode off. Any other op keeps the chain on per-tile inits.
+std::optional<ChainOpState> chain_op_state(const EltwiseUnaryWithParam& op, DataType dtype, bool fp32_dest_acc_en) {
+    if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT8_B) {
+        return std::nullopt;
+    }
+    const auto param0 = std::visit(
+        [](auto params) { return params.empty() ? std::optional<float>{} : std::optional<float>(params[0]); },
+        op.get_params());
+    // An sfpi body can record its row into the replay buffer, and every body uses LREG0-7.
+    constexpr uint32_t body = kReplay | kLregs;
+    switch (op.type()) {
+        case UnaryOpType::NEG:
+        case UnaryOpType::ABS:
+        case UnaryOpType::ADD_UNARY_SFPU:
+        case UnaryOpType::SUB_UNARY_SFPU:
+        case UnaryOpType::MUL_UNARY_SFPU:
+        case UnaryOpType::DIV_UNARY_SFPU: return ChainOpState{0, 0, body};
+        case UnaryOpType::SQUARE:
+            // The chain form rounds without Prgm0-2 and stores through ADDR_MOD_4, which no other op of this kernel
+            // programs.
+            return ChainOpState{
+                kAddrMod4, kAddrMod4, body, "square_tile_chain_init();", nullptr, "square_tile_chain(0);"};
+        case UnaryOpType::RSQRT:
+            return ChainOpState{
+                kPrgm, kPrgm, body, "", [](uint32_t) { return std::string("rsqrt_tile_chain_reinit();"); }};
+        case UnaryOpType::TANH:
+            if (param0.value_or(0.0f) != 0.0f) {
+                return std::nullopt;  // the LUT form keeps its table in LREG0-6
+            }
+            return ChainOpState{kPrgm, kPrgm, body};
+        case UnaryOpType::EXP: {
+            if (param0.value_or(0.0f) != 1.0f) {
+                return std::nullopt;
+            }
+            constexpr uint32_t state =
+                kPrgm | kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 | kMacroMisc;
+            return ChainOpState{state, state, body, "", [](uint32_t lost) {
+                                    return fmt::format(
+                                        "exp_tile_chain_reinit<true, {}, {}>();",
+                                        (lost & kPrgm) != 0,
+                                        (lost & (kMacroTemplates23 | kMacroSequence1)) != 0);
+                                }};
+        }
+        case UnaryOpType::RECIP: {
+            // The chain form leaves Prgm0, which only sfpu_reciprocal_iter reads, not the full-tile programs.
+            const uint32_t state = fp32_dest_acc_en
+                                       ? kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 |
+                                             kMacroSequences23 | kMacroMisc | kReplay | kAddrMod6
+                                       : kMacroTemplates01 | kMacroSequence0 | kMacroMisc | kAddrMod6;
+            return ChainOpState{
+                state, state, body, "recip_tile_chain_init();", [](uint32_t lost) {
+                    if ((lost & ~kReplay) == 0) {
+                        return std::string("recip_tile_chain_rerecord();");
+                    }
+                    return fmt::format("recip_tile_chain_reinit<{}>();", (lost & (kAddrMod6 | kMacroSequences23)) != 0);
+                }};
+        }
+        default: return std::nullopt;
+    }
+}
+
+// Blackhole: in a chain of two or more ops, an init runs with the first tile only when nothing that runs after it on
+// a later tile writes the state its call reads: no call, no per-tile init, no init that follows it on the first tile.
+// The other inits re-program only their op's state on later tiles. SFPU_OP_CHAIN_0_TILE is the per-tile chain for
+// eltwise_sfpu.cpp.
+std::map<std::string, std::string> get_chain_init_once_defines(
+    const std::vector<EltwiseUnaryWithParam>& op_chain, DataType dtype, bool fp32_dest_acc_en) {
+    if (op_chain.size() < 2) {
+        return {};
+    }
+    std::vector<ChainOpState> states;
+    uint32_t call_writes = 0;
+    for (const auto& op : op_chain) {
+        auto state = chain_op_state(op, dtype, fp32_dest_acc_en);
+        if (!state) {
+            return {};
+        }
+        call_writes |= state->call;
+        states.push_back(std::move(*state));
+    }
+    const size_t n = op_chain.size();
+    std::vector<bool> once(n, true);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (size_t k = 0; k < n; k++) {
+            if (!once[k]) {
+                continue;
+            }
+            bool ok = (states[k].reads & call_writes) == 0;
+            for (size_t j = 0; j < n && ok; j++) {
+                // The same op's init writes the same values; an init that runs once before k's leaves k's state alone.
+                const bool same_init = op_chain[j].type() == op_chain[k].type() && states[j].init == states[k].init;
+                ok = j == k || same_init || (j < k && once[j]) || (states[k].reads & states[j].init) == 0;
+            }
+            if (!ok) {
+                once[k] = false;
+                changed = true;
+            }
+        }
+    }
+    std::map<std::string, std::string> defines;
+    std::string tile;
+    for (size_t k = 0; k < n; k++) {
+        std::string first = fmt::format("SFPU_OP_CHAIN_0_INIT_{}", k);
+        if (!states[k].first_init.empty()) {
+            first = fmt::format("SFPU_OP_CHAIN_0_FIRST_INIT_{}", k);
+            defines[first] = states[k].first_init;
+        }
+        if (once[k]) {
+            tile += fmt::format("SFPU_OP_CHAIN_FIRST_TILE_ONLY({}) ", first);
+        } else if (states[k].later_init != nullptr) {
+            // What of k's state a later tile finds written: by a call, a per-tile init, or an init after k's on tile 0.
+            uint32_t lost = states[k].reads & call_writes;
+            for (size_t j = 0; j < n; j++) {
+                const bool same_init = op_chain[j].type() == op_chain[k].type() && states[j].init == states[k].init;
+                if (j != k && !same_init && (!once[j] || j > k)) {
+                    lost |= states[k].reads & states[j].init;
+                }
+            }
+            const std::string later = fmt::format("SFPU_OP_CHAIN_0_LATER_INIT_{}", k);
+            defines[later] = states[k].later_init(lost);
+            tile += fmt::format("SFPU_OP_CHAIN_FIRST_OR_LATER_TILE({}, {}) ", first, later);
+        } else {
+            tile += first + " ";
+        }
+        if (!states[k].func.empty()) {
+            const std::string func = fmt::format("SFPU_OP_CHAIN_0_CHAIN_FUNC_{}", k);
+            defines[func] = states[k].func;
+            tile += func + " ";
+        } else {
+            tile += fmt::format("SFPU_OP_CHAIN_0_FUNC_{} ", k);
+        }
+    }
+    defines["SFPU_OP_CHAIN_0_TILE"] = tile;
+    return defines;
+}
+
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -409,9 +576,13 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     const bool logit_clamp_enabled =
         CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
-    const std::string compute_path = fmt::format(
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}",
-        get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
+    const std::string_view compute_kernel = get_compute_kernel_path(ops_chain[0].type(), input.dtype());
+    const std::string compute_path =
+        fmt::format("ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/{}", compute_kernel);
+    if (compute_kernel == "eltwise_sfpu.cpp" && input.device()->arch() == tt::ARCH::BLACKHOLE) {
+        unary_defines.merge(CMAKE_UNIQUE_NAMESPACE::get_chain_init_once_defines(
+            ops_chain, input.dtype(), operation_attributes.fp32_dest_acc_en));
+    }
 
     DataFormat cb_data_format_for_input =
         (ops_chain[0].type() == unary::UnaryOpType::BITCAST) ? cb_data_format_output : cb_data_format;

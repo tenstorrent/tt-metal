@@ -14,6 +14,48 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+#if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
+// The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: a later tile's init re-programs only the op's
+// state another op wrote, square rounds without Prgm0-2 and stores through ADDR_MOD_4 (free here), the reciprocal
+// leaves Prgm0.
+namespace ckernel {
+#ifdef SFPU_OP_EXP_INCLUDE
+template <bool approx, bool constants, bool upper_macros>
+ALWI void exp_tile_chain_reinit() {
+    MATH((sfpu::exp_init<approx, 0x3F800000, true, DST_ACCUM_MODE, false, constants, upper_macros>()));
+}
+#endif
+#ifdef SFPU_OP_RECIP_INCLUDE
+ALWI void recip_tile_chain_init() {
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, true, false)));
+}
+template <bool own_state>
+ALWI void recip_tile_chain_reinit() {
+    MATH((sfpu::recip_init<APPROX, DST_ACCUM_MODE, false, false, own_state>()));
+}
+ALWI void recip_tile_chain_rerecord() { MATH((sfpu::_record_reciprocal_fast_24b_5c_())); }
+#endif
+#ifdef SFPU_OP_RSQRT_INCLUDE
+ALWI void rsqrt_tile_chain_reinit() { MATH((sfpu::rsqrt_init<APPROX>())); }
+#endif
+#ifdef SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
+ALWI void square_tile_chain_init() {
+    MATH(llk_math_sfpu_init_once());
+    MATH((sfpu::_square_init_<ADDR_MOD_4, true, false>()));
+}
+ALWI void square_tile_chain(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_square,
+        (APPROX, DST_ACCUM_MODE, 32, ADDR_MOD_4, false),
+        idst,
+        VectorMode::None));
+}
+#endif
+}  // namespace ckernel
+#endif
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -33,8 +75,29 @@ void kernel_main() {
 
         copy_tile(cb_input, 0, 0);
 
+#if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_FUNC_0) && !defined(SFPU_OP_CHAIN_0_FUNC_1)
+        // A single op's init state outlives its calls, so only the first tile runs the init.
+        if (i == 0) {
+            SFPU_OP_CHAIN_0_INIT_0
+        }
+        SFPU_OP_CHAIN_0_FUNC_0
+#elif defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
+        // The host wraps the inits whose state nothing after them writes, and the inits a later tile repeats.
+#define SFPU_OP_CHAIN_FIRST_TILE_ONLY(init) \
+    if (i == 0) {                           \
+        init                                \
+    }
+#define SFPU_OP_CHAIN_FIRST_OR_LATER_TILE(first, later) \
+    if (i == 0) {                                       \
+        first                                           \
+    } else {                                            \
+        later                                           \
+    }
+        SFPU_OP_CHAIN_0_TILE
+#else
 #ifdef SFPU_OP_CHAIN_0
         SFPU_OP_CHAIN_0
+#endif
 #endif
 
         tile_regs_commit();

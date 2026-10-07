@@ -201,57 +201,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
-void gelu_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
-    if constexpr (APPROXIMATION_MODE) {
-        sfpi::vConstFloatPrgm0 = 0.5f;
-
-        // Load the packed 6-segment LUT coefficients directly into the LRegs via sfpi.
-        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.1928f, 0.4939f);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(-0.00010443f, -0.1604f);
-
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.6188f, 0.6099f);
-        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(-0.2795f, -0.2635f);
-
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.5402f, 0.5f);
-        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(-0.1194f, 0.0f);
-    } else if constexpr (is_fp32_dest_acc_en) {
-        // FP32 accurate mode: rational erf evaluation requires reciprocal init
-        sfpu_reciprocal_init<false>();
-    }
-    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
-}
-
-template <int ITERATIONS>
-inline void calculate_gelu_appx() {
-    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat half = sfpi::vConstFloatPrgm0;
-        sfpi::vFloat half_in = in * half;
-        sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
-        result = half_in + result;
-
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg++;
-    }
-
-    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
-}
-
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
 // Split from ERF_LUT (ckernel_sfpu_erf.h INP_FLOAT32 branch) entries [2..18] (num) and [19..35] (den).
 // piecewise_rational_eval_parity_numer_denom() takes const float* — no std::array needed.
@@ -292,6 +241,59 @@ constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=
     0.0f,
     -6.7350725691e-12f};
 
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+void gelu_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    if constexpr (APPROXIMATION_MODE) {
+        sfpi::vConstFloatPrgm0 = 0.5f;
+
+        // Load the packed 6-segment LUT coefficients directly into the LRegs via sfpi.
+        sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.1928f, 0.4939f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(-0.00010443f, -0.1604f);
+
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.6188f, 0.6099f);
+        sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(-0.2795f, -0.2635f);
+
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.5402f, 0.5f);
+        sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(-0.1194f, 0.0f);
+    } else if constexpr (is_fp32_dest_acc_en) {
+        // FP32 accurate mode: rational erf evaluation requires reciprocal init
+        sfpu_reciprocal_init<false>();
+        sfpi::vConstFloatPrgm1 = GELU_ERF_NUM[15];
+        sfpi::vConstFloatPrgm2 = GELU_ERF_DEN[16];
+    }
+    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
+}
+
+template <int ITERATIONS>
+inline void calculate_gelu_appx() {
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat half = sfpi::vConstFloatPrgm0;
+        sfpi::vFloat half_in = in * half;
+        sfpi::vFloat result = sfpi::lut(in, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Update);
+        result = half_in + result;
+
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
@@ -302,6 +304,9 @@ inline void calculate_gelu() {
         // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
         constexpr float INV_SQRT2 = 0.7071067811865475f;
         constexpr float GELU_SAT = -5.54259443f;  // 0xc0b15cef: first x where libm erff=-1.0
+        // The four leading erf coefficients stay in registers (two from gelu_init) instead of loads in every row.
+        const sfpi::vFloat den_next = GELU_ERF_DEN[14];
+        const sfpi::vFloat num_next = GELU_ERF_NUM[13];
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
@@ -312,7 +317,16 @@ inline void calculate_gelu() {
                 sfpi::vFloat x2 = scaled * scaled;
                 sfpi::vFloat erf_n, erf_d;
                 piecewise_rational_eval_parity_numer_denom<16, 16>(
-                    GELU_ERF_NUM, GELU_ERF_DEN, scaled, x2, erf_n, erf_d);
+                    GELU_ERF_NUM,
+                    GELU_ERF_DEN,
+                    scaled,
+                    x2,
+                    erf_n,
+                    erf_d,
+                    sfpi::vConstFloatPrgm1,
+                    num_next,
+                    sfpi::vConstFloatPrgm2,
+                    den_next);
                 sfpi::vFloat erf_val = erf_n * sfpu_reciprocal<false>(erf_d);
                 erf_val = sfpi::clamp(erf_val, -1.0f, 1.0f);
                 result = x * (0.5f + 0.5f * erf_val);
