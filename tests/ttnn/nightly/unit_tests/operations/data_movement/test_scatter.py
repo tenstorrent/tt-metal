@@ -168,18 +168,8 @@ def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, ind
 def test_scatter_zero_volume(input_shape, dim, index_shape, layout, device):
     # The op bails out early only for an empty input or an empty scatter axis. An index that is
     # empty on some *other* axis is left to the device op on purpose - it returns a correct,
-    # freshly allocated result there - but that route converts layout on the way in, and
-    # ttnn.to_layout currently fails on any zero-volume tensor with
-    # TT_FATAL "DFB 'mci_out' has no producer" out of untilize_with_unpadding. That is a defect in
-    # to_layout, not in scatter, and it is not specific to this op: to_layout(TILE -> ROW_MAJOR)
-    # fails on [2,0,4], [2,3,0] and [0,3,4] with no scatter involved. ROW_MAJOR keeps the coverage
-    # and is where the result is asserted; drop the skip once to_layout handles empty tensors.
-    index_is_empty_off_axis = (
-        layout == ttnn.Layout.TILE and 0 not in input_shape and index_shape[dim] != 0 and 0 in index_shape
-    )
-    if index_is_empty_off_axis:
-        pytest.skip("to_layout fails on zero-volume tensors (untilize_with_unpadding); ROW_MAJOR covers this case")
-
+    # freshly allocated result there. That route converts layout on the way in, which used to fail
+    # on a zero-volume tensor; #58900 fixed it, so TILE is covered here too.
     torch.manual_seed(0)
 
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
@@ -195,8 +185,8 @@ def test_scatter_zero_volume(input_shape, dim, index_shape, layout, device):
     ttnn_result = ttnn.scatter(ttnn_input, dim, ttnn_index, ttnn_src)
 
     result = ttnn.to_torch(ttnn_result)
-    assert result.shape == torch_result.shape
-    assert result.dtype == torch_result.dtype
+    assert result.shape == torch_result.shape, f"shape {result.shape} != expected {torch_result.shape}"
+    assert result.dtype == torch_result.dtype, f"dtype {result.dtype} != expected {torch_result.dtype}"
     if result.numel():
         assert_allclose(result, torch_result)
 
@@ -225,7 +215,7 @@ def test_scatter_add_zero_volume(input_shape, dim, index_shape, device):
     ttnn_result = ttnn.scatter_add(ttnn_input, dim, ttnn_index, ttnn_src)
 
     result = ttnn.to_torch(ttnn_result)
-    assert result.shape == torch_result.shape
+    assert result.shape == torch_result.shape, f"scatter_add shape {result.shape} != expected {torch_result.shape}"
     if result.numel():
         assert_allclose(result, torch_result)
 
