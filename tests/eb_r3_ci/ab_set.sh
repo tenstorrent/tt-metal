@@ -5,6 +5,7 @@
 set -uo pipefail
 cd /work
 OPT=$1; shift
+ARGS=(); while (( $# )); do if [[ "$1" == "-k" ]]; then export EB_K_EXPR="$2"; ARGS+=(-p eb_k_plugin); shift 2; else ARGS+=("$1"); shift; fi; done; set -- "${ARGS[@]}"  # tracy splits a -k expression at spaces
 SEL=()
 if [[ "${1:-}" == "--nodes-file" ]]; then export EB_NODES_FILE=$(readlink -f "$2"); shift 2; set -- "$@" $(cut -d: -f1 "$EB_NODES_FILE" | sort -u); SEL=(-p eb_select_plugin); fi
 O=/tmp/ebset; mkdir -p $O

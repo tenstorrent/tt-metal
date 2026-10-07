@@ -4,6 +4,7 @@
 set -uo pipefail
 cd /work
 VAR=$1; shift
+ARGS=(); while (( $# )); do if [[ "$1" == "-k" ]]; then export EB_K_EXPR="$2"; ARGS+=(-p eb_k_plugin); shift 2; else ARGS+=("$1"); shift; fi; done; set -- "${ARGS[@]}"  # tracy splits a -k expression at spaces
 O=/tmp/ebenv2; mkdir -p $O
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-}
 run=0
