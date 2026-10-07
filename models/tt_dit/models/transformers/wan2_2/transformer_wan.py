@@ -548,6 +548,10 @@ class WanTransformer3DModel(Module):
         # Output dtype of the norm_out (shift, 1+scale) pair; None = fp32 reference (see
         # WanTransformerBlock.modulation_affine_dtype). Set by apply_quant_config.
         self.norm_out_affine_dtype: ttnn.DataType | None = None
+        # Output dtype of norm_out (the proj_out input and its TP all-gather). fp32 is the
+        # reference; bf16 halves the gather (the diffusers reference casts to bf16 before
+        # proj_out). Presets only (QuantConfig.norm_out_output_dtype), sprint 7 A7.
+        self.norm_out_output_dtype: ttnn.DataType = ttnn.float32
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -766,17 +770,28 @@ class WanTransformer3DModel(Module):
         self._per_token_temb_mask = temb_mask
         self._per_token_proj_mask = proj_mask
 
+    # Token count of the tile-aligned two-row timestep layout (sprint 7, A7): row 0 holds t = 0, row 32
+    # holds t, the rows between are zero padding. Both `_expand_two_row` slices then start on a
+    # tile boundary and stay on `ttnn.slice`'s tile program factory; the legacy (.., 2, W) layout
+    # put row 1 at a misaligned start, which untilizes / slices row-major / re-tilizes (3 programs
+    # per tensor per step, notes 7.12). The embedder is pointwise per row and the MLP reduces
+    # along K only, so the values are bit-identical to the 2-row layout (gate:
+    # test_cfg_hoist_ti2v_5b.py "two-row aligned vs legacy layout").
+    TWO_ROW_ALIGNED_TOKENS = 33
+
     @staticmethod
     def _expand_two_row(rows, mask):
         """Select per token between two embedding rows: `row0 + mask * (row1 - row0)`.
 
-        `rows` is (..., 2, W); `mask` is (..., N, W) and binary. Rows are repeated to the token
-        count rather than relied on to broadcast, so this does not depend on two-axis broadcast
+        `rows` is (..., 2, W) (legacy) or (..., TWO_ROW_ALIGNED_TOKENS, W) with the second value
+        in the last row; `mask` is (..., N, W) and binary. Rows are repeated to the token count
+        rather than relied on to broadcast, so this does not depend on two-axis broadcast
         semantics for the fused ternary.
         """
         n = mask.shape[-2]
+        i1 = rows.shape[-2] - 1  # 1 (legacy) or 32 (tile-aligned)
         row0 = ttnn.slice(rows, [0, 0, 0, 0], [rows.shape[0], rows.shape[1], 1, rows.shape[3]])
-        row1 = ttnn.slice(rows, [0, 0, 1, 0], [rows.shape[0], rows.shape[1], 2, rows.shape[3]])
+        row1 = ttnn.slice(rows, [0, 0, i1, 0], [rows.shape[0], rows.shape[1], i1 + 1, rows.shape[3]])
         row0 = ttnn.repeat(row0, ttnn.Shape([1, 1, n, 1]))
         row1 = ttnn.repeat(row1, ttnn.Shape([1, 1, n, 1]))
         return ttnn.lerp(row0, row1, mask)
@@ -793,6 +808,7 @@ class WanTransformer3DModel(Module):
 
           (B, 1, 1, 1)  scalar, one timestep per batch -- T2V and 14B I2V, unchanged
           (1, 1, 2, 1)  two distinct values, expanded per token via the installed masks
+          (1, 1, 33, 1) the same, tile-aligned (value 0 in row 0, t in row 32; see TWO_ROW_ALIGNED_TOKENS)
           (1, B, N, 1)  fully per-token (kept working, but runs the MLP N/SP times over)
 
         TI2V-5B image conditioning only ever needs two values -- 0 on the conditioned frame and
@@ -802,15 +818,15 @@ class WanTransformer3DModel(Module):
         it needs no matmul blocking entries of its own and cannot overflow L1 at any resolution.
         """
         tokens = timestep.shape[-2]
-        two_row = tokens == 2 and self._per_token_temb_mask is not None
+        two_row = tokens in (2, self.TWO_ROW_ALIGNED_TOKENS) and self._per_token_temb_mask is not None
         per_token = tokens != 1 and not two_row
 
         tt_temb_11BD, tt_timestep_proj_1BTD = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
 
         if two_row:
-            assert tt_temb_11BD.shape[-2] == 2 and tt_timestep_proj_1BTD.shape[-2] == 2, (
-                f"expected 2 embedding rows, got temb {tt_temb_11BD.shape} / " f"proj {tt_timestep_proj_1BTD.shape}"
-            )
+            assert (
+                tt_temb_11BD.shape[-2] == tokens and tt_timestep_proj_1BTD.shape[-2] == tokens
+            ), f"expected {tokens} embedding rows, got temb {tt_temb_11BD.shape} / proj {tt_timestep_proj_1BTD.shape}"
             tt_temb_11BD = self._expand_two_row(tt_temb_11BD, self._per_token_temb_mask)
             tt_timestep_proj_1BTD = self._expand_two_row(tt_timestep_proj_1BTD, self._per_token_proj_mask)
             return tt_temb_11BD, tt_timestep_proj_1BTD
@@ -1042,7 +1058,7 @@ class WanTransformer3DModel(Module):
         shift_11BD, scale1_11BD = norm_out_modulation
 
         spatial_norm_1BND = self.norm_out(
-            spatial_1BND, dynamic_weight=scale1_11BD, dynamic_bias=shift_11BD, dtype=ttnn.float32
+            spatial_1BND, dynamic_weight=scale1_11BD, dynamic_bias=shift_11BD, dtype=self.norm_out_output_dtype
         )
 
         if self.parallel_config.tensor_parallel.factor > 1:

@@ -255,3 +255,29 @@ def test_cfg_hoist_bit_exact(mesh_device, sp_axis, tp_axis, num_links, device_pa
         torch.tensor([0.0, TIMESTEP], dtype=torch.float32).reshape(1, 1, 2, 1), device=mesh_device
     )
     _assert_bit_exact(_bit_exact_checks(tt_model, timestep=two_row_ts, **inputs), "two-row")
+
+    # Sprint 7 (A7): the tile-aligned two-row layout the I2V pipeline emits (t = 0 in row 0, t in
+    # row 32 of 33) must give the same embeddings and the same pass output as the legacy
+    # (1, 1, 2, 1) layout, to the bit, and pass the hoist checks itself.
+    n_rows = tt_model.TWO_ROW_ALIGNED_TOKENS
+    aligned = torch.zeros(1, 1, n_rows, 1, dtype=torch.float32)
+    aligned[0, 0, n_rows - 1, 0] = TIMESTEP
+    aligned_ts = float32_tensor(aligned, device=mesh_device)
+    common = {"spatial_1BNI": spatial_device, "N": n, "gather_output": False, **inputs["rope"]}
+    legacy_out = local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, timestep=two_row_ts, **common))
+    aligned_out = local_device_to_torch(tt_model.inner_step(prompt_1BLP=prompt_1BLP, timestep=aligned_ts, **common))
+    legacy_emb = tt_model.prepare_timestep_conditioning(two_row_ts)
+    aligned_emb = tt_model.prepare_timestep_conditioning(aligned_ts)
+    layout_checks = {
+        "two-row aligned vs legacy layout: temb": (
+            local_device_to_torch(legacy_emb[0]),
+            local_device_to_torch(aligned_emb[0]),
+        ),
+        "two-row aligned vs legacy layout: proj": (
+            local_device_to_torch(legacy_emb[1]),
+            local_device_to_torch(aligned_emb[1]),
+        ),
+        "two-row aligned vs legacy layout: inner_step": (legacy_out, aligned_out),
+    }
+    _assert_bit_exact(layout_checks, "layout")
+    _assert_bit_exact(_bit_exact_checks(tt_model, timestep=aligned_ts, **inputs), "two-row-aligned")
