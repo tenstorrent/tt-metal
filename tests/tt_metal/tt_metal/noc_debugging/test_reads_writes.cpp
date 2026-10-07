@@ -1141,7 +1141,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingDuringLongKernel) {
 // It is a short kernel rather than a huge one because the event COUNT was never what the stress test needed. What
 // matters is the event time SPAN: process_accumulated_events_up_to() holds back everything within margin_ticks of the
 // newest event it has seen, so events only become processable once the span exceeds the margin. At the 3000 ms
-// default no short kernel can ever qualify. Shrinking the margin to 60 ms (and the full-read period to 20 ms, so
+// default no short kernel can ever qualify. Shrinking the margin to 30 ms (and the full-read period to 10 ms, so
 // several passes land while the kernel is still running) gets the same coverage from a bounded CI kernel.
 TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
     // Collected here (where the fixture's device list is in scope) because the retuned thread has to be relaunched
@@ -1171,13 +1171,14 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
             // Relaunching the thread above drains the device once, which can push leftovers from earlier tests.
             noc_debug_state->reset_state();
 
-            // 400 writes in 10 bursts, each burst followed by an on-device idle long enough for a full background
-            // read. Reuse a small source set within every burst so issue detection does not depend on pending-write
-            // state surviving profiler flushes between independently processed batches.
-            constexpr uint32_t writes = 400;
-            constexpr uint32_t burst = 40;
+            // Cross the profiler's local-buffer capacity, forcing the background thread to drain events while the
+            // kernel is still active. Reuse a small source set within every burst so issue detection does not depend
+            // on pending-write state surviving profiler flushes between independently processed batches.
+            constexpr uint32_t writes = 10'000;
+            constexpr uint32_t burst = 1'000;
             constexpr uint32_t source_slots = 8;
-            constexpr uint32_t wait_iters = 50'000'000u;
+            // Ten bounded idle windows let the 10 ms background poll run without exceeding CI's 5 s device timeout.
+            constexpr uint32_t wait_iters = 8'000'000u;
 
             // NO user read: only the background thread drains, processes, reports and discharges.
             run_stress_write_program(
