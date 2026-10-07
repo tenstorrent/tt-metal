@@ -40,6 +40,8 @@ inline void calculate_celu_bw_bf16() {
             product0 = convert<vFloat16b>(grad * (e0s), RoundMode::Nearest) * 5.421010862427522e-20f;
         }
         v_endif;
+        v_if(e0s == 0.0f) { product0 = 0.0f; }
+        v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);
         vFloat result = grad;
         v_if(x <= 0.0f) { result = scaled0; }

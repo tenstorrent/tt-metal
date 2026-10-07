@@ -109,7 +109,22 @@
   team: ttnn
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: digamma_bw
+- name: "ttnn eltwise generated bf16 device perf digamma_bw"
+  cmd: >-
+    TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
+    tests/ttnn/perf_tests/operations/eltwise/test_digamma_bw_device_perf.py
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: device_perf
+  owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: elu_bw
 # generated bf16 op: erf_bw
+# generated bf16 op: erfc_bw
 # generated bf16 op: erfinv_bw
 - name: "ttnn eltwise generated bf16 device perf erfinv_bw"
   cmd: >-
@@ -136,6 +151,7 @@
   team: ttnn
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: exp_bw
 # generated bf16 op: expm1_bw
 - name: "ttnn eltwise generated bf16 device perf expm1_bw"
   cmd: >-
@@ -202,6 +218,7 @@
   team: ttnn
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: lgamma
 # generated bf16 op: log10_bw
 - name: "ttnn eltwise generated bf16 device perf log10_bw"
   cmd: >-
@@ -363,6 +380,7 @@
   team: ttnn
   budget_type: device_perf
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: silu_bw
 # generated bf16 op: sinh_bw
 - name: "ttnn eltwise generated bf16 device perf sinh_bw"
   cmd: >-

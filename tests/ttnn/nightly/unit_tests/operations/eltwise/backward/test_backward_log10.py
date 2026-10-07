@@ -43,7 +43,10 @@ def test_bw_log10(input_shapes, device):
 # another class, for the output and for the composite's on the same operands.
 # The output is 0 wherever f'(x) alone is below the smallest normal BF16 value, as the composite this
 # program replaces computes it; torch keeps the exact product.
-LOG10_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# The output is 0 wherever x is infinite, where f'(x)'s limit is 0 (torch's product is NaN for an
+# infinite or NaN grad), as the composite this program replaces computes it; torch keeps the exact
+# product.
+LOG10_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 LOG10_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -72,7 +75,10 @@ def _log10_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _log10_bw_torch_reference(grad, x, flush)
     unit = _log10_bw_torch_reference(torch.ones_like(grad), x, flush)
+    g = _log10_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
     result = torch.where(unit.abs() < LOG10_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
+    x32 = x.to(torch.float32)
+    result = torch.where((torch.isinf(x32)), torch.zeros_like(result), result)
     return result
 
 

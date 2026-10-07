@@ -120,9 +120,10 @@ def test_bw_sinh_nan_test2(input_shapes, device):
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
-# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, as the
-# composite this program replaces computes it; torch keeps the exact product.
-SINH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, and 0
+# there at a zero gradient, as the composite this program replaces computes it; torch keeps the exact
+# product.
+SINH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 SINH_BW_SMALLEST_NORMAL = 2.0**-126
 SINH_BW_LARGEST_FINITE = 2.0**128 * (1 - 2.0**-25)
 
@@ -154,7 +155,7 @@ def _sinh_bw_reference(grad, x, flush, board):
     unit = _sinh_bw_torch_reference(torch.ones_like(grad), x, flush)
     g = _sinh_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
     infinite = g * torch.where(unit < 0, -torch.inf, torch.inf)
-    result = torch.where(unit.abs() >= SINH_BW_LARGEST_FINITE, infinite, result)
+    result = torch.where((unit.abs() >= SINH_BW_LARGEST_FINITE) & (g != 0), infinite, result)
     return result
 
 

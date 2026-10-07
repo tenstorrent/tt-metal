@@ -48,6 +48,7 @@ enum class UnaryBackwardOpType : uint8_t {
     COSH_BW,
     ERFINV_BW,
     MULTIGAMMALN_BW,
+    DIGAMMA_BW,
 };
 
 }  // namespace ttnn::operations::unary_backward

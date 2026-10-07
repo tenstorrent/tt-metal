@@ -42,6 +42,10 @@ inline void calculate_rsqrt_bw_bf16() {
             v_endif;
         }
         v_endif;
+        v_if(setsgn(factor, 0) < 1.1754943508222875e-38f || setsgn(r * r, 0) < 1.1754943508222875e-38f) {
+            result = 0.0f;
+        }
+        v_endif;
         {
             vFloat x = dst_reg[d];
             vFloat q = x + 0.0f;
@@ -50,7 +54,9 @@ inline void calculate_rsqrt_bw_bf16() {
             v_if(setsgn(q, 0) == 0.0f) {
                 vFloat infinity = sFloat16b(std::numeric_limits<float>::infinity());
                 result = -copysgn(infinity, grad);
-                v_if(setsgn(grad, 0) == 0.0f) { result = std::numeric_limits<float>::quiet_NaN(); }
+                v_if(setsgn(grad, 0) == 0.0f || as<vInt>(setsgn(grad, 0)) > 0x7f800000) {
+                    result = std::numeric_limits<float>::quiet_NaN();
+                }
                 v_endif;
             }
             v_endif;

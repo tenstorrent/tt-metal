@@ -42,9 +42,10 @@ def test_bw_asinh(input_shapes, device):
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
 # The output is 0 wherever |x| >= 2^64, where Q(x) = x * x + 1.0 leaves the FP32 range (the
-# composite's BF16 Q overflows there too), as the composite this program replaces computes it; torch
-# keeps the exact product.
-ASINH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# composite's BF16 Q overflows there too); or x is infinite, where f'(x)'s limit is 0 (torch's product
+# is NaN for an infinite or NaN grad), as the composite this program replaces computes it; torch keeps
+# the exact product.
+ASINH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 ASINH_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -73,7 +74,7 @@ def _asinh_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _asinh_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
-    result = torch.where((x32.abs() >= 1.8446744073709552e19), torch.zeros_like(result), result)
+    result = torch.where((x32.abs() >= 1.8446744073709552e19) | (torch.isinf(x32)), torch.zeros_like(result), result)
     return result
 
 

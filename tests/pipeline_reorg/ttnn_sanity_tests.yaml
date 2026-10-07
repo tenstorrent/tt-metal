@@ -112,7 +112,23 @@
   team: ttnn
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: digamma_bw
+- name: "ttnn eltwise generated bf16 accuracy digamma_bw"
+  cmd: >-
+    pytest --timeout 300 -s -v
+    tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_digamma.py::test_digamma_bw_exhaustive_bfloat16
+    tests/ttnn/nightly/unit_tests/operations/eltwise/backward/test_backward_digamma.py::test_digamma_bw_runs_the_fused_program_only_where_it_applies
+  skus:
+    wh_n300_civ2:
+      timeout: 4
+    bh_p150b_civ2:
+      timeout: 4
+  team: ttnn
+  budget_type: sanity
+  owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: elu_bw
 # generated bf16 op: erf_bw
+# generated bf16 op: erfc_bw
 # generated bf16 op: erfinv_bw
 - name: "ttnn eltwise generated bf16 accuracy erfinv_bw"
   cmd: >-
@@ -141,6 +157,7 @@
   team: ttnn
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: exp_bw
 # generated bf16 op: expm1_bw
 - name: "ttnn eltwise generated bf16 accuracy expm1_bw"
   cmd: >-
@@ -212,6 +229,7 @@
   team: ttnn
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: lgamma
 # generated bf16 op: log10_bw
 - name: "ttnn eltwise generated bf16 accuracy log10_bw"
   cmd: >-
@@ -385,6 +403,7 @@
   team: ttnn
   budget_type: sanity
   owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: silu_bw
 # generated bf16 op: sinh_bw
 - name: "ttnn eltwise generated bf16 accuracy sinh_bw"
   cmd: >-

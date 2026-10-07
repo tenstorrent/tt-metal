@@ -661,13 +661,7 @@ def _select_tests_by_op(config, items):
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(config, items):
-    _select_tests_by_op(config, items)
-
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
-        _collapse_runtime_only_variants(config, items)
-
+def _restore_test_order(config, items):
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -702,6 +696,19 @@ def pytest_collection_modifyitems(config, items):
     logger.info(
         f"Executing {len(items)} variants as they were executed on runner {temp_runner_name} on run recorded to file {test_order_file}"
     )
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    # Choose compile representatives only after other plugins apply selection filters.
+    result = yield
+    _select_tests_by_op(config, items)
+    _restore_test_order(config, items)
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
+    return result
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

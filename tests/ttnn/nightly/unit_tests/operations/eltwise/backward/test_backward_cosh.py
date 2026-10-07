@@ -123,10 +123,13 @@ def test_bw_cosh_nan_test2(input_shapes, device):
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
 # The output is 0 wherever the exact grad * f'(x) is below the smallest normal value, before rounding,
-# as the composite this program replaces computes it; torch rounds before it flushes.
-# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, as the
-# composite this program replaces computes it; torch keeps the exact product.
-COSH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# as the composite this program replaces computes it; torch rounds before it flushes. Where f'(x)
+# alone is below it, an infinite or NaN grad gives 0 too, where torch's product is grad's infinity or
+# NaN.
+# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, and 0
+# there at a zero gradient, as the composite this program replaces computes it; torch keeps the exact
+# product.
+COSH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 COSH_BW_SMALLEST_NORMAL = 2.0**-126
 COSH_BW_LARGEST_FINITE = 2.0**128 * (1 - 2.0**-25)
 
@@ -156,10 +159,12 @@ def _cosh_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _cosh_bw_torch_reference(grad, x, flush)
     unit = _cosh_bw_torch_reference(torch.ones_like(grad), x, flush)
-    result = torch.where(result.abs() < COSH_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
     g = _cosh_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
+    result = torch.where(result.abs() < COSH_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
+    tiny = (unit.abs() < COSH_BW_SMALLEST_NORMAL) & (unit != 0)
+    result = torch.where(~torch.isfinite(g) & tiny, torch.zeros_like(result), result)
     infinite = g * torch.where(unit < 0, -torch.inf, torch.inf)
-    result = torch.where(unit.abs() >= COSH_BW_LARGEST_FINITE, infinite, result)
+    result = torch.where((unit.abs() >= COSH_BW_LARGEST_FINITE) & (g != 0), infinite, result)
     return result
 
 

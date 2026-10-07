@@ -41,6 +41,8 @@ inline void calculate_selu_bw_bf16() {
                 convert<vFloat16b>(grad * (e0s * 1.7580993175506592f), RoundMode::Nearest) * 5.421010862427522e-20f;
         }
         v_endif;
+        v_if(e0s == 0.0f) { product0 = 0.0f; }
+        v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);
         vFloat scaled1 = convert<vFloat16b>(grad * 1.0507010221481323f, RoundMode::Nearest);
         vFloat result = scaled1;

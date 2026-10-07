@@ -69,6 +69,9 @@ inline void calculate_sinh_bw_bf16() {
         vFloat v2 = template_reciprocal(v3);
         vFloat v1 = v2 * vFloat(0.25f) + v3;
         vFloat factor = v1;
+        vFloat x = dst_reg[d];
+        v_if(setsgn(vFloat(dst_reg[32 + d]), 0) == 0.0f && setsgn(x, 0) < 712.0f) { factor = 0.0f; }
+        v_endif;
         vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();
         v_if((raw & 0x00ff) == 0x00ff) {
             factor = std::numeric_limits<float>::infinity();

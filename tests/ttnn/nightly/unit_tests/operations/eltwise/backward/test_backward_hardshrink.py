@@ -64,7 +64,7 @@ def test_bw_hardshrink_default(input_shapes, device):
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
 # At a NaN input the output is grad, as the composite this program replaces returns; torch returns 0.
-HARDSHRINK_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+HARDSHRINK_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 HARDSHRINK_BW_SMALLEST_NORMAL = 2.0**-126
 HARDSHRINK_BW_LAMBD = 0.5
 

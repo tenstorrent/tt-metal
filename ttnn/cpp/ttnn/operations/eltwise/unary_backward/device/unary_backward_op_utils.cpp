@@ -316,6 +316,15 @@ const UnaryBackwardKernelSpec& get_kernel_spec(UnaryBackwardOpType op_type) {
             };
             return spec;
         }
+        case UnaryBackwardOpType::DIGAMMA_BW: {
+            // The generated kernel evaluates the gradient over BF16 DEST.
+            static const UnaryBackwardKernelSpec spec{
+                .compute_kernel_path =
+                    "ttnn/cpp/ttnn/operations/eltwise/unary_backward/device/kernels/compute/"
+                    "eltwise_bw_digamma.cpp",
+            };
+            return spec;
+        }
     }
     TT_THROW("Unary backward op type {} has no kernel spec", static_cast<int>(op_type));
 }
@@ -355,6 +364,7 @@ std::string_view to_string(UnaryBackwardOpType op_type) {
         case UnaryBackwardOpType::COSH_BW: return "COSH_BW";
         case UnaryBackwardOpType::ERFINV_BW: return "ERFINV_BW";
         case UnaryBackwardOpType::MULTIGAMMALN_BW: return "MULTIGAMMALN_BW";
+        case UnaryBackwardOpType::DIGAMMA_BW: return "DIGAMMA_BW";
     }
     TT_THROW("Unary backward op type {} has no name", static_cast<int>(op_type));
 }

@@ -54,6 +54,8 @@ inline void calculate_log_sigmoid_bw_bf16() {
         v_if(setsgn(x, 0) >= 69.31472778320312f && x >= 0.0f) {
             vFloat Ts = es * P;
             product = convert<vFloat16b>(dst_reg[32 + d] * Ts, RoundMode::Nearest) * 5.421010862427522e-20f;
+            v_if(es == 0.0f) { product = 0.0f; }
+            v_endif;
         }
         v_endif;
         vFloat result = convert<vFloat16b>(product, RoundMode::Nearest);

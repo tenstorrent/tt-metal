@@ -78,6 +78,8 @@ inline void calculate_cosh_bw_bf16() {
         v_if(x <= -0.25f) { factor = v1; }
         v_elseif(x < 0.25f) { factor = v17; }
         v_endif;
+        v_if(setsgn(vFloat(dst_reg[32 + d]), 0) == 0.0f && setsgn(x, 0) < 712.0f) { factor = 0.0f; }
+        v_endif;
         vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();
         v_if((raw & 0x00ff) == 0x00ff) {
             factor = std::numeric_limits<float>::infinity();

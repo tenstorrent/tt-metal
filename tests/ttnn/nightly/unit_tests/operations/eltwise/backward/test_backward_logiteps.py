@@ -64,7 +64,7 @@ def test_bw_logiteps_default(input_shapes, device):
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
-LOGITEPS_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+LOGITEPS_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 LOGITEPS_BW_SMALLEST_NORMAL = 2.0**-126
 LOGITEPS_BW_EPS = 0.0
 

@@ -55,9 +55,10 @@ def test_bw_atanh_zero_grad(device):
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
 # The output is 0 wherever |Q(x)| = |-x * x + 1.0| reaches 2^126 in FP32, where the reciprocal is 0 on
-# both boards (the composite's reciprocal is 0 there too), as the composite this program replaces
+# both boards (the composite's reciprocal is 0 there too); or x is infinite, where f'(x)'s limit is 0
+# (torch's product is NaN for an infinite or NaN grad), as the composite this program replaces
 # computes it; torch keeps the exact product.
-ATANH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+ATANH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 ATANH_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -86,7 +87,9 @@ def _atanh_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _atanh_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
-    result = torch.where(((-x32 * x32 + 1.0).abs() >= 8.507059173023462e37), torch.zeros_like(result), result)
+    result = torch.where(
+        ((-x32 * x32 + 1.0).abs() >= 8.507059173023462e37) | (torch.isinf(x32)), torch.zeros_like(result), result
+    )
     return result
 
 

@@ -33,14 +33,14 @@ ttnn::Tensor as_f32(const ttnn::Tensor& x) {
 // [B,T,H,D] -> [B*H, T, D], fp32 TILE (head-major; permute on TILE via transpose engine).
 ttnn::Tensor head_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H, uint32_t D) {
     ttnn::Tensor t = as_f32(x);
-    t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B,H,T,D]
+    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,H,T,D]
     return ttnn::reshape(t, ttnn::Shape({B * H, T, D}));
 }
 
 // [B,T,H] -> [B*H, T], fp32 TILE.
 ttnn::Tensor headvec_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H) {
     ttnn::Tensor t = as_f32(x);
-    t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1});  // [B,H,T]
+    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B,H,T]
     return ttnn::reshape(t, ttnn::Shape({B * H, T}));
 }
 
@@ -152,7 +152,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // o [BH*T,1,V] -> [B,HV,T,V] -> [B,T,HV,V].
     ttnn::Tensor o = ttnn::to_layout(o_pt, Layout::ROW_MAJOR);
     o = ttnn::reshape(o, ttnn::Shape({B, HV, T, V}));
-    o = ttnn::permute(o, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V]
+    o = ttnn::permute(o, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V]
     o = ttnn::to_layout(o, Layout::TILE);
 
     std::optional<ttnn::Tensor> state_opt;
@@ -167,7 +167,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         } else {
             ttnn::Tensor s = ttnn::to_layout(st, Layout::ROW_MAJOR);
             s = ttnn::reshape(s, ttnn::Shape({T, B, HV, K, V}));
-            s = ttnn::permute(s, ttnn::SmallVector<int64_t>{1, 0, 2, 3, 4});  // [B,T,HV,K,V]
+            s = ttnn::permute(s, ttsl::SmallVector<int64_t>{1, 0, 2, 3, 4});  // [B,T,HV,K,V]
             state_opt = ttnn::to_layout(s, Layout::TILE);
         }
     } else if (output_final_state) {

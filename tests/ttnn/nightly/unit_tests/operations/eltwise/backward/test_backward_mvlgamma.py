@@ -41,7 +41,7 @@ def test_bw_multigammaln(input_shapes, device):
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
-MULTIGAMMALN_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+MULTIGAMMALN_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 MULTIGAMMALN_BW_SMALLEST_NORMAL = 2.0**-126
 
 

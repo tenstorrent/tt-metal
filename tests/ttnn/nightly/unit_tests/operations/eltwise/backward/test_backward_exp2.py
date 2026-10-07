@@ -43,9 +43,10 @@ def test_bw_exp2(input_shapes, device):
 # another class, for the output and for the composite's on the same operands.
 # The output is 0 wherever f'(x) alone is below the smallest normal BF16 value, as the composite this
 # program replaces computes it; torch keeps the exact product.
-# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, as the
-# composite this program replaces computes it; torch keeps the exact product.
-EXP2_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, and 0
+# there at a zero gradient, as the composite this program replaces computes it; torch keeps the exact
+# product.
+EXP2_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 EXP2_BW_SMALLEST_NORMAL = 2.0**-126
 EXP2_BW_LARGEST_FINITE = 2.0**128 * (1 - 2.0**-25)
 
@@ -75,10 +76,10 @@ def _exp2_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _exp2_bw_torch_reference(grad, x, flush)
     unit = _exp2_bw_torch_reference(torch.ones_like(grad), x, flush)
-    result = torch.where(unit.abs() < EXP2_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
     g = _exp2_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
+    result = torch.where(unit.abs() < EXP2_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
     infinite = g * torch.where(unit < 0, -torch.inf, torch.inf)
-    result = torch.where(unit.abs() >= EXP2_BW_LARGEST_FINITE, infinite, result)
+    result = torch.where((unit.abs() >= EXP2_BW_LARGEST_FINITE) & (g != 0), infinite, result)
     return result
 
 

@@ -436,4 +436,5 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/cosh_bw.h
     inc/api/compute/erfinv_bw.h
     inc/api/compute/multigammaln_bw.h
+    inc/api/compute/digamma_bw.h
 )

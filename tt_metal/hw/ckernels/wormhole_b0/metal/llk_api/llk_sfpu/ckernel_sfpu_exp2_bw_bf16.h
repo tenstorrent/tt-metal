@@ -33,6 +33,9 @@ inline void calculate_exp2_bw_bf16() {
         v_if(g0_c >= 255.0f) { g0 = std::numeric_limits<float>::infinity(); }
         v_endif;
         vFloat product0 = grad * g0;
+        v_if(g0_c < 1.0f) { product0 = 0.0f; }
+        v_elseif(setsgn(grad, 0) == 0.0f && setsgn(x, 0) < 1024.0f) { product0 = 0.0f; }
+        v_endif;
         v_if(sfpi::is_nan(product0)) { product0 = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);

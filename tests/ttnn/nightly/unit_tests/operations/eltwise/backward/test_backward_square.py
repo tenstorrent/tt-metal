@@ -42,8 +42,10 @@ def test_bw_square(input_shapes, device):
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
 # The output is 0 wherever the exact grad * f'(x) is below the smallest normal value, before rounding,
-# as the composite this program replaces computes it; torch rounds before it flushes.
-SQUARE_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# as the composite this program replaces computes it; torch rounds before it flushes. Where f'(x)
+# alone is below it, an infinite or NaN grad gives 0 too, where torch's product is grad's infinity or
+# NaN.
+SQUARE_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 SQUARE_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -71,7 +73,11 @@ def _square_bw_torch_reference(grad, x, flush):
 def _square_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _square_bw_torch_reference(grad, x, flush)
+    unit = _square_bw_torch_reference(torch.ones_like(grad), x, flush)
+    g = _square_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
     result = torch.where(result.abs() < SQUARE_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
+    tiny = (unit.abs() < SQUARE_BW_SMALLEST_NORMAL) & (unit != 0)
+    result = torch.where(~torch.isfinite(g) & tiny, torch.zeros_like(result), result)
     return result
 
 

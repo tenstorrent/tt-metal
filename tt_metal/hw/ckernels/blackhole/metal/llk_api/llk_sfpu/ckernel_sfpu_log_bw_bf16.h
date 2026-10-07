@@ -37,6 +37,8 @@ inline void calculate_log_bw_bf16() {
             v_endif;
         }
         v_endif;
+        v_if(setsgn(factor, 0) < 1.1754943508222875e-38f) { result = 0.0f; }
+        v_endif;
         {
             vFloat x = dst_reg[d];
             vFloat q = x + 0.0f;

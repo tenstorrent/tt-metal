@@ -89,7 +89,7 @@ def test_bw_softshrink_default(input_shapes, device):
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
 # below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
 # another class, for the output and for the composite's on the same operands.
-SOFTSHRINK_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+SOFTSHRINK_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1", "0", "-0", "inf", "-inf", "nan"]
 SOFTSHRINK_BW_SMALLEST_NORMAL = 2.0**-126
 SOFTSHRINK_BW_LAMBD = 0.5
 
