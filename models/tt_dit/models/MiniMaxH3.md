@@ -451,17 +451,10 @@ slots falls back to the per-token one-hot gathers and says so in the log; a tran
 (no tile-row map) takes the same per-token path. The norms' static weight is multiplied into the 6-row modulation
 table instead of the per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores). None of these change the numerics.
 
-Opt-in, off by default: `MINIMAX_H3_ADALN_CACHE=1` keeps every block's six modulation tables per timestep vector
-(the eager path only; traced steps never consult it), so a timestep vector seen before costs no adaLN projection.
-A 50-step schedule holds about 1.3 GB of tables per device; if device memory runs out the cache switches itself off
-with a warning. Known limitation: a full 50-step run with the cache on reproduces the 2-step gate exactly but
-diverges from the uncached run, so cached tables are not yet safe to reuse for production output.
-
 | env | effect |
 |---|---|
 | `MINIMAX_H3_ADALN_MIXED_TILES=N` | tile-row slots for tiles that straddle an adaLN run boundary (default 16) |
 | `MINIMAX_H3_FOLD_NORM_WEIGHT=0` | apply the norm's static weight per token again instead of folding it into the table |
-| `MINIMAX_H3_ADALN_CACHE=1` | keep every block's modulation tables per timestep vector (eager path only; see the limitation above) |
 
 ## Audio decode precision
 
