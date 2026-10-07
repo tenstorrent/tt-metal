@@ -25,9 +25,9 @@ utilization (60% for SDPA) and 60% DRAM bandwidth.
 Bound by DRAM, reading the weights. Target: 60% DRAM bandwidth
 | 1x128 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
-| Dense layer | 8% | 22% | DRAM | 0.05 | 0.14 |
+| Dense layer | 8% | 20% | DRAM | 0.05 | 0.14 |
 | MoE layer | 15% | 28% | DRAM | 0.19 | 0.33 |
-| **e2e** | 13% | 26% | DRAM | 1.44 | 2.87 |
+| **e2e** | 13% | 25% | DRAM | 1.44 | 2.85 |
 
 ### 2x288: the switch
 
@@ -56,46 +56,46 @@ Bound by compute. Target: 70% compute utilization (60% for SDPA)
 
 | 1x128 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
-| embedding + norm\* | 1% | 8% | DRAM | 0.003 | 0.022 |
-| QKV | 17% | 58% | DRAM | 0.146 | 0.158 |
+| embedding + norm\* | 1% | 6% | DRAM | 0.003 | 0.022 |
+| QKV | 17% | 54% | DRAM | 0.146 | 0.159 |
 | SDPA | 6% | 0% | FPU | 0.008 | 0.088 |
-| out_proj | 9% | 28% | DRAM | 0.046 | 0.102 |
-| add + norm1\* | 1% | 5% | DRAM | 0.015 | 0.237 |
-| fc1 + GELU | 20% | 44% | DRAM | 0.096 | 0.137 |
-| fc2 | 12% | 37% | DRAM | 0.092 | 0.152 |
-| add + norm2\* | 1% | 6% | DRAM | 0.019 | 0.242 |
-| expert w1 + GELU | 37% | 39% | DRAM | 0.461 | 0.607 |
-| expert w2\* | 11% | 55% | DRAM | 0.473 | 0.433 |
-| dispatch + combine\* | 8% | 9% | DRAM | 0.084 | 0.114 |
+| out_proj | 9% | 28% | DRAM | 0.046 | 0.104 |
+| add + norm1\* | 1% | 1% | DRAM | 0.015 | 0.231 |
+| fc1 + GELU | 20% | 42% | DRAM | 0.096 | 0.137 |
+| fc2 | 12% | 36% | DRAM | 0.092 | 0.153 |
+| add + norm2\* | 1% | 1% | DRAM | 0.019 | 0.232 |
+| expert w1 + GELU | 37% | 39% | DRAM | 0.461 | 0.606 |
+| expert w2\* | 11% | 55% | DRAM | 0.473 | 0.431 |
+| dispatch + combine\* | 9% | 9% | DRAM | 0.084 | 0.110 |
 
 ### 2x288: the switch
 
 | 2x288 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
 | embedding + norm\* | 2% | 25% | DRAM | 0.012 | 0.028 |
-| QKV | 40% | 36% | DRAM | 0.174 | 0.300 |
+| QKV | 40% | 36% | DRAM | 0.174 | 0.301 |
 | SDPA | 19% | 0% | FPU | 0.075 | 0.233 |
 | out_proj | 30% | 22% | FPU | 0.057 | 0.133 |
-| add + norm1\* | 3% | 18% | DRAM | 0.069 | 0.249 |
-| fc1 + GELU | 38% | 21% | SFPU | 0.180 | 0.330 |
+| add + norm1\* | 3% | 17% | DRAM | 0.069 | 0.250 |
+| fc1 + GELU | 38% | 21% | SFPU | 0.180 | 0.329 |
 | fc2 | 43% | 30% | FPU | 0.115 | 0.189 |
 | add + norm2\* | 3% | 21% | DRAM | 0.086 | 0.253 |
-| expert w1 + GELU | 53% | 22% | SFPU | 1.436 | 1.900 |
-| expert w2\* | 25% | 54% | DRAM | 0.759 | 0.841 |
-| dispatch + combine\* | 1% | 51% | DRAM | 0.377 | 0.448 |
+| expert w1 + GELU | 53% | 22% | SFPU | 1.436 | 1.893 |
+| expert w2\* | 25% | 54% | DRAM | 0.759 | 0.844 |
+| dispatch + combine\* | 1% | 51% | DRAM | 0.377 | 0.445 |
 
 ### 8x256: compute-bound
 
 | 8x256 | compute | DRAM | bound | target, ms | current, ms |
 |---|---|---|---|---|---|
-| embedding + norm\* | 5% | 58% | DRAM | 0.041 | 0.042 |
-| QKV | 53% | 20% | FPU | 0.613 | 0.813 |
-| SDPA | 36% | 0% | FPU | 0.238 | 0.393 |
-| out_proj | 38% | 8% | FPU | 0.204 | 0.372 |
-| add + norm1\* | 8% | 44% | DRAM | 0.246 | 0.333 |
+| embedding + norm\* | 5% | 58% | DRAM | 0.041 | 0.043 |
+| QKV | 53% | 20% | FPU | 0.613 | 0.812 |
+| SDPA | 36% | 0% | FPU | 0.238 | 0.395 |
+| out_proj | 39% | 8% | FPU | 0.204 | 0.371 |
+| add + norm1\* | 9% | 45% | DRAM | 0.246 | 0.331 |
 | fc1 + GELU | 53% | 11% | SFPU | 0.638 | 0.840 |
-| fc2 | 54% | 11% | FPU | 0.409 | 0.528 |
-| add + norm2\* | 8% | 51% | DRAM | 0.307 | 0.363 |
-| expert w1 + GELU | 71% | 18% | SFPU | 5.107 | 5.032 |
-| expert w2\* | 40% | 54% | DRAM | 1.697 | 1.901 |
-| dispatch + combine\* | 2% | 63% | DRAM | 1.341 | 1.272 |
+| fc2 | 54% | 11% | FPU | 0.409 | 0.527 |
+| add + norm2\* | 8% | 51% | DRAM | 0.307 | 0.362 |
+| expert w1 + GELU | 71% | 18% | SFPU | 5.107 | 5.031 |
+| expert w2\* | 40% | 54% | DRAM | 1.697 | 1.898 |
+| dispatch + combine\* | 2% | 63% | DRAM | 1.341 | 1.280 |
