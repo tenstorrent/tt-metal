@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cerrno>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -19,11 +20,30 @@ namespace detail {
 
 // Everything below runs from a signal handler, so it uses write(2) rather than printf and keeps to
 // async-signal-safe calls.
+inline void write_to_stderr(const char* data, size_t size) {
+    // The handler returns into code that may be about to read errno, so leave it as we found it.
+    const int saved_errno = errno;
+    // write(2) may write less than asked, or be interrupted by another signal; finish the job either way.
+    while (size > 0) {
+        const ssize_t written = ::write(STDERR_FILENO, data, size);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;  // nowhere to report a failure to report
+        }
+        data += written;
+        size -= static_cast<size_t>(written);
+    }
+    errno = saved_errno;
+}
+
+inline void write_to_stderr(const char* text) { write_to_stderr(text, std::strlen(text)); }
+
 inline void trace(const char* message) {
-    const char* prefix = "[hang-app] ";
-    (void)::write(STDERR_FILENO, prefix, std::strlen(prefix));
-    (void)::write(STDERR_FILENO, message, std::strlen(message));
-    (void)::write(STDERR_FILENO, "\n", 1);
+    write_to_stderr("[hang-app] ");
+    write_to_stderr(message);
+    write_to_stderr("\n");
 }
 
 inline void trace_with_number(const char* message, long number) {
@@ -42,11 +62,10 @@ inline void trace_with_number(const char* message, long number) {
         *--cursor = '-';
     }
 
-    const char* prefix = "[hang-app] ";
-    (void)::write(STDERR_FILENO, prefix, std::strlen(prefix));
-    (void)::write(STDERR_FILENO, message, std::strlen(message));
-    (void)::write(STDERR_FILENO, cursor, static_cast<size_t>(end - cursor));
-    (void)::write(STDERR_FILENO, "\n", 1);
+    write_to_stderr("[hang-app] ");
+    write_to_stderr(message);
+    write_to_stderr(cursor, static_cast<size_t>(end - cursor));
+    write_to_stderr("\n");
 }
 
 inline void print_backtrace() {
