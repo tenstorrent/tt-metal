@@ -278,8 +278,8 @@ bool is_demoted(
     const Tensor& src_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config) {
     // supported_by_codegen() has already rejected an out-of-range dim, so the axis is in range here.
-    // Every clause below compares the normalized axis, so `dim=2` and `dim=-2` on a rank-4 tensor
-    // are the same case.
+    // The check below works on the normalized axis, so `dim=3` and `dim=-1` on a rank-4 tensor are
+    // the same case.
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     const int32_t axis = dim < 0 ? dim + rank : dim;
 
@@ -307,29 +307,6 @@ bool is_demoted(
                 input_tensor, index_tensor, src_tensor, working_input, working_index, output_mem_config)) {
             return true;
         }
-    }
-
-    // Ungeneralized (ambiguous mechanism) demotion: measured below native on-device for exactly this
-    // input/index/src shape, scatter axis (the pre-last one) and layout, in both ROW_MAJOR and TILE.
-    // No general condition tying the regression to a broader shape family was identified, so this is
-    // an exact-match carve-out rather than a predicate -- widen it only if a mechanism is found.
-    if (input_tensor.dtype() == DataType::BFLOAT16 && axis == rank - 2 &&
-        (input_tensor.layout() == Layout::ROW_MAJOR || input_tensor.layout() == Layout::TILE) &&
-        input_tensor.logical_shape() == ttnn::Shape{1, 1, 32, 64} &&
-        index_tensor.logical_shape() == ttnn::Shape{1, 1, 16, 64} &&
-        src_tensor.logical_shape() == ttnn::Shape{1, 1, 16, 64}) {
-        return true;
-    }
-
-    // Same carve-out class as above, for the ROW_MAJOR-only sibling shape: measured below native
-    // on-device for exactly this input/index/src shape and scatter axis. No general condition tying
-    // the regression to a broader shape family was identified, so this is an exact-match carve-out
-    // rather than a predicate -- widen it only if a mechanism is found.
-    if (input_tensor.dtype() == DataType::BFLOAT16 && axis == rank - 2 && input_tensor.layout() == Layout::ROW_MAJOR &&
-        input_tensor.logical_shape() == ttnn::Shape{1, 1, 64, 128} &&
-        index_tensor.logical_shape() == ttnn::Shape{1, 1, 32, 128} &&
-        src_tensor.logical_shape() == ttnn::Shape{1, 1, 32, 128}) {
-        return true;
     }
 
     return false;
