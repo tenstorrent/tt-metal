@@ -138,12 +138,8 @@ def test_min_multi_dim(device, input_shape):
 @pytest.mark.parametrize("input_shape", [(32, 32), (16, 2, 32, 3), (16, 2, 32, 24), (1, 1, 64, 64)])
 @pytest.mark.parametrize("dim", [None, -1, -2])
 @pytest.mark.parametrize("scalar", [1.0, 2.5, -2.5])
-@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
-def test_min_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fast_and_approximate_mode):
-    """FLOAT32 min with both values of fast_and_approximate_mode.
-    - False (default): accurate SFPU path (LLK MIN reduce) - result matches torch exactly.
-    - True: faster FPU/TF32 path via -MAX(-x) - result is approximate.
-    """
+def test_min_fp32_accurate(device, input_shape, dim, scalar):
+    """FLOAT32 min on the accurate path. fast_and_approximate_mode=True is refused."""
     torch.manual_seed(1)
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
@@ -152,10 +148,10 @@ def test_min_fp32_fast_and_approximate_mode(device, input_shape, dim, scalar, fa
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
-    output_tensor = ttnn.min(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode, dim=dim, scalar=scalar)
+    output_tensor = ttnn.min(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
 
-    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+    if device.arch() == ttnn.device.Arch.QUASAR:
         assert_allclose(torch_output_tensor, output_tensor, rtol=1e-3, atol=1e-2)
     else:
         assert_equal(torch_output_tensor, output_tensor)
@@ -198,3 +194,32 @@ def test_min_bfloat16_dest_modes(device, input_shape, dim, fp32_dest_acc_en):
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor)).reshape(torch_output_tensor.shape)
 
     assert_equal(torch_output_tensor, output_tensor)
+
+
+# Tall TILE shapes: Ht above the split bar, with a trailing slice past Ht.
+_TILE_H_SPLIT_SHAPES = [
+    (1, 1, 3216, 128),  # Ht=101, non-aligned H
+    (2, 3, 1024, 40),  # NC=6, Ht=32
+    (1, 1, 3136, 145),  # non-aligned W: RM writer's last-tile clamp
+    (1, 1, 1024, 1),  # W=1: stage-2 scaler must still fold all 32 rows
+]
+
+
+# fp32 fast_and_approximate_mode is refused, so only the accurate SFPU path splits.
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize("shape", _TILE_H_SPLIT_SHAPES)
+def test_min_h_axis_split(device, dtype, shape):
+    """H reduce on tall TILE input — tiled stage 1, RM stage 2."""
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    # Positive input: an overhang filled with zero would win the min.
+    torch_input = torch.rand(shape, dtype=torch_dtype) + 1.0
+    torch_ref = torch.amin(torch_input.float(), dim=-2).to(torch_dtype)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # A value that would win if implicit tile padding reached the reduce.
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
+
+    tt_output = ttnn.min(tt_input, dim=-2)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert_equal(torch_ref, ttnn.to_torch(tt_output))
