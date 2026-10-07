@@ -11,6 +11,9 @@
 #ifndef BINARY_NG_BLOCK_PACK
 #define BINARY_NG_BLOCK_PACK 0
 #endif
+#ifndef BINARY_NG_PRE_SECTIONS
+#define BINARY_NG_PRE_SECTIONS 0
+#endif
 // Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one, except
 // in the block section (BINARY_NG_BLOCK), whose block unpack takes it for every op.
 #define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK)
@@ -52,15 +55,20 @@ void kernel_main() {
 
     // Inline helper to process n tiles
     auto process_tiles = [&](uint32_t n) {
+#if BINARY_NG_PRE_SECTIONS
+        cb_post_lhs.wait_front(n);
+        cb_post_rhs.wait_front(n);
+#else
         PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
         cb_post_lhs.wait_front(n);
 
         PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
         cb_post_rhs.wait_front(n);
+#endif
 
         cb_out.reserve_back(n);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
+#if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT) && !BINARY_NG_PRE_SECTIONS
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
         tile_regs_acquire();
@@ -98,6 +106,25 @@ void kernel_main() {
         cb_post_rhs.pop_front(n);
     };
 
+#if BINARY_NG_PRE_SECTIONS
+    // Blackhole: the operand pass runs over BINARY_NG_PRE_SECTIONS sections, then one binary init for all of them
+    const uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
+    const uint32_t num_chunks = num_full_chunks + (num_tiles % num_tiles_per_cycle > 0);
+    auto chunk_tiles = [&](uint32_t chunk) {
+        return chunk < num_full_chunks ? num_tiles_per_cycle : num_tiles % num_tiles_per_cycle;
+    };
+    for (uint32_t first = 0; first < num_chunks; first += BINARY_NG_PRE_SECTIONS) {
+        const uint32_t last = first + BINARY_NG_PRE_SECTIONS < num_chunks ? first + BINARY_NG_PRE_SECTIONS : num_chunks;
+        for (uint32_t chunk = first; chunk < last; ++chunk) {
+            PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, chunk_tiles(chunk));
+            PREPROCESS(RHS, CircularBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, chunk_tiles(chunk));
+        }
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
+        for (uint32_t chunk = first; chunk < last; ++chunk) {
+            process_tiles(chunk_tiles(chunk));
+        }
+    }
+#else
     // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
@@ -109,4 +136,5 @@ void kernel_main() {
     if (remainder > 0) {
         process_tiles(remainder);
     }
+#endif
 }

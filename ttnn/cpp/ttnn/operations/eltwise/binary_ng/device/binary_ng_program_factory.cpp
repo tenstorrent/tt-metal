@@ -1118,8 +1118,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
+    // Blackhole: with an operand activation and more than one DEST section per core, the no-broadcast and Python-scalar
+    // kernels run the operand pass over two sections before one binary init, so the intermediate CBs hold two.
+    const uint32_t pre_sections = bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 &&
+                                          c_num_tiles_per_shard.value_or(0) > num_tiles_per_cycle
+                                      ? 2
+                                      : 1;
     const uint32_t a_intermediate_tiles =
-        bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle;
+        (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) * pre_sections;
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1177,7 +1183,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
+            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle * pre_sections,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
@@ -1443,6 +1449,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
     // acquire; without activations an add or sub into bf16 unpacks it with one call.
+    if (pre_sections > 1) {
+        compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
+    }
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
         if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
