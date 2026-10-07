@@ -148,6 +148,7 @@ inline __attribute__((always_inline)) void read(hal::Gpr<GprIndex>)
 {
     static_assert(A == Access::TensixCfgUnit, "RDCFG requires Access::TensixCfgUnit");
     static_assert(GprIndex != hal::detail::DynamicGprIndex, "RDCFG requires a compile-time GPR index: use hal::gpr<Index>()");
+    static_assert(GprIndex < 64u, "RDCFG GPR index must be in [0, 63]");
     static_assert(F.scope == RegisterScope::State, "RDCFG cannot read thread CFG (SETC16) fields");
     static_assert(F.width <= 32, "field wider than 32b cannot be selected through a single CFG word");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
