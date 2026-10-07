@@ -372,6 +372,20 @@ private:
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
         tt::tt_metal::NOC forwarder_noc);
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::ProgramDescriptor& program,
+        const FabricMuxV2Config& config,
+        const tt::tt_metal::CoreCoord& mux_logical_core,
+        const std::vector<uint32_t>& downstream_sender_rt_args,
+        tt::tt_metal::NOC forwarder_noc);
+    friend void add_fabric_mux_v2_to_program(
+        tt::tt_metal::ProgramDescriptor& program,
+        const FabricMuxV2Config& config,
+        const tt::tt_metal::CoreCoord& mux_logical_core,
+        const FabricNodeId& src_fabric_node_id,
+        const FabricNodeId& dst_fabric_node_id,
+        uint32_t link_idx,
+        tt::tt_metal::NOC forwarder_noc);
 
     std::unordered_map<std::string, uint32_t> get_fabric_mux_v2_named_compile_time_args() const;
     void validate_logical_channel_id(uint8_t logical_channel_id) const;
@@ -416,6 +430,22 @@ void add_fabric_mux_v2_to_program(
 
 void add_fabric_mux_v2_to_program(
     tt::tt_metal::Program& program,
+    const FabricMuxV2Config& config,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    uint32_t link_idx,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::ProgramDescriptor& program,
+    const FabricMuxV2Config& config,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
+    const std::vector<uint32_t>& downstream_sender_rt_args,
+    tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
+
+void add_fabric_mux_v2_to_program(
+    tt::tt_metal::ProgramDescriptor& program,
     const FabricMuxV2Config& config,
     const tt::tt_metal::CoreCoord& mux_logical_core,
     const FabricNodeId& src_fabric_node_id,
