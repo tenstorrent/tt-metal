@@ -51,6 +51,14 @@ struct ProgramData {
     time_point compile_finished_timestamp;
     std::unordered_map<int, KernelData> kernels;
     std::unordered_map<std::size_t, ProgramBinaryStatus> binary_status_per_device;
+    std::vector<Semaphore> semaphores;
+};
+
+struct GlobalSemaphoreData {
+    uint64_t address{};
+    CoreRangeSet cores;
+    std::vector<uint32_t> chip_ids;
+    std::optional<uint32_t> reset_value;
 };
 
 struct MeshDeviceData {

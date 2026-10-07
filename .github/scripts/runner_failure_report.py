@@ -967,7 +967,9 @@ def runner_report_results(
     known_results: list[JobScanResult] | None = None,
 ) -> list[JobScanResult]:
     checked_results_by_key: dict[str, JobScanResult] = {
-        job_state_key(result.job): result for result in known_results or [] if result.job.job_id and result.log_checked
+        job_state_key(result.job): result
+        for result in known_results or []
+        if result.job.job_id and (result.log_checked or result.signature_labels)
     }
     jobs_to_scan = [
         job

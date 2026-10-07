@@ -62,10 +62,6 @@ class L1AccessMode(Enum):
     STRIDED = "ckernel::trisc::L1AccessMode::Strided"
 
 
-def bfd_current(engine: BfdResource) -> str:
-    return f"ckernel::trisc::bfd_current<{engine.value}>()"
-
-
 @dataclass
 class Operand:
     name: str
@@ -85,6 +81,8 @@ class Operand:
     acc_atol: float = 0.0
     acc_rtol: float = 0.0
     acc_pcc: float = 1.0
+    atol: Optional[float] = None
+    rtol: Optional[float] = None
 
     def __post_init__(self):
         self.tile_count_x = self.dimensions[1] // self.tile_shape.total_col_dim()
@@ -236,12 +234,20 @@ class Operand:
         self,
         engine: BfdResource,
         mode: L1AccessMode = L1AccessMode.CONTINUOUS,
+        *,
+        result_name: Optional[str] = None,
     ) -> str:
+        assignment = f"const auto {result_name} = " if result_name else ""
+        data_format = (
+            DataFormat.Int16
+            if self.data_format == DataFormat.UInt16
+            else self.data_format
+        )
         return (
-            f"ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
+            f"{assignment}ckernel::trisc::bfd_alloc_and_program<{engine.value}, {mode.value}>("
             f"{self.tile_shape.cpp_value}, "
             f"{hex(self.l1_address)} / 16, "
-            f"{self.data_format.cpp_underlying_value});\n"
+            f"{data_format.cpp_underlying_value});\n"
         )
 
 
@@ -256,6 +262,8 @@ class OperandRegistry:
         data_format: DataFormat,
         intervals: Optional[List[Tuple[float, float]]] = None,
         tile_dims: Optional[Tuple[int, int]] = None,
+        atol: Optional[float] = None,
+        rtol: Optional[float] = None,
     ) -> Operand:
         if name in self.operands:
             operand = self.operands[name]
@@ -283,6 +291,8 @@ class OperandRegistry:
             is_output=False,
             intervals=intervals,
             tile_shape=tile_shape,
+            atol=atol,
+            rtol=rtol,
         )
         self.operands[name] = operand
         return operand

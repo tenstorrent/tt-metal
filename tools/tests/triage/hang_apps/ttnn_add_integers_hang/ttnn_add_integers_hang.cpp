@@ -17,12 +17,18 @@
 #include <tt-metalium/distributed.hpp>
 
 #include "add_integers_hang_op.hpp"
+#include "stop_simulation_on_termination.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/types.hpp"
 
 int main() {
+    // Killed while hung -- which is the whole point of this app -- we still have to release the
+    // simulator, so exit rather than die on SIGTERM.
+    tt::tt_metal::triage_hang_apps::stop_simulation_on_termination();
+
     auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(0);
 
     constexpr uint32_t M = tt::constants::TILE_HEIGHT;
@@ -39,12 +45,24 @@ int main() {
     ttnn::Tensor a = ttnn::Tensor::from_vector<bfloat16>(a_data, spec, mesh_device.get());
     ttnn::Tensor b = ttnn::Tensor::from_vector<bfloat16>(b_data, spec, mesh_device.get());
 
+    // Read by dump_semaphores, same as in add_2_integers_hang.
+    auto global_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), ttnn::CoreRange({0, 0}, {0, 0}), 3);
+    auto incremented_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), ttnn::CoreRange({0, 0}, {0, 0}), 5);
+
     try {
-        ttnn::Tensor result = triage_hang_apps::add_integers_hang(a, b);
+        ttnn::Tensor result = triage_hang_apps::add_integers_hang(
+            a, b, static_cast<uint32_t>(ttnn::global_semaphore::get_global_semaphore_address(incremented_semaphore)));
         // Force the dispatch to actually complete (which it won't — the kernel hangs).
         // Reading back will block until the op finishes or times out.
         std::cout << "Number of elements: " << result.to_vector<bfloat16>().size() << std::endl;
     } catch (const std::runtime_error& e) {
+        // Being torn down: teardown has closed the link to the simulator, so this failure is the
+        // expected end of the wait, not a fault to report.
+        if (tt::tt_metal::triage_hang_apps::termination_requested()) {
+            tt::tt_metal::triage_hang_apps::park_until_process_exits();
+        }
         std::string error_msg = e.what();
         if (error_msg.find("device timeout") != std::string::npos || error_msg.find("Timeout (") != std::string::npos) {
             printf("Device timeout detected as expected.\n");
