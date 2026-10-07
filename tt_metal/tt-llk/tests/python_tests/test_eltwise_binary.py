@@ -277,6 +277,21 @@ def _get_valid_math_fidelity(formats, math_op=None):
     ]
 
 
+def _runs_per_tile(tile_dimensions, broadcast_type, *, dest_reuse):
+    """Blackhole: whether the LLK runs this tile per tile under SrcDvalid::PerTile; other tiles keep the per-face program
+    behind a run-time shape check, so their perf variants take the per-face hand-off."""
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    needs_2x2 = (
+        (BroadcastType.Row,)
+        if dest_reuse
+        else (BroadcastType.Column, BroadcastType.Row)
+    )
+    return face_r_dim == 16 and (
+        broadcast_type not in needs_2x2
+        or (num_faces_r_dim == 2 and num_faces_c_dim == 2)
+    )
+
+
 def _run_eltwise_binary_test(
     dest_acc,
     dest_sync,
@@ -298,9 +313,11 @@ def _run_eltwise_binary_test(
 ):
     if per_face_handoff is None:
         # Blackhole: functional variants take the per-tile hand-off; perf variants take it where the opted-in kernels do,
-        # a multiply above LoFi.
+        # a multiply above LoFi, on a tile the LLK runs per tile.
         per_face_handoff = is_perf and not (
-            math_op == MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi
+            math_op == MathOperation.Elwmul
+            and math_fidelity != MathFidelity.LoFi
+            and _runs_per_tile(tile_dimensions, broadcast_type, dest_reuse=False)
         )
     # A transposed SrcA is handed over per face on both threads.
     per_face_handoff = per_face_handoff or transpose_srca == Transpose.Yes
@@ -950,9 +967,13 @@ def _run_eltwise_binary_dest_reuse_test(
     perf_report=None,
     run_types=None,
     loop_factor=1,
-    per_face_handoff=False,
+    per_face_handoff=None,
     broadcast_type=BroadcastType.None_,
 ):
+    if per_face_handoff is None:
+        per_face_handoff = is_perf and not _runs_per_tile(
+            tile_dimensions, broadcast_type, dest_reuse=True
+        )
     prepared = _prepare_dest_reuse_inputs(
         formats,
         input_dimensions,
