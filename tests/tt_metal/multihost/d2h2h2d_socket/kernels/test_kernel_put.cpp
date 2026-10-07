@@ -3,7 +3,7 @@
 
 // The send leg: one tt_uva_put_signal per iteration. Framing, fencing and the commit all
 // live behind the verb, so this file holds only what is specific to the benchmark.
-#include <stdint.h>
+#include <cstdint>
 
 #include "risc_common.h"
 #include "api/dataflow/dataflow_api.h"

@@ -16,6 +16,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 #include <internal/cluster_noc_helpers.hpp>
+#include "impl/context/metal_context.hpp"
+#include "tt_metal/llrt/tt_cluster.hpp"
 
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 
@@ -27,10 +29,6 @@ namespace {
 
 namespace dist = tt::tt_metal::distributed;
 
-ttsl::Span<const std::byte> byte_span(const void* p, std::size_t n) {
-    return ttsl::Span<const std::byte>(static_cast<const std::byte*>(p), n);
-}
-
 }  // namespace
 
 // Single-threaded by design: the caller drives poll(). No atomics, no locks.
@@ -39,6 +37,9 @@ struct D2HLeg::Impl {
     uint32_t page_size = 0;
     uint32_t fifo_bytes = 0;
     uint32_t device_id = 0;
+    // The mesh's own cluster, not MetalContext::instance(): a leg built from a
+    // non-default context must not write control words through the default one.
+    const Cluster* cluster = nullptr;
 
     // Everything one core owns, in one place. `fifo`/`bytes_sent`/`connector` point into
     // the alias; the counters are bytes, the watermarks are frames.
@@ -94,6 +95,16 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
             cfg.ring_pages);
         return nullptr;
     }
+    // The ring is aliased into one core's arena, so a larger one addresses the next core's.
+    // Necessary, not sufficient: the ring starts at the socket's data_offset inside it.
+    if (fifo64 > kArenaBytes) {
+        err = fmt::format(
+            "D2HLeg::create: {} B payload x {} ring pages exceeds the {} KiB arena",
+            cfg.payload_bytes,
+            cfg.ring_pages,
+            kArenaBytes >> 10);
+        return nullptr;
+    }
 
     const uint32_t page = tt_uva_frame_page_size(cfg.payload_bytes);
     const uint32_t align = tt::tt_metal::hal::get_pcie_alignment();
@@ -120,6 +131,7 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
         return nullptr;
     }
     im.device_id = static_cast<uint32_t>(devices.front()->id());
+    im.cluster = &mesh->impl().metal_context().get_cluster();
 
     const uint32_t n = cfg.cores;
     im.core.resize(n);
@@ -167,6 +179,21 @@ std::unique_ptr<D2HLeg> D2HLeg::create(
         im.core[c].connector = reinterpret_cast<dist::HDSocketConnectorState*>(b + d.connector_state_offset);
         im.core[c].cfg_addr = d.config_buffer_address;
         im.core[c].acked_dev_off = d.bytes_acked_device_offset;
+    }
+
+    // Zeroed here so it starts where the new sockets' bytes_sent does, and this leg's credited=0
+    // agrees. L1 keeps the previous PROCESS's count, and tt_uva_sync() would clear against that.
+    // Once per leg, not per launch: both counters persist across kernel launches on this leg.
+    if (cfg.consumed_addr != 0) {
+        const uint32_t zero = 0;
+        for (uint32_t c = 0; c < n; ++c) {
+            const auto& v = im.core[c].virt;
+            im.cluster->write_core_immediate(
+                &zero,
+                sizeof(uint32_t),
+                tt_cxy_pair(im.device_id, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)),
+                cfg.consumed_addr);
+        }
     }
     return leg;
 }
@@ -260,7 +287,29 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
     if (core >= im.cfg.cores || pages == 0) {
         return;
     }
-    const uint32_t bytes = pages * im.page_size;
+    // Over-retiring puts acked ahead of sent, which underflows poll()'s wrap-safe
+    // subtraction and opens the device's send gate on pages this host never read.
+    const uint64_t outstanding = im.core[core].forwarded - im.core[core].retired;
+    if (pages > outstanding) {
+        im.fail(fmt::format(
+            "d2h: core {} retire of {} pages exceeds the {} forwarded and not yet retired",
+            core,
+            pages,
+            outstanding));
+        return;
+    }
+
+    // Disarm each page as it is freed -- this is the point the transport is done with it.
+    // uva_frame.h makes a zero guard "not armed", so a reused slot cannot read fresh.
+    uint32_t disarm_off = im.core[core].read_ptr;
+    for (uint32_t i = 0; i < pages; ++i) {
+        auto* const t = reinterpret_cast<FrameTrailer*>(
+            im.core[core].fifo + disarm_off + im.page_size - kFrameTrailerBytes);
+        std::atomic_ref<uint64_t>(t->guard).store(UINT64_C(0), std::memory_order_release);
+        disarm_off = static_cast<uint32_t>((disarm_off + im.page_size) % im.fifo_bytes);
+    }
+
+    const uint32_t bytes = static_cast<uint32_t>(static_cast<uint64_t>(pages) * im.page_size);
     im.core[core].acked += bytes;
     im.core[core].read_ptr = (im.core[core].read_ptr + bytes) % im.fifo_bytes;
     im.core[core].retired += pages;
@@ -272,12 +321,11 @@ void D2HLeg::retire(uint32_t core, uint32_t pages) {
         im.core[core].connector->read_ptr = im.core[core].read_ptr;
     }
     const auto& v = im.core[core].virt;
-    tt::tt_metal::internal::noc_write_immediate(
-        im.device_id,
-        static_cast<uint32_t>(v.x),
-        static_cast<uint32_t>(v.y),
-        im.core[core].cfg_addr + im.core[core].acked_dev_off,
-        byte_span(&im.core[core].acked, sizeof(uint32_t)));
+    im.cluster->write_core_immediate(
+        &im.core[core].acked,
+        sizeof(uint32_t),
+        tt_cxy_pair(im.device_id, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y)),
+        im.core[core].cfg_addr + im.core[core].acked_dev_off);
 }
 
 // Only on change: an unchanged counter is a PCIe write the kernel would not notice.
@@ -291,12 +339,11 @@ void D2HLeg::credit(uint32_t core, uint64_t pages) {
     }
     im.core[core].credited = v;
     const auto& c = im.core[core].virt;
-    tt::tt_metal::internal::noc_write_immediate(
-        im.device_id,
-        static_cast<uint32_t>(c.x),
-        static_cast<uint32_t>(c.y),
-        im.cfg.consumed_addr,
-        byte_span(&im.core[core].credited, sizeof(uint32_t)));
+    im.cluster->write_core_immediate(
+        &im.core[core].credited,
+        sizeof(uint32_t),
+        tt_cxy_pair(im.device_id, static_cast<uint32_t>(c.x), static_cast<uint32_t>(c.y)),
+        im.cfg.consumed_addr);
 }
 
 uint32_t D2HLeg::page_size() const { return impl_->page_size; }

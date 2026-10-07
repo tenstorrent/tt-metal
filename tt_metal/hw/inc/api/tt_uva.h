@@ -45,7 +45,7 @@ inline bool g_rx_on = false;
 // unconditional. Per-arch: a hardcoded 8 KiB used to split every page needlessly.
 constexpr uint32_t kMaxNocWrite = NOC_MAX_BURST_SIZE;
 
-inline uint64_t page_addr() {
+FORCE_INLINE uint64_t page_addr() {
     // write_ptr added in 64 bits, after the halves are joined: the 32-bit add drops the
     // carry when fifo_addr sits within fifo_size of a 4 GiB boundary.
     return ((static_cast<uint64_t>(g_socket.d2h.data_addr_hi) << 32) |
@@ -53,7 +53,7 @@ inline uint64_t page_addr() {
            g_socket.write_ptr;
 }
 
-inline void push(uint32_t src, uint64_t dst, uint32_t bytes) {
+FORCE_INLINE void push(uint32_t src, uint64_t dst, uint32_t bytes) {
     const uint32_t enc = g_socket.d2h.pcie_xy_enc;
     while (bytes > 0) {
         const uint32_t chunk = bytes < kMaxNocWrite ? bytes : kMaxNocWrite;
@@ -67,10 +67,14 @@ inline void push(uint32_t src, uint64_t dst, uint32_t bytes) {
 
 // Payload, then trailer, then the caller decides whether to commit. The signal fields are
 // written unconditionally: the staging slot is reused, so stale bytes would read as an op.
-inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_off, uint32_t sig_val, uint32_t sig_op) {
-    // One page is reserved, and the trailer takes its tail: a longer payload runs through
-    // the trailer and into the next page, which nothing has reserved.
+FORCE_INLINE void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_off, uint32_t sig_val, uint32_t sig_op) {
+    // Refused, not clamped: an over-long put runs off the slot onto the socket's own
+    // bytes_sent word, and the host validates length from a trailer that is already gone.
     ASSERT(g_page_size >= kFrameTrailerBytes && bytes <= g_page_size - kFrameTrailerBytes);
+    // Subtraction, not bytes + kFrameTrailerBytes: that sum wraps and lets the put through.
+    if (g_page_size < kFrameTrailerBytes || bytes > g_page_size - kFrameTrailerBytes) {
+        return;
+    }
     // Bracketed separately from the write below: this is the wait for the host to retire a
     // page, which is the slot round trip and not a cost of sending.
     const uint64_t t_pre = get_timestamp();
@@ -93,6 +97,11 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
     t->sig_off = sig_off;
     t->sig_val = sig_val;
     t->sig_op = sig_op;
+    // Written even though unused: the staging slot is reused, so stale L1 would ride out
+    // on every frame and a peer reads these as a future field's value.
+    t->reserved0 = 0;
+    t->reserved[0] = 0;
+    t->reserved[1] = 0;
 
     // Page TAIL, not page + bytes: D2HLeg::poll() always reads the trailer at
     // page_size - kFrameTrailerBytes, and cannot know `bytes` before it has the trailer.
@@ -104,7 +113,7 @@ inline void stage(uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_of
 
 // A single NOC transaction has a burst limit and exceeding it reads NOTHING, so the chunk
 // loop is unconditional rather than a limit every caller must remember.
-inline void pull(uint64_t src, uint32_t dst_l1, uint32_t bytes) {
+FORCE_INLINE void pull(uint64_t src, uint32_t dst_l1, uint32_t bytes) {
     while (bytes) {
         const uint32_t chunk = bytes > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : bytes;
         noc_read_with_state<noc_mode, read_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT>(
@@ -117,7 +126,7 @@ inline void pull(uint64_t src, uint32_t dst_l1, uint32_t bytes) {
 
 // No atomic: this core's puller is the only writer of any signal word on this core, however
 // many peers are sending. The senders contend in the ring, not here.
-inline void apply_signal(const volatile FrameTrailer* t) {
+FORCE_INLINE void apply_signal(const volatile FrameTrailer* t) {
     if (t->sig_op == kSignalNone) {
         return;
     }
@@ -131,7 +140,7 @@ inline void apply_signal(const volatile FrameTrailer* t) {
 
 // The whole ordering contract in one place: the bytes land, the barrier retires the read,
 // and only then does anything -- credit or signal -- advertise them.
-inline void land_one() {
+FORCE_INLINE void land_one() {
     pull(g_ring + (g_rx.read_ptr - g_rx.fifo_addr), g_landing, g_page_size);
     noc_async_read_barrier();
 
@@ -143,7 +152,7 @@ inline void land_one() {
 
 // Lands one frame if one is waiting. The bounded wait is what keeps a stop flag reachable:
 // an unbounded socket_wait_for_pages on an idle socket never returns.
-inline bool poll_one(uint32_t polls) {
+FORCE_INLINE bool poll_one(uint32_t polls) {
     if (!socket_wait_for_pages(g_rx, 1, polls)) {
         invalidate_l1_cache();
         return false;
@@ -155,14 +164,14 @@ inline bool poll_one(uint32_t polls) {
 }  // namespace detail
 
 // This core's selector, derived from its own coordinates so no argument can forge it.
-inline uint32_t tt_uva_self(uint32_t grid_width, uint32_t host, uint32_t chip, uint32_t chips_per_host) {
+FORCE_INLINE uint32_t tt_uva_self(uint32_t grid_width, uint32_t host, uint32_t chip, uint32_t chips_per_host) {
     const uint32_t core = get_absolute_logical_y() * grid_width + get_absolute_logical_x();
     return tt_uva_t6_global_selector(host, chip, core, chips_per_host);
 }
 
 // A zero config address means this RISC does not own that direction. Exactly one RISC may
 // drive a socket, so the half this one does not own is left unarmed rather than raced.
-inline void tt_uva_ini(
+FORCE_INLINE void tt_uva_ini(
     uint32_t tx_config_addr,
     uint32_t rx_config_addr,
     uint32_t page_size,
@@ -203,14 +212,14 @@ inline void tt_uva_ini(
 }
 
 // Store `bytes` from L1 to `dst`, and publish it. Blocks only if the FIFO is full.
-inline void tt_uva_put(uint32_t src_l1, tt_uva_t dst, uint32_t bytes) {
+FORCE_INLINE void tt_uva_put(uint32_t src_l1, tt_uva_t dst, uint32_t bytes) {
     detail::stage(src_l1, dst, bytes, 0, 0, kSignalNone);
     socket_notify_receiver(detail::g_socket);
 }
 
 // As tt_uva_put, then updates `sig_addr` on the target once the payload has landed there.
 // A sibling, not a wrapper: stage() commits, so a later signal would cost a second message.
-inline void tt_uva_put_signal(
+FORCE_INLINE void tt_uva_put_signal(
     uint32_t src_l1, tt_uva_t dst, uint32_t bytes, uint32_t sig_addr, uint32_t sig_val, uint32_t sig_op) {
     // Symmetric: the host gives sender and receiver the same l1_base, so an offset off ours
     // names the word the target owns. Below that base it would wrap and the far bound drop it.
@@ -221,7 +230,7 @@ inline void tt_uva_put_signal(
 
 // Returns once THIS host has released every frame this core put, which the H2H leg flushes
 // before it acks -- so they are in the peer host's window. One-sided: no far device needed.
-inline void tt_uva_quiet() {
+FORCE_INLINE void tt_uva_quiet() {
     if (detail::g_tx_on) {
         socket_barrier(detail::g_socket);
     }
@@ -229,7 +238,7 @@ inline void tt_uva_quiet() {
 
 // Returns once the FAR device has pulled everything this core put. A full round trip, so
 // calling it per message is the latency shape, not the bandwidth one.
-inline void tt_uva_sync() {
+FORCE_INLINE void tt_uva_sync() {
     if (detail::g_consumed_addr == 0) {
         return;
     }
@@ -248,14 +257,14 @@ inline void tt_uva_sync() {
 
 // The verb for a consumer that does NOT own this core's socket -- one on another RISC, which
 // must not touch read_ptr. It spins on the fetch itself; a second driver would race the ring.
-inline uint32_t tt_uva_signal_fetch(uint32_t sig_addr) {
+FORCE_INLINE uint32_t tt_uva_signal_fetch(uint32_t sig_addr) {
     invalidate_l1_cache();
     return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sig_addr);
 }
 
 // Reports the signal without committing to reach it, landing at most one frame trying. Tests
 // before draining, so a satisfied signal never pulls a frame the caller did not ask for.
-inline bool tt_uva_test(uint32_t sig_addr, uint32_t cmp_value, uint32_t polls = 4096) {
+FORCE_INLINE bool tt_uva_test(uint32_t sig_addr, uint32_t cmp_value, uint32_t polls = 4096) {
     if (static_cast<int32_t>(tt_uva_signal_fetch(sig_addr) - cmp_value) >= 0) {
         return true;
     }
@@ -265,7 +274,7 @@ inline bool tt_uva_test(uint32_t sig_addr, uint32_t cmp_value, uint32_t polls = 
 
 // Drains what this RISC put, then writes back only the sockets it armed: a config write for
 // a socket another RISC drives would publish stale pointers over that RISC's progress.
-inline void tt_uva_fin() {
+FORCE_INLINE void tt_uva_fin() {
     if (detail::g_tx_on) {
         socket_barrier(detail::g_socket);
         update_socket_config(detail::g_socket);

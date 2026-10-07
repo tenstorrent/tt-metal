@@ -36,6 +36,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/host_ring_alias.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_l1_map.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/host_d2h_leg.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/host_h2d_leg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/command_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
