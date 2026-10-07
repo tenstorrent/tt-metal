@@ -66,21 +66,32 @@ constexpr std::uint32_t DEQUANT_REPLAY_LEN = 5;
 constexpr std::uint32_t INT8_SIGN_MASK = 0x00000080u;
 
 // Round to nearest even:
-// STOCH_RND rounds ties away from zero and its FP32_TO_INT8 mode cannot produce -128.
-// The SFPU adder rounds to nearest even. Adding RNE_MAGIC (1.5 * 2^23) to any |v| < 2^22 gives
-// m = RNE(v) + RNE_MAGIC in [2^23, 2^24), where the fp32 spacing is 1.
-// The integer subtraction bits(m) - bits(t) with t = RNE_MAGIC - zero_point gives RNE(v) + zero_point.
-// A large zero point would push t out of [2^23, 2^24). Quant splits it into zp_hi (a multiple of 4) and
-// zp_lo in [-2, 2], adds zp_hi in the MAD and uses t = RNE_MAGIC - zp_lo. An even zp_hi does not change the rounding.
-// Requant uses t = RNE_MAGIC since its zero point is already in v.
-// Clamp m to [t + LO, t + HI] before subtracting to saturate where LO/HI are [-128, 127]
-// for int32/int8 and [0, 255] for uint8.
+// For quantization, q = RNE(v) + zp, where v = input/scale. Since STOCH_RND rounds ties away from zero,
+// we use SFPU adder here which performs FP32 addition with round to nearest even. We choose a magic number 1.5 * 2^23
+// to be added such that FP32 spacing near 1.5 * 2^23 is 1. Adding this to any v such that |v| < 2^22 gives a value
+// in the range [2^23, 2^24).
+//     m = RNE(1.5 * 2^23 + v) = 1.5 * 2^23 + RNE(v) = RNE_MAGIC + RNE(v)
+//  If t = RNE_MAGIC - zp, then bits(m) - bits(t) = RNE(v) + zp
+//
+// However, this is not possible for a large zp because t = RNE_MAGIC - zp may not stay in the range [2^23, 2^24).
+// To keep t close to RNE_MAGIC, we split zp = zp_hi + zp_lo.
+// zp_hi is chosen such that it is a multiple of 4, is close to zp and zp_lo = zp - zp_hi is in range [-2, 2].
+// zp_hi is added to RNE_MAGIC inside the same MAD before rounding since adding an even number does not change
+// how a tie rounds.
+//     m = RNE_MAGIC + zp_hi + RNE(v)
+//  If t = RNE_MAGIC - zp_lo , bits(m) - bits(t) = RNE(v) + zp_hi +zp_lo = RNE(v) + zp
+// The result is exact for |zp| <= 2^24.
+//
+// For requantization, the out_zp is added after RNE. We split out_zp the same way as above.
+//
+// Saturate to output dtype range:
+// FP32_TO_INT8 mode cannot produce -128. So we clamp m to [t + LO, t + HI] before subtracting to saturate
+// where LO/HI are [-128, 127] for int32/int8 and [0, 255] for uint8.
 constexpr std::uint32_t RNE_MAGIC_FP32 = 0x4b400000u;  // 12582912.0f = 1.5 * 2^23
-// floating point respresentation of zero_point + ZP_SPLIT is a multiple of 4 for |zero_point| <= 2^24
 constexpr std::uint32_t ZP_SPLIT_FP32 = 0x4c400000u;  // 50331648.0f = 1.5 * 2^25
 
-// T_LREG holds t on entry. LREG12 = t + LO and LREG13 = t + HI. Within this range, the FP32 bit pattern
-// differs from bits(t) by the integer offset. T_LREG = -bits(t) with +128 for the int8 output. LREG0 is scratch.
+// T_LREG holds t on entry. LREG12 = t + LO and LREG13 = t + HI.
+// T_LREG = -bits(t) with +128 for the int8 output.
 template <DataFormat OUTPUT_FORMAT, std::uint32_t T_LREG>
 inline void _rne_clamp_init_() {
     constexpr int LO = OUTPUT_FORMAT == DataFormat::UInt8 ? 0 : -128;
@@ -367,16 +378,28 @@ template <
     bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false,
     DataFormat OUTPUT_FORMAT = DataFormat::Int32,
     bool INT8_INPUT = false>
-void requant_init(const uint zero_point) {
+void requant_init(const uint zero_point, const uint out_zero_point = 0) {
     static_assert(
         OUTPUT_FORMAT == DataFormat::Int32 || OUTPUT_FORMAT == DataFormat::UInt8 || OUTPUT_FORMAT == DataFormat::Int8,
         "requant_init OUTPUT_FORMAT must be Int32, UInt8 or Int8");
-    // The body rounds the whole expression q * (s_in / s_out) + zp to nearest even, zp being the
-    // host-folded z_out - z_in * (s_in / s_out) in LREG2; this matches the op's golden
-    // round((q - z_in) * (s_in / s_out) + z_out). With t = RNE_MAGIC, LREG6 ends up as -bits(t) (+128).
+    // The body rounds v = q * (s_in / s_out) + zp to nearest even and then adds out_zero_point.
+    // zp is the host-folded -z_in * (s_in / s_out) in LREG2.
+    // LREG5 = RNE_MAGIC + zp_hi (the SFPADD addend); LREG6 = t = RNE_MAGIC - zp_lo ends up as -bits(t) (+128).
     _sfpu_load_imm32_(p_sfpu::LREG2, zero_point);
     _sfpu_load_imm32_(p_sfpu::LREG5, RNE_MAGIC_FP32);
-    _sfpu_load_imm32_(p_sfpu::LREG6, RNE_MAGIC_FP32);
+    _sfpu_load_imm32_(p_sfpu::LREG6, out_zero_point);
+    _sfpu_load_imm32_(p_sfpu::LREG1, ZP_SPLIT_FP32);
+    // LREG0 = zp_hi = fl(out_zero_point + ZP_SPLIT) - ZP_SPLIT
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /*mod1*/);
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG0, 0 /*mod1*/);
+    TTI_SFPNOP;
+    // LREG6 = zp_lo = out_zero_point - zp_hi
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG6, p_sfpu::LREG6, 0 /*mod1*/);
+    TTI_SFPNOP;
+    TTI_SFPMAD(p_sfpu::LREG6, p_sfpu::LCONST_neg1, p_sfpu::LREG5, p_sfpu::LREG6, 0 /*mod1*/);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG5, 0 /*mod1*/);
+    TTI_SFPNOP;
     _rne_clamp_init_<OUTPUT_FORMAT, p_sfpu::LREG6>();
     if constexpr (INT8_INPUT || OUTPUT_FORMAT == DataFormat::Int8) {
         _sfpu_load_imm32_(p_sfpu::LREG4, INT8_SIGN_MASK);
@@ -392,7 +415,8 @@ void requant_init(const uint zero_point) {
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPCAST_MOD1_INT32_TO_FP32_RNE);
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);  // v = A * B + zp
         TTI_SFPNOP;
-        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);  // m = RNE(v) + MAGIC
+        // m = RNE(v + zp_hi) + RNE_MAGIC
+        TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG0, 0 /*mod1*/);
         TTI_SFPNOP;
         TTI_SFPSWAP(0, p_sfpu::LREG12, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MAX_MIN);  // m = max(m, t + LO)
         TTI_SFPSWAP(0, p_sfpu::LREG13, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // m = min(m, t + HI)
@@ -400,7 +424,7 @@ void requant_init(const uint zero_point) {
             0,
             p_sfpu::LREG6,
             p_sfpu::LREG0,
-            sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);  // n = clamp(RNE(v)) (+128)
+            sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);  // n = clamp(RNE(v) + out_zp) (+128)
         if constexpr (OUTPUT_FORMAT == DataFormat::Int8) {
             TTI_SFPXOR(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);  // b = (n + 128) ^ 0x80
         }
