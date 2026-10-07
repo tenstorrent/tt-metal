@@ -199,9 +199,9 @@ class TestTargetConfig:
         Simulators are orders of magnitude slower than silicon, and the wait is a
         poll on an L1 mailbox rather than anything backend-specific.
         """
-        return 600 if self.run_simulator else 2
+        return 7200 if self.run_simulator else 2
 
     @property
     def brisc_command_timeout_s(self) -> int:
         """Seconds to wait for BRISC to acknowledge a command mailbox write."""
-        return 600 if self.run_simulator else 1
+        return 7200 if self.run_simulator else 1
