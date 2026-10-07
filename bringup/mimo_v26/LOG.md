@@ -1502,3 +1502,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_K_full48_ag_sum_h40_22eff654928.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py
 - data: {"replays":1000,"eager":200,"glitches":0}
+
+## E261007-1453-eba
+- date: 2026-10-07T14:53:47
+- commit: 22eff654928
+- branch: ssinghal/mimo-race
+- host: 40
+- track: decode
+- status: verified
+- claim: RACE TRACK HANDOFF: worktree wt/race, branch ssinghal/mimo-race tip 414f0721e88 (+ this entry). Fix: MiMoMoEDecode._column_reduce (all_gather over columns + sum instead of ttnn.all_reduce), MIMO_MOE_AR=rs restores old. Evidence E261007-0930-424, E261007-1343-2d2, E261007-1453-b3d. Open: workaround cost (paired ms/layer U=1,8,32), PCC/alpha L1/L5/L16, GSM8K n=128 pair, other all_reduce sites (attention decode/prefill, dense FFN, prefill MoE: same op, NOT tested; stand-alone repro does not trigger), upstream repro needs the MoE context; hangs seen were dead=sentinel at >=12 layers and device left dirty after killing a hung job (reset needed), plus any allocation after end_trace_capture hangs the next replay
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_K_full48_ag_sum_h40_22eff654928.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py
