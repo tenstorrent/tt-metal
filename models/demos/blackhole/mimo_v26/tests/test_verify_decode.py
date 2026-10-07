@@ -73,6 +73,9 @@ def main():
             vd = Decoder(model, trace=trace, U=U, block=blk, capture=cap)
             av, bv = vd.verify(toks, pos, dead)
             fv = feat_host(mesh, vd.feat)  # [rows, U*blk, NL*4096]
+            av2, _ = vd.verify(toks, pos, dead)
+            fv2 = feat_host(mesh, vd.feat)
+            verify_repeat_equal = bool(torch.equal(fv, fv2))
             vd.close()
             # 2. sequential on a fresh prefill
             gen.prefill(prompts, S)
