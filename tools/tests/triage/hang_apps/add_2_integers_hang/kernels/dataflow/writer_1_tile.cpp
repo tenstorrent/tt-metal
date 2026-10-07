@@ -6,6 +6,7 @@
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t global_semaphore_addr = get_arg_val<uint32_t>(1);
 
     // The circular buffer that we are going to read from and write to DRAM
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
@@ -14,10 +15,12 @@ void kernel_main() {
     constexpr auto out0_args = TensorAccessorArgs<0>();
     const auto dst = TensorAccessor(out0_args, dst_addr);
 
-    // dump_semaphores expects semaphore 0 at its initial 7 plus these two increments.
+    // dump_semaphores expects semaphore 0 at its initial 7 plus these two increments, and the GlobalSemaphore at
+    // global_semaphore_addr at its initial 5 plus one.
     uint64_t semaphore = get_noc_addr(get_semaphore(0));
     noc_semaphore_inc(semaphore, 1);
     noc_semaphore_inc(semaphore, 1);
+    noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
     noc_async_atomic_barrier();
 
     // Make sure there is a tile in the circular buffer
