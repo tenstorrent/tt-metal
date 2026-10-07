@@ -60,18 +60,20 @@ def _bcast_data(dim, small):
     return a, (nb, 1, 64, 1024), B, (nb, 1, 1, 1), np.repeat(B, 65536)
 
 
-BCASTS = [("H", "dram"), ("H", "hs"), ("W", "dram"), ("HW", "dram"), ("HW", "hs")]
+BCASTS = [("H", "dram"), ("H", "bs"), ("W", "dram"), ("HW", "dram"), ("HW", "hs")]
 
 
 @pytest.mark.parametrize("dim, mem", BCASTS, ids=["-".join(c) for c in BCASTS])
 def test_bcast(device, dim, mem):
     t0 = time.time()
-    small = mem == "hs"
+    small = mem != "dram"
     a, ashape, b, bshape, bel = _bcast_data(dim, small)
     if mem == "hs":
         tile_rows = int(np.prod(ashape[:-1])) // 32
         cores = next(c for c in (64, 32, 16, 8) if tile_rows % c == 0)
         mca = _hs(ashape, cores // 8, 8)
+    elif mem == "bs":  # the sharded H factory (bcast_h_sharded_optimised.cpp) takes block or width sharding
+        mca = ttnn.create_sharded_memory_config(ashape, core_grid=ttnn.CoreGrid(y=8, x=8), strategy=ttnn.ShardStrategy.BLOCK)
     else:
         mca = ttnn.DRAM_MEMORY_CONFIG
     ta = ttnn.from_torch(bf16_from_bits(a.reshape(-1)).reshape(ashape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mca)
@@ -85,6 +87,10 @@ def test_bcast(device, dim, mem):
             env["EB_R3_BCAST_FP32"] = "1"
         set_env(device, env)
         out = out_bits(ttnn.bcast(ta, tb, ttnn.BcastOpMath.MUL, bdim, memory_config=mca))
+        if fid == "HiFi4" and not fp32:
+            base = out
+        elif out.dtype == base.dtype:
+            print(f"\nDUMP control bcast_{dim}_{mem} {fid}_{'d32' if fp32 else 'd16'} against HiFi4_d16 (same side): differ {int((out != base).sum())}", flush=True)
         stage(f"bcast_{dim}_{mem}_{fid}_{'d32' if fp32 else 'd16'}", out, av, bv, "mul", f"({time.time() - t0:.1f} s)")
     set_env(device, {})
 

@@ -134,6 +134,7 @@ def test_scalar_lhs(device, b_dt, out_dt):
     for lab, env in envs.items():
         set_env(device, env)
         dig[lab] = [digest(call(i)) for i in range(PATS.size)]
+        print(f"\nDUMP scal_{b_dt}_{out_dt} [{lab}]: {len(set(dig[lab]))} distinct outputs over {PATS.size} scalars", flush=True)
     set_env(device, {})
     for a, b_ in prs:
         la, lb = env_label(a), env_label(b_)
