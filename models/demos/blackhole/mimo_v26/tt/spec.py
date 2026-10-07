@@ -34,7 +34,10 @@ class SpecEngine:
         self.rows = model.mesh.shape[0]
         self.dec = Decoder(model, trace=trace, U=U, block=BLK, capture=tuple(cap))
         self.trace = trace
-        self.dr_trace = trace and os.environ.get("SPEC_DR_TRACE", "1") == "1"
+        self.dr_mode = os.environ.get(
+            "SPEC_DR_TRACE", "late"
+        )  # 0 = eager drafter, 1 = traced from round 0, late = eager in round 0 then traced (verify trace captured first)
+        self.dr_trace = trace and self.dr_mode == "1"
         self.dr.use_trace = self.dr_trace
         self.stats = dict(rounds=[], t_draft=[], t_verify=[], t_append=[])
 
@@ -125,6 +128,9 @@ class SpecEngine:
                     break
             self.pos[r, u] += kk + 1
             self.anchor[r, u] = post[r, u, kk]
+        if self.trace and self.dr_mode == "late":
+            self.dr_trace = True
+            self.dr.use_trace = True
         self.stats["rounds"].append(acc)
         self.stats["t_draft"].append(t_draft)
         self.stats["t_verify"].append(t_verify)
