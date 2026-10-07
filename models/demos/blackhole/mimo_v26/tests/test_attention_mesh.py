@@ -103,13 +103,18 @@ def main():
                     pre[:, u, c * CH : (c + 1) * CH] = h[:, 0]
                     ttnn.deallocate(o)
             rec("prefill_time", kind=kind, secs=round(time.time() - t0, 1))
-            res = {f"r{r}u{u}": round(pcc(pre[r, u], ref[r, u, :P]), 5) for r in range(rows) for u in range(U)}
+            res = {
+                f"r{r}u{u}": round(pcc(pre[r, u, : LENS[u]], ref[r, u, : LENS[u]]), 5)
+                for r in range(rows)
+                for u in range(U)
+            }
             per_chunk = {
                 f"c{c}": round(
                     min(
                         pcc(pre[r, u, c * CH : (c + 1) * CH], ref[r, u, c * CH : (c + 1) * CH])
                         for r in range(rows)
                         for u in range(U)
+                        if (c + 1) * CH <= LENS[u]
                     ),
                     5,
                 )
@@ -136,8 +141,19 @@ def main():
                 h = gather(o)  # [rows, 8, 32, 4096]
                 cs = float((h - h[:, :1]).abs().max())
                 dd = {
-                    f"r{r}u{u}": round(pcc(h[r, 0, u], ref[r, u, P + step]), 5) for r in range(rows) for u in range(U)
+                    f"r{r}u{u}": round(pcc(h[r, 0, u], ref[r, u, LENS[u] + step]), 5)
+                    for r in range(rows)
+                    for u in range(U)
                 }
+                if (
+                    step == ND - 1
+                ):  # determinism: repeat the step 3x (cache write is idempotent), output must be bit-identical
+                    same = True
+                    for _ in range(3):
+                        o2 = m.decode(to_mesh(xin), cur, idx)
+                        same &= bool(torch.equal(gather(o2), h))
+                        ttnn.deallocate(o2)
+                    rec("decode_determinism_3x", kind=kind, bit_identical=same)
                 dres.append(dict(step=step, min=min(dd.values()), col_spread=cs, per_user=dd))
                 ttnn.deallocate(o)
             rec("decode_pcc", kind=kind, min=min(d["min"] for d in dres), steps=dres)
