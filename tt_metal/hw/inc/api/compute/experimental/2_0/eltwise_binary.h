@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_binary.h"
@@ -40,13 +41,17 @@ namespace experimental {
 // clang-format on
 template <EltwiseBinaryType eltwise_binary_type, DataFormat AFormat, TensorShape AShape>
 ALWI void binary_tiles_init(LLKOperand<AFormat, AShape> /*a*/, bool acc_to_dest = false) {
+    // Operand B is not a parameter yet (PR B). Both sources are programmed from A, which matches
+    // today's same-format callers. A mixed A/B format still needs hw_startup until B is passed.
+    constexpr auto desc = LLKOperand<AFormat, AShape>::descriptor;
+    MATH((llk_math_config<DST_ACCUM_MODE, desc, desc>()));
     MATH((llk_math_eltwise_binary_init<
-          LLKOperand<AFormat, AShape>::descriptor,
+          desc,
           eltwise_binary_type,
           BroadcastType::NONE,
           MATH_FIDELITY>(acc_to_dest)));
-    UNPACK(
-        (llk_unpack_AB_init<LLKOperand<AFormat, AShape>::descriptor, BroadcastType::NONE>(ckernel::Transpose::None)));
+    UNPACK((llk_unpack_config<DST_ACCUM_MODE, desc, desc>()));
+    UNPACK((llk_unpack_AB_init<desc, BroadcastType::NONE>(ckernel::Transpose::None)));
 }
 
 // clang-format off
@@ -344,19 +349,24 @@ template <
     TensorShape Shape>
 ALWI void binary_reuse_dest_init(LLKOperand<Format, Shape> /*in*/) {
     static_assert(is_legal_tile_shape(Shape), "binary_reuse_dest_init: illegal tile shape for the L1 operand.");
-    // BH: accumulate the unpacked operand into DST at the unpacker (acc_to_dest = true).
-    UNPACK((llk_unpack_A_init<
-            LLKOperand<Format, Shape>::descriptor,
-            is_fp32_dest_acc_en,
-            BroadcastType::NONE,
-            true /*acc_to_dest*/,
-            reuse_dest>()));
+    // The L1 operand feeds one source register; the other is loaded from DST. Both format slots are
+    // programmed from `in` until the dest-fed register has its own operand.
+    constexpr auto desc = LLKOperand<Format, Shape>::descriptor;
+    MATH((llk_math_config<is_fp32_dest_acc_en, desc, desc>()));
     MATH((llk_math_eltwise_binary_init<
-          LLKOperand<Format, Shape>::descriptor,
+          desc,
           eltwise_binary_type,
           BroadcastType::NONE,
           MATH_FIDELITY,
           reuse_dest>(0 /*acc_to_dest*/)));
+    // BH: accumulate the unpacked operand into DST at the unpacker (acc_to_dest = true).
+    UNPACK((llk_unpack_config<is_fp32_dest_acc_en, desc, desc>()));
+    UNPACK((llk_unpack_A_init<
+            desc,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            true /*acc_to_dest*/,
+            reuse_dest>()));
 }
 
 // Dest-reuse EXECUTE: DST[dst_tile_index] loads into SrcA (DEST_TO_SRCA) or SrcB (DEST_TO_SRCB); the op

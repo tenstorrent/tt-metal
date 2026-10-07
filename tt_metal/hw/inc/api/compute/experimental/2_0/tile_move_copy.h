@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
-#include "data_format_derive.h"  // ckernel::infer_unpack_dst_format -- register-format derivation (BH)
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -52,24 +52,22 @@ ALWI void copy_init(
         !(is_block_float_format(Format) && is_partial_height(Shape)),
         "copy: sub-32-row (partial-height) block-float tiles are not supported on the BH compute datapath "
         "(they produce garbage even at tile 0); use a full 32-row tile.");
+    constexpr auto desc = LLKOperand<Format, Shape>::descriptor;
+    UNPACK((llk_unpack_config<is_fp32_dest_acc_en, desc, desc>()));
     UNPACK((llk_unpack_A_init<
-            LLKOperand<Format, Shape>::descriptor,
+            desc,
             is_fp32_dest_acc_en,
             BroadcastType::NONE,
             false,
             EltwiseBinaryReuseDestType::NONE,
             UnpackToDestEn>(transpose, transpose_within_16x16_face)));
+    // datacopy_zero_flag: preserve bf16 -0.0 / 16b-int residuals, flush fp8.
+    MATH((llk_math_config<is_fp32_dest_acc_en, desc, desc, true /*datacopy_zero_flag*/>()));
     MATH((llk_math_eltwise_unary_datacopy_init<
-          LLKOperand<Format, Shape>::descriptor,
+          desc,
           DataCopyType::A2D,
           is_fp32_dest_acc_en,
           BroadcastType::NONE>()));
-    // Src zero-substitution flag, chosen by the derived register format (id-free equivalent of legacy
-    // copy_init's ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))): preserve
-    // bf16 -0.0 / 16b-int residuals, but flush fp8 (e4m3/e5m2) whose zero widens to a nonzero SrcA residual
-    // and must read back as 0. MATH-only config; records no format-reconfig diff. The fn masks to 0x1F.
-    MATH((ckernel::math::_configure_copy_zero_flag_state_(
-        static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en)))));
 }
 
 // clang-format off

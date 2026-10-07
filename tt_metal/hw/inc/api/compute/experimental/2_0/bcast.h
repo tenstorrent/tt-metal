@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "experimental/2_0/llk_config.h"
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -68,18 +69,18 @@ ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
     // 32-bit register formats use the unpack-to-dest A2D path (SrcB is only 19 bits wide); folds to a constant.
     constexpr bool enable_unpack_to_dest = is_unpack_to_dest<Format, is_fp32_dest_acc_en>();
     constexpr DataCopyType dcopy = detail::unary_bcast_dcopy<bcast_type, Format, is_fp32_dest_acc_en>();
+    // ROW/COL/SCALAR read SrcB; unpack-to-dest and NONE read SrcA. One operand, so both slots match.
+    constexpr auto desc = LLKOperand<Format, Shape>::descriptor;
+    UNPACK((llk_unpack_config<is_fp32_dest_acc_en, desc, desc>()));
     UNPACK((llk_unpack_A_init<
-            LLKOperand<Format, Shape>::descriptor,
+            desc,
             is_fp32_dest_acc_en,
             bcast_type,
             false /*acc_to_dest*/,
             EltwiseBinaryReuseDestType::NONE,
             enable_unpack_to_dest>()));
-    MATH((llk_math_eltwise_unary_datacopy_init<
-          LLKOperand<Format, Shape>::descriptor,
-          dcopy,
-          is_fp32_dest_acc_en,
-          bcast_type>()));
+    MATH((llk_math_config<is_fp32_dest_acc_en, desc, desc, true /*datacopy_zero_flag*/>()));
+    MATH((llk_math_eltwise_unary_datacopy_init<desc, dcopy, is_fp32_dest_acc_en, bcast_type>()));
 }
 
 // clang-format off
@@ -171,14 +172,18 @@ template <EltwiseBinaryType tBcastOp, BroadcastType tBcastDim, DataFormat AForma
 ALWI void bcast_init(LLKOperand<AFormat, AShape> /*a*/) {
     static_assert(is_legal_tile_shape(AShape), "bcast_init: illegal tile shape for operand A.");
     static_assert(tBcastDim != BroadcastType::NONE, "bcast_init: use add/sub/mul_init for BroadcastType::NONE.");
+    // Operand B is not a parameter yet. Both sources are programmed from A (same-format callers).
+    constexpr auto desc = LLKOperand<AFormat, AShape>::descriptor;
     // ADD/SUB use LoFi (no fidelity multiplier), MUL uses MATH_FIDELITY; the ternary must stay inside MATH()
     // since MATH_FIDELITY is a MATH-thread-only macro.
+    MATH((llk_math_config<DST_ACCUM_MODE, desc, desc>()));
     MATH((llk_math_eltwise_binary_init<
-          LLKOperand<AFormat, AShape>::descriptor,
+          desc,
           tBcastOp,
           tBcastDim,
           (tBcastOp == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi>()));
-    UNPACK((llk_unpack_AB_init<LLKOperand<AFormat, AShape>::descriptor, tBcastDim>(ckernel::Transpose::None)));
+    UNPACK((llk_unpack_config<DST_ACCUM_MODE, desc, desc>()));
+    UNPACK((llk_unpack_AB_init<desc, tBcastDim>(ckernel::Transpose::None)));
 }
 
 // clang-format off
