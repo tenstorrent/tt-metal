@@ -22,15 +22,16 @@ def default_page_params(max_seq_len, users_per_row):
     }
 
 
-def _env_setup(kv_dtype):
+def _env_setup(kv_dtype, batch=None, max_seq_len=None, mesh_rows=4):
+    """Build-time environment. The spec default of this batch size (tt/spec_policy.py, the same resolution the demo and ``Generator.enable_spec`` use) decides DSV41_RING_ROWS=288
+    (read by the pool at build / reconfigure time; only when spec decode will run) and DSV41_SPEC_ROWS (B >= 64 opt-in).
+    """
     import os
 
-    if (
-        int(os.environ.get("DSV41_SPEC", "0")) > 0
-    ):  # speculative decoding needs the window ring to hold 128 + k rows (tt/spec_paged.py RING_SPEC)
-        os.environ.setdefault(
-            "DSV41_RING_ROWS", "288"
-        )  # >= 128 + 127 (replay warm-up window of the drafter seeding) + k
+    if batch is not None:
+        from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy
+
+        spec_policy.resolve_apply(batch, mesh_rows, max_seq_len)
     if os.environ.get("DSV41_POOL_DTYPE", "bf16") == "fp8":  # fp8_e4m3 KV pool (halves the pool: batch 128 at 64k)
         kv_dtype = ttnn.fp8_e4m3
     return kv_dtype
@@ -50,7 +51,7 @@ def create_tt_model(
 
     from models.demos.blackhole.deepseek_v41_flash.tt.dsv41_model import Model
 
-    kv_dtype = _env_setup(kv_dtype)
+    kv_dtype = _env_setup(kv_dtype, max_batch_size, max_seq_len, mesh_device.shape[0])
 
     args = DSV41ModelArgs(mesh_device, max_batch_size, max_seq_len, layer_ids, paged_attention_config)
     if paged_attention_config is not None:
@@ -81,7 +82,7 @@ def reconfigure_tt_model(
     state is released and rebuilt for ``max_batch_size`` / ``max_seq_len`` while the weights stay on the device (``Model.reconfigure``). Takes minutes
     instead of the 60-90 minutes of a full build and does not run out of DRAM like a second ``create_tt_model`` in the same process.
     """
-    kv_dtype = _env_setup(kv_dtype)
+    kv_dtype = _env_setup(kv_dtype, max_batch_size, max_seq_len, mesh_device.shape[0])
     args = DSV41ModelArgs(mesh_device, max_batch_size, max_seq_len, layer_ids, paged_attention_config)
     assert list(args.layer_ids) == list(model.layer_ids), "reconfigure keeps the weights: the layer set cannot change"
     if paged_attention_config is not None:
