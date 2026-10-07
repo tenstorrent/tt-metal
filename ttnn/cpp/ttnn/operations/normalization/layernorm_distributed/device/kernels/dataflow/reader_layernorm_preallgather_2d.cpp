@@ -51,7 +51,7 @@ void kernel_main() {
     DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
     // On the merge core: counts the partials that have landed in its gather buffer for the current row.
     Semaphore reducer_sem(sem::reducer);
-    // On the other cores: set by the merge core when its gather buffer can take this core's next partial.
+    // On the other cores: incremented by the merge core when its gather buffer can take this core's next partial.
     Semaphore gather_free_sem(sem::gather_free);
 
     // ublocks size defined in tiles

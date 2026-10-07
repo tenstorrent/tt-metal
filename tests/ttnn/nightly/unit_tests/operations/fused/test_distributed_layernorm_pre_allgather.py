@@ -1062,12 +1062,12 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     )
 
 
-# Shapes that give a core of the 2D core grid more than one tile row. The 2D grid splits the tile rows over
-# the largest divisor of their count that is at most grid.y, so a tile-row count only gives several rows per
-# core if that divisor is smaller than the count. 14 and 21 tile rows have 7 as that divisor on grids with 7
-# to 13 rows, and 32 tile rows have 8 on grids with 8 to 15 rows, so these shapes keep 2, 3 or 4 tile rows
-# per core across Wormhole and Blackhole grids. The widths split each tile row over 2, 4 or 8 cores, or over
-# 1 core, in which case the merge core has no other cores in its column.
+# Shapes that give a core of the 2D core grid more than one tile row. The 2D grid splits the tile rows over the
+# largest divisor of their count that is at most grid.y, so a tile-row count only gives several rows per core if
+# that divisor is smaller than the count. 14 and 21 tile rows have 7 as that divisor on grids with 7 to 13 rows,
+# and 32 tile rows have 8 on grids with 8 to 15 rows, so on grids with 7 to 13 rows these shapes give every core
+# 2, 3 or 4 tile rows, except 32 tile rows on a 7-row grid, which gives 8. The widths split each tile row over
+# 2, 4 or 8 cores, or over 1 core, in which case the merge core has no other cores in its column.
 PRE_ALL_GATHER_2D_MULTI_ROW_SHAPES = [
     (1, 1, 448, 64),
     (1, 1, 672, 256),
@@ -1202,8 +1202,10 @@ def test_rms_norm_pre_all_gather_2d_bfloat16_multiple_tile_rows(device, shape, u
     )
     actual = ttnn.to_torch(tt_out)
 
-    # col 0 = sum(x^2). The bfloat16 output alone rounds by up to 2^-9 relative; the residual sum is also
-    # rounded to the intermediate format before squaring.
+    # col 0 = sum(x^2). bfloat16 has 8 significant bits, so the output alone is off by up to 2^-8 relative
+    # with round-to-nearest, or 2^-7 with truncation. Smaller errors come before that: with bfloat16 input
+    # the kernel reads its Float32 intermediates (the residual sum, x^2 and the per-core partial sums)
+    # through SrcA/SrcB, which rounds each to TF32, with 11 significant bits, about 2^-11 relative.
     ref_sumx2 = golden.pow(2).sum(dim=-1)
     tt_sumx2 = actual[..., 0].to(torch.float64)
     assert_numeric_metrics(
