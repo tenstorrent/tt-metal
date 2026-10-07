@@ -61,7 +61,7 @@ struct SerializedTensorBuffer {
 // pinned for device uploads (see `map_tensor_file`). Rewriting that file in place would change the loaded tensor's
 // contents under it, or kill its readers with SIGBUS where the new file is shorter, while uploads from a cached pin
 // kept sending the old pages. Replacing it leaves the old file intact until its last mapping goes away. When
-// `file_name` is a symlink, the file it points to is replaced, not the link.
+// `file_name` is a symlink, the link itself is replaced and the file it points to is left untouched.
 void write_tensor_file(
     const std::string& file_name,
     const flatbuffers::FlatBufferBuilder& builder,

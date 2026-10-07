@@ -149,18 +149,20 @@ def test_dump_tensor_replaces_an_existing_file_atomically(tmp_path):
     assert torch.equal(ttnn.to_torch(ttnn.load_tensor(str(file_name))), replacement)
 
 
-def test_dump_tensor_keeps_the_replaced_files_permissions(tmp_path):
-    """The temporary file is created with the destination's mode, so replacing a 0600 cache file
-    under umask 022 does not publish it as 0644; a new file still follows the umask."""
+@pytest.mark.parametrize("mode", [0o600, 0o664])
+def test_dump_tensor_keeps_the_replaced_files_permissions(tmp_path, mode):
+    """The temporary file gets the destination's exact mode, so under umask 022 replacing a 0600
+    cache file does not publish it as 0644, and replacing a 0664 one does not drop group write;
+    a new file still follows the umask."""
     file_name, torch_tensor = _dump_host_tensor(tmp_path)
-    file_name.chmod(0o600)
+    file_name.chmod(mode)
     old_umask = os.umask(0o022)
     try:
         _dump_host_tensor(tmp_path)
         fresh, _ = _dump_host_tensor(tmp_path, name="fresh.tensorbin")
     finally:
         os.umask(old_umask)
-    assert file_name.stat().st_mode & 0o777 == 0o600
+    assert file_name.stat().st_mode & 0o777 == mode
     assert fresh.stat().st_mode & 0o777 == 0o644
     assert torch.equal(ttnn.to_torch(ttnn.load_tensor(str(file_name))), torch_tensor)
 

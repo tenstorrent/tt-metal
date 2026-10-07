@@ -11,14 +11,12 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
-#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <system_error>
 #include <unistd.h>
 #include <utility>
 
@@ -95,25 +93,47 @@ uint64_t next_temp_file_id() {
     return counter.fetch_add(1, std::memory_order_relaxed);
 }
 
-// Creates a new file in the directory of `path`, named `<path>.tmp.<pid>.<n>`, and returns its descriptor and name.
+// A file created next to the file it will replace, open for writing.
+struct SiblingFile {
+    int fd = -1;
+    std::string path;
+};
+
+// Creates a new file in the directory of `path`, named `<path>.tmp.<pid>.<n>`.
 //
-// The file is created exclusively: containers sharing one cache can share a pid, so the name alone is not unique. It
-// takes the permissions of `path` when `path` exists, so replacing a restricted cache file does not widen access, and
-// is otherwise created 0666 under the umask, as fopen would create `path`. A writer killed outright leaves this file
-// behind; its name does not end in .tensorbin, so cache listings that glob for tensorbins never pick it up.
-std::pair<int, std::string> create_sibling_file(const std::string& path) {
-    mode_t mode = 0666;
+// The file is created exclusively: containers sharing one cache can share a pid, so the name alone is not unique. When
+// `path` exists, the file gets exactly its permission bits, so replacing a shared cache file neither widens nor
+// narrows access to it; otherwise it is created 0666 under the umask, as fopen would create `path`. A writer killed
+// outright leaves this file behind; its name does not end in .tensorbin, so cache listings that glob for tensorbins
+// never pick it up.
+SiblingFile create_sibling_file(const std::string& path) {
     struct stat path_stat{};
-    if (stat(path.c_str(), &path_stat) == 0) {
-        mode = path_stat.st_mode & 07777;
-    }
+    const bool path_exists = stat(path.c_str(), &path_stat) == 0;
+    const mode_t mode = path_exists ? (path_stat.st_mode & 0777) : 0666;
     while (true) {
-        std::string sibling = fmt::format("{}.tmp.{}.{}", path, getpid(), next_temp_file_id());
-        const int fd = open(sibling.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
-        if (fd != -1) {
-            return {fd, std::move(sibling)};
+        SiblingFile sibling{.path = fmt::format("{}.tmp.{}.{}", path, getpid(), next_temp_file_id())};
+        sibling.fd = open(sibling.path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
+        if (sibling.fd == -1) {
+            TT_FATAL(
+                errno == EEXIST,
+                "Cannot create a temporary file next to \"{}\": errno={} \"{}\"",
+                path,
+                errno,
+                strerror(errno));
+            continue;
         }
-        TT_FATAL(errno == EEXIST, "Cannot create \"{}\" for writing: errno={} \"{}\"", sibling, errno, strerror(errno));
+        // open() applies the umask to `mode`.
+        if (path_exists && fchmod(sibling.fd, mode) != 0) {
+            const int fchmod_errno = errno;
+            close(sibling.fd);
+            unlink(sibling.path.c_str());
+            TT_THROW(
+                "Cannot set the permissions of a temporary file next to \"{}\": errno={} \"{}\"",
+                path,
+                fchmod_errno,
+                strerror(fchmod_errno));
+        }
+        return sibling;
     }
 }
 
@@ -123,34 +143,30 @@ void write_tensor_file(
     const std::string& file_name,
     const flatbuffers::FlatBufferBuilder& builder,
     ttsl::Span<const SerializedTensorBuffer> buffers) {
-    // Resolve symlinks, so the rename below replaces the file a link points to rather than the link. A path that does
-    // not resolve, such as a file that does not exist yet, is written as given.
-    std::error_code resolve_error;
-    std::filesystem::path target = std::filesystem::canonical(file_name, resolve_error);
-    if (resolve_error) {
-        target = file_name;
-    }
-
-    auto [fd, temp_name] = create_sibling_file(target.string());
-    auto remove_temp_file = ttsl::make_cleanup([&temp_name = temp_name]() { unlink(temp_name.c_str()); });
+    SiblingFile temp = create_sibling_file(file_name);
+    auto remove_temp_file = ttsl::make_cleanup([&temp]() { unlink(temp.path.c_str()); });
 
     auto close_file = [](FILE* file) { fclose(file); };
-    std::unique_ptr<FILE, decltype(close_file)> file(fdopen(fd, "wb"));
+    std::unique_ptr<FILE, decltype(close_file)> file(fdopen(temp.fd, "wb"));
     if (file == nullptr) {
         const int fdopen_errno = errno;
-        close(fd);
-        TT_THROW("Cannot open \"{}\" for writing: errno={} \"{}\"", temp_name, fdopen_errno, strerror(fdopen_errno));
+        close(temp.fd);
+        TT_THROW(
+            "Cannot open a temporary file next to \"{}\" for writing: errno={} \"{}\"",
+            file_name,
+            fdopen_errno,
+            strerror(fdopen_errno));
     }
 
     write_tensor_contents(file.get(), file_name, builder, buffers);
     // Close before publishing: a deferred write error (ENOSPC, a network file system) surfaces at fclose, and only a
     // fully written file may be renamed into place.
-    TT_FATAL(fclose(file.release()) == 0, "Failed to write \"{}\": errno={} \"{}\"", temp_name, errno, strerror(errno));
+    TT_FATAL(fclose(file.release()) == 0, "Failed to write \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));
     TT_FATAL(
-        rename(temp_name.c_str(), target.c_str()) == 0,
+        rename(temp.path.c_str(), file_name.c_str()) == 0,
         "Failed to rename \"{}\" to \"{}\": errno={} \"{}\"",
-        temp_name,
-        target.string(),
+        temp.path,
+        file_name,
         errno,
         strerror(errno));
     std::move(remove_temp_file).cancel();

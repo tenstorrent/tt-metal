@@ -539,24 +539,6 @@ TEST(TensorSerializationOverwriteTest, OverwritingOverlappedTensorsFileKeepsLoad
     EXPECT_EQ(reloaded_views[0].fused_tensor.to_vector<uint32_t>(), replacement_data);
 }
 
-// Replacing the file must not replace a symlink to it: the dump goes to the file the link points to.
-TEST(TensorSerializationOverwriteTest, OverwritingSymlinkReplacesItsTarget) {
-    TemporaryFile target_file("overwrite_target.tensorbin");
-    TemporaryFile link_file("overwrite_link.tensorbin");
-    const ttnn::Shape shape{1, 1, 32, 32};
-    const std::vector<uint32_t> original_data(shape.volume(), 1);
-    const std::vector<uint32_t> replacement_data(shape.volume(), 2);
-
-    dump_tensor_flatbuffer(
-        target_file.string(), Tensor::from_vector(original_data, get_tensor_spec(shape, DataType::UINT32)));
-    std::filesystem::create_symlink(target_file.path(), link_file.path());
-    dump_tensor_flatbuffer(
-        link_file.string(), Tensor::from_vector(replacement_data, get_tensor_spec(shape, DataType::UINT32)));
-
-    EXPECT_TRUE(std::filesystem::is_symlink(link_file.path()));
-    EXPECT_EQ(load_tensor_flatbuffer(target_file.string()).to_vector<uint32_t>(), replacement_data);
-}
-
 // Returns the permission column of the /proc/self/maps entry that contains `address` -- e.g. "r--s", where the
 // fourth character is 's' for a shared mapping and 'p' for a private one -- or nullopt if no entry contains it.
 std::optional<std::string> mapping_permissions(uintptr_t address) {
