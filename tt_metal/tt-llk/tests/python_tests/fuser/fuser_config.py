@@ -234,31 +234,36 @@ class FuserConfig(TestConfig):
             runs.append(profiler_data)
 
         result = Profiler.STATS_FUNCTION[run_type](ProfilerData.concat(runs))
-        case_key = sha256(self.global_config.test_name.encode()).hexdigest()
+        test_name = self.global_config.test_name
+        case_key = sha256(test_name.encode()).hexdigest()
         parts_dir = self.PERF_DATA_DIR / "fuser" / session_id / case_key
         parts_dir.mkdir(parents=True, exist_ok=True)
-        with FileLock(parts_dir / "report.lock"):
+        parts = [parts_dir / f"{mode.name}.csv" for mode in PERF_RUN_TYPES_QUASAR[0]]
+        report_lock = FileLock(parts_dir / "report.lock")
+
+        with report_lock:
             result.to_csv(parts_dir / f"{run_type.name}.csv", index=False)
-            parts = [
-                parts_dir / f"{mode.name}.csv" for mode in PERF_RUN_TYPES_QUASAR[0]
-            ]
             if not all(path.exists() for path in parts):
                 return
+            all_results = [
+                pd.read_csv(path, float_precision="round_trip") for path in parts
+            ]
 
-            results = reduce(
-                lambda left, right: pd.merge(
-                    left, right, on=MARKER, how="outer", validate="1:1"
-                ),
-                [pd.read_csv(path, float_precision="round_trip") for path in parts],
-            )
-            results[TEST_NAME_COLUMN] = self.global_config.test_name
-            results[LOOP_FACTOR_COLUMN] = self.global_config.loop_factor
-            perf_report = PerfReport()
-            perf_report.append(results)
-            logger.info("Perf results:\n{}", results)
+        results = reduce(
+            lambda left, right: pd.merge(
+                left, right, on=MARKER, how="outer", validate="1:1"
+            ),
+            all_results,
+        )
+        results[TEST_NAME_COLUMN] = test_name
+        results[LOOP_FACTOR_COLUMN] = self.global_config.loop_factor
+        perf_report = PerfReport()
+        perf_report.append(results)
+        logger.info("Perf results:\n{}", results)
 
-            # A stable shard name keeps the output independent of worker scheduling.
-            csv_prefix = f"{self.global_config.test_name.replace('/', '_')}_fused_test"
+        # A stable shard name keeps the output independent of worker scheduling.
+        csv_prefix = f"{test_name.replace('/', '_')}_fused_test"
+        with report_lock:
             perf_report.dump_csv(f"{csv_prefix}.master.csv")
             perf_report.post_process()
             perf_report.dump_csv(f"{csv_prefix}.master.post.csv")
