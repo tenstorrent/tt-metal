@@ -263,8 +263,9 @@ inline __attribute__((always_inline)) void write()
  * Assignments with the same CFG scope and register word address are combined
  * across the entire call, including assignments separated by @ref from_gpr.
  * Field groups and individual GPR transfers are emitted in first-occurrence order.
- * With Access::TensixCfgUnit, each register-word group uses TTI instructions
- * when all its assignments are compile-time constants; otherwise it uses TT instructions.
+ * With Access::TensixCfgUnit, state-CFG groups use TTI instructions for bytes
+ * containing only compile-time values and TT instructions for bytes containing runtime values.
+ * Thread-CFG groups use TTI instructions only when all assignments are compile-time constants.
  * Use separate calls when hardware programming order matters.
  *
  * @note Combining assignments saves instructions only when they share a register

@@ -37,7 +37,8 @@ inline constexpr void rmwcib_check_address()
 }
 
 // Runtime values are shifted into position before emitting the selected byte lanes.
-template <std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask>
+// ConstantData is already positioned. Bytes without runtime bits use immediate emission.
+template <std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask, std::uint32_t RuntimeMask = Mask, std::uint32_t ConstantData = 0>
 inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t value)
 {
     rmwcib_check_address<Addr>();
@@ -46,19 +47,47 @@ inline __attribute__((always_inline)) void rmw_write_word(const std::uint32_t va
 
     if constexpr ((Mask & 0x000000ffu) != 0u)
     {
-        TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, Addr);
+        if constexpr ((RuntimeMask & 0x000000ffu) != 0u)
+        {
+            TT_RMWCIB0((Mask >> 0) & 0xffu, (write_data >> 0) & 0xffu, Addr);
+        }
+        else
+        {
+            TTI_RMWCIB0((Mask >> 0) & 0xffu, (ConstantData >> 0) & 0xffu, Addr);
+        }
     }
     if constexpr ((Mask & 0x0000ff00u) != 0u)
     {
-        TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, Addr);
+        if constexpr ((RuntimeMask & 0x0000ff00u) != 0u)
+        {
+            TT_RMWCIB1((Mask >> 8) & 0xffu, (write_data >> 8) & 0xffu, Addr);
+        }
+        else
+        {
+            TTI_RMWCIB1((Mask >> 8) & 0xffu, (ConstantData >> 8) & 0xffu, Addr);
+        }
     }
     if constexpr ((Mask & 0x00ff0000u) != 0u)
     {
-        TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, Addr);
+        if constexpr ((RuntimeMask & 0x00ff0000u) != 0u)
+        {
+            TT_RMWCIB2((Mask >> 16) & 0xffu, (write_data >> 16) & 0xffu, Addr);
+        }
+        else
+        {
+            TTI_RMWCIB2((Mask >> 16) & 0xffu, (ConstantData >> 16) & 0xffu, Addr);
+        }
     }
     if constexpr ((Mask & 0xff000000u) != 0u)
     {
-        TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, Addr);
+        if constexpr ((RuntimeMask & 0xff000000u) != 0u)
+        {
+            TT_RMWCIB3((Mask >> 24) & 0xffu, (write_data >> 24) & 0xffu, Addr);
+        }
+        else
+        {
+            TTI_RMWCIB3((Mask >> 24) & 0xffu, (ConstantData >> 24) & 0xffu, Addr);
+        }
     }
 }
 
@@ -237,6 +266,10 @@ inline __attribute__((always_inline)) void write_planned_operation(
         {
             // Preserve the single-field path: shift the value only at emission.
             write_word<A, group.scope, group.addr, Operation::shift, group.mask>(operation.value, cfg);
+        }
+        else if constexpr (A == Access::TensixCfgUnit && group.scope == RegisterScope::State)
+        {
+            rmw_write_word<group.addr, 0, group.mask, group.runtime_mask, group.data>(group.data | data[group_index]);
         }
         else
         {
