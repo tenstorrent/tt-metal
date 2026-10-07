@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import contextmanager
+
 import torch
 from loguru import logger
 
@@ -494,6 +496,50 @@ class DropInVisionTransformer(torch.nn.Module):
         return final_output_sharded, deepstack_visual_embeds_sharded
 
 
+class HostEmbedding(LightweightModule):
+    """Token embedding whose table stays in host memory; looks up the rows on the host and uploads only them.
+
+    On Quasar the bf16 [151936, 2560] table (~778 MB) does not fit in DRAM next to the bf16 LM head (QUASAR_GAPS Q14).
+    Returns what ttnn.embedding + unsqueeze_to_4D would: [1, 1, num_tokens, dim], bf16, TILE.
+    """
+
+    def __init__(self, mesh_device, args, weight_cache_path, state_dict, dtype, embed_scale=None):
+        super().__init__()
+        self.mesh_device = mesh_device
+        self.table = state_dict[args.get_state_dict_prefix("", None) + "tok_embeddings.weight"].to(torch.bfloat16)
+        self.embed_scale = embed_scale
+
+    def forward(self, x, memory_config=None):
+        ids = ttnn.to_torch(ttnn.get_device_tensors(x)[0]) if isinstance(x, ttnn.Tensor) else x
+        rows = self.table[ids.to(torch.long).flatten()]
+        if self.embed_scale is not None:
+            rows = (rows.float() * self.embed_scale).to(torch.bfloat16)
+        return ttnn.from_torch(
+            rows.reshape(1, 1, rows.shape[0], rows.shape[1]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+
+@contextmanager
+def _embedding_class(host):
+    """Make the base Transformer build HostEmbedding instead of the device table (it has no embedding-class hook)."""
+    import models.tt_transformers.tt.model as tt_model
+
+    if not host:
+        yield
+        return
+    saved = tt_model.Embedding, tt_model.ScaledEmbedding
+    tt_model.Embedding = tt_model.ScaledEmbedding = HostEmbedding
+    try:
+        yield
+    finally:
+        tt_model.Embedding, tt_model.ScaledEmbedding = saved
+
+
 class Transformer(TTTransformer):
     # --- On-device greedy decode correctness on batch-32 (#48037) ---
     # Symptom: on-device sampling produced gibberish at batch-32 (BERTScore F1 ~0.34)
@@ -531,16 +577,17 @@ class Transformer(TTTransformer):
         args.model_config["SAMPLING_AG_CONFIG"] = ag_cfg
 
         # Call parent constructor with vision-specific classes
-        super().__init__(
-            args=args,
-            dtype=dtype,
-            mesh_device=mesh_device,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
-            rope_setup_class=RotarySetup,
-        )
+        with _embedding_class(getattr(args, "host_embedding", False)):
+            super().__init__(
+                args=args,
+                dtype=dtype,
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
+                rope_setup_class=RotarySetup,
+            )
 
     def _prepare_cos_sin(self, rot_mats):
         cos_matrix = rot_mats[0]
