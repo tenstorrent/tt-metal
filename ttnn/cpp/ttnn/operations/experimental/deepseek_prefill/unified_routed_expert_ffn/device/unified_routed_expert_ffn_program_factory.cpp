@@ -381,13 +381,24 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //   * intermediates (gate/up_intermed, activated) are Bfp8_b: post-activation
     //     per-element values feeding the next matmul, not accumulators, so
     //     1KB/tile (half the bf16 cost) is enough and saves L1.
-    const tt::DataFormat intermed_df = tt::DataFormat::Bfp8_b;
+    // MiMo patch (env switches, default = original bfp8 behaviour):
+    //   MOE_UNI_BF16_INTERMED=1 -> gate/up_intermed, activated and cb_in0_down_full are Float16_b
+    //   MOE_UNI_BF16_X=1        -> cb_in0_x (tilized dispatched activations on the row-major path) is Float16_b
+    //   MOE_UNI_FIDELITY=lofi|hifi2|hifi4 -> compute math fidelity (default LoFi)
+    // bfp8 activations cost real accuracy on layers with outlier channels (MiMo L5: PCC 0.993 vs 0.9999 with bf16).
+    const auto env_flag = [](const char* n) {
+        const char* v = std::getenv(n);
+        return v != nullptr && v[0] == '1';
+    };
+    const tt::DataFormat intermed_df =
+        env_flag("MOE_UNI_BF16_INTERMED") ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b;
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
 
     // See in0_x_ts above: cb_in0_x is bf8_b on the row-major path (tilize output),
     // else it matches x's dtype (bf8_b on the TILE path).
-    const tt::DataFormat in0_x_df = op.x_is_row_major ? tt::DataFormat::Bfp8_b : x_df;
+    const tt::DataFormat in0_x_df =
+        op.x_is_row_major ? (env_flag("MOE_UNI_BF16_X") ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp8_b) : x_df;
     const uint32_t in0_x_tile_size = tt::tile_size(in0_x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
     const uint32_t up_tile_size = tt::tile_size(up_df);
@@ -1157,8 +1168,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     compute_kernel_desc.compile_time_args = std::move(compute_ct_args);
     compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
     compute_kernel_desc.defines = std::move(compute_defines);
+    MathFidelity mimo_fidelity = MathFidelity::LoFi;
+    if (const char* fv = std::getenv("MOE_UNI_FIDELITY")) {
+        const std::string f(fv);
+        mimo_fidelity = f == "hifi2" ? MathFidelity::HiFi2 : f == "hifi4" ? MathFidelity::HiFi4 : MathFidelity::LoFi;
+    }
     compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
-        .math_fidelity = MathFidelity::LoFi,
+        .math_fidelity = mimo_fidelity,
         .fp32_dest_acc_en = kFp32DestAccEn,
         .dst_full_sync_en = false,
         .math_approx_mode = false,
