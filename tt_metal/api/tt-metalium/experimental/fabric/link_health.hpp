@@ -80,13 +80,15 @@ struct LinkInfo {
     MeshId dst_mesh() const { return dst_node.mesh_id; }
 };
 
-// Routing planes per (node, direction), before and after fabric's own downgrade. Filled by the
-// control plane, which is the only thing that knows the post-trim numbers; LinkHealth just compares
-// them. Expected comes from the mesh graph, live from the channel map after the row/column minimum,
-// the trim and the cross-host merge.
+// Routing planes per (node, direction). Expected is the mesh-graph channel count. Live is what
+// fabric settled on after the row/column minimum. psd_cables, when set for a direction, is the
+// live cable count on that edge before trim; classify uses it instead of recounting the descriptor.
+// Tests set it to force a mesh-graph / factory / live combination. Production leaves it empty and
+// the live descriptor is counted directly, which is the same number on every rank.
 struct RoutingPlaneSnapshot {
     std::unordered_map<FabricNodeId, std::unordered_map<RoutingDirection, std::size_t>> expected_planes;
     std::unordered_map<FabricNodeId, std::unordered_map<RoutingDirection, std::size_t>> live_planes;
+    std::unordered_map<FabricNodeId, std::unordered_map<RoutingDirection, std::size_t>> psd_cables;
 };
 
 // The set of downed links for one (expected descriptor, live descriptor) pair, with indexes over it.
@@ -112,10 +114,13 @@ public:
     LinkHealth(LinkHealth&&) = delete;
     LinkHealth& operator=(LinkHealth&&) = delete;
 
-    // Move the intra-mesh holes that sit on routing planes fabric already downgraded away out of the
-    // active set. They are real unplugged cables, so they stay documented, but fabric does not route
-    // on those planes and must not reroute for them. Runs after the plane trim and the cross-host
-    // merge, so every rank classifies identically. Rebuilds the indexes.
+    // Split factory holes against the mesh-graph count, per intra-mesh direction and per intermesh
+    // pair. A hole the mesh graph still needs stays in get_downed_links(). A missing factory cable
+    // past that count goes to get_unused_downed_links(). A live cable is not filed in either set.
+    // Intra-mesh channels the mesh graph asks for beyond the factory descriptor are a routing-plane
+    // downgrade. Intermesh channels past the factory descriptor are not registered. Neither becomes
+    // a link record. Cables the mesh graph does not use at all are already in the unused set.
+    // Rebuilds the indexes.
     void classify_unused_from_routing_planes(const RoutingPlaneSnapshot& snapshot);
 
     bool has_downed_links() const { return !downed_.empty(); }
@@ -145,10 +150,8 @@ public:
 
     std::vector<chan_id_t> get_downed_eth_chans_in_direction(const FabricNodeId& node, RoutingDirection dir) const;
     bool has_downed_link_in_direction(const FabricNodeId& node, RoutingDirection dir) const;
-    // Capacity lost on planes fabric still uses. Zero for a direction that was downgraded, because
-    // its holes moved to the unused set. Intra-mesh only: an intermesh record has no direction, so
-    // this is always zero for one, and there is no intermesh equivalent -- that would be a
-    // requested-versus-resolved shortfall at a mesh boundary, which is not a cable-level number.
+    // Active downed records in this direction: factory holes the mesh graph still needs. Factory
+    // cables past the mesh-graph count are in the unused set and are not counted. Intra-mesh only.
     std::size_t get_num_downed_routing_planes_in_direction(const FabricNodeId& node, RoutingDirection dir) const;
 
     std::vector<chan_id_t> get_downed_intramesh_eth_chans(const FabricNodeId& node) const;
@@ -156,10 +159,9 @@ public:
 
     std::vector<LinkInfo> get_downed_links(LinkScope scope) const;
     std::vector<LinkInfo> get_downed_intramesh_links() const;
-    // Not empty when factory-declared intermesh cables are gone. Pairing only ever chose among live
-    // cables, so it never assigned these a port and their directions stay NONE -- but they are still
-    // downed links, and deliberately not filtered against the post-pairing mesh graph, which knows
-    // only about links that came up.
+    // Factory-declared intermesh cables the mesh graph requests between those two meshes. A
+    // cross-mesh cable the descriptor does not connect is unused instead. Pairing only ever chose
+    // among live cables, so these still have no direction.
     std::vector<LinkInfo> get_downed_intermesh_links() const;
 
     std::vector<LinkInfo> get_downed_links_between(const FabricNodeId& src, const FabricNodeId& dst) const;

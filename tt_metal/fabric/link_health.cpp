@@ -5,7 +5,9 @@
 #include <tt-metalium/experimental/fabric/link_health.hpp>
 
 #include <algorithm>
-#include <stdexcept>
+#include <cstdint>
+#include <map>
+#include <string>
 #include <tuple>
 #include <utility>
 
@@ -39,6 +41,34 @@ std::pair<RoutingDirection, RoutingDirection> directions_from_mesh_graph(
     return {direction(src, dst), direction(dst, src)};
 }
 
+// The mesh graph lists a connection in the direction the descriptor wrote it. A downed cable is
+// stored in both directions, so either spelling means the graph uses that mesh pair.
+bool mesh_pair_requested(const MeshGraph& mesh_graph, MeshId src, MeshId dst) {
+    const auto contains_pair = [](const auto& table, uint32_t from, uint32_t to) {
+        const auto by_src = table.find(from);
+        return by_src != table.end() && by_src->second.contains(to);
+    };
+    const auto src_id = *src;
+    const auto dst_id = *dst;
+    const auto& relaxed = mesh_graph.get_requested_intermesh_connections();
+    const auto& strict = mesh_graph.get_requested_intermesh_ports();
+    return contains_pair(relaxed, src_id, dst_id) || contains_pair(relaxed, dst_id, src_id) ||
+           contains_pair(strict, src_id, dst_id) || contains_pair(strict, dst_id, src_id);
+}
+
+// Active downed links are the missing cables the mesh graph routes over. An intra-mesh cable is
+// one of those when the two chips share a grid edge. An inter-mesh cable is one of those when the
+// descriptor requests a connection between its two meshes.
+bool used_by_mesh_graph(const MeshGraph& mesh_graph, const LinkInfo& record) {
+    if (record.is_intramesh()) {
+        return record.src_direction != RoutingDirection::NONE;
+    }
+    if (record.is_intermesh()) {
+        return mesh_pair_requested(mesh_graph, record.src_mesh(), record.dst_mesh());
+    }
+    return false;
+}
+
 std::size_t count_directed(const tt::tt_metal::AsicTopology& links) {
     std::size_t total = 0;
     for (const auto& [src, edges] : links) {
@@ -47,6 +77,37 @@ std::size_t count_directed(const tt::tt_metal::AsicTopology& links) {
         }
     }
     return total;
+}
+
+// One direction of one chip. Missing factory cables the mesh graph still needs stay downed. Missing
+// factory cables past that count are unused. A live cable is not a downed link, so a live factory
+// cable past the mesh-graph count stays out of both sets. When the mesh graph asks for more than
+// the factory descriptor has, every missing factory cable stays downed. The extra channels are not created.
+void split_edge_by_mesh_graph_count(
+    std::vector<LinkInfo> missing,
+    const std::vector<tt::tt_metal::EthConnection>& live_connections,
+    std::size_t mesh_graph_count,
+    std::optional<std::size_t> psd_override,
+    std::vector<LinkInfo>& downed,
+    std::vector<LinkInfo>& unused) {
+    std::sort(
+        missing.begin(), missing.end(), [](const LinkInfo& a, const LinkInfo& b) { return a.src_chan < b.src_chan; });
+
+    const std::size_t psd = psd_override.value_or(live_connections.size());
+    const std::size_t fsd = psd + missing.size();
+
+    if (mesh_graph_count > fsd) {
+        for (auto& record : missing) {
+            downed.push_back(std::move(record));
+        }
+        return;
+    }
+
+    const std::size_t still_needed = mesh_graph_count > psd ? mesh_graph_count - psd : 0;
+    for (std::size_t i = 0; i < missing.size(); ++i) {
+        auto& destination = i < still_needed ? downed : unused;
+        destination.push_back(std::move(missing[i]));
+    }
 }
 
 }  // namespace
@@ -156,6 +217,20 @@ void LinkHealth::refresh(const TopologyMapper* mapper, const PhysicalSystemDescr
         }
     }
 
+    // Cables the mesh graph does not route over stay documented, in the unused set. The downed
+    // API is only the holes a reroute can act on.
+    std::vector<LinkInfo> used;
+    used.reserve(downed_.size());
+    for (auto& record : downed_) {
+        const bool used_by_graph = used_by_mesh_graph(mapper_->get_mesh_graph(), record);
+        if (used_by_graph) {
+            used.push_back(std::move(record));
+        } else {
+            unused_downed_.push_back(std::move(record));
+        }
+    }
+    downed_ = std::move(used);
+
     rebuild_indexes();
 }
 
@@ -191,44 +266,124 @@ void LinkHealth::rebuild_indexes() {
 }
 
 void LinkHealth::classify_unused_from_routing_planes(const RoutingPlaneSnapshot& snapshot) {
-    auto planes = [](const auto& table, const FabricNodeId& node, RoutingDirection dir) -> std::optional<std::size_t> {
+    auto mesh_graph_count_for = [](const auto& table, const FabricNodeId& node, RoutingDirection dir) {
         const auto by_node = table.find(node);
         if (by_node == table.end()) {
-            return std::nullopt;
+            return std::optional<std::size_t>{};
         }
         const auto by_dir = by_node->second.find(dir);
-        return by_dir == by_node->second.end() ? std::nullopt : std::optional{by_dir->second};
+        return by_dir == by_node->second.end() ? std::optional<std::size_t>{} : std::optional{by_dir->second};
     };
 
-    // Fabric has already dropped a plane when it ends up routing on fewer than the mesh graph asked
-    // for. A hole on such a plane is a real unplugged cable that fabric will never route over, so it
-    // must not drive rerouting -- but it still gets documented.
-    auto downgraded = [&](const LinkInfo& record) {
-        if (!record.is_intramesh() || record.src_direction == RoutingDirection::NONE) {
-            // Intermesh holes stay active by decision, and a record with no direction has no plane
-            // count to compare against.
-            return false;
-        }
-        const auto expected = planes(snapshot.expected_planes, record.src_node, record.src_direction);
-        const auto live = planes(snapshot.live_planes, record.src_node, record.src_direction);
-        if (!expected.has_value() || !live.has_value()) {
-            // Nothing said about this direction, so nothing was downgraded.
-            return false;
-        }
-        return *live < *expected;
-    };
-
-    std::vector<LinkInfo> active;
-    active.reserve(downed_.size());
-    for (auto& record : downed_) {
-        if (downgraded(record)) {
-            unused_downed_.push_back(std::move(record));
-        } else {
-            active.push_back(std::move(record));
+    // Live cables between two meshes, counted in both directions. A cable is stored once each way.
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::size_t> live_intermesh;
+    for (const auto& [host, topology] : live_->get_system_graph().asic_connectivity_graph) {
+        (void)host;
+        for (const auto& [asic, edges] : topology) {
+            const auto src_address = live_->find_physical_node_id(asic);
+            if (!src_address.has_value()) {
+                continue;
+            }
+            const auto src_node = mapper_->find_fabric_node_id_from_physical_node_id(*src_address);
+            if (!src_node.has_value()) {
+                continue;
+            }
+            for (const auto& [peer, connections] : edges) {
+                const auto dst_address = live_->find_physical_node_id(peer);
+                if (!dst_address.has_value()) {
+                    continue;
+                }
+                const auto dst_node = mapper_->find_fabric_node_id_from_physical_node_id(*dst_address);
+                if (!dst_node.has_value() || src_node->mesh_id == dst_node->mesh_id) {
+                    continue;
+                }
+                live_intermesh[{*src_node->mesh_id, *dst_node->mesh_id}] += connections.size();
+            }
         }
     }
-    downed_ = std::move(active);
+    auto live_between = [&](std::uint32_t src_mesh, std::uint32_t dst_mesh) {
+        const auto forward = live_intermesh.find({src_mesh, dst_mesh});
+        const auto backward = live_intermesh.find({dst_mesh, src_mesh});
+        const std::size_t fwd = forward == live_intermesh.end() ? 0 : forward->second;
+        const std::size_t back = backward == live_intermesh.end() ? 0 : backward->second;
+        return std::max(fwd, back);
+    };
+    // The mesh graph stores a connection in one direction. Both ends of the cable use that count.
+    auto intermesh_count = [&](std::uint32_t src_mesh, std::uint32_t dst_mesh) {
+        const auto& table = mapper_->get_mesh_graph().get_requested_intermesh_connections();
+        auto lookup = [&](std::uint32_t from, std::uint32_t to) {
+            const auto by_src = table.find(from);
+            if (by_src == table.end()) {
+                return std::size_t{0};
+            }
+            const auto by_dst = by_src->second.find(to);
+            return by_dst == by_src->second.end() ? std::size_t{0} : by_dst->second;
+        };
+        return std::max(lookup(src_mesh, dst_mesh), lookup(dst_mesh, src_mesh));
+    };
 
+    // One direction of one chip, toward one neighbor. The two ends of a cable are separate groups.
+    struct EdgeKey {
+        FabricNodeId node{MeshId{0}, 0};
+        RoutingDirection dir = RoutingDirection::NONE;
+        AsicID dst{0};
+        bool operator==(const EdgeKey& other) const {
+            return node == other.node && dir == other.dir && dst == other.dst;
+        }
+    };
+    std::vector<std::pair<EdgeKey, std::vector<LinkInfo>>> edges;
+    std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<LinkInfo>> intermesh_edges;
+
+    std::vector<LinkInfo> downed;
+    downed.reserve(downed_.size());
+    for (auto& record : downed_) {
+        if (record.is_intermesh() && record.logical_resolved) {
+            intermesh_edges[{*record.src_mesh(), *record.dst_mesh()}].push_back(std::move(record));
+            continue;
+        }
+        // Direction NONE (a wrap the topology does not route) was already split in refresh().
+        const auto mesh_graph_count =
+            mesh_graph_count_for(snapshot.expected_planes, record.src_node, record.src_direction);
+        if (!record.is_intramesh() || record.src_direction == RoutingDirection::NONE || !mesh_graph_count.has_value()) {
+            downed.push_back(std::move(record));
+            continue;
+        }
+        const EdgeKey key{record.src_node, record.src_direction, record.dst_asic};
+        auto edge = std::find_if(edges.begin(), edges.end(), [&](const auto& entry) { return entry.first == key; });
+        if (edge == edges.end()) {
+            edges.push_back({key, {}});
+            edge = edges.end() - 1;
+        }
+        edge->second.push_back(std::move(record));
+    }
+
+    for (auto& [key, missing] : edges) {
+        const auto live = live_->get_eth_connections(missing.front().src_asic, key.dst);
+        split_edge_by_mesh_graph_count(
+            std::move(missing),
+            live,
+            *mesh_graph_count_for(snapshot.expected_planes, key.node, key.dir),
+            mesh_graph_count_for(snapshot.psd_cables, key.node, key.dir),
+            downed,
+            unused_downed_);
+    }
+
+    // Intermesh has no routing planes. A missing factory cable the mesh graph still needs stays
+    // downed. The rest of the factory-to-live mismatch is unused. Channels the factory never had
+    // are not registered and are not link records.
+    for (auto& [meshes, missing] : intermesh_edges) {
+        const auto [src_mesh, dst_mesh] = meshes;
+        const std::size_t psd = live_between(src_mesh, dst_mesh);
+        split_edge_by_mesh_graph_count(
+            std::move(missing),
+            std::vector<tt::tt_metal::EthConnection>{},
+            intermesh_count(src_mesh, dst_mesh),
+            psd,
+            downed,
+            unused_downed_);
+    }
+
+    downed_ = std::move(downed);
     rebuild_indexes();
 }
 

@@ -450,8 +450,10 @@ void MetalEnvImpl::teardown_fabric_config() {
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    if (!devices_still_open) {
-        this->get_control_plane().clear_fabric_context();
+    // Only clear a control plane that already exists. get_control_plane() would build one, and a
+    // STRICT build here rejects a mismatched factory descriptor before the caller has chosen a mode.
+    if (!devices_still_open && this->control_plane_) {
+        this->control_plane_->clear_fabric_context();
     }
 }
 
