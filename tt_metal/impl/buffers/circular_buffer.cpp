@@ -5,7 +5,6 @@
 #include <buffer.hpp>
 #include <circular_buffer.hpp>
 #include <global_circular_buffer.hpp>
-#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <array>
@@ -22,26 +21,6 @@ namespace tt::tt_metal {
 // We use 16 bits to store tiles_received and tiles_acked.
 static constexpr uint32_t cb_page_count_bits = 16;
 static constexpr uint32_t max_num_cb_pages = (1 << cb_page_count_bits) - 1;
-
-namespace {
-
-// Base address of a CB's backing buffer on the CB's cores. A per-core-allocated buffer sits at a different
-// address on each core, and Buffer::address() is only its first core's, while a CB has one address for all its
-// cores, so it is taken from the CB's own cores, which must agree. When the backing came from a MeshTensor, the
-// reference device's address is used on every device, so the devices must agree too.
-DeviceAddr cb_buffer_base_address(
-    const Buffer& buffer, const distributed::MeshBuffer* mesh_buffer, const CoreRangeSet& core_ranges) {
-    namespace per_core_allocation = experimental::per_core_allocation;
-    if (mesh_buffer != nullptr && per_core_allocation::is_per_core_allocation(*mesh_buffer)) {
-        return per_core_allocation::get_uniform_per_core_address(*mesh_buffer, core_ranges);
-    }
-    if (per_core_allocation::is_per_core_allocation(buffer)) {
-        return per_core_allocation::get_uniform_per_core_address(buffer, core_ranges);
-    }
-    return buffer.address();
-}
-
-}  // namespace
 
 // Dynamic CBs will be created with address_ initialized to globally allocated address
 // Static CBs will not have address set until their owning Program allocates them
@@ -222,24 +201,31 @@ void CircularBufferImpl::set_page_size(uint8_t buffer_index, uint32_t page_size)
 
 void CircularBufferImpl::set_global_buffer(const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
     // Reject a buffer this CB's cores cannot share before changing any backing-buffer state.
-    cb_buffer_base_address(buffer, nullptr, this->core_ranges_);
+    const DeviceAddr base_address =
+        experimental::per_core_allocation::get_cb_base_address(buffer, nullptr, this->core_ranges_);
     config_.set_globally_allocated_address_and_total_size(buffer, total_size, address_offset);
     global_mesh_buffer_ = nullptr;
-    assign_global_address();
+    set_global_base_address(base_address);
 }
 
 void CircularBufferImpl::set_global_buffer(const MeshTensor& tensor, uint32_t total_size, uint32_t address_offset) {
-    const Buffer& reference_buffer = *tensor.mesh_buffer().get_reference_buffer();
-    cb_buffer_base_address(reference_buffer, &tensor.mesh_buffer(), this->core_ranges_);
+    const distributed::MeshBuffer& mesh_buffer = tensor.mesh_buffer();
+    const Buffer& reference_buffer = *mesh_buffer.get_reference_buffer();
+    const DeviceAddr base_address =
+        experimental::per_core_allocation::get_cb_base_address(reference_buffer, &mesh_buffer, this->core_ranges_);
     config_.set_globally_allocated_address_and_total_size(reference_buffer, total_size, address_offset);
-    global_mesh_buffer_ = &tensor.mesh_buffer();
-    assign_global_address();
+    config_.shadow_global_mesh_buffer = &mesh_buffer;
+    global_mesh_buffer_ = &mesh_buffer;
+    set_global_base_address(base_address);
 }
 
 void CircularBufferImpl::assign_global_address() {
-    globally_allocated_address_ =
-        cb_buffer_base_address(*config_.shadow_global_buffer, global_mesh_buffer_, this->core_ranges_) +
-        config_.address_offset();
+    set_global_base_address(experimental::per_core_allocation::get_cb_base_address(
+        *config_.shadow_global_buffer, global_mesh_buffer_, this->core_ranges_));
+}
+
+void CircularBufferImpl::set_global_base_address(DeviceAddr base_address) {
+    globally_allocated_address_ = base_address + config_.address_offset();
     ++config_generation_;
 }
 

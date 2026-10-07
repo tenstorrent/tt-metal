@@ -268,14 +268,14 @@ void apply_resolved_bindings(
         (*current_data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
-        if (cb.requires_mesh_tensor) {
-            TT_FATAL(
-                cb.tensor_buffer_idx < current_mesh_tensors.size() && current_mesh_tensors[cb.tensor_buffer_idx],
-                "MeshTensor-backed CB binding at tensor slot {} requires the current MeshTensor",
-                cb.tensor_buffer_idx);
+        // Slots pushed as a bare Buffer (workload_descriptor.buffers, custom extractors) carry no MeshTensor, so
+        // they keep the Buffer path: per-core addresses are still resolved, only the cross-device check is skipped.
+        const MeshTensor* mesh_tensor = cb.tensor_backed && cb.tensor_buffer_idx < current_mesh_tensors.size()
+                                            ? current_mesh_tensors[cb.tensor_buffer_idx]
+                                            : nullptr;
+        if (mesh_tensor != nullptr) {
             auto circular_buffer = program.impl().get_circular_buffer(cb.cb_id);
-            circular_buffer->set_global_buffer(
-                *current_mesh_tensors[cb.tensor_buffer_idx], circular_buffer->size(), cb.address_offset);
+            circular_buffer->set_global_buffer(*mesh_tensor, circular_buffer->size(), cb.address_offset);
         } else {
             UpdateDynamicCircularBufferAddress(
                 program, cb.cb_id, *current_buffers[cb.tensor_buffer_idx], cb.address_offset);

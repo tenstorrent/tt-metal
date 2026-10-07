@@ -75,6 +75,8 @@ public:
     DeviceAddr config_address() const;
 
 private:
+    void set_global_base_address(DeviceAddr base_address);
+
     bool uses_buffer_index(uint32_t buffer_index) const;
 
     void validate_set_config_attributes();

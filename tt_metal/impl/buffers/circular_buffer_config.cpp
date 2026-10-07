@@ -195,7 +195,9 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const MeshTensor& tensor, uint32_t total_size) {
-    set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
+    const Buffer& reference_buffer = *tensor.mesh_buffer().get_reference_buffer();
+    set_backing_layout(reference_buffer, total_size, address_offset_);
+    this->shadow_global_buffer = &reference_buffer;
     this->shadow_global_mesh_buffer = &tensor.mesh_buffer();
     return *this;
 }
@@ -207,6 +209,13 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
 
 CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
+    set_backing_layout(buffer, total_size, address_offset);
+    this->shadow_global_buffer = &buffer;
+    this->shadow_global_mesh_buffer = nullptr;
+    return *this;
+}
+
+void CircularBufferConfig::set_backing_layout(const Buffer& buffer, uint32_t total_size, uint32_t address_offset) {
     if (not buffer.is_l1()) {
         TT_THROW("Only L1 buffers can have an associated circular buffer!");
     }
@@ -234,10 +243,7 @@ CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_t
     this->dynamic_cb_ = true;
     this->max_size_ = max_size;
     this->buffer_size_ = buffer.aligned_size();
-    this->shadow_global_buffer = &buffer;
-    this->shadow_global_mesh_buffer = nullptr;
     this->total_size_ = total_size;
-    return *this;
 }
 
 CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, const Tile& tile) {
@@ -301,9 +307,7 @@ uint32_t CircularBufferConfig::address_offset() const { return this->address_off
 
 void CircularBufferConfig::set_address_offset(uint32_t offset) {
     if (shadow_global_buffer != nullptr) {
-        const auto* mesh_buffer = shadow_global_mesh_buffer;
-        set_globally_allocated_address_and_total_size(*shadow_global_buffer, total_size_, offset);
-        shadow_global_mesh_buffer = mesh_buffer;
+        set_backing_layout(*shadow_global_buffer, total_size_, offset);
     } else {
         address_offset_ = offset;
     }

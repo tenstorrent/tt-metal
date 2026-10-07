@@ -38,7 +38,14 @@ DeviceAddr get_uniform_per_core_address(const Buffer& buffer, const CoreRangeSet
     CoreCoord address_core;
     for (const CoreRange& core_range : cores.ranges()) {
         for (const CoreCoord& core : core_range) {
-            const DeviceAddr core_address = get_per_core_address(buffer, core);
+            const auto it = buffer.impl().per_core_addresses_.find(core);
+            TT_FATAL(
+                it != buffer.impl().per_core_addresses_.end(),
+                "Per-core-allocated buffer has no shard on core {}, so it cannot back an address on cores {}; "
+                "limit the cores to the buffer's shard grid",
+                core.str(),
+                cores.str());
+            const DeviceAddr core_address = it->second;
             if (!address.has_value()) {
                 address = core_address;
                 address_core = core;

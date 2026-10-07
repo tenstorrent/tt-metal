@@ -55,6 +55,17 @@ DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buff
     return *address;
 }
 
+DeviceAddr get_cb_base_address(
+    const Buffer& buffer, const distributed::MeshBuffer* mesh_buffer, const CoreRangeSet& cores) {
+    if (!is_per_core_allocation(buffer)) {
+        return buffer.address();
+    }
+    TT_FATAL(
+        !cores.empty(), "A circular buffer backed by a per-core-allocated buffer needs cores to resolve its address");
+    return mesh_buffer != nullptr ? get_uniform_per_core_address(*mesh_buffer, cores)
+                                  : get_uniform_per_core_address(buffer, cores);
+}
+
 bool is_per_core_allocation(const distributed::MeshBuffer& mesh_buffer) {
     // Check if the reference buffer uses per-core allocation
     auto* buffer = mesh_buffer.get_reference_buffer();

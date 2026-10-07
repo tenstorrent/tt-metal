@@ -78,8 +78,6 @@ CBDescriptor cb_descriptor_from_sharded_tensor(
 }
 
 uint32_t get_cb_address(const CBDescriptor& desc) {
-    namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
-    const auto addr_offset = desc.address_offset;
     const tt::tt_metal::Buffer* buffer = desc.buffer;
     const tt::tt_metal::distributed::MeshBuffer* mesh_buffer = nullptr;
     if (buffer == nullptr && desc.tensor != nullptr) {
@@ -87,15 +85,11 @@ uint32_t get_cb_address(const CBDescriptor& desc) {
         buffer = mesh_buffer->get_reference_buffer();
     }
     if (buffer == nullptr) {
-        return addr_offset;
+        return desc.address_offset;
     }
-    if (!per_core_allocation::is_per_core_allocation(*buffer) || desc.core_ranges.empty()) {
-        return buffer->address() + addr_offset;
-    }
-    const auto base = mesh_buffer != nullptr
-                          ? per_core_allocation::get_uniform_per_core_address(*mesh_buffer, desc.core_ranges)
-                          : per_core_allocation::get_uniform_per_core_address(*buffer, desc.core_ranges);
-    return base + addr_offset;
+    return tt::tt_metal::experimental::per_core_allocation::get_cb_base_address(
+               *buffer, mesh_buffer, desc.core_ranges) +
+           desc.address_offset;
 }
 
 std::vector<CoreCoord> get_optimal_worker_cores_for_sharded_tensor(const Tensor& tensor, NOC noc) {

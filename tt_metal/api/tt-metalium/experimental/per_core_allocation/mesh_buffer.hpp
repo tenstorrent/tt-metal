@@ -28,6 +28,12 @@ DeviceAddr get_uniform_per_core_address(const distributed::MeshBuffer& mesh_buff
 
 bool is_per_core_allocation(const distributed::MeshBuffer& mesh_buffer);
 
+// Base address a circular buffer over ``cores`` gets from its backing ``buffer``: Buffer::address() for a
+// lockstep buffer, else the one per-core address the cores share. Pass the MeshBuffer when the backing came
+// from a MeshTensor so the local devices are checked to agree too; nullptr checks ``buffer``'s device only.
+DeviceAddr get_cb_base_address(
+    const Buffer& buffer, const distributed::MeshBuffer* mesh_buffer, const CoreRangeSet& cores);
+
 // Creates a MeshBuffer that only allocates on a single device within the mesh.
 std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
     const distributed::MeshBufferConfig& mesh_buffer_config,
