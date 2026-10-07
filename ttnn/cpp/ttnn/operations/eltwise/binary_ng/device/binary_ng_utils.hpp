@@ -131,6 +131,11 @@ struct AllShardSpecs {
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);
 
+struct NativeBlockBroadcast {
+    bool column = false;
+    bool scalar = false;
+};
+
 struct AllShardVolumes {
     std::optional<std::uint32_t> a_shard_volume;
     std::optional<std::uint32_t> b_shard_volume;
@@ -140,14 +145,27 @@ struct AllShardVolumes {
 std::optional<AllShardVolumes> get_shard_volumes(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c);
+    const tt::tt_metal::TensorSpec& c,
+    NativeBlockBroadcast block_broadcast = {});
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);
 
+// Blackhole: whether a block or width sharded a with a column or scalar b may take the native sharded path, which computes on
+// the shard grid only: the plain FPU add, subtract and multiply, without activations, from 16-bit and block-float inputs, into
+// the same formats (and into Float32 for a scalar b).
+NativeBlockBroadcast native_block_broadcast(
+    const BinaryNgDeviceOperation::operation_attributes_t& attributes,
+    tt::tt_metal::DataType a,
+    std::optional<tt::tt_metal::DataType> b,
+    tt::tt_metal::DataType c);
+
 bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c);
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const MemoryConfig& c,
+    NativeBlockBroadcast block_broadcast = {});
 
 ttnn::Shape compute_broadcasted_output(const ttnn::Shape& shape_a, const ttnn::Shape& shape_b);
 

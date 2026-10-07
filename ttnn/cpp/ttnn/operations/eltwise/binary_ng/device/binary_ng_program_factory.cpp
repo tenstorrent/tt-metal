@@ -93,7 +93,8 @@ TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor
 std::optional<AllShardSpecs> get_shard_specs(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c) {
+    const tt::tt_metal::TensorSpec& c,
+    NativeBlockBroadcast block_broadcast = {}) {
     bool a_sharded = a.memory_config().is_sharded();
     bool b_sharded = b.has_value() && b->memory_config().is_sharded();
     bool c_sharded = c.memory_config().is_sharded();
@@ -102,7 +103,7 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(a, b, c.memory_config())) {
+    if (!is_native_L1_sharding(a, b, c.memory_config(), block_broadcast)) {
         return std::nullopt;
     }
 
@@ -374,8 +375,9 @@ namespace ttnn::operations::binary_ng {
 std::optional<AllShardVolumes> get_shard_volumes(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,
-    const tt::tt_metal::TensorSpec& c) {
-    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c);
+    const tt::tt_metal::TensorSpec& c,
+    NativeBlockBroadcast block_broadcast) {
+    const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(a, b, c, block_broadcast);
 
     if (not shard_specs.has_value()) {
         return std::nullopt;
@@ -448,7 +450,14 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
     const auto [cD, cN, cC, cHt, cWt] = CMAKE_UNIQUE_NAMESPACE::get_shape_dims(c);
 
     const auto shard_specs = CMAKE_UNIQUE_NAMESPACE::get_shard_specs(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
+        a.tensor_spec(),
+        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+        c.tensor_spec(),
+        native_block_broadcast(
+            operation_attributes,
+            a.dtype(),
+            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
+            c.dtype()));
     const bool rt_has_sharding = shard_specs.has_value();
     auto grid = rt_has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
 
@@ -695,6 +704,16 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
             auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
                 operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
+            // A block or width shard repeats a column b over its own row width and a scalar b over the whole shard
+            if (rt_has_sharding && a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+                if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B) {
+                    freq = c_current_shard_width;
+                    counter = 0;
+                } else if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
+                    freq = c_num_tiles_core;
+                    counter = 0;
+                }
+            }
             if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                 operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
                 // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
@@ -858,7 +877,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     const auto shard_volumes = get_shard_volumes(
-        a.tensor_spec(), b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{}, c.tensor_spec());
+        a.tensor_spec(),
+        b.has_value() ? b->tensor_spec() : std::optional<tt::tt_metal::TensorSpec>{},
+        c.tensor_spec(),
+        native_block_broadcast(
+            operation_attributes,
+            a.dtype(),
+            b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
+            c.dtype()));
     const auto has_sharding = shard_volumes.has_value();
     const auto a_sharded = has_sharding and shard_volumes->a_shard_volume.has_value();
     const auto b_sharded = has_sharding and shard_volumes->b_shard_volume.has_value();

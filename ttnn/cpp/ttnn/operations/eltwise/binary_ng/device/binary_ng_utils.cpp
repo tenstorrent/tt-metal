@@ -810,8 +810,28 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
+NativeBlockBroadcast native_block_broadcast(
+    const BinaryNgDeviceOperation::operation_attributes_t& attributes,
+    tt::tt_metal::DataType a,
+    std::optional<tt::tt_metal::DataType> b,
+    tt::tt_metal::DataType c) {
+    using tt::tt_metal::DataType;
+    const auto narrow = [](DataType t) {
+        return t == DataType::BFLOAT16 || t == DataType::BFLOAT8_B || t == DataType::BFLOAT4_B;
+    };
+    const auto op = attributes.binary_op_type;
+    const bool plain = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE &&
+                       (op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL) &&
+                       attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&
+                       attributes.post_activations.empty() && narrow(a) && b.has_value() && narrow(*b);
+    return {.column = plain && narrow(c), .scalar = plain && (narrow(c) || c == DataType::FLOAT32)};
+}
+
 bool is_native_L1_sharding(
-    const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
+    const tt::tt_metal::TensorSpec& a,
+    const std::optional<tt::tt_metal::TensorSpec>& b,
+    const MemoryConfig& c,
+    NativeBlockBroadcast block_broadcast) {
     if (!c.is_sharded()) {
         return false;
     }
@@ -855,12 +875,14 @@ bool is_native_L1_sharding(
         auto subtile_bcast = get_subtile_broadcast_type(
             a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        // A scalar b is one tile per plane, so a block or width shard takes it only within one plane
+        const bool shard_in_plane = a.padded_shape()[-2] % a.memory_config().shard_spec()->shape[0] == 0;
 
         switch (subtile_bcast) {
+            case SubtileBroadcastType::COL_B: return is_height || block_broadcast.column;
+            case SubtileBroadcastType::SCALAR_B: return is_height || (block_broadcast.scalar && shard_in_plane);
             case SubtileBroadcastType::COL_A:
-            case SubtileBroadcastType::COL_B:
-            case SubtileBroadcastType::SCALAR_A:
-            case SubtileBroadcastType::SCALAR_B: return is_height;
+            case SubtileBroadcastType::SCALAR_A: return is_height;
             case SubtileBroadcastType::ROW_A:
             case SubtileBroadcastType::ROW_B:
             case SubtileBroadcastType::ROW_A_COL_B:
