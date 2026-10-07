@@ -811,7 +811,12 @@ size_t serialize_dfb_config_for_core(
             const uint32_t cbs = std::max<uint32_t>(dfb->config.consumer_block_size, 1u);
             const uint32_t P = dfb->config.num_producers;
             const uint32_t C = dfb->config.num_consumers;
-            const uint32_t block_out = producer_blocked ? bs : (consumer_blocked ? cbs : 1u);
+            uint32_t block_out = 1u;
+            if (producer_blocked) {
+                block_out = bs;
+            } else if (consumer_blocked) {
+                block_out = cbs;
+            }
             uint32_t side_stride_entries = stride;
             uint32_t jump_entries = stride;
             if (producer_blocked) {
