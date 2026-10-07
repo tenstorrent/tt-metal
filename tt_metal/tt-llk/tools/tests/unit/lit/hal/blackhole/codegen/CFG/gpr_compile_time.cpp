@@ -169,51 +169,51 @@ extern "C" __attribute__((noinline, used)) void read_cfg_field_word_to_gpr()
 // CHECK-NEXT: ttrdcfg 6,112
 // CHECK-NEXT: ret
 
-// Bank-end boundaries.
+// Bank-end boundaries and last valid GPR indices.
 
 extern "C" __attribute__((noinline, used)) void write_gpr_last_word()
 {
-    cfg::write<cfg::Access::TensixCfgUnit, state_last, cfg::Sec::S0>(hal::gpr<4>());
+    cfg::write<cfg::Access::TensixCfgUnit, state_last, cfg::Sec::S0>(hal::gpr<63>());
 }
 
 // CHECK-LABEL: <write_gpr_last_word>:
-// CHECK-NEXT: ttwrcfg 4,0,223
+// CHECK-NEXT: ttwrcfg 63,0,223
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_word()
 {
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_last, cfg::Sec::S0>(hal::gpr<4>()));
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_last, cfg::Sec::S0>(hal::gpr<63>()));
 }
 
 // CHECK-LABEL: <write_grouped_gpr_last_word>:
-// CHECK-NEXT: ttwrcfg 4,0,223
+// CHECK-NEXT: ttwrcfg 63,0,223
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_gpr_last_block()
 {
-    cfg::write<cfg::Access::TensixCfgUnit, state_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>());
+    cfg::write<cfg::Access::TensixCfgUnit, state_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<60>());
 }
 
 // CHECK-LABEL: <write_gpr_last_block>:
-// CHECK-NEXT: ttwrcfg 4,1,220
+// CHECK-NEXT: ttwrcfg 60,1,220
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_grouped_gpr_last_block()
 {
-    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<4>()));
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::from_gpr<state_last_block, cfg::Sec::S0, cfg::GprTransferSize::Bits128>(hal::gpr<60>()));
 }
 
 // CHECK-LABEL: <write_grouped_gpr_last_block>:
-// CHECK-NEXT: ttwrcfg 4,1,220
+// CHECK-NEXT: ttwrcfg 60,1,220
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void read_gpr_last_word()
 {
-    cfg::read<cfg::Access::TensixCfgUnit, state_last, cfg::Sec::S0>(hal::gpr<4>());
+    cfg::read<cfg::Access::TensixCfgUnit, state_last, cfg::Sec::S0>(hal::gpr<63>());
 }
 
 // CHECK-LABEL: <read_gpr_last_word>:
-// CHECK-NEXT: ttrdcfg 4,223
+// CHECK-NEXT: ttrdcfg 63,223
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_scalar_last_thcon_block()
