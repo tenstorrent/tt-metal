@@ -3,6 +3,7 @@
 """Protect profile attribution from warmup, rank summation and lost timings."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ from models.demos.qwen38_27b_qb2.tests.layer_profile_report import (
     PROFILE_CASES,
     analyze,
     drain_after_call,
+    require_storage_headroom,
     write_report,
 )
 
@@ -139,3 +141,27 @@ def test_failed_prefill_does_not_mask_failure_with_profiler_drain(expect_error):
 
     with expect_error(RuntimeError, "prefill failed"):
         drain_after_call(fail, unexpected_drain)()
+
+
+@pytest.mark.parametrize("full_path", ["artifacts", "jit"])
+def test_storage_guard_checks_both_filesystems(monkeypatch, full_path, expect_error):
+    monkeypatch.setattr(
+        "models.demos.qwen38_27b_qb2.tests.layer_profile_report.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=15 * 1024**3 if path == full_path else 32 * 1024**3),
+    )
+    with expect_error(RuntimeError, f"Profiler storage guard: {full_path}"):
+        require_storage_headroom(["artifacts", "jit"])
+
+
+@pytest.mark.parametrize("exhausted_at", ["before", "after"])
+def test_storage_guard_stops_prefill_at_chunk_boundaries(exhausted_at, expect_error):
+    calls = []
+
+    def guard():
+        if exhausted_at == "before" or "drain" in calls:
+            raise RuntimeError("Profiler storage guard")
+
+    wrapped = drain_after_call(lambda: calls.append("prefill"), lambda: calls.append("drain"), storage_guard=guard)
+    with expect_error(RuntimeError, "Profiler storage guard"):
+        wrapped()
+    assert calls == ([] if exhausted_at == "before" else ["prefill", "drain"])

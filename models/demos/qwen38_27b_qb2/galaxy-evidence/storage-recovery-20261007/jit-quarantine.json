@@ -1,0 +1,71 @@
+{
+  "source": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy/tt-metal-cache7775681896954413955/kernels/reader_concat_stick_layout_interleaved_start_id/7614080901500256318",
+  "quarantine": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/jit-cache-metal-galaxy/tt-metal-cache7775681896954413955/kernels/reader_concat_stick_layout_interleaved_start_id/7614080901500256318.disk-full-20261007",
+  "files": [
+    {
+      "path": "chlkc_descriptors.h",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "kernel_args_generated.h",
+      "bytes": 1534,
+      "sha256": "d6df4172173fb1e3b682b3e1292458dea2fc3e57d2e506783da77f63b6df9759"
+    },
+    {
+      "path": "kernel_bindings_generated.h",
+      "bytes": 3500,
+      "sha256": "ec040c0451553751486a732c7da5974a5a35c688ee75da6fbdba99a02bf42036"
+    },
+    {
+      "path": "kernel_includes.hpp",
+      "bytes": 301,
+      "sha256": "b2354ea3f5dfc17b22a404d335414c2126a5e9ed78c986cecaa11ceb3e7dfb7a"
+    },
+    {
+      "path": "ncrisc/.build_state",
+      "bytes": 19,
+      "sha256": "183b3459a501eabf38a901dd2078ee38f5984687e1b1ca077c2e4b023e092f2d"
+    },
+    {
+      "path": "ncrisc/ncrisc.elf",
+      "bytes": 771240,
+      "sha256": "ba99fa1795b0346f41a6cd4b49784dc09bff0b6a9ce6313305b80c8333c18f39"
+    },
+    {
+      "path": "ncrisc/ncrisc.elf.dephash",
+      "bytes": 314,
+      "sha256": "2a771b414567874b8b4d65bb6178b078fafb3e778ae843354c9357339d840dc5"
+    },
+    {
+      "path": "ncrisc/ncrisc.elf.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "ncrisc/ncrisc.elf.xip.elf",
+      "bytes": 771240,
+      "sha256": "41b847cd880d1b46ee83014727f4fb33186ae2d01aba0f9c0b55c3805cf84830"
+    },
+    {
+      "path": "ncrisc/ncrisck.7906494035020934056_3671983.d",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "ncrisc/ncrisck.o",
+      "bytes": 795592,
+      "sha256": "2c813a6a0fedbb3564ac1a295da5892a83822194ba29fd337b6409fb8a5f552c"
+    },
+    {
+      "path": "ncrisc/ncrisck.o.dephash",
+      "bytes": 15503,
+      "sha256": "2f56451ee4ba55dd2fd393d5cd77c04f223b63f423a3fbdd8fbd0b3d76d93933"
+    },
+    {
+      "path": "ncrisc/ncrisck.o.log",
+      "bytes": 8192,
+      "sha256": "085d2c5230f98b8d864ea7afa803de8b577323726c2803c09c570e6c235068ff"
+    }
+  ]
+}

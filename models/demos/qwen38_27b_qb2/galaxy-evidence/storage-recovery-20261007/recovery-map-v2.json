@@ -1,0 +1,31 @@
+{
+  "pv": {
+    "pv_name": "/dev/nvme2n4p3",
+    "pv_uuid": "CQGjH2-uufu-JpNc-ar2C-IMb5-lUOl-OjdIIm",
+    "vg_name": "ubuntu-vg"
+  },
+  "uuid": "88c45e81-3ea9-416f-a712-6aa2a87f72ae",
+  "commands": [
+    [
+      "sudo",
+      "-n",
+      "dmsetup",
+      "create",
+      "qwen38_weights_ro_v2_20261007",
+      "--readonly",
+      "--table",
+      "0 3221225472 linear /dev/nvme2n4p3 209717248"
+    ],
+    [
+      "sudo",
+      "-n",
+      "mount",
+      "-t",
+      "ext4",
+      "-o",
+      "ro,noload,nosuid,nodev",
+      "/dev/mapper/qwen38_weights_ro_v2_20261007",
+      "/home/ttuser/qwen38-weights-ro-v2-20261007"
+    ]
+  ]
+}

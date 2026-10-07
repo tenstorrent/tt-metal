@@ -1,0 +1,69 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "server_capacity": 16,
+  "data_parallel_size": 8,
+  "total_server_capacity": 128,
+  "checkpoint_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "dataset_revision": "633f5ee89ab8ad4522a9f850766b73f62147ffdd",
+  "dataset_source": {
+    "transport": "validated_local_csv",
+    "path": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/gpqa-data/gpqa_diamond.csv",
+    "git_blob": "7589e3e467d69a1dceb126a60c4108d6d4f1d166",
+    "sha256": "41d1213cd7a4998605a26c2798500652572007161b3a92817ba46b35befcd305"
+  },
+  "harness_revision": "321e3bb68cb750a58c76606ab57832533302be73",
+  "selection": "first 198 Diamond rows, choice shuffle seed 42",
+  "scope": "198/198 Diamond questions; 32768-token output budget",
+  "gpqa": {
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "seed": 42,
+    "thinking": true,
+    "max_output_tokens": 32768,
+    "concurrency": 128,
+    "accuracy_threshold": 0.892,
+    "selected_samples": 198,
+    "full_dataset": true
+  },
+  "performance": {
+    "shapes": [
+      [
+        128,
+        128,
+        128
+      ],
+      [
+        1024,
+        128,
+        128
+      ]
+    ],
+    "warmup": "one burst per shape",
+    "repeats": 2,
+    "temperature": 0,
+    "ignore_eos": true
+  },
+  "input_sha256": "73f40d9f36c2cf2070120e34c425f0a10aafaa7edd8c1f6878b002e7bf756114",
+  "run_start": "2026-10-07T08:33:25.061223+00:00",
+  "gpqa_result": {
+    "measurement_start": "2026-10-07T08:47:19.564901+00:00",
+    "measurement_end": "2026-10-07T09:15:17.956282+00:00",
+    "measured_s": 1678.3913625399582,
+    "requests": 198,
+    "mean_ttft_ms": 10711.796449445603,
+    "mean_decode_tokens_per_s": 14.946133120617992,
+    "aggregate_output_tokens_per_s": 817.498248992171,
+    "accuracy": 0.8636363636363636,
+    "correct": 171,
+    "completed_samples": 198,
+    "dataset_samples": 198,
+    "full_dataset": true,
+    "concurrency": 128,
+    "max_output_tokens": 32768,
+    "accuracy_threshold": 0.892,
+    "truncated_samples": 5,
+    "truncated_correct": 0,
+    "passed": false
+  }
+}

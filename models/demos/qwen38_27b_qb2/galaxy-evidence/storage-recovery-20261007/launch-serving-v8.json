@@ -1,0 +1,27 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit",
+    "qwen38-galaxy-serving-v8-20261007.service",
+    "--property=RuntimeMaxSec=48h",
+    "--property=MemoryMax=256G",
+    "--property=CPUQuota=3200%",
+    "--property=TimeoutStopSec=300",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/galaxy-serving-v8.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/galaxy-serving-v8.log",
+    "--setenv=MODEL_WEIGHTS_DIR=/home/ttuser/qwen38-weights-ro-20261007/qwen38-27b-20261006/checkpoint",
+    "--setenv=QWEN_SKIP_PROFILE=1",
+    "--setenv=QWEN_GDN_STEP_EXPERIMENT_DIR=/home/ttuser/qwen38-artifacts-20261007/gdn-step-candidate-v3",
+    "/bin/bash",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-galaxy/models/demos/qwen38_27b_qb2/demo/run_profile_then_serving.sh",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "/home/ttuser/qwen38-artifacts-20261007/layer-profile-deferred-v5",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-tuning-v4",
+    "/home/ttuser/qwen38-artifacts-20261007/galaxy-serving-v8",
+    "qwen38-metal-galaxy-eight-replicas-v3-20261007.service",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/galaxy-eight-replicas-v3/full-model.json"
+  ],
+  "checkpoint_verification": "/home/ttuser/qwen38-artifacts-20261007/checkpoint-recovered.json",
+  "profile_deferred": true
+}

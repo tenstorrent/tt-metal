@@ -17,7 +17,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.qwen38_27b_qb2.tests.layer_profile_report import PROFILE_CASES, drain_after_call
+from models.demos.qwen38_27b_qb2.tests.layer_profile_report import (
+    PROFILE_CASES,
+    drain_after_call,
+    require_storage_headroom,
+)
 from models.demos.qwen38_27b_qb2.tests.test_galaxy_perf_sweep import drop_request_buffers, run_batch
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 
@@ -42,6 +46,8 @@ def test_galaxy_layer_profile():
 
     output = Path(os.environ["QWEN_PROFILE_RECEIPT"])
     assert not output.exists(), "Use a new receipt path"
+    storage_guard = functools.partial(require_storage_headroom, [output.parent, Path(os.environ["TT_METAL_CACHE"])])
+    storage_guard()
     torch.set_num_threads(8)
     configure_fabric(topology=ttnn.Topology.Linear)
     parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
@@ -56,6 +62,7 @@ def test_galaxy_layer_profile():
         topology="linear",
         scope="Reduced two-layer diagnostic, not full-model throughput or accuracy qualification",
         measurement="Eager warm device operations with Tracy stage signposts; no host-time TPOT claim",
+        profiler_raw_dump_disabled=os.getenv("TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES") == "1",
         cells=[],
     )
     originals = []
@@ -76,7 +83,11 @@ def test_galaxy_layer_profile():
         for name in ("prefill", "prefill_batch"):
             method = getattr(gen.model, name)
             prefill_originals.append((name, method))
-            setattr(gen.model, name, drain_after_call(method, lambda: ttnn.ReadDeviceProfiler(mesh)))
+            setattr(
+                gen.model,
+                name,
+                drain_after_call(method, lambda: ttnn.ReadDeviceProfiler(mesh), storage_guard=storage_guard),
+            )
         report["device_ids"] = list(mesh.get_device_ids())
         report["precision"] = gen.model.precision
         ttnn.ReadDeviceProfiler(mesh)
@@ -85,6 +96,7 @@ def test_galaxy_layer_profile():
         )
         report["state"] = "profiling"
         for length, batch in PROFILE_CASES:
+            storage_guard()
             # Restore methods before the next geometry's warmup: only the
             # diagnostic window should have stage signposts.
             for layer, name, method in originals:
@@ -121,6 +133,7 @@ def test_galaxy_layer_profile():
             logits = gen._host_logits(diagnostic_logits)
             assert torch.isfinite(logits).all()
             del diagnostic_logits, logits
+            storage_guard()
             report["cells"].append(
                 dict(
                     input_tokens=length,

@@ -25,6 +25,10 @@ export MODEL_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR:?Set the pinned checkpoint director
 export ARCH_NAME=blackhole OMP_NUM_THREADS=8 PYTHONUNBUFFERED=1
 export QWEN_GALAXY_LAYER_PROFILE=1 QWEN_PROFILE_RECEIPT="$QWEN_PROFILE_DIR/profile.json"
 export TT_METAL_PROFILER_DIR="$QWEN_PROFILE_DIR/tracy" TRACY_NO_WEB_SERVER=1
+# The pinned native runtime still writes cpp_device_perf_report.csv when this
+# flag suppresses profile_log_device.csv. Tracy joins the compact report with
+# host op metadata; the strict report checks below reject missing timings.
+export TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES=1
 export QWEN_COMPACT_DECODE_RESIDUAL=1
 unset TT_METAL_SLOW_DISPATCH_MODE TT_METAL_ALLOCATOR_MODE_HYBRID
 unset TT_METAL_DEVICE_PROFILER TT_METAL_PROFILER_MID_RUN_DUMP TT_METAL_PROFILER_CPP_POST_PROCESS
@@ -53,6 +57,9 @@ suites = ET.parse(root / "hardware.xml").getroot().findall(".//testsuite")
 assert sum(int(suite.get("tests", 0)) for suite in suites) == 1
 assert all(int(suite.get(field, 0)) == 0 for suite in suites for field in ("failures", "errors", "skipped"))
 reports = list((root / "tracy").rglob("ops_perf_results*.csv"))
+compact_reports = list((root / "tracy").rglob("cpp_device_perf_report.csv"))
+assert compact_reports and all(path.stat().st_size for path in compact_reports), "Missing compact device timings"
+assert not list((root / "tracy").rglob("profile_log_device.csv")), "Raw profiler dump was unexpectedly enabled"
 assert reports, "Tracy produced no per-op report"
 assert len(reports) == 1, "Ambiguous profiler reports; select the diagnostic CSV explicitly"
 print("PROFILE_REPORTS", *reports, sep="\n", flush=True)

@@ -10,7 +10,8 @@ import pytest
 
 
 @pytest.mark.parametrize("qualified,diagnostic_status", [(False, 0), (True, 0), (True, 124)])
-def test_bounded_diagnostics_never_bypass_qualification(tmp_path, qualified, diagnostic_status):
+@pytest.mark.parametrize("skip_profile", [False, True])
+def test_bounded_diagnostics_never_bypass_qualification(tmp_path, qualified, diagnostic_status, skip_profile):
     binaries = tmp_path / "bin"
     binaries.mkdir()
     state = "inactive" if qualified else "failed"
@@ -38,7 +39,12 @@ def test_bounded_diagnostics_never_bypass_qualification(tmp_path, qualified, dia
             "qualification.service",
             str(tmp_path / "qualification.json"),
         ],
-        env={**os.environ, "PATH": f"{binaries}:/usr/bin:/bin", "QUEUE_LOG": str(log)},
+        env={
+            **os.environ,
+            "PATH": f"{binaries}:/usr/bin:/bin",
+            "QUEUE_LOG": str(log),
+            "QWEN_SKIP_PROFILE": "1" if skip_profile else "0",
+        },
         capture_output=True,
         text=True,
         timeout=10,
@@ -49,8 +55,12 @@ def test_bounded_diagnostics_never_bypass_qualification(tmp_path, qualified, dia
     else:
         assert result.returncode == 0, result.stderr
         commands = log.read_text().splitlines()
-        assert len(commands) == 3
-        assert all(line.startswith("--signal=TERM --kill-after=300 900 ") for line in commands[:2])
-        assert "run_galaxy_layer_profile.sh" in commands[0]
-        assert "run_long_context_attention.sh" in commands[1]
-        assert commands[2].startswith("SERVE ") and commands[2].endswith("qualification.json")
+        assert len(commands) == (2 if skip_profile else 3)
+        assert all(line.startswith("--signal=TERM --kill-after=300 900 ") for line in commands[:-1])
+        if skip_profile:
+            assert "P0 gate remains incomplete" in result.stdout
+            assert not (tmp_path / "profile.log").exists()
+        else:
+            assert "run_galaxy_layer_profile.sh" in commands[0]
+        assert "run_long_context_attention.sh" in commands[-2]
+        assert commands[-1].startswith("SERVE ") and commands[-1].endswith("qualification.json")

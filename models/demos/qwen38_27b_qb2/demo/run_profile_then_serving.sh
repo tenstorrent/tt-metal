@@ -25,6 +25,10 @@ done
 unset QWEN_WAIT_FOR_UNIT
 for QWEN_DIAGNOSTIC in profile attention; do
     if [[ "$QWEN_DIAGNOSTIC" == profile ]]; then
+        if [[ "${QWEN_SKIP_PROFILE:-0}" == 1 ]]; then
+            echo "Profile explicitly deferred; its P0 gate remains incomplete"
+            continue
+        fi
         QWEN_SCRIPT=run_galaxy_layer_profile.sh
         QWEN_OUTPUT=$QWEN_PROFILE_DIR
     else

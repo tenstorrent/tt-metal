@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import re
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,13 +29,25 @@ DURATIONS = {
 }
 
 
-def drain_after_call(method, drain):
+def require_storage_headroom(paths, *, minimum_free_bytes=16 * 1024**3):
+    """Abort diagnostics before exhausting either the report or JIT filesystem."""
+    for path in paths:
+        free = shutil.disk_usage(path).free
+        if free < minimum_free_bytes:
+            raise RuntimeError(
+                f"Profiler storage guard: {path} has {free} free bytes; " f"requires at least {minimum_free_bytes}"
+            )
+
+
+def drain_after_call(method, drain, *, storage_guard=lambda: None):
     """Drain diagnostic records after each completed prefill chunk, not a batch."""
 
     @functools.wraps(method)
     def wrapped(*args, **kwargs):
+        storage_guard()
         result = method(*args, **kwargs)
         drain()
+        storage_guard()
         return result
 
     return wrapped

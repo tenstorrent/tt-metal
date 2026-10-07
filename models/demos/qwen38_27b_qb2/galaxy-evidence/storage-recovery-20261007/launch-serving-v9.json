@@ -1,0 +1,23 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit",
+    "qwen38-galaxy-serving-v9-20261007.service",
+    "--property=RuntimeMaxSec=48h",
+    "--property=MemoryMax=256G",
+    "--property=CPUQuota=3200%",
+    "--property=TimeoutStopSec=300",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/galaxy-serving-v9.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/galaxy-serving-v9.log",
+    "--setenv=MODEL_WEIGHTS_DIR=/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--setenv=QWEN_WAIT_FOR_UNIT=qwen38-checkpoint-local-copy-20261007.service",
+    "/bin/bash",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-galaxy/models/demos/qwen38_27b_qb2/demo/run_galaxy_serving.sh",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "/home/ttuser/qwen38-artifacts-20261007/galaxy-serving-v9",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/galaxy-eight-replicas-v3/full-model.json"
+  ],
+  "checkpoint_verification": "/home/ttuser/qwen38-artifacts-20261007/checkpoint-local-copy.json",
+  "profile_deferred": true
+}

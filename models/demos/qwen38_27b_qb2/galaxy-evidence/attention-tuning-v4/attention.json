@@ -1,0 +1,201 @@
+{
+  "state": "failed",
+  "passed": false,
+  "promoted_to_model": false,
+  "scope": "Synthetic TP4 attention kernel experiment, not full-model performance or quality",
+  "precision": {
+    "query": "bfloat16",
+    "kv": "bfloat8_b",
+    "reference": "float32 on quantized device inputs"
+  },
+  "local_heads": {
+    "query": 6,
+    "kv": 1,
+    "head_dim": 256
+  },
+  "measurement": "Five warm samples of 100 trace replays; wall cost includes dispatch, excludes CPU/readback",
+  "cache_contract": "Full causal attention, shuffled physical pages, mapped aligned tail with sentinel future values",
+  "torch_version": "2.11.0+cpu",
+  "source_sha256": {
+    "test_long_context_attention.py": "e29a3de51c4e80770a9a681d34ff43fabeababea7aff10578b077731cbcaab20",
+    "attention_tuning.py": "e885dd76365b59a72257f3491821e593cba37e3f18e62663ccdb45b112bd8e49"
+  },
+  "cases": [
+    {
+      "input_tokens": 8192,
+      "batch": 1,
+      "native_capacity": 8320,
+      "aligned_capacity": 8704,
+      "native_chunk": 128,
+      "extra_pool_tokens": 384,
+      "pool_tokens": 8704,
+      "positions": [
+        8191
+      ],
+      "seed": 20269199,
+      "state": "measuring",
+      "page_table_sha256": "02b54a665084a35128b331d8032839e98644bbc3e69084649b95d0e7f8560be4",
+      "candidates": [
+        {
+          "chunk": 128,
+          "traced_call_us": [
+            47.85607103258371,
+            47.83604294061661,
+            48.024728894233704,
+            47.83503711223602,
+            47.858282923698425
+          ],
+          "median_traced_call_us": 47.85607103258371,
+          "accuracy_per_rank": [
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "max_abs_error": 0.0019282139837741852
+            },
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "max_abs_error": 0.0019282139837741852
+            },
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "max_abs_error": 0.0019282139837741852
+            },
+            {
+              "passed": false,
+              "pcc_per_user": [
+                0.9996517300605774
+              ],
+              "relative_rms": 0.027003495022654533,
+              "max_abs_error": 0.0019282139837741852
+            }
+          ],
+          "accuracy_passed": false
+        }
+      ],
+      "grid": [
+        12,
+        10
+      ],
+      "active_chunk": 128
+    },
+    {
+      "input_tokens": 8192,
+      "batch": 16,
+      "native_capacity": 8320,
+      "aligned_capacity": 8704,
+      "native_chunk": 128,
+      "extra_pool_tokens": 6144,
+      "pool_tokens": 139264,
+      "positions": [
+        8191,
+        8154,
+        8117,
+        8080,
+        8043,
+        8006,
+        7969,
+        7932,
+        7895,
+        7858,
+        7821,
+        7784,
+        7747,
+        7710,
+        7673,
+        7636
+      ]
+    },
+    {
+      "input_tokens": 55000,
+      "batch": 1,
+      "native_capacity": 55136,
+      "aligned_capacity": 55296,
+      "native_chunk": 32,
+      "extra_pool_tokens": 160,
+      "pool_tokens": 55296,
+      "positions": [
+        54999
+      ]
+    },
+    {
+      "input_tokens": 131072,
+      "batch": 1,
+      "native_capacity": 131200,
+      "aligned_capacity": 131584,
+      "native_chunk": 128,
+      "extra_pool_tokens": 384,
+      "pool_tokens": 131584,
+      "positions": [
+        131071
+      ]
+    },
+    {
+      "input_tokens": 131072,
+      "batch": 8,
+      "native_capacity": 131200,
+      "aligned_capacity": 131584,
+      "native_chunk": 128,
+      "extra_pool_tokens": 3072,
+      "pool_tokens": 1052672,
+      "positions": [
+        131071,
+        131034,
+        130997,
+        130960,
+        130923,
+        130886,
+        130849,
+        130812
+      ]
+    },
+    {
+      "input_tokens": 262016,
+      "batch": 1,
+      "native_capacity": 262144,
+      "aligned_capacity": 262144,
+      "native_chunk": 128,
+      "extra_pool_tokens": 0,
+      "pool_tokens": 262144,
+      "positions": [
+        262015
+      ]
+    },
+    {
+      "input_tokens": 262016,
+      "batch": 4,
+      "native_capacity": 262144,
+      "aligned_capacity": 262144,
+      "native_chunk": 128,
+      "extra_pool_tokens": 0,
+      "pool_tokens": 1048576,
+      "positions": [
+        262015,
+        261978,
+        261941,
+        261904
+      ]
+    }
+  ],
+  "updated_at": "2026-10-07T08:04:44Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "error": {
+    "type": "AssertionError",
+    "message": "Native chunk failed full-context numerical reference\nassert False"
+  }
+}
