@@ -160,10 +160,7 @@ inline constexpr bool unhandled_op = false;
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
 inline constexpr std::uint32_t kEmaBetaBits  = 0x3ECCCCCDu; // 0.4f
 
-// Dropout dispatch constants, shared with the golden (sfpu_dispatch_constants.py: DROPOUT_SCALE,
-// DROPOUT_SEED). probability = p * INT_MAX; the default p = 0 keeps every datum, so the result is the
-// deterministic x * 2.0. The SFPU_DROPOUT_PARAMS template parameter overrides all three so the
-// dedicated dropout tests can drive the drop path, reseed, and use a non-trivial scale.
+// Dropout defaults (p = 0, so x * 2.0) match sfpu_dispatch_constants.py; SFPU_DROPOUT_PARAMS overrides them.
 #ifdef SFPU_DROPOUT_PROBABILITY
 constexpr std::uint32_t kDropoutProbability = SFPU_DROPOUT_PROBABILITY;
 constexpr std::uint32_t kDropoutSeed        = SFPU_DROPOUT_SEED;

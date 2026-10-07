@@ -92,11 +92,7 @@ EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
 EMA_ALPHA = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
 EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]
 
-# dropout scales every kept datum by this (the dispatcher's default kDropoutScaleBits, 2.0f).
+# Dropout harness defaults (kDropoutScaleBits / kDropoutSeed); probability is p * INT_MAX.
 DROPOUT_SCALE = 2.0
-
-# dropout's probability operand is p * INT_MAX; this is p = 1 (every datum dropped).
 DROPOUT_PROBABILITY_MAX = 0x7FFFFFFF
-
-# The dispatcher's default PRNG seed (kDropoutSeed).
 DROPOUT_SEED = 0xDEADBEEF
