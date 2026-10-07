@@ -63,7 +63,15 @@ def main():
             dec = gen.dec
             dec.set_inputs(cur, pos, torch.zeros(rows, U, dtype=torch.bool))
             sp(f"U{U}_compile_capture_begin")
-            dec.run()  # eager warm + trace capture + one replay + readback
+            # same sequence as Decoder.run() on first call, but with a profiler flush after each phase: one full decode is ~5000 ops and the per-core profiler DRAM buffer holds
+            # TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT programs, so eager warmup + capture + replay in one read window overflows it.
+            dec._forward()  # eager warmup/compile
+            ttnn.synchronize_device(mesh)
+            ttnn.ReadDeviceProfiler(mesh)
+            os.environ["MIMO_CHECK_CAP"] = "0"
+            dec._tr = ttnn.begin_trace_capture(mesh, cq_id=0)
+            dec.out = dec._forward()
+            ttnn.end_trace_capture(mesh, dec._tr, cq_id=0)
             ttnn.synchronize_device(mesh)
             sp(f"U{U}_compile_capture_end")
             ttnn.ReadDeviceProfiler(mesh)
