@@ -605,8 +605,8 @@ inline void bitonic_topk_store16(std::uint32_t dist0, std::uint32_t dist1)
 
 // Stable compare-exchange for one register pair. Values are the primary key; on exact value
 // ties the paired index registers (LREG4+n tracks LREGn) are compare-exchanged so ties resolve
-// by index. VD ^= VC leaves 0 only in tied lanes, providing the tie predicate; the second XOR
-// restores VD. INDEX_MIN_TO_VD selects the index-swap operand order to match the sort direction.
+// by index. Two SFPLE in sign-magnitude order hold together exactly where the words are bitwise
+// equal. INDEX_MIN_TO_VD selects the index-swap operand order to match the sort direction.
 template <std::uint32_t VC, std::uint32_t VD, std::uint32_t MODE, bool INDEX_MIN_TO_VD>
 TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
 {
@@ -620,8 +620,8 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
     // is an entry invariant established once per LLK entry point (see the STABLE_SORT branch
     // of _bitonic_topk_{phases_steps,merge,rebuild}) and re-established by the trailing
     // SFPENCC of every comparator body.
-    TTI_SFPXOR(0, VC, VD, 0);
-    TTI_SFPSETCC(0, VD, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPLE(0, VC, VD, 1); // flags = VC >= VD
+    TTI_SFPLE(0, VD, VC, 1); // and VD >= VC, in the lanes still enabled
 
     // Secondary key: index compare-exchange under the tie mask.
     if constexpr (INDEX_MIN_TO_VD)
@@ -633,9 +633,6 @@ TT_ALWAYS_INLINE void topk_cmp_swap_stable_directional()
         TTI_SFPSWAP(0, IDX_VD, IDX_VC, MODE);
     }
     TOPK_SFPENCC_ALL_LANES_ON();
-
-    // Restore values after the XOR scratch operation.
-    TTI_SFPXOR(0, VC, VD, 0);
 }
 
 // Runtime-polarity wrapper for stable compare sites shared by ascending and descending sorts.
