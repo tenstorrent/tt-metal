@@ -144,6 +144,9 @@ void kernel_main() {
         }
         if (is_output_tiled && !tilize_stick_counter) {
             out_dfb.reserve_back(in_ntiles_c);
+            // The producer view is pushed a stick at a time across the whole round, so it is
+            // reserved here, before the round's first push.
+            pre_tilize_dfb.reserve_back(TILE_HEIGHT * in_ntiles_c);
         }
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             const bool last_c_block = c_i == in_nblocks_c - 1;
@@ -217,6 +220,7 @@ void kernel_main() {
                     // advance by the same number of bytes per round so their rd/wr pointers
                     // stay aligned. The producer-view wait_front/pop_front/reserve_back below
                     // continues to drive the producer pointer ledger.
+                    fast_tilize_dfb.reserve_back(in_ntiles_c);
                     fast_tilize_dfb.push_back(in_ntiles_c);
                     fast_tilize_dfb.wait_front(in_ntiles_c);
 
@@ -226,9 +230,7 @@ void kernel_main() {
 
                     out_dfb.push_back(in_ntiles_c);
                     fast_tilize_dfb.pop_front(in_ntiles_c);
-                    fast_tilize_dfb.reserve_back(in_ntiles_c);
                     pre_tilize_dfb.pop_front(TILE_HEIGHT * in_ntiles_c);
-                    pre_tilize_dfb.reserve_back(TILE_HEIGHT * in_ntiles_c);
 
                     tilize_stick_counter = 0;
 
@@ -256,8 +258,7 @@ void kernel_main() {
         }
     }
 
-    // With one scalar per core the tile is waited once before the loop and reused by every
-    // iteration, so it is popped here rather than per iteration.
+    // Pairs with the wait_front before the loop.
     if constexpr (one_scalar_per_core) {
         in_scalar_dfb_0.pop_front(1);
     }

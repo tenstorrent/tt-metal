@@ -112,7 +112,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         processed_sticks == total_elems_to_reduce) {
                         noc.async_read_barrier();
                         in_dfb.push_back(1);
-                        in_dfb.reserve_back(1);
+                        // Only reserve when another chunk follows. Reserving after the final chunk
+                        // would leave the buffer reserved but never pushed when the kernel exits.
+                        if (processed_sticks != total_elems_to_reduce) {
+                            in_dfb.reserve_back(1);
+                        }
                         write_offset = 0;
                         // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
                         // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
@@ -364,27 +368,21 @@ void kernel_main() {
         }
     }
 
-    // The pop shouldn't happen until after the loop above, because
-    // read_kernel_with_top_left_index copies from the same CB (passed into the function
-    // via clear_value_cb_id).
-    if constexpr (is_avg_pool || need_to_initialize_in_cb) {
-        // Reader 0 fills and pushes the clear tile; reader 1 is its consumer so it pops it.
-        if constexpr (reader_id == 1) {
+    // Reader 1 consumes the buffers that reader 0 fills once before the segment loop: the
+    // clear value tile, and the reader indices and config buffers when the config tensor is
+    // in DRAM. Reader 1 reads all of them in place for the whole kernel, so it releases them
+    // here. The pops belong after the loop above because for avg pool with a large kernel
+    // read_kernel_with_top_left_index copies from the clear value CB at every chunk
+    // boundary. Each pop keeps the condition that its wait_front carries.
+    if constexpr (reader_id == 1) {
+        if constexpr (is_avg_pool || need_to_initialize_in_cb) {
             clear_value_dfb.pop_front(1);
         }
-    }
-
-    // Both config buffers are read through a raw pointer throughout the kernel rather than
-    // through the buffer object, so they are waited once up front and popped here. Each pop
-    // carries the same conditions as its wait.
-    if constexpr (config_in_dram) {
-        if (reader_id != 0) {
+        if constexpr (config_in_dram) {
             reader_indices_dfb.pop_front(1);
-        }
-    }
-    if constexpr (!one_scalar_per_core && config_in_dram) {
-        if (reader_id != 0) {
-            config_dfb.pop_front(1);
+            if constexpr (!one_scalar_per_core) {
+                config_dfb.pop_front(1);
+            }
         }
     }
 }  // kernel_main()
