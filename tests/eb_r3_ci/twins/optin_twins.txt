@@ -1,0 +1,11 @@
+tests/eb_r3_ci/twins/kernels/tw_zpkv.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+tests/eb_r3_ci/twins/kernels/tw_r2r.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+tests/eb_r3_ci/twins/kernels/tw_r2r.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+tests/eb_r3_ci/twins/kernels/tw_agmm.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+tests/eb_r3_ci/twins/kernels/tw_agmm.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+tests/eb_r3_ci/twins/kernels/tw_srs.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+tests/eb_r3_ci/twins/kernels/tw_srs.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+tests/eb_r3_ci/twins/kernels/tw_r21.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
+tests/eb_r3_ci/twins/kernels/tw_gr.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
+tests/eb_r3_ci/twins/kernels/tw_psdpa.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+tests/eb_r3_ci/twins/kernels/tw_psdpa.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

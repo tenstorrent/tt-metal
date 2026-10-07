@@ -6,5 +6,6 @@ cd /work
 export EB_SHOW_ERR=1 EB_RUN_LIMIT=1500 EB_REPS=3
 for p in 1 2 3; do
   echo "##### srs addcmul pass $p"; bash tests/eb_r3_ci/ab_set.sh tests/eb_r3_ci/optin_srs.txt tests/eb_r3_ci/test_eb_srs_addcmul.py
+  [[ $p == 1 ]] && { echo "##### elf srs"; python3 tests/eb_r3_ci/elf_cache_diff.py /tmp/ebset/cache_main /tmp/ebset/cache_optin 2>&1 | head -30; }
 done
 echo "##### bits srs addcmul"; bash tests/eb_r3_ci/bits_ab.sh tests/eb_r3_ci/optin_srs.txt -p eb_seed_plugin tests/eb_r3_ci/test_eb_srs_addcmul.py
