@@ -5,6 +5,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "common.h"
+#ifdef FUSED_IN
+#include "relayout_fused.h"
+#endif
 
 template <typename A>
 inline void dram_read(const A& s, uint32_t off, uint32_t l1, uint32_t nbytes) {
@@ -49,6 +52,27 @@ void kernel_main() {
     uint32_t t0;
 
     const uint32_t npass = get_arg_val<uint32_t>(12);  // same for every core of the column (shared statics stream)
+#ifdef FUSED_IN
+    // natural inputs -> my share of the rearranging (relayout_fused.h); then wait until every core is done
+    const uint32_t st_fmk = get_write_ptr(CB_SFMK);
+    {
+        constexpr auto a_cn = TensorAccessorArgs<a_inv.next_compile_time_args_offset()>();
+        constexpr auto a_f1 = TensorAccessorArgs<a_cn.next_compile_time_args_offset()>();
+        constexpr auto a_f2 = TensorAccessorArgs<a_f1.next_compile_time_args_offset()>();
+        constexpr auto a_m1 = TensorAccessorArgs<a_f2.next_compile_time_args_offset()>();
+        constexpr auto a_m2 = TensorAccessorArgs<a_m1.next_compile_time_args_offset()>();
+        const auto Cn = TensorAccessor(a_cn, get_arg_val<uint32_t>(13), R::M * 4);
+        const auto F1 = TensorAccessor(a_f1, get_arg_val<uint32_t>(14), rf::C1 * 4);
+        const auto F2 = TensorAccessor(a_f2, get_arg_val<uint32_t>(15), rf::C2 * 4);
+        const auto M1 = TensorAccessor(a_m1, get_arg_val<uint32_t>(16), rf::C1 * 4);
+        const auto M2 = TensorAccessor(a_m2, get_arg_val<uint32_t>(17), rf::C2 * 4);
+        rf::hw_read(Cn, F1, F2, M1, M2, x, l0_core, nl_core);
+        rf::barrier(get_semaphore(SEM_ARRIVE), get_semaphore(SEM_GO), core_id == 0, get_write_ptr(CB_RARR) + 448);
+    }
+#define FM_SRC(k, li, arr) (st_fmk + ((((k) % 6) * R::LCM + (li)) * 2 + (arr)) * (P::NBLK * CHB) + ((k) / 6) * CHB)
+#else
+#define FM_SRC(k, li, arr) (fmkbuf + ((k) & 1) * FMK_SLOT_B + ((li) * 2 + (arr)) * CHB)
+#endif
     for (uint32_t q = 0; q < npass; ++q) {
         const uint32_t l0 = l0_core + q * P::LP;
         const uint32_t nl = nl_core > q * P::LP ? (nl_core - q * P::LP < P::LP ? nl_core - q * P::LP : P::LP) : 0;
@@ -66,12 +90,14 @@ void kernel_main() {
         // all plane slots of my levels (both planes + the host-made shifted copies): one contiguous run per level
         // v26: even levels, one at a time; compute shifts each level as soon as its token arrives (writer: odd levels)
         for (uint32_t li = 0; li < nl; li += 2) {
+#ifndef FUSED_IN
             dram_read(
                 CELL,
                 ((l0 + li) * P::NBX + x) * NSLOT_DRAM * plane_slot_bytes,
                 planes + li * P::LVL_PITCH_B,
                 NSLOT_DRAM * plane_slot_bytes);
             noc_async_read_barrier();
+#endif
             cb_reserve_back(CB_TOK4, 1);
             cb_push_back(CB_TOK4, 1);
         }
@@ -80,16 +106,18 @@ void kernel_main() {
         const uint32_t invbuf = get_write_ptr(CB_INV);  // this band's inverse areas, once per pass
         dram_read(INV, x * P::NOBLK * CHB, invbuf, P::NOBLK * CHB);
         auto fetch_fmk = [&](uint32_t k) {  // f/mask of step k = b * 6 + g, all my levels of this pass, into slot k % 2
+#ifdef FUSED_IN
+            return;  // already in my L1
+#endif
             const uint32_t g = k % 6, b = k / 6;
             const uint32_t off = (((g * P::NBX + x) * P::NBLK + b) * P::L + l0) * 2 * CHB;
             for (uint32_t lp = 0; lp < nl;
-                 lp += 4) {  // even pairs (levels lp, lp + 1) only: the writer does the odd ones
+                 lp += 4)  // even pairs (levels lp, lp + 1) only: the writer does the odd ones
                 dram_read(
                     FMK,
                     off + lp * 2 * CHB,
                     fmkbuf + (k & 1) * FMK_SLOT_B + lp * 2 * CHB,
                     (nl - lp < 2 ? nl - lp : 2) * 2 * CHB);
-            }
         };
         // statics of step k go to compute one step ahead of its level tiles
         auto stat_copy = [&](uint32_t k) {
@@ -175,7 +203,6 @@ void kernel_main() {
                 if (k + 1 < 6 * P::NBLK) {
                     fetch_fmk(k + 1);  // in flight while this step is assembled
                 }
-                const uint32_t fslot = fmkbuf + (k & 1) * FMK_SLOT_B;
                 uint32_t tap_src[10];
                 for (uint32_t i = 0; i < 10; ++i) {
                     const uint32_t start = b * P::CH + P::TAP_OFF[g][i];
@@ -183,9 +210,8 @@ void kernel_main() {
                     tap_src[i] = planes + P::SLOT[P::TAP_P[g][i]][rho] * plane_slot_bytes + (start - rho) * 4;
                 }
                 noc_async_read_one_packet_set_state(get_noc_addr(0), CHB);
-                const uint32_t npairs = (nl + 1) / 2, nmine = (npairs + 1) / 2;
                 t0 = CLK();
-                cb_reserve_back(CB_LVL, 3 * nmine);
+                cb_reserve_back(CB_LVL, LVL_STEP_TILES);
                 T[3] += CLK() - t0;
                 const uint32_t dst0 = get_write_ptr(CB_LVL);
                 t0 = CLK();
@@ -198,8 +224,8 @@ void kernel_main() {
                         }
                         const uint32_t base = dst + j * 12 * CHB;
                         const uint32_t lvl_off = li * P::LVL_PITCH_B;
-                        noc_async_read_one_packet_with_state(fslot + li * 2 * CHB, base);
-                        noc_async_read_one_packet_with_state(fslot + li * 2 * CHB + CHB, base + CHB);
+                        noc_async_read_one_packet_with_state(FM_SRC(k, li, 0), base);
+                        noc_async_read_one_packet_with_state(FM_SRC(k, li, 1), base + CHB);
 #pragma GCC unroll 10
                         for (uint32_t i = 0; i < 10; ++i) {
                             noc_async_read_one_packet_with_state(tap_src[i] + lvl_off, base + (2 + i) * CHB);
@@ -208,7 +234,7 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 T[4] += CLK() - t0;
-                cb_push_back(CB_LVL, 3 * nmine);
+                cb_push_back(CB_LVL, LVL_STEP_TILES);
                 if (k + 2 < 6 * P::NBLK) {
                     stat_copy(k + 2);
                 }
@@ -221,6 +247,9 @@ void kernel_main() {
             }
         }
     }
+#ifdef FUSED_OUT
+    rf::out_arrive(x, nl_core);  // my assembler slots are complete: hand them to compute
+#endif
     T[7] = CLK() - t_start;
     if (dbg_addr) {
         volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)get_write_ptr(CB_MCW);

@@ -7,6 +7,10 @@
 #pragma once
 #include <cstdint>
 constexpr uint32_t CHB = P::CH * 4;  // chunk bytes (128 fp32)
+// level-pair tiles per step in CB_LVL (reader: pairs 0, 4, 8, ...) and CB_LVL2 (writer: pairs 2, 6, ...), sized for a
+// full pass of LP levels. Every core reserves and pushes this many per step even when it has fewer levels (compute
+// pops the unused rest), so a reservation never straddles the end of the CB ring (it would overrun the next CB).
+constexpr uint32_t LVL_STEP_TILES = 3 * ((P::LP / 2 + 1) / 2), LVL2_STEP_TILES = 3 * ((P::LP / 2) / 2);
 constexpr uint32_t TILEB = 4096;
 // CB ids
 constexpr uint32_t CB_STAT = 0, CB_LVL = 1, CB_OI = 2, CB_TOK = 3, CB_PLANES = 4, CB_FBUF = 5, CB_STAGE = 6,

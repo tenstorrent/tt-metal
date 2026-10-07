@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Time per model time step (100 x 100 cells, 100 levels), everything per step on the chip; see tests/common.py.
-Measured on a P150 (2026-10-07): baseline ~1,186 ms, optimized ~0.52 ms. The limits below are loose."""
+Measured on a P150 (2026-10-07): baseline ~1,186 ms, optimized ~0.33 ms. The limits below are loose."""
 import pytest
 from loguru import logger
 

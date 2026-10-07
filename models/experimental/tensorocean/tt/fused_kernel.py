@@ -6,11 +6,15 @@
 
 Core (x, y) owns mesh-column strip x and a range of depth levels (core row y). Each core loads its strip's
 tracer values once, makes the shifted copies it needs with the SFPU, streams its edges in blocks of 128
-(f, mask from DRAM; per-edge coefficients multicast down the core column by row 0), computes fluxes on the SFPU
+(f, mask; per-edge coefficients multicast down the core column by row 0), computes fluxes on the SFPU
 in fp32, keeps them in a small ring buffer in L1, and writes each cell's output (sum of 6 fluxes x 1/area).
 Kernels: kernels/reader.cpp, kernels/writer.cpp, kernels/compute.cpp (+ common.h, sfpu_shift.h).
-Inputs are in the per-core layout of fused_plan.py; tensorocean.py adds the on-chip conversion from and to the
-natural layout.
+
+prepare(..., natural=, natural_out=) also builds the natural-layout conversions into the same program
+(kernels/relayout_fused.h): before the main loop, each core row reads the natural rows of its levels from DRAM,
+the compute engine transposes them, and every column goes to the L1 of the core that owns it; after the main
+loop, the outputs come back the same way into natural rows in DRAM. Without them, inputs and outputs are in the
+per-core DRAM layout of fused_plan.py (tensorocean.py then converts with two separate programs).
 """
 import pathlib
 import numpy as np
@@ -30,6 +34,7 @@ CB_F_STEPS = 6
 NS = int(_os_b.environ.get("NS", "4"))  # statics ring depth (steps the sender may multicast ahead)
 DEBUG = False  # True: reader/writer write per-core cycle counters to the DBG tensor (checks/dbg_v3.py)
 PAGE = 2048
+L1_CB_BUDGET = 1_420_000  # bytes of circular buffers per core the fused versions may use (P150 limit ~1,461,088)
 KDIR = pathlib.Path(__file__).resolve().parent / "kernels"
 
 
@@ -84,6 +89,9 @@ def header(plan, f_alloc, npk, shift_slot, shift_k, lp, nslot=0, pbase=(0, 0)):
 def source(hdr, name):
     common = (KDIR / "common.h").read_text().replace("#pragma once", "")
     body = (KDIR / name).read_text().replace('#include "common.h"', "")
+    body = body.replace(
+        '#include "relayout_fused.h"', (KDIR / "relayout_fused.h").read_text().replace("#pragma once", "")
+    )
     body = body.replace('#include "sfpu_shift.h"', (KDIR / "sfpu_shift.h").read_text().replace("#pragma once", ""))
     # keep the kernel's own #includes first, then constants + common, then the body
     lines = body.splitlines()
@@ -106,7 +114,7 @@ def _upload(a, device):
     )
 
 
-def prepare(host, n, levels, device, dtype):
+def prepare(host, n, levels, device, dtype, natural=None, natural_out=None):
     assert dtype == ttnn.float32, "v2 is an fp32 kernel"
     grid = device.compute_with_storage_grid_size()  # 13 x 10 on a P150, 11 x 10 on a QB2 chip
     plan = make_plan(
@@ -157,19 +165,15 @@ def prepare(host, n, levels, device, dtype):
     budget = int(_os_b.environ.get("L1BUDGET_KB", "1000")) * 1024
     # level assignment per y: y=0 (the statics sender) gets SENDER_LEVELS, the rest split evenly
     ny_all = min(10, levels)
-    if ny_all >= 2 and SENDER_LEVELS:
-        rest = levels - SENDER_LEVELS
+    sl = min(SENDER_LEVELS, levels)  # never more levels than exist (else OUT is written past its end)
+    if ny_all >= 2 and sl:
+        rest = levels - sl
         per = -(-rest // (ny_all - 1))
-        lv = [(0, SENDER_LEVELS)] + [(SENDER_LEVELS + i * per, min(per, rest - i * per)) for i in range(ny_all - 1)]
+        lv = [(0, sl)] + [(sl + i * per, min(per, rest - i * per)) for i in range(ny_all - 1)]
     else:
         lv = [(y * plan.lc, min(plan.lc, levels - y * plan.lc)) for y in range(plan.nby)]
     lv = [(a, n_) for a, n_ in lv if n_ > 0]
     lcmax = max(n_ for _, n_ in lv)
-    lp = lcmax + (lcmax & 1)
-    if LP_OVERRIDE:
-        lp = LP_OVERRIDE
-    while lp > 2 and (lp * lvl_pitch_b + 6 * lp * (FR + 1) * CH * 4 + 4 * (24 + lp * 2) * CH * 4) > budget:
-        lp -= 2
     # F arrays: groups 0 (ee) and 1 (eo) always appear together with the same offsets -> one array
     fa_of = [0, 0, 1, 2, 3, 4]
     fterms = {}
@@ -183,6 +187,60 @@ def prepare(host, n, levels, device, dtype):
     nt = len(fterms["even"])
     assert nt == len(fterms["odd"]) == 5
     assert all(fa == 0 for part in fterms.values() for fa, dr, dc in part if dr), "only array 0 needs a shifted copy"
+    # output blocks ready after each F block
+    ob_ready, c = [], 0
+    for b in range(plan.nblk):
+        while c < plan.noblk:
+            need = 0
+            for part in ("even", "odd"):
+                for g, dr, dc in fterms[part]:
+                    start = c * CH + dc * plan.H + dr
+                    need = max(need, start + CH - 1 + (1 if start % 4 else 0))
+            if need <= (b + 1) * CH - 1:
+                c += 1
+            else:
+                break
+        ob_ready.append(c if b < plan.nblk - 1 else plan.noblk)
+    # v25: CB_OI / CB_OI2 hold a whole output batch (operands assembled early, consumed at the block end)
+    batches = [ob_ready[b] - (ob_ready[b - 1] if b else 0) for b in range(plan.nblk - 1)]
+
+    def base_cbs(lp):  # (CB id, total bytes, page bytes) of v27's circular buffers for lp levels per pass
+        oi_tiles = max(4, (max(batches) if batches else 1) * 2 * ((lp + 1) // 2))
+        return [
+            (0, CB_STAT_STEPS * 3 * 4096, 4096),
+            (1, 2 * 3 * ((lp // 2 + 1) // 2) * 4096, 4096),
+            (21, 2 * 3 * (lp // 4) * 4096 if lp >= 4 else 4096, 4096),
+            (22, 2 * lp * 2 * CH * 4, lp * 2 * CH * 4),
+            (23, 32, 32),
+            (2, oi_tiles * 4096, 4096),
+            (3, 4 * 32, 32),
+            (4, lp * lvl_pitch_b, lvl_pitch_b),
+            (5, 6 * lp * (FR + 1) * CH * 4, (FR + 1) * CH * 4),
+            (6, NS * 24 * CH * 4, 24 * CH * 4),
+            (10, 2 * lp * 2 * CH * 4, lp * 2 * CH * 4),
+            (11, 2 * SB * 24 * CH * 4, 24 * CH * 4),
+            (7, 32, 32),
+            (8, 32, 32),
+            (9, 32, 32),
+            (12, 512, 512),
+            (13, plan.noblk * CH * 4, plan.noblk * CH * 4),
+            (14, oi_tiles * 4096, 4096),
+            (15, plan.noblk * CH * 4, plan.noblk * CH * 4),
+            (18, 4096, 4096),
+            (19, 32, 32),
+            (20, 32 * 16, 32),
+            (24, 32 * 16, 32),
+            (16, CB_F_STEPS * 2 * 4096, 4096),
+            (17, OUT_TILES * 4096, 4096),
+        ]
+
+    lp = min(lcmax + (lcmax & 1), 16)  # DEST holds 16 levels' F chunks (compute.cpp: chunks 48 + level)
+    if LP_OVERRIDE:
+        lp = LP_OVERRIDE
+    while lp > 2 and (lp * lvl_pitch_b + 6 * lp * (FR + 1) * CH * 4 + 4 * (24 + lp * 2) * CH * 4) > budget:
+        lp -= 2
+    while lp > 2 and sum(b for _, b, _ in base_cbs(lp)) > L1_CB_BUDGET:  # all of v27's buffers must fit too
+        lp -= 2
     nfg = 5
     npass = -(-lcmax // lp)  # same pass count on every core: the statics stream is shared per column
     hdr = header(plan, f_alloc, npk, shift_slot, shift_k, lp, nslot, pbase)
@@ -213,19 +271,6 @@ def prepare(host, n, levels, device, dtype):
     # streaming tables
     maxoff = max(o for tl in plan.taps for _, o in tl)
     shift_limit = [min(plan.cell_len, (b + 1) * CH + maxoff + 8) for b in range(plan.nblk)]
-    ob_ready, c = [], 0
-    for b in range(plan.nblk):
-        while c < plan.noblk:
-            need = 0
-            for part in ("even", "odd"):
-                for g, dr, dc in fterms[part]:
-                    start = c * CH + dc * plan.H + dr
-                    need = max(need, start + CH - 1 + (1 if start % 4 else 0))
-            if need <= (b + 1) * CH - 1:
-                c += 1
-            else:
-                break
-        ob_ready.append(c if b < plan.nblk - 1 else plan.noblk)
     shift_w = [1 if k == len(plan.shifts) - 1 else 0 for k in range(len(plan.shifts))]  # the writer makes the last one
     hdr = hdr.replace("}\n", "", 1) if False else hdr
     extra = _arr("SHIFT_LIMIT", shift_limit) + _arr("OB_READY", ob_ready) + _arr("SHIFT_W", shift_w or [0])
@@ -290,12 +335,105 @@ def prepare(host, n, levels, device, dtype):
     w_ct = [0, 1]  # semaphore ids: ready (on the sender), valid (on receivers)
     for k in ("OUT", "FMK", "STAT", "INV", "CELL"):
         w_ct += ttnn.TensorAccessorArgs(t[k]).get_compile_time_args()
-
-    # v25: CB_OI / CB_OI2 hold a whole output batch (operands assembled early, consumed at the block end)
-    batches = [ob_ready[b] - (ob_ready[b - 1] if b else 0) for b in range(plan.nblk - 1)]
-    oi_tiles = max(4, (max(batches) if batches else 1) * 2 * ((lp + 1) // 2))
-    if _os_b.environ.get("PRINT_OB"):
-        print("ob_ready", ob_ready, "batches", batches, "oi_tiles", oi_tiles, "nblk", plan.nblk, "noblk", plan.noblk)
+    extra_cbs = []
+    if natural:
+        # FUSED_IN: the input rearranging runs inside this program (kernels/relayout_fused.h): each row of cores reads
+        # the natural rows of its levels from DRAM, the compute engine transposes them, and the columns are sent to
+        # the cores that own them. FUSED_OUT (natural_out): the outputs go the same way back into natural rows.
+        assert npass == 1, "fused rearranging needs all of a core's levels in one pass"
+        xs_, ys_ = {x for x, _, _ in active}, {y for _, y, _ in active}
+        assert len(active) == len(xs_) * len(ys_), "fused rearranging needs a full core rectangle (GO multicast)"
+        nat_list = [
+            natural[k]
+            for k in ("cell", "normalThicknessFlux1", "normalThicknessFlux2", "advMaskHighOrder1", "advMaskHighOrder2")
+        ]
+        for x_ in nat_list:
+            r_ct += ttnn.TensorAccessorArgs(x_).get_compile_time_args()
+        for x_ in natural_out or []:
+            w_ct += ttnn.TensorAccessorArgs(x_).get_compile_time_args()
+        nat_addr = [x_.buffer_address() for x_ in nat_list]
+        out_addr = [o.buffer_address() for o in natural_out or []]
+        ncores = len(active)
+        for x, y, nl in active:
+            ra[x][y] = list(ra[x][y]) + nat_addr  # reader args 13..17
+            wa[x][y] = list(wa[x][y]) + out_addr  # writer args 19, 20
+            ca[x][y] = list(ca[x][y]) + [x]  # compute arg 2
+        M = n + 4
+        nrin = 2  # CB_RIN depth in plane units
+        if natural_out:  # output units a = (level, part) of a row, one assembler core each, in a CB_RIN slot
+            assert max(-(-2 * nl_ // plan.nbx) for _, nl_ in lv) <= min(nrin, 2), "output units per assembler > 2"
+        cdiv = lambda a, b_: -(-a // b_)
+        tr = cdiv(plan.H, 32)  # tiles per transposed row (v27 column)
+        wt_cell, wt_f2, wt_f1 = cdiv(M, 32), cdiv(n + 1, 32), cdiv(2 * n + 1, 32)
+        wt_max = max(wt_cell, wt_f2, wt_f1)
+        assert tr <= 4 and cdiv(n, 32) <= 4, "a transposed row block must fit DEST (4 fp32 tiles)"
+        G = plan.groups
+        unit_rows = [
+            M // 2,
+            M // 2,
+            G[4].rows,
+            G[5].rows,
+            G[4].rows,
+            G[5].rows,
+            G[0].rows,
+            G[2].rows,
+            G[0].rows,
+            G[2].rows,
+        ]
+        unit_cols = [M, M] + [n + 1] * 4 + [2 * n + 1] * 4
+        zb_words = -(-max(plan.cell_len, plan.f_len) // 4) * 4
+        lev_y, lev_li = [0] * levels, [0] * levels
+        for y, (a, nl_) in enumerate(lv):
+            for i in range(nl_):
+                lev_y[a + i], lev_li[a + i] = y, i
+        ny = len(lv)
+        nocs = [noc(i % plan.nbx, i // plan.nbx) for i in range(ncores)]
+        c0, c1 = noc(0, 0), noc(plan.nbx - 1, ny - 1)
+        u = lambda nm, v: f"constexpr uint32_t {nm}[{len(v)}] = {{{', '.join(str(int(a)) for a in v)}}};\n"
+        r = "namespace R {\n"
+        for k, v in dict(
+            N=n,
+            M=M,
+            H=plan.H,
+            CELL_LEN=plan.cell_len,
+            F_LEN=plan.f_len,
+            NBX=plan.nbx,
+            L=levels,
+            LCM=lcmax,
+            NCORES=ncores,
+            LVL_PITCH=lvl_pitch_b,
+            TR=tr,
+            WT_MAX=wt_max,
+            WT_CELL=wt_cell,
+            WT_F2=wt_f2,
+            WT_F1=wt_f1,
+            UNIT_PAGES=tr * wt_max,
+            ROWB=wt_max * 128,
+            ZB_WORDS=zb_words,
+            TRO=cdiv(n, 32),
+            NRIN=nrin,
+            MCX0=c0.x,
+            MCY0=c0.y,
+            MCX1=c1.x,
+            MCY1=c1.y,
+        ).items():
+            r += f"constexpr uint32_t {k} = {v};\n"
+        r += u("BAND0", [a for a, _ in plan.bands]) + u("BANDW", [b - a for a, b in plan.bands])
+        r += u("G_COLS", [g.cols for g in plan.groups])
+        r += u("UNIT_ROWS", unit_rows) + u("UNIT_COLS", unit_cols)
+        r += u("LEV_Y", lev_y) + u("LEV_LI", lev_li) + u("NOCX", [c.x for c in nocs]) + u("NOCY", [c.y for c in nocs])
+        r += "}\n"
+        r += "constexpr uint32_t CB_SFMK = 25, CB_RIN = 26, CB_TIL = 28, CB_TOUT = 29, CB_ZB = 30;\n"
+        r += "constexpr uint32_t SEM_ARRIVE = 2, SEM_GO = 3, SEM_OUT0 = 4;\n"
+        hdr = "#define FUSED_IN 1\n" + ("#define FUSED_OUT 1\n" if natural_out else "") + hdr + r
+        up = tr * wt_max * 4096  # one plane unit
+        extra_cbs = [
+            (25, 6 * lcmax * 2 * plan.f_len * 4),
+            (26, nrin * up, 4096),
+            (28, up, 4096),
+            (29, 2 * up, 4096),
+            (30, zb_words * 4),
+        ]
 
     def cb(idx, nbytes, page=4096):
         return ttnn.CBDescriptor(
@@ -304,38 +442,22 @@ def prepare(host, n, levels, device, dtype):
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=ttnn.float32, page_size=page)],
         )
 
-    cbs = [
-        cb(0, CB_STAT_STEPS * 3 * 4096),
-        cb(1, 2 * 3 * ((lp // 2 + 1) // 2) * 4096),
-        cb(21, 2 * 3 * (lp // 4) * 4096 if lp >= 4 else 4096),
-        cb(22, 2 * lp * 2 * CH * 4, lp * 2 * CH * 4),
-        cb(23, 32, 32),
-        cb(2, oi_tiles * 4096),
-        cb(3, 4 * 32, 32),
-        cb(4, lp * lvl_pitch_b, lvl_pitch_b),
-        cb(5, 6 * lp * (FR + 1) * CH * 4, (FR + 1) * CH * 4),
-        cb(6, NS * 24 * CH * 4, 24 * CH * 4),
-        cb(10, 2 * lp * 2 * CH * 4, lp * 2 * CH * 4),
-        cb(11, 2 * SB * 24 * CH * 4, 24 * CH * 4),
-        cb(7, 32, 32),
-        cb(8, 32, 32),
-        cb(9, 32, 32),
-        cb(12, 512, 512),
-        cb(13, plan.noblk * CH * 4, plan.noblk * CH * 4),
-        cb(14, oi_tiles * 4096),
-        cb(15, plan.noblk * CH * 4, plan.noblk * CH * 4),
-        cb(18, 4096),
-        cb(19, 32, 32),
-        cb(20, 32 * 16, 32),
-        cb(24, 32 * 16, 32),
-        cb(16, CB_F_STEPS * 2 * 4096),
-        cb(17, OUT_TILES * 4096),
-    ]
+    cbs = [cb(i, b, pg) for i, b, pg in base_cbs(lp)]
+    if natural:  # f/mask now come from CB 25: the two DRAM prefetch buffers shrink to one page
+        cbs = [c for c in cbs if c.format_descriptors[0].buffer_index not in (10, 22)] + [
+            cb(10, 1024, 1024),
+            cb(22, 1024, 1024),
+        ]
+        cbs += [cb(e[0], e[1], e[2] if len(e) > 2 else e[1]) for e in extra_cbs]
+        # measured on the P150: CBs may total 1,572,864 - 111,776 B before program creation fails
+        assert sum(c.total_size for c in cbs) <= L1_CB_BUDGET, "fused rearranging buffers do not fit L1"
+    if _os_b.environ.get("PRINT_L1"):
+        print("CB bytes", sum(c.total_size for c in cbs))
     cfg = ttnn.ComputeConfigDescriptor(
         math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, dst_full_sync_en=True, math_approx_mode=False
     )
     m = [ttnn.UnpackToDestMode.Default] * 64
-    for i in (0, 1, 2, 14, 18, 21):
+    for i in (0, 1, 2, 14, 18, 21) + ((26, 28) if natural else ()):
         m[i] = ttnn.UnpackToDestMode.UnpackToDestFp32
     cfg.unpack_to_dest_mode = ttnn._ttnn.program_descriptor.VectorUnpackToDestMode(m)
     SC = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
@@ -365,9 +487,15 @@ def prepare(host, n, levels, device, dtype):
             config=cfg,
         ),
     ]
-    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in (0, 1)]
+    sem_ids = (0, 1) + ((2, 3) if natural else ()) + ((4, 5) if natural_out else ())
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in sem_ids]
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
-    io = [t["CELL"], t["FMK"], t["STAT"], t["INV"], t["DBG"], t["OUT"]]
+    io = (
+        [t["CELL"], t["FMK"], t["STAT"], t["INV"], t["DBG"]]
+        + (nat_list if natural else [])
+        + list(natural_out or [])
+        + [t["OUT"]]
+    )
     return dict(plan=plan, prog=prog, io=io, t=t, hdr=hdr, lp=lp)
 
 

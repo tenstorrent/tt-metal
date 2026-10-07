@@ -9,7 +9,96 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/experimental/reg_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/compute/tilize.h"
+#include "api/compute/transpose.h"
+#include "api/compute/pack_untilize.h"
 #include "common.h"
+#ifdef FUSED_IN
+// HW input rearranging (relayout_fused.h, hw_read / hw_write): per plane unit, tilize the natural rows (lossless
+// fp32), transpose each tile, untilize: natural column c becomes row c of CB_TOUT. Units are padded to UNIT_PAGES.
+template <uint32_t WT>
+inline void hw_unit() {
+    tilize_init(CB_RIN, R::WT_MAX, CB_TIL);
+    cb_reserve_back(CB_TIL, R::UNIT_PAGES);
+    for (uint32_t h = 0; h < R::TR; ++h) {
+        cb_wait_front(CB_RIN, R::WT_MAX);
+        tilize_block(CB_RIN, WT, CB_TIL, 0, h * WT);
+        cb_pop_front(CB_RIN, R::WT_MAX);
+    }
+    cb_push_back(CB_TIL, R::UNIT_PAGES);
+    tilize_uninit(CB_RIN, CB_TIL);
+    cb_wait_front(CB_TIL, R::UNIT_PAGES);
+    transpose_init(CB_TIL);
+    pack_untilize_dest_init<R::TR, R::TR>(CB_TOUT);
+    for (uint32_t w = 0; w < WT; ++w) {
+        cb_reserve_back(CB_TOUT, R::TR);
+        tile_regs_acquire();
+        for (uint32_t h = 0; h < R::TR; ++h) {
+            transpose_tile(CB_TIL, h * WT + w, h);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_untilize_dest<R::TR, R::TR>(CB_TOUT);
+        tile_regs_release();
+        cb_push_back(CB_TOUT, R::TR);
+    }
+    pack_untilize_uninit(CB_TOUT);
+    cb_pop_front(CB_TIL, R::UNIT_PAGES);
+    if constexpr (WT < R::WT_MAX) {
+        cb_reserve_back(CB_TOUT, (R::WT_MAX - WT) * R::TR);
+        cb_push_back(CB_TOUT, (R::WT_MAX - WT) * R::TR);
+    }
+}
+#ifdef FUSED_OUT
+// output unit: CB_RIN slot = TRO * 32 rows (natural columns) x TR * 32 floats -> CB_TOUT rows = natural output rows
+inline void hw_out(uint32_t x, uint32_t nl) {
+    for (uint32_t a = x; a < 2 * nl; a += R::NBX) {
+        tilize_init(CB_RIN, R::TR, CB_TIL);
+        cb_wait_front(CB_RIN, R::UNIT_PAGES);
+        cb_reserve_back(CB_TIL, R::UNIT_PAGES);
+        for (uint32_t h = 0; h < R::TRO; ++h) {
+            tilize_block(CB_RIN, R::TR, CB_TIL, 0, h * R::TR);
+            cb_pop_front(CB_RIN, R::TR);
+        }
+        cb_pop_front(CB_RIN, R::UNIT_PAGES - R::TRO * R::TR);
+        cb_push_back(CB_TIL, R::UNIT_PAGES);
+        tilize_uninit(CB_RIN, CB_TIL);
+        cb_wait_front(CB_TIL, R::UNIT_PAGES);
+        transpose_init(CB_TIL);
+        pack_untilize_dest_init<R::TRO, R::TRO>(CB_TOUT);
+        for (uint32_t w = 0; w < R::TR; ++w) {
+            cb_reserve_back(CB_TOUT, R::TRO);
+            tile_regs_acquire();
+            for (uint32_t h = 0; h < R::TRO; ++h) {
+                transpose_tile(CB_TIL, h * R::TR + w, h);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_untilize_dest<R::TRO, R::TRO>(CB_TOUT);
+            tile_regs_release();
+            cb_push_back(CB_TOUT, R::TRO);
+        }
+        pack_untilize_uninit(CB_TOUT);
+        cb_pop_front(CB_TIL, R::UNIT_PAGES);
+        cb_reserve_back(CB_TOUT, R::UNIT_PAGES - R::TR * R::TRO);
+        cb_push_back(CB_TOUT, R::UNIT_PAGES - R::TR * R::TRO);
+    }
+}
+#endif
+inline void hw_transpose(uint32_t x, uint32_t nl) {
+    compute_kernel_hw_startup(CB_RIN, CB_TOUT);
+    for (uint32_t i = x; i < 10 * nl; i += R::NBX) {  // unit i = (level l0 + i / 10, k = i % 10), as hw_read
+        const uint32_t k = i % 10;
+        if (k < 2) {
+            hw_unit<R::WT_CELL>();
+        } else if (k < 6) {
+            hw_unit<R::WT_F2>();
+        } else {
+            hw_unit<R::WT_F1>();
+        }
+    }
+}
+#endif
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "sfpi.h"
@@ -221,6 +310,9 @@ void kernel_main() {
     uint32_t T[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     const uint32_t t_start = CLK();
     uint32_t t0;
+#ifdef FUSED_IN
+    hw_transpose(get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(0));  // my share of the input rearranging
+#endif
     compute_kernel_hw_startup(CB_STAT, CB_F);
     copy_init(CB_STAT);
     const uint32_t nl_core = get_arg_val<uint32_t>(0);
@@ -301,6 +393,18 @@ void kernel_main() {
 
                     cb_pop_front(lcb, 3);
                 }
+                {  // the unused rest of this step's level tiles (cores with fewer than LP levels; see LVL_STEP_TILES)
+                    const uint32_t npairs = (nl + 1) / 2, rest = LVL_STEP_TILES - 3 * ((npairs + 1) / 2);
+                    const uint32_t nodd = npairs / 2, rest2 = nodd ? LVL2_STEP_TILES - 3 * nodd : 0;
+                    if (rest) {
+                        cb_wait_front(CB_LVL, rest);
+                        cb_pop_front(CB_LVL, rest);
+                    }
+                    if (rest2) {
+                        cb_wait_front(CB_LVL2, rest2);
+                        cb_pop_front(CB_LVL2, rest2);
+                    }
+                }
                 if (g != 0) {
                     if (g == 1) {
                         MATH(make_shifted(nl));
@@ -368,6 +472,9 @@ void kernel_main() {
 #endif
         }
     }
+#ifdef FUSED_OUT
+    hw_out(get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(0));  // the output units I assemble
+#endif
     T[7] = CLK() - t_start;
 #ifdef KDEBUG
 #ifdef TRISC_MATH

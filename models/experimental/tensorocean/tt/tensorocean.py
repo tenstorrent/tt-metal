@@ -4,12 +4,17 @@
 
 """Optimized TensorOcean horizontal tracer flux on one Blackhole chip.
 
-One step (TensorOcean.run) = three programs on an 11 x 10 grid of Tensix cores, all on the chip:
-  1. kernels/relayout_in.cpp:  natural-layout tracer values, f and mask in DRAM -> the fused kernel's per-core
-                               layout (one pass: whole rows read once, reordered in L1, written as blocks)
-  2. fused_kernel.py:          the fused flux + accumulation kernel (reader / compute / writer per core)
-  3. kernels/relayout_out.cpp: per-core outputs -> natural even, odd outputs [L, N/2, N] in DRAM
-Mesh constants (coefficient products, edge signs, 0.5 * dvEdge, 1 / area) are prepared once in prepare().
+One step (run) is one program on an 11 x 10 grid of Tensix cores (fused_kernel.py with kernels/relayout_fused.h):
+  1. natural-layout tracer values, f and mask in DRAM -> each core row reads the rows of its depth levels, the
+     compute engine transposes them (tilize, transpose, untilize; exact in fp32) and every mesh column is sent
+     to the L1 of the core that owns it
+  2. the fused flux + accumulation kernel (reader / compute / writer per core)
+  3. per-core outputs -> an assembler core per (level, even/odd part) -> transposed -> natural rows [L, N/2, N]
+     in DRAM
+Sizes the single program does not fit (larger meshes, many levels per core) use three programs instead:
+kernels/relayout_in.cpp, the fused kernel, kernels/relayout_out.cpp, with the per-core layout in DRAM between.
+Mesh constants (coefficient products, edge signs, 0.5 * dvEdge, 1 / area) are prepared once in prepare(); the
+per-step inputs reach the chip only as the natural arrays.
 Usage:
     s = prepare(host_inputs, n, levels, device)
     even, odd = run(s)            # device tensors [levels, n/2, n]; traceable
@@ -18,9 +23,10 @@ import os
 
 import torch
 import ttnn
+from loguru import logger
 
 from models.experimental.tensorocean.tt import fused_kernel as base
-from models.experimental.tensorocean.tt.natural_io import natural_host, upload_natural
+from models.experimental.tensorocean.tt.natural_io import STEP_INPUTS, natural_host, upload_natural
 
 PAGE = base.PAGE
 KDIR = base.KDIR
@@ -28,6 +34,7 @@ NY = 10
 # best fused-kernel settings measured at 100 x 100 on a P150: an even 10-level split per core row,
 # coefficients fetched one step per DRAM batch, a 2-step multicast ring
 TUNED_SMALL = dict(SENDER_LEVELS=10, SB=1, NS=2)
+DEFAULTS = {k: getattr(base, k) for k in TUNED_SMALL}
 
 
 def _arr(name, vals):
@@ -104,36 +111,37 @@ def _jobs_args(nbx, njobs, addrs):
     return ar, aw
 
 
-def prepare(host, n, levels, device, dtype=ttnn.float32):
+def _zeros(shape, device):
+    return ttnn.from_torch(
+        torch.zeros(shape),
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def prepare(host, n, levels, device, dtype=ttnn.float32, fused=True):
+    """fused=False forces the three-program path (used for comparison and by the tests)."""
     assert dtype == ttnn.float32, "fp32 kernel"
-    if n <= 100 and not os.environ.get("TENSOROCEAN_NO_TUNE"):
-        for k, v in TUNED_SMALL.items():
-            setattr(base, k, v)
-    s = base.prepare(host, n, levels, device, dtype)
-    plan, t = s["plan"], s["t"]
-    # the per-step arrays base.prepare built on the host are cleared: run() rebuilds them on the chip every step
-    for k in ("CELL", "FMK"):
-        z = ttnn.from_torch(
-            torch.zeros(list(t[k].shape)),
-            dtype=ttnn.float32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.copy(z, t[k])
-        ttnn.deallocate(z)
+    tuned = n <= 100 and not os.environ.get("TENSOROCEAN_NO_TUNE")
+    for k, v in (TUNED_SMALL if tuned else DEFAULTS).items():  # set on every call: the module is shared
+        setattr(base, k, v)
     nat = upload_natural(natural_host(host), device)
     half = n // 2
-    outs = [
-        ttnn.from_torch(
-            torch.zeros(levels, half, n),
-            dtype=ttnn.float32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        for _ in range(2)
-    ]
+    outs = [_zeros([levels, half, n], device) for _ in range(2)]
+    # the per-step inputs reach the chip only as the natural arrays: the host-side builder sees zeros for them
+    # (it prepares the mesh constants)
+    consts = {k: (torch.zeros_like(v) if k in STEP_INPUTS else v) for k, v in host.items()}
+    if fused:
+        try:
+            s = base.prepare(consts, n, levels, device, dtype, natural=nat, natural_out=outs)
+            s.update(nat=nat, outs=outs, fused=True)
+            return s
+        except AssertionError as e:  # this size does not fit the single program
+            logger.info(f"TensorOcean N={n} L={levels}: {e}; using three programs")
+    s = base.prepare(consts, n, levels, device, dtype)
+    plan, t = s["plan"], s["t"]
     nbx = plan.nbx
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(nbx - 1, NY - 1))])
     hdr = _header(plan)
@@ -166,13 +174,16 @@ def prepare(host, n, levels, device, dtype=ttnn.float32):
     cbytes_out = 64 + nbx * plan.out_len * 4 + half * r64(n * 4)
     prog_out = _program(_source(hdr, "relayout_out.cpp"), cores, cbytes_out, ct, ar, aw)
 
-    s.update(nat=nat, outs=outs, prog_in=prog_in, io_in=order_in, prog_out=prog_out, io_out=order_out)
+    s.update(nat=nat, outs=outs, fused=False, prog_in=prog_in, io_in=order_in, prog_out=prog_out, io_out=order_out)
     return s
 
 
 def run(s):
-    """One step: rearrange the natural inputs, run the fused kernel, rearrange the outputs. Returns (even, odd)."""
-    ttnn.generic_op(s["io_in"], s["prog_in"])
-    base.run(s)
-    ttnn.generic_op(s["io_out"], s["prog_out"])
+    """One step: natural inputs in DRAM -> natural outputs (even, odd) in DRAM, all on the chip."""
+    if s["fused"]:
+        base.run(s)
+    else:
+        ttnn.generic_op(s["io_in"], s["prog_in"])
+        base.run(s)
+        ttnn.generic_op(s["io_out"], s["prog_out"])
     return tuple(s["outs"])

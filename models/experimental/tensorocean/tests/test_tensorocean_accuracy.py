@@ -11,11 +11,11 @@ from models.experimental.tensorocean.tests.common import PCC_MIN, RMS_REL_MAX, V
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("version", ["optimized", "baseline"])
-@pytest.mark.parametrize("n, levels", [(8, 3), (30, 5), (100, 100)])
+@pytest.mark.parametrize("n, levels", [(8, 3), (30, 5), (100, 100), (64, 37), (30, 120), (100, 7)])
 @pytest.mark.parametrize("seed", [0, 1])
 def test_tensorocean_accuracy(device, version, n, levels, seed):
-    if version == "baseline" and n == 100 and seed == 1:
-        pytest.skip("baseline at 100 x 100 is slow; seed 0 covers it")
+    if version == "baseline" and ((n == 100 and seed == 1) or (n, levels) in ((64, 37), (30, 120), (100, 7))):
+        pytest.skip("the baseline is slow; the three first sizes cover it")
     m, _ = check(VERSIONS[version], device, n, levels, seed)
     for part, r in zip(("even", "odd"), m):
         logger.info(f"{version} N={n} L={levels} seed={seed} {part}: pcc {r['pcc']:.12f} rms_rel {r['rms_rel']:.2e}")

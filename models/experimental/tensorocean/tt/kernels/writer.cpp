@@ -5,6 +5,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "common.h"
+#ifdef FUSED_IN
+#include "relayout_fused.h"
+#endif
 
 template <typename A>
 inline void dram_read(const A& s, uint32_t off, uint32_t l1, uint32_t nbytes) {
@@ -53,6 +56,7 @@ void kernel_main() {
     const auto INV = TensorAccessor(a_inv, get_arg_val<uint32_t>(17), P::PAGE);
     constexpr auto a_cell = TensorAccessorArgs<a_inv.next_compile_time_args_offset()>();
     const auto CELL = TensorAccessor(a_cell, get_arg_val<uint32_t>(18), P::PAGE);
+
     constexpr uint32_t K = 6 * P::NBLK;  // steps k = b * 6 + g
     uint32_t l0 = 0, nl = 0, kbase = 0, next = 0;
     const uint32_t sstage = get_write_ptr(CB_SSTAGE);  // sender-only 2-slot DRAM prefetch of statics
@@ -130,6 +134,20 @@ void kernel_main() {
     const uint32_t fbuf = get_write_ptr(CB_FBUF);
 
     const uint32_t npass = get_arg_val<uint32_t>(16);
+#ifdef FUSED_IN
+    const uint32_t st_fmk = get_write_ptr(CB_SFMK);
+    {  // send the transposed columns of my share of the input rearranging (relayout_fused.h), then wait for all cores
+        const uint32_t zb = get_write_ptr(CB_ZB);
+        for (uint32_t i = 0; i < R::ZB_WORDS; ++i) {
+            ((volatile uint32_t*)zb)[i] = 0;
+        }
+        rf::hw_write(x, l0_core, nl_core, planes, st_fmk, zb);
+        rf::barrier(get_semaphore(SEM_ARRIVE), get_semaphore(SEM_GO), false, 0);
+    }
+#define FM_SRC2(k, li, arr) (st_fmk + ((((k) % 6) * R::LCM + (li)) * 2 + (arr)) * (P::NBLK * CHB) + ((k) / 6) * CHB)
+#else
+#define FM_SRC2(k, li, arr) (fmkbuf2 + ((k) & 1) * FMK_SLOT_B2 + ((li) * 2 + (arr)) * CHB)
+#endif
     for (uint32_t q = 0; q < npass; ++q) {
         l0 = l0_core + q * P::LP;
         nl = nl_core > q * P::LP ? (nl_core - q * P::LP < P::LP ? nl_core - q * P::LP : P::LP) : 0;
@@ -149,12 +167,14 @@ void kernel_main() {
         uint32_t ob_done = 0;
         // my half of the plane levels (the reader loads levels [0, nl/2)), then tell the reader
         for (uint32_t li = 1; li < nl; li += 2) {  // odd levels (the reader loads the even ones)
+#ifndef FUSED_IN
             dram_read(
                 CELL,
                 ((l0 + li) * P::NBX + x) * NSLOT_DRAM * plane_slot_bytes,
                 planes + li * P::LVL_PITCH_B,
                 NSLOT_DRAM * plane_slot_bytes);
             noc_async_read_barrier();
+#endif
             cb_reserve_back(CB_TOK6, 1);
             cb_push_back(CB_TOK6, 1);
         }
@@ -166,15 +186,17 @@ void kernel_main() {
         constexpr uint32_t FMK_SLOT_B2 = P::LP * 2 * CHB;
         const uint32_t nodd = ((nl + 1) / 2) / 2;
         auto fetch_fmk2 = [&](uint32_t k) {
+#ifdef FUSED_IN
+            return;  // already in my L1
+#endif
             const uint32_t g = k % 6, b = k / 6;
             const uint32_t off = (((g * P::NBX + x) * P::NBLK + b) * P::L + l0) * 2 * CHB;
-            for (uint32_t lp = 2; lp < nl; lp += 4) {
+            for (uint32_t lp = 2; lp < nl; lp += 4)
                 dram_read(
                     FMK,
                     off + lp * 2 * CHB,
                     fmkbuf2 + (k & 1) * FMK_SLOT_B2 + lp * 2 * CHB,
                     (nl - lp < 2 ? nl - lp : 2) * 2 * CHB);
-            }
         };
         uint32_t next_asm = 0;
         auto asm_one = [&]() {
@@ -183,14 +205,13 @@ void kernel_main() {
             if (k + 1 < K) {
                 fetch_fmk2(k + 1);
             }
-            const uint32_t fslot = fmkbuf2 + (k & 1) * FMK_SLOT_B2;
             uint32_t tap_src[10];
             for (uint32_t i = 0; i < 10; ++i) {
                 const uint32_t start = b * P::CH + P::TAP_OFF[g][i];
                 const uint32_t rho = start & 3;
                 tap_src[i] = planes + P::SLOT[P::TAP_P[g][i]][rho] * plane_slot_bytes + (start - rho) * 4;
             }
-            cb_reserve_back(CB_LVL2, 3 * nodd);
+            cb_reserve_back(CB_LVL2, LVL2_STEP_TILES);
             const uint32_t dst0 = get_write_ptr(CB_LVL2);
             noc_async_read_one_packet_set_state(get_noc_addr(0), CHB);
             for (uint32_t lp = 2; lp < nl; lp += 4) {
@@ -202,21 +223,21 @@ void kernel_main() {
                     }
                     const uint32_t base = dst + j * 12 * CHB;
                     const uint32_t lvl_off = li * P::LVL_PITCH_B;
-                    noc_async_read_one_packet_with_state(fslot + li * 2 * CHB, base);
-                    noc_async_read_one_packet_with_state(fslot + li * 2 * CHB + CHB, base + CHB);
+                    noc_async_read_one_packet_with_state(FM_SRC2(k, li, 0), base);
+                    noc_async_read_one_packet_with_state(FM_SRC2(k, li, 1), base + CHB);
 #pragma GCC unroll 10
                     for (uint32_t i = 0; i < 10; ++i)
                         noc_async_read_one_packet_with_state(tap_src[i] + lvl_off, base + (2 + i) * CHB);
                 }
             }
             noc_async_read_barrier();
-            cb_push_back(CB_LVL2, 3 * nodd);
+            cb_push_back(CB_LVL2, LVL2_STEP_TILES);
         };
         auto pump = [&](uint32_t limit) {  // assemble ahead without blocking
             if (is_sender && next_mc < K && ready_ok(next_mc)) {
                 mc_one(next_mc++);  // statics first: the column waits on them
             }
-            if (nodd && next_asm < K && next_asm < limit && cb_pages_reservable_at_back(CB_LVL2, 3 * nodd)) {
+            if (nodd && next_asm < K && next_asm < limit && cb_pages_reservable_at_back(CB_LVL2, LVL2_STEP_TILES)) {
                 asm_one();
             }
         };
@@ -346,16 +367,33 @@ void kernel_main() {
                     cb_wait_front(CB_OUT, 2);
                     T[4] += CLK() - t0;
                     const uint32_t src = get_read_ptr(CB_OUT);
+#ifdef FUSED_OUT
+                    for (uint32_t li = 0; li < nl; ++li) {
+                        rf::out_send(x, l0, nl, li, part, ob_w, src + li * CHB);
+                    }
+#else
                     for (uint32_t li = 0; li < nl; ++li) {
                         const uint32_t off = ((((l0 + li) * 2 + part) * P::NBX + x) * P::NOBLK + ob_w) * CHB;
                         noc_async_write(src + li * CHB, OUT.get_noc_addr(off / P::PAGE) + off % P::PAGE, CHB);
                     }
+#endif
                     noc_async_write_barrier();
                     cb_pop_front(CB_OUT, 2);
                 }
             }
         }
     }
+#ifdef FUSED_OUT
+    {  // my output columns have all been sent: tell every assembler of my row, then assemble my own units
+        noc_async_write_barrier();
+        rf::out_done(l0_core, nl_core);
+        constexpr auto a_ev = TensorAccessorArgs<a_cell.next_compile_time_args_offset()>();
+        constexpr auto a_od = TensorAccessorArgs<a_ev.next_compile_time_args_offset()>();
+        const auto EV = TensorAccessor(a_ev, get_arg_val<uint32_t>(19), R::N * 4);
+        const auto OD = TensorAccessor(a_od, get_arg_val<uint32_t>(20), R::N * 4);
+        rf::out_write(EV, OD, x, l0_core, nl_core);
+    }
+#endif
     T[7] = CLK() - t_start;
     {
 #ifdef KDEBUG
