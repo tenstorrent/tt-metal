@@ -7,6 +7,8 @@ code are summed; per run the median over the repetitions; the table compares eve
 medians, the change, and the spread (the larger range of per-run medians of the two sides). 'slower' marks a change above the
 spread."""
 import csv, glob, os, statistics, sys
+
+KEEP0 = os.environ.get("EB_KEEP_REP0") == "1"  # one repetition per test (EB_REPS=1): keep it
 from collections import defaultdict
 
 d, tag = sys.argv[1], sys.argv[2]
@@ -35,7 +37,7 @@ for rd in runs:
             if cur and node not in order:
                 order.append(node)
             continue
-        if cur is None or cur[1] == 0:
+        if cur is None or (cur[1] == 0 and not KEEP0):
             continue
         try:
             per[cur[0]][row["OP CODE"]][cur[1]] += float(row[COL])
