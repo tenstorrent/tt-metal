@@ -16,11 +16,7 @@ from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import (
     point_sampling_3d_to_2d_ttnn,
 )
 
-from models.experimental.bevformer.config.encoder_config import get_preset_config
-from models.experimental.bevformer.tests.camera_rig import (
-    img_metas_for_dataset,
-    lidar2img_for_dataset,
-)
+from models.experimental.bevformer.tests.common import PRESETS, img_metas_for_dataset, lidar2img_for_dataset
 
 from models.experimental.bevformer.tests.test_utils import (
     print_detailed_comparison,
@@ -66,13 +62,8 @@ def test_generate_reference_points(
     """Test 3D reference point generation using configuration system."""
     torch.manual_seed(seed)
 
-    # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = preset_config.dataset_config
-    z_cfg = dataset_config.z_cfg
+    preset = PRESETS[config_name]
+    z_cfg = preset.z_cfg
 
     # --------------------------------------------------------------------------- #
     # Function Execution                                                          #
@@ -156,17 +147,12 @@ def test_point_sampling_3d_to_2d(
     """Test 3D to 2D point sampling transformation using configuration system."""
     torch.manual_seed(seed)
 
-    # Get configuration from preset
-    preset_config = get_preset_config(config_name)
-    if preset_config is None:
-        pytest.fail(f"Configuration '{config_name}' not found")
-
-    dataset_config = preset_config.dataset_config
+    preset = PRESETS[config_name]
 
     # Extract parameters from configs
-    pc_range = dataset_config.pc_range
-    z_cfg = dataset_config.z_cfg
-    num_cams = dataset_config.num_cams
+    pc_range = preset.pc_range
+    z_cfg = preset.z_cfg
+    num_cams = preset.num_cams
     eps = 1e-5
 
     # --------------------------------------------------------------------------- #
@@ -175,8 +161,8 @@ def test_point_sampling_3d_to_2d(
 
     # The deterministic rig keeps bev_mask a property of the geometry rather than
     # of an RNG draw, so this test's projections match the encoder's.
-    lidar2img = lidar2img_for_dataset(dataset_config).unsqueeze(0).repeat(batch_size, 1, 1, 1)
-    img_metas = img_metas_for_dataset(dataset_config, batch_size)
+    lidar2img = lidar2img_for_dataset(preset).unsqueeze(0).repeat(batch_size, 1, 1, 1)
+    img_metas = img_metas_for_dataset(preset, batch_size)
 
     # Generate reference points with batch dimension
     torch_ref_points = generate_reference_points(bev_h, bev_w, z_cfg, batch_size=batch_size, device=torch.device("cpu"))

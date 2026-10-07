@@ -24,6 +24,8 @@ import math
 import torch
 import torch.nn as nn
 
+from models.experimental.bevformer.model_config import EMBED_DIMS, NUM_CAMS, NUM_HEADS, NUM_LEVELS, SCA_NUM_POINTS
+
 from .ms_deformable_attention import multi_scale_deformable_attn
 
 
@@ -32,7 +34,14 @@ class MSDeformableAttention3D(nn.Module):
     reference points: each anchor gets ``num_points // num_Z_anchors`` offsets. No output
     projection; SpatialCrossAttention applies one after the cameras are merged."""
 
-    def __init__(self, embed_dims=256, num_heads=8, num_levels=4, num_points=8, batch_first=True):
+    def __init__(
+        self,
+        embed_dims=EMBED_DIMS,
+        num_heads=NUM_HEADS,
+        num_levels=NUM_LEVELS,
+        num_points=SCA_NUM_POINTS,
+        batch_first=True,
+    ):
         super().__init__()
         if embed_dims % num_heads != 0:
             raise ValueError(f"embed_dims ({embed_dims}) must be divisible by num_heads ({num_heads})")
@@ -94,7 +103,14 @@ class SpatialCrossAttention(nn.Module):
     """Cross-attention from the BEV queries into the cameras that see them, through
     ``MSDeformableAttention3D``, averaged over those cameras and projected."""
 
-    def __init__(self, embed_dims=256, num_cams=6, num_heads=8, num_levels=4, num_points=8):
+    def __init__(
+        self,
+        embed_dims=EMBED_DIMS,
+        num_cams=NUM_CAMS,
+        num_heads=NUM_HEADS,
+        num_levels=NUM_LEVELS,
+        num_points=SCA_NUM_POINTS,
+    ):
         super().__init__()
         self.embed_dims = embed_dims
         self.num_cams = num_cams
