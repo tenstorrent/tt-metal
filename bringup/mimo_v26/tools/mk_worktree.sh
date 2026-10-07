@@ -10,4 +10,7 @@ for p in runtime build build_Release python_env .cpmcache tt_metal/pre-compiled 
   [ -e "$MAIN/$p" ] && { mkdir -p "$(dirname "$p")"; [ -e "$p" ] || ln -s "$MAIN/$p" "$p"; }
 done
 mkdir -p generated
+# .gitignore patterns have trailing slashes (dirs only), so the symlinks look untracked and launch.py/log_tool.py refuse a "dirty" tree
+EX=$(git rev-parse --git-path info/exclude); mkdir -p "$(dirname "$EX")"
+for p in runtime build build_Release python_env .cpmcache tt_metal/pre-compiled ttnn/ttnn.egg-info ttnn/ttnn/_ttnn.so tt_metal/llrt/hal/generated tools/triage/inspector_capnp.pyi generated; do echo "/$p" >> "$EX"; done
 echo "worktree ready: $WT ($BR)"; ls -l build python_env ttnn/ttnn/_ttnn.so | head
