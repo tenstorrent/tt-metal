@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "llk_sfpu_types.h"
@@ -323,103 +324,144 @@ sfpi_inline void apply_unary_int_comp<SfpuType::unary_eq>(sfpi::vInt& v, int sca
     v_endif;
 }
 
-// a[i] > scalar
-template <>
-sfpi_inline void apply_unary_int_comp<SfpuType::unary_gt>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+// The ordered scalar compares are evaluated on the sign bit, as in #58193 (@ldjurovicTT): no condition codes per row.
+sfpi_inline sfpi::vInt _int_sign_bit_(const sfpi::vInt x)
 {
-    const sfpi::vInt s = scalar;
-    v_if (v >= 0 && s < 0)
-    {
-        out_val = 1;
-    }
-    v_elseif (v < 0 && s >= 0)
-    {
-        out_val = 0;
-    }
-    v_elseif (v > s)
-    {
-        out_val = 1;
-    }
-    v_endif;
+    return sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(x) >> 31);
 }
 
-// a[i] < scalar
-template <>
-sfpi_inline void apply_unary_int_comp<SfpuType::unary_lt>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+// v < s is sign(v | (v - s)) for s >= 0 and sign(v & (v - s)) for s < 0; v - s decides only where v and s share a sign.
+template <bool SCALAR_NEGATIVE, int ITERATIONS>
+sfpi_inline void _comp_unary_int_lt_rows_(const sfpi::vInt s)
 {
-    const sfpi::vInt s = scalar;
-    v_if (v >= 0 && s < 0)
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
     {
-        out_val = 0;
+        const sfpi::vInt v    = sfpi::dst_reg[0];
+        const sfpi::vInt diff = v - s;
+        if constexpr (SCALAR_NEGATIVE)
+        {
+            sfpi::dst_reg[0] = _int_sign_bit_(v & diff);
+        }
+        else
+        {
+            sfpi::dst_reg[0] = _int_sign_bit_(v | diff);
+        }
+        sfpi::dst_reg++;
     }
-    v_elseif (v < 0 && s >= 0)
-    {
-        out_val = 1;
-    }
-    v_elseif (v < s)
-    {
-        out_val = 1;
-    }
-    v_endif;
 }
 
-// a[i] >= scalar
-template <>
-sfpi_inline void apply_unary_int_comp<SfpuType::unary_ge>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+// v > s is sign(~v & (s - v)) for s >= 0 and sign(~v | (s - v)) for s < 0.
+template <bool SCALAR_NEGATIVE, int ITERATIONS>
+sfpi_inline void _comp_unary_int_gt_rows_(const sfpi::vInt s)
 {
-    const sfpi::vInt s = scalar;
-    v_if (v >= 0 && s < 0)
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
     {
-        out_val = 1;
+        const sfpi::vInt v     = sfpi::dst_reg[0];
+        const sfpi::vInt not_v = ~v;
+        const sfpi::vInt diff  = s - v;
+        if constexpr (SCALAR_NEGATIVE)
+        {
+            sfpi::dst_reg[0] = _int_sign_bit_(not_v | diff);
+        }
+        else
+        {
+            sfpi::dst_reg[0] = _int_sign_bit_(not_v & diff);
+        }
+        sfpi::dst_reg++;
     }
-    v_elseif (v < 0 && s >= 0)
-    {
-        out_val = 0;
-    }
-    v_elseif (v >= s)
-    {
-        out_val = 1;
-    }
-    v_endif;
 }
 
-// a[i] <= scalar
-template <>
-sfpi_inline void apply_unary_int_comp<SfpuType::unary_le>(sfpi::vInt& v, int scalar, sfpi::vInt& out_val)
+template <bool IS_GT, int ITERATIONS>
+sfpi_inline void _comp_unary_int_ordered_(const int scalar)
 {
     const sfpi::vInt s = scalar;
-    v_if (v < 0 && s >= 0)
+    if (scalar < 0)
     {
-        out_val = 1;
+        if constexpr (IS_GT)
+        {
+            _comp_unary_int_gt_rows_<true, ITERATIONS>(s);
+        }
+        else
+        {
+            _comp_unary_int_lt_rows_<true, ITERATIONS>(s);
+        }
     }
-    v_elseif (v >= 0 && s < 0)
+    else
     {
-        out_val = 0;
+        if constexpr (IS_GT)
+        {
+            _comp_unary_int_gt_rows_<false, ITERATIONS>(s);
+        }
+        else
+        {
+            _comp_unary_int_lt_rows_<false, ITERATIONS>(s);
+        }
     }
-    v_elseif (v <= s)
+}
+
+// Every int32 satisfies v <= INT_MAX and v >= INT_MIN.
+template <int ITERATIONS>
+sfpi_inline void _comp_unary_int_all_true_()
+{
+    const sfpi::vInt one = 1;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
     {
-        out_val = 1;
+        sfpi::dst_reg[0] = one;
+        sfpi::dst_reg++;
     }
-    v_else
-    {
-        out_val = 0;
-    }
-    v_endif;
 }
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_int_(int scalar)
 {
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++)
+    if constexpr (COMP_MODE == SfpuType::unary_lt)
     {
-        sfpi::vInt v   = sfpi::dst_reg[0];
-        sfpi::vInt val = 0;
+        _comp_unary_int_ordered_<false, ITERATIONS>(scalar);
+    }
+    else if constexpr (COMP_MODE == SfpuType::unary_gt)
+    {
+        _comp_unary_int_ordered_<true, ITERATIONS>(scalar);
+    }
+    else if constexpr (COMP_MODE == SfpuType::unary_le)
+    {
+        // v <= s is v < s + 1
+        if (scalar == std::numeric_limits<std::int32_t>::max())
+        {
+            _comp_unary_int_all_true_<ITERATIONS>();
+        }
+        else
+        {
+            _comp_unary_int_ordered_<false, ITERATIONS>(scalar + 1);
+        }
+    }
+    else if constexpr (COMP_MODE == SfpuType::unary_ge)
+    {
+        // v >= s is v > s - 1
+        if (scalar == std::numeric_limits<std::int32_t>::min())
+        {
+            _comp_unary_int_all_true_<ITERATIONS>();
+        }
+        else
+        {
+            _comp_unary_int_ordered_<true, ITERATIONS>(scalar - 1);
+        }
+    }
+    else
+    {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            sfpi::vInt v   = sfpi::dst_reg[0];
+            sfpi::vInt val = 0;
 
-        apply_unary_int_comp<COMP_MODE>(v, scalar, val);
+            apply_unary_int_comp<COMP_MODE>(v, scalar, val);
 
-        sfpi::dst_reg[0] = val;
-        sfpi::dst_reg++;
+            sfpi::dst_reg[0] = val;
+            sfpi::dst_reg++;
+        }
     }
 }
 
