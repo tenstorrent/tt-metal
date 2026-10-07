@@ -1934,3 +1934,16 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_y_u4_7d6211c6290.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
 - data: {"n":20,"identical":20,"identical_strict":18,"ties_one_bf16_ulp":2}
+
+## E261007-1705-e20
+- date: 2026-10-07T17:05:45
+- commit: 7d6211c6290
+- branch: ssinghal/mimo-spec
+- host: 41,48
+- track: spec
+- status: verified
+- claim: spec_exact (scorecard format, same evidence as E261007-1705-c97, paths narrowed to the driver and drafter so later test-file edits do not stale it): STRICT IDENTITY 18/20 users; the other two are exact bf16 ties (gap 0.125 = one ulp at logit 16-32), E261007-1703-420; identical modulo ties 20/20. 48 layers, GSM8K enable_thinking=false, 256 new tokens, U=1 (4 users) + U=4 (16 users), plain stream from a clean prefill.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_y_u4_7d6211c6290.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py
+- supersedes: E261007-1705-c97
+- data: {"n":20,"identical":20,"identical_strict":18,"ties_one_bf16_ulp":2}
