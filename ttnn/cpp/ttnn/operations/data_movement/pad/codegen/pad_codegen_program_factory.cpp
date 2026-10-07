@@ -358,7 +358,7 @@ ProgramDescriptor build_fill_partial_tile(
             args.emplace_back(tasks[i][1]);
             args.emplace_back(tasks[i][2]);
         }
-        kernel_desc.emplace_runtime_args(core, std::move(args));
+        kernel_desc.emplace_runtime_args(core, args);
         start += n;
     }
 
@@ -371,8 +371,6 @@ ProgramDescriptor build_fill_partial_tile(
 ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
     const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args, Tensor& tensor_return_value) {
     const Tensor& input = tensor_args.input;
-    TT_FATAL(input.buffer() != nullptr, "PadCodegen input must be allocated on device!");
-    TT_FATAL(tensor_return_value.buffer() != nullptr, "PadCodegen output must be allocated on device!");
 
     const tt::DataFormat format = datatype_to_dataformat_converter(input.dtype());
     if (operation_attributes.fill_partial_tile) {

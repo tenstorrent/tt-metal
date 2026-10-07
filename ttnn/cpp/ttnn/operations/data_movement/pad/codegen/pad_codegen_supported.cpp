@@ -144,52 +144,75 @@ bool rm_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) 
     return rm_footprint(sizes, 1, 1) <= gate_l1_budget(input, attrs);
 }
 
-struct HwPad {
-    uint32_t front_h, after_h, front_w, after_w;
-};
+constexpr uint32_t kNumDtypes = 4;
+constexpr uint32_t kNumValues = 3;
+constexpr uint32_t kAllDtypes = (1u << kNumDtypes) - 1;
+constexpr uint32_t kBf16 = 1u << 0;
+constexpr uint32_t kI32 = 1u << 2;
+constexpr uint32_t kU32 = 1u << 3;
+constexpr uint32_t kF32 = 1u << 1;
 
-bool only_hw_padded(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const HwPad& p) {
-    const auto& s = input.logical_shape();
-    return attrs.front_n == 0 && attrs.front_c == 0 && attrs.N_out == s[0] && attrs.C_out == s[1] &&
-           attrs.front_h == p.front_h && attrs.H_out == p.front_h + s[2] + p.after_h && attrs.front_w == p.front_w &&
-           attrs.W_out == p.front_w + s[3] + p.after_w;
-}
+// Row = dtype (bfloat16, float32, int32, uint32), column = pad value (0, 1, 3), as packed pad words.
+constexpr std::array<std::array<uint32_t, kNumValues>, kNumDtypes> kPackedValues = {{
+    {0, 0x3F803F80, 0x40404040},
+    {0, 0x3F800000, 0x40400000},
+    {0, 1, 3},
+    {0, 1, 3},
+}};
 
-constexpr uint32_t kBf16 = 1;
-constexpr uint32_t kF32 = 2;
-constexpr uint32_t kI32 = 4;
-constexpr uint32_t kU32 = 8;
-constexpr uint32_t kAllDtypes = kBf16 | kF32 | kI32 | kU32;
-
-uint32_t dtype_bit(DataType dtype) {
+uint32_t dtype_index(DataType dtype) {
     switch (dtype) {
-        case DataType::BFLOAT16: return kBf16;
-        case DataType::FLOAT32: return kF32;
-        case DataType::INT32: return kI32;
-        case DataType::UINT32: return kU32;
-        default: return 0;
+        case DataType::BFLOAT16: return 0;
+        case DataType::FLOAT32: return 1;
+        case DataType::INT32: return 2;
+        case DataType::UINT32: return 3;
+        default: return kNumDtypes;
     }
 }
 
-struct RmDemotion {
-    uint32_t h, w;
-    HwPad pad;
-    uint32_t dtypes_value_0;
-    uint32_t dtypes_value_3;
+using HwKey = std::array<uint32_t, 6>;
+
+struct Demotion {
+    tt::tt_metal::Layout layout;
+    tt::tt_metal::BufferType buffer;
+    HwKey hw;        // input H, input W, front/after pad on H, front/after pad on W
+    uint32_t value;  // column of kPackedValues
+    uint32_t dtypes;
 };
 
-// Unsettled: small ROW_MAJOR [1,1,H,W] pads (rank-2 [32,64] arrives here as [1,1,32,64]) measured slower
-// than native on device; exact matches only.
-constexpr std::array<RmDemotion, 5> kRmDemotions = {{
-    {32, 32, {0, 32, 16, 32}, kAllDtypes, kBf16 | kI32 | kU32},
-    {32, 32, {0, 32, 32, 32}, kAllDtypes, kBf16 | kI32 | kU32},
-    {32, 32, {0, 32, 4, 32}, kAllDtypes, kI32 | kU32},
-    {32, 32, {3, 25, 4, 6}, kAllDtypes, kBf16 | kI32 | kU32},
-    {32, 64, {0, 32, 4, 32}, kAllDtypes, kBf16 | kI32 | kU32},
+// Unsettled: no mechanism is on record for any row; exact matches over [1,1,H,W] inputs (rank-2 [32,64] arrives
+// as [1,1,32,64]) and unit batch dims.
+constexpr std::array<Demotion, 13> kDemotions = {{
+    {ttnn::TILE_LAYOUT, tt::tt_metal::BufferType::DRAM, {14336, 80, 0, 0, 0, 16}, 0, kAllDtypes},
+    {ttnn::TILE_LAYOUT, tt::tt_metal::BufferType::DRAM, {14336, 80, 0, 0, 0, 16}, 1, kAllDtypes},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 16, 32}, 0, kAllDtypes},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 16, 32}, 2, kI32 | kU32},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 32, 32}, 0, kAllDtypes},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 32, 32}, 2, kBf16 | kI32 | kU32},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 4, 32}, 0, kAllDtypes},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 4, 32}, 2, kI32 | kU32},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 3, 25, 4, 6}, 0, kAllDtypes},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 3, 25, 4, 6}, 2, kI32 | kU32},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 64, 0, 32, 4, 32}, 0, kAllDtypes},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 64, 0, 32, 4, 32}, 2, kBf16 | kI32 | kU32},
+    {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::L1, {8, 4, 2, 6, 4, 4}, 0, kF32},
 }};
 
-bool is_value(const ttnn::prim::PadCodegenParams& attrs, DataType dtype, float value) {
-    return attrs.packed_pad_value == pack_pad_value(dtype, value);
+HwKey hw_key(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+    const auto& s = input.logical_shape();
+    return {
+        s[2],
+        s[3],
+        attrs.front_h,
+        attrs.H_out - attrs.front_h - s[2],
+        attrs.front_w,
+        attrs.W_out - attrs.front_w - s[3]};
+}
+
+bool unit_batch(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+    const auto& s = input.logical_shape();
+    const std::array<uint32_t, 6> batch = {s[0], s[1], attrs.N_out, attrs.C_out, attrs.front_n, attrs.front_c};
+    return batch == std::array<uint32_t, 6>{1, 1, 1, 1, 0, 0};
 }
 
 }  // namespace
@@ -349,38 +372,15 @@ bool is_demoted(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) 
     if (attrs.fill_partial_tile) {
         return false;
     }
-    const auto& s = input.logical_shape();
-    const auto dtype = input.dtype();
-
-    if (input.layout() == ttnn::TILE_LAYOUT) {
-        // Unsettled: width-only pad of a tall bfloat16/float32/int32/uint32 tile tensor, values 0 and 1.
-        return s[0] == 1 && s[1] == 1 && s[2] == 14336 && s[3] == 80 && dtype_bit(dtype) != 0 &&
-               only_hw_padded(input, attrs, {0, 0, 0, 16}) &&
-               (is_value(attrs, dtype, 0.0f) || is_value(attrs, dtype, 1.0f));
-    }
-
-    if (s[0] != 1 || s[1] != 1) {
+    const uint32_t dtype = dtype_index(input.dtype());
+    if (dtype >= kNumDtypes || !unit_batch(input, attrs)) {
         return false;
     }
-    const uint32_t bit = dtype_bit(dtype);
-    if (bit == 0) {
-        return false;
-    }
-    const auto input_buffer_type = input.memory_config().buffer_type();
-
-    // Unsettled: tiny L1-resident float32 pad, value 0.
-    if (input_buffer_type == tt::tt_metal::BufferType::L1 && s[2] == 8 && s[3] == 4 && dtype == DataType::FLOAT32 &&
-        only_hw_padded(input, attrs, {2, 6, 4, 4}) && is_value(attrs, dtype, 0.0f)) {
-        return true;
-    }
-
-    if (input_buffer_type != tt::tt_metal::BufferType::DRAM) {
-        return false;
-    }
-    return std::any_of(kRmDemotions.begin(), kRmDemotions.end(), [&](const RmDemotion& d) {
-        return s[2] == d.h && s[3] == d.w && only_hw_padded(input, attrs, d.pad) &&
-               (((d.dtypes_value_0 & bit) != 0 && is_value(attrs, dtype, 0.0f)) ||
-                ((d.dtypes_value_3 & bit) != 0 && is_value(attrs, dtype, 3.0f)));
+    const HwKey key = hw_key(input, attrs);
+    const auto buffer = input.memory_config().buffer_type();
+    return std::any_of(kDemotions.begin(), kDemotions.end(), [&](const Demotion& d) {
+        return d.layout == input.layout() && d.buffer == buffer && d.hw == key && ((d.dtypes >> dtype) & 1u) != 0 &&
+               attrs.packed_pad_value == kPackedValues[dtype][d.value];
     });
 }
 

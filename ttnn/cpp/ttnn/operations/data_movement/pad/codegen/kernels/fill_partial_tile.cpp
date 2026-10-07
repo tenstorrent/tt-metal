@@ -2,20 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// In-place fill of a TILE tensor's partial-tile REMAINDER lanes with a packed
-// constant, so a partial-input TILE pad can then use the fast whole-tile kernel
-// (mirrors tt-metal FillPad + Pad). One data-movement kernel per assigned
-// border tile: read tile -> fill L-shaped remainder (grow>=row_from ||
-// gcol>=col_from) -> write the same tile back. Touches ONLY boundary tiles.
-//
-// Tiles are stored as four 16x16 faces (face0=rows0-15/cols0-15,
-// face1=rows0-15/cols16-31, face2=rows16-31/cols0-15, face3=rows16-31/cols16-31);
-// element (grow,gcol) lives at index (fr*2+fc)*256 + r*16 + c with fr=grow/16,
-// fc=gcol/16, r=grow%16, c=gcol%16. row 16 is NOT after row 15 in memory.
-//
-// CT args: cb_scratch, tile_bytes, elem_size(2|4), packed_val, cb_pad,
-//          then TensorAccessorArgs.
-// RT args: [dst_addr, n], then n triples (tile_id, row_from, col_from).
+// Fills the remainder lanes of a TILE tensor's partial border tiles with the pad value in place, so the
+// whole-tile pad kernel can run next. A tile is four 16x16 faces: element (r, c) is in face (r/16)*2 + c/16
+// at offset (r%16)*16 + c%16, so row 16 does not follow row 15 in memory.
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
