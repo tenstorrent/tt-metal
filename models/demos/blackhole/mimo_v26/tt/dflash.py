@@ -130,23 +130,23 @@ class DFlashDrafter:
             )
         z = lambda *s: torch.zeros(*s)
         # rings (persistent state) + host bookkeeping of the position stored in every slot (-1 = empty)
-        self.ring_k = [up(z(U, 1, WIN, HD).to(bf), bf, rep) for _ in range(5)]
-        self.ring_v = [up(z(U, 1, WIN, HD).to(bf), bf, rep) for _ in range(5)]
+        self.ring_k = [up(z(U, 1, WIN, HD).bfloat16(), bf, rep) for _ in range(5)]
+        self.ring_v = [up(z(U, 1, WIN, HD).bfloat16(), bf, rep) for _ in range(5)]
         self.ring_pos = torch.full((self.rows, U, WIN), -1, dtype=torch.long)
         # persistent per-call inputs
         self.in_feats = up(
-            z(self.rows, 1, U * R, 20480).to(bf), bf, ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, 3))
+            z(self.rows, 1, U * R, 20480).bfloat16(), bf, ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, 3))
         )
-        self.in_acos = up(z(self.rows, 1, U * R, HD).to(bf), bf, self.rowmap)
-        self.in_asin = up(z(self.rows, 1, U * R, HD).to(bf), bf, self.rowmap)
-        self.in_S = up(z(self.rows, U, WIN, R).to(bf), bf, self.rowmap)
-        self.in_keep = up(z(self.rows, U, WIN, HD).to(bf), bf, self.rowmap)
+        self.in_acos = up(z(self.rows, 1, U * R, HD).bfloat16(), bf, self.rowmap)
+        self.in_asin = up(z(self.rows, 1, U * R, HD).bfloat16(), bf, self.rowmap)
+        self.in_S = up(z(self.rows, U, WIN, R).bfloat16(), bf, self.rowmap)
+        self.in_keep = up(z(self.rows, U, WIN, HD).bfloat16(), bf, self.rowmap)
         self.in_tok = up(z(self.rows, U).to(torch.int32), ttnn.uint32, self.rowmap, ttnn.ROW_MAJOR_LAYOUT)
-        self.in_mask = up(z(self.rows, U, NQC * BLK, KPAD).to(bf), bf, self.rowmap)
-        self.in_cq = up(z(self.rows, U, NQC * BLK, HD).to(bf), bf, self.rowmap)
-        self.in_sq = up(z(self.rows, U, NQC * BLK, HD).to(bf), bf, self.rowmap)
-        self.in_ck = up(z(self.rows, U, BLK, HD).to(bf), bf, self.rowmap)
-        self.in_sk = up(z(self.rows, U, BLK, HD).to(bf), bf, self.rowmap)
+        self.in_mask = up(z(self.rows, U, NQC * BLK, KPAD).bfloat16(), bf, self.rowmap)
+        self.in_cq = up(z(self.rows, U, NQC * BLK, HD).bfloat16(), bf, self.rowmap)
+        self.in_sq = up(z(self.rows, U, NQC * BLK, HD).bfloat16(), bf, self.rowmap)
+        self.in_ck = up(z(self.rows, U, BLK, HD).bfloat16(), bf, self.rowmap)
+        self.in_sk = up(z(self.rows, U, BLK, HD).bfloat16(), bf, self.rowmap)
         self._tr = {}
         self._keep = []
 
