@@ -414,7 +414,7 @@ inline std::string op_meta_data_serialized_json(
                     operation,                                                                                        \
                     op_id,                                                                                            \
                     device_id,                                                                                        \
-                    *mesh_device,                                                                                     \
+                    *(mesh_device),                                                                                   \
                     program,                                                                                          \
                     operation_attributes,                                                                             \
                     tensor_args,                                                                                      \
