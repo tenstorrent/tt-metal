@@ -376,3 +376,14 @@ def test_class_satisfies_vllm_text_generation_protocol():
     from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM
 
     assert is_text_generation_model(DeepseekV41ForCausalLM)
+
+
+def test_context_bound_by_batch(monkeypatch):
+    from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM as C
+
+    monkeypatch.delenv("DSV41_VLLM_MAX_CTX", raising=False)
+    assert C.bounded_max_seq_len(65536, 128) == 33280
+    assert C.bounded_max_seq_len(20000, 128) == 20000
+    assert C.bounded_max_seq_len(65536, 64) == 65536
+    monkeypatch.setenv("DSV41_VLLM_MAX_CTX", "40000")
+    assert C.bounded_max_seq_len(65536, 64) == 40000
