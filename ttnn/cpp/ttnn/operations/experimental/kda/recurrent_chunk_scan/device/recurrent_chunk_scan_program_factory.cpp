@@ -20,56 +20,6 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
-namespace {
-
-struct ScanWorkDistribution {
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    std::vector<uint32_t> head;
-    std::vector<uint32_t> value_block;
-    uint32_t value_blocks = 1;
-    uint32_t value_tiles_per_core = 1;
-    tt::tt_metal::CoreRangeSet core_set;
-};
-
-ScanWorkDistribution distribute_scan(tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles) {
-    TT_FATAL(
-        batch_heads <= grid.x * grid.y,
-        "KDA recurrent scan heads {} exceed compute cores {}",
-        batch_heads,
-        grid.x * grid.y);
-    // State columns evolve independently in both modes, so each head's value columns are split across as many
-    // cores as fit; per-column math is identical for any split. A head's blocks share one grid row so value
-    // block 0 can multicast the value-independent inputs to the rest.
-    uint32_t value_blocks = 1;
-    for (uint32_t candidate = std::min<uint32_t>(value_tiles, grid.x); candidate > 1; --candidate) {
-        if (value_tiles % candidate == 0 && batch_heads <= (grid.x / candidate) * grid.y) {
-            value_blocks = candidate;
-            break;
-        }
-    }
-    const uint32_t heads_per_row = grid.x / value_blocks;
-    ScanWorkDistribution result;
-    result.value_blocks = value_blocks;
-    result.value_tiles_per_core = value_tiles / value_blocks;
-    std::vector<tt::tt_metal::CoreRange> rows;
-    for (uint32_t row = 0; row * heads_per_row < batch_heads; ++row) {
-        const uint32_t row_heads = std::min(heads_per_row, batch_heads - row * heads_per_row);
-        rows.emplace_back(tt::tt_metal::CoreCoord{0, row}, tt::tt_metal::CoreCoord{row_heads * value_blocks - 1, row});
-    }
-    for (uint32_t head = 0; head < batch_heads; ++head) {
-        for (uint32_t block = 0; block < value_blocks; ++block) {
-            result.cores.push_back({(head % heads_per_row) * value_blocks + block, head / heads_per_row});
-            result.head.push_back(head);
-            result.value_block.push_back(block);
-        }
-    }
-    // Merged ranges keep dispatch to one multicast when the rows fill the same columns.
-    result.core_set = tt::tt_metal::CoreRangeSet(rows).merge_ranges();
-    return result;
-}
-
-}  // namespace
-
 ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::create_mesh_workload_artifacts(
     const RecurrentChunkScanParams& attrs,
     const RecurrentChunkScanInputs& in,
@@ -91,7 +41,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const uint32_t Vt_full = attrs.value_dim / tt::constants::TILE_WIDTH;
     const bool summary = attrs.mode == RecurrentChunkScanMode::SUMMARY;
     const bool packed_head = attrs.packed_head;
-    const auto distribution = distribute_scan(device.compute_with_storage_grid_size(), BH, Vt_full);
+    const auto distribution =
+        kda_factory_detail::distribute_value_blocks(device.compute_with_storage_grid_size(), BH, Vt_full);
     const auto& cores = distribution.core_set;
     const uint32_t Vt = distribution.value_tiles_per_core;
     const uint32_t value_blocks = distribution.value_blocks;

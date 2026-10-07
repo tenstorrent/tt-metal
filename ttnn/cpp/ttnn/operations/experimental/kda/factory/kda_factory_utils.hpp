@@ -48,4 +48,19 @@ struct KdaPrepWorkDist {
 
 KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, uint32_t core_cap);
 
+// One core per (head, value block). A head's state columns evolve independently, so its value tiles are split
+// across as many cores as fit. A head's blocks share one grid row so value block 0 can multicast the
+// value-independent inputs to the rest.
+struct ValueBlockDistribution {
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    std::vector<uint32_t> head;
+    std::vector<uint32_t> value_block;
+    uint32_t value_blocks = 1;
+    uint32_t value_tiles_per_core = 1;
+    tt::tt_metal::CoreRangeSet core_set;
+};
+
+ValueBlockDistribution distribute_value_blocks(
+    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles);
+
 }  // namespace ttnn::experimental::prim::kda_factory_detail

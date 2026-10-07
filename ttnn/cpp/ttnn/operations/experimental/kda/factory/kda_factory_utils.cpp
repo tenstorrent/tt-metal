@@ -140,4 +140,36 @@ KdaPrepWorkDist distribute_prep(tt::tt_metal::CoreCoord grid, uint32_t total, ui
     return distribution;
 }
 
+ValueBlockDistribution distribute_value_blocks(
+    tt::tt_metal::CoreCoord grid, uint32_t batch_heads, uint32_t value_tiles) {
+    TT_FATAL(batch_heads <= grid.x * grid.y, "KDA heads {} exceed compute cores {}", batch_heads, grid.x * grid.y);
+    // Per-column math is identical for any split.
+    uint32_t value_blocks = 1;
+    for (uint32_t candidate = std::min<uint32_t>(value_tiles, grid.x); candidate > 1; --candidate) {
+        if (value_tiles % candidate == 0 && batch_heads <= (grid.x / candidate) * grid.y) {
+            value_blocks = candidate;
+            break;
+        }
+    }
+    const uint32_t heads_per_row = grid.x / value_blocks;
+    ValueBlockDistribution result;
+    result.value_blocks = value_blocks;
+    result.value_tiles_per_core = value_tiles / value_blocks;
+    std::vector<tt::tt_metal::CoreRange> rows;
+    for (uint32_t row = 0; row * heads_per_row < batch_heads; ++row) {
+        const uint32_t row_heads = std::min(heads_per_row, batch_heads - row * heads_per_row);
+        rows.emplace_back(tt::tt_metal::CoreCoord{0, row}, tt::tt_metal::CoreCoord{row_heads * value_blocks - 1, row});
+    }
+    for (uint32_t head = 0; head < batch_heads; ++head) {
+        for (uint32_t block = 0; block < value_blocks; ++block) {
+            result.cores.push_back({(head % heads_per_row) * value_blocks + block, head / heads_per_row});
+            result.head.push_back(head);
+            result.value_block.push_back(block);
+        }
+    }
+    // Merged ranges keep dispatch to one multicast when the rows fill the same columns.
+    result.core_set = tt::tt_metal::CoreRangeSet(rows).merge_ranges();
+    return result;
+}
+
 }  // namespace ttnn::experimental::prim::kda_factory_detail
