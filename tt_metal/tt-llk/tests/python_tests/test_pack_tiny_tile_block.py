@@ -77,7 +77,8 @@ def _make_config(
 
     # For tiny tiles with fewer faces, more tiles fit in DEST
     # Scale by the ratio of faces: a 2-face tile uses half the DEST of a 4-face tile
-    if num_faces < 4:
+    # (the closed and per-tile packs address DEST in whole-tile slots, so they keep the 32x32 count)
+    if num_faces < 4 and pack_mode == 0:
         max_tiles_in_dest = max_tiles_in_dest * (4 // num_faces)
 
     num_tiles_in_block = min(tile_cnt_A, max_tiles_in_dest)
