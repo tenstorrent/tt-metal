@@ -18,7 +18,7 @@ import json
 from collections import Counter, defaultdict
 
 CCL = ("AllGather", "ReduceScatter", "AllReduce", "all_gather", "reduce_scatter", "all_reduce", "Ccl", "CCL")
-MATMUL = ("Matmul", "matmul", "LinearOperation")
+MATMUL = ("Matmul", "matmul", "LinearOperation", "linear", "Linear")
 
 
 def category(op_code):
@@ -50,7 +50,17 @@ def main():
         # op sequence, cyclically.
         dev_col0 = next(c for c in cols if c.strip() == "DEVICE ID")
         assert args.ops_json, "raw device CSV needs --ops-json"
-        seq = [o["parent"] or o["name"] for o in json.load(open(args.ops_json))["ops"]]
+        allops = json.load(open(args.ops_json))["ops"]
+        # Device-launching level: the ttnn::prim::* entries when the build names
+        # them; otherwise the depth-1 ops under each top-level call, skipping
+        # allocation and host-conversion records.
+        prims = [o for o in allops if "::prim::" in o["name"]]
+        if not prims:
+            skip = ("create_device_tensor", "convert_tt_tensor", "deallocate", "to_torch", "from_torch")
+            prims = [o for o in allops if o["depth"] == 1 and not any(k in o["name"] for k in skip)]
+        seq = [o["parent"] or o["name"] for o in prims]
+        from collections import Counter as _C
+        print("captured levels:", {d: c for d, c in sorted(_C(o["depth"] for o in allops).items())}, "| device-level ops/step:", len(seq))
         dev_rows = [r for r in rows if str(r[dev_col0]).strip() == str(args.device)]
         gc = next(c for c in cols if c.strip() == "GLOBAL CALL COUNT")
         dev_rows.sort(key=lambda r: int(r[gc]))
@@ -102,7 +112,8 @@ def main():
     print(f"device time/step: {device_busy / n:.2f} ms  = matmul {dur['matmul'] / n:.2f} + ccl {dur['ccl'] / n:.2f} + other {dur['other'] / n:.2f}")
     if gap_col:
         print(f"op-to-op gaps/step: {gaps / n:.2f} ms   (busy + gaps = {(device_busy + gaps) / n:.2f} ms)")
-    print(f"DRAM floor/step: {floor_ms:.2f} ms  -> matmul at {floor_ms / (dur['matmul'] / n) * 100:.0f}% of floor, "
+    mm = dur["matmul"] / n
+    print(f"DRAM floor/step: {floor_ms:.2f} ms  -> matmul at {(floor_ms / mm * 100) if mm else float('nan'):.0f}% of floor, "
           f"whole step at {floor_ms / ((device_busy + gaps) / n) * 100:.0f}% of floor")
     print("\ntop ops by device time per step:")
     for code, d in sorted(per_op.items(), key=lambda kv: -kv[1])[:15]:

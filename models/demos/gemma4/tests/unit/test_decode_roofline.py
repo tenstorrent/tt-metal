@@ -37,7 +37,7 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 
 PREFILL_LEN = 128
 WARM_STEPS = 4
-N_STEPS = int(os.environ.get("GEMMA4_ROOFLINE_STEPS", "10"))
+N_STEPS = int(os.environ.get("GEMMA4_ROOFLINE_STEPS", "3"))
 # Eager by default: the device profiler records each op of an eager step with its
 # host op record (name, type), which the split needs. Traced replays are not
 # attributed per op by the Tracy post-processing on this build, so the measured
@@ -46,22 +46,19 @@ TRACED = os.environ.get("GEMMA4_ROOFLINE_TRACE", "0") == "1"
 
 
 def _device_ops_in_order(captured):
-    """``ttnn::prim::*`` (device-launching) ops of a graph capture, in execution
-    order, each with the top-level ttnn op that issued it."""
-    nodes = {n["counter"]: n for n in captured}
-    starts = [n for n in captured if n["node_type"] == "function_start"]
+    """Every ``function_start`` of a graph capture in execution order with its
+    nesting depth and the top-level ttnn op that issued it. The report picks the
+    device-launching level from this (names and counts differ per build), so
+    nothing is filtered here."""
     ops = []
-    stack = []  # (counter, name)
+    stack = []  # names
     for n in captured:
         if n["node_type"] == "function_start":
             name = n["params"].get("name", "?")
-            parent = stack[0][1] if stack else None
-            stack.append((n["counter"], name))
-            if name.startswith("ttnn::prim::") or name.startswith("tt::tt_metal::") or "::prim::" in name:
-                ops.append({"name": name, "parent": parent})
+            ops.append({"name": name, "parent": stack[0] if stack else None, "depth": len(stack)})
+            stack.append(name)
         elif n["node_type"] == "function_end" and stack:
             stack.pop()
-    del nodes, starts
     return ops
 
 
@@ -158,11 +155,22 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
         json.dump({"batch_size": batch_size, "ops": ops}, f)
     logger.info(f"captured {len(ops)} device ops for one decode step -> {ops_json}")
 
+    def _flush():
+        # The device-side profiler buffers hold a bounded number of op records per
+        # core; without a read-back between steps the earlier ops are lost and the
+        # per-step split comes out short (seen: 1990 rows for 10 x 3618 ops).
+        try:
+            ttnn.ReadDeviceProfiler(mesh_device)
+        except Exception:
+            pass
+
+    _flush()
     _signpost("start")
     for _ in range(N_STEPS):
         tok = step(tok)
         current_pos += 1
-    ttnn.synchronize_device(mesh_device)
+        ttnn.synchronize_device(mesh_device)
+        _flush()
     _signpost("stop")
     try:
         ttnn.ReadDeviceProfiler(mesh_device)

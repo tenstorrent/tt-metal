@@ -39,8 +39,11 @@ def test_vision_encoder_probe(mesh_device):
     pixel_values, pos = ref["pixel_values"], ref["image_position_ids"].to(torch.long)
     _stats("pixel_values (host)", pixel_values)
     logger.info(f"pixel dtype {pixel_values.dtype}; positions valid {(pos != -1).all(-1).sum().item()} / {pos.shape[1]}")
+    vdt = getattr(ttnn, os.environ.get("GEMMA4_PROBE_VISION_DTYPE", "bfloat8_b"))
+    logger.info(f"vision dtype {vdt}")
     generator, _kv, _tok = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device, model_path=model_path, max_batch_size=1, max_seq_len=4096, multimodal=True,
+        vision_dtype=vdt,
     )
     tower = generator.vision_tower
     pv = pixel_values.to(torch.bfloat16)
