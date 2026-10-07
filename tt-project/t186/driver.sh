@@ -37,7 +37,7 @@ wait_ready() {
 # Submit and watch one job under the blx01-device lock; prints "<status> <exit> <job>".
 one_job() {
   local label=$1 sig=$2 out job st ex
-  out=$(ssh $H "cd $WS && tt-device-mcp run-bg 'env PYTEST_S=220 bash $RUN $label LTX_FRESH_PROMPTS=0 LTX_E2E_SEEDS=0,1,2,3,4 LTX_E2E_EXTRA_REPLAYS=0 LTX_S1_SIGMAS=$sig' -w $WS -t $TMO" 2>&1)
+  out=$(ssh $H "cd $WS && tt-device-mcp run-bg 'env PYTEST_S=220 bash $RUN $label LTX_FRESH_PROMPTS=0 LTX_E2E_SEEDS=0,1,2,3,4 LTX_E2E_EXTRA_REPLAYS=0 LTX_S1_SIGMAS=$sig' -w $WS -e /var/tmp/fasth3/t159/env.yaml -t $TMO" 2>&1)
   job=$(echo "$out" | sed -n 's/^Job \([0-9]*\) queued.*/\1/p' | head -1)
   [ -n "$job" ] || { log "$label: submit failed: $(echo "$out" | tr '\n' ' ' | cut -c1-300)"; echo "submitfail - -"; return; }
   log "$label: submitted job $job ($sig)"

@@ -22,3 +22,8 @@
   ref|cand, sbs stills, eval_vs_ref_t48_f6b8/ PCC/PSNR + VBench 5 dims, POST.done).
 - Log: t186/driver.log; marker t186/DRIVER.done = "<rc> <reason>".
 - Next: read E2E_WALL_S gen#1..5 from data/g15/t186_<label>/run.log, eval summary, look at stills.
+
+## Attempt 2 (2026-10-07)
+- Attempt 1's driver failed both submits: tt-device-mcp looked for python_env under $WS/tt-metal. Fix: pass
+  `-e /var/tmp/fasth3/t159/env.yaml` (PYTHON_ENV_DIR=/var/tmp/fasth3/t48/python_env, as t185 job 758).
+- Rerun detached as run-dir t186drv2; s1x6 submitted as blx01 job 760 at 05:58:51 UTC; s1x5 follows.
