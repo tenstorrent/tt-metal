@@ -5,6 +5,7 @@ Checks per round: PCC of the draft hidden rows (7 per user, after the final norm
 Env: DF_DEV (capture dir), DF_WDTYPE (bf8|bf16), DF_USERS (users per row: 4 uses all 16 sequences, 1 uses sequences 0,4,8,12), DF_ANCHORS, DF_OUT."""
 import json
 import os
+import time
 
 import pytest
 import torch
@@ -20,6 +21,8 @@ DEV = E("DF_DEV", "/mnt/tt-data/ssinghal/mimo-dumps/mimo-device-s128b16")
 OUT = E("DF_OUT", "/tmp/dflash.jsonl")
 WD = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[E("DF_WDTYPE", "bf8")]
 UPR = int(E("DF_USERS", "4"))
+POS0 = int(E("DF_POS0", "0"))
+TRACE = E("DF_TRACE", "0") == "1"
 ANCH = [int(v) for v in E("DF_ANCHORS", "16,64,120").split(",")]
 
 
@@ -73,15 +76,24 @@ def test_dflash_device(mesh_device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(md, md.shape, dims=(None, 3)),
     )
-    dr = DFlashDrafter(md, embed, lm, wdtype=WD, sd=sd)
+    dr = DFlashDrafter(md, embed, lm, UPR, wdtype=WD, sd=sd)
     users = [r * 4 + u for r in range(4) for u in range(UPR)]  # sequence index of (row, slot)
     for p in ANCH:
         f = torch.stack([feats[b, :p] for b in users]).reshape(4, UPR, p, -1)
-        dr.set_context(f)
+        dr.ring_pos.fill_(-1)
+        dr.load_context(f, torch.full((4, UPR), POS0), use_trace=TRACE)
         a_tok = torch.stack([tok[b, p] for b in users]).reshape(4, UPR)
-        y = dr.draft(a_tok, torch.full((4, UPR), p))
+        dr.set_round(a_tok, torch.full((4, UPR), p + POS0))
+        t0 = time.perf_counter()
+        dtok, y = dr.draft(use_trace=TRACE)
+        t_first = time.perf_counter() - t0
+        t_round = None
+        if TRACE:
+            t0 = time.perf_counter()
+            for _ in range(5):
+                dr.draft(use_trace=True)
+            t_round = (time.perf_counter() - t0) / 5
         hid = dr.hidden_host(y)[:, :, 1:]  # [rows, U, 7, 4096]
-        lg = dr.logits(y)[:, :, 1:] if False else None
         ref = (
             torch.stack([D.draft_blocks(hn[b], tok[b, p : p + 1], torch.tensor([p]), sd, Etab)[0] for b in users])
             .reshape(4, UPR, 7, 4096)
@@ -93,8 +105,7 @@ def test_dflash_device(mesh_device):
         rt = (ref.reshape(-1, 4096).bfloat16() @ head.T).argmax(-1).reshape(4, UPR, 7)
         agree = (dt == rt).float().mean((0, 1)).tolist()
         # device lm_head path too
-        dl = dr.logits(y).reshape(4, UPR, 8, -1)[:, :, 1:].argmax(-1)
-        agree_dev = (dl == rt).float().mean((0, 1)).tolist()
+        agree_dev = (dtok == rt).float().mean((0, 1)).tolist()
         ref32 = torch.stack(
             [D.draft_blocks(hn32[b], tok[b, p : p + 1], torch.tensor([p]), sd32, E32)[0] for b in users]
         ).reshape(4, UPR, 7, 4096)
@@ -111,6 +122,10 @@ def test_dflash_device(mesh_device):
         )
         rec(
             "round",
+            pos0=POS0,
+            trace=TRACE,
+            first_call_ms=round(t_first * 1e3, 1),
+            round_ms=round(t_round * 1e3, 2) if t_round else None,
             wdtype=E("DF_WDTYPE", "bf8"),
             U=UPR,
             anchor=p,
