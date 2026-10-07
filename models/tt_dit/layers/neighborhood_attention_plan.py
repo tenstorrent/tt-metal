@@ -734,7 +734,19 @@ def brick_override(volume: tuple[int, int, int]) -> tuple[int, int, int] | None:
     return None
 
 
-def cached_bricked_plan(volume, context_window, stride, brick, device, *, resident=None, shard_count=1, sp_axis=None):
+def cached_bricked_plan(
+    volume,
+    context_window,
+    stride,
+    brick,
+    device,
+    *,
+    resident=None,
+    shard_count=1,
+    sp_axis=None,
+    h_shard_count=1,
+    h_axis=None,
+):
     """Plan plus uploaded tables, cached per geometry. Unsharded is the one-shard case.
 
     ``resident`` is what one device HOLDS: its owned columns plus the halo its windows reach into.
@@ -744,11 +756,26 @@ def cached_bricked_plan(volume, context_window, stride, brick, device, *, reside
     One plan per shard, with the per-device gather tables stacked for a sharded upload. Every
     device runs the SAME program, so the plan's shapes must agree across shards (asserted below);
     only the origins differ, and those ride the sharded table. Shard 0's plan is the representative.
+
+    ``h_axis`` adds a second split, H over ``h_shard_count`` devices on that mesh axis, with its own
+    halo; the table is then ``(h_shard_count, shard_count, ...)``, one origin pair per device.
     """
     sharded = resident is not None
     resident = resident if sharded else volume
     query_chunk_bricks = _query_chunk_bricks(stride, brick)
-    key = (volume, context_window, stride, brick, query_chunk_bricks, resident, shard_count, sp_axis, id(device))
+    key = (
+        volume,
+        context_window,
+        stride,
+        brick,
+        query_chunk_bricks,
+        resident,
+        shard_count,
+        sp_axis,
+        h_shard_count,
+        h_axis,
+        id(device),
+    )
     entry = _BRICKED_PLAN_CACHE.get(key)
     if entry is not None:
         return entry
@@ -756,26 +783,29 @@ def cached_bricked_plan(volume, context_window, stride, brick, device, *, reside
     # Queries are the columns this shard OWNS; keys are those plus the halo. Unsharded there is no
     # halo, so the query region is the whole volume.
     halo = halo_sites(min(context_window[2], volume[2]), brick[2]) if sharded else 0
+    halo_h = halo_sites(min(context_window[1], volume[1]), brick[1]) if h_axis is not None else 0
     owned_width = resident[2] - 2 * halo
-    query_extent = (resident[0], resident[1], owned_width)
-    query_origin = (0, 0, halo)
+    owned_height = resident[1] - 2 * halo_h
+    query_extent = (resident[0], owned_height, owned_width)
+    query_origin = (0, halo_h, halo)
     plans = []
-    for shard_index in range(shard_count):
-        # The device at the low edge sits BELOW the volume by one halo: real storage holding
-        # nothing the volume contains; no query owns those columns, no window reaches them.
-        plans.append(
-            ttnn.transformer.neighborhood_plan(
-                volume,
-                context_window,
-                stride,
-                brick,
-                query_chunk_bricks=query_chunk_bricks,
-                shard_extent=resident,
-                shard_origin=(0, 0, shard_index * owned_width - halo),
-                query_extent=query_extent,
-                query_origin=query_origin,
+    for h_index in range(h_shard_count):
+        for shard_index in range(shard_count):
+            # The device at the low edge sits BELOW the volume by one halo: real storage holding
+            # nothing the volume contains; no query owns those columns, no window reaches them.
+            plans.append(
+                ttnn.transformer.neighborhood_plan(
+                    volume,
+                    context_window,
+                    stride,
+                    brick,
+                    query_chunk_bricks=query_chunk_bricks,
+                    shard_extent=resident,
+                    shard_origin=(0, h_index * owned_height - halo_h, shard_index * owned_width - halo),
+                    query_extent=query_extent,
+                    query_origin=query_origin,
+                )
             )
-        )
 
     first = plans[0]
     for shard_index, plan in enumerate(plans[1:], start=1):
@@ -785,16 +815,20 @@ def cached_bricked_plan(volume, context_window, stride, brick, device, *, reside
                 f"({plan[field]} vs {first[field]}); one program cannot serve both"
             )
 
-    stacked = torch.tensor([plan["gather_origin_table"] for plan in plans], dtype=torch.uint32).reshape(
-        shard_count, 1, first["chunk_count"], first["gather_origin_columns"]
-    )
-    # sp_axis is None unsharded, which makes every placement a replicate.
+    tables = torch.tensor([plan["gather_origin_table"] for plan in plans], dtype=torch.uint32)
+    if h_axis is None:
+        stacked = tables.reshape(shard_count, 1, first["chunk_count"], first["gather_origin_columns"])
+        # sp_axis is None unsharded, which makes every placement a replicate.
+        mesh_axes = [sp_axis, None, None, None]
+    else:
+        stacked = tables.reshape(h_shard_count, shard_count, first["chunk_count"], first["gather_origin_columns"])
+        mesh_axes = [h_axis, sp_axis, None, None]
     first["gather_origin_tensor"] = from_torch(
         stacked,
         device=device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_axes=[sp_axis, None, None, None],
+        mesh_axes=mesh_axes,
     )
     first["query_chunk_bricks"] = query_chunk_bricks
     first["query_extent"] = query_extent
@@ -803,7 +837,8 @@ def cached_bricked_plan(volume, context_window, stride, brick, device, *, reside
     from loguru import logger
 
     logger.info(
-        f"[neighborhood] {f'W-SHARDED x{shard_count}: ' if sharded else ''}volume={volume} "
+        f"[neighborhood] {f'H x{h_shard_count} ' if h_axis is not None else ''}"
+        f"{f'W-SHARDED x{shard_count}: ' if sharded else ''}volume={volume} "
         f"{f'resident={resident} ' if sharded else ''}"
         f"window={context_window} stride={stride} brick={brick} "
         f"chunk={query_chunk_bricks} bricks ({first['bricks_per_query_chunk'] * SITES_PER_BRICK} queries) "
