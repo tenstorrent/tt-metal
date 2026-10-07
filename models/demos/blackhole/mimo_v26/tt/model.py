@@ -19,7 +19,17 @@ HIDDEN, VOCAB = W.HIDDEN, W.VOCAB
 
 class MiMoModel:
     def __init__(
-        self, mesh, n_layers=48, max_pos=512, users=32, ring_blocks=10, ck=None, wc=None, expert_op=None, log=print
+        self,
+        mesh,
+        n_layers=48,
+        max_pos=512,
+        users=32,
+        ring_blocks=10,
+        ck=None,
+        wc=None,
+        expert_op=None,
+        log=print,
+        layout=None,
     ):
         if layout is not None:
             max_pos, ring_blocks, users = layout.max_pos, layout.ring_blocks, 32
