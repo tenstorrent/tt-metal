@@ -147,6 +147,7 @@ class DFlashDrafter:
         self.in_sq = up(z(self.rows, U, NQC * BLK, HD).bfloat16(), bf, self.rowmap)
         self.in_ck = up(z(self.rows, U, BLK, HD).bfloat16(), bf, self.rowmap)
         self.in_sk = up(z(self.rows, U, BLK, HD).bfloat16(), bf, self.rowmap)
+        self.zpad = up(z(U, 1, KPAD - WIN - BLK, HD).bfloat16(), bf, rep)
         self._tr = {}
         self._keep = []
 
@@ -266,7 +267,7 @@ class DFlashDrafter:
         mask = ttnn.reshape(self.in_mask, (U, 1, NQC * BLK, KPAD))
         cq, sq = ttnn.reshape(self.in_cq, (U, 1, NQC * BLK, HD)), ttnn.reshape(self.in_sq, (U, 1, NQC * BLK, HD))
         ck, sk = ttnn.reshape(self.in_ck, (U, 1, BLK, HD)), ttnn.reshape(self.in_sk, (U, 1, BLK, HD))
-        zpad = ttnn.zeros([U, 1, KPAD - WIN - BLK, HD], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh)
+        zpad = self.zpad
         for li, L in enumerate(self.layers):
             xn = self._rms(x, L["ln1"])
             q = ttnn.linear(xn, L["wq"], dtype=ttnn.bfloat16, compute_kernel_config=_ck())
@@ -321,7 +322,6 @@ class DFlashDrafter:
             x = ttnn.add(x1, dd)
             ttnn.deallocate(x1)
             ttnn.deallocate(dd)
-        ttnn.deallocate(zpad)
         y = self._rms(x, self.norm)
         ttnn.deallocate(x)
         lg = ttnn.linear(y, self.lm_head, dtype=ttnn.bfloat16, compute_kernel_config=_ck(hifi4=True))
