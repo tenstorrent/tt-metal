@@ -39,9 +39,27 @@ def test_bw_multigammaln(input_shapes, device):
 # the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
 # path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
-# another class, for the output and for the composite's on the same operands.
-MULTIGAMMALN_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
+# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
+# pure ULP error against torch and the lanes of another class, for the output and for the
+# composite's on the same operands.
+MULTIGAMMALN_BW_GRADS = [
+    "1",
+    "-1",
+    "0.5",
+    "3",
+    "random0",
+    "random1",
+    "0",
+    "-0",
+    "inf",
+    "-inf",
+    "nan",
+    "1.1754943508222875e-38",
+    "-1.1754943508222875e-38",
+    "3.3895313892515355e+38",
+    "-3.3895313892515355e+38",
+]
 MULTIGAMMALN_BW_SMALLEST_NORMAL = 2.0**-126
 
 
@@ -114,7 +132,10 @@ def _multigammaln_bw_pure_ulp(reference, actual):
     ulp = ((golden - actual.to(torch.float64)).abs().to(torch.float32) / spacing.to(torch.float32)).to(torch.float64)
     same_class = _multigammaln_bw_stored_classes(rounded) == _multigammaln_bw_stored_classes(actual)
     ulp = torch.where(torch.isfinite(rounded), ulp, torch.zeros_like(ulp))
-    return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    ulp = torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    # A +0 where torch's own result is subnormal is torch's result as stored: BF16 cannot store a subnormal.
+    flushed = (actual.to(torch.float64) == 0) & (reference.abs() < MULTIGAMMALN_BW_SMALLEST_NORMAL)
+    return torch.where(flushed, torch.zeros_like(ulp), ulp)
 
 
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
@@ -153,11 +174,16 @@ def test_multigammaln_bw_exhaustive_bfloat16(grad, device):
 
 
 def _multigammaln_bw_torch_gradient(grad, x):
-    """Torch autograd in float32."""
+    """Torch autograd in float32, or the exact derivative where it is declared."""
     with torch.enable_grad():
         x = x.to(torch.float32).requires_grad_(True)
         torch.special.multigammaln(x, 4).backward(grad.to(torch.float32))
-        return x.grad
+        x64 = x.detach().to(torch.float64)
+        exact = (
+            grad.to(torch.float64)
+            * (2 * torch.special.digamma(x64) + 2 * torch.special.digamma(x64 - 0.5) - 1 / (x64 - 1) - 1 / (x64 - 1.5))
+        ).to(torch.float32)
+        return torch.where(torch.isfinite(x64), exact, x.grad)
 
 
 def _multigammaln_bw_device_operations(call):
