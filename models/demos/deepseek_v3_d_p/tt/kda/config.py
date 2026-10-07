@@ -52,6 +52,7 @@ class KDAProgramConfig:
     qkv_channel_chunk_size: int = 768
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
+    input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
@@ -72,7 +73,11 @@ _TUNED_PROJECTION_ROWS = 640
 
 
 def tuned_projection_matmul_configs(
-    grid: ttnn.CoreCoord, rows: int, output_k: int, output_n: int
+    grid: ttnn.CoreCoord,
+    rows: int,
+    output_k: int,
+    output_n: int,
+    input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4,
 ) -> tuple[ttnn.MinimalMatmulConfig | None, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig | None]:
     """Return the tuned input and output projection schedules laid out on ``grid``.
 
@@ -85,10 +90,16 @@ def tuned_projection_matmul_configs(
     per_core_n = math.ceil(output_n // ttnn.TILE_SIZE / grid.x)
     if per_core_m % 2 or (output_k // ttnn.TILE_SIZE) % 8:
         return None, None
+    # HiFi4 is compute-bound with short blocks. At HiFi2 the math halves, and longer K and N blocks
+    # cut the per-block overhead that then dominates (K3 at 640 rows: 829 -> 654 us per device).
+    if input_projection_math_fidelity == ttnn.MathFidelity.HiFi4:
+        k_block, n_block = 8, 3
+    else:
+        k_block, n_block = 16, 12
     input_projection = ttnn.MinimalMatmulConfig(
         M_block_size=2,
-        K_block_size=8,
-        N_block_size=3,
+        K_block_size=k_block,
+        N_block_size=n_block,
         subblock_h=1,
         subblock_w=3,
         compute_with_storage_grid_size=grid,
@@ -126,6 +137,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         qkv_channel_chunk_size=512,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
+        input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
