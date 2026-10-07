@@ -120,13 +120,34 @@ def test_bw_cosh_nan_test2(input_shapes, device):
 # the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
 # path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
-# another class, for the output and for the composite's on the same operands.
+# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
+# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
+# pure ULP error against torch and the lanes of another class, for the output and for the
+# composite's on the same operands.
 # The output is 0 wherever the exact grad * f'(x) is below the smallest normal value, before rounding,
-# as the composite this program replaces computes it; torch rounds before it flushes.
-# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, as the
-# composite this program replaces computes it; torch keeps the exact product.
-COSH_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# as the composite this program replaces computes it; torch rounds before it flushes. Where f'(x)
+# alone is below it, an infinite or NaN grad gives 0 too, where torch's product is grad's infinity or
+# NaN.
+# The output is grad times an infinity wherever f'(x) alone is beyond the largest finite value, and 0
+# there at a zero gradient, as the composite this program replaces computes it; torch keeps the exact
+# product.
+COSH_BW_GRADS = [
+    "1",
+    "-1",
+    "0.5",
+    "3",
+    "random0",
+    "random1",
+    "0",
+    "-0",
+    "inf",
+    "-inf",
+    "nan",
+    "1.1754943508222875e-38",
+    "-1.1754943508222875e-38",
+    "3.3895313892515355e+38",
+    "-3.3895313892515355e+38",
+]
 COSH_BW_SMALLEST_NORMAL = 2.0**-126
 COSH_BW_LARGEST_FINITE = 2.0**128 * (1 - 2.0**-25)
 
@@ -156,10 +177,12 @@ def _cosh_bw_reference(grad, x, flush, board):
     """Torch, except on the declared lanes in the module docstring."""
     result = _cosh_bw_torch_reference(grad, x, flush)
     unit = _cosh_bw_torch_reference(torch.ones_like(grad), x, flush)
-    result = torch.where(result.abs() < COSH_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
     g = _cosh_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
+    result = torch.where(result.abs() < COSH_BW_SMALLEST_NORMAL, torch.zeros_like(result), result)
+    tiny = (unit.abs() < COSH_BW_SMALLEST_NORMAL) & (unit != 0)
+    result = torch.where(~torch.isfinite(g) & tiny, torch.zeros_like(result), result)
     infinite = g * torch.where(unit < 0, -torch.inf, torch.inf)
-    result = torch.where(unit.abs() >= COSH_BW_LARGEST_FINITE, infinite, result)
+    result = torch.where((unit.abs() >= COSH_BW_LARGEST_FINITE) & (g != 0), infinite, result)
     return result
 
 
@@ -205,7 +228,10 @@ def _cosh_bw_pure_ulp(reference, actual):
     ulp = ((golden - actual.to(torch.float64)).abs().to(torch.float32) / spacing.to(torch.float32)).to(torch.float64)
     same_class = _cosh_bw_stored_classes(rounded) == _cosh_bw_stored_classes(actual)
     ulp = torch.where(torch.isfinite(rounded), ulp, torch.zeros_like(ulp))
-    return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    ulp = torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    # A +0 where torch's own result is subnormal is torch's result as stored: BF16 cannot store a subnormal.
+    flushed = (actual.to(torch.float64) == 0) & (reference.abs() < COSH_BW_SMALLEST_NORMAL)
+    return torch.where(flushed, torch.zeros_like(ulp), ulp)
 
 
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
