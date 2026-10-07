@@ -41,7 +41,7 @@ def main():
     maxlen = max(len(it["prompt_ids"]) for it in allitems)
     S = max(256, -(-maxlen // 128) * 128)
     max_pos = -(-(S + NEWMAX + 8) // S) * S
-    pool = KVLayout(users=-(-NMAX // 4), max_pos=max_pos, chunk=S)
+    pool = KVLayout(users=-(-scen[0][0] // 4), max_pos=max_pos, chunk=S)
     mesh = open_mesh_full()
     try:
         t0 = time.time()
@@ -65,10 +65,13 @@ def main():
             dram=dram(mesh),
             cache=model.wc.stats,
         )
-        gen = Generator(model, max_pos, trace=E("GSM_TRACE", "1") == "1", keep_logits=False)
+        gen = Generator(model, max_pos, trace=E("GSM_TRACE", "1") == "1", keep_logits=False, U=-(-scen[0][0] // 4))
         prev = {}
         for si, (N, NEW) in enumerate(scen):
             items = allitems[:N]
+            Uc = -(-N // 4)
+            if Uc != gen.U:
+                gen.reconfigure(Uc, KVLayout(users=Uc, max_pos=max_pos, chunk=S))
             r = gen.generate([it["prompt_ids"] for it in items], NEW, S=S)
             times = r["times"]
             steady = sorted(times[5:])
