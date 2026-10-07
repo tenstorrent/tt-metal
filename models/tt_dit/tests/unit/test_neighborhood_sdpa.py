@@ -652,6 +652,22 @@ def test_choose_sharded_brick_refuses_stride_with_h_split(expect_error):
         _choose_sharded_brick((145, 272, 480), (11, 11, 11), (2, 4, 4), 60, 8, height_local=68, h_shard_count=4)
 
 
+@pytest.mark.parametrize(
+    "s5_2d, stride, expected",
+    [(None, None, True), ("1", None, True), ("0", None, False), (None, "2,4,4", False), ("1", "2,4,4", True)],
+)
+def test_s5_2d_default_on(monkeypatch, s5_2d, stride, expected):
+    """The 2-D split is the default; DIFFVAE_S5_2D=0 or an unset flag with a GNA stride keeps 1-D."""
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import s5_2d_enabled
+
+    for name, value in (("DIFFVAE_S5_2D", s5_2d), ("DIFFVAE_GNA_STRIDE", stride)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    assert s5_2d_enabled() is expected
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
 def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
     """A volume with few time frames must not select a brick deeper than the volume.
