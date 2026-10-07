@@ -745,3 +745,32 @@ def test_every_fallback_is_certified():
     from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
 
     assert set(O.CERTIFIED) == set(O.FALLBACKS)  # so --host-ops all needs no --qwen-allow-uncertified
+
+
+class _ArchTensor:
+    def __init__(self, arch):
+        self._arch = arch
+
+    def device(self):
+        return self
+
+    def arch(self):
+        return self._arch
+
+
+def test_quasar_experimental_add_routes_only_on_quasar(monkeypatch):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "quasar_experimental_add")
+    assert wa.target == "ttnn.add"
+    monkeypatch.setattr(ttnn, "Tensor", _ArchTensor)  # the predicate looks for ttnn.Tensor arguments
+    assert wa.applies((_ArchTensor(ttnn.device.Arch.QUASAR), 1.0), {})
+    assert not wa.applies((_ArchTensor(ttnn.device.Arch.WORMHOLE_B0), 1.0), {})
+    assert not wa.applies((1.0, 2.0), {})  # no tensor argument: leave the op alone
+    calls = []
+    monkeypatch.setattr(ttnn.experimental.quasar, "add", lambda *a, **k: calls.append((a, k)) or "q")
+    assert wa.rewrite(None, ("a", "b"), {"memory_config": "m"}) == "q" and calls == [
+        (("a", "b"), {"memory_config": "m"})
+    ]
