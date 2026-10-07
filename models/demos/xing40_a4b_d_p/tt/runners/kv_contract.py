@@ -29,6 +29,7 @@ host tag come from it, as DeepSeek's populate_kv_chunk_address_table_block_cycli
 
 from __future__ import annotations
 
+import os
 import socket
 
 import torch
@@ -96,6 +97,8 @@ class XingContractKV:
         L = len(self.layers)
         nbytes = self.entry_bytes(self.kvpe)
         base, num_banks, host = int(self.kvpe.buffer_address()), self.num_banks, socket.gethostname()
+        # Local override (disagg on one machine): the KV manager tells the prefill's and the decode's tables apart by host name.
+        table_host = os.environ.get("XING_PREFILL_TABLE_HOST") or None
         sp, tp = self.mesh_shape
         fnids = [[self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c)) for c in range(tp)] for r in range(sp)]
         if stage_layout is not None:
@@ -104,6 +107,8 @@ class XingContractKV:
             assert (st["first_layer"], st["count"]) == (first_layer_idx, L), (st["first_layer"], st["count"], L)
             assert int(st["base_addr"]) == base, (st["base_addr"], base)
             num_banks, host, fnids = int(st["num_banks"]), f"host-{st['host_tag']:08x}", st["fnids"]
+        if table_host:
+            host = table_host
         table = D.KvChunkAddressTable(
             {
                 "0": _make_config(
