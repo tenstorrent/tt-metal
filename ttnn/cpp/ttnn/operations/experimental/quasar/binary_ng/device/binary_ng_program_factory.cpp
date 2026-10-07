@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <algorithm>
 using namespace tt::tt_metal;

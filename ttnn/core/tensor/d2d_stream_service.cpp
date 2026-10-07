@@ -33,6 +33,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"

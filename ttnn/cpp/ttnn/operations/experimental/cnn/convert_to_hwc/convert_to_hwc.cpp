@@ -4,6 +4,7 @@
 
 #include "convert_to_hwc.hpp"
 #include "device/convert_to_hwc_device_operation.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace {
 

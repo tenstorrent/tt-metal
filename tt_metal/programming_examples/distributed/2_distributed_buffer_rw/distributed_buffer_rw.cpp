@@ -4,6 +4,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing Read and Write commands to a distributed memory buffer spanning

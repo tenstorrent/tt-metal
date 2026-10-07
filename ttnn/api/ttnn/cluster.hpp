@@ -8,6 +8,7 @@
 
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/cluster.hpp>
 
 namespace ttnn {
 

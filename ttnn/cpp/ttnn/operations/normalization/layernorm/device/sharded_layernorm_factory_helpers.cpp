@@ -7,6 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <algorithm>

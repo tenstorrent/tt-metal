@@ -5,6 +5,7 @@
 #include <limits>
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::prim {
 

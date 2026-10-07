@@ -51,6 +51,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 

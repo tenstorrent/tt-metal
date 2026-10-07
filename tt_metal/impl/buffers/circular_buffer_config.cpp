@@ -13,6 +13,7 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
