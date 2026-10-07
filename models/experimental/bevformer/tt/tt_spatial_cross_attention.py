@@ -29,7 +29,7 @@ from models.experimental.bevformer.model_config import (
     SCA_NUM_POINTS,
     DeformableAttentionConfig,
 )
-from .tt_ms_deformable_attention import TTMSDeformableAttention
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention
 
 
 def _index_dtype(num_rows):

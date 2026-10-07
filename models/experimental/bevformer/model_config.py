@@ -21,6 +21,10 @@ Sections:
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import ttnn
 
 # --- Cameras and images -------------------------------------------------------------------------
 
@@ -150,8 +154,11 @@ class DeformableAttentionConfig:
 
 # --- TTNN precision and memory ------------------------------------------------------------------
 
-# The ttnn dtypes, by name: the PyTorch reference imports this module and must not need ttnn, so
-# ``GRID_DTYPE`` and ``SCORE_DTYPE`` resolve on first access (``__getattr__`` below).
+# The ttnn dtypes, by name. The PyTorch reference imports this module and must not need ttnn, so
+# ``GRID_DTYPE`` and ``SCORE_DTYPE`` are looked up in ttnn on first access, by the module
+# ``__getattr__`` at the end of this file.
+GRID_DTYPE: "ttnn.DataType"
+SCORE_DTYPE: "ttnn.DataType"
 _TTNN_DTYPES = {
     # The deformable attentions' reference points and sampling grids, in the encoder and the
     # decoder: in bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the 200x200 grid.
@@ -160,14 +167,6 @@ _TTNN_DTYPES = {
     # num_classes scores tie, and the top-k order departs from the reference's.
     "SCORE_DTYPE": "float32",
 }
-
-
-def __getattr__(name):
-    if name in _TTNN_DTYPES:
-        import ttnn
-
-        return getattr(ttnn, _TTNN_DTYPES[name])
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # The backbone and FPN, for 6 cameras at 1600x928. Layer indices count the ResNet layers from 0
@@ -205,7 +204,9 @@ BLOCK_SHARDED_LEVELS = (0, 1)
 
 
 def tt_resnet_kwargs():
-    """TtResNet's memory and precision arguments for this configuration."""
+    """TtResNet's memory and precision arguments for this configuration, the ones
+    ``TtResNet.layer_kwargs`` also takes. TtResNet's ``out_indices`` defaults to all four layers;
+    pass ``RESNET_KWARGS["out_indices"]`` with these for BEVFormer-base's C3-C5."""
     return dict(
         dram_activation_stages=DRAM_ACTIVATION_STAGES,
         dram_conv_slices=DRAM_CONV_SLICES,
@@ -221,3 +222,20 @@ def tt_fpn_kwargs():
         dram_conv_slices=DRAM_CONV_SLICES,
         block_sharded_levels=BLOCK_SHARDED_LEVELS,
     )
+
+
+def __getattr__(name):
+    """The module attribute hook of PEP 562: resolves ``_TTNN_DTYPES`` against ttnn on first access
+    and caches the result, so ttnn is imported only by the code that uses them."""
+    if name not in _TTNN_DTYPES:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    try:
+        import ttnn
+    except ImportError as error:
+        raise AttributeError(f"{name} is a ttnn dtype, and ttnn is not importable") from error
+    value = globals()[name] = getattr(ttnn, _TTNN_DTYPES[name])
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_TTNN_DTYPES))

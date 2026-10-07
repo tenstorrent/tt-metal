@@ -275,7 +275,8 @@ class TtResNet:
     DRAM the same way. ``block_sharded_downsample_stages`` lists the layers whose downsample
     conv is block sharded, and ``fp32_acc_stages`` the layers whose convs accumulate in an fp32
     destination register (see TtBottleneck). The defaults keep everything in L1 at bfloat16
-    accumulation; ``model_config.tt_resnet_kwargs`` gives BEVFormer-base's values.
+    accumulation; ``model_config.tt_resnet_kwargs`` gives BEVFormer-base's values, and
+    ``model_config.RESNET_KWARGS["out_indices"]`` its ``out_indices``.
     """
 
     num_layers = 4

@@ -23,10 +23,10 @@ import ttnn
 from torchvision.transforms.functional import rotate
 
 from models.experimental.bevformer.model_config import CAN_BUS_DIMS, GRID_DTYPE
-from ..reference.perception_transformer import bev_grid_length, ego_shift
-from .tt_common import layer_norm
-from .tt_encoder import TTBEVFormerEncoder
-from .tt_spatial_cross_attention import SCARebatchPlan
+from models.experimental.bevformer.reference.perception_transformer import bev_grid_length, ego_shift
+from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
+from models.experimental.bevformer.tt.tt_spatial_cross_attention import SCARebatchPlan
 
 
 @dataclass

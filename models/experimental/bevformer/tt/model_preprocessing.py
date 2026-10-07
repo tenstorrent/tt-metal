@@ -64,6 +64,17 @@ def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=DEFAULT_DTYPE)
     )
 
 
+def ffn_parameters(ffn, device, dtype=DEFAULT_DTYPE):
+    """The encoder's and decoder's mmcv-style ``FFN``: ``layers`` is
+    ``Sequential(Sequential(Linear, ReLU), Linear)``, so the two Linears are ``layers[0][0]`` and
+    ``layers[1]``."""
+    first, second = ffn.layers[0][0], ffn.layers[1]
+    return SimpleNamespace(
+        linear1=linear_params(first.weight, first.bias, device, dtype),
+        linear2=linear_params(second.weight, second.bias, device, dtype),
+    )
+
+
 # --- Deformable attention and encoder ---------------------------------------------------------
 
 
@@ -117,14 +128,10 @@ def create_temporal_self_attention_parameters(tsa, device, dtype=DEFAULT_DTYPE):
 
 def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
     """``reference.encoder.BEVFormerLayer`` as TTBEVFormerLayer takes it."""
-    ffn = layer.ffns[0].layers
     return SimpleNamespace(
         tsa=create_temporal_self_attention_parameters(layer.attentions[0], device, dtype),
         sca=create_spatial_cross_attention_parameters(layer.attentions[1], device, dtype),
-        ffn=SimpleNamespace(
-            linear1=linear_params(ffn[0][0].weight, ffn[0][0].bias, device, dtype),
-            linear2=linear_params(ffn[1].weight, ffn[1].bias, device, dtype),
-        ),
+        ffn=ffn_parameters(layer.ffns[0], device, dtype),
         norms=[preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms],
     )
 
@@ -375,15 +382,13 @@ def _cross_attn_parameters(msda, device, dtype):
     return params
 
 
-def _layer_parameters(layer, device, dtype):
-    ffn = layer.ffns[0].layers
+def _decoder_layer_parameters(layer, device, dtype):
+    """``reference.decoder.DetrTransformerDecoderLayer`` as TtDetectionTransformerDecoder's layer
+    takes it."""
     return SimpleNamespace(
         self_attn=_self_attn_parameters(layer.attentions[0].attn, device, dtype),
         cross_attn=_cross_attn_parameters(layer.attentions[1], device, dtype),
-        ffn=SimpleNamespace(
-            linear1=linear_params(ffn[0][0].weight, ffn[0][0].bias, device, dtype),
-            linear2=linear_params(ffn[1].weight, ffn[1].bias, device, dtype),
-        ),
+        ffn=ffn_parameters(layer.ffns[0], device, dtype),
         norms=[preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms],
     )
 
@@ -395,7 +400,7 @@ def create_decoder_parameters(torch_model, device, dtype=DEFAULT_DTYPE):
     ``cross_attn.sampling_offsets`` and frees the original, so every decoder instance (and
     every BEV size) needs its own call.
     """
-    return SimpleNamespace(layers=[_layer_parameters(layer, device, dtype) for layer in torch_model.layers])
+    return SimpleNamespace(layers=[_decoder_layer_parameters(layer, device, dtype) for layer in torch_model.layers])
 
 
 def create_reg_branch_parameters(reg_branches, device, dtype=DEFAULT_DTYPE):
