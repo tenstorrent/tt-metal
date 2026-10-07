@@ -1366,7 +1366,8 @@
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
-      export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+      # ModelArgs needs config.json even when all TT weights come from TT_CACHE_PATH.
+      export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b
       export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
       export TT_HF_DRAFT_MODEL=/mnt/models/blaze/openai/gpt-oss-120b-DFlash
       export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
