@@ -185,6 +185,10 @@ public:
             is_opened = true;
             zone_reserve();
             start_timestamp = ckernel::read_wall_clock();
+#if defined(LLK_ZONE_OLD) // experiment: the start record goes to L1 inside the window, as before df14044db9e
+            write_entry_at(EntryType::ZONE_START, id16, start_timestamp);
+            reserved_words_count -= ZONE_START_WORDS;
+#endif
         }
         ckernel::fence_compiler();
     }
@@ -202,7 +206,12 @@ public:
                          : [on] "i"(LOOP_PAD ? 1 : 0));
             std::uint32_t id;
             asm volatile("lui %0, %%hi(%1)\n\taddi %0, %0, %%lo(%1)" : "=r"(id) : "i"(id16));
+#if defined(LLK_ZONE_OLD)
+            reserved_words_count -= ZONE_END_WORDS;
+            write_entry_at(EntryType::ZONE_END, static_cast<std::uint16_t>(id), end_timestamp);
+#else
             zone_record(static_cast<std::uint16_t>(id), start_timestamp, end_timestamp);
+#endif
 #else
             zone_record(id16, start_timestamp, end_timestamp);
 #endif
