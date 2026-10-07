@@ -80,13 +80,18 @@ class MiMoMoEDecode:
         w2 = ttnn.reshape(ttnn.to_layout(w2, ttnn.ROW_MAJOR_LAYOUT), [T, 1, 1, TOPK])
         return w2, i2
 
-    def forward(self, x, mask):
+    def forward(self, x, mask, upto=99):
+        """upto (stage-timing hook): 0 = pad+router+spread, 1..4 = moe stages (counts, dispatch, experts, combine), 5 = full moe without all-reduce."""
         B = x.shape[2]
         xp = ttnn.pad(x, [(0, 0), (0, 0), (0, SLOTS - B), (0, 0)], 0.0)
         wts, idx = self.gate.route(xp, "exact")
         wts2, idx2 = self._spread(wts, idx, mask)
+        if upto == 0:
+            return wts2, idx2
         x_rm = ttnn.reshape(ttnn.to_layout(xp, ttnn.ROW_MAJOR_LAYOUT), [1, SLOTS, HIDDEN])
-        part = self.moe.forward(x_rm, wts2, idx2)
+        part = self.moe.forward(x_rm, wts2, idx2, upto=min(upto, 99) if upto <= 4 else 99)
+        if upto <= 5:
+            return part
         out = ttnn.all_reduce(part, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if self.do_ar else part
         if self.do_ar:
             ttnn.deallocate(part)

@@ -177,3 +177,34 @@ def test_moe_decode_trace(mesh_device):
         flush=True,
     )
     ttnn.release_trace(md, tid)
+
+    # stage-cumulative traces at users/row 32: pad+router+spread (0), +counts (1), +dispatch (2), +experts (3), +combine (4), +reduce (5), full with all-reduce+slice (6)
+    set_users(32)
+    prev = 0.0
+    names = {
+        0: "pad+router+spread",
+        1: "+masked_bincount/offset_cumsum",
+        2: "+dispatch",
+        3: "+experts(unified)",
+        4: "+combine",
+        5: "+post_combine_reduce",
+        6: "+all_reduce+slice (full)",
+    }
+    for st in (0, 1, 2, 3, 4, 5, 6):
+        fn = lambda st=st: [dec[L].forward(xdev[L], mask_dev, upto=st if st < 6 else 99) for L in LAYERS]
+        fn()
+        ttnn.synchronize_device(md)
+        tid = ttnn.begin_trace_capture(md, cq_id=0)
+        fn()
+        ttnn.end_trace_capture(md, tid, cq_id=0)
+        for _ in range(5):
+            ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        t0 = time.time()
+        for _ in range(REPLAYS):
+            ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(md)
+        v = (time.time() - t0) / REPLAYS * 1e3 / len(LAYERS)
+        print(f"RESULT STAGE cumulative {names[st]}: {v:.3f} ms/layer (delta {v - prev:+.3f})", flush=True)
+        prev = v
+        ttnn.release_trace(md, tid)

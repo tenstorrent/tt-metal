@@ -139,7 +139,7 @@ class MiMoPrefillMoE:
             ttnn.deallocate(p_)
         return o
 
-    def forward(self, x_rm, scores, indices, keep_counts=False):
+    def forward(self, x_rm, scores, indices, keep_counts=False, upto=99):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (router outputs; N = tokens of this mesh row)."""
         md = self.md
         N = x_rm.shape[1]
@@ -159,6 +159,8 @@ class MiMoPrefillMoE:
         ttnn.deallocate(hist)
         if keep_counts:
             self.last_counts = counts
+        if upto == 1:  # stage-timing hook: counts only
+            return offsets, counts, region_offsets
         disp, meta = dp.dispatch(
             input_tensor=x_rm,
             indices_tensor=ttnn.reshape(indices, [1, N, TOPK]),
@@ -182,6 +184,8 @@ class MiMoPrefillMoE:
             use_l1_small_for_semaphores=True,
         )
         ttnn.deallocate(offsets)
+        if upto == 2:  # stage-timing hook: after dispatch
+            return disp, meta, counts, region_offsets
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
         if self.expert_op in ("loop", "mm"):
             # bf16-activation path (user decision: activations stay bf16): tilize the dispatched bf16 buffer (stays bf16), then per local expert
@@ -249,6 +253,8 @@ class MiMoPrefillMoE:
                 activation=ttnn.RoutedExpertActivation.Silu,
             )
         ttnn.deallocate(disp)
+        if upto == 3:  # stage-timing hook: after the expert op
+            return out, meta, counts, region_offsets
         out5 = ttnn.reshape(out, [1, 1, sh.max_buf, out.shape[-1]])
         comb = dp.combine(
             out5,
@@ -269,6 +275,8 @@ class MiMoPrefillMoE:
         )
         ttnn.deallocate(out)
         ttnn.deallocate(meta)
+        if upto == 4:  # stage-timing hook: after combine
+            return comb
         if not keep_counts:
             ttnn.deallocate(counts)
         ttnn.deallocate(region_offsets)
