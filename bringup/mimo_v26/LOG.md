@@ -153,3 +153,38 @@
 - claim: DECISION (coordinator): checkpoint downloaded from HF XiaomiMiMo/MiMo-V2.6-Flash-RL into /mnt/tt-data/MiMo-V2.6-Flash-RL (user approved download and location 2026-10-07; whole repo, ~173 GB, log /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log). MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL. Hosts approved by user for use (health-check each first): 30 35 40 41 43 44 46 47 48.
 - evidence: -
 - paths: bringup/mimo_v26
+
+## E261007-0159-101
+- date: 2026-10-07T01:59:21
+- commit: 97024a064ab
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: attn
+- status: verified
+- claim: Attention module v1 (models/demos/blackhole/mimo_v26/tt/attention.py) on the real 4x8 mesh (host .30), random weights of real shapes (bfp8 qkv/o, bf16 KV, V padded to 192 with V*0.707 folded into Wv, TP8 over columns, GA 4 KV heads on 8 columns, partial RoPE 64/192 split-half via x*cos+(x@R)*sin, 4 mesh rows with different data) vs torch fp32 HF-semantics reference: chunked prefill (chunk 1024 x3, ragged lengths user0 3 chunks / user1 2 chunks, 2 users x 4 rows) PCC min 0.99956 (SWA, ring 24 pages, sink x1) and 0.99961 (GA), per chunk >= 0.99954; decode (32 slots/row, 3 steps, positions 3072.. past the SWA ring of 1536 slots, ragged 2048/3072) PCC min 0.99939 (SWA) / 0.99937 (GA); column outputs identical after all_reduce (spread 0.0), 3 repeated decode steps bit-identical. Same at 5 chunks x3 users ragged (C5): prefill 0.99955/0.9996, decode 0.99945/0.99953; bf16 weights give 0.9996 so bfp8 weights cost ~0.0001. Real activations/weights not yet used.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_C4_ragged.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"swa_prefill_pcc":0.99956,"ga_prefill_pcc":0.99961,"swa_decode_pcc":0.99939,"ga_decode_pcc":0.99937,"mesh":"4x8","ring_slots":1536,"chunk":1024}
+
+## E261007-0159-07c
+- date: 2026-10-07T01:59:21
+- commit: 87e19f95595
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: attn
+- status: verified
+- claim: Attention module v1 UNOPTIMISED warm wall time per layer call on the 4x8 mesh (20 decode calls / 5 prefill chunks after warmup, no trace, host-dispatch inclusive, ctx 2048-4096, host .30, one process): decode 32 users/row 3.46 ms (GA) / 3.46 ms (SWA); prefill chunk 2048 tokens at start 2048: 3.06 ms (GA) / 2.70 ms (SWA). Decode is far above the DRAM roofline (~0.05 ms for 15 MB weights/chip) so it is dispatch/op-overhead bound (~40 small ops incl. embedding, repeat, to_memory_config, all_reduce): needs trace and op fusion in the next step. Not a throughput claim.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_C6_perf.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"decode_ms":3.46,"prefill_chunk2048_ms_ga":3.06,"prefill_chunk2048_ms_swa":2.70}
+
+## E261007-0159-bd0
+- date: 2026-10-07T01:59:21
+- commit: 87e19f95595
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: skill-defect
+- status: verified
+- claim: Fixed per coordinator: tt-lab-ops sec.0 now says TT_METAL_CACHE defaults to /mnt/tt-data/ssinghal/tt-metal-cache/kit (shared, --cache-dir overrides) to match launch.py (text changed, tool unchanged). Merge of ssinghal/mimo into the attn branch had LOG.md and bringup_kit/.gitignore conflicts (both sides kept). Also learned: the black pre-commit hook reformats files so scripted multi-line text replacements on a file committed once fail silently (my ragged-test edit only half applied and produced a wrong PCC for ragged users; caught because the per-chunk and per-user numbers disagreed): re-read a file after the first commit before patching it.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_B2_ga.log
+- paths: .claude/skills/tt-lab-ops/SKILL.md
