@@ -291,6 +291,9 @@ void kernel_main() {
     // remote writes must wait until every rank has entered this program. Data
     // readiness semaphores protect reads within this gather, not prior owners.
     // This barrier covers the Ring activation gather; Linear and FSDP are unchanged.
+    // Every in0 core on every rank runs it symmetrically: out_ready_sem_noc0_x/y are
+    // this core's own coordinates, so each core signals its counterpart on the
+    // num_devices - 1 peers and waits for exactly that many arrivals in its own L1.
     if constexpr (topology == Topology::Ring && num_devices > 1) {
         if (barrier_sem != 0) {
             auto* barrier_connection =
@@ -307,7 +310,10 @@ void kernel_main() {
             noc_obj.async_writes_flushed();
             auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
             noc_semaphore_wait_min(barrier_ptr, num_devices - 1);
-            noc_semaphore_set(barrier_ptr, 0);
+            // Consume this launch's arrivals rather than resetting: a faster rank's
+            // next-launch arrival may already be here, and a reset would drop it.
+            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - (num_devices - 1));
+            noc_obj.async_atomic_barrier();
         }
     }
 #endif
