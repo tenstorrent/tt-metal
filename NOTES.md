@@ -50,3 +50,10 @@
 - Next: read res/ab2.marker + res/ab2/job.log; score PCC/PSNR per seed vs ref_t48_f6b8; decide default-on
   (>= ~20 ms e2e win, output equivalent) or keep opt-in; push.
 - ab2 = blx01 broker job 757, started 05:45:25 UTC.
+
+## ab2 result (blx01 job 757, 05:45-05:51 UTC, rc=0, no drop, no OOM)
+- ON  warm gen#1-5 E2E 6.112/6.127/6.001/6.102/6.066 s, mean 6.082 (range 0.126); peak DRAM 24.78 GiB/chip.
+- OFF warm gen#1-5 E2E 5.732/5.718/5.699/5.743/5.752 s, mean 5.729 (range 0.053); peak DRAM 20.15 GiB/chip.
+- Delta +353 ms (ON slower): 4x weight reads cost more than the saved CCLs. Decision: keep LTX_AUDIO_REPLICATE
+  opt-in (default off), do not land. PCC/PSNR not scored: moot for an off-by-default regression.
+- Videos/stills: blx01 /var/tmp/fasth3/t189/res/ab2/{on,off}/ltx_av_fast_1920x1088_<n>.mp4, *_t3s.jpg
