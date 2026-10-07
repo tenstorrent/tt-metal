@@ -735,7 +735,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         input_tensor_b.tensor_spec(),
         output_spec,
         ttnn::operations::binary_ng::native_block_broadcast(
-            operation_attributes, input_tensor_a.dtype(), input_tensor_b.dtype(), output_spec.data_type()));
+            operation_attributes, input_tensor_a.tensor_spec(), input_tensor_b.dtype(), output_spec.data_type()));
     if (shard_volumes.has_value()) {
         operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
         operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
