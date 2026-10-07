@@ -12,6 +12,9 @@
 #include "topk_large_indices_compute_body_mode.hpp"
 #include "topk_large_indices_metadata.hpp"
 #include "topk_large_indices_runtime_args.hpp"
+#ifdef ARCH_BLACKHOLE
+#include "topk_large_indices_split.hpp"
+#endif
 
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
@@ -31,6 +34,12 @@ inline void _topk_large_indices_reinit_fused_after_stamp_() {
         .set(ADDR_MOD_6);
     topk_mop_config<true>();
 }
+
+}  // namespace ckernel::sfpu
+#endif
+
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
+namespace ckernel::sfpu {
 
 // The final TopK XL survivor stores FP32 value words followed by UINT32 index
 // words. Mark indices paired with exact -inf values as invalid without
@@ -228,6 +237,50 @@ FORCE_INLINE void reduce_segmented_row(CircularBuffer& input, uint32_t num_chunk
     }
 }
 
+#ifdef ARCH_BLACKHOLE
+// A fused K = 512 row of two or more chunks, its SFPU work on PACK and its copies and transposes on MATH
+// (topk_large_indices_split.hpp). Ends with the -inf indices marked and the index tile transposed, as
+// mark_neginf_indices and materialize_index_rank_order leave it.
+FORCE_INLINE void reduce_split_row_512(
+    CircularBuffer& input, uint32_t indices_cb, uint32_t num_chunks, uint32_t tail_elements) {
+    constexpr uint32_t K = 512;
+    const uint32_t input_cb = input.get_cb_id();
+#ifdef TRISC_UNPACK
+    for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
+        input.wait_front(1);
+        if (chunk == 0) {
+            topk_xl_copy_tile_init(input_cb);
+        }
+        topk_xl_copy_tile<K>(input_cb, 0, 0, chunk + 1 == num_chunks ? tail_elements : K);
+        input.pop_front(1);
+        llk_unpack_set_srcb_dummy_valid();  // the local sort's transposes
+        if (chunk > 0) {
+            llk_unpack_set_srcb_dummy_valid();  // the rebuild's
+        }
+    }
+#endif
+#ifdef TRISC_MATH
+    _llk_math_eltwise_unary_sfpu_init_once_();
+    topk_large_indices_split::math_row(num_chunks, [&](uint32_t chunk, uint32_t tile) {
+        if (chunk == 0) {
+            topk_xl_copy_tile_init(input_cb);
+        }
+        topk_xl_copy_tile<K>(input_cb, tile, 0, chunk + 1 == num_chunks ? tail_elements : K);
+    });
+#endif
+#ifdef TRISC_PACK
+    topk_large_indices_split::pack_row(num_chunks, [] {
+        ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_();
+        ckernel::sfpu::_topk_xl_split_begin_(0);
+        ckernel::sfpu::_topk_large_indices_mark_neginf_indices_<512>();
+    });
+#endif
+    constexpr uint32_t tiles_per_sequence = 1;
+    transpose_dest_init<true, false>(indices_cb);
+    transpose_dest<true, false>(tiles_per_sequence);
+}
+#endif
+
 template <uint32_t K>
 FORCE_INLINE void mark_neginf_indices(uint32_t dst) {
     MATH((ckernel::sfpu::_topk_large_indices_mark_neginf_indices_init_()));
@@ -285,6 +338,31 @@ void kernel_main() {
 
     CircularBuffer input(input_cb);
     CircularBuffer indices(indices_cb);
+
+#ifdef ARCH_BLACKHOLE
+    if constexpr (K == 512 && body_mode == ComputeBodyMode::FusedEndToEnd) {
+        if (num_chunks >= 2) {
+            MATH((topk_large_indices_split::start()));
+            PACK((topk_large_indices_split::wait_start()));
+            for (uint32_t row = 0; row < num_rows; ++row) {
+                tile_regs_acquire();
+                reduce_split_row_512(input, indices_cb, num_chunks, tail_elements);
+                tile_regs_commit();
+                tile_regs_wait();
+
+                // The pack thread's SFPU work reprogrammed its ADDR_MODs and MOP.
+                pack_untilize_dest_init<tiles_per_sequence, tiles_per_sequence>(indices_cb);
+                indices.reserve_back(1);
+                pack_untilize_dest<tiles_per_sequence, tiles_per_sequence>(
+                    indices_cb, 1, 0, final_survivor + tiles_per_sequence);
+                indices.push_back(1);
+
+                tile_regs_release();
+            }
+            return;
+        }
+    }
+#endif
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         tile_regs_acquire();
