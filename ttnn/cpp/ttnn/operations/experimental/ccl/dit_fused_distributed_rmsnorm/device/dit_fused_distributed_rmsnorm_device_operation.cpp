@@ -163,6 +163,10 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             map.storage_type() == StorageType::DEVICE && map.buffer() != nullptr,
             "affine_tile_row_map must be an allocated device tensor");
+        // The reader binds the map's raw buffer address on the input's mesh, so a map that lives on
+        // another mesh would be read as unrelated memory.
+        TT_FATAL(
+            map.device() == input.device(), "affine_tile_row_map must be on the same mesh device as the input");
         TT_FATAL(
             map.dtype() == DataType::UINT32 || map.dtype() == DataType::INT32,
             "affine_tile_row_map must be UINT32 or INT32, got {}",
