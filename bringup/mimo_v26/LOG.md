@@ -1616,3 +1616,172 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_R_sites_dec6_h47_b5e70f78d96.log
 - paths: models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py, models/demos/blackhole/mimo_v26/tests/test_prefill_determinism_traced.py
 - data: {"attn_decode_calls":18600,"dense_calls":3100,"prefill_calls":36000,"events":0}
+
+## E261007-1642-30c
+- date: 2026-10-07T16:42:27
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 44
+- track: correctness
+- status: verified
+- claim: RE-GATE layer_pcc.dense at b1a54e1a53f: layer 0 (dense SwiGLU, global attention) WHOLE layer on device, teacher forced from dump h_in (mimo-prefill-s128b16, B=16 S=128): h_out PCC vs bf16 CPU dump, min over 16 users = 0.99998 (bf16-vs-fp32 floor 1.0). LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights. Device-vs-dump on the dump inputs. Log /mnt/tt-data/ssinghal/mimo-logs/regate_chain_b1a54e1a53f.log (pytest test_chain_dump.py, 1 passed).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_chain_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py
+- supersedes: E261007-0604-261
+- data: {"pcc":0.99998,"layer_type":"dense","layer":0}
+
+## E261007-1642-7c4
+- date: 2026-10-07T16:42:27
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 44
+- track: correctness
+- status: verified
+- claim: RE-GATE layer_pcc.swa_moe at b1a54e1a53f: layers 1..4 (SWA attention + MoE) WHOLE layer on device, teacher forced from dump h_in (s128b16), h_out PCC vs bf16 CPU dump, min over 16 users and L1..L4 = 0.99992 (L1 0.99993, L2 0.99992, L3 0.99995, L4 0.99995; floors 0.99994-0.99995). LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_chain_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py
+- supersedes: E261007-0604-070
+- data: {"pcc":0.99992,"layer_type":"swa_moe","layers":[1,2,3,4]}
+
+## E261007-1642-f2e
+- date: 2026-10-07T16:42:27
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 44
+- track: correctness
+- status: verified
+- claim: RE-GATE layer_pcc.global_moe at b1a54e1a53f: layer 5 (global attention + MoE) WHOLE layer on device, teacher forced from dump h_in (s128b16), h_out PCC vs bf16 CPU dump min over 16 users = 0.9999 (floor 0.99994). Only L5 has a dump. LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_chain_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py
+- supersedes: E261007-0604-b44
+- data: {"pcc":0.9999,"layer_type":"global_moe","layer":5}
+
+## E261007-1642-220
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 44
+- track: correctness
+- status: verified
+- claim: RE-GATE chain_prefix_pcc at b1a54e1a53f: L0..L5 free-running chain on device (device embedding of the dump tokens, each layer fed the previous DEVICE output), h_out PCC after layer 1..6 vs bf16 CPU dump, min over 16 users: 0.99998, 0.99989, 0.99986, 0.99986, 0.99989, 0.99977 (floor >= 0.99994). Max drop per layer 0.00012 (L0->L1: 0.00009, L4->L5 0.00012). LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_chain_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_chain_dump.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py
+- supersedes: E261007-0604-a7e
+- data: {"pcc_curve":[0.99998,0.99989,0.99986,0.99986,0.99989,0.99977]}
+
+## E261007-1642-283
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 44,47
+- track: correctness
+- status: verified
+- claim: RE-GATE prefill_phase at b1a54e1a53f: traced chunked prefill L0..L5 (6 layers) vs CPU dumps, worst over s128b16 (CH128, host 47), s512b4 (CH256, host 44), s2048b1 (CH512, host 44), s8192b1 (CH2048, host 47): layer_pcc_min = hidden after L5 at every real position, min over users = 0.99953 (s512b4; s128b16 0.99977, s2048b1 0.99974, s8192b1 0.9998); kv_pcc_min = min over L0..L5 of K (post-RoPE) and V cache contents read back from the paged pool = 0.99922 (GA L5 V in s128b16). Replay-identical true on all four; first-token top1 agreement vs CPU 16/16, 4/4, 1/1, 1/1. LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights. Logs /mnt/tt-data/ssinghal/mimo-logs/regate_pf_<dump>_b1a54e1a53f.jsonl/.log.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_pf_s128b16_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-0604-364
+- data: {"layer_pcc_min":0.99953,"kv_pcc_min":0.99922}
+
+## E261007-1642-43c
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 44,47
+- track: correctness
+- status: verified
+- claim: RE-GATE decode_phase at b1a54e1a53f: one-step decode from a prefill-written state at the LAYER level: for each of L0..L5, teacher-forced dump dec_in (3 steps) through that layer's decode path reading the paged KV pool written by the traced chunked prefill, vs dump dec_out; min PCC over layers, steps and the four dumps = 0.98768 (L5 step 2 of s128b16, 4 live tokens per row, near-tie routing; all s512b4/s2048b1/s8192b1 >= 0.99957, s128b16 others >= 0.99893). Prefilled state is the device chunked prefill. LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_pf_s128b16_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-0604-8da
+- data: {"pcc":0.98768}
+
+## E261007-1642-04d
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 30,40,47
+- track: memory
+- status: verified
+- claim: RE-GATE memory_fit at b1a54e1a53f: free DRAM per chip after 48-layer chunked prefill (ttnn memory view, free_gib = free MB per bank x 8 banks / 1024), one process per cell, KV pool sized to each cell: (4,4096) 2321.0 MB/bank -> 18.133 GiB (host 30); (16,4096) 2278.3 -> 17.799 (host 40); (4,65536) 2000.2 -> 15.627 (host 47); (16,65536) 1805.7 -> 14.107 (host 47). No OOM. Identical to the old E261007-0601-d16 numbers. LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights. Logs /mnt/tt-data/ssinghal/mimo-logs/regate_ps48_<B>_<ISL>_b1a54e1a53f.jsonl
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_ps48_16_65536_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-0601-d16
+- data: {"table":[{"batch":4,"isl":4096,"free_gib":18.133},{"batch":16,"isl":4096,"free_gib":17.799},{"batch":4,"isl":65536,"free_gib":15.627},{"batch":16,"isl":65536,"free_gib":14.107}]}
+
+## E261007-1642-751
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 30
+- track: perf
+- status: verified
+- claim: RE-GATE perf_prefill at b1a54e1a53f (host 30, 48 layers, B=4 users one per mesh row, ISL 4096, CH 2048, traced chunked prefill, real GSM8K text): REAL TTFT warm (second call of the same case: set_step host copies + 2 replays + last-token hidden to host + final norm + lm_head + host copy) = 1441.9 ms (ttft_ms, ttft_ms_real_warm); first call incl. eager warm-up and trace capture = 13802 ms; replay-only (trace replays only) = 969 ms (2 x 486.8 ms) -> 16905 tok/s aggregate replay-only (prefill_tok_s_replay_only), real warm aggregate = 4 x 4096 / 1.4419 s = 11363 tok/s (prefill_tok_s). B=16 ISL 4096 (host 40): real warm TTFT 4750 ms (13800 tok/s real warm), replay-only 16877 tok/s. 64k: B=4 warm 19558 ms (13404 tok/s), replay-only 14671 tok/s; B=16 warm 76958 ms (13625 tok/s), replay-only 14686 tok/s. REGRESSION vs old replay-only 21959 tok/s (step 375.3 ms -> 486.8 ms at ISL 4096): not investigated here (candidates: integ library unified-op numerics, other merged changes). LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_ps48_4_4096_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-0601-86b
+- data: {"ttft_ms":1441.9,"prefill_tok_s":11363,"ttft_ms_real_warm":1441.9,"ttft_ms_real_first_call":13802.3,"ttft_ms_replay_only":969,"prefill_tok_s_replay_only":16905,"batch":4,"isl":4096,"b16_isl4096_ttft_ms_real_warm":4750.2,"b4_isl65536_ttft_ms_real_warm":19557.6,"b16_isl65536_ttft_ms_real_warm":76958.4,"replay_only":0}
+
+## E261007-1642-ad3
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 40
+- track: metric
+- status: verified
+- claim: RE-GATE ctx64k_two_isl at b1a54e1a53f (host 40): 48 layers, 4 users, ISL 64k -> 8k -> 64k in ONE process, prefill only (no decode trace in the process): free DRAM 2000.2 MB/bank after each of the three cases (identical, no leak), no OOM, first-token logits finite (assert in test), replay 17.84 s / 2.00 s / 17.76 s. No accuracy claim. LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_ps48_4_65536_4_8192_4_65536_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-0601-af7
+- data: {"two_isl_same_process_ok":1}
+
+## E261007-1642-118
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 47,40
+- track: prefill
+- status: verified
+- claim: RE-GATE ctx64k_prefill_decode at b1a54e1a53f (MILESTONE 1): 48 layers, 4x8, LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights, enable_thinking=false chat frame, real text = Frankenstein (Gutenberg, 101982 tokens; user b takes the window from body token b*2400) + 'quote and summarise' question, ISL 65000 per user, chunked traced prefill (CH 2048, paged pool) then traced decode, 1100 new tokens. B=4 (host 47): prefill 41.0 s, step0 21786 ms (trace capture+compile), steady 109.17 ms median over 1099 steps (p10-p90 107.99-110.36), free DRAM after 1807.5 MB/bank (14.1 GiB). B=16 (host 40): prefill 97.7 s, step0 23345 ms, steady 119.99 ms (115.19-121.73), free after 1613.0 MB/bank. No OOM, no hang. First tokens 8420 ('Here') for all 4 and 15/16 users, 28715 ('Based') for one: sane. Generated text READ (users 0 and 3 of B=4, 10 and 15 of B=16, head and tail): coherent Frankenstein summaries followed by verbatim quotes, ntok 1100 each, text files /mnt/tt-data/ssinghal/mimo-logs/regate_ctx64k_b4_b1a54e1a53f_texts.json and ..._b16_..._texts.json. Logits finiteness inferred from argmax tokens/text. Logs /mnt/tt-data/ssinghal/mimo-logs/regate_ctx64k_b{4,16}_b1a54e1a53f.jsonl
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_ctx64k_b16_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/conftest.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- supersedes: E261007-1046-caa
+- data: {"ctx64k_ok":1,"step_ms_64k_b4":109.17,"step_ms_64k_b16":119.99}
+
+## E261007-1642-daa
+- date: 2026-10-07T16:42:28
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 47,44
+- track: decode
+- status: verified
+- claim: RE-GATE gsm8k at b1a54e1a53f: 110/128 correct (85.9%, Wilson95 78.9-90.9) on gsm8k_128_nothink.json, enable_thinking=false, greedy, max_new 512, 48 layers, LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights, MIMO_MOE_AR=ag_sum default. Same 110/128 in all four runs (scenario 0 and 1, hosts 47 and 44); gate >=109 passes by ONE correct answer. All 128 users finished with EOS. Log /mnt/tt-data/ssinghal/mimo-logs/regate_gsm_h47_b1a54e1a53f.jsonl (host 47), regate_gsm_h44_b1a54e1a53f.jsonl (host 44).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_gsm_h47_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/decode_common.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-0836-eb6
+- data: {"n":128,"correct":110}
+
+## E261007-1642-84e
+- date: 2026-10-07T16:42:29
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 47,44
+- track: decode
+- status: verified
+- claim: RE-GATE perf_decode at b1a54e1a53f: decode step 107.1 ms/token at B=128 live users (32 slots per mesh row x 4 rows), prompts 35..137 tokens, up to 512 new tokens (context <= 800), 9.34 tok/s/user, 1195 tok/s total live; dedicated process, trace on, UNPAIRED, host-timed replay + candidate readback, steady steps after step 5. Four measurements of the same case: host 47 107.11 / 107.13 ms, host 44 107.44 / 106.76 ms. Same-session U sweep (scenarios after the gsm8k runs, 48 new tokens, prompts = first N of the 128, Generator.reconfigure between): users 128 (U=32) 107.1, 64 (U=16) 108.5, 32 (U=8) 101.3, 16 (U=4) 94.0, 8 (U=2) 87.2, 4 (U=1) 80.8 ms (host 47; host 44: 107.4, 108.5, 101.2, 94.0, 86.8, 81.1). The sweep scenarios have short context (<= ~190) so their ms are not like-for-like with the 128-user 512-token case. LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_gsm_h47_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/decode_common.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-0836-f36
+- data: {"decode_ms_tok":107.1,"tok_s_user":9.34,"batch":128,"u_sweep_ms":{"U32":107.1,"U16":108.5,"U8":101.3,"U4":94.0,"U2":87.2,"U1":80.8}}
+
+## E261007-1642-287
+- date: 2026-10-07T16:42:29
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 47,44
+- track: decode
+- status: verified
+- claim: RE-GATE determinism at b1a54e1a53f: two identical GSM8K n=128 runs (max_new 512, greedy, 48 layers, 4x8, LIB integ_73c014eb46d (LD_LIBRARY_PATH, harness guard passed), MIMO_EXPERT_OP=unified, exact router, MIMO_DEAD=spread32 default, real bfp8 weights, scenarios 128:512 twice in ONE process per host, test_gsm8k_decode.py) are TOKEN-IDENTICAL for all 128 users on host 47 (identical_to_previous_run_same_scenario=True, first_diff_user_step=[]) AND on host 44 (same); completions of host 47 and host 44 are also identical for all 128 users (texts json equal, s0 and s1). 110/128 correct in all four runs. Logs /mnt/tt-data/ssinghal/mimo-logs/regate_gsm_h47_b1a54e1a53f.log, regate_gsm_h44_b1a54e1a53f.log.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_gsm_h47_b1a54e1a53f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/decode_common.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-1505-aa2
+- data: {"runs":2,"bit_identical":1,"hosts_identical":2,"n":128,"correct":110}
