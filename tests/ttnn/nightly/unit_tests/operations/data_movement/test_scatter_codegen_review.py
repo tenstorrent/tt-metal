@@ -42,21 +42,31 @@ def _run_auto_against_native(device, xt, it, st, dim, **kwargs):
     return out, device.num_program_cache_entries() - entries_before
 
 
-# The exact-match carve-outs in is_demoted() are measured on the pre-last axis of a rank-4 tensor,
-# which a caller may spell as either 2 or -2.
-_CARVE_OUTS = [
-    ([1, 1, 32, 64], [1, 1, 16, 64], ttnn.ROW_MAJOR_LAYOUT),
-    ([1, 1, 32, 64], [1, 1, 16, 64], ttnn.TILE_LAYOUT),
-    ([1, 1, 64, 128], [1, 1, 32, 128], ttnn.ROW_MAJOR_LAYOUT),
-]
+@pytest.mark.parametrize("dim", [3, -1])
+def test_scatter_codegen_demotion_matches_either_axis_spelling(device, dim):
+    # is_demoted() normalizes the caller's raw dim before its unit-row check, so the last axis of a
+    # rank-4 tensor demotes the same whether spelled 3 or -1. The L1 output keeps the row-major detour
+    # from serving the unit row, which is what makes the case demote at all.
+    xt, it, st = _make_case([1, 1, 1, 64], [1, 1, 1, 32], dim, ttnn.TILE_LAYOUT, device)
+    _, added = _run_auto_against_native(device, xt, it, st, dim, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert added == 0, f"dim={dim} routed a unit TILE row the detour cannot serve to codegen; expected native"
 
 
-@pytest.mark.parametrize("dim", [2, -2])
-@pytest.mark.parametrize("shape,index_shape,layout", _CARVE_OUTS, ids=lambda v: str(v) if isinstance(v, list) else None)
-def test_scatter_codegen_demotion_matches_either_axis_spelling(device, shape, index_shape, layout, dim):
-    xt, it, st = _make_case(shape, index_shape, dim, layout, device)
-    _, added = _run_auto_against_native(device, xt, it, st, dim)
-    assert added == 0, f"dim={dim} routed a perf-demoted case to codegen (program cache grew); expected native"
+@pytest.mark.parametrize(
+    "shape,index_shape,layout",
+    [
+        ([1, 1, 32, 64], [1, 1, 16, 64], ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 1, 32, 64], [1, 1, 16, 64], ttnn.TILE_LAYOUT),
+        ([1, 1, 64, 128], [1, 1, 32, 128], ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=lambda v: str(v) if isinstance(v, list) else None,
+)
+def test_scatter_codegen_row_axis_small_shapes_route_to_codegen(device, shape, index_shape, layout):
+    # Small bf16 shapes scattered along the row axis sit within host-time noise of native: the
+    # demotion predicate names no shape, so they route to codegen and must match native.
+    xt, it, st = _make_case(shape, index_shape, -2, layout, device)
+    _, added = _run_auto_against_native(device, xt, it, st, -2)
+    assert added > 0, "auto fell back to native; expected codegen to serve this call"
 
 
 def test_scatter_codegen_tile_dram_input_l1_output_runs_tile_factory(device):
