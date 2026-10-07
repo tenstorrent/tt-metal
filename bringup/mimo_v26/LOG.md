@@ -1256,3 +1256,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_M14_ldet_default.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/decode.py
 - data: {"replays":100,"layers":48,"glitch_replays":"2-5 of 100","rows":[1,2,3],"row0_clean":true,"allreduce_stress_bad":0}
+
+## E261007-0827-805
+- date: 2026-10-07T08:27:01
+- commit: d59a132dc5e
+- branch: ssinghal/mimo-attn
+- host: 41
+- track: decode
+- status: verified
+- claim: GSM8K GATE on the NEW MoE numerics (merge d72e22e2fbf: bf16 activations + fp32 DEST/partials + HiFi3, library integ_d72e22e2fbf, router exact): 48 layers, 4x8, host .41, greedy, enable_thinking=false, gsm8k_128_nothink.json prompts (verified identical token ids), max_new 512, prefill = MiMoModel.prefill_first_token (S=256, groups of 8), traced decode loop, scored with reference/score_gsm8k.extract: n=128: 113/128 = 88.3% correct (Wilson95 81.6-92.8), gate >= 109 PASS, 128/128 finished with EOS before 512 tokens; first 64 users (B=64, run 2): 56/64 = 87.5% (77.2-93.5); repeat of the n=128 run in the same process: 112/128 = 87.5% (see determinism entry: runs are not token-identical). Decode step time (median over steady steps, p10-p90 123.1-123.8 ms; step 0 = trace capture + compile 13.9 s) 123.4 ms at B=128 live users (32 slots/row) = 8.10 tok/s/user, 1037 tok/s total; at B=64 123.3 ms = 8.11 tok/s/user, 519 tok/s total (step time independent of the number of live users). Session: dedicated process, scenarios sequential in one process, trace on, UNPAIRED, host-timed replay + candidate readback; previous biased-numerics runs were 103.8 ms/step and 88.3% (n=128, old library) so the precise numerics cost ~19 ms/step and did not change accuracy resolvably. Weights from cache: build ~11 min cold NFS on .41.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
+- data: {"gsm8k_n":128,"gsm8k_correct":113,"acc":0.8828,"gate_min_correct":109,"step_ms":123.4,"b":128,"tok_s_user":8.1,"tok_s_total":1037,"b64_correct":56,"b64_step_ms":123.3}
