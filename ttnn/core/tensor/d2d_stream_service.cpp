@@ -88,7 +88,7 @@ using stream_service_common::WorkerSyncArgs;
 std::map<distributed::MeshCoordinate, DeviceAddr> allocate_service_core_words(
     const std::shared_ptr<distributed::MeshDevice>& mesh,
     const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores) {
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     std::vector<uint32_t> zero_word{0};
     std::map<distributed::MeshCoordinate, DeviceAddr> addrs;
     for (const auto& [coord, core] : service_cores) {
@@ -353,7 +353,7 @@ struct ServiceCoreReleaseGuard {
         if (committed) {
             return;
         }
-        auto& svc = tt::tt_metal::internal::service_core_manager();
+        auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
         for (const auto& [coord, core] : cores) {
             svc.release(mesh->get_device(coord), {core});
         }
@@ -488,11 +488,17 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
         if (impl_ == nullptr) {
             return;
         }
-        auto& svc = tt::tt_metal::internal::service_core_manager();
         auto* mesh = impl_->mesh_device.get();
+        if (mesh == nullptr) {
+            // No device-side state to tear down; just drop the host-side objects.
+            impl_->workload.reset();
+            impl_->socket.reset();
+            return;
+        }
+        auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
 
         // 1. Signal termination + drain the persistent sender kernel.
-        if (impl_->launched && mesh != nullptr) {
+        if (impl_->launched) {
             std::vector<uint32_t> one_word{1};
             for (const auto& [coord, addr] : impl_->termination_addrs) {
                 tt::tt_metal::detail::WriteToDeviceL1(
@@ -634,11 +640,17 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
         if (impl_ == nullptr) {
             return;
         }
-        auto& svc = tt::tt_metal::internal::service_core_manager();
         auto* mesh = impl_->mesh_device.get();
+        if (mesh == nullptr) {
+            // No device-side state to tear down; just drop the host-side objects.
+            impl_->workload.reset();
+            impl_->socket.reset();
+            return;
+        }
+        auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
 
         // 1. Signal termination + drain the persistent receiver kernel.
-        if (impl_->launched && mesh != nullptr) {
+        if (impl_->launched) {
             std::vector<uint32_t> one_word{1};
             for (const auto& [coord, addr] : impl_->termination_addrs) {
                 tt::tt_metal::detail::WriteToDeviceL1(
@@ -1052,7 +1064,7 @@ SenderSideResources build_sender_side(
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
     const D2DStreamConfig& cfg) {
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     const uint32_t num_workers = core_range_size(cfg.sender_worker_cores);
 
     // Reserve the socket config buffer's L1 footprint in each service core's
@@ -1198,7 +1210,7 @@ ReceiverSideResources build_receiver_side(
     const std::vector<distributed::MeshCoordinate>& coords,
     const CommonPlan& common,
     const D2DStreamConfig& cfg) {
-    auto& svc = tt::tt_metal::internal::service_core_manager();
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
     const uint32_t num_workers = core_range_size(cfg.receiver_worker_cores);
 
     // Reserve the socket config buffer + data FIFO L1 footprint. They sit at the
