@@ -40,10 +40,10 @@ PCC_THRESHOLD = 0.95
 
 
 def build_reference_model():
-    bev_h, bev_w = BEV_SHAPES["base"]
+    """The dummy-weight detector, or BEVFormer-base with ``BEVFORMER_CHECKPOINT``'s weights when set."""
     if CHECKPOINT is None:
-        return build_reference_bevformer((bev_h, bev_w))
-    model = build_bevformer_base(bev_h, bev_w)
+        return build_reference_bevformer(BEV_SHAPES["base"])
+    model = build_bevformer_base(*BEV_SHAPES["base"])
     state_dict = torch.load(CHECKPOINT, map_location="cpu", weights_only=False)["state_dict"]
     load_bevformer_checkpoint(model, state_dict)
     return model.eval().requires_grad_(False)
