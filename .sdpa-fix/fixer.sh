@@ -179,7 +179,10 @@ $lines" >/dev/null
     fi
   done <<<"$open"
 }
-[[ "$FIX_MODE" == "live" ]] && followup
+# Every mode: dryrun only stops the bot from OPENING PRs. A PR that already
+# exists (e.g. from a manual `sdpa-fix` live run) must still be followed to
+# merged / closed, or the ledger and digest keep calling it an open draft.
+followup
 
 # ======================================================================
 # Phase B — triage every newly analyzed run of every watched pipeline
