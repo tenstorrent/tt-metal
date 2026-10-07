@@ -280,8 +280,35 @@ class MiMoDecoderLayer:
     def moe_decode(self, x):
         """32 live-or-dead slots per row padded with 32 zero rows to 64 tokens (masked_bincount needs N % 64 == 0); dead rows are dropped from the output."""
         B = x.shape[2]
-        xp = ttnn.pad(x, [(0, 0), (0, 0), (0, 64 - B), (0, 0)], 0.0)
-        out = self.ffn_moe(xp)
+        npad = 64 - B
+        # route the B real slots with the gate; the npad padding rows get spread routing (round-robin over all experts) so they cannot pile onto the experts a
+        # zero hidden state would pick and overflow one chip's dispatch buffer
+        wts, idx = self.gate.route(x, ROUTER_MODE)
+        from models.demos.blackhole.mimo_v26.tt.moe_prefill import spread_pad_routing
+
+        pi, pw = spread_pad_routing(ROWS, npad)
+        rowmap = ttnn.ShardTensor2dMesh(self.mesh, self.mesh.shape, dims=(0, None))
+        pi_t = ttnn.from_torch(
+            pi.reshape(ROWS, npad, 1, 1, -1).to(torch.int32),
+            device=self.mesh,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rowmap,
+        )
+        pw_t = ttnn.from_torch(
+            pw.reshape(ROWS, npad, 1, 1, -1),
+            device=self.mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=rowmap,
+        )
+        pi_t, pw_t = ttnn.reshape(pi_t, [npad, 1, 1, -1]), ttnn.reshape(pw_t, [npad, 1, 1, -1])
+        idx = ttnn.concat([idx, pi_t], dim=0)
+        wts = ttnn.concat([wts, pw_t], dim=0)
+        xp = ttnn.pad(x, [(0, 0), (0, 0), (0, npad), (0, 0)], 0.0)
+        out = self.ffn_moe(xp, route=(wts, idx))
         ttnn.deallocate(xp)
         o = ttnn.slice(out, [0, 0, 0, 0], [1, 1, B, HIDDEN])
         ttnn.deallocate(out)

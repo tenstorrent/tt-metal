@@ -58,7 +58,10 @@ def test_prefill_handoff(mesh_device):
     B, S = toks.shape
     UPR = -(-B // 4)
     where = {b: (b // UPR, b % UPR) for b in range(B)}
-    prompts = [[toks[b].tolist() for b in range(B) if where[b][0] == r] for r in range(4)]
+    lens = [int(v) for v in E("PF_LENS", "").split(",") if v] or [S] * B
+    lens = [lens[b % len(lens)] for b in range(B)]
+    ragged = any(n != S for n in lens)
+    prompts = [[toks[b][: lens[b]].tolist() for b in range(B) if where[b][0] == r] for r in range(4)]
     maxpos = -(-(S + 8) // CH) * CH  # room for the decode steps after the prompt
     lay = KVLayout(users=UPR, max_pos=maxpos, chunk=CH)
     model = MiMoModel(md, n_layers=NL, layout=lay, log=lambda s: print(s, flush=True))
@@ -83,7 +86,7 @@ def test_prefill_handoff(mesh_device):
     per = {}
     for b in range(B):
         hv = res["full"][where[b]].float()
-        per[b] = pcc(hv, ref_h[b].float())
+        per[b] = pcc(hv, ref_h[b, : lens[b]].float())
     rec(
         "hidden_vs_dump",
         layer=NL - 1,
@@ -97,7 +100,7 @@ def test_prefill_handoff(mesh_device):
     lm = model.ck.get("lm_head.weight").float()
     pcs, agree = [], []
     for b in range(B):
-        x = ref_h[b, -1].float()
+        x = ref_h[b, lens[b] - 1].float()
         hn = (x * torch.rsqrt(x.pow(2).mean() + 1e-6) * w).bfloat16().float()
         ref = hn @ lm.T
         pcs.append(pcc(ft[where[b]][1], ref))
@@ -119,12 +122,16 @@ def test_prefill_handoff(mesh_device):
                 kh = c * cfg.nkv // 8
                 kc, vc = ttnn.to_torch(kd[r * 8 + c]).float(), ttnn.to_torch(vd[r * 8 + c]).float()
                 if swa:
-                    ps = list(range(max(0, S - 128), S))
+                    ps = [
+                        p for p in range(max(0, lens[b] - 128), lens[b]) if p >= S - 128
+                    ]  # dump ring only holds the last 128 of S
+                    if not ps:
+                        continue
                     ref_k = torch.stack([st["k_ring"][b, kh, p % 128] for p in ps]).float()
                     ref_v = torch.stack([st["v_ring"][b, kh, p % 128] for p in ps]).float()
                 else:
-                    ps = list(range(S))
-                    ref_k, ref_v = st["k"][b, kh].float(), st["v"][b, kh].float()
+                    ps = list(range(lens[b]))
+                    ref_k, ref_v = st["k"][b, kh, : lens[b]].float(), st["v"][b, kh, : lens[b]].float()
                 blk = [int(tab[u][(p // 64) % (lay.ring_blocks if swa else 10**9)]) for p in ps]
                 kdev = torch.stack([kc[bl, 0, p % 64] for bl, p in zip(blk, ps)])
                 vdev = torch.stack([vc[bl, 0, p % 64] for bl, p in zip(blk, ps)])
@@ -141,7 +148,7 @@ def test_prefill_handoff(mesh_device):
         )
 
     # ---- hand-off: decode of each layer reading the pool, teacher forced with dump dec_in
-    if E("PF_DECODE", "1") == "1":
+    if E("PF_DECODE", "1") == "1" and not ragged:
         for L in range(NL):
             lyr = model.layers[L]
             dio = lyr.attn.decode_io()
