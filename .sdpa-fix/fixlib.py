@@ -257,12 +257,13 @@ def cmd_mark(a):
     with Ledger() as d:
         for s in a.sigs:
             r = d["sigs"][s]
-            r["state"] = a.state
+            if a.state != "keep":
+                r["state"] = a.state
             r["updated"] = now_iso()
             if a.attempt:
                 r.setdefault("attempts", []).append(dict(extra, at=now_iso(), state=a.state))
             for k, v in extra.items():
-                if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha"):
+                if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts"):
                     r[k] = v
         if a.count_daily:
             d["daily"][today()] = d["daily"].get(today(), 0) + 1
