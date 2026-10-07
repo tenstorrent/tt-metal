@@ -2062,3 +2062,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_F9_dev_ab.log
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tests/test_decode_fb.py
 - data: {"ab_U1_ms":[66.1,58.8],"ab_U8_ms":[84.5,79.6],"ab_U32_ms":[100.3,95.1],"enqueue_ms":0.02,"gsm_correct":112}
+
+## E261007-1947-9ec
+- date: 2026-10-07T19:47:01
+- commit: 9fac4088790
+- branch: ssinghal/mimo-perf1
+- host: 40
+- track: perf
+- status: verified
+- claim: DEVICE-RESIDENT VERIFY ROUND (Decoder(block=8, vdev=True), tt/verify_dev.py): verify prologue (block tokens/positions/8 KV update-index tensors/live mask from persistent device state) and epilogue (target argmax, accept_prefix, bonus token, positions += k+1, eos/context alive flags, ring of rounds) run inside the trace; per round the host only does write_drafts (device op) + non-blocking replay (enqueue 0.02-0.09 ms), one bulk ring read. 4-layer model, ragged real GSM8K prompts, 3 rounds with ragged acceptance (k from 0 to 7), U=1,2,4 per mesh row: target argmax of all 8 rows and committed count equal the host verify+accept_prefix flow in every round/row/user (equal=true, 6/6), and the eos pass follows the spec driver semantics (user dead after the round committing the eos, later rounds commit 0). Interface: bringup/mimo_v26/notes/spec_hooks.md. Weakness: the eos pass uses one shared token so all users die together.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_V1_vdev.log
+- paths: models/demos/blackhole/mimo_v26/tt/verify_dev.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tests/test_verify_device.py, bringup/mimo_v26/notes/spec_hooks.md
+- data: {"U":[1,2,4],"rounds":3,"all_equal":true}
