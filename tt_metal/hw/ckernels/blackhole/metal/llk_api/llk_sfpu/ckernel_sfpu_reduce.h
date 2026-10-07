@@ -468,19 +468,8 @@ struct RowFoldSwap {
     }
 };
 
-/**
- * @brief Horizontal reduce of the two accumulators of an 8-row group with one shared butterfly: 9 SFPSHFT2, 4 folds.
- *
- * After the first rotate and fold, the odd lanes of an accumulator hold the pairs (0,1), (2,3), (4,5), (6,7) and the
- * even lanes the pairs (7,0), (1,2), (3,4), (5,6). LREG4 takes the odd lanes of LREG0, and the rotate-by-2 and
- * rotate-by-4 stages run once for both: LREG4 ends with group B's total in its even lanes and group A's in its odd
- * lanes, and a last rotate brings A's total to lane 0 of LREG0. Only column 0 of each row holds the result.
- *
- * In: LREG0 / LREG4 = per-column partials of the two 4-row groups. Out: column 0 of LREG0 / LREG4. Clobbers
- * LREG1, LREG5 and, unless mask_ready (MASK already holds load_odd_lane_mask's pattern), MASK. The fold must be
- * associative and commutative (integer add, extreme), so the result equals horizontal_reduce's whatever the pairing;
- * the float sum keeps horizontal_reduce.
- */
+// One butterfly for both accumulators: after the first stage LREG4 takes LREG0's odd lanes (whole pairs) and the last
+// two stages run once; results in column 0 of LREG0 / LREG4 only. Needs an associative, commutative fold.
 template <typename Fold, std::uint32_t MASK = p_sfpu::LREG2, bool mask_ready = false>
 inline void horizontal_reduce_merged() {
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
