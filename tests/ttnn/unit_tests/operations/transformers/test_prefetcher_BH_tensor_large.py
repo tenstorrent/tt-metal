@@ -1906,6 +1906,41 @@ def test_tensor_prefetcher_gather_in0_pipes_rejects_ring_without_lookahead(devic
         _linear_over_pipes(setup, pipes)
 
 
+def test_tensor_prefetcher_gather_in0_pipes_rejects_output_off_the_ring(device, expect_error):
+    """Ring worker i writes output block i in place, into its own output shard, so output shard i has to
+    sit on the core holding activation shard i. Column-major output shards over the activation's own
+    grid cover the right cores in the wrong order."""
+    setup = _streaming_gather_in0_setup(
+        device, "qkv_small_bf16", 1, 1, 2, ttnn.bfloat16, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    out_shard_spec = setup["output_mem_config"].shard_spec
+    setup["output_mem_config"] = ttnn.create_sharded_memory_config(
+        shape=tuple(out_shard_spec.shape),
+        core_grid=out_shard_spec.grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    with expect_error(RuntimeError, "Shard the output over the activation's shard grid, in the same order"):
+        _linear_over_pipes(setup, pipes)
+
+
+def test_tensor_prefetcher_gather_in0_pipes_rejects_workers_short_of_N(device, expect_error):
+    """Each ring worker computes per_core_N output columns, so a per_core_N narrower than the weight's
+    N per worker would leave the last columns uncomputed."""
+    setup = _streaming_gather_in0_setup(
+        device, "qkv_small_bf16", 1, 2, 2, ttnn.bfloat16, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    program_config = setup["program_config"]
+    program_config.per_core_N = 1
+    program_config.out_block_w = 1
+    program_config.out_subblock_w = 1
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    with expect_error(RuntimeError, "does not cover the weight's N"):
+        _linear_over_pipes(setup, pipes)
+
+
 def test_tensor_prefetcher_gather_and_mcast_in0_share_pipes(device):
     """A gather-in0 and an mcast-in0 matmul back to back on one pipe set.
 

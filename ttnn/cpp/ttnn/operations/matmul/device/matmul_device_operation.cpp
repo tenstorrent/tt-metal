@@ -1267,11 +1267,14 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
 // gather_in0 over PrefetcherPipes streams: each worker's in1 K-blocks arrive in ring order, its own
 // K-block first, and the reader publishes each to compute as it lands, keeping one block of lookahead
 // as mcast_in0 does. A pipe ring is never read as a resident layer the way a batched global_cb is.
+// Ring worker i is the core holding activation shard i; it computes output column block i, per_core_N
+// tiles wide, in place in its own shard of the output.
 void validate_prefetcher_pipes_gather_in0_geometry(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
@@ -1297,6 +1300,45 @@ void validate_prefetcher_pipes_gather_in0_geometry(
         ring_size,
         in0_shard_width_tiles,
         weight_K_tiles);
+
+    // A worker-sender pipe's producer is the caller's, so nothing on the in1 side ties per_core_N to the
+    // weight's N; the ring's output column blocks have to reach the weight's last column.
+    const uint32_t weight_N_tiles = b_shape_padded[-1] / in1_tile.get_width();
+    TT_FATAL(
+        ring_size * program_config.per_core_N >= weight_N_tiles,
+        "gather_in0 prefetcher_pipes computes per_core_N ({}) output column tiles on each of its {} ring workers, "
+        "{} in all, which does not cover the weight's N of {} tiles; per_core_N must be at least {}",
+        program_config.per_core_N,
+        ring_size,
+        ring_size * program_config.per_core_N,
+        weight_N_tiles,
+        tt::div_up(weight_N_tiles, ring_size));
+
+    const auto& out_shard_spec = output_mem_config.shard_spec().value();
+    const uint32_t out_block_width = program_config.per_core_N * in1_tile.get_width();
+    TT_FATAL(
+        out_shard_spec.shape[1] == out_block_width,
+        "gather_in0 prefetcher_pipes writes each ring worker's per_core_N ({}) output column tiles into that worker's "
+        "output shard, so the output shard must be {} wide, but it is {}",
+        program_config.per_core_N,
+        out_block_width,
+        out_shard_spec.shape[1]);
+    const std::vector<CoreCoord> ring =
+        tt::tt_metal::corerange_to_cores(in0_shard_spec.grid, std::nullopt, /*row_wise=*/true);
+    const std::vector<CoreCoord> out_shard_cores = tt::tt_metal::corerange_to_cores(
+        out_shard_spec.grid, std::nullopt, out_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    for (size_t i = 0; i < ring.size(); ++i) {
+        TT_FATAL(
+            i < out_shard_cores.size() && out_shard_cores[i] == ring[i],
+            "gather_in0 prefetcher_pipes computes output column block {} on core {}, which holds activation shard {}, "
+            "and writes it into that core's output shard, but output shard {} sits on {}. Shard the output over the "
+            "activation's shard grid, in the same order.",
+            i,
+            ring[i].str(),
+            i,
+            i,
+            i < out_shard_cores.size() ? out_shard_cores[i].str() : std::string("no core"));
+    }
 
     validate_prefetcher_pipes_in1_delivery(
         prefetcher_pipes,
@@ -2125,6 +2167,7 @@ void validate_matmul_mcast1d_config(
                 input_tensor_a,
                 input_tensor_b,
                 b_shape_padded,
+                attributes.output_mem_config,
                 in0_tile,
                 in1_tile,
                 program_config);

@@ -11,7 +11,6 @@
 
 #include <stdint.h>
 
-#include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -44,5 +43,4 @@ void kernel_main() {
 
     // pop_front acks the sender with non-posted NOC atomics; retire them before the kernel exits.
     noc.async_atomic_barrier();
-    noc.async_write_barrier();
 }

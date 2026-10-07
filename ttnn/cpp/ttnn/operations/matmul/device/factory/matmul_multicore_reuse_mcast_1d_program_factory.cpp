@@ -3247,12 +3247,14 @@ struct In1PrefetcherPipeRelay {
     DataflowBufferSpec relay_dfb;
 };
 
-// `workers` lists the workers in row-major order; worker i computes output column block i. Validation
-// has checked that the ring holds at least two K-blocks, the reader's one block of lookahead.
+// workers[i] computes output column block i. Each body orders its workers differently, so
+// `worker_order` is the caller's sentence telling a user which core computes block i. Validation has
+// checked that the ring holds at least two K-blocks, the reader's one block of lookahead.
 static In1PrefetcherPipeRelay make_in1_prefetcher_pipe_relay(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const MeshTensor& in1_tensor,
     const std::vector<CoreCoord>& workers,
+    std::string_view worker_order,
     const DFBSpecName& relay_name,
     uint32_t in1_block_num_tiles,
     uint32_t in1_single_tile_size,
@@ -3264,10 +3266,11 @@ static In1PrefetcherPipeRelay make_in1_prefetcher_pipe_relay(
     TT_FATAL(
         pipe_receivers.num_cores() == worker_cores.num_cores() && pipe_receivers.contains(worker_cores),
         "matmul over prefetcher_pipes needs the pipes' receivers to be exactly the {} workers that compute an output "
-        "block ({}), but they are {}. Worker i in row-major order computes output column block i.",
+        "block ({}), but they are {}. {}",
         worker_cores.num_cores(),
         worker_cores.str(),
-        pipe_receivers.str());
+        pipe_receivers.str(),
+        worker_order);
     if (prefetcher_pipes.front()->sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram) {
         validate_prefetcher_pipes_deliver_each_worker_its_shard(prefetcher_pipes, in1_tensor, workers);
     }
@@ -3830,6 +3833,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             prefetcher_pipes,
             in1_tensor,
             corerange_to_cores(all_cores, num_cores_with_work, row_major),
+            "Worker i in row-major order computes output column block i.",
             IN1_DFB,
             in1_block_tiles,
             in1_single_tile_size,
@@ -4656,12 +4660,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     };
 }
 
-// gather_in0 over PrefetcherPipes. The ring is the activation's shard grid in row-major order: worker
-// i holds in0 shard i and computes output column block i. Each step it forwards the in0 shard it holds
-// to the previous worker, so at step s worker i holds shard (i + s) % ring_size and needs that in1
-// K-block; the pipes' producer streams each worker its K-blocks in exactly that order (the Tensor
-// prefetcher's identity rotation). in1 is then consumed front to back as it arrives, the same
-// one-block-lookahead loop as mcast_in0 over pipes.
+// gather_in0 over PrefetcherPipes. The ring is the activation's shard grid in shard order (range by
+// range, which is row-major only within a range): worker i holds in0 shard i and computes output
+// column block i. Each step it forwards the in0 shard it holds to the previous worker, so at step s
+// worker i holds shard (i + s) % ring_size and needs that in1 K-block; the pipes' producer streams
+// each worker its K-blocks in exactly that order (the Tensor prefetcher's identity rotation). in1 is
+// then consumed front to back as it arrives, the same one-block-lookahead loop as mcast_in0 over
+// pipes.
 //
 // The legacy MeshWorkload builder keeps every other gather_in0 transport (DRAM, L1-sharded and
 // GlobalCircularBuffer in1), hop cores, several weights and the fused reduce-scatter signaler;
@@ -4776,6 +4781,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         prefetcher_pipes,
         in1_tensor,
         ring,
+        "The core holding activation shard i computes output column block i.",
         IN1_DFB,
         in1_block_num_tiles,
         in1_single_tile_size,
