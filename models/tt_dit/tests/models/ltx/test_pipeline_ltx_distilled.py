@@ -202,6 +202,7 @@ def test_pipeline_distilled(
             logger.info(f"Skipping generation on rank {ttnn.distributed_context_get_rank()}")
             return
 
+        _t_gen = time.perf_counter()
         pipeline.generate(
             prompt,
             output_path=output_filename,
@@ -213,6 +214,7 @@ def test_pipeline_distilled(
             fps=fps,
         )
         logger.info(f"Saved video to: {output_filename}")
+        logger.info(f"E2E_WALL_S gen={number} seed={seed} wall={time.perf_counter() - _t_gen:.3f}")
         print_ltx_timing_table(
             pipeline,
             label="LTX DISTILLED",
@@ -399,6 +401,10 @@ def test_pipeline_distilled(
             check_output_with_vbench(prompt, 1)
             # LTX_E2E_EXTRA_REPLAYS=N: N more pure replays of the same gen, so a served queue's
             # steady-state step time (not only the first replay after capture) is on the record.
+            # LTX_E2E_SEEDS=1,2,..: one more warm gen per listed seed (gen #2, #3, ...).
+            for k, extra_seed in enumerate(s for s in os.environ.get("LTX_E2E_SEEDS", "").split(",") if s):
+                logger.info(f"=== traced warm pass (gen #{k + 2}, seed {extra_seed}) ===")
+                run(prompt=prompt, number=k + 2, seed=int(extra_seed))
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
                 logger.info(f"=== traced steady-state pass (gen #{extra + 2}, pure replay) ===")
                 run(prompt=prompt, number=extra + 2, seed=seed)
