@@ -48,7 +48,7 @@ from models.experimental.bevformer.model_config import (
     RESNET_KWARGS,
     SPATIAL_SHAPES,
 )
-from models.experimental.bevformer.reference.bevformer import relative_can_bus
+from models.experimental.bevformer.reference.bevformer import BEVFormer, relative_can_bus
 from models.experimental.bevformer.reference.decoder import DetectionTransformerDecoder, inverse_sigmoid, reg_branch
 from models.experimental.bevformer.reference.encoder import BEVFormerEncoder
 from models.experimental.bevformer.reference.fpn import FPN
@@ -772,6 +772,20 @@ def build_reference_transformer(num_layers, seed=0):
     CAN-bus MLP keep upstream's and PyTorch's init."""
     torch.manual_seed(seed)
     return PerceptionTransformer(build_reference_encoder(num_layers, seed)).eval().requires_grad_(False)
+
+
+def build_reference_bevformer(bev_shape):
+    """The detector over a ``(bev_h, bev_w)`` grid from the dummy-weight parts above."""
+    bev_h, bev_w = bev_shape
+    model = BEVFormer(
+        build_reference_backbone(),
+        build_reference_fpn(),
+        build_reference_transformer(ENCODER_NUM_LAYERS),
+        build_reference_head(bev_shape),
+        bev_h,
+        bev_w,
+    )
+    return model.eval().requires_grad_(False)
 
 
 def random_fpn_levels(batch_size, generator, spatial_shapes=SPATIAL_SHAPES):
