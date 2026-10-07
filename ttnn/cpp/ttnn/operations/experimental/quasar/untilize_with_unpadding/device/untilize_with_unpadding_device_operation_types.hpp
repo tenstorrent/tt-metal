@@ -14,7 +14,7 @@ struct UntilizeWithUnpaddingParams {
     bool use_multicore = false;
     bool fp32_dest_acc_en = false;
     bool enough_space_height = false;
-    std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt;
 };
 
 }  // namespace ttnn::prim::qsr
