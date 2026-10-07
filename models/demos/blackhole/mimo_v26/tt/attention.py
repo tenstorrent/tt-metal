@@ -8,6 +8,7 @@ into the V weights; o_proj rows for the 64 pad dims are zero. RoPE = x*cos + (x@
 the pass-through dims). Sink input to the SDPA ops is sink/scale. SWA KV is a ring of `ring_blocks` pages (decode: cache_position_modulo, chunked prefill:
 page table aliasing logical block i -> ring block i % ring_blocks); global KV is a plain paged cache.
 """
+import os
 from dataclasses import dataclass
 
 import torch
@@ -382,7 +383,9 @@ class MiMoAttention:
         for t in (q, k, cos, sin, cosq, sinq):
             ttnn.deallocate(t)
         extra = {"cache_position_modulo": self.ring_blocks * BLOCK} if self.ring_blocks else {}
-        if block > 1 and upd is not None:
+        if block > 1 and os.environ.get("MIMO_VERIFY_NOWRITE") == "1":
+            pass  # debug: reads only (cache already holds the block's K/V from a sequential run)
+        elif block > 1 and upd is not None:
             # verify: the `block` virtual users of one real user write rows of the SAME cache tiles; one batched update would read-modify-write the same tiles
             # concurrently, so write token t of all real users in separate calls (upd[t] = int32 [U] positions pos_u + t), in order, before any attention read.
             U = B // block
