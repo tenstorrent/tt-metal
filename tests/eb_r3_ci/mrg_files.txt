@@ -1,0 +1,7 @@
+ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/compute/qkv_causal_conv1d_silu.cpp
+ttnn/cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/device/kernels/compute/deepseek_grouped_gate.cpp
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_pre_allgather.cpp
+ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp
+ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp

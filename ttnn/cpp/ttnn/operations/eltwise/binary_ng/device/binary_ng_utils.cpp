@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
@@ -820,7 +821,7 @@ NativeBlockBroadcast native_block_broadcast(
         return t == DataType::BFLOAT16 || t == DataType::BFLOAT8_B || t == DataType::BFLOAT4_B;
     };
     const auto op = attributes.binary_op_type;
-    const bool plain = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE &&
+    const bool plain = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && std::getenv("EB_R3_NO_NATIVE") == nullptr &&
                        (op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL) &&
                        attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&
                        attributes.post_activations.empty() && narrow(a) && b.has_value() && narrow(*b);

@@ -1,0 +1,7 @@
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_scalar.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_col_bcast.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_bcast.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_row_col_bcast.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/compute/eltwise_binary_scalar_bcast.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)

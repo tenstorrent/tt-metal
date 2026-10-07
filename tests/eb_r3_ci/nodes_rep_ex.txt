@@ -1,0 +1,4 @@
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_recurrent_chunk_scan.py::test_recurrent_chunk_scan_contract_and_trace[value-sharding-above-eight-heads]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_recurrent_chunk_scan.py::test_recurrent_chunk_scan_contract_and_trace[production-four-chunk]
+tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py::TestRgbToYuv::test_correctness_Y[720p_shard]
+tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py::TestRgbToYuv::test_correctness_UV[720p_shard]

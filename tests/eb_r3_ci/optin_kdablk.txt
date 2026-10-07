@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/experimental/kda/prepare_chunk_recurrence/device/kernels/compute/prepare_chunk_recurrence.cpp|#define ELTWISE_BINARY_BLOCK_UNPACK true
+ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/device/kernels/compute/recurrent_chunk_scan.cpp|#define ELTWISE_BINARY_BLOCK_UNPACK true

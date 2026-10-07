@@ -1,0 +1,4 @@
+ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_rmsnorm_fused_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_layernorm_fused_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/compute/dit_layernorm_fused_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

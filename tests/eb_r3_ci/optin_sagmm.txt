@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/fabric_bound_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/fabric_bound_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

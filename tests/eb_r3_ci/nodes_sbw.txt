@@ -1,0 +1,1 @@
+tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_softmax.py::test_softmax_backward_for_dim_hw[fp32_dest_acc_en=False-dtype=DataType.BFLOAT16-shape_dim=[[10, 20, 96, 160], 3]]

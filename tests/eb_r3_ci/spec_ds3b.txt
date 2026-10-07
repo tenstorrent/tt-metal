@@ -1,0 +1,2 @@
+models/demos/deepseek_v3_b1/fused_ops/gated_local_reduce_down_proj/kernels/gated_local_reduce_down_proj_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|models/demos/deepseek_v3_b1/tests/unit_tests/test_gated_local_reduce_down_proj.py
+models/demos/deepseek_v3_b1/fused_ops/moe/moe_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_mlp.py::test_mlp

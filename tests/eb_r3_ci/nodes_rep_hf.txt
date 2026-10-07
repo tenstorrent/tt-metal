@@ -1,0 +1,5 @@
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_decode_batch_per_core_gt_one[128]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_decode_batch_per_core_gt_one[32]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_decode_per_batch_position[128]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_decode_per_batch_position[32]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_prefill[DataType.BFLOAT16-DataType.BFLOAT16-False-False-2048-1-71-128-64]

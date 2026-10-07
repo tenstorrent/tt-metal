@@ -1,0 +1,6 @@
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded_welford.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_welford.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax_sharded.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
