@@ -557,11 +557,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     uint32_t contiguous_page_stride() const { return IsDram ? NUM_DRAM_BANKS : NUM_L1_BANKS; }
 
     // As for the sharded accessor, but end_page_id is required and is the only run bound.
-    // Pages are InterleavedAddrGen::aligned_page_size apart, which differs from get_aligned_page_size()
-    // when the ctor is given an unaligned page size.
+    // Bank pages sit InterleavedAddrGen::aligned_page_size apart; if the ctor's page size is not
+    // aligned, they are not get_aligned_page_size() apart, so every run is 1 page.
     FORCE_INLINE
     uint32_t num_contiguous_pages(uint32_t page_id, uint32_t end_page_id) const {
         ASSERT(page_id < end_page_id);
+        if (aligned_page_size != InterleavedAddrGen<IsDram>::aligned_page_size) {
+            return 1;
+        }
         const uint32_t stride = contiguous_page_stride();
         return (end_page_id - page_id - 1) / stride + 1;
     }

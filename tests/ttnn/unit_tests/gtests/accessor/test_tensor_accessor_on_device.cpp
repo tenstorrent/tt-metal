@@ -480,7 +480,10 @@ static void test_single_core_copy_abstract_wrapper(
 
 template <typename T>
 static void test_single_core_copy_num_contiguous_pages(
-    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device, bool is_interleaved) {
+    const CopyParams& params,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    bool is_interleaved,
+    bool explicit_page_size = false) {
     MemoryConfig mem_config = is_interleaved ? MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type)
                                              : MemoryConfig(params.buffer_type, params.input_shard_spec);
     tt::tt_metal::TensorSpec tensor_spec(
@@ -496,6 +499,9 @@ static void test_single_core_copy_num_contiguous_pages(
     auto aligned_page_size = input_buffer->aligned_page_size();
     if (output_buffer->aligned_page_size() != aligned_page_size) {
         GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
+    }
+    if (explicit_page_size) {
+        ASSERT_NE(input_buffer->page_size(), aligned_page_size) << "Test needs a page size that is not aligned";
     }
 
     auto program = CreateProgram();
@@ -523,6 +529,10 @@ static void test_single_core_copy_num_contiguous_pages(
     std::map<std::string, std::string> kernel_defines;
     if (is_interleaved) {
         kernel_defines["INTERLEAVED_LAYOUT"] = "1";
+    }
+    if (explicit_page_size) {
+        // The kernel passes the raw page size to the accessors instead of the aligned default.
+        kernel_defines["EXPLICIT_PAGE_SIZE"] = std::to_string(input_buffer->page_size());
     }
 
     KernelHandle kernel_id = CreateKernel(
@@ -936,6 +946,28 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPagesNumContiguous
         default: TT_THROW("Unsupported data type");
     }
 }
+
+// Accessors built with an explicit page size (1000 B) that is not a multiple of the allocator alignment: pages sit
+// aligned_page_size() apart, so num_contiguous_pages must return runs of 1 or a run copy would pick up padding.
+class InterleavedAccessorTestsUnalignedPageSizeOnDevice : public GenericMeshDeviceFixture,
+                                                          public ::testing::WithParamInterface<BufferType> {};
+
+TEST_P(InterleavedAccessorTestsUnalignedPageSizeOnDevice, SingleCoreCopyAllPagesNumContiguousPages) {
+    // Row-major pages of 500 bfloat16 = 1000 B. Enough rows that every bank holds more than one page.
+    const CopyParams params{
+        .tensor_shape = tt::tt_metal::Shape{256, 500},
+        .layout = Layout::ROW_MAJOR,
+        .dtype = DataType::BFLOAT16,
+        .buffer_type = GetParam(),
+    };
+    test_single_core_copy_num_contiguous_pages<bfloat16>(
+        params, mesh_device_.get(), /*is_interleaved=*/true, /*explicit_page_size=*/true);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InterleavedAccessorTests,
+    InterleavedAccessorTestsUnalignedPageSizeOnDevice,
+    testing::Values(BufferType::DRAM, BufferType::L1));
 
 TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
     const auto& params = GetParam();

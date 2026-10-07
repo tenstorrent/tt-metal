@@ -133,7 +133,7 @@ private:
 
     void update_current_page() { current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor); }
 
-    void set_noc_addr(uint32_t page_id) { current_noc_addr = accessor.get_noc_addr(page_id, 0, noc); }
+    void set_noc_addr(uint32_t page_id) { current_noc_addr = detail::transfer_noc_addr(accessor, page_id, 0, noc); }
 
     void set_run_pages_left(uint32_t page_id) {
         if (run_pages_per_step_ != 0) {

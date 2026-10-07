@@ -9,7 +9,10 @@ This kernel is expected to be executed on only one core (RISCV_0).
 */
 
 #include <cstdint>
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 
 void kernel_main() {
@@ -24,8 +27,14 @@ void kernel_main() {
     const uint32_t input_base_address = get_common_arg_val<uint32_t>(0);
     const uint32_t output_base_address = get_common_arg_val<uint32_t>(1);
 
+#ifdef EXPLICIT_PAGE_SIZE
+    // An explicit page size that may be unaligned; pages then sit the aligned size apart in each bank.
+    const auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, EXPLICIT_PAGE_SIZE);
+    const auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address, EXPLICIT_PAGE_SIZE);
+#else
     const auto tensor_accessor_src = TensorAccessor(args_src, input_base_address);
     const auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address);
+#endif
 
 #if INTERLEAVED_LAYOUT
     const uint32_t tensor_volume = volume_arg;
@@ -36,7 +45,8 @@ void kernel_main() {
 
     // The CB is only scratch L1.
     cb_reserve_back(cb_id, cb_num_pages);
-    const uint32_t l1_addr = get_write_ptr(cb_id);
+    CoreLocalMem<uint32_t> scratch(get_write_ptr(cb_id));
+    Noc noc;
 
     // Runs step page ids by page_stride, so one walk per residue class covers every page once.
     const uint32_t page_stride = tensor_accessor_src.contiguous_page_stride();
@@ -48,8 +58,6 @@ void kernel_main() {
             const uint32_t src_pages = tensor_accessor_src.num_contiguous_pages(page_id, tensor_volume);
             const uint32_t dst_pages = tensor_accessor_dst.num_contiguous_pages(page_id, tensor_volume);
             const uint32_t run_pages = src_pages < dst_pages ? src_pages : dst_pages;
-            const uint64_t src_addr = tensor_accessor_src.get_noc_addr(page_id);
-            const uint64_t dst_addr = tensor_accessor_dst.get_noc_addr(page_id);
 
             // A run can exceed the CB; copy it in CB-sized chunks.
             for (uint32_t done = 0; done < run_pages;) {
@@ -57,11 +65,21 @@ void kernel_main() {
                 const uint32_t chunk = left < cb_num_pages ? left : cb_num_pages;
                 const uint32_t byte_offset = done * page_size;
 
-                noc_async_read(src_addr + byte_offset, l1_addr, chunk * page_size);
-                noc_async_read_barrier();
+                noc.async_read(
+                    tensor_accessor_src,
+                    scratch,
+                    chunk * page_size,
+                    {.page_id = page_id, .offset_bytes = byte_offset},
+                    {.offset_bytes = 0});
+                noc.async_read_barrier();
 
-                noc_async_write(l1_addr, dst_addr + byte_offset, chunk * page_size);
-                noc_async_write_barrier();
+                noc.async_write(
+                    scratch,
+                    tensor_accessor_dst,
+                    chunk * page_size,
+                    {.offset_bytes = 0},
+                    {.page_id = page_id, .offset_bytes = byte_offset});
+                noc.async_write_barrier();
 
                 done += chunk;
             }

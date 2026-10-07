@@ -182,12 +182,12 @@ Note: In case containers size is compile-time, then shapes, strides, coords are 
 // end_page_id defaults to tensor_volume() for sharded accessors; it is required for interleaved ones.
 uint32_t pages = tensor_accessor.num_contiguous_pages(page_id, end_page_id);
 pages = std::min(pages, dst_capacity_pages);
-noc_async_read(tensor_accessor.get_noc_addr(page_id), l1_write_addr, pages * tensor_accessor.get_aligned_page_size());
+noc.async_read(tensor_accessor, cb, pages * tensor_accessor.get_aligned_page_size(), {.page_id = page_id}, {.offset_bytes = 0});
 ```
 
 - `contiguous_page_stride()` depends only on the shapes, so read it once. It is the number of banks for interleaved tensors and `1` for most sharded tensors; for a shard one page wide in the trailing dims, it is the product of those tensor dims. With a stride > 1, a run's pages land in stride order, not page-id order.
 - `end_page_id` is an exclusive page id, not a count.
-- A bulk transfer includes any padding between pages. Interleaved pages are the page size rounded up to the allocator alignment apart. That equals `get_aligned_page_size()` for the default page size from `TensorAccessorArgs`, but not for an explicit unaligned one (e.g. a row-major stick size).
+- Interleaved pages are the page size rounded up to the allocator alignment apart. That equals `get_aligned_page_size()` for the default page size from `TensorAccessorArgs`; for an explicit unaligned one (e.g. a row-major stick size), every run is 1 page.
 - A sharded run stops at a shard edge, even when the next shard follows in the same bank, and at the tensor edge. Starting at a shard's first page, it covers the whole shard only if the shard's page ids form one arithmetic sequence (e.g. height sharding, or a one-page-wide shard); for a multi-page-wide tile block shard it covers one shard row. Use [`shard_pages()`](./tensor_accessor_iterator.md) to walk whole shards.
 - `BufferDistributionSpec::contiguous_page_stride()` and `num_contiguous_pages()` are host twins with the same semantics.
 
