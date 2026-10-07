@@ -1,0 +1,35 @@
+# t155: device check of the t152 vol2col_rm CB-sizing fix
+
+Scripts on blx03: ~/fasth3/t155/{build155.sh,job155.sh,fix.diff}. Logs: /var/tmp/fasth3/t155/{build,j1,j2}.log.
+
+## State (2026-10-06 ~05:30 UTC)
+- Build: runner job t155-build, broker 306, rc=0 (05:17:37). t48 tree: before bf7db12a14, after b4c2b9f9d6
+  (fix be371d08a9f C++ part as one commit on top). Test source: /var/tmp/fasth3/t155/src @73347dfaec8 (t152).
+- Attempt 1 jobs t155-j1 (broker 307) and t155-j2 (broker 309) exited 20 at the script's build gate
+  without opening the device: the gate grep'd 'Unaligned blocks get exactly num_patches pages', which
+  spans two source lines. Fixed to 'blocks get exactly num_patches pages' (job155.sh, build155.sh).
+- Requeued as t155-j1-r2 and t155-j2-r2 (j2 gated on j1.log having '1 ok, 0 failed' and T155_PASS),
+  behind 8 t140 jobs in the runner queue.
+
+## Next
+Wake: read g14blx03:/var/tmp/fasth3/runner/done/t155-j{1,2}-r2.done and /var/tmp/fasth3/t155/j{1,2}.log
+(T155_PASS/T155_FAIL, 'Output check best vs table', T155_TIMES). No marker: run
+`ssh g14blx03 bash ~/fasth3/runner/runner-start.sh` and wait again.
+Production safety: aligned blocks unchanged (min(n,32)); unaligned n<=64 old min(n,64)=n, new n; unaligned
+n>64 was rejected by the guard. So every blocking the guard accepted keeps its CB size.
+
+## State (2026-10-07 01:25 UTC)
+- t155-j1-r2 = broker job 929 (00:10:53-00:12:43 UTC) failed at mesh open after 0.52 s:
+  `RuntimeError: Failed to pin pages for hugepage at virtual address 0x0 with size 0x0` (distributed.py:631).
+  At 01:21 blx03 showed HugePages_Free 0/703. Host hugepage exhaustion: no conv3d ran, so it says nothing
+  about the fix. The runner logged it as a drop (chips unknown, post-job fabric gate SKIPPED) and will rerun
+  j1-r2 itself after 2 healthy checks. A second failure means the runner skips the config (dropped twice).
+- Broker at 01:20 UTC: degraded hold loop (glx_reset, fabric check skipped rc 77, HELD). Same window:
+  ltx-host job 978 failed in 3.6 s, job 958 abandoned. None of these are ours.
+- #167 update applied: job155.sh is now `timeout 270` / `--timeout=250` / SWEEP_MAX_SECONDS=200
+  (spec TIMEOUT 300), replaced atomically via mv.
+
+## Next
+Wait for g14blx03:/var/tmp/fasth3/runner/done/t155-j2-r2.done (j2 refuses at its gate if j1 did not pass).
+Then read j1.log and j2.log. If j1 hits the hugepage error again, record it as an environment failure, not a
+fix failure, and requeue once hugepages are free.
