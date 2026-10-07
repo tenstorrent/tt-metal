@@ -56,14 +56,21 @@ def main():
             gen.generate([it["prompt_ids"] for it in items[: 4 * U]], 6, S=S)
             gen.dec.release()
             dec = gen.dec
+            os.environ["MIMO_CHECK_CAP"] = "0"
+            dec._forward()  # builds every layer's MiMoMoEDecode once
+            ttnn.synchronize_device(mesh)
             traces = {}
             for name in names:
                 env, kind = VARIANTS[name]
                 old = {k2: os.environ.get(k2) for k2 in env}
                 os.environ.update(env)
-                for lyr in model.layers:  # MiMoMoEDecode is built lazily with the router mode of the moment
-                    if hasattr(lyr, "moe_dec"):
-                        lyr.moe_dec = None
+                for (
+                    lyr
+                ) in (
+                    model.layers
+                ):  # the router mode is a runtime attribute of the (single, shared) MiMoMoEDecode: toggle it, never rebuild (two sets of persistent buffers hang)
+                    if getattr(lyr, "moe_dec", None) is not None:
+                        lyr.moe_dec.router = env.get("MIMO_ROUTER", "exact")
 
                 def fwd(kind=kind):
                     if kind == "full":
