@@ -101,10 +101,14 @@ class SpecEngine:
         self.stats.setdefault("t_set", []).append(t_set)
         block = torch.cat([self.anchor[:, :, None], d], 2)  # [rows,U,8]
         t0 = time.perf_counter()
-        post, _ = dec.verify(
-            block, self.pos, ~alive
+        dec.set_inputs(block, self.pos, ~alive)  # = Decoder.verify split into its two parts to time them
+        t_in = time.perf_counter() - t0
+        res_v = dec.run()
+        post = res_v[0].reshape(
+            rows, U, BLK
         )  # [rows,U,8] target argmax after every block row; dec.feat = captured hidden states (device)
         t_verify = time.perf_counter() - t0
+        self.stats.setdefault("t_vin", []).append(t_in)
         k = Decoder.accept_prefix(post, block)  # [rows,U]
         t0 = time.perf_counter()
         valid = torch.zeros(rows, U, BLK, dtype=torch.bool)

@@ -159,6 +159,11 @@ def test_spec_exact(mesh_device):
     acc = [x for rr in eng.stats["rounds"] for x in rr]
     nr = len(eng.stats["rounds"])
     toks = sum(len(t) for t in out)
+
+    def steady(key, skip=2):
+        v = sorted(eng.stats[key][skip:])
+        return dict(median_ms=round(1e3 * v[len(v) // 2], 2), mean_ms=round(1e3 * sum(v) / len(v), 2)) if v else None
+
     rec(
         "spec",
         n=len(prompts),
@@ -169,15 +174,23 @@ def test_spec_exact(mesh_device):
         rounds=nr,
         accepted_mean=round(sum(acc) / max(1, len(acc)), 3),
         accepted_hist=[acc.count(k) for k in range(1, 9)],
-        set_round_ms_mean=round(1e3 * sum(eng.stats["t_set"]) / max(1, nr), 2),
-        draft_ms_mean=round(1e3 * sum(eng.stats["t_draft"]) / max(1, nr), 2),
-        verify_ms_mean_fallback_8_steps=round(1e3 * sum(eng.stats["t_verify"]) / max(1, nr), 2),
-        append_ms_mean=round(1e3 * sum(eng.stats["t_append"]) / max(1, nr), 2),
+        first_rounds_ms=dict(
+            draft=[round(1e3 * x, 1) for x in eng.stats["t_draft"][:3]],
+            verify=[round(1e3 * x, 1) for x in eng.stats["t_verify"][:3]],
+        ),
+        steady_set_round=steady("t_set"),
+        steady_draft_incl_set_round=steady("t_draft"),
+        steady_verify_incl_set_inputs=steady("t_verify"),
+        steady_verify_set_inputs=steady("t_vin"),
+        steady_append=steady("t_append"),
         wall_s=round(wall, 2),
-        tok_s_user=round(toks / len(prompts) / wall, 2),
+        tok_s_user_including_capture=round(toks / len(prompts) / wall, 2),
         dram=dram(md),
     )
-    json.dump(dict(plain=plain, spec=out), open(OUT.replace(".jsonl", "_tokens.json"), "w"))
+    json.dump(
+        dict(plain=plain, spec=out, stats={k: v for k, v in eng.stats.items() if k != "rounds"}),
+        open(OUT.replace(".jsonl", "_tokens.json"), "w"),
+    )
     rec("texts", sample=[tok.decode(out[i], skip_special_tokens=True)[:300] for i in range(min(4, len(out)))])
     eng.dec.release()
     dr.release()

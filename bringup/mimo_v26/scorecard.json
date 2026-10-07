@@ -143,7 +143,7 @@
       "kind": "spec_exact",
       "min_frac": 0.95,
       "required": false,
-      "evidence": [],
+      "evidence": ["E261007-1705-e20"],
       "note": "only if speculative decoding is shipped"
     },
     {

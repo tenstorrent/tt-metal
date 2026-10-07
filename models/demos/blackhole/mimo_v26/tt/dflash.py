@@ -267,7 +267,8 @@ class DFlashDrafter:
         self._h2d(sin.bfloat16(), self.in_sk)
         ttnn.synchronize_device(self.mesh)
 
-    def _draft_forward(self):
+    def _draft_forward(self, nl=5, attn_only_last=False, head=True):
+        """nl/attn_only_last/head: profiling variants (run the first nl layers, optionally stop after the attention half of the last one, optionally skip lm_head)."""
         U = self.U
         e = ttnn.embedding(self.in_tok, self.embed, layout=ttnn.ROW_MAJOR_LAYOUT)
         e = ttnn.reshape(e, (U, 1, 1, HIDDEN))
@@ -279,7 +280,7 @@ class DFlashDrafter:
         cq, sq = ttnn.reshape(self.in_cq, (U, 1, NQC * BLK, HD)), ttnn.reshape(self.in_sq, (U, 1, NQC * BLK, HD))
         ck, sk = ttnn.reshape(self.in_ck, (U, 1, BLK, HD)), ttnn.reshape(self.in_sk, (U, 1, BLK, HD))
         zpad = self.zpad
-        for li, L in enumerate(self.layers):
+        for li, L in enumerate(self.layers[:nl]):
             xn = self._rms(x, L["ln1"])
             q = ttnn.linear(xn, L["wq"], dtype=ttnn.bfloat16, compute_kernel_config=_ck())
             k = ttnn.linear(xn, L["wk"], dtype=ttnn.bfloat16, compute_kernel_config=_ck())
@@ -317,6 +318,9 @@ class DFlashDrafter:
             x1 = ttnn.add(x, att)
             ttnn.deallocate(x)
             ttnn.deallocate(att)
+            if attn_only_last and li == nl - 1:
+                x = x1
+                break
             xm = self._rms(x1, L["ln2"])
             g = ttnn.linear(xm, L["wg"], dtype=ttnn.bfloat16, compute_kernel_config=_ck())
             u = ttnn.linear(xm, L["wu"], dtype=ttnn.bfloat16, compute_kernel_config=_ck())
@@ -333,6 +337,8 @@ class DFlashDrafter:
             x = ttnn.add(x1, dd)
             ttnn.deallocate(x1)
             ttnn.deallocate(dd)
+        if not head:
+            return x, x, x
         y = self._rms(x, self.norm)
         ttnn.deallocate(x)
         lg = ttnn.linear(y, self.lm_head, dtype=ttnn.bfloat16, compute_kernel_config=_ck(hifi4=True))
