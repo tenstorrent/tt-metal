@@ -38,15 +38,14 @@ WELFORDS_FORMATS = [
     for fmt in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
 ]
 
-# (atol, rtol) per format: two output steps of relative slack plus a near-zero floor.
+# (atol, rtol): two output steps of relative slack plus a near-zero floor.
 WELFORDS_TOLERANCE = {
     DataFormat.Float16_b: (0.02, 2.0**-6),
     DataFormat.Float16: (0.005, 2.0**-9),
     DataFormat.Float32: (1e-4, 1e-4),
 }
 
-# Dest units a Face-layout group slot covers, and the tile column each lane of the state
-# registers tracks after the row-quad transpose: lane (r, c) -> column QUAD_COLUMN[r](c).
+# After the row-quad transpose, state lane (r, c) tracks tile column QUAD_COLUMN[r](c).
 GROUP_UNITS = 4
 LANE_COLUMNS = 8
 QUAD_COLUMN = (
@@ -73,9 +72,7 @@ class Scenario:
     state_group_id: int = 0
     state_dst: int = 0
     save_after_tiles: int = 0
-    # Tiles per Dest section; 0 puts every tile in one section. A smaller value runs the
-    # stream as tile_count / tiles_per_block sections, so the LREG4/LREG5 state has to
-    # survive the section handoffs and bank flips, as it does for a Metal consumer.
+    # Tiles per Dest section (0 = one section); several sections make the state cross handoffs.
     tiles_per_block: int = 0
 
     @property
@@ -92,7 +89,7 @@ class Scenario:
             assert (
                 0 < self.save_after_tiles < self.tile_count
             ), "save point must fall strictly inside the tile stream"
-            # The save lands in the current block, so both state tiles must already be folded.
+            # The save lands in the current block, so both state tiles must already be consumed.
             assert (
                 self.state_dst + 1 < self.save_after_tiles % self.block
             ), "both saved-state tiles must already be folded in the current Dest block"
@@ -149,11 +146,9 @@ SCENARIOS = {
         state_group_id=5,
         save_after_tiles=2,
     ),
-    # Three Dest sections of four tiles each (3x a 32-bit half-sync section): the state is
-    # carried in LREG4/LREG5 across two section handoffs.
+    # 3x a 32-bit half-sync section.
     "blocked_3x4_row_nolut": Scenario(tile_count=12, use_lut=False, tiles_per_block=4),
-    # Blocked, with the save/restore in the middle section at a non-zero state_dst, a
-    # partial last tile and the LUT covering all 384 rows.
+    # Save/restore mid-stream at a non-zero state_dst, with a 384-entry LUT.
     "blocked_3x4_dst1_g2_face_g3_partial_lut": Scenario(
         tile_count=12,
         tiles_per_block=4,
@@ -174,11 +169,7 @@ SCENARIOS = {
 
 
 def make_stimuli(tile_count, torch_format):
-    """Row-major [32, 32 * tile_count] block; tile t is columns [32t, 32t + 32).
-
-    Every tile column has its own offset and spread, so a lane permutation or a dropped or
-    duplicated row shows up as a wrong mean or variance.
-    """
+    """Row-major [32, 32 * tile_count]; per-column offset and spread expose lane or row mix-ups."""
     torch.manual_seed(0)
     column = torch.arange(TILE_DIM, dtype=torch.float32)
     offset = (column - 15.5) * 0.25
@@ -224,14 +215,7 @@ def row_slot(tile, stat):
 @pytest.mark.parametrize("formats", WELFORDS_FORMATS, ids=lambda f: f.input_format.name)
 @pytest.mark.parametrize("scenario_name", list(SCENARIOS))
 def test_sfpu_welfords_quasar(formats, scenario_name):
-    """Welford running per-column mean / population variance over a stream of Dest tiles.
-
-    The state lives in SFPU registers across calls, so one test folds several tiles and
-    checks the finalize output (mean at final_dst, variance at final_dst + 1). Scenarios
-    cover the LUT and RISC-V reciprocal paths, partial last tiles, Row and Face layouts,
-    and a save -> clear -> restore round trip, whose saved state is checked too. The blocked
-    scenarios stream the tiles through several Dest sections.
-    """
+    """Welford running per-column mean / population variance over a stream of Dest tiles."""
     scenario = SCENARIOS[scenario_name]
     scenario.validate()
     dest_acc = (

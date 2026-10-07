@@ -5655,13 +5655,9 @@ class Top32RmGolden:
 
 @register_golden
 class WelfordsGolden:
-    """Golden for the Welford running per-column mean / population variance SFPU kernel.
+    """Per-column Welford mean / population variance over ``row_blocks``, in float64.
 
-    Folds ``row_blocks`` (each ``[rows, columns]``, in the order the kernel visits them) one
-    row at a time with Welford's update in float64. With ``save_before_block`` set, the state
-    reached just before that block is returned as ``saved_mean`` / ``saved_m2`` and, when
-    ``state_format`` is given, rounded to it before folding continues - the save/restore
-    round trip goes through Dest in that format.
+    ``save_before_block`` also returns the state before that block, rounded to ``state_format`` (Dest).
     """
 
     def __call__(self, row_blocks, save_before_block=None, state_format=None):

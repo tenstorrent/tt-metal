@@ -1965,16 +1965,7 @@ class FILL_INT_FORMAT(TemplateParameter):
 
 @dataclass
 class WELFORDS(TemplateParameter):
-    """Compile-time schedule of the Quasar Welford test (sfpu_welfords_quasar_test.cpp).
-
-    Every tile is folded into the running state in order; the last one covers only rows
-    [welfords_start_row, welfords_start_row + welfords_num_rows) when partial_last_tile is
-    set. The tiles pass through Dest in blocks of tiles_per_block (0 = one block), one Dest
-    section each. With
-    save_restore the state is saved to tile state_dst (mean) / state_dst + 1 (M2) of the
-    current block before global tile save_after_tiles, cleared, and restored. The finalize,
-    in the last block, writes mean to final_dst and variance to final_dst + 1.
-    """
+    """Compile-time schedule of sfpu_welfords_quasar_test.cpp (tiles_per_block 0 = one Dest section)."""
 
     reciprocal_size: int = 0
     partial_last_tile: bool = False
@@ -2016,15 +2007,9 @@ class WELFORDS(TemplateParameter):
 
 @dataclass
 class TWO_PASS_STATS(TemplateParameter):
-    """Compile-time schedule of the Quasar two-pass statistics test (sfpu_welfords_two_pass_quasar_test.cpp).
+    """Compile-time schedule of sfpu_welfords_two_pass_quasar_test.cpp.
 
-    two_pass_mode: 0 = STREAM (pass one over every tile, then pass two over every tile again,
-    in blocks of two_pass_tiles_per_block per Dest section), 1 = COMBINE (blocks of
-    two_pass_block_tiles, Chan-combined in tiles two_pass_state_dst/+1), 2 = SWITCH (two
-    groups swapped through group slots two_pass_group_a/b). two_pass_finalize picks the
-    STREAM finaliser: 0 = row, 1 = raw group, 2 = split row (retained anchor), 3 = combined
-    raw group, 4 = row without the mean. The last tile only covers
-    [two_pass_start_row, +two_pass_num_rows) when two_pass_partial_last_tile is set.
+    two_pass_mode: 0 STREAM, 1 COMBINE, 2 SWITCH; two_pass_finalize: 0 row, 1 raw, 2 split, 3 combined, 4 row w/o mean.
     """
 
     two_pass_mode: int = 0
