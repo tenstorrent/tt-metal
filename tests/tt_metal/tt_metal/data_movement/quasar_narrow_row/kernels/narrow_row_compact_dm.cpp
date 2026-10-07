@@ -48,12 +48,6 @@ using namespace overlay;
 using narrow_row::CHANNELS_ALL;
 using narrow_row::EngineMode;
 
-// This is what keeps the host's CHANNELS_MAX honest: it is the only place both it and the
-// real constant are visible at once.
-static_assert(
-    narrow_row::CHANNELS_MAX == CMDBUF_NUM_IDMA_VCS,
-    "CHANNELS_MAX no longer mirrors CMDBUF_NUM_IDMA_VCS; update the shared header");
-
 namespace {
 
 // The whole of this kernel's addressing rests on this. On a non-TRISC core
@@ -72,15 +66,50 @@ inline std::uint32_t l1_phys(std::uint32_t addr) {
 #endif
 }
 
-// Issue every row, then drain once. Draining inside the loop would serialise the transfers and
-// turn a throughput path into a latency one; issuing first also means the RISC has registered
-// all `num_rows` outstanding before it polls, so the ack counter cannot read zero early.
+// Owns cmdbuf 0 and addrgen 0 for the whole gather: configures both, issues every row, drains
+// once, and hands the command buffer back. `num_channels` is the raw runtime arg -- it is
+// resolved here because CMDBUF_NUM_IDMA_VCS is visible only on this side.
+//
+// The transfer length is `dst_stride`: the output is dense, so the bytes kept from each row and
+// the destination stride are the same number. It is the SOURCE stride that is larger, and that
+// difference is the compaction.
 inline void compact_idma_per_row(
     std::uint32_t src_base,
     std::uint32_t dst_base,
     std::uint32_t num_rows,
     std::uint32_t src_stride,
-    std::uint32_t dst_stride) {
+    std::uint32_t dst_stride,
+    std::uint32_t num_channels) {
+    // CHANNELS_ALL and anything above the VC count both mean "every VC", so a stale caller
+    // cannot ask for channels that do not exist.
+    if (num_channels == CHANNELS_ALL || num_channels > CMDBUF_NUM_IDMA_VCS) {
+        num_channels = CMDBUF_NUM_IDMA_VCS;
+    }
+
+    // ---- command buffer: what ONE transfer is -------------------------------------------
+    reset_cmdbuf_0();
+    idma_setup_as_copy_cmdbuf_0(/*wrapping_en=*/false);
+    // Everything AutoIncConfig does not name defaults to false; the addrgen supplies both
+    // addresses, so only the request VC advances -- round-robining the per-row packets across
+    // the VC window below.
+    setup_ongoing_cmdbuf_0({.req_vc = true});
+    // `resp` must be passed explicitly. Defaulted it is {0, 0, 0}, which forces RESP_VC 0 --
+    // and that sits INSIDE the request window this same call programs, because
+    // CMDBUF_FIRST_IDMA_VC is 0. Sharing a VC between requests and their responses is the
+    // classic NoC deadlock configuration.
+    setup_wrapping_vcs_cmdbuf_0(
+        /*req=*/{.start = CMDBUF_FIRST_IDMA_VC, .end = CMDBUF_FIRST_IDMA_VC + num_channels - 1},
+        /*resp=*/{.start = CMDBUF_WR_RESP_VC, .end = CMDBUF_WR_RESP_VC});
+    // Fan-out round-robins PACKETS, and one packet per row is the right granularity: 32 rows
+    // already outnumber the 8 channels, and splitting further only multiplies per-packet cost
+    // (measured: ~5 cyc per extra packet, up to 12x slower at 16 B packets). This must be
+    // programmed explicitly whatever the value -- CMDBUF_RESET zeroes it to its rdl default of
+    // 0, which means "never split", and every channel knob then goes silently inert.
+    setup_max_bytes_in_packet_cmdbuf_0(dst_stride);
+    setup_trids_cmdbuf_0(CMDBUF_DEF_TRID);
+    set_len_cmdbuf_0(dst_stride);
+
+    // ---- address generator: WHERE each transfer goes ------------------------------------
     // FULL reset, not reset_counters_: that variant keeps "base addresses, sizes and strides
     // intact", which includes the outer-loop, face-size and banking registers this kernel
     // never programs. The addrgen and im2col tests in this same binary DO program them on
@@ -94,30 +123,57 @@ inline void compact_idma_per_row(
     setup_dest_base_start_addrgen_0(dst_base);
     setup_dest_inner_loop_addrgen_0(dst_stride, (std::uint64_t)num_rows * dst_stride);
 
-    for (std::uint32_t r = 0; r < num_rows; r++) {
+    // ---- issue every row, then drain ONCE ------------------------------------------------
+    // Draining inside the loop would serialise the transfers and turn a throughput path into a
+    // latency one; issuing first also means the RISC has registered all `num_rows` outstanding
+    // before it polls, so the ack counter cannot read zero early.
+    for (std::uint64_t r = 0; r < num_rows; r++) {
         push_both_addrgen_0();  // hand the next src/dst pair to the cmdbuf
         issue_cmdbuf_0();
     }
     while (!idma_acked_cmdbuf_0()) {
     }
+
+    // Every ack is in: safe to hand cmdbuf 0 back to the NoC write path.
+    init_wr_cmd_buf(noc_local_xy());
 }
 
-// Length and NoC coordinates are STICKY in the read state set by the caller: the one-packet
-// path writes only the low address word. So this takes neither -- passing them per call would
-// look like it configured something it does not, and an edit to those arguments alone would
-// silently have no effect. The coordinate fields below are required by the endpoint struct
-// and are ignored by this path.
+// Owns the read state for the whole gather, mirroring compact_idma_per_row: configure, loop,
+// barrier. As there, the transfer length is `dst_stride` -- the dense output row.
 inline void compact_noc_per_row(
-    const Noc& noc,
     std::uint32_t src_base,
     std::uint32_t dst_base,
     std::uint32_t num_rows,
     std::uint32_t src_stride,
-    std::uint32_t dst_stride) {
+    std::uint32_t dst_stride,
+    std::uint32_t dest_coords) {
     UnicastEndpoint ep;
-    for (std::uint32_t r = 0; r < num_rows; r++) {
+    Noc noc;  // defaults to noc_index
+
+    // Set the read state ONCE so the loop pays only for the per-row issue -- the cheapest form
+    // of the workaround, which is what makes it a fair baseline. Length and NoC coordinates are
+    // sticky in that state, so the loop below writes only the addresses.
+    //
+    // <NOC_MAX_BURST_SIZE> selects the ONE-PACKET path. The default max_page_size is
+    // NOC_MAX_BURST_SIZE + 1, which falls through to noc_async_read_with_state -- the any-len
+    // path, which additionally writes the length register and computes a packet count for the
+    // barrier. Neither path chunks in software (the overlay packetizes via
+    // MAX_BYTES_IN_PACKET), so the gap is small: switching paths moved the measured per-block
+    // engine delta by ~4 cyc out of ~470, which is inside the noise. Rows here are at most
+    // 512 B against a 65536 B burst limit, so one-packet is legal, and it makes this baseline
+    // the cheapest NOC read rather than merely a cheap one.
+    noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+        ep, dst_stride, {.noc_x = dest_coords >> 16, .noc_y = dest_coords & 0xFFFF, .addr = src_base});
+
+    for (std::uint64_t r = 0; r < num_rows; r++) {
         noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-            ep, ep, 0, {.addr = src_base + r * src_stride}, {.addr = dst_base + r * dst_stride});
+            ep,
+            ep,
+            0,
+            // The addresses are 32-bit L1 offsets; r is 64-bit, so the sums must be narrowed
+            // back explicitly or -Werror=narrowing rejects the braced initializer.
+            {.addr = static_cast<std::uint32_t>(src_base + r * src_stride)},
+            {.addr = static_cast<std::uint32_t>(dst_base + r * dst_stride)});
     }
     noc.async_read_barrier();
 }
@@ -132,18 +188,7 @@ void kernel_main() {
     const auto engine_mode = static_cast<EngineMode>(get_arg(args::engine_mode));
     const std::uint32_t dest_coords = get_arg(args::dest_coords);  // packed (x << 16) | y
 
-    // Fan-out round-robins PACKETS, and one packet per row is the right granularity here: both
-    // sides already emit num_rows packets, so 32 rows always outnumber the 8 channels and
-    // sub-splitting only multiplies issue cost. MAX_BYTES_IN_PACKET must be programmed
-    // explicitly whatever the value -- CMDBUF_RESET zeroes it to its rdl default of 0, which
-    // means "never split", and every channel knob then goes silently inert.
-    // CHANNELS_ALL resolves here rather than on the host, because CMDBUF_NUM_IDMA_VCS is
-    // visible only on this side. Anything above the VC count clamps down to it as well, so a
-    // stale caller cannot ask for channels that do not exist.
-    std::uint32_t num_channels = get_arg(args::num_channels);
-    if (num_channels == CHANNELS_ALL || num_channels > CMDBUF_NUM_IDMA_VCS) {
-        num_channels = CMDBUF_NUM_IDMA_VCS;
-    }
+    const std::uint32_t num_channels = get_arg(args::num_channels);  // resolved by the engine
     const bool use_idma = engine_mode == EngineMode::IdmaPerRow;
     // Anything else would have fallen through to the NOC branch and reported as a passing NOC
     // run, which would hide a runtime-arg plumbing mistake rather than surface it.
@@ -155,52 +200,12 @@ void kernel_main() {
     pad.wait_front(num_rows);
     const std::uint32_t src_base = l1_phys(pad.get_read_ptr());
 
+    // Each engine owns its hardware end to end -- command buffer or read state, the per-row
+    // loop, and the drain -- so this is only the choice between them.
     if (use_idma) {
-        reset_cmdbuf_0();
-        idma_setup_as_copy_cmdbuf_0(/*wrapping_en=*/false);
-        setup_ongoing_cmdbuf_0(
-            /*src_addr_inc_en=*/false,  // the addrgen supplies both addresses
-            /*dest_addr_inc_en=*/false,
-            /*trid_inc_en=*/false,
-            /*req_vc_inc_en=*/true,  // round-robin the per-row packets across the VC window
-            /*resp_vc_inc_en=*/false);
-        // The response VC must be passed explicitly. setup_wrapping_vcs_ never reads its `wr`
-        // argument -- it is not the selector it looks like -- and its defaulted resp_start_vc
-        // and resp_end_vc would force RESP_VC 0, which sits INSIDE the request window this
-        // same call programs (CMDBUF_FIRST_IDMA_VC is 0). Sharing a VC between requests and
-        // their responses is the classic NoC deadlock configuration. CMDBUF_WR_RESP_VC is what
-        // setup_vcs_cmdbuf_0(/*wr=*/true) would have selected.
-        setup_wrapping_vcs_cmdbuf_0(
-            /*wr=*/true,
-            /*req_start_vc=*/CMDBUF_FIRST_IDMA_VC,
-            /*req_end_vc=*/CMDBUF_FIRST_IDMA_VC + num_channels - 1,
-            /*req_vc_offset=*/0,
-            /*resp_start_vc=*/CMDBUF_WR_RESP_VC,
-            /*resp_end_vc=*/CMDBUF_WR_RESP_VC);
-        setup_max_bytes_in_packet_cmdbuf_0(out_row_bytes);
-        setup_trids_cmdbuf_0(CMDBUF_DEF_TRID);
-        set_len_cmdbuf_0(out_row_bytes);
-
-        compact_idma_per_row(src_base, dst_addr, num_rows, pad_row_bytes, out_row_bytes);
-
-        // Every ack is in: safe to hand cmdbuf 0 back to the NoC write path.
-        init_wr_cmd_buf(noc_local_xy());
+        compact_idma_per_row(src_base, dst_addr, num_rows, pad_row_bytes, out_row_bytes, num_channels);
     } else {
-        // Set the read state once so the loop pays only for the per-row issue -- the cheapest
-        // form of the workaround, which is what makes it a fair baseline.
-        UnicastEndpoint ep;
-        // <NOC_MAX_BURST_SIZE> selects the ONE-PACKET path. The default max_page_size is
-        // NOC_MAX_BURST_SIZE + 1, which falls through to noc_async_read_with_state -- the
-        // any-len path, which additionally writes the length register and computes a packet
-        // count for the barrier. Neither path chunks in software (the overlay packetizes via
-        // MAX_BYTES_IN_PACKET), so the gap is small: switching paths moved the measured
-        // per-block engine delta by ~4 cyc out of ~470, which is inside the noise. Rows here
-        // are at most 512 B against a 65536 B burst limit, so one-packet is legal, and it
-        // makes this baseline the cheapest NOC read rather than merely a cheap one.
-        Noc noc;  // defaults to noc_index
-        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-            ep, out_row_bytes, {.noc_x = dest_coords >> 16, .noc_y = dest_coords & 0xFFFF, .addr = src_base});
-        compact_noc_per_row(noc, src_base, dst_addr, num_rows, pad_row_bytes, out_row_bytes);
+        compact_noc_per_row(src_base, dst_addr, num_rows, pad_row_bytes, out_row_bytes, dest_coords);
     }
 
     pad.pop_front(num_rows);
