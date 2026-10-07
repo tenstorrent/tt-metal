@@ -510,12 +510,17 @@ def test_eltwise_binary_sfpu_float_quasar(
 # Broadcast float ops (add, sub, mul): column 0 (COL) or row 0 (ROW) of the src1
 # tile is broadcast over the whole tile, one full-tile calculate_binary_bcast call.
 # ===========================================================================
-_BCAST_OPS = [
-    ("ADD", MathOperation.SfpuElwadd),
-    ("SUB", MathOperation.SfpuElwsub),
-    ("MUL", MathOperation.SfpuElwmul),
-]
-_BCAST_TYPES = [BroadcastType.Column, BroadcastType.Row]
+BCAST_SWEEP = dict(
+    formats=[variant.formats for variant in _FLOAT_VARIANTS],
+    dest_acc=_dest_acc_for_float_formats,
+    mathop=[
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+    ],
+    broadcast_type=[BroadcastType.Column, BroadcastType.Row],
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+)
 # (2, 3, 0): disjoint tiles at non-zero data / bcast bases. (0, 1, 1): the result
 # overwrites the bcast tile, so the ROW hoist and the per-band COL bcast load must
 # both land before that band's store. Two layouts keep the matrix at 72 cases.
@@ -559,24 +564,17 @@ def _inject_bcast_specials(src_A, src0_idx, src1_idx, broadcast_type):
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize(
-    "broadcast_type", _BCAST_TYPES, ids=[f"bcast_{b.value}" for b in _BCAST_TYPES]
-)
-@pytest.mark.parametrize(
-    "binary_op, mathop", _BCAST_OPS, ids=[op for op, _ in _BCAST_OPS]
-)
 @parametrize(
-    formats_dest_acc=_get_valid_float_formats_dest_acc(),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    **BCAST_SWEEP,
     tile_indices=runtime(_BCAST_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_bcast_quasar(
-    formats_dest_acc,
-    implied_math_format,
-    tile_indices,
-    binary_op,
+    formats,
+    dest_acc,
     mathop,
     broadcast_type,
+    implied_math_format,
+    tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -585,7 +583,13 @@ def test_eltwise_binary_sfpu_bcast_quasar(
 ):
     """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast. The
     src1 cells the broadcast ignores hold Inf/NaN, and some retained ones -0.0."""
-    format_variant = formats_dest_acc
+    format_variant = resolve_quasar_sfpu_variant(
+        MathOperation.SfpuElwadd, formats, dest_acc
+    )
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
+    binary_op = mathop.cpp_enum_value
 
     def prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop):
         src_A, tile_cnt_A, src_B = _prepare_float_stimuli(
