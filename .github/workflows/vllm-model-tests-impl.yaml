@@ -154,6 +154,7 @@ jobs:
         FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
         FILE_CHUNKED_PREFILL_TESTS_LOG: "./output/vllm_chunked_prefill_tests.log"
         FILE_COHERENCE_TEST_LOG: "./output/vllm_coherence_test.log"
+        FILE_PREFIX_CACHING_LOG: "./output/vllm_prefix_caching.log"
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -381,6 +382,17 @@ jobs:
               ;;
           esac
 
+          # Per-entry environment, space-separated KEY=VALUE pairs, exported after
+          # the per-model case block so an entry can override it.
+          if [ -n "${{ matrix.test-group.extra-env }}" ]; then
+            for _kv in ${{ matrix.test-group.extra-env }}; do
+              case "$_kv" in
+                *=*) export "$_kv"; echo "extra-env: ${_kv%%=*}" ;;
+                *) echo "extra-env: ignoring malformed entry '$_kv'" ;;
+              esac
+            done
+          fi
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
@@ -550,6 +562,83 @@ jobs:
             exit 1
           fi
           echo "✅ Coherence guard passed: verbatim echo found"
+
+      - name: 🗂️ Run prefix-caching gate (cache-hit resume)
+        if: ${{ matrix.test-group.prefix-caching-test }}
+        timeout-minutes: 15
+        run: |
+          # Prefix-caching gate: a second request sharing a ~24K-token document with a completed one must
+          # answer from the cached blocks correctly and show the engine's prefix-cache counters engaged.
+          python3 - <<'EOF' 2>&1 | tee "${FILE_PREFIX_CACHING_LOG}"
+          import json, sys, time, urllib.request
+
+          MODEL = "${{ matrix.test-group.model }}"
+          URL = "http://localhost:8000/v1/chat/completions"
+          secret = f"vault-{int(time.time())}"
+          paras = []
+          for i in range(550):
+              paras.append(
+                  f"[archive section {i:03d}] The archive catalogs shipment manifests, "
+                  f"calibration notes and survey logs for bay {i % 17}; entry checksum "
+                  f"{(i * 7919) % 100000:05d} was verified during audit cycle {i % 9}."
+              )
+              if i == 275:
+                  paras.append(f"IMPORTANT RECORD: the vault passphrase is '{secret}'.")
+          doc = "\n".join(paras)
+
+          def ask(question):
+              body = json.dumps({
+                  "model": MODEL,
+                  "messages": [{"role": "system", "content": doc}, {"role": "user", "content": question}],
+                  "max_tokens": 32, "temperature": 0.0, "stream": True,
+                  "chat_template_kwargs": {"enable_thinking": False},
+              }).encode()
+              req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json", "X-User-ID": "vllm_test"})
+              t0 = time.perf_counter()
+              ttft, text = None, ""
+              with urllib.request.urlopen(req, timeout=1800) as resp:
+                  for raw in resp:
+                      line = raw.decode("utf-8", "ignore").strip()
+                      if not line.startswith("data:") or line.endswith("[DONE]"):
+                          continue
+                      piece = (json.loads(line[5:])["choices"][0].get("delta") or {}).get("content") or ""
+                      if piece:
+                          ttft = ttft if ttft is not None else time.perf_counter() - t0
+                          text += piece
+              return ttft, text
+
+          def cache_counters():
+              # vLLM's prefix-cache counters (tokens queried / tokens served from cache)
+              txt = urllib.request.urlopen("http://localhost:8000/metrics", timeout=60).read().decode()
+              q = h = 0.0
+              for line in txt.splitlines():
+                  if line.startswith("vllm:prefix_cache_queries_total"):
+                      q += float(line.rsplit(" ", 1)[1])
+                  elif line.startswith("vllm:prefix_cache_hits_total"):
+                      h += float(line.rsplit(" ", 1)[1])
+              return q, h
+
+          cold_ttft, cold = ask("What is the vault passphrase recorded in the archive above? Answer with just the passphrase.")
+          q0, h0 = cache_counters()
+          warm_ttft, warm = ask("Quote the vault passphrase from the archive above, and nothing else.")
+          q1, h1 = cache_counters()
+          queried, hits = q1 - q0, h1 - h0
+          print(f"cold request: ttft={cold_ttft:.2f}s answer={cold.strip()[:80]!r}")
+          print(f"cache-hit resume: ttft={warm_ttft:.2f}s answer={warm.strip()[:80]!r}")
+          print(f"resume prefix-cache counters: queried={queried:.0f} tokens, hits={hits:.0f} tokens")
+          ok = True
+          if secret not in cold:
+              print("❌ cold request did not recall the passphrase"); ok = False
+          if secret not in warm:
+              print("❌ cache-hit resume did not recall the passphrase (wrong prefix or window tail)"); ok = False
+          # The prompts are identical up to the question, so nearly all of the resume should hit the cache.
+          # Gate on the engine's counters, not TTFT, which also carries queueing and the resume cost.
+          if queried <= 0 or hits < 0.8 * queried:
+              print(f"❌ prefix cache not engaged for the resume: {hits:.0f} of {queried:.0f} queried tokens were cache hits"); ok = False
+          if ok:
+              print(f"✅ Prefix-caching gate passed: resume correct, {hits:.0f}/{queried:.0f} tokens from cache, TTFT {warm_ttft:.2f}s vs cold {cold_ttft:.2f}s")
+          sys.exit(0 if ok else 1)
+          EOF
 
       - name: 📐 Run structured output benchmark
         if: ${{ matrix.test-group.structured-output }}
