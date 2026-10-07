@@ -44,3 +44,19 @@ Wait on: ssh g14blx03 'bash ~/fasth3/runner/probe.sh t119-ups3-r1'. On wake with
 Retries get a new ID (-r2) with the same CONFIG. Results: done/<ID>.done (log=), grep T119_UPS / T119_VAE / VAE_REF / T119_HIT.
 Device state at queue time: broker in hold-deadline-escalate (glx_reset); tray 2 (chips 8,9,12,13) dropped in every
 t140 job 05:22-08:46 UTC (broker jobs 311, 331, 351, 371, 389), each followed by a power-cycle. Expect a long wait.
+
+## 2026-10-07 10:36 UTC: moved to blx01 (#127 update 10:33)
+blx03: all four t119 runner specs (vae, ups1, ups2, ups3 -r1) moved from queue/ to /var/tmp/fasth3/runner/parked
+(all four were still queued; parking only ups3 would have let the other three run twice).
+blx01: /var/tmp/fasth3/t127 (driver.sh, run127.sh, setup.sh, test copy); reuses #135's lean t48 tree
+/var/tmp/fasth3/t48 @ bf7db12a149 (test copied into its tmp/t127). Full (4,8) mesh, LTX_CONV3D_BLOCKING_MESH=4,8.
+The vae job is dropped: #135 (jobs 773/774) already timed the 4x8 traced VAE decode (545.5 ms) on this tree, and
+the only re-picked key on the 4x8 path is ups_initial (latent upsampler), so the VAE blockings are not under test.
+Jobs (one A/B each, arms base/cand/base): u1 vs 64,128,3,2,4; u2 vs 128,64,3,2,4; u3 vs 128,128,3,2,2.
+u1 = broker job 775, 87.7 s, rc 0:
+  base 128,128,1,2,4: full med 144.5 ms, initial_conv med 0.661 ms, PSNR 48.48 (seams 48.07/48.20)
+  64,128,3,2,4:       full med 141.2 ms, initial_conv med 0.671 ms, PSNR 48.40 (seams 47.99/48.12)
+  base again:         full med 137.0 ms, initial_conv med 0.710 ms
+  -> initial_conv is <0.5% of the upsampler; arm deltas are inside the base's own drift.
+Wait: ssh blx01 test -e /var/tmp/fasth3/t127/driver.marker ; results grep T119_UPS /var/tmp/fasth3/t127/run127_u?.log
+(summary.txt). Then: delete /var/tmp/fasth3/t127 and /var/tmp/fasth3/t48/tmp/t127 (nothing else was created).
