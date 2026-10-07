@@ -48,6 +48,9 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
     }
 
     const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    // Only rank 0 serializes and writes; the other ranks wait in the barrier below. If rank 0 throws before the
+    // barrier (a rejected tensor, a failed fopen or fwrite) they wait until the launcher tears the job down.
+    // Reporting the failure to every rank needs a collective in place of the barrier; follow-up.
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
         // Serialize before opening the output file, so that a tensor the serializer rejects leaves no file behind.
         std::vector<SerializedTensorBuffer> buffers;

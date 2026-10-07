@@ -22,6 +22,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -678,7 +679,7 @@ TEST(TensorSerializationFlatbufferGuardTest, AliasedShardsDeduplicatedByPointer)
 
     auto buffer = DistributedHostBuffer::create(
         buffer_shape, buffer_shape, MeshCoordinate::zero_coordinate(buffer_shape.dims()), /*context=*/nullptr);
-    const HostBuffer shared_buffer{std::vector<float>(values)};
+    HostBuffer shared_buffer{std::vector<float>(values)};
     for (const auto& coord : coords) {
         buffer.emplace_shard(coord, [&shared_buffer]() { return shared_buffer; });
     }
@@ -693,6 +694,61 @@ TEST(TensorSerializationFlatbufferGuardTest, AliasedShardsDeduplicatedByPointer)
     for (const auto& coord : coords) {
         EXPECT_THAT(shard_values(loaded_tensor, coord), Pointwise(FloatEq(), values));
     }
+}
+
+// Two borrowed-span HostBuffers over one allocation of three floats: they start at the same address, so the
+// address lookup in `to_flatbuffer` sees them, but one views two floats and the other all three. The pins keep the
+// allocation alive.
+struct SameAddressViews {
+    HostBuffer short_view;  // The first two floats.
+    HostBuffer long_view;   // All three floats.
+};
+SameAddressViews make_same_address_views() {
+    auto storage = std::make_shared<std::vector<float>>(std::vector<float>{1.0f, 2.0f, 3.0f});
+    return {
+        .short_view = HostBuffer(ttsl::Span<float>(storage->data(), 2), MemoryPin(storage)),
+        .long_view = HostBuffer(ttsl::Span<float>(storage->data(), 3), MemoryPin(storage))};
+}
+
+// Builds a 1x2 host tensor with `views.short_view` at (0,0) and `views.long_view` at (0,1) under `label`.
+Tensor make_same_address_tensor(SameAddressViews& views, const TensorTopology& label) {
+    const MeshShape buffer_shape(1, 2);
+    auto buffer = DistributedHostBuffer::create(
+        buffer_shape, buffer_shape, MeshCoordinate::zero_coordinate(buffer_shape.dims()), /*context=*/nullptr);
+    buffer.emplace_shard(MeshCoordinate(0, 0), [&views]() { return views.short_view; });
+    buffer.emplace_shard(MeshCoordinate(0, 1), [&views]() { return views.long_view; });
+    return wrap_host_buffer(std::move(buffer), /*elements_per_shard=*/3, label);
+}
+
+// The address shortcut has to compare lengths too. Under a Replicate label the two views land in one group; without
+// the length check the second one reused the first one's record and the file claimed 12 bytes where 8 were written.
+TEST(TensorSerializationFlatbufferGuardTest, SameAddressDifferentLengthReplicasRejected) {
+    TemporaryFile test_file("same_address_replicas.tensorbin");
+    const TensorTopology label(MeshShape(2), Placements{kReplicate}, all_coords(MeshShape(1, 2)));
+    SameAddressViews views = make_same_address_views();
+    Tensor tensor = make_same_address_tensor(views, label);
+
+    expect_dump_rejected(test_file, tensor, "sizes differ");
+}
+
+// Under a Shard label the two views are different groups and not an alias, so each gets its own copy: the second
+// buffer starts on the next 64-byte boundary, and each coordinate loads with its own length.
+TEST(TensorSerializationFlatbufferGuardTest, SameAddressDifferentLengthShardsWrittenSeparately) {
+    TemporaryFile test_file("same_address_shards.tensorbin");
+    const TensorTopology label(MeshShape(2), Placements{shard_on(1)}, all_coords(MeshShape(1, 2)));
+    SameAddressViews views = make_same_address_views();
+    Tensor tensor = make_same_address_tensor(views, label);
+
+    dump_tensor_flatbuffer(test_file.string(), tensor, DumpTensorMode::LOCAL);
+
+    const uint64_t data_offset = read_data_region_offset(test_file.string());
+    EXPECT_EQ(std::filesystem::file_size(test_file.path()), data_offset + kExpectedDataAlignment + 3 * sizeof(float));
+    Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+    EXPECT_EQ(loaded_tensor.tensor_topology(), label);
+    EXPECT_THAT(
+        shard_values(loaded_tensor, MeshCoordinate(0, 0)), Pointwise(FloatEq(), std::vector<float>{1.0f, 2.0f}));
+    EXPECT_THAT(
+        shard_values(loaded_tensor, MeshCoordinate(0, 1)), Pointwise(FloatEq(), std::vector<float>{1.0f, 2.0f, 3.0f}));
 }
 
 // A labelled coordinate that is remote to this host (a multi-host LOCAL dump) legitimately has no shard here. The
