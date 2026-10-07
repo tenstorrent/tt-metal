@@ -28,7 +28,8 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type = BufferType::L1,
-    bool support_multi_receiver_shards = true);
+    bool support_multi_receiver_shards = true,
+    std::optional<BufferType> config_buffer_type = std::nullopt);
 
 // Build a DRAM-sender GCB shaped to feed one or more gather-in0 or mcast-in0 1D matmuls from the
 // given weight tensors. The caller supplies `bank_to_receivers` (the same layout the low-level

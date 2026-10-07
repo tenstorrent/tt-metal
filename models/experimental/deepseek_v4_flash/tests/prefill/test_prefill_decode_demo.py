@@ -6,8 +6,9 @@
 Each prompt is prefilled in 128-aligned chunks by :class:`DeepSeekV4PrefillModel`; its per-layer attention state is
 then committed into the decode model's own buffers on device (:meth:`DeepSeekV4Model.commit_prefill_state`: same
 ring / compressed KV / CSA overlap window / paged HCA pool that decode fills itself), the prompt's ragged tail
-(``len % 128`` tokens) is fed through ``decode_traced`` one token at a time, and generation continues with
-``decode_traced`` exactly like ``tests/decode/test_full_model_decode_demo.py``.
+(``len % 128`` tokens) is fed through traced decode one token at a time, and generation continues exactly like
+``tests/decode/test_full_model_decode_demo.py``: the decode traces posted a window of steps ahead, then each step's
+packet written and its logits read back.
 
 * ``test_prefill_decode_demo``: the first ``DEEPSEEK_V4_DEMO_COUNT`` (20) ``length == "short"`` LongBench
   questions in file order (or exactly ``DEEPSEEK_V4_LONGBENCH_INDICES``), back to back, indexer on; each one's
@@ -32,27 +33,30 @@ those stages at once and are loaded once each: the prefill model is built by
 embedding table and ``lm_head``. Both are captured once, then every prompt alternates between the two:
 
 1. tokenizer, config and the prompts;
-2. the decode model, built with the DRISC prefetcher off (no GCBs; every projection copies its weight DRAM -> L1
-   per call), its static state prepared (sized for the longest conversation), a session opened, and every decode
+2. the decode model, built with the DRISC weight prefetcher on (four GCB rings per stage; their config pages in
+   L1_SMALL), its static state prepared (sized for the longest conversation), a session opened, and every decode
    variant compiled (:meth:`DeepSeekV4Model.compile_traces`) so the buffers its ops keep for themselves exist
    before prefill lays out its memory;
-3. prefill compile: decode's resident L1 tensors parked on the host
+3. prefill compile: the prefetcher stopped, decode's GCBs freed and its resident L1 tensors parked on the host
    (:meth:`DeepSeekV4Model.release_prefetch_buffers`) so prefill's circular buffers can take that L1, the prefill
    model built, and its persistent buffers (sized for the longest prompt), sockets and compile run
    (:meth:`DeepSeekV4PrefillModel.compile_traced_prefill`); not timed;
-4. decode capture, then prefill capture: decode's L1 tensors uploaded again
-   (:meth:`DeepSeekV4Model.restore_prefetch_buffers`) and one throw-away decode step run, which captures the decode
-   traces; then those L1 tensors parked once more while prefill captures its traces, one per stage and position
-   tier (:meth:`DeepSeekV4PrefillModel.capture_traced_prefill`), and put back at the addresses the decode traces
-   recorded (checked). They sat under prefill's capture, so they are copied to the host
-   (:meth:`DeepSeekV4Model.snapshot_resident_state`);
+4. prefill capture, then decode capture: prefill captures its traces, one per stage and position tier
+   (:meth:`DeepSeekV4PrefillModel.capture_traced_prefill`), with decode's L1 still released; then the GCBs are
+   rebuilt and the L1 tensors uploaded again under prefill's buffers, the prefetcher restarted
+   (:meth:`DeepSeekV4Model.restore_prefetch_buffers`), and one throw-away decode step run, which compiles against
+   the rebuilt rings and captures the decode traces. The prefetcher is not stopped again before teardown: that
+   would drop the prefetch requests the decode traces replay. Decode's tensors sit under prefill's buffers, so they
+   are copied to the host (:meth:`DeepSeekV4Model.snapshot_resident_state`);
 5. per prompt, prefill execute: its 128-aligned part prefilled by replaying the prefill traces (timed), then
-   decode's overwritten tensors written back in place (:meth:`DeepSeekV4Model.reload_resident_state`);
+   decode's overwritten tensors written back in place and the prefetcher fenced behind the prefill
+   (:meth:`DeepSeekV4Model.reload_resident_state`);
 6. per prompt, decode execute: the session rewound, the prompt's states committed into the decode buffers on
    device, the ragged tail replayed through decode, and up to ``DEEPSEEK_V4_MAX_NEW_TOKENS`` tokens generated.
 
-The prefetcher stays off because a prefill replay would also overwrite the GCB config pages (credit counters and
-read pointers), which cannot be snapshot from Python; see ``PREFILL_DECODE_INTERLEAVE_NOTES.md``.
+Prefill and decode share L1: a prefill replay overwrites the GCB ring data, which is empty between decode steps,
+but not the GCB config pages (read pointers and credit counters), which live in L1_SMALL above every circular
+buffer; see ``PREFILL_DECODE_PREFETCHER.md``.
 
 Limits: ``test_prefill_decode_demo`` leaves the lightning indexer off, so the conversation (prompt + generated
 tokens) must stay below ``index_topk * 4 = 2048`` tokens. The longbench test turns the indexer on and prefills
@@ -82,9 +86,19 @@ first chunk plus one full-``max_len`` trace, the pre-tier behaviour; fewer tiers
 ``DEEPSEEK_V4_PREFILL_MAX_LEN`` (prefill buffer / tier sizing, rounded down to 128; defaults to the longest prompt's
 aligned length. A longer prompt prefills only its first ``DEEPSEEK_V4_PREFILL_MAX_LEN`` tokens and replays the rest
 through decode; a larger value only enlarges the buffers),
+``DEEPSEEK_V4_MAX_INPUT_PREFILL_CHUNKS`` (0 = off: keep only a prompt's first N ``DEEPSEEK_V4_E2E_CHUNK``-token
+chunks and drop the rest, so a long prompt is prefilled whole with no tail through decode; like
+``DEEPSEEK_V4_E2E_MAX_INPUT``, a LongBench question at the end is lost),
 ``DEEPSEEK_V4_TRACE_REGION_SIZE`` (bytes to reserve for the captured traces -- the prefill stage traces, one per
 stage and position tier, and decode's together; unset keeps the ttnn default -- set it, e.g. 500000000, if a capture
-reports the trace region too small), ``DEEPSEEK_V4_L1_SMALL_SIZE`` (bytes of L1_SMALL for the CCL semaphores, 4096 by default).
+reports the trace region too small), ``DEEPSEEK_V4_L1_SMALL_SIZE`` (bytes of L1_SMALL for the CCL semaphores and the
+GCB config pages, 4096 by default; it must not be 0 with the prefetcher on),
+``DEEPSEEK_V4_PREFETCHER`` (1: decode streams its weights through the DRISC prefetcher; 0: every projection copies
+its weight DRAM -> L1 per call, slower but with no GCBs), ``DEEPSEEK_V4_GCB_HEADROOM`` (16384 by default here: bytes
+per L1 bank the decode model keeps free just above its GCB rings until it creates its host sockets or compiles, so
+the sockets and the buffers decode's ops keep for themselves land above the rings rather than in the middle of L1
+once the rings are released, where they would cap prefill's circular buffers; ``release_prefetch_buffers`` warns
+about any that is left below them).
 LongBench: ``DEEPSEEK_V4_LONGBENCH`` (the question file), ``DEEPSEEK_V4_LONGBENCH_MAX_TOKENS`` (65536, capped below 1M,
 the DSv4 max context: in ``test_prefill_decode_demo`` a question whose prompt plus the new tokens is longer is skipped
 and another drawn; in the known-correct test it fails the test), ``DEEPSEEK_V4_LONGBENCH_INDICES`` (comma-separated
@@ -113,6 +127,7 @@ from models.experimental.deepseek_v4_flash.tests.decode.test_full_model_decode_d
     _CACHE_DIR,
     _DEFAULT_MODEL_DIR,
     _PAGE_BLOCK_SIZE,
+    _InterruptFlag,
     _assert_decode_parallelism,
     _build_rope,
     _checkpoint_available,
@@ -143,12 +158,14 @@ _MAX_CONTEXT = 2048  # index_topk * CSA rate: the dense CSA / no-indexer-state l
 # LongBench indices of the ``length == "short"`` questions the model answers correctly (of the first 20 in file order).
 _KNOWN_CORRECT_LONGBENCH = [1, 6, 21, 24, 25, 27, 39, 52]
 _NUM_STAGES = 8  # 1 x 4 TP4 stages, one per Galaxy row: decode and prefill share all 32 chips
+_DECODE_REPLAY_AHEAD = 32  # decode steps whose traces are posted ahead of their packet (the decode demo's window)
 _LONGBENCH_FILE = Path(os.path.expanduser(os.environ.get("DEEPSEEK_V4_LONGBENCH", "~/smanoj/data.json")))
 _DEVICE_PARAMS = {
     "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     "num_command_queues": 2,
-    # The CCL ops' global semaphores go here instead of L1. Decode's are allocated when its traces are captured,
-    # after prefill's, so in L1 they could sit under prefill's circular buffers and be overwritten by every replay.
+    # The ops' global semaphores and the GCB config pages go here instead of L1. The config pages, and the
+    # semaphores of decode programs recompiled against the rebuilt rings, are allocated after prefill's capture,
+    # so in L1 they could sit under prefill's circular buffers and be overwritten by every replay.
     # It comes out of L1, where prefill's widest stage has only ~7 KB to spare.
     "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
     # Like the prefill demo: only reserve a trace region when asked (the ttnn default otherwise).
@@ -245,6 +262,8 @@ def _run_with_progress(mesh_device, AutoTokenizer, make_prompts, **kwargs) -> li
     progress = _Progress(interval=0.0, stall=0.0)  # never entered: step logging only, no heartbeat thread
     progress.verbose = False
     os.environ["DEEPSEEK_V4_DSPARK"] = "0"  # MTP disabled for now (read by DeepSeekV4Model.__init__): no link on row 2
+    # Room above the GCB rings for decode's own buffers, so releasing the rings frees one block of L1 for prefill.
+    os.environ.setdefault("DEEPSEEK_V4_GCB_HEADROOM", "16384")
     # The decode model's prefetcher session spans everything (as in the decode demo).
     with contextlib.ExitStack() as prefetcher:
         return _run(mesh_device, progress, prefetcher, AutoTokenizer, make_prompts, **kwargs)
@@ -421,6 +440,19 @@ def _run(
             if len(prompt.ids) > max_input:
                 logger.info(f"{prompt.name}: truncated to its first {max_input} of {len(prompt.ids)} tokens")
                 prompt.ids = prompt.ids[:max_input]
+    # DEEPSEEK_V4_MAX_INPUT_PREFILL_CHUNKS (0 = off): keep only a prompt's first this many prefill chunks of tokens.
+    max_prefill_chunks = _env_int("DEEPSEEK_V4_MAX_INPUT_PREFILL_CHUNKS", 0)
+    if max_prefill_chunks < 0:
+        raise ValueError(f"DEEPSEEK_V4_MAX_INPUT_PREFILL_CHUNKS={max_prefill_chunks} must be >= 0")
+    if max_prefill_chunks:
+        keep = max_prefill_chunks * chunk_size
+        for prompt in prompts:
+            if len(prompt.ids) > keep:
+                logger.info(
+                    f"{prompt.name}: truncated to its first {max_prefill_chunks} prefill chunk(s), {keep} of "
+                    f"{len(prompt.ids)} tokens"
+                )
+                prompt.ids = prompt.ids[:keep]
     if "DEEPSEEK_V4_PREFILL_INDEXER" in os.environ:
         indexer_on = os.environ["DEEPSEEK_V4_PREFILL_INDEXER"] == "1"
     else:
@@ -462,9 +494,12 @@ def _run(
     max_seq = round_context(_traced_max_seq(config, needed), set(config.compress_rates.values()), _PAGE_BLOCK_SIZE)
     rope = _build_rope(config, max_seq)
 
-    # --- the decode model, prefetcher off: static state and session, before anything of prefill exists ---- #
+    # --- the decode model: static state and session, before anything of prefill exists ------------------ #
     # Everything allocated here, in DRAM and in L1, is live while prefill is captured, so prefill keeps off it.
-    progress.step(f"[2/6] decode model ({_NUM_STAGES} x TP{_TP_SIZE} stages, prefetcher off)")
+    use_prefetcher = os.environ.get("DEEPSEEK_V4_PREFETCHER", "1") == "1"
+    progress.step(
+        f"[2/6] decode model ({_NUM_STAGES} x TP{_TP_SIZE} stages, prefetcher {'on' if use_prefetcher else 'off'})"
+    )
     t0 = time.perf_counter()
     decode, lm_head, loader, config = _construct_model(
         mesh_device,
@@ -475,7 +510,7 @@ def _run(
         config=config,
         num_stages=_NUM_STAGES,
         submeshes=submeshes,
-        use_prefetcher=False,
+        use_prefetcher=use_prefetcher,
     )
     _assert_decode_parallelism(decode, _TP_SIZE, _NUM_STAGES)
     assert decode.num_layers == num_layers, f"decode built {decode.num_layers} layers, prefill {num_layers}"
@@ -489,7 +524,7 @@ def _run(
     sid = decode.open_session()
     decode.activate_session(sid)
 
-    # --- decode compile, then prefill compile: decode's L1 tensors parked on the host so prefill can use it --- #
+    # --- decode compile, then prefill compile and capture, with decode's GCBs and L1 tensors released ----- #
     prefill = None
     bias_slots = None
     build_seconds = prepare_seconds = 0.0
@@ -499,7 +534,8 @@ def _run(
     prefill_rope = rope if max_len <= max_seq else _build_rope(config, max_len)
     if max_len:
         # Decode's ops keep buffers of their own (global semaphores, cached constants) that no snapshot can reach;
-        # compiling first allocates them before prefill lays out its memory, so its replays keep off them.
+        # compiling first allocates them before prefill lays out its memory, so its replays keep off them. The
+        # prefetcher runs here (matmul_decode waits on ring pages).
         progress.step("[3/6] decode compile (every variant), before anything of prefill exists")
         t0 = time.perf_counter()
         decode.compile_traces(pad_id, 0)
@@ -507,6 +543,7 @@ def _run(
         progress.step(
             "[3/6] prefill model on the decode stages (sharing decode's routed experts, embedding and lm_head)"
         )
+        # Stops the prefetcher and frees the GCBs; allowed because no decode trace exists yet.
         decode.release_prefetch_buffers()
         cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
         t0 = time.perf_counter()
@@ -537,27 +574,26 @@ def _run(
         # Unwinds before the decode model's shutdown (LIFO).
         prefetcher.callback(prefill.release_traced_prefill)
         bias_slots = prefill_bias_slots(prefill)
-        decode.restore_prefetch_buffers()
 
-    # --- decode capture: a throw-away step; its scratch cache writes are overwritten by every commit ------ #
-    progress.step("[4/6] throw-away decode step: captures the decode traces")
-    t0 = time.perf_counter()
-    decode.decode_traced(pad_id, 0)
-    logger.info(f"trace capture + first step: {time.perf_counter() - t0:.1f}s")
-
-    # --- prefill capture: decode's L1 tensors parked again, and put back where the decode traces expect them --- #
-    if prefill is not None:
-        progress.step(
-            "[4/6] prefill capture: one trace per stage and position tier (decode's L1 tensors parked meanwhile)"
-        )
+        # --- prefill capture, before decode's: stopping the prefetcher would drop the decode traces' requests -- #
+        progress.step("[4/6] prefill capture: one trace per stage and position tier (decode's L1 still released)")
         t0 = time.perf_counter()
-        decode.release_prefetch_buffers()
         prefill.capture_traced_prefill()
-        decode.restore_prefetch_buffers()
         capture_seconds = time.perf_counter() - t0
         prepare_seconds += capture_seconds
         logger.info(f"traced prefill captured in {capture_seconds:.1f}s")
-        # The parked L1 tensors sat under prefill's capture, so its replays overwrite them.
+        # The GCBs (config pages in L1_SMALL) and the L1 tensors come back under prefill's buffers; restarts the
+        # prefetcher, which then runs until teardown.
+        decode.restore_prefetch_buffers()
+
+    # --- decode capture: a throw-away step; its scratch cache writes are overwritten by every commit ------ #
+    progress.step("[4/6] throw-away decode step: compiles against the rebuilt rings and captures the decode traces")
+    t0 = time.perf_counter()
+    decode.decode_traced(pad_id, 0)
+    logger.info(f"trace capture + first step: {time.perf_counter() - t0:.1f}s")
+    if prefill is not None:
+        # Decode's L1 tensors, and what its capture allocated, sit under prefill's buffers, so its replays
+        # overwrite them.
         decode.snapshot_resident_state()
 
     # --- every prompt: prefill execute, then decode execute, in the one session -------------------------- #
@@ -610,7 +646,7 @@ def _run(
                 flush=True,
             )
     logger.info(f"pool usage: {decode.session_usage()}")
-    _summary(results, prepare_seconds)
+    _summary(results, prepare_seconds, decode.use_prefetcher)
     progress.step("done")
     return results
 
@@ -734,18 +770,51 @@ def _decode_one(
     progress.step(f"{tag}: decode: up to {max_new} tokens")
     generated = [next_id]
     step_times: list[float] = []
-    for step in range(1, max_new):
-        if generated[-1] in eos:
-            logger.info("hit EOS; stopping")
-            break
-        t0 = time.perf_counter()
-        logits = decode.decode_traced(generated[-1], real_len + step - 1).reshape(1, -1).float()
-        generated.append(int(logits[0].argmax()))
-        step_times.append(time.perf_counter() - t0)
-        print(tokenizer.decode([generated[-1]]), end="", flush=True)
-        if step % 32 == 0:
-            recent = step_times[-32:]
-            logger.info(f"decode {step}/{max_new}: {len(recent) / sum(recent):.2f} tok/s (last {len(recent)} tokens)")
+    # As in the decode demo: the traces are posted a window ahead, so each step is only its packet and its output.
+    positions = [real_len + step - 1 for step in range(1, max_new)]
+    if positions:
+        # Page tables are device tensors the posted traces read: grow them before any replay, not between steps.
+        decode.ensure_session_capacity(positions[-1])
+    posted = fed = read = 0  # positions handed to replay_traced_ahead / packets written / outputs read
+    interrupt = _InterruptFlag()
+    interrupt.install()
+    try:
+        for step, pos in enumerate(positions, start=1):
+            if interrupt.hit:
+                logger.info("interrupted; unwinding the posted replays")
+                raise KeyboardInterrupt
+            if generated[-1] in eos:
+                logger.info("hit EOS; stopping")
+                break
+            want = min(len(positions), step - 1 + _DECODE_REPLAY_AHEAD)
+            if want > posted:
+                decode.replay_traced_ahead(positions[posted:want])
+                posted = want
+            t0 = time.perf_counter()
+            decode.write_step_packet(generated[-1], pos)
+            fed += 1
+            logits = decode.read_decoded_output().reshape(1, -1).float()
+            read += 1
+            generated.append(int(logits[0].argmax()))
+            step_times.append(time.perf_counter() - t0)
+            print(tokenizer.decode([generated[-1]]), end="", flush=True)
+            if step % 32 == 0:
+                recent = step_times[-32:]
+                logger.info(
+                    f"decode {step}/{max_new}: {len(recent) / sum(recent):.2f} tok/s (last {len(recent)} tokens)"
+                )
+    finally:
+        # Every posted replay must be fed and read before the next prefill or session reset; their logits are
+        # not part of the reply.
+        try:
+            for i in range(read, posted):
+                if i >= fed:
+                    decode.write_step_packet(generated[-1], positions[i])
+                    fed += 1
+                decode.read_decoded_output()
+                read += 1
+        finally:
+            interrupt.restore()
     if step_times:
         result.decode_tps = len(step_times) / sum(step_times)
         logger.info(
@@ -775,11 +844,12 @@ def _print_correctness(results: list[_Result]) -> int:
     return correct
 
 
-def _summary(results: list[_Result], prepare_seconds: float) -> None:
+def _summary(results: list[_Result], prepare_seconds: float, use_prefetcher: bool) -> None:
     """One line per prompt: its prefill and decode perf (and answer), then the totals."""
     lines = [
         "",
-        f"=== end-to-end perf ({len(results)} prompt(s); prefill traced, pipelined; decode prefetcher off) ===",
+        f"=== end-to-end perf ({len(results)} prompt(s); prefill traced, pipelined; decode prefetcher "
+        f"{'on' if use_prefetcher else 'off'}) ===",
         f"{'prompt':<18} {'tokens':>7} {'prefill s':>10} {'tok/s':>8} {'piped t/s':>10} "
         f"{'decode t/s':>10} {'gen':>4} {'answer':>9}",
     ]

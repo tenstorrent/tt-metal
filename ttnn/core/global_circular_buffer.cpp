@@ -31,9 +31,10 @@ GlobalCircularBuffer create_global_circular_buffer_for_tensor_prefetcher(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
     BufferType buffer_type,
-    bool support_multi_receiver_shards) {
+    bool support_multi_receiver_shards,
+    std::optional<BufferType> config_buffer_type) {
     return tt::tt_metal::experimental::CreateGlobalCircularBufferForTensorPrefetcher(
-        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards);
+        *mesh_device, bank_to_receivers, size, buffer_type, support_multi_receiver_shards, config_buffer_type);
 }
 
 namespace {
