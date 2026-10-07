@@ -96,8 +96,9 @@ HELPER_COMPUTE = """
 
 void kernel_main() {
     constexpr uint32_t width = get_compile_time_arg_val(0);
+    constexpr uint32_t num_rows = get_compile_time_arg_val(1);
     compute_kernel_hw_startup(0, 16);
-    compute_kernel_lib::untilize<width, 0, 16>(1);
+    compute_kernel_lib::untilize<width, 0, 16>(num_rows);
 }
 """
 
@@ -143,18 +144,20 @@ def _fp8_values(full_ct_dim, seed):
     return bits.to(torch.uint8).view(torch.float8_e4m3fn).to(torch.bfloat16)
 
 
-def _run(device, compute, full_ct_dim, out_dtype, out_page_size, out_pages, in_pages, pre_cb=None, seed=0):
-    values = _fp8_values(full_ct_dim, seed)
+def _launch(device, compute, values, out_dtype, out_page_size, out_pages, in_pages, pre_cb=None):
+    # Untilizes values ([rows, width], bf16) and returns the output rows; Fp8_e4m3 output comes back as its bytes.
+    num_rows, row_datums = values.shape
+    num_tiles = (num_rows // TILE) * (row_datums // TILE)
     tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     fp8 = out_dtype == ttnn.fp8_e4m3
     # The output CB holds Fp8_e4m3; its bytes are read back through a uint8 tensor of the same rows.
     tt_out = ttnn.from_torch(
-        torch.zeros(ROWS, full_ct_dim * TILE, dtype=torch.uint8 if fp8 else torch.bfloat16),
+        torch.zeros(num_rows, row_datums, dtype=torch.uint8 if fp8 else torch.bfloat16),
         dtype=ttnn.uint8 if fp8 else ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
-    row_bytes = full_ct_dim * TILE * (1 if fp8 else 2)
+    row_bytes = row_datums * (1 if fp8 else 2)
 
     # pre_cb: (pages, value, post value or None)
     pre_pages, pre_value, post_value = pre_cb if pre_cb else (0, 0, None)
@@ -166,7 +169,7 @@ def _run(device, compute, full_ct_dim, out_dtype, out_page_size, out_pages, in_p
         core_ranges=_core(),
         compile_time_args=[
             CB_IN,
-            full_ct_dim,
+            num_tiles,
             CB_PRE if pre_cb else NO_CB,
             pre_pages,
             pre_value,
@@ -186,7 +189,7 @@ def _run(device, compute, full_ct_dim, out_dtype, out_page_size, out_pages, in_p
         compile_time_args=[
             CB_OUT,
             out_pages,
-            ROWS,
+            num_rows,
             row_bytes,
             *ttnn.TensorAccessorArgs(tt_out).get_compile_time_args(),
         ],
@@ -201,24 +204,35 @@ def _run(device, compute, full_ct_dim, out_dtype, out_page_size, out_pages, in_p
         cbs.append(_cb(CB_PRE, ttnn.uint32, 16, max(pre_pages, 2)))
     program = ttnn.ProgramDescriptor(kernels=[reader, compute, writer], semaphores=[], cbs=cbs)
     ttnn.generic_op([tt_in, tt_out], program)
+    return ttnn.to_torch(tt_out)
 
-    actual = ttnn.to_torch(tt_out)
-    if fp8:
-        expected = values.to(torch.float8_e4m3fn).view(torch.uint8)
-    else:
-        expected, actual = values.view(torch.int16), actual.view(torch.int16)
+
+def _assert_equal(expected, actual):
     mismatched = (expected != actual).nonzero()
     assert mismatched.numel() == 0, f"{mismatched.shape[0]} of {expected.numel()} datums differ, first {mismatched[:4]}"
 
 
-def _helper(device, out_dtype, width, full_sync):
-    compute = ttnn.KernelDescriptor(
+def _run(device, compute, full_ct_dim, out_dtype, out_page_size, out_pages, in_pages, pre_cb=None, seed=0):
+    values = _fp8_values(full_ct_dim, seed)
+    actual = _launch(device, compute, values, out_dtype, out_page_size, out_pages, in_pages, pre_cb)
+    if out_dtype == ttnn.fp8_e4m3:
+        _assert_equal(values.to(torch.float8_e4m3fn).view(torch.uint8), actual)
+    else:
+        _assert_equal(values.view(torch.int16), actual.view(torch.int16))
+
+
+def _helper_compute(width, num_rows, full_sync):
+    return ttnn.KernelDescriptor(
         kernel_source=HELPER_COMPUTE,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=_core(),
-        compile_time_args=[width],
+        compile_time_args=[width, num_rows],
         config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True, dst_full_sync_en=full_sync),
     )
+
+
+def _helper(device, out_dtype, width, full_sync):
+    compute = _helper_compute(width, 1, full_sync)
     _run(device, compute, width, out_dtype, ttnn.tile_size(out_dtype), width, width)
 
 
@@ -279,6 +293,27 @@ def test_fp8_one_tile_blocks_refused(device, expect_error, full_ct_dim):
 )
 def test_helper_fp8_row_split(device, width, full_sync):
     _helper(device, ttnn.fp8_e4m3, width, full_sync)
+
+
+@pytest.mark.parametrize("width, full_sync", [(11, False), (13, False), (11, True), (17, True)])
+def test_helper_fp8_row_split_all_bf16(device, width, full_sync):
+    # Every bf16 bit pattern, special values included, untilized to Fp8_e4m3 through the split row and through
+    # one-tile rows (full-width blocks, which the packer writes without a pad); the bytes must match.
+    tile_rows = -(-65536 // (width * TILE * TILE))
+    bits = torch.arange(tile_rows * width * TILE * TILE, dtype=torch.int32) % 65536
+    values = bits.to(torch.int16).view(torch.bfloat16).reshape(tile_rows * TILE, width * TILE)
+    num_tiles = tile_rows * width
+    fp8_tile = ttnn.tile_size(ttnn.fp8_e4m3)
+    split = _launch(
+        device, _helper_compute(width, tile_rows, full_sync), values, ttnn.fp8_e4m3, fp8_tile, num_tiles, num_tiles
+    )
+    # The same tiles, each its own row.
+    tiles = values.reshape(tile_rows, TILE, width, TILE).permute(0, 2, 1, 3).reshape(num_tiles * TILE, TILE)
+    one_tile_rows = _launch(
+        device, _helper_compute(1, num_tiles, full_sync), tiles, ttnn.fp8_e4m3, fp8_tile, num_tiles, num_tiles
+    )
+    reference = one_tile_rows.reshape(tile_rows, width, TILE, TILE).permute(0, 2, 1, 3).reshape(split.shape)
+    _assert_equal(reference, split)
 
 
 @pytest.mark.parametrize(
