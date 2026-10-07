@@ -120,3 +120,14 @@
 - claim: Defects found during the attention Phase A: (1) kit: models/common/bringup_kit/__pycache__/*.pyc were tracked, so running any kit tool dirtied the tree and launch.py/log_tool.py then refused (fixed: untracked + bringup_kit/.gitignore, commit d0f087b6b61). (2) tt-moe-correctness had no attention-op section; added section J (sink/scale convention, window=128 keys incl self, needle tests, binding quirks), validated at 0d3b876e60f. (3) ttnn.transformer.chunked_scaled_dot_product_attention rejects scale=<python float> (noconvert binding; omit scale, default is Q_dim**-0.5, checked by PCC 0.9997 vs 192**-0.5 reference). (4) black/isort pre-commit hook rewrites new python files so the first git commit fails and must be repeated after re-add. (5) launch.py defaults TT_METAL_CACHE to .../tt-metal-cache/kit, tt-lab-ops says h<host digits> (not changed). (6) ONBOARDING mentions mimo_sdpa_probe.md which does not exist: this probe replaces it (bringup/mimo_v26/ attn LOG entries + probe_sdpa_ops.py).
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_probeA2_dbg.jsonl
 - paths: models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py
+
+## E261007-0114-9dc
+- date: 2026-10-07T01:14:58
+- commit: 7510d7e4a07
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: handoff
+- status: verified
+- claim: Attention track handoff after Phase A (module NOT designed or written, waiting for coordinator ack on the pad/native decision E261007-0114-2df). Worktree /mnt/tt-data/ssinghal/mimo/wt/attn, branch ssinghal/mimo-attn. Probe: models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py; repro: launch.py --worktree $PWD --commit <tip> --host 30 --env PROBE=<group[,..]> --env PROBE_OUT=<jsonl> [--env PROBE_SINK_MULT=5] -- python models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py; groups dec_corr dec_gqa dec_ring dec_perf pre_corr pre_gqa pre_perf edge pre_long. Logs /mnt/tt-data/ssinghal/mimo-logs/attn_probe*. Not done/unverified: real MiMo weights and activations (all data is random with real shapes), bfp8 weights, RoPE/V*0.707 path, TP8 mesh run (single chip only), 32-chip behaviour, determinism across hosts, bfp8 KV (not asked), 1 KV head per chip assumes KV replication for GA, trace-compatibility of chunk_start_idx_tensor variant (chunk_start_idx int variant only tested), decode with ragged positions at B>32 per chip, timing is host-wall with 20 calls (no device profiler).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_probeB_pre_perf.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py
