@@ -1,0 +1,5 @@
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_prepare_chunk_recurrence.py::test_prepare_chunk_recurrence_contract_accuracy_and_determinism[sp2-tp4-h24-n80-k128-v128]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_recurrent_chunk_scan.py::test_recurrent_chunk_scan_contract_and_trace[value-sharding-above-eight-heads]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_recurrent_chunk_scan.py::test_recurrent_chunk_scan_contract_and_trace[production-four-chunk]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic[sp1-tp8-local]
+tests/ttnn/nightly/unit_tests/operations/experimental/kda/test_sigmoid_gated_rms_norm.py::test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic[sp4-tp2-local]

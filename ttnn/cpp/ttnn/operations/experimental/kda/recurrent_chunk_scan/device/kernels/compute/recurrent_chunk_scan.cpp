@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
 //
 // Phase B (scan) compute kernel: the sequential-over-chunk recurrence for one
