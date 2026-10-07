@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +31,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -1166,6 +1168,100 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixUnpackReconfigQuasarDfb) {
 TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixPackReconfigQuasarDfb) {
     for (auto& device : this->devices_) {
         ASSERT_TRUE(unit_tests::compute::reconfig::single_core_pack_reconfig_quasar(device));
+    }
+}
+
+// ============================================================================
+// Conditional reconfig_data_format_srca(old, new) where old and new differ in BOTH data format and tile geometry:
+// SrcA is configured for a Float16_b 32x32 CB, switched to a Float32 tiny-tile CB, and that CB is copied through
+// DST. The reconfig must reprogram the face geometry as well as the format, so the output equals the input.
+// Inputs are bf16-representable so the Tf32 SrcA path copies them exactly.
+// ============================================================================
+namespace unit_tests::compute::reconfig {
+
+std::vector<std::uint32_t> run_reconfig_srca_format_and_geometry(
+    distributed::MeshDevice& mesh_device,
+    const Tile& tile,
+    const std::vector<std::uint32_t>& src_vec,
+    std::uint32_t num_tiles) {
+    Program program = CreateProgram();
+    CoreCoord core = {0, 0};
+
+    const std::uint32_t tiny_tile_size = tile.get_tile_size(tt::DataFormat::Float32);
+    const std::uint32_t full_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+
+    auto src_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * tiny_tile_size},
+        {.page_size = num_tiles * tiny_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+    auto dst_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_tiles * tiny_tile_size},
+        {.page_size = num_tiles * tiny_tile_size, .buffer_type = BufferType::DRAM},
+        &mesh_device);
+
+    CircularBufferConfig cb_src_config =
+        CircularBufferConfig(tiny_tile_size, {{tt::CBIndex::c_0, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_0, tiny_tile_size);
+    cb_src_config.set_tile_dims(tt::CBIndex::c_0, tile);
+    CreateCircularBuffer(program, core, cb_src_config);
+
+    // Only configures SrcA before the reconfig; never pushed.
+    CircularBufferConfig cb_old_config =
+        CircularBufferConfig(full_tile_size, {{tt::CBIndex::c_1, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_1, full_tile_size);
+    CreateCircularBuffer(program, core, cb_old_config);
+
+    CircularBufferConfig cb_dst_config =
+        CircularBufferConfig(tiny_tile_size, {{tt::CBIndex::c_16, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_16, tiny_tile_size);
+    cb_dst_config.set_tile_dims(tt::CBIndex::c_16, tile);
+    CreateCircularBuffer(program, core, cb_dst_config);
+
+    auto reader = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    auto writer = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
+        core,
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_srca_format_and_geometry.cpp",
+        core,
+        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = {num_tiles}});
+
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, /*blocking=*/true);
+    SetRuntimeArgs(program, reader, core, {src_buffer->address(), 0, num_tiles});
+    SetRuntimeArgs(program, writer, core, {dst_buffer->address(), 0, num_tiles});
+    LaunchProgram(mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> result_vec;
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_buffer, /*blocking=*/true);
+    return result_vec;
+}
+
+}  // namespace unit_tests::compute::reconfig
+
+TEST_F(LLKMeshDeviceFixture, TensixReconfigSrcaFormatAndGeometry) {
+    constexpr std::uint32_t num_tiles = 4;
+    for (const auto& shape : {std::array<std::uint32_t, 2>{16, 32}, std::array<std::uint32_t, 2>{8, 32}}) {
+        const Tile tile(shape);
+        const std::uint32_t datums = num_tiles * tile.get_tile_hw();
+        std::mt19937 rng(42);
+        std::uniform_real_distribution<float> dist(-10.0f, 10.0f);
+        std::vector<std::uint32_t> src_vec(datums);
+        for (auto& word : src_vec) {
+            word = std::bit_cast<std::uint32_t>(dist(rng)) & 0xFFFF0000u;
+        }
+        for (auto& device : this->devices_) {
+            auto result =
+                unit_tests::compute::reconfig::run_reconfig_srca_format_and_geometry(*device, tile, src_vec, num_tiles);
+            EXPECT_EQ(src_vec, result) << "tile " << shape[0] << "x" << shape[1];
+        }
     }
 }
 
