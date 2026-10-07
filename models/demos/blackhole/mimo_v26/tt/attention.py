@@ -107,6 +107,33 @@ def _k_mm():
     )
 
 
+def _row_mapper(mesh):
+    return ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, None))
+
+
+def decode_pos_io(mesh, slots=32):
+    """Device-resident per-row decode position tensors shared by all layers: cur [rows*slots] sharded -> int32 [slots] per device, idx uint32 [1,slots]."""
+    rows = mesh.shape[0]
+    m = _row_mapper(mesh)
+    mk = lambda t, dt: ttnn.from_torch(t, device=mesh, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=m)
+    return dict(
+        cur=mk(torch.zeros(rows * slots, dtype=torch.int32), ttnn.int32),
+        idx=mk(torch.zeros(rows, slots, dtype=torch.int32), ttnn.uint32),
+    )
+
+
+def decode_pos_set(mesh, io, positions):
+    rows = mesh.shape[0]
+    pos = torch.as_tensor(positions, dtype=torch.int32)
+    if pos.dim() == 1:
+        pos = pos.reshape(1, -1).expand(rows, -1)
+    assert pos.shape[0] == rows
+    m = _row_mapper(mesh)
+    h = lambda t, dt: ttnn.from_torch(t.contiguous(), dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=m)
+    ttnn.copy_host_to_device_tensor(h(pos.reshape(-1), ttnn.int32), io["cur"])
+    ttnn.copy_host_to_device_tensor(h(pos, ttnn.uint32), io["idx"])
+
+
 class MiMoAttention:
     def __init__(
         self,
@@ -272,16 +299,12 @@ class MiMoAttention:
 
     # ------------------------------------------------------------------ decode (32 user slots per row)
     def decode_io(self):
-        """Persistent decode inputs (cur_pos int32 RM [32], rope_idx uint32 RM [1,32]); refresh with decode_set."""
-        return dict(
-            cur=self._persist(torch.zeros(32, dtype=torch.int32), ttnn.int32),
-            idx=self._persist(torch.zeros(1, 32, dtype=torch.int32), ttnn.uint32),
-        )
+        """Persistent decode inputs, PER MESH ROW: cur_pos int32 RM [32] and rope_idx uint32 RM [1,32] on every device of row r (positions of row r's 32 slots).
+        Refresh with decode_set (positions [32] = same for all rows, or [rows,32])."""
+        return decode_pos_io(self.mesh)
 
     def decode_set(self, io, positions):
-        pos = torch.as_tensor(positions, dtype=torch.int32)
-        ttnn.copy_host_to_device_tensor(self._host(pos, ttnn.int32), io["cur"])
-        ttnn.copy_host_to_device_tensor(self._host(pos.reshape(1, -1), ttnn.uint32), io["idx"])
+        decode_pos_set(self.mesh, io, positions)
 
     def decode_inputs(self, positions):
         io = self.decode_io()

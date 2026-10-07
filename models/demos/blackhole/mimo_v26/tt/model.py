@@ -18,7 +18,17 @@ HIDDEN, VOCAB = W.HIDDEN, W.VOCAB
 
 class MiMoModel:
     def __init__(
-        self, mesh, n_layers=48, max_pos=512, users=32, ring_blocks=10, ck=None, wc=None, expert_op=None, log=print
+        self,
+        mesh,
+        n_layers=48,
+        max_pos=512,
+        users=32,
+        ring_blocks=10,
+        ck=None,
+        wc=None,
+        expert_op=None,
+        log=print,
+        pool=None,
     ):
         self.mesh, self.n_layers, self.users = mesh, n_layers, users
         self.ck = ck or Ckpt()
@@ -57,7 +67,15 @@ class MiMoModel:
             t0 = time.time()
             self.layers.append(
                 MiMoDecoderLayer(
-                    mesh, L, self.ck, self.wc, max_pos, users=users, ring_blocks=ring_blocks, expert_op=expert_op
+                    mesh,
+                    L,
+                    self.ck,
+                    self.wc,
+                    max_pos,
+                    users=users,
+                    ring_blocks=ring_blocks,
+                    expert_op=expert_op,
+                    pool=pool,
                 )
             )
             log(f"MODEL layer {L} built in {time.time() - t0:.1f}s cache={self.wc.stats}")
@@ -113,11 +131,11 @@ class MiMoModel:
         dts = ttnn.get_device_tensors(t)
         return torch.stack([ttnn.to_torch(dts[r * cols + col]).float().reshape(t.shape[2], -1) for r in range(rows)])
 
-    def prefill_first_token(self, tokens, lens, S, U):
+    def prefill_first_token(self, tokens, lens, S, U, slot0=0):
         """tokens [rows, U*S] int64 (each user right-padded to S), lens [rows, U] real lengths. Returns (first-token ids [rows,U], h_out host-free)."""
         h = self.embed_tokens(tokens)
         for lyr in self.layers:
-            h = self._step(lyr, h, S, U)
+            h = self._step(lyr, h, S, U, slot0)
         hh = self.rows_to_host(h)  # [rows, U*S, 4096]
         ttnn.deallocate(h)
         last = torch.zeros(tokens.shape[0], 32, HIDDEN)
@@ -143,7 +161,7 @@ class MiMoModel:
         return lg
 
     @staticmethod
-    def _step(lyr, h, S, U):
-        h2 = lyr.prefill(h, S, U)
+    def _step(lyr, h, S, U, slot0=0):
+        h2 = lyr.prefill(h, S, U, slot0=slot0)
         ttnn.deallocate(h)
         return h2

@@ -49,6 +49,7 @@ class MiMoDecoderLayer:
         cf=4,
         wdtype=ttnn.bfloat8_b,
         build_only=False,
+        pool=None,
     ):
         self.mesh, self.L, self.users, self.max_pos = mesh, L, users, max_pos
         self.swa = Ld.is_swa(L)
@@ -88,7 +89,11 @@ class MiMoDecoderLayer:
         hw = convert_weights(self.cfg, qkv[:nq], qkv[nq : nq + nk], qkv[nq + nk :], o_w, sink)
         nb = ring_blocks if self.swa else max_pos // BLOCK
         g = torch.Generator().manual_seed(seed + L)
-        pt = torch.randperm(users * nb, generator=g).reshape(users, nb).to(torch.int32)
+        pt = (
+            pool.page_table(self.swa)
+            if pool is not None
+            else torch.randperm(users * nb, generator=g).reshape(users, nb).to(torch.int32)
+        )
         self.attn = MiMoAttention(
             mesh, self.cfg, hw, pt, max_pos, ring_blocks=ring_blocks if self.swa else 0, users=users, wdtype=wdtype
         )
@@ -207,7 +212,7 @@ class MiMoDecoderLayer:
         return self.ffn_dense(x) if self.L == 0 else self.ffn_moe(x, route)
 
     # ------------------------------------------------------------------ prefill
-    def prefill(self, h, S, U, taps=None, route=None):
+    def prefill(self, h, S, U, taps=None, route=None, slot0=0):
         """h [1,1,U*S,4096] bf16 tile (U users of S tokens each, positions 0..S-1, user u uses KV slot u). Returns h_out (same shape).
         taps: dict to receive attn_in/attn_out/ffn_in/ffn_out (device tensors, caller deallocates)."""
         if S not in self.io:
@@ -217,7 +222,7 @@ class MiMoDecoderLayer:
         outs = []
         for u in range(U):
             xu = xn if U == 1 else ttnn.slice(xn, [0, 0, u * S, 0], [1, 1, (u + 1) * S, HIDDEN])
-            self.attn.prefill_set(io, 0, u)
+            self.attn.prefill_set(io, 0, slot0 + u)
             outs.append(self.attn.prefill_chunk(xu, io))
             if U > 1:
                 ttnn.deallocate(xu)
@@ -237,7 +242,7 @@ class MiMoDecoderLayer:
         return h2
 
     # ------------------------------------------------------------------ decode (32 slots per row)
-    def decode(self, h, cur_pos, rope_idx, taps=None):
+    def decode(self, h, cur_pos, rope_idx, taps=None, dead=None):
         """h [1,1,32,4096] bf16 tile. Dead slots must hold zeros and cur_pos 0."""
         xn = self.rms(h, self.w_in)
         a = self.attn.decode(xn, cur_pos, rope_idx)
@@ -246,7 +251,7 @@ class MiMoDecoderLayer:
         if self.L == 0:
             f = self.ffn_dense(fn)
         else:
-            f = self.moe_decode(fn)
+            f = self.moe_decode(fn, dead)
         h2 = ttnn.add(h1, f, dtype=ttnn.bfloat16)
         if taps is not None:
             taps.update(attn_out=a, ffn_in=fn, ffn_out=f)
@@ -255,11 +260,16 @@ class MiMoDecoderLayer:
                 ttnn.deallocate(t)
         return h2
 
-    def moe_decode(self, x):
-        """32 live-or-dead slots per row padded with 32 zero rows to 64 tokens (masked_bincount needs N % 64 == 0); dead rows are dropped from the output."""
+    def moe_decode(self, x, dead=None):
+        """32 live-or-dead slots per row padded with 32 zero rows to 64 tokens (masked_bincount needs N % 64 == 0); dead rows are dropped from the output.
+        dead: optional tt/decode.py DeadRouting; its (spread) routing replaces the router output on dead slots and pad rows so they cannot overflow a chip's
+        dispatch buffer (L-oob / capacity)."""
         B = x.shape[2]
         xp = ttnn.pad(x, [(0, 0), (0, 0), (0, 64 - B), (0, 0)], 0.0)
-        out = self.ffn_moe(xp)
+        route = None
+        if dead is not None:
+            route = dead.override(self.gate.route(xp, ROUTER_MODE), self.L)
+        out = self.ffn_moe(xp, route)
         ttnn.deallocate(xp)
         o = ttnn.slice(out, [0, 0, 0, 0], [1, 1, B, HIDDEN])
         ttnn.deallocate(out)

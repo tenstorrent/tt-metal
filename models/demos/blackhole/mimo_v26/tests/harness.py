@@ -23,6 +23,12 @@ def open_mesh(trace_mb=256):
     return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), trace_region_size=trace_mb * 1024 * 1024)
 
 
+def open_mesh_full(trace_mb=512):
+    """mesh for the full model tests (same params as the smoke fixtures: FABRIC_1D_RING, l1_small 16384)"""
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+    return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=trace_mb * 1024 * 1024)
+
+
 def close_mesh(mesh):
     ttnn.close_mesh_device(mesh)
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
