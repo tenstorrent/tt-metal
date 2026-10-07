@@ -65,7 +65,7 @@ from .decode.paged_cache import (
     build_groups,
     plan_pool_blocks,
 )
-from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
+from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard, _traced_decode_enabled
 from .decode.decoder_layer import DeepSeekV4DecoderLayer, _strip_prefix
 from .embedding import DeepSeekV4Embedding
 from .decode.hyperconnection import DeepSeekV4HyperHead
@@ -343,17 +343,6 @@ def _l1_spacer(device, bytes_per_bank: int):
     return ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32, 32 * tiles]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG
     )
-
-
-def _traced_decode_enabled() -> bool:
-    """Whether :meth:`DeepSeekV4Model.decode_traced` captures and replays traces.
-
-    ``DEEPSEEK_V4_TRACED_DECODE=0`` runs every step eagerly instead: the same per-submesh
-    :meth:`DeepSeekV4Model._decode_submesh_static` program a trace capture records, with the
-    same variant selection, packet and output sockets, just dispatched op by op. Profiler
-    reads inside the layers then run, which a replayed trace cannot do.
-    """
-    return os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "1") not in ("0", "false", "False")
 
 
 class DeepSeekV4Model(DeepSeekV4Module):
