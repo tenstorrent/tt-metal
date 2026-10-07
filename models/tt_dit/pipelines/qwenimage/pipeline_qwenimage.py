@@ -409,9 +409,9 @@ class QwenImagePipeline(PipelineAPIMixin):
             self._width // _VAE_SCALE_FACTOR,
         ]
 
-        # We let randn generate a permuted latent tensor in float32, so that the generated noise
-        # matches the reference implementation.
-        latents = self._transformers[0].patchify(torch.randn(shape).permute(0, 2, 3, 1))
+        # Noise is drawn in bfloat16 and channels first like in the reference implementation.
+        noise = torch.randn(shape, dtype=torch.bfloat16)
+        latents = self._transformers[0].patchify(noise.permute(0, 2, 3, 1).float())
 
         return from_torch_to_devices(latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
 
