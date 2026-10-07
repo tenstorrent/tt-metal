@@ -18,3 +18,10 @@ files; diffvae_ltx.py differs only by the default-off DIFFVAE_GNA_STRIDE env). -
 Marker: blx01 /var/tmp/fasth3/t227/drv/driver.marker. Outputs: /var/tmp/fasth3/t227/outF (run.log, stage_tree_{hifi2,lofi}.txt).
 Next: read marker, run.log DECODE lines, both deep trees (split of the 417 ms attention), cmp jsons. Then pick the code
 step from the split (halo exchange / permutes / sdpa / qkv) and record it here.
+
+## Job F result (blx01 863, 22:00-22:07 UTC, 242 s, no drops). Driver marker rc=13 was only the scorer's python3 lacking numpy; rescored by hand with t48 python_env.
+- hifi2 (default) 4.927 s mean; lofi 4.898 s (-29 ms). lofi vs unoptimized ref (host noise, seeds 0-4): PCC 0.99986-0.99987, PSNR 48.1-49.0 dB (floor 43.7). vs 2-D hifi2: same. Gain too small to bother defaulting.
+- Stage-5 block (8 blocks, ~471 ms each, deep profile): attention 429 = neighborhood-sdpa 294 (69%) + qkv-lanes slice+norm+rope 58 + halo/brick k,v 51 (halo-exchange 2x10.4) + q-to-seq 9 + proj 10. MLP 25.
+- Conclusion: the NA SDPA kernel itself is 2.35 s of 4.93 s. lofi barely moves it, so it is not math-fidelity bound: look at masked/padded tile waste in the brick (tile narrowing, PLAN), K/V reads and core grid utilization. Second target: qkv-lanes 58 ms/block (0.46 s) -> fuse slice+norm+rope.
+- Next step (standard run): profile the neighborhood-sdpa op (op-level: core count, per-core tiles, useful vs computed QK tiles) and implement NA tile narrowing behind an env knob. Also run the #226 follow-up tests (needs a ttnn build at/after 5c1635d733d on blx01).
+Files: tt-project/t227/stage_tree_{hifi2,lofi}.txt, cmp_lofi_vs_{ref,hifi2}.json.
