@@ -21,6 +21,8 @@ This module is the leaf of that dependency: it must not import from golden_gener
 sfpu_domains.
 """
 
+import struct
+
 # exp_with_base(x) = exp(EXP_WITH_BASE_SCALE * x), base e^0.5: EXP_WITH_BASE_SCALE_BF16
 # (and its fp32 form for exp_init) in sfpu_operations.h.
 EXP_WITH_BASE_SCALE = 0.5
@@ -88,3 +90,6 @@ RAND_SCALE = 2.0
 # non-dyadic, so alpha * EMA_old rounds, and it weights the carry above the input.
 EMA_ALPHA_BITS = 0x3F19999A  # 0.6f
 EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
+# The same weights as floats, exactly the fp32 values the bit patterns encode.
+EMA_ALPHA = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
+EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]

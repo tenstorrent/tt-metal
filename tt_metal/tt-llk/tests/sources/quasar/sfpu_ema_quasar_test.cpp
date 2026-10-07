@@ -4,9 +4,18 @@
 
 // Drives the Quasar EMA entry (llk_math_ema_sfpu_entry.h) the way the ema compute kernel does:
 // init, load the weights and clear the carry once, then feed TILE_CNT time tiles top to bottom with
-// the carry chained through LREG4 from one tile to the next. Each input tile t is copied to Dest
-// tile 2t and the entry writes its EMA to tile 2t + 1, so the production dst + 1 output store is
-// what gets packed.
+// the carry chained through LREG4 from one tile to the next, each tile's EMA stored to the Dest tile
+// after its input (EMA_OUTPUT_TILE_DELTA).
+//
+// Two Dest schedules, picked by dest_sync:
+//   * SyncFull: one Dest section for the whole chain. Input tile t is copied to Dest tile
+//     EMA_DST_STRIDE * t and its EMA lands one tile further on.
+//   * SyncHalf: one Dest section per time tile, as ema_compute.cpp runs it (acquire, copy to tile 0,
+//     ema_tile(0), pack tile 1, release), so the carry crosses a section release / bank flip at
+//     every tile boundary.
+// With MATH_TRANSPOSE_FACES (SyncHalf only), each input tile is also transposed in Dest by
+// transpose_dest before its EMA: an FPU op that records into and replays from replay bank 0 runs
+// between EMA tiles, with the EMA body left resident in bank 1 from the single init.
 
 #include <cstdint>
 
@@ -16,8 +25,19 @@
 #include "quasar_test_common.h"
 #include "sfpu_stub.h"
 
-// Input tile t sits at Dest tile EMA_DST_STRIDE * t; its EMA lands one tile further on.
-constexpr std::uint32_t EMA_DST_STRIDE = 2;
+using namespace ckernel;
+#include "params.h" // dest_sync, MATH_TRANSPOSE_FACES
+
+// Mirrors sfpu::EMA_OUTPUT_TILE_DELTA (checked against it on the math thread): the EMA of the input
+// at Dest tile i lands in tile i + EMA_OUT_TILE_OFFSET.
+constexpr std::uint32_t EMA_OUT_TILE_OFFSET = 1;
+// SyncFull keeps every input/output pair resident at once, so input tile t sits at this stride.
+constexpr std::uint32_t EMA_DST_STRIDE = EMA_OUT_TILE_OFFSET + 1;
+// SyncHalf reuses the same two tiles of each section.
+constexpr std::uint32_t EMA_SECTION_IN_TILE = 0;
+
+constexpr bool EMA_TILE_PER_SECTION = (dest_sync == ckernel::DstSync::SyncHalf);
+static_assert(EMA_TILE_PER_SECTION || !MATH_TRANSPOSE_FACES, "the transpose_dest interleave runs with one tile per section");
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -38,6 +58,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (is_fp32_dest_acc_en)
     {
+        // 32-bit A2D datacopy is ELWADD, so both SrcA and SrcB formats must be configured.
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     }
@@ -45,13 +66,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
     }
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
 
     // SrcA unpack is not a dest-dvalid client; do not inherit an UNP_DEST wait mask.
     set_up_zero_dest_dvalid_handshake_for_unpack();
 
-    // Unpacks all TILE_CNT tiles into SrcA, one per math datacopy.
-    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    if constexpr (EMA_TILE_PER_SECTION)
+    {
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
+        for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+        {
+            _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(t /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+            if constexpr (MATH_TRANSPOSE_FACES)
+            {
+                // transpose_dest's MOVD2B reads stall on SrcB validity.
+                _llk_unpack_set_srcB_dummy_valid_();
+            }
+        }
+    }
+    else
+    {
+        // Unpacks all TILE_CNT tiles into SrcA, one per math datacopy.
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, params.TILE_CNT);
+        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+    }
 }
 
 #endif
@@ -63,6 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
+#include "llk_math_transpose_dest.h"
 #include "params.h"
 
 // The entry bounds-checks Dest against the compute kernel's DST_SYNC_MODE / DST_ACCUM_MODE.
@@ -74,15 +114,19 @@ constexpr bool DST_ACCUM_MODE            = is_fp32_dest_acc_en;
 using namespace ckernel;
 using namespace ckernel::math;
 
+static_assert(EMA_OUT_TILE_OFFSET == sfpu::EMA_OUTPUT_TILE_DELTA, "the test's output offset must match the entry's");
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const DataFormat src_format = static_cast<DataFormat>(formats.math);
+    const DataFormat src_format   = static_cast<DataFormat>(formats.math);
+    const std::uint32_t num_rows  = params.num_faces * params.TEST_FACE_R_DIM;
+    constexpr bool interleave_fpu = MATH_TRANSPOSE_FACES;
 
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
-    _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(params.num_faces * params.TEST_FACE_R_DIM, 1 /*num_matrices*/);
+    _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
 
     // One chain over the whole input: weights and a cleared carry once, before the first tile.
     llk_math_ema_sfpu_init();
@@ -92,18 +136,47 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
     set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
 
-    for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+    if constexpr (EMA_TILE_PER_SECTION)
     {
-        _llk_math_eltwise_unary_datacopy_(EMA_DST_STRIDE * t);
-    }
-    _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+        for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+        {
+            if constexpr (interleave_fpu)
+            {
+                // Datacopy and transpose_dest share bank 0's MOP, so each is programmed right before
+                // it runs; transpose_dest also re-records replay bank 0 every tile. Neither touches
+                // the EMA body in bank 1, its weights or its carry, so EMA needs no re-init.
+                _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(src_format, src_format);
+                _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1 /*num_matrices*/);
+            }
+            _llk_math_eltwise_unary_datacopy_(EMA_SECTION_IN_TILE);
+            if constexpr (interleave_fpu)
+            {
+                _configure_mov_ops_explicit_alu_data_format_state_<is_fp32_dest_acc_en>(src_format, src_format);
+                _llk_math_transpose_dest_init_<true /*TRANSPOSE_OF_FACES*/, is_fp32_dest_acc_en>();
+                _llk_math_transpose_dest_(EMA_SECTION_IN_TILE);
+            }
+            _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
-    // Top to bottom: each call continues the carry the previous one left in LREG4.
-    for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
-    {
-        llk_math_ema_sfpu_tile(EMA_DST_STRIDE * t);
+            // Continues the carry the previous tile left in LREG4, across the section release.
+            llk_math_ema_sfpu_tile(EMA_SECTION_IN_TILE);
+            _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+        }
     }
-    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+    else
+    {
+        for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+        {
+            _llk_math_eltwise_unary_datacopy_(EMA_DST_STRIDE * t);
+        }
+        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+
+        // Top to bottom: each call continues the carry the previous one left in LREG4.
+        for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+        {
+            llk_math_ema_sfpu_tile(EMA_DST_STRIDE * t);
+        }
+        _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+    }
 
     wait_sfpu_idle();
     wait_fpu_idle();
@@ -129,16 +202,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    // One tile per pack: the outputs sit at every other Dest tile.
+    // One tile per pack: only the EMA outputs are packed, never the inputs beside them.
     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
 
     set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
 
-    for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+    if constexpr (EMA_TILE_PER_SECTION)
     {
-        _llk_pack_(EMA_DST_STRIDE * t + 1 /*EMA output*/, t /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+        for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+        {
+            _llk_pack_(EMA_SECTION_IN_TILE + EMA_OUT_TILE_OFFSET /*start_math_dest_tile_idx*/, t /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            // Drain this section's pack before releasing the next.
+            ckernel::wait_pack_idle();
+        }
     }
-    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    else
+    {
+        for (std::uint32_t t = 0; t < params.TILE_CNT; ++t)
+        {
+            _llk_pack_(EMA_DST_STRIDE * t + EMA_OUT_TILE_OFFSET /*start_math_dest_tile_idx*/, t /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+        }
+        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+    }
 }
 
 #endif

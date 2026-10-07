@@ -36,8 +36,8 @@ from helpers.sfpu_dispatch_constants import (
     CLAMP_MAX,
     CLAMP_MIN,
     CLAMPED_SILU_GLU_LIMIT,
-    EMA_ALPHA_BITS,
-    EMA_BETA_BITS,
+    EMA_ALPHA,
+    EMA_BETA,
     EXP_WITH_BASE_SCALE,
     HARDSHRINK_LAMBDA,
     INT_MAXMIN_SCALAR,
@@ -2286,6 +2286,26 @@ class PackGolden:
         return acceptable.all().item()
 
 
+def ema_down_columns(x: torch.Tensor, chain_rows: int = None) -> torch.Tensor:
+    """EMA down each column of a row-major [rows, cols] tensor, as the Quasar EMA kernel runs it.
+
+    ``out[r] = EMA_ALPHA * out[r-1] + EMA_BETA * x[r]``, with the carry restarting at 0 every
+    ``chain_rows`` rows (default: one chain over all rows). The recurrence runs in float32
+    because the kernel keeps its carry in an LREG at full width; the caller applies the
+    output-format rounding.
+    """
+    x = x.to(torch.float32)
+    chain_rows = chain_rows or x.shape[0]
+    out = torch.empty_like(x)
+    prev = torch.zeros_like(x[0])
+    for row in range(x.shape[0]):
+        if row % chain_rows == 0:
+            prev = torch.zeros_like(x[0])
+        prev = EMA_ALPHA * prev + EMA_BETA * x[row]
+        out[row] = prev
+    return out
+
+
 @register_golden
 class UnarySFPUGolden:
     # Ops whose NaN result carries a real sign, because the kernel moves the sign bit rather
@@ -3626,23 +3646,11 @@ class UnarySFPUGolden:
     def _ema(self, x, dimensions: tuple[int, int]):
         """Column-wise (top-to-bottom) exponential moving average inside each 32x32 tile.
 
-        EMA_new = alpha * EMA_old + beta * x, with the carry starting at 0 in every tile and
-        the recurrence run in float32 on the fp32 weights the kernel loads. Reached through
-        the whole-tensor branch of __call__ like _cumsum; the caller applies the single
-        Dest-format rounding.
+        Reached through the whole-tensor branch of __call__ like _cumsum, on the untilized
+        [rows, cols] view; every tile starts a fresh chain (see ema_down_columns).
         """
-        alpha = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
-        beta = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]
         rows, cols = dimensions[0], dimensions[1]
-        tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM).to(
-            torch.float32
-        )
-        out = torch.empty_like(tiles)
-        prev = torch.zeros_like(tiles[:, 0])
-        for row in range(TILE_DIM):
-            prev = alpha * prev + beta * tiles[:, row]
-            out[:, row] = prev
-        return out.flatten()
+        return ema_down_columns(x.reshape(rows, cols), chain_rows=TILE_DIM).flatten()
 
     # Pools whose NaN result is emitted by the datapath rather than selected from a lane, so
     # its sign is the ISA's to choose and the golden canonicalises it. Max and Min instead

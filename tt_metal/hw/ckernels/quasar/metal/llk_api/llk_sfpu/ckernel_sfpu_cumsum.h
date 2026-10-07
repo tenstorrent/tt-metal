@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_replay_bank1.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 
@@ -55,19 +56,11 @@ constexpr std::uint32_t CUMSUM_REPLAY_LEN = CUMSUM_QUADS_PER_RECORDING * CUMSUM_
 constexpr std::uint32_t CUMSUM_REPLAYS_PER_FACE_PAIR = CUMSUM_QUADS_PER_FACE_PAIR / CUMSUM_QUADS_PER_RECORDING;
 static_assert(CUMSUM_ROW_QUADS % CUMSUM_QUADS_PER_RECORDING == 0, "the recorded body must tile the Dest tile exactly");
 
-// The math thread's replay buffer is double-banked: 64 entries, two banks of 32. A REPLAY's start
-// index addresses within a bank, and which bank it hits comes from a write ID (loads) and a read ID
-// (executes), each flipped by a REPLAY with `last` set once it completes. Every other math-thread op
-// records into and replays from bank 0 with both IDs at 0, so cumsum keeps its body in bank 1 and
-// survives them - an FPU op such as transpose_dest can run between cumsum tiles without a re-init.
-// Both IDs are back at 0 whenever cumsum is not running.
-constexpr std::uint32_t CUMSUM_REPLAY_BANK_DEPTH = 32;
-static_assert(CUMSUM_REPLAY_LEN <= CUMSUM_REPLAY_BANK_DEPTH, "the recorded body must fit one replay bank");
-
-// The read ID only flips after an executed REPLAY, so entering bank 1 costs one instruction replayed
-// out of bank 0: an SFPNOP kept in bank 0's last slot. No math-thread FPU recording reaches that slot
-// (the longest, 32-bit transpose_dest, stops at 23), and the SFPNOP is refreshed every tile anyway.
-constexpr std::uint32_t CUMSUM_BANK_SWITCH_SLOT = CUMSUM_REPLAY_BANK_DEPTH - 1;
+// The body lives in replay bank 1 (see ckernel_sfpu_replay_bank1.h), so math-thread FPU ops, which
+// record into and replay from bank 0, can run between cumsum tiles without a re-init. EMA records
+// into bank 1 too, over this body.
+static_assert(
+    CUMSUM_REPLAY_SLOT + CUMSUM_REPLAY_LEN <= SFPU_REPLAY_BANK_DEPTH, "the recorded body must fit one replay bank");
 
 /**
  * @brief Accumulate one tile row quad on top of the previous quad's running totals.
@@ -131,8 +124,8 @@ inline void _calculate_cumsum_row_quad_() {
  * recording it here rather than per call leaves each tile costing only its replays.
  *
  * @note Call this before @ref calculate_cumsum, and again before resuming cumsum after any op that
- *       reprograms ADDR_MOD_6 (several SFPU ops do) or records into replay bank 1. Ops that only use
- *       replay bank 0 - every other math-thread LLK today - leave cumsum's state intact.
+ *       reprograms ADDR_MOD_6 (several SFPU ops do) or records into replay bank 1 (EMA does). Ops
+ *       that only use replay bank 0 - the math-thread FPU ops - leave cumsum's state intact.
  */
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumsum_init() {
@@ -145,24 +138,8 @@ inline void cumsum_init() {
     }
         .set(CUMSUM_ADDR_MOD);
 
-    // Loading the bank switch with `last` flips the write ID to bank 1 for the body below.
-    TTI_REPLAY(
-        CUMSUM_BANK_SWITCH_SLOT,
-        1 /* len */,
-        1 /* last */,
-        0 /* set_mutex */,
-        0 /* exec_while_loading */,
-        1 /* load */);
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
-
-    // Record only; the tile the walk would touch is not this call's to write. `last` flips the write
-    // ID back to bank 0 for everyone else.
-    load_replay_buf<
-        CUMSUM_REPLAY_SLOT,
-        CUMSUM_REPLAY_LEN,
-        false /* exec_while_loading */,
-        0 /* set_mutex */,
-        1 /* last */>([] {
+    // Record only; the tile the walk would touch is not this call's to write.
+    _sfpu_record_replay_bank1_<CUMSUM_REPLAY_SLOT, CUMSUM_REPLAY_LEN>([] {
         _calculate_cumsum_row_quad_<CUMSUM_LREG_BANK_A>();
         _calculate_cumsum_row_quad_<CUMSUM_LREG_BANK_B>();
     });
@@ -182,7 +159,9 @@ inline void cumsum_init() {
  *       store order. The next call's first transpose reconstructs the carry in LREG7. Feed tiles
  *       top-to-bottom and write nothing to LREG4-7 in between.
  * @note Replays from bank 1 of the math thread's replay buffer, and overwrites bank 0's last slot with
- *       the SFPNOP that switches banks. Both replay bank IDs are back at 0 on return.
+ *       the SFPNOP that switches banks (@ref _sfpu_enter_replay_bank1_; on quasar_4row that slot holds
+ *       16-bit transpose_dest's last instruction, see SFPU_REPLAY_BANK_SWITCH_SLOT_FREE). Both replay
+ *       bank IDs are back at 0 on return.
  * @note Call @ref cumsum_init before this - it programs the address mode and records the body this
  *       replays.
  */
@@ -197,22 +176,7 @@ inline void calculate_cumsum(const bool first) {
         TTI_SFPMOV(p_sfpu::LCONST_0, CUMSUM_LREG_BANK_B + 3, 0 /* instr_mod1: plain copy */);
     }
 
-    // Refresh the bank switch in bank 0, then replay it with `last` so the read ID flips to bank 1.
-    TTI_REPLAY(
-        CUMSUM_BANK_SWITCH_SLOT,
-        1 /* len */,
-        0 /* last */,
-        0 /* set_mutex */,
-        0 /* exec_while_loading */,
-        1 /* load */);
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
-    TTI_REPLAY(
-        CUMSUM_BANK_SWITCH_SLOT,
-        1 /* len */,
-        1 /* last */,
-        0 /* set_mutex */,
-        0 /* exec_while_loading */,
-        0 /* load */);
+    _sfpu_enter_replay_bank1_();
 
     for (std::uint32_t face_pair = 0; face_pair < CUMSUM_FACE_PAIRS; face_pair++) {
         if (face_pair != 0) {

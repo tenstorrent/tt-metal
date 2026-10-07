@@ -6,8 +6,16 @@
 The unary sweep in test_eltwise_unary_sfpu_quasar.py runs EMA in place with a fresh chain per
 tile. This test drives the entry the way the ema compute kernel does instead: the carry is cleared
 once, TILE_CNT time tiles are fed top to bottom so the carry chains across tile boundaries, and
-each tile's EMA is stored to the Dest tile after its input (OUT_TILE_DELTA = 1). The golden is
-one continuous recurrence down all TILE_CNT * 32 rows.
+each tile's EMA is stored to the Dest tile after its input (EMA_OUTPUT_TILE_DELTA = 1). The golden
+is one continuous recurrence down all TILE_CNT * 32 rows.
+
+Three schedules (see sfpu_ema_quasar_test.cpp):
+  * DestSync.Full: the whole chain in one Dest section.
+  * DestSync.Half: one Dest section per time tile, released after each pack, as ema_compute.cpp
+    runs it, so the carry crosses a section release / bank flip at every tile boundary.
+  * DestSync.Half + MATH_TRANSPOSE_FACES: each input tile is transposed in Dest by transpose_dest,
+    a replay-bank-0 FPU op, between EMA tiles. 16-bit Dest only: 32-bit transpose_dest needs
+    unpack-to-Dest, which this datacopy-based source does not use.
 """
 
 import pytest
@@ -17,6 +25,7 @@ from helpers.golden_generators import (
     TILE_DIM,
     TilizeGolden,
     UntilizeGolden,
+    ema_down_columns,
     get_golden_generator,
 )
 from helpers.llk_params import (
@@ -25,6 +34,7 @@ from helpers.llk_params import (
     DestSync,
     ImpliedMathFormat,
     MathOperation,
+    Transpose,
     UnpackerEngine,
     format_dict,
 )
@@ -34,16 +44,17 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
-    DEST_INDEX,
     DEST_SYNC,
     EMA_ALPHA_BETA,
     IMPLIED_MATH_FORMAT,
     MATH_OP,
+    MATH_TRANSPOSE_FACES,
     NUM_FACES,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
+from helpers.tile_constants import MAX_NUM_FACES
 from helpers.utils import passed_test
 
 # Float32 is left out: through the SrcA datacopy this source uses it is narrowed to TF32, which a
@@ -53,37 +64,31 @@ EMA_FORMATS = [
     InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
 ]
 
-# Input tile t is copied to Dest tile 2t and its EMA stored to 2t + 1, so 4 time tiles fill the
-# 8 tiles of a full 32-bit Dest.
-EMA_TIME_TILES = [1, 2, 4]
 
+def _ema_schedules():
+    """(dest_sync, dest_acc, transpose, time_tiles) per schedule.
 
-def _fp32(bits: int) -> float:
-    return torch.tensor([bits], dtype=torch.int32).view(torch.float32).item()
-
-
-def _continuous_ema_golden(x: torch.Tensor, alpha: float, beta: float) -> torch.Tensor:
-    """EMA down all rows of a row-major [rows, 32] tensor, carry starting at 0 and never reset.
-
-    The kernel keeps the carry in an fp32 LREG across tiles, so the recurrence runs in float32 and
-    only the stored output is rounded to the output format.
+    Full sync keeps input tile t at Dest tile 2t and its EMA at 2t + 1, so 4 time tiles fill the
+    8 tiles of a full 32-bit Dest. Half sync reuses tiles 0 / 1 of each section, so any count
+    crosses a release; 4 tiles cycle both Dest halves twice.
     """
-    x = x.to(torch.float32)
-    out = torch.empty_like(x)
-    prev = torch.zeros(x.shape[1], dtype=torch.float32)
-    for row in range(x.shape[0]):
-        prev = alpha * prev + beta * x[row]
-        out[row] = prev
-    return out
+    schedules = []
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+        schedules += [(DestSync.Full, dest_acc, Transpose.No, n) for n in (1, 2, 4)]
+        schedules += [(DestSync.Half, dest_acc, Transpose.No, n) for n in (2, 4)]
+    schedules += [
+        (DestSync.Half, DestAccumulation.No, Transpose.Yes, n) for n in (2, 4)
+    ]
+    return schedules
 
 
 @pytest.mark.quasar
 @parametrize(
     formats=EMA_FORMATS,
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    time_tiles=EMA_TIME_TILES,
+    schedule=_ema_schedules(),
 )
-def test_sfpu_ema_quasar(formats, dest_acc, time_tiles):
+def test_sfpu_ema_quasar(formats, schedule):
+    dest_sync, dest_acc, transpose, time_tiles = schedule
     torch.manual_seed(0)
 
     input_dimensions = [time_tiles * TILE_DIM, TILE_DIM]
@@ -95,9 +100,12 @@ def test_sfpu_ema_quasar(formats, dest_acc, time_tiles):
     src_A = src_A.to(torch_format)
     src_B = torch.zeros(time_tiles * TILE_DIM * TILE_DIM, dtype=torch_format)
 
-    golden = _continuous_ema_golden(
-        src_A, _fp32(EMA_ALPHA_BITS), _fp32(EMA_BETA_BITS)
-    ).to(format_dict[formats.output_format])
+    # transpose_dest transposes each 32x32 input tile in Dest before its EMA.
+    ema_input = src_A
+    if transpose == Transpose.Yes:
+        ema_input = src_A.reshape(time_tiles, TILE_DIM, TILE_DIM).transpose(1, 2)
+        ema_input = ema_input.reshape(input_dimensions)
+    golden = ema_down_columns(ema_input).to(format_dict[formats.output_format])
 
     device_src_A = get_golden_generator(TilizeGolden)(
         src_A.flatten(), input_dimensions, formats.input_format
@@ -111,14 +119,14 @@ def test_sfpu_ema_quasar(formats, dest_acc, time_tiles):
             IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpA),
-            DEST_SYNC(DestSync.Full),
+            DEST_SYNC(dest_sync),
+            MATH_TRANSPOSE_FACES(transpose),
             EMA_ALPHA_BETA(alpha_bits=EMA_ALPHA_BITS, beta_bits=EMA_BETA_BITS),
         ],
         runtimes=[
             TILE_COUNT(time_tiles),
-            NUM_FACES(4),
+            NUM_FACES(MAX_NUM_FACES),
             TEST_FACE_DIMS(),
-            DEST_INDEX(0),
         ],
         variant_stimuli=StimuliConfig(
             device_src_A,
@@ -129,7 +137,7 @@ def test_sfpu_ema_quasar(formats, dest_acc, time_tiles):
             tile_count_A=time_tiles,
             tile_count_B=time_tiles,
             tile_count_res=time_tiles,
-            num_faces=4,
+            num_faces=MAX_NUM_FACES,
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,

@@ -16,8 +16,10 @@ namespace ckernel {
  * @brief Configure the math thread for column-wise EMA.
  *
  * @note Follow this with @ref llk_math_ema_sfpu_load_alpha_beta and
- *       @ref llk_math_ema_sfpu_clear_previous_output before the first
- *       @ref llk_math_ema_sfpu_tile, and run it again before resuming EMA after another SFPU op.
+ *       @ref llk_math_ema_sfpu_clear_previous_output before the first @ref llk_math_ema_sfpu_tile.
+ * @note Another SFPU op between EMA tiles ends the chain: it may overwrite the weights and the
+ *       carry (LREG4-6), and the carry cannot be restored. Run all three calls again to start a new
+ *       chain. FPU ops between EMA tiles need none of them.
  */
 inline void llk_math_ema_sfpu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::init_ema<sfpu::EMA_OUTPUT_TILE_DELTA>);

@@ -483,8 +483,23 @@ PackEntrySchema = Union[
 ]
 
 
+# Unary SFPU kernels that walk a whole 32x32 Dest tile (four 16x16 faces, all 32 rows) instead of
+# the selected tile's own faces, so any smaller tile shape would read and write past it.
+FULL_TILE_ONLY_UNARY_SFPU_OPS = frozenset({MathOperation.Ema})
+
+
 class OperationSchema(OperationSchemaBase):
     dest_consuming_operations: ClassVar = frozenset({"TransposeDest"})
 
     math: List[MathSchema] = Field(..., min_length=1)
     pack: List[PackEntrySchema] = Field(..., min_length=1)
+
+    def to_l1_operation(self, operands, dest_acc=False):
+        tile_dims = self._resolve_output_tile_shape(operands).tile_dims
+        for m in self.math:
+            operation = getattr(m, "operation", None)
+            if operation in FULL_TILE_ONLY_UNARY_SFPU_OPS and tile_dims != (32, 32):
+                raise ValueError(
+                    f"{operation.name} needs 32x32 Dest tiles, got {tile_dims}"
+                )
+        return super().to_l1_operation(operands, dest_acc)

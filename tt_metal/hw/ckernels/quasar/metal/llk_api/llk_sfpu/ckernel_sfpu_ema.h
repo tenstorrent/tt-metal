@@ -10,6 +10,7 @@
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "ckernel_trisc_common.h"
+#include "ckernel_sfpu_replay_bank1.h"
 #include "cmath_common.h"
 #include "sfpi.h"
 
@@ -32,10 +33,10 @@ constexpr std::uint32_t EMA_OUTPUT_TILE_DELTA = 1;
 constexpr std::uint32_t EMA_ADDR_MOD = ADDR_MOD_6;
 
 // Register roles, resident across calls: carry = EMA_old per column, alpha/beta lane-uniform weights.
+// LREG7 is not used.
 constexpr std::uint32_t EMA_CARRY_REG = p_sfpu::LREG4;
 constexpr std::uint32_t EMA_ALPHA_REG = p_sfpu::LREG5;
 constexpr std::uint32_t EMA_BETA_REG = p_sfpu::LREG6;
-constexpr std::uint32_t EMA_SCRATCH_REG = p_sfpu::LREG7;
 
 // Splits a runtime fp32 bit pattern into the two SFPLOADI halves.
 constexpr std::uint32_t FP32_LO16_MASK = 0xFFFF;
@@ -50,26 +51,16 @@ constexpr std::uint32_t EMA_PLAIN_MOD1 = 0;  // SFPMAD: no negation; SFPMOV: pla
 // One row-quad body, composed from its instructions so the replay length follows the body.
 constexpr std::uint32_t EMA_QUAD_LOADS = 4;                 // one per (face, column parity)
 constexpr std::uint32_t EMA_QUAD_TRANSPOSES = 2;            // into rows and back
-constexpr std::uint32_t EMA_QUAD_MADS = 2 * EMA_QUAD_ROWS;  // alpha * old, then + beta * x, per row
+constexpr std::uint32_t EMA_QUAD_MADS = 2 * EMA_QUAD_ROWS;  // beta * x, then alpha * old + that, per row
 constexpr std::uint32_t EMA_QUAD_MOVS = 1;                  // last row -> carry
 constexpr std::uint32_t EMA_QUAD_STORES = EMA_QUAD_LOADS;
 constexpr std::uint32_t EMA_REPLAY_LEN =
     EMA_QUAD_LOADS + EMA_QUAD_TRANSPOSES + EMA_QUAD_MADS + EMA_QUAD_MOVS + EMA_QUAD_STORES;
 
-// The math thread's replay buffer is double-banked: 64 entries, two banks of 32. A REPLAY's start
-// index addresses within a bank, and which bank it hits comes from a write ID (loads) and a read ID
-// (executes), each flipped by a REPLAY with `last` set once it completes. Every math-thread FPU op
-// records into and replays from bank 0 with both IDs at 0, so EMA keeps its body in bank 1 - as
-// cumsum does - and an FPU op such as transpose_dest can run between EMA tiles without a re-init.
-// Both IDs are back at 0 whenever EMA is not running.
+// The body lives in replay bank 1 (see ckernel_sfpu_replay_bank1.h), so math-thread FPU ops, which
+// record into and replay from bank 0, can run between EMA tiles without a re-init.
 constexpr std::uint32_t EMA_REPLAY_SLOT = 0;
-constexpr std::uint32_t EMA_REPLAY_BANK_DEPTH = 32;
-static_assert(EMA_REPLAY_LEN <= EMA_REPLAY_BANK_DEPTH, "the recorded body must fit one replay bank");
-
-// The read ID only flips after an executed REPLAY, so entering bank 1 costs one instruction replayed
-// out of bank 0: an SFPNOP kept in bank 0's last slot. No math-thread FPU recording reaches that slot
-// (the longest, 32-bit transpose_dest, stops at 23), and the SFPNOP is refreshed every tile anyway.
-constexpr std::uint32_t EMA_BANK_SWITCH_SLOT = EMA_REPLAY_BANK_DEPTH - 1;
+static_assert(EMA_REPLAY_SLOT + EMA_REPLAY_LEN <= SFPU_REPLAY_BANK_DEPTH, "the recorded body must fit one replay bank");
 
 /**
  * @brief Write a runtime fp32 bit pattern into one LREG, lane-uniform.
@@ -88,9 +79,10 @@ inline void _ema_load_fp32_(const std::uint32_t lreg, const std::uint32_t bits) 
  * @brief Run the EMA recurrence down one quad of four tile rows.
  *
  * Four SFPLOADs bring in the quad's 128 datums, one register per (face, column parity). SFPTRANSP
- * then redistributes the bank so LREG0-3 each hold one whole tile row, which the MAD pairs chain:
- * carry -> row 0 -> row 1 -> row 2 -> row 3. The second SFPTRANSP returns the rows to store order,
- * and the quad's last row stays in the carry for the next quad.
+ * then redistributes the bank so LREG0-3 each hold one whole tile row. Four independent MADs scale
+ * every row by beta first; four more then chain carry -> row 0 -> row 1 -> row 2 -> row 3, each
+ * adding alpha times the row above. The second SFPTRANSP returns the rows to store order, and the
+ * quad's last row stays in the carry for the next quad.
  *
  * @tparam OUT_TILE_DELTA: Tiles from the input tile to the output tile; 0 writes in place.
  * @note This is recorded into the replay buffer rather than executed directly, so every Dest
@@ -117,15 +109,17 @@ inline void _calculate_ema_row_quad_() {
     // LREG_j = tile row j; LREG4-7 back to math layout
     TTI_SFPTRANSP;
 
-    // EMA chain down the quad: tmp = alpha * old; row = beta * x + tmp. MAD consumers are interlocked.
-    TTI_SFPMAD(EMA_ALPHA_REG, EMA_CARRY_REG, p_sfpu::LCONST_0, EMA_SCRATCH_REG, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG0, EMA_SCRATCH_REG, p_sfpu::LREG0, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG0, p_sfpu::LCONST_0, EMA_SCRATCH_REG, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG1, EMA_SCRATCH_REG, p_sfpu::LREG1, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG1, p_sfpu::LCONST_0, EMA_SCRATCH_REG, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG2, EMA_SCRATCH_REG, p_sfpu::LREG2, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG2, p_sfpu::LCONST_0, EMA_SCRATCH_REG, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG3, EMA_SCRATCH_REG, p_sfpu::LREG3, EMA_PLAIN_MOD1);
+    // beta * x for every row first: independent of each other, so they issue back to back
+    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG3, EMA_PLAIN_MOD1);
+
+    // Then the serial part, row = alpha * old + beta * x: one dependent MAD per row (interlocked)
+    TTI_SFPMAD(EMA_ALPHA_REG, EMA_CARRY_REG, p_sfpu::LREG0, p_sfpu::LREG0, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG2, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG3, EMA_PLAIN_MOD1);
 
     TTI_SFPMOV(p_sfpu::LREG3, EMA_CARRY_REG, EMA_PLAIN_MOD1);  // carry = last row
 
@@ -150,10 +144,12 @@ inline void _calculate_ema_row_quad_() {
  * @tparam OUT_TILE_DELTA: Tiles from the input tile to the output tile, baked into the recorded
  *         stores; the production contract is EMA_OUTPUT_TILE_DELTA, 0 writes in place.
  * @note @ref calculate_ema replays what this recorded, so this decides where its output lands.
- * @note Call this before @ref calculate_ema, and again before resuming EMA after any op that
- *       reprograms ADDR_MOD_6 (several SFPU ops do), records into replay bank 1 (cumsum does), or
- *       writes LREG4-7. Follow it with @ref ema_load_alpha_beta to install the weights and
- *       @ref ema_clear_previous_output to start a chain.
+ * @note Writes no LREG. Starting a chain takes this, then @ref ema_load_alpha_beta and
+ *       @ref ema_clear_previous_output.
+ * @note Re-running this alone resumes a chain after an op that only reprograms ADDR_MOD_6 (several
+ *       SFPU ops do) or records into replay bank 1 (cumsum does): the carry and weights are intact.
+ *       An op that writes LREG4-6 ends the chain instead - the carry cannot be restored - so start
+ *       a new one with all three calls.
  */
 template <std::uint32_t OUT_TILE_DELTA = EMA_OUTPUT_TILE_DELTA>
 inline void init_ema() {
@@ -166,14 +162,8 @@ inline void init_ema() {
     }
         .set(EMA_ADDR_MOD);
 
-    // Loading the bank switch with `last` flips the write ID to bank 1 for the body below.
-    TTI_REPLAY(EMA_BANK_SWITCH_SLOT, 1 /*len*/, 1 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 1 /*load*/);
-    TTI_SFPNOP(0 /*srcs_wr_done*/, 0 /*srcs_rd_done*/, 0 /*dest_done*/);
-
-    // Record only; the tile the walk would touch is not this call's to write. `last` flips the write
-    // ID back to bank 0 for everyone else.
-    load_replay_buf<EMA_REPLAY_SLOT, EMA_REPLAY_LEN, false /*exec_while_loading*/, 0 /*set_mutex*/, 1 /*last*/>(
-        [] { _calculate_ema_row_quad_<OUT_TILE_DELTA>(); });
+    // Record only; the tile the walk would touch is not this call's to write.
+    _sfpu_record_replay_bank1_<EMA_REPLAY_SLOT, EMA_REPLAY_LEN>([] { _calculate_ema_row_quad_<OUT_TILE_DELTA>(); });
 }
 
 /**
@@ -192,7 +182,7 @@ inline void ema_load_alpha_beta(const std::uint32_t alpha, const std::uint32_t b
 /**
  * @brief Zero the running EMA_old carry, starting a fresh top-to-bottom chain.
  *
- * @note Clears EMA_CARRY_REG only - the neighbouring LREGs hold the weights and the scratch, and
+ * @note Clears EMA_CARRY_REG only - the neighbouring LREGs hold the weights, and
  *       @ref calculate_ema's tile-entry transpose leaves the carry where the chain expects it.
  */
 inline void ema_clear_previous_output() { TTI_SFPLOADI(EMA_CARRY_REG, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO); }
@@ -212,19 +202,18 @@ inline void ema_clear_previous_output() { TTI_SFPLOADI(EMA_CARRY_REG, sfpi::SFPL
  *       @ref _llk_math_eltwise_sfpu_done_ resets.
  * @note The carry survives in EMA_CARRY_REG on return, so consecutive calls continue one time
  *       sequence. Feed tiles top-to-bottom, call @ref ema_clear_previous_output to start a chain,
- *       and write nothing to EMA_CARRY_REG / EMA_ALPHA_REG / EMA_BETA_REG / EMA_SCRATCH_REG in
- *       between.
+ *       and write nothing to EMA_CARRY_REG / EMA_ALPHA_REG / EMA_BETA_REG in between
+ *       (see @ref init_ema for what ends a chain).
  * @note The transposes surrounding the tile walk are what keep that register bank math-ready
  *       between tiles; they pair up and must not be removed.
  * @note Replays from bank 1 of the math thread's replay buffer, and overwrites bank 0's last slot
- *       with the SFPNOP that switches banks. Both replay bank IDs are back at 0 on return.
+ *       with the SFPNOP that switches banks (@ref _sfpu_enter_replay_bank1_; on quasar_4row that slot
+ *       holds 16-bit transpose_dest's last instruction, see SFPU_REPLAY_BANK_SWITCH_SLOT_FREE). Both
+ *       replay bank IDs are back at 0 on return.
  * @note Call @ref init_ema and @ref ema_load_alpha_beta before this.
  */
 inline void calculate_ema() {
-    // Refresh the bank switch in bank 0, then replay it with `last` so the read ID flips to bank 1.
-    TTI_REPLAY(EMA_BANK_SWITCH_SLOT, 1 /*len*/, 0 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 1 /*load*/);
-    TTI_SFPNOP(0 /*srcs_wr_done*/, 0 /*srcs_rd_done*/, 0 /*dest_done*/);
-    TTI_REPLAY(EMA_BANK_SWITCH_SLOT, 1 /*len*/, 1 /*last*/, 0 /*set_mutex*/, 0 /*exec_while_loading*/, 0 /*load*/);
+    _sfpu_enter_replay_bank1_();
 
     // Tile-entry bracket: keeps the LREG4-7 bank math-ready between tiles
     TTI_SFPTRANSP;
