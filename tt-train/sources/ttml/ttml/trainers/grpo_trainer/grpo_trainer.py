@@ -100,7 +100,6 @@ class RolloutBatch:
     """Describes multiple rollout samples (not a specific count).
 
     Fields:
-        batch_id: Monotonic counter picked by the producer.
         weight_version: Which theta version produced this batch. The trainer
             can use it to detect / down-weight stale samples.
         prompts: B ragged prompt token IDs.
@@ -111,7 +110,6 @@ class RolloutBatch:
             trainer masks them out.
     """
 
-    batch_id: int
     weight_version: int
     prompts: List[List[int]]
     completions: List[List[int]]
