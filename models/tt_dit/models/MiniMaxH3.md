@@ -455,7 +455,8 @@ table instead of the per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores)
 Opt-in, off by default: `MINIMAX_H3_ADALN_CACHE=1` keeps every block's six modulation tables per denoise step, so a
 step whose timestep vector was seen before (the same schedule as the previous request) costs no adaLN projection.
 The cache is one slot per step of the default 50-step schedule, reserved at warm-up before any trace is captured
-(about 1.3 GB per device for a text-to-video request) and refilled in place when a step's timestep vector changes;
+(about 1.3 GB per device for a text-to-video request; a pipeline without buckets captures no traces and reserves
+the slots on its first request, sized for it) and refilled in place when a step's timestep vector changes;
 steps beyond the reserved schedule and traced steps project per step as without the cache. The reservation order
 matters: a ttnn trace replays into the memory its capture-time intermediates occupied, so a table allocated after
 the audio-decode trace was captured would be overwritten on every audio decode (that is what made an earlier

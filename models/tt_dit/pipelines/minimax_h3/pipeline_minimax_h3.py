@@ -2778,6 +2778,9 @@ class MiniMaxH3Pipeline:
 
         levels = step_levels(0)
         upload_levels(levels)
+        if not self.bucket_denoise:
+            # Without buckets no trace is ever captured, so the cache's slots can be reserved on first use.
+            transformer.reserve_adaln_cache(len(timesteps), len(slot_roles))
         cache_hits, cache_misses = transformer.adaln_cache_hits, transformer.adaln_cache_misses
         if _is_host_rank():
             _tqdm_spacer()
