@@ -1027,7 +1027,7 @@ DRAM = ttnn.BufferType.DRAM
         (DRAM, DRAM, 512, 4),  # zero-copy factory needs L1
         (DRAM, L1, 512, 4),
         (L1, DRAM, 512, 4),
-        (DRAM, DRAM, 16384, 8),  # wide row overflows L1 (#47735)
+        (DRAM, DRAM, 16384, 8),  # row of tiles doesn't fit in L1
         (L1, None, 16384, 8),  # wide L1 sharded to DRAM interleaved
     ],
 )
@@ -1062,3 +1062,29 @@ def test_tilize_with_val_padding_width_sharded_dram_and_wide(device, in_buffer, 
     assert tt_output.memory_config() == output_memory_config
     torch_golden = pytorch_tilize_with_val_padding(torch_input, output_padded_shape, 0.0)
     assert_equal(torch_golden, tt_output.cpu().to_torch_with_padded_shape())
+
+
+def test_tilize_with_val_padding_wide_row_dram_width_sharded(device):
+    """DRAM width-sharded input whose row of tiles doesn't fit in L1."""
+    torch.manual_seed(0)
+    num_cores = device.dram_grid_size().x  # 12 DRAM banks on WH, 8 on BH
+    shard_shape = (2048, 3584)
+    tensor_shape = (shard_shape[0], shard_shape[1] * num_cores)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    sharded_dram_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    tt_rm = ttnn.from_torch(
+        torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=sharded_dram_cfg, device=device
+    )
+
+    tt_tile = ttnn.tilize_with_val_padding(
+        tt_rm, list(tensor_shape), 0.0, memory_config=sharded_dram_cfg, use_multicore=True
+    )
+
+    assert tt_tile.layout == ttnn.TILE_LAYOUT
+    assert torch.equal(torch_tensor, ttnn.to_torch(tt_tile))
