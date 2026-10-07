@@ -1,0 +1,166 @@
+{
+ "model": "mimo_v26",
+ "version": 2,
+ "gates": [
+  {
+   "id": "layer_pcc.dense",
+   "kind": "single_layer_pcc",
+   "threshold": 0.99,
+   "layer_type": "dense",
+   "required": true,
+   "evidence": [],
+   "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
+  },
+  {
+   "id": "layer_pcc.swa_moe",
+   "kind": "single_layer_pcc",
+   "threshold": 0.99,
+   "layer_type": "swa_moe",
+   "required": true,
+   "evidence": [],
+   "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
+  },
+  {
+   "id": "layer_pcc.global_moe",
+   "kind": "single_layer_pcc",
+   "threshold": 0.99,
+   "layer_type": "global_moe",
+   "required": true,
+   "evidence": [],
+   "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
+  },
+  {
+   "id": "chain_prefix_pcc",
+   "kind": "chain_pcc_curve",
+   "min_final": 0.97,
+   "max_drop_per_layer": 0.01,
+   "required": true,
+   "evidence": [],
+   "note": "short chained prefix: first 4-8 layers or one of each layer type (NOT the full model)"
+  },
+  {
+   "id": "prefill_phase",
+   "kind": "prefill_check",
+   "min_layer_pcc": 0.99,
+   "min_kv_pcc": 0.99,
+   "required": true,
+   "evidence": [],
+   "note": "layer outputs + KV cache contents after prefill vs CPU oracle"
+  },
+  {
+   "id": "decode_phase",
+   "kind": "decode_check",
+   "threshold": 0.98,
+   "required": true,
+   "evidence": [],
+   "note": "one decode step starting from a reference-prefilled state"
+  },
+  {
+   "id": "first_token",
+   "kind": "first_token",
+   "min_frac": 0.9,
+   "required": true,
+   "evidence": [],
+   "note": "sanity: argmax of the first generated token vs reference on real prompts"
+  },
+  {
+   "id": "gsm8k",
+   "kind": "gsm8k",
+   "min_n": 64,
+   "min_correct": 55,
+   "required": true,
+   "evidence": [],
+   "note": "REQUIRED. closed-loop greedy decode, full model; catches compounding error beyond the CPU prefix. set n/min_correct per model; PROVISIONAL threshold (n=64,min 55) copied from template: set from reference/hosted accuracy once known, log the decision"
+  },
+  {
+   "id": "determinism",
+   "kind": "determinism",
+   "min_runs": 2,
+   "required": true,
+   "evidence": [],
+   "note": "REQUIRED. two identical runs, bit-identical outputs"
+  },
+  {
+   "id": "memory_fit",
+   "kind": "memory_fit",
+   "min_free_gib": 1.0,
+   "cells": [
+    [
+     4,
+     4096
+    ],
+    [
+     16,
+     4096
+    ],
+    [
+     4,
+     65536
+    ],
+    [
+     16,
+     65536
+    ]
+   ],
+   "required": true,
+   "evidence": [],
+   "note": "free DRAM per chip after prefill"
+  },
+  {
+   "id": "perf_prefill",
+   "kind": "perf_recorded",
+   "keys": [
+    "ttft_ms",
+    "prefill_tok_s"
+   ],
+   "required": true,
+   "evidence": []
+  },
+  {
+   "id": "perf_decode",
+   "kind": "perf_recorded",
+   "keys": [
+    "decode_ms_tok",
+    "tok_s_user"
+   ],
+   "required": true,
+   "evidence": []
+  },
+  {
+   "id": "hosted_oracle",
+   "kind": "hosted_oracle",
+   "min_n": 16,
+   "required": false,
+   "evidence": [],
+   "note": "optional behavioural comparison vs a hosted model; evidence data.prompts_file = logged prompts/outputs"
+  },
+  {
+   "id": "spec_exact",
+   "kind": "spec_exact",
+   "min_frac": 0.95,
+   "required": false,
+   "evidence": [],
+   "note": "only if speculative decoding is shipped"
+  },
+  {
+   "id": "ctx64k_prefill_decode",
+   "kind": "metric",
+   "key": "ctx64k_ok",
+   "op": "==",
+   "value": 1,
+   "required": true,
+   "evidence": [],
+   "note": "MILESTONE 1: 64k-context prefill (chunked, paged KV) + decode on all 48 layers, no OOM/hang; data.ctx64k_ok=1 only if first token sane and 1k further decode tokens coherent"
+  },
+  {
+   "id": "ctx64k_two_isl",
+   "kind": "metric",
+   "key": "two_isl_same_process_ok",
+   "op": "==",
+   "value": 1,
+   "required": true,
+   "evidence": [],
+   "note": "two different ISLs in ONE process, no DRAM leak (L-works)"
+  }
+ ]
+}
