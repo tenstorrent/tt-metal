@@ -346,7 +346,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.experimental.topk_large_indices">
-<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">topk_large_indices</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_length</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_length_tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_length_offset</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subdevice_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.topk_large_indices" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.experimental.</span></span><span class="sig-name descname"><span class="pre">topk_large_indices</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_length</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_length_tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_length_offset</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subdevice_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_end_tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.experimental.topk_large_indices" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Experimental Top-K over the last dimension of a row-major BFLOAT16 tensor.
@@ -411,6 +411,11 @@ dynamic valid lengths during trace replay. Mutually exclusive with valid_length.
 <li><p><span class="tt-api-param-name"><strong>valid_length_offset</strong></span><span class="tt-api-param-desc">constant added to valid_length_tensor[0] (default 0).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>subdevice_id</strong></span><span class="tt-api-param-desc">optional active subdevice containing the top-k workers.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong></span><span class="tt-api-param-desc">optional core restriction within <code class="docutils literal notranslate"><span class="pre">subdevice_id</span></code>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>valid_end_tensor</strong></span><span class="tt-api-param-desc">optional 1-element UINT32 row-major DRAM tensor holding the REAL token end;
+caps the derived search length at ceil32(valid_end). Requires valid_length_tensor. Without
+it a padded chunk ranks columns that were never written. Pass the SAME bound to
+ring_indexer_score_dsa’s valid_end_tensor – a looser score with a tighter top-k drops real
+keys, the reverse ranks a stale tail.</span></p></li>
 </ul>
 </dd>
 </dl>

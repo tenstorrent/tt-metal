@@ -311,7 +311,7 @@
 </dt>
 <dd>
 <p>Initiates an asynchronous read from a specified source node located at NOC coordinates (x,y) at a local address (encoded as a uint64_t using <em>get_noc_addr</em> function). The destination is in L1 memory on the Tensix core executing this function call. Also, see <em>noc_async_read_barrier</em>.</p>
-<p>The source node can be either a DRAM bank, a Tensix core or a PCIe controller.</p>
+<p>The source node can be either a DRAM bank or a Tensix core. To read from a PCIe-routed address, use <em>noc_async_read_pcie</em> instead.</p>
 <p>Return value: None</p>
 <p></p>
 <div class="tt-api-param-list colwidths-auto docutils container">

@@ -4,13 +4,13 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ttnn.sigmoid &mdash; TT-NN™  documentation</title>
+  <title>ttnn.transformer.fused_recurrent_gated_delta_rule &mdash; TT-NN™  documentation</title>
       <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/copybutton.css" type="text/css" />
       <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
     <link rel="shortcut icon" href="../../_static/favicon.png"/>
-    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.sigmoid.html" />
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/api/ttnn.transformer.fused_recurrent_gated_delta_rule.html" />
   <!--[if lt IE 9]>
     <script src="../../_static/js/html5shiv.min.js"></script>
   <![endif]-->
@@ -23,14 +23,12 @@
         <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
         <script src="../../_static/copybutton.js?v=d122708d"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ttnn.sigmoid_accurate" href="ttnn.sigmoid_accurate.html" />
-    <link rel="prev" title="ttnn.selu" href="ttnn.selu.html" />
+    <link rel="next" title="ttnn.transformer.gated_delta_attn_seq" href="ttnn.transformer.gated_delta_attn_seq.html" />
+    <link rel="prev" title="ttnn.transformer.flash_multi_latent_attention_decode" href="ttnn.transformer.flash_multi_latent_attention_decode.html" />
  <link rel="stylesheet" href="https://docs.tenstorrent.com/_static/tt_theme.css">
 
 <script>
@@ -240,129 +238,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#core">Core</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#tensor-creation">Tensor Creation</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#matrix-multiplication">Matrix Multiplication</a></li>
-<li class="toctree-l3 current"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a><ul class="current">
-<li class="toctree-l4"><a class="reference internal" href="ttnn.abs.html">ttnn.abs</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.acos.html">ttnn.acos</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.acosh.html">ttnn.acosh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.alt_complex_rotate90.html">ttnn.alt_complex_rotate90</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.angle.html">ttnn.angle</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.asin.html">ttnn.asin</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.asinh.html">ttnn.asinh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.atan.html">ttnn.atan</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.atanh.html">ttnn.atanh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitcast.html">ttnn.bitcast</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_left_shift.html">ttnn.bitwise_left_shift</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_not.html">ttnn.bitwise_not</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.bitwise_right_shift.html">ttnn.bitwise_right_shift</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cbrt.html">ttnn.cbrt</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.ceil.html">ttnn.ceil</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.celu.html">ttnn.celu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clamp.html">ttnn.clamp</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clip.html">ttnn.clip</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.clone.html">ttnn.clone</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.conj.html">ttnn.conj</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cos.html">ttnn.cos</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.cosh.html">ttnn.cosh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.deg2rad.html">ttnn.deg2rad</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.digamma.html">ttnn.digamma</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.eqz.html">ttnn.eqz</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erf.html">ttnn.erf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erfc.html">ttnn.erfc</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.erfinv.html">ttnn.erfinv</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.exp.html">ttnn.exp</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.exp2.html">ttnn.exp2</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.dropout.html">ttnn.experimental.dropout</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.elu.html">ttnn.elu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.expm1.html">ttnn.expm1</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.fill.html">ttnn.fill</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.floor.html">ttnn.floor</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.frac.html">ttnn.frac</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.geglu.html">ttnn.geglu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.gelu.html">ttnn.gelu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.gez.html">ttnn.gez</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.glu.html">ttnn.glu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.gtz.html">ttnn.gtz</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardmish.html">ttnn.hardmish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardshrink.html">ttnn.hardshrink</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardsigmoid.html">ttnn.hardsigmoid</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardswish.html">ttnn.hardswish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.hardtanh.html">ttnn.hardtanh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.heaviside.html">ttnn.heaviside</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.i0.html">ttnn.i0</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.i1.html">ttnn.i1</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.identity.html">ttnn.identity</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.imag.html">ttnn.imag</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.is_imag.html">ttnn.is_imag</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.is_real.html">ttnn.is_real</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isfinite.html">ttnn.isfinite</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isinf.html">ttnn.isinf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isnan.html">ttnn.isnan</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isneginf.html">ttnn.isneginf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.isposinf.html">ttnn.isposinf</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.leaky_relu.html">ttnn.leaky_relu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.lez.html">ttnn.lez</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.lgamma.html">ttnn.lgamma</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log.html">ttnn.log</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log10.html">ttnn.log10</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log1p.html">ttnn.log1p</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log2.html">ttnn.log2</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.log_sigmoid.html">ttnn.log_sigmoid</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_left_shift.html">ttnn.logical_left_shift</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_not.html">ttnn.logical_not</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_not_.html">ttnn.logical_not_</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logical_right_shift.html">ttnn.logical_right_shift</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.logit.html">ttnn.logit</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.ltz.html">ttnn.ltz</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.mish.html">ttnn.mish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.multigammaln.html">ttnn.multigammaln</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.neg.html">ttnn.neg</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.nez.html">ttnn.nez</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.normalize_global.html">ttnn.normalize_global</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.normalize_hw.html">ttnn.normalize_hw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.polar.html">ttnn.polar</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.polygamma.html">ttnn.polygamma</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.prelu.html">ttnn.prelu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rad2deg.html">ttnn.rad2deg</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rdiv.html">ttnn.rdiv</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.real.html">ttnn.real</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.reciprocal.html">ttnn.reciprocal</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.reglu.html">ttnn.reglu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu.html">ttnn.relu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu6.html">ttnn.relu6</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu_max.html">ttnn.relu_max</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.relu_min.html">ttnn.relu_min</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.remainder.html">ttnn.remainder</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.round.html">ttnn.round</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.rsqrt.html">ttnn.rsqrt</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.selu.html">ttnn.selu</a></li>
-<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.sigmoid</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sigmoid_accurate.html">ttnn.sigmoid_accurate</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sign.html">ttnn.sign</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.signbit.html">ttnn.signbit</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.silu.html">ttnn.silu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sin.html">ttnn.sin</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sinh.html">ttnn.sinh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softcap.html">ttnn.softcap</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softplus.html">ttnn.softplus</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softshrink.html">ttnn.softshrink</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.softsign.html">ttnn.softsign</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.sqrt.html">ttnn.sqrt</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.square.html">ttnn.square</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.std_hw.html">ttnn.std_hw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.swiglu.html">ttnn.swiglu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.swish.html">ttnn.swish</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tan.html">ttnn.tan</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tanh.html">ttnn.tanh</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tanhshrink.html">ttnn.tanhshrink</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.threshold.html">ttnn.threshold</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.tril.html">ttnn.tril</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.triu.html">ttnn.triu</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.trunc.html">ttnn.trunc</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.unary_chain.html">ttnn.unary_chain</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.var_hw.html">ttnn.var_hw</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.xielu.html">ttnn.xielu</a></li>
-</ul>
-</li>
+<li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-unary">Pointwise Unary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-binary">Pointwise Binary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#pointwise-ternary">Pointwise Ternary</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#quantization">Quantization</a></li>
@@ -371,7 +247,32 @@
 <li class="toctree-l3"><a class="reference internal" href="../api.html#data-movement">Data Movement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization">Normalization</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#normalization-program-configs">Normalization Program Configs</a></li>
-<li class="toctree-l3"><a class="reference internal" href="../api.html#transformer">Transformer</a></li>
+<li class="toctree-l3 current"><a class="reference internal" href="../api.html#transformer">Transformer</a><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.attention_softmax.html">ttnn.transformer.attention_softmax</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.attention_softmax_.html">ttnn.transformer.attention_softmax_</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.chunk_gated_delta_rule.html">ttnn.transformer.chunk_gated_delta_rule</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.chunked_flash_mla_prefill.html">ttnn.transformer.chunked_flash_mla_prefill</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.chunked_scaled_dot_product_attention.html">ttnn.transformer.chunked_scaled_dot_product_attention</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.concatenate_heads.html">ttnn.transformer.concatenate_heads</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_mla_prefill.html">ttnn.transformer.flash_mla_prefill</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.flash_multi_latent_attention_decode.html">ttnn.transformer.flash_multi_latent_attention_decode</a></li>
+<li class="toctree-l4 current"><a class="current reference internal" href="#">ttnn.transformer.fused_recurrent_gated_delta_rule</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.gated_delta_attn_seq.html">ttnn.transformer.gated_delta_attn_seq</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.joint_scaled_dot_product_attention.html">ttnn.transformer.joint_scaled_dot_product_attention</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.paged_flash_multi_latent_attention_decode.html">ttnn.transformer.paged_flash_multi_latent_attention_decode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.paged_scaled_dot_product_attention_decode.html">ttnn.transformer.paged_scaled_dot_product_attention_decode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_distributed_scaled_dot_product_attention.html">ttnn.transformer.ring_distributed_scaled_dot_product_attention</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_joint_scaled_dot_product_attention.html">ttnn.transformer.ring_joint_scaled_dot_product_attention</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.ring_mla.html">ttnn.transformer.ring_mla</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention.html">ttnn.transformer.scaled_dot_product_attention</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.scaled_dot_product_attention_decode.html">ttnn.transformer.scaled_dot_product_attention_decode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.sparse_sdpa.html">ttnn.transformer.sparse_sdpa</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.sparse_sdpa_msa.html">ttnn.transformer.sparse_sdpa_msa</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.transformer.split_query_key_value_and_split_heads.html">ttnn.transformer.split_query_key_value_and_split_heads</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.indexer_score_dsa.html">ttnn.experimental.indexer_score_dsa</a></li>
+<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.indexer_score_msa.html">ttnn.experimental.indexer_score_msa</a></li>
+</ul>
+</li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#ccl">CCL</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#embedding">Embedding</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../api.html#convolution">Convolution</a></li>
@@ -438,7 +339,7 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
   <li><a href="../../index.html">Home</a></li><li class="breadcrumb-item"><a href="../api.html">APIs</a></li>
-  <li class="breadcrumb-item active">ttnn.sigmoid</li>
+  <li class="breadcrumb-item active">ttnn.transformer.fused_recurrent_gated_delta_rule</li>
       <li class="wy-breadcrumbs-aside">
       </li>
   </ul>
@@ -447,72 +348,51 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="ttnn-sigmoid">
-<h1>ttnn.sigmoid<a class="headerlink" href="#ttnn-sigmoid" title="Permalink to this heading"></a>
+  <section id="ttnn-transformer-fused-recurrent-gated-delta-rule">
+<h1>ttnn.transformer.fused_recurrent_gated_delta_rule<a class="headerlink" href="#ttnn-transformer-fused-recurrent-gated-delta-rule" title="Permalink to this heading"></a>
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
-<dt class="sig sig-object py" id="ttnn.sigmoid">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">sigmoid</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vector_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">4</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.SigmoidMode</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">SigmoidMode.Accurate</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.sigmoid" title="Permalink to this definition"></a>
+<dt class="sig sig-object py" id="ttnn.transformer.fused_recurrent_gated_delta_rule">
+<span class="sig-prename descclassname"><span class="pre">ttnn.transformer.</span></span><span class="sig-name descname"><span class="pre">fused_recurrent_gated_delta_rule</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">q</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">v</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">g</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">initial_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_final_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_per_token_state</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_qk_l2norm</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn.Tensor</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#ttnn.transformer.fused_recurrent_gated_delta_rule" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Applies sigmoid to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p>
-<div class="math notranslate nohighlight">
-\[\mathrm{output\_tensor}_i = \verb|sigmoid|(\mathrm{input\_tensor}_i)\]</div>
+<p>Fused recurrent Gated Delta Rule forward (flash-linear-attention algorithm).</p>
+<p>Single-token decode (T=1) and K+1-token speculative verify are the same op: one Tensix core
+per head walks the T token axis sequentially, holding the recurrent state on-core. Matches
+FLA <cite>naive_recurrent_gated_delta_rule</cite> (fp32/HiFi4). q/k must be L2-normalized over K on host.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><strong>input_tensor</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">the input tensor.</span></p>
+<ul class="simple">
+<li><p><span class="tt-api-param-name"><strong>q</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]  (L2-normalized over K)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>k</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, H,  K]  (L2-normalized over K)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>v</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV, V]</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>g</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]     log-space decay (exp(g) applied internally)</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>beta</strong> (<em>ttnn.Tensor</em>)</span><span class="tt-api-param-desc">[B, T, HV]     gate (already sigmoid’d)</span></p></li>
+</ul>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><span class="tt-api-param-name"><strong>vector_mode</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Use vector mode to get better performance. Defaults to 4. Use 2 or 4 for different vector modes (2 -&gt; Vector Mode C and 4 -&gt; Vector Mode RC)”.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>mode</strong> (<em>ttnn.SigmoidMode</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Select sigmoid mode to use. Defaults to <cite>SigmoidMode.Accurate</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">preallocated output tensor. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">sub core grids for the operation. Defaults to <cite>None</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scale</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">query scale, defaults to K**-0.5.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>initial_state</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">[B, HV, K, V].</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_final_state</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>output_per_token_state</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">default False. When True, returns the state AFTER every
+token as [B, T, HV, K, V] (speculative-verify slots); overrides output_final_state.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>use_qk_l2norm</strong> (<em>bool</em>)</span><span class="tt-api-param-desc">must be False (L2-norm is done on host).</span></p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – </p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – </p></li>
 </ul>
 </dd>
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor.</span></p>
+<p><span class="tt-api-param-name"><em>tuple[ttnn.Tensor, Optional[ttnn.Tensor]]</em></span><span class="tt-api-param-desc">    o [B, T, HV, V],
+state [B, T, HV, K, V] (per-token) or [B, HV, K, V] (final), if requested.</span></p>
 </dd>
 </dl>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Supported dtypes and layouts:</p>
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd">
-<th class="head"><p>Dtypes</p></th>
-<th class="head"><p>Layouts</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>BFLOAT16</p></td>
-<td><p>TILE, ROW_MAJOR</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<div class="admonition-example admonition">
-<p class="admonition-title">Example</p>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Create a tensor with specific values</span>
-<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span>
-    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">]],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span>
-<span class="p">)</span>
-
-<span class="c1"># Apply sigmoid activation function with vector mode</span>
-<span class="n">output</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">vector_mode</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">SigmoidMode</span><span class="o">.</span><span class="n">FastApproximate</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Sigmoid: </span><span class="si">{</span><span class="n">output</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
 </dd>
 </dl>
 
@@ -523,8 +403,8 @@
            </div>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="ttnn.selu.html" class="btn btn-neutral float-left" title="ttnn.selu" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-        <a href="ttnn.sigmoid_accurate.html" class="btn btn-neutral float-right" title="ttnn.sigmoid_accurate" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+        <a href="ttnn.transformer.flash_multi_latent_attention_decode.html" class="btn btn-neutral float-left" title="ttnn.transformer.flash_multi_latent_attention_decode" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="ttnn.transformer.gated_delta_attn_seq.html" class="btn btn-neutral float-right" title="ttnn.transformer.gated_delta_attn_seq" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>
