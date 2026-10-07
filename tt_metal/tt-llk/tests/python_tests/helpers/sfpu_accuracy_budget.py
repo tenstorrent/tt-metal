@@ -44,7 +44,13 @@ import yaml
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat, InputOutputFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
-from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dtype
+from .ulp import (  # FLUSH_SUBNORMAL_OUTPUTS re-exported: the step gates read it here
+    FLUSH_SUBNORMAL_OUTPUTS,
+    MANTISSA_BITS_FOR_ULP,
+    MAX_MEANINGFUL_ULP,
+    has_ulp_gate,
+    ulp_dtype,
+)
 
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
@@ -497,17 +503,6 @@ def accuracy_contract(
         if contract.metric is not Metric.ULP
     }
     return resolve_contract(tolerance_rows, query, label=op.name)
-
-
-#: Subnormal *outputs* flushed when a step budget ranks a result, on every format, fp16
-#: included. The metric keeps fp16's subnormal band by default, but the golden keeps IEEE
-#: subnormals the pack path does not reproduce: a near-cancelling ``a - b`` lands there
-#: 140 steps from a correct kernel, and an exact unary op read 512 steps on
-#: Float16_b->Float16 from that band alone. One policy, named once: every step-budget gate
-#: hands it to ``passed_test_kwargs`` -- the binary and ternary gate
-#: (:func:`assert_against_contract`), the unary step-budget drivers, and the exhaustive
-#: unary sweep's emit and gate -- and their rows were measured that way.
-FLUSH_SUBNORMAL_OUTPUTS = True
 
 
 def assert_against_contract(

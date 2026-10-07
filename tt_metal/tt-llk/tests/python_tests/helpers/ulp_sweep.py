@@ -949,10 +949,21 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
 #: or are given one by :func:`_stamp_kept`.
 _MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
 
-#: For stripping a previous run's clause, so a re-emit replaces it instead of appending.
+#: A previous run's clause, built from :data:`_MEASURED_BY` so the wording lives in one
+#: place: stripped so a re-emit replaces it instead of appending, and its ``run`` group
+#: is the run it names.
 _MEASURED_BY_RE = re.compile(
-    r";?\s*measured by: .*?, except where a row says otherwise"
+    r";?\s*" + re.escape(_MEASURED_BY).replace(re.escape("{suffix}"), r"(?P<run>.*?)")
 )
+
+
+def _split_key_line(key_line: str) -> Tuple[str, str, str]:
+    """An op's key line as ``(head, header, run)``: the ``Op:`` part, its header comment
+    without the ``measured by:`` clause, and the run that clause names ("" if none)."""
+    head, _, comment = key_line.rstrip("\n").partition("#")
+    clause = _MEASURED_BY_RE.search(comment)
+    header = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    return head, header, clause.group("run") if clause else ""
 
 
 #: A run identity names its date; a row without one relied on its key line for it.
@@ -983,14 +994,7 @@ def _stamp_kept(kept: List[str], key_line: str) -> List[str]:
     sample's figures), since no run on the key line measured it and crediting one would
     be a guess, and an ``arch:`` row, which a run on this arch never measures.
     """
-    _, _, comment = key_line.rstrip("\n").partition("#")
-    clause = _MEASURED_BY_RE.search(comment)
-    outgoing = (
-        clause.group(0).split("measured by: ", 1)[1].rsplit(", except where", 1)[0]
-        if clause
-        else ""
-    )
-    header = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    _, header, outgoing = _split_key_line(key_line)
     stamped = []
     for row in kept:
         body, _, note = row.rstrip("\n").partition("#")
@@ -1017,9 +1021,8 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """
     from helpers.sfpu_accuracy_budget import usable_budget_ceiling
 
-    head, _, comment = key_line.rstrip("\n").partition("#")
+    head, existing, _ = _split_key_line(key_line)
     measured_by = _MEASURED_BY.format(suffix=suffix)
-    existing = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
     out = [f"{head.rstrip()}  # {existing + '; ' if existing else ''}{measured_by}\n"]
     for row in rows:
         metric, value = row["verdict"]

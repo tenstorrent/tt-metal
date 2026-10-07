@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 from collections import namedtuple
 from collections.abc import Sequence
@@ -24,6 +25,7 @@ from .tile_constants import (
 )
 from .tile_shape import construct_tile_shape
 from .ulp import (
+    FLUSH_SUBNORMAL_OUTPUTS,
     MANTISSA_BITS_FOR_ULP,
     has_ulp_gate,
     ulp_distance,
@@ -586,10 +588,15 @@ def prepare_ulp_measure_file() -> None:
 def _consume_ulp_query() -> None:
     """Drop ``accuracy_contract``'s pending query and ambiguity flag. Called once per
     :func:`passed_test`, on every path, after the recorder had its chance to read them.
-    """
-    from . import sfpu_accuracy_budget as budget
 
-    budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
+    Looked up rather than imported: importing the registry loads and validates the whole
+    budget table, and every ``passed_test`` caller -- matmul, pack and Quasar suites run
+    on their own included -- would then fail on a bad row after its verdict. A registry
+    nobody imported published no query, so there is nothing to drop.
+    """
+    budget = sys.modules.get(f"{__package__}.sfpu_accuracy_budget")
+    if budget is not None:
+        budget.LAST_QUERY, budget.PENDING_AMBIGUOUS = None, False
 
 
 def _record_ulp_measurement(distance, *, mask) -> None:
@@ -770,8 +777,15 @@ def passed_test(
     budget charges for block quantization the format is entitled to. See
     ``_ULP_PROXY_DTYPES`` in :mod:`helpers.ulp`.
 
-    ``max_ulp=None`` gives the previous verdict bit for bit; under ``--ulp-report`` it
-    also measures and logs the comparison's ULP at INFO, without reading it back.
+    ``max_ulp=None`` gives the previous verdict bit for bit. Under ``--ulp-report`` it
+    also measures and logs the comparison's ULP at INFO, and under ``--ulp-measure`` files
+    it, without reading either back. That reading ranks subnormal outputs flushed
+    (``FLUSH_SUBNORMAL_OUTPUTS``), as every step-budget gate does, not under the
+    per-dtype default *flush_subnormals* describes, so a Float16 ``--ulp-report`` figure
+    is the flushed one.
+
+    Every call, on every path, spends the variant ``accuracy_contract`` last resolved
+    (its ``LAST_QUERY``/``PENDING_AMBIGUOUS``), so a later comparison cannot inherit it.
     """
 
     if tile_shape is None:
@@ -1055,27 +1069,34 @@ def passed_test(
             logger.warning(
                 "{} skipped — golden {} and result {} differ in shape; the verdict "
                 "above compared them broadcast",
-                "ULP report" if _ULP_REPORT else "--ulp-measure",
+                " and ".join(
+                    name
+                    for name, on in (
+                        ("ULP report", _ULP_REPORT),
+                        ("--ulp-measure", _ULP_MEASURE_PATH),
+                    )
+                    if on
+                ),
                 tuple(golden_tensor.shape),
                 tuple(res_tensor.shape),
             )
         else:
-            # Ranked with fp16 subnormals flushed, as every step-budget gate ranks them
-            # (`assert_against_contract`, the exhaustive sweep): one --ulp-measure file
-            # then holds one kind of fp16 reading, and a tolerance cell's figure is the
-            # one its gate would see if enrolled. A no-op for bf16 and fp32, which flush
-            # by default.
-            unenrolled = ulp_distance(golden_tensor, res_tensor, flush_subnormals=True)
-            _record_ulp_measurement(unenrolled, mask=None)
+            # Ranked under the step-budget gates' flush policy (`assert_against_contract`,
+            # the exhaustive sweep): one --ulp-measure file then holds one kind of fp16
+            # reading, and a tolerance cell's figure is the one its gate would see if
+            # enrolled. A no-op for bf16 and fp32, which flush by default.
+            flush = FLUSH_SUBNORMAL_OUTPUTS
+            distances = ulp_distance(golden_tensor, res_tensor, flush_subnormals=flush)
+            _record_ulp_measurement(distances, mask=None)
             if _ULP_REPORT:
                 logger.info(
                     "ULP report — {}",
                     ulp_verdict_message(
                         golden_tensor,
                         res_tensor,
-                        unenrolled,
+                        distances,
                         output_data_format,
-                        flush_subnormals=True,
+                        flush_subnormals=flush,
                     ),
                 )
 

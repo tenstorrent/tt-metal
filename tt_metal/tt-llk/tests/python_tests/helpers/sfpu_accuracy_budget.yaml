@@ -125,8 +125,8 @@ Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
-  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21; on no Dest, since dest_acc=No runs promoted to this one
+  - {in: Bfp4_b, out: Float16, approx: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21; on no Dest, since dest_acc=No runs promoted to this one
   - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -156,6 +156,45 @@ Abs:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
 
+
+# ── Exact and predicate unary ops ───────────────────────────────────────────
+#
+# Fill, Threshold, the Is* predicates, LogicalNot, Signbit, UnaryEq/UnaryNe,
+# ReluMax/ReluMin, Frac, Sign and Heaviside, each in its alphabetical place below.
+#
+# Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
+# These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
+# constant fill, a clamp, or a subtraction the hardware does in one step -- so the budget
+# is 0 and any drift at all is a regression. The exception is a 16-bit output from a
+# wider input, where a selection or clamp that passes x through can measure 1 step: the
+# op is still exact, and the step is the output rounding on the way out of Dest, as the
+# rows there record. A sampled row carries that 1; a row the sweep emitted carries 2, the
+# measured step plus the emitter's 1.1x headroom rounded up to a whole step.
+#
+# Every row names an output format that was actually measured. Nothing is enrolled on
+# Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
+# which costs thousands of steps for reasons that have nothing to do with the kernel
+# (ReluMax reports 15488 there on the stimuli where ReluMin reports 3). An unlisted
+# format falls through to the tolerance metric, which is what Bfp8_b and Bfp4_b want.
+
+# ── Binary and ternary SFPU, and the remaining unary approximations ─────────
+#
+# GeluTanh, Tanhshrink, SqrtCustom and the Sfpu* ops other than SfpuElwpow and
+# SfpuXlogy (which have their own note), each in its alphabetical place below.
+#
+# Measured on Wormhole 2026-09-18 with --ulp-report over each driver's own sweep.
+# For these sampled rows, budget = 1.25x the sweep's p99.9, rounded up and floored at 1
+# -- not 1.25x the worst lane, which would widen every row by the one unluckiest sample.
+# (Exhaustive --ulp-emit rows elsewhere are ceil(1.1x the worst lane), with a measured 0
+# kept at 0.) The p99.9 came from that run and is not recorded per row. The `max` each row records is the worst lane, so a budget sitting at or a little
+# under 1.25x that number is the rule working, not a row that lost its margin. A budget is
+# only written where it is *tighter* than the tolerance it replaces: the usable ceiling
+# is 419430 steps on Float32, 51 on Float16 and 6 on Float16_b, and an op past it is
+# recorded as tolerance with its measurement so nobody re-derives it.
+#
+# Bfp8_b is never enrolled here. Its shared block exponent quantises a small element in
+# a wide block to zero, which costs ~15k steps on ops that cannot be wrong; that is the
+# block, not the kernel. Unlisted formats fall through to the tolerance metric.
 
 # ── Derived from the accuracy sweep ───────────────────────────────────────
 #
@@ -436,7 +475,7 @@ Celu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
@@ -544,7 +583,7 @@ Elu:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
@@ -680,23 +719,6 @@ Exp2:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 72090}  # max 65536 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
-
-# ── Exact and predicate unary ops ───────────────────────────────────────────
-#
-# Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
-# These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
-# constant fill, a clamp, or a subtraction the hardware does in one step -- so the budget
-# is 0 and any drift at all is a regression. The exception is a 16-bit output from a
-# wider input, where a selection or clamp that passes x through can measure 1 step: the
-# op is still exact, and the step is the output rounding on the way out of Dest, as the
-# rows there record. A sampled row carries that 1; a row the sweep emitted carries 2, the
-# measured step plus the emitter's 1.1x headroom rounded up to a whole step.
-#
-# Every row names an output format that was actually measured. Nothing is enrolled on
-# Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
-# which costs thousands of steps for reasons that have nothing to do with the kernel
-# (ReluMax reports 15488 there on the stimuli where ReluMin reports 3). An unlisted
-# format falls through to the tolerance metric, which is what Bfp8_b and Bfp4_b want.
 
 Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized, so tolerance
@@ -834,9 +856,9 @@ Frac:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-
   - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -903,26 +925,13 @@ GeluAppx:
   - &coarse_lut_tolerance {metric: tolerance, atol: 0.13, rtol: 0.05}
 
 
-# ── Binary and ternary SFPU, and the remaining unary approximations ─────────
-#
-# Measured on Wormhole 2026-09-18 with --ulp-report over each driver's own sweep.
-# For these sampled rows, budget = 1.25x the sweep's p99.9, rounded up and floored at 1
-# -- not 1.25x the worst lane, which would widen every row by the one unluckiest sample.
-# (Exhaustive --ulp-emit rows elsewhere are ceil(1.1x the worst lane), with a measured 0
-# kept at 0.) The p99.9 came from that run and is not recorded per row. The `max` each row records is the worst lane, so a budget sitting at or a little
-# under 1.25x that number is the rule working, not a row that lost its margin. A budget is
-# only written where it is *tighter* than the tolerance it replaces: the usable ceiling
-# is 419430 steps on Float32, 51 on Float16 and 6 on Float16_b, and an op past it is
-# recorded as tolerance with its measurement so nobody re-derives it.
-#
-# Bfp8_b is never enrolled here. Its shared block exponent quantises a small element in
-# a wide block to zero, which costs ~15k steps on ops that cannot be wrong; that is the
-# block, not the kernel. Unlisted formats fall through to the tolerance metric.
-
 # -- Unary approximations mostly on tolerance --------------------------------
-# GeluTanh and Tanhshrink are past the ceiling on every Float16_b and Float32 column, by
-# three orders of magnitude on Float32, where the tolerance is the tighter bound. Only
-# their exhaustive Float16-output cells measure inside it, and those rows gate.
+# GeluTanh and Tanhshrink measure past the ceiling on most Float16_b and Float32 cells,
+# by three orders of magnitude on Float32, so the op-wide tolerance row (2026-09-18)
+# answers every cell no row pins. Two kinds of row measure inside it and carry a budget:
+# the exhaustive Float16-output cells, which gate, and the sampled 2026-09-21 rows -- the
+# Bfp4_b inputs, Float32 -> Float16, and Float32 outputs from narrower inputs (and, for
+# Tanhshrink, Float32 -> Float16_b and Float32 -> Float32), which no gate reads yet.
 GeluTanh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 13219 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 13219 ULP, block-quantized, so tolerance
@@ -1149,8 +1158,8 @@ Log:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
   - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 36018}  # max 32743 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 8}  # max 7 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 8}  # max 7 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 72090}  # max 65536 ULP, wormhole, 2026-09-21
@@ -1244,8 +1253,8 @@ Neg:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
   - {in: Bfp4_b, out: Bfp8_b, approx: "No", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Bfp4_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 0 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
-  - {in: Bfp4_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Bfp4_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
+  - {in: Bfp4_b, out: Float16, approx: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21; on no Dest, since dest_acc=No runs promoted to this one
+  - {in: Bfp4_b, out: Float16, approx: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21; on no Dest, since dest_acc=No runs promoted to this one
   - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp4_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Bfp4_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1305,7 +1314,7 @@ Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole,
   - {in: Float16_b, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Float16_b, out: Float16, approx: "No", dest: "Yes", max_ulp: 5}  # max 4 ULP
   - {in: Float16_b, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 6}  # max 5 ULP
-  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float16_b, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {in: Float16_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float16_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP
@@ -1346,8 +1355,8 @@ Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole,
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
 
 
-# Relu/Frac follow the Abs/Neg shape: exact on Float32, one step of output rounding on
-# the 16-bit formats.
+# ReluMax/ReluMin follow the Abs/Neg shape: exact on Float32, one step of output
+# rounding on the 16-bit formats.
 ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Float16, max_ulp: 0}  # max 0 ULP
@@ -1384,13 +1393,13 @@ ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 20
   - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -1442,9 +1451,9 @@ ReluMin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 20
   - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "No", metric: tolerance}  # max 2 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Float32, out: Bfp8_b, approx: "Yes", dest: "Yes", metric: tolerance}  # max 3 ULP, wormhole, 2026-09-21; block-quantized, so tolerance
   - {in: Float32, out: Float16, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 0}  # max 0 ULP, wormhole, 2026-09-21
@@ -2128,9 +2137,9 @@ Sin:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-1
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 5}  # max 4 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
 
 
 Sqrt:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-10-05, except where a row says otherwise
@@ -2231,8 +2240,8 @@ SqrtCustom:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole,
 # differently; 32768 at dest_acc=Yes has no such explanation, the product agreeing to
 # only ~8 mantissa bits. Attributing either is its own change, so it is recorded, not
 # blessed: every Float32-output row that carries those figures is tolerance. The one
-# cell gated is Float32 -> Float32 at dest_acc=Yes, which measured 0 on the 2026-09-21
-# sample -- a 32-bit input at a 32-bit Dest agrees, so the 32768 is the 16-bit input's.
+# Float32-output cell that carries a step budget is Float32 -> Float32 at dest_acc=Yes
+# (approx No and Yes), which measured 0 on the 2026-09-21 sample -- a 32-bit input at a 32-bit Dest agrees, so the 32768 is the 16-bit input's.
 Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp8_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 32505 ULP, block-quantized, so tolerance
   - {in: Bfp8_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 32505 ULP, block-quantized, so tolerance
@@ -2280,9 +2289,9 @@ Square:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 202
   - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
   - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
-  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
-  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP, wormhole, 2026-09-21
+  - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 1}  # max 1 ULP, wormhole, 2026-09-21; budget kept at the 1 the cell carried before
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)
   - {in: Float32, out: Float32, approx: "No", dest: "No", metric: tolerance}  # max 65536 ULP, wormhole, 2026-09-21; recorded, not blessed (see the note above)
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 1}  # max 0 ULP, wormhole, 2026-09-21, floored to 1 (a finite sample cannot assert exactness)

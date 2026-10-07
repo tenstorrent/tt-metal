@@ -60,7 +60,7 @@ from helpers.ulp import (
     has_ulp_gate,
     ulp_dtype,
 )
-from helpers.ulp_sweep import _DATED, _row_fields
+from helpers.ulp_sweep import _DATED, _EMITTED_NOTE, _row_fields, _split_key_line
 from helpers.utils import passed_test
 
 UNSWEPT_ARCHS = [a for a in ChipArchitecture if a != MEASURED_ARCH]
@@ -600,12 +600,7 @@ def test_the_measure_recorder_files_one_row_under_the_variant_just_resolved(
     consumes it: a second comparison in the same test that never went through the
     registry must not inherit the variant, and the row names the variant asked for
     rather than the tensors' format."""
-    import json
-
-    import helpers.utils as utils
-
-    path = tmp_path / "measure.jsonl"
-    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(path))
+    read = _measure_rows(tmp_path, monkeypatch)
     golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
 
     accuracy_contract(
@@ -618,7 +613,7 @@ def test_the_measure_recorder_files_one_row_under_the_variant_just_resolved(
     assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
     assert passed_test(golden, golden.clone(), DataFormat.Float16_b)  # no lookup
 
-    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows = read()
     assert len(rows) == 1, rows
     assert rows[0]["op"] == "Abs" and rows[0]["in"] == "Float16"
     assert rows[0]["out"] == "Float16_b" and rows[0]["dest"] == "Yes"
@@ -653,7 +648,7 @@ def test_the_measure_recorder_ranks_the_lanes_the_verdict_ranks(tmp_path, monkey
     golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
     golden[0] = 1e-6
     result = golden.clone()
-    result[0] = 3e-6  # thousands of steps away, but 2e-6 in absolute terms
+    result[0] = 3e-6  # about 200 steps away, but 2e-6 in absolute terms
     result[1] = 1.5078125  # one real bf16 step above 1.5
 
     accuracy_contract(MathOperation.Abs, output_format=fmt, arch=MEASURED_ARCH)
@@ -724,11 +719,39 @@ def test_every_comparison_spends_the_query_it_was_resolved_for(tmp_path, monkeyp
         assert (budget.LAST_QUERY, budget.PENDING_AMBIGUOUS) == (None, False), fmt
 
 
+def test_a_comparison_does_not_load_the_budget_table():
+    """``passed_test`` spends the registry's pending query on every call, but must not
+    import the registry to do it: every caller -- matmul, pack and Quasar suites run on
+    their own -- would then load and validate the whole table, and a bad row would error
+    each comparison after its verdict. In a fresh interpreter, since this one has it."""
+    import subprocess
+    import sys
+
+    code = textwrap.dedent(
+        """
+        import sys, torch
+        from helpers.format_config import DataFormat
+        from helpers.utils import passed_test
+        golden = torch.ones(32, dtype=torch.bfloat16)
+        assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
+        print("helpers.sfpu_accuracy_budget" in sys.modules)
+        """
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=_TABLE_PATH.parent.parent,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert done.stdout.strip().splitlines()[-1] == "False", done.stdout
+
+
 def test_a_tolerance_reading_ranks_fp16_subnormals_flushed(tmp_path, monkeypatch):
     """Every step-budget gate on Float16 ranks the subnormal band flushed, so a reading
     from a tolerance cell must too, or one file mixes the two and a folded-back figure
-    is looser than its gate: a golden 6e-08 against a flushed 0 is dozens of steps
-    unflushed and none flushed."""
+    is looser than its gate: a golden 6e-08 (the smallest fp16 subnormal) against a
+    flushed 0 is one step unflushed and none flushed."""
     rows = _measure_rows(tmp_path, monkeypatch)
     golden = torch.full((32,), 1.5, dtype=torch.float16)
     golden[0] = 6e-08
@@ -759,6 +782,13 @@ def test_an_unpreparable_measure_path_warns_and_records_nothing(tmp_path, monkey
     target.write_text("stale\n", encoding="utf-8")
     utils.prepare_ulp_measure_file()
     assert target.read_text() == ""  # truncated, so runs do not fold together
+
+    # `--ulp-measure out/dir/x.jsonl` with no `out/dir` yet: the parent is created, not
+    # warned about.
+    fresh = tmp_path / "out" / "dir" / "measure.jsonl"
+    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(fresh))
+    utils.prepare_ulp_measure_file()
+    assert utils._ULP_MEASURE_PATH == str(fresh) and fresh.read_text() == ""
 
 
 def test_a_measure_recorder_write_failure_does_not_fail_the_comparison(
@@ -1495,32 +1525,39 @@ _MEASUREMENT = re.compile(r"(?:max )?(\d+) ULP")
 #: What marks a row's comment as the exhaustive sweep's: ``write_table``'s suffix.
 _EXHAUSTIVE = "exhaustive"
 
-# A run label names the day it ran: ``_DATED``, imported from the emitter, which decides
-# by the same test whether a row names its own run. The emitter writes the label once
-# per op on the key line and leaves each row with its number alone, so a row speaks for
-# its own run only when it carries a date; the number says what was measured, not
-# which run measured it.
+
+def _run_of(note, key_run):
+    """The run a row's measurement came from, read as the emitter writes it.
+
+    A dated note names its own run (``_DATED``, the emitter's own test). An undated one
+    is credited to the ``measured by:`` run on the key line only when it is a note the
+    emitter writes (``_EMITTED_NOTE``), the rule ``_stamp_kept`` applies before a
+    re-emit replaces that clause. Any other undated note, or none, names no run: a
+    hand-written ``max 0 ULP over 2048 pts`` under an exhaustive key line is a sample,
+    and is held to the sampled rules."""
+    note = note.strip()
+    if _DATED.search(note):
+        return note
+    return key_run if _EMITTED_NOTE.fullmatch(note) else ""
 
 
 def _measured_budget_rows(path=_TABLE_PATH):
     """``(op_name, row_text, max_ulp, measured_or_None, exhaustive)`` for every
-    ``max_ulp`` row. *exhaustive* is whether the run that measured it is the sweep:
-    the row's own, when its comment is dated, and the op's key line otherwise.
+    ``max_ulp`` row. *exhaustive* is whether :func:`_run_of` the row is the sweep.
 
     Deciding that by "the row has a number" instead read every emitted row -- which has
     a number and no label -- as a sampled one, and the exhaustive audit below then
-    covered 10 of the table's 1,614 budgets. Acosh's ``max_ulp: 7  # max 6 ULP`` raised
-    to 12 with its comment untouched passed."""
-    rows, op, op_measured, op_exhaustive = [], None, None, False
+    covered only the handful of rows that carry their own exhaustive label. Acosh's
+    ``max_ulp: 7  # max 6 ULP`` raised to 12 with its comment untouched passed."""
+    rows, op, op_measured, op_run = [], None, None, ""
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if not line.startswith(" "):  # `OpName:`, optionally with a header comment
-            head, _, comment = line.partition("#")
+            head, header, op_run = _split_key_line(line)
             op = head.split(":")[0].strip()
-            found = _MEASUREMENT.search(comment)
+            found = _MEASUREMENT.search(header)
             op_measured = int(found.group(1)) if found else None
-            op_exhaustive = _EXHAUSTIVE in comment
             continue
         body, _, comment = line.strip().partition("#")
         declared = re.search(r"max_ulp:\s*(\d+)", body)
@@ -1528,7 +1565,7 @@ def _measured_budget_rows(path=_TABLE_PATH):
             continue  # a tolerance row has no step budget to back
         found = _MEASUREMENT.search(comment)
         measured = int(found.group(1)) if found else op_measured
-        exhaustive = _EXHAUSTIVE in comment if _DATED.search(comment) else op_exhaustive
+        exhaustive = _EXHAUSTIVE in _run_of(comment, op_run)
         rows.append((op, body.strip(), int(declared.group(1)), measured, exhaustive))
     return rows
 
@@ -1555,53 +1592,66 @@ def test_every_step_budget_names_the_measurement_it_came_from():
     )
 
 
-#: Exact by construction without being canaries: a selection or clamp returns one of
-#: its operands, and x - trunc(x) is exact, so a sampled 0 on these states what the op
-#: guarantees rather than what the sample happened to miss -- where the output can hold
-#: that operand (:func:`_narrows_on_a_32_bit_dest`).
+#: Exact by construction without being canaries: a clamp returns one of its operands,
+#: and x - trunc(x) is exact, so a sampled 0 on these states what the op guarantees
+#: rather than what the sample happened to miss -- where the output can hold that
+#: operand (:func:`_rounds_at_pack`). SfpuBinaryMax/Min are selections too, and already
+#: canaries in ``EXACT_ZERO_BY_CONSTRUCTION``.
 EXACT_SELECTIONS = (
     MathOperation.ReluMax,
     MathOperation.ReluMin,
     MathOperation.Frac,
-    MathOperation.SfpuBinaryMax,
-    MathOperation.SfpuBinaryMin,
 )
 
 
 def _sampled_zero_budgets(path=_TABLE_PATH):
     """``(op_name, row_text)`` for every ``max_ulp: 0`` row whose measurement was a
-    sample: it names its own dated run, and that run is not the exhaustive sweep. A row
-    naming no run of its own was emitted by the run on its key line."""
+    sample: :func:`_run_of` it is not the exhaustive sweep."""
     found, op, key_run = [], None, ""
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         if not line.startswith(" "):
-            op, _, key_run = line.partition(":")[0].strip(), None, line
+            head, _, key_run = _split_key_line(line)
+            op = head.split(":")[0].strip()
             continue
         body, _, note = line.strip().partition("#")
         if not re.search(r"max_ulp:\s*0\b", body):
             continue
-        run = note if _DATED.search(note) else key_run
-        if _EXHAUSTIVE not in run:
+        if _EXHAUSTIVE not in _run_of(note, key_run):
             found.append((op, body.strip()))
     return found
 
 
-def _narrows_on_a_32_bit_dest(body) -> bool:
-    """Whether *body* pins a cell whose output holds fewer mantissa bits than its input,
-    on a 32-bit Dest (``dest: "Yes"`` or unpinned): there the operand an exact op
-    returns -- a selected fp32 value, an fp32 integer -- is rounded at pack, as Abs,
-    Neg and Identity's 1-step Float32 -> Float16_b cells record. On a 16-bit Dest the
-    unpack has narrowed it already. A row that leaves `in` or `out` unpinned is an
-    op-wide canary; the narrowing cells it would cover are pinned by rows of their own.
+def _rounds_at_pack(body) -> bool:
+    """Whether *body* pins a cell whose output holds fewer mantissa bits than its input
+    still has in Dest: there the operand an exact op returns -- a selected value, an
+    integer -- is rounded at pack, as Abs, Neg and Identity's 1-step Float32 -> Float16_b
+    cells record. Dest keeps the input's precision except where a 32-bit input meets a
+    16-bit Dest (``dest: "No"``), which the unpack has narrowed already. A 16-bit input
+    keeps it in a 16-bit Dest too: Float16 -> Float16_b at ``dest: "No"`` reads 1 step on
+    Abs and ReluMin. A row that leaves `in` or `out` unpinned is an op-wide canary; the
+    narrowing cells it would cover are pinned by rows of their own.
     """
     fields = _row_fields(body)
-    if "in" not in fields or "out" not in fields or fields.get("dest") == "No":
+    if "in" not in fields or "out" not in fields:
         return False
-    return _mantissa_bits(DataFormat[fields["out"]]) < _mantissa_bits(
-        DataFormat[fields["in"]]
-    )
+    in_fmt = DataFormat[fields["in"]]
+    if fields.get("dest") == "No" and in_fmt.is_32_bit():
+        return False
+    return _mantissa_bits(DataFormat[fields["out"]]) < _mantissa_bits(in_fmt)
+
+
+def test_only_a_32_bit_input_is_narrowed_before_a_16_bit_dest():
+    """A Float16 operand stays fp16 in a 16-bit Dest and is rounded to bf16 at pack, so
+    a sampled 0 there cannot be an exact op's guarantee; a Float32 one was narrowed by
+    the unpack, leaving the pack nothing to round."""
+    row = "- {{in: {}, out: Float16_b, dest: {}, max_ulp: 0}}"
+    assert _rounds_at_pack(row.format("Float16", '"No"'))
+    assert _rounds_at_pack(row.format("Float32", '"Yes"'))
+    assert _rounds_at_pack(row.format("Float32", "Any").replace(", dest: Any", ""))
+    assert not _rounds_at_pack(row.format("Float32", '"No"'))
+    assert not _rounds_at_pack(row.format("Float16_b", '"No"'))
 
 
 def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
@@ -1622,7 +1672,7 @@ def test_a_sampled_zero_on_an_inexact_op_is_floored_to_one():
         f"{op}: {body}"
         for op, body in _sampled_zero_budgets()
         if MathOperation[op] not in EXACT_IN_EVERY_FORMAT
-        and (MathOperation[op] not in exact or _narrows_on_a_32_bit_dest(body))
+        and (MathOperation[op] not in exact or _rounds_at_pack(body))
     ]
     assert not unfloored, "\n".join(unfloored)
 
@@ -1715,6 +1765,26 @@ def test_an_emitted_row_is_held_to_the_run_on_its_key_line(tmp_path):
     problems = _budgets_past_their_measurement(path)
     assert len(problems) == 1 and "the emitter writes 7" in problems[0], problems
     assert _measured_budget_rows(path)[0][4] is True, "the emitted row read as sampled"
+
+
+def test_only_a_note_the_emitter_writes_is_credited_to_the_key_lines_run(tmp_path):
+    """The other half of that rule, and the one ``_stamp_kept`` applies before a re-emit
+    replaces the clause: an undated *hand-written* note under an exhaustive key line was
+    not measured by that run. Credited to it, a sampled bit-exact gate would read as
+    exhaustive, escape the sampled-zero floor, and pass the exact-budget audit 0 for 0.
+    """
+    path = tmp_path / "budget.yaml"
+    path.write_text(
+        "Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, "
+        "2026-09-30, except where a row says otherwise\n"
+        '  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP over 2048 pts\n'
+        '  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP\n',
+        encoding="utf-8",
+    )
+    assert [row[4] for row in _measured_budget_rows(path)] == [False, True]
+    assert _sampled_zero_budgets(path) == [
+        ("Acosh", '- {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}')
+    ]
 
 
 # ── A gated cell is not quietly parked ────────────────────────────────────────
