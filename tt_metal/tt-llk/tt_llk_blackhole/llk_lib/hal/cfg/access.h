@@ -10,7 +10,7 @@
 
 #include "../utils/gpr.h"
 #include "access_types.h"
-#include "ckernel.h" // RDCFG, SETC16
+#include "ckernel_ops.h"
 #include "detail/mmio_read.h"
 #include "detail/state_bank.h"
 #include "detail/word_anchor.h"
@@ -210,6 +210,27 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
             detail::rmw_write_word<cfg_word_addr, F.shamt(S), F.mask(S)>(value);
         }
     }
+}
+
+/**
+ * @brief Write a complete prepacked thread-CFG word using immediate SETC16.
+ *
+ * Both section and value must become compile-time constants through inlining.
+ * The field anchors the register word. Its width does not limit the prepacked value.
+ *
+ * @tparam A: Access path; must be Access::TensixCfgUnit.
+ * @tparam F: Thread-CFG field anchoring the word at bit zero.
+ * @param section: Section index; must be smaller than F.count.
+ * @param value: Complete 16-bit register word, already packed into its bit positions.
+ */
+template <Access A, const Field& F>
+inline __attribute__((always_inline)) void write(const std::uint32_t section, const std::uint32_t value)
+{
+    static_assert(A == Access::TensixCfgUnit, "constant-propagated thread CFG writes require Access::TensixCfgUnit");
+    static_assert(F.scope == RegisterScope::Thread, "SETC16 targets thread CFG only");
+    static_assert(F.shamt(Sec::S0) == 0, "prepacked thread CFG anchor must begin at bit zero");
+
+    detail::write_thread_word<F>(section, value);
 }
 
 /**

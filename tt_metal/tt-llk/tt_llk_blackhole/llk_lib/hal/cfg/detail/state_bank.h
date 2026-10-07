@@ -6,8 +6,15 @@
 
 #include <cstdint>
 
-#include "ckernel.h" // ckernel::cfg_state_id, TENSIX_CFG_BASE
+#include "internal/risc_attribs.h"
 #include "register_layout.h"
+#include "tensix.h"
+
+namespace ckernel
+{
+// Share the legacy state tracker until its callers migrate to HAL.
+extern std::uint32_t cfg_state_id;
+} // namespace ckernel
 
 namespace hal::cfg::detail
 {
