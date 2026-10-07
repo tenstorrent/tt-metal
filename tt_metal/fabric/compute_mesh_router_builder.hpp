@@ -15,6 +15,7 @@
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/connection_registry.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
 
 namespace tt::tt_fabric {
 
@@ -190,6 +191,8 @@ private:
     bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
     bool is_inter_mesh_;  // True if this router connects different meshes
+    // What create_kernel passed to CreateKernel, for the manifest.
+    RouterKernelInputs kernel_inputs_;
 };
 
 }  // namespace tt::tt_fabric
