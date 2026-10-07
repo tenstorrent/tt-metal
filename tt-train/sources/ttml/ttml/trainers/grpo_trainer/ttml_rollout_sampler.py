@@ -106,7 +106,6 @@ class TTMLRolloutSampler(RolloutSampler):
         self._kv_cache: Any = None
         self._kv_cache_B: int = 0
 
-        self._batch_id_counter: int = 0
         self._weight_version: int = 0
 
     # --------------------------------------------------------------
@@ -193,11 +192,6 @@ class TTMLRolloutSampler(RolloutSampler):
         their :class:`RolloutBatch` with this value.
         """
         self._weight_version = int(version)
-
-    def _next_batch_id(self) -> int:
-        current = self._batch_id_counter
-        self._batch_id_counter += 1
-        return current
 
     # --------------------------------------------------------------
     # Per-model dispatch: KV cache + forward call signature
@@ -371,7 +365,6 @@ class TTMLRolloutSampler(RolloutSampler):
         # completions with the padded logprob buffer.
         if tokens_to_complete <= 0:
             return RolloutBatch(
-                batch_id=self._next_batch_id(),
                 weight_version=self._weight_version,
                 prompts=prompts_x,
                 completions=[[] for _ in range(B)],
@@ -589,7 +582,6 @@ class TTMLRolloutSampler(RolloutSampler):
                 logprobs_padded[b, :fit] = -trimmed_nlogs[:fit]
 
         return RolloutBatch(
-            batch_id=self._next_batch_id(),
             weight_version=self._weight_version,
             prompts=prompts_x,
             completions=completions,
