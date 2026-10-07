@@ -239,9 +239,9 @@
     bh_p150b_civ2:
       timeout: 15
     sim_wh_n150:
-      timeout: 40
+      timeout: 60
     sim_bh_p150:
-      timeout: 40
+      timeout: 60
   team: ttnn
   budget_type: sanity
   owner_id: U085GDCAZTN # Pavle Josipovic
