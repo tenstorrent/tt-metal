@@ -812,7 +812,11 @@ EOF
     if [[ "$(jq -r '.inputs == null' <<<"$p")" == "true" ]]; then disp_out=$(jq -c --argjson p "$p" '. + [$p]' <<<"$disp_out"); continue; fi
     mapfile -t fargs < <(jq -r '.inputs | to_entries[] | "-f", "\(.key)=\(.value)"' <<<"$p")
     t0=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    gh workflow run "$wf" -R "$REPO" --ref "$branch" "${fargs[@]}"
+    if ! gh workflow run "$wf" -R "$REPO" --ref "$branch" "${fargs[@]}" 2>>"$AGENT_ERR"; then
+      log "  WARN: dispatch of $wf rejected (inputs?) — PR will say to run it by hand"
+      disp_out=$(jq -c --argjson p "$p" '. + [$p + {inputs: null, job: (($p.job // "") + " (dispatch rejected, run by hand)")}]' <<<"$disp_out")
+      continue
+    fi
     rid=""
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
       sleep 10
