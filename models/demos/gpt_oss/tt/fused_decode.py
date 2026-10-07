@@ -1,31 +1,35 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Layouts and fused collectives shared by the fused decode layer (one token per user, TP across mesh columns).
+"""Layouts, decode policy and fused collectives of the fused decode layer (one token per user, TP across mesh columns).
 
-Decode keeps the residual stream in L1, width-sharded over RESIDUAL_CORES cores ([32, hidden / cores] shards), so
-that the two decoder collectives are single fused all-reduces (ttnn.experimental.all_reduce_async) and the two
-RMSNorms run on the same shards (sharded multi-core rms_norm) with no reshard in between.
+Decode keeps the residual stream in L1, width-sharded over RESIDUAL_CORES cores ([32, hidden / cores] shards): the two
+RMSNorms run on those shards (sharded multi-core rms_norm) and the two all-reduces return into them. The projections
+are the DRAM-streaming ops of experts/stream.py, which read the norm output row straight from these shards and write
+their results straight into the next op's layout (Q/K/V heads, the all-reduce input, the routed ids / scores).
 """
-
-import torch
 
 import ttnn
 
-# Largest core grid the fused decode uses (down projection 10x9, router/norm/all-reduce grids fit inside it).
+# Smallest compute grid the fused decode layout was validated on (residual / all-reduce 10x3, SDPA 8x8, the stream ops'
+# cores next to the 8 DRAM banks of the 11x10 Blackhole grid).
 FUSED_DECODE_MIN_GRID = (10, 9)
+# The streamed weight layouts split their columns over exactly this many DRAM banks (P150 Blackhole; a 7-bank part
+# keeps the original decode path).
+FUSED_DECODE_DRAM_BANKS = 8
 
 
 def fused_decode_layout_supported(
-    is_blackhole, mesh_shape, tp, ep, num_experts, use_throughput_experts, tokens, grid=(11, 10)
+    is_blackhole, mesh_shape, tp, ep, num_experts, use_throughput_experts, tokens, grid=(11, 10), dram_banks=8
 ):
     """Host-only form of fused_decode_supported (no device): the validated envelope of the fused decode layer
-    (grid: the device compute-with-storage grid, x by y).
+    (grid: the device compute-with-storage grid, x by y; dram_banks: the device's DRAM bank count).
 
     The fused layer serves one token per device with TP over a single mesh row and no expert parallelism. Its
-    core grids (residual / all-reduce 30 cores, QKV 40, o_proj 30, packed gate|up 48, down 90) are sized for the
-    gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only expert copies (+3.2 GB per device
-    for 32 experts) were budgeted for that model. Every other layout keeps the original decode path."""
+    layouts (residual / all-reduce 30 cores, Q/K/V head buffers, the streamed weights' per-DRAM-bank column split
+    and worker cores) are sized for the gpt-oss-20b shapes on the 11x10 Blackhole grid at TP=4, and its decode-only
+    streamed weight copies (about +3.2 GB of DRAM per device) were budgeted for that model. Every other layout keeps
+    the original decode path."""
     return (
         is_blackhole
         and tuple(mesh_shape) == (1, 4)
@@ -36,6 +40,7 @@ def fused_decode_layout_supported(
         and tokens == 1
         and grid[0] >= FUSED_DECODE_MIN_GRID[0]
         and grid[1] >= FUSED_DECODE_MIN_GRID[1]
+        and dram_banks == FUSED_DECODE_DRAM_BANKS
     )
 
 
@@ -53,13 +58,45 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
         use_throughput_experts,
         tokens_per_device,
         (grid.x, grid.y),
+        mesh_device.dram_grid_size().x,
     )
 
 
-# 2880 = 90 tiles: 30 cores x 3 tiles. The fused all-reduce over 30 cores measured 8.4 us (BF8 in, BF16 out,
-# 2 links) against 41 us for ttnn.all_reduce on the 1x4 Blackhole ring (probes/bench_allreduce.py).
+# Decode precision policy (decode-only weight copies; prefill keeps its own weights). The streamed matmuls run
+# custom_mm at LoFi with FP32 accumulation. Real-weight accuracy gate evidence (work_log.md): BFP4 QKV fails the gate,
+# BFP4 o_proj passes it but costs 7 points of top-1; BFP8 / BF16 router weights rank alike; experts are BFP4.
+QKV_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+OPROJ_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+ROUTER_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+
+# Streamed-op worker cores per DRAM bank (perf gate sweeps, work_log.md): dense projections are bank-bandwidth bound
+# at 1; the routed gate|up (3 column pairs per bank) and down (12 columns per bank) gain from 3 and 2.
+QKV_STREAM_READERS = 1
+OPROJ_STREAM_READERS = 1
+GATE_UP_STREAM_READERS = 3
+DOWN_STREAM_READERS = 2
+
+# Paged decode SDPA K chunk per layer type (probes/bench_sdpa.py, 8x8 grid): the 128-token sliding window is fastest
+# at 128; full attention at 256 (11.8 vs 13.0 us at 200 tokens, 109 vs 155 us at 64k; 512 only wins past ~8k).
+SDPA_DECODE_K_CHUNK_SLIDING = 128
+SDPA_DECODE_K_CHUNK_FULL = 256
+
+
+def sdpa_decode_program_config(sliding_window):
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        q_chunk_size=0,
+        k_chunk_size=SDPA_DECODE_K_CHUNK_SLIDING if sliding_window else SDPA_DECODE_K_CHUNK_FULL,
+        exp_approx_mode=False,
+    )
+
+
+# Residual: 2880 = 90 tiles, 30 cores x 3 tiles. The decode all-reduce runs on the packed [32, 96] BF16 partial on
+# one core (DecodeAllReduce): 4.1 us with 1 link vs 8.4 us for the 90-tile residual-layout payload (2 links). With a
+# single-core payload it must use 1 link: at 2 links the second link gets no cores and its reader reads past its
+# runtime args (watcher assert in all_reduce_async worker_reader.cpp).
 RESIDUAL_CORES = 30
-DECODE_CCL_LINKS = 2
+DECODE_CCL_LINKS = 1
 
 
 def width_sharded_memory_config(mesh_device, width, cores, rows=32):
@@ -98,8 +135,19 @@ def sharded_norm_program_config(memory_config):
     )
 
 
+def packed_partial_memory_config(mesh_device, hidden_size):
+    """The packed [32, W] BF16 all-reduce payload (W = hidden / RESIDUAL_CORES; hidden value h at row h / W, column
+    h % W, see experts/stream.py PackedResidualAdd), on one core."""
+    return width_sharded_memory_config(mesh_device, hidden_size // RESIDUAL_CORES, 1)
+
+
 class DecodeAllReduce:
-    """Fused single-op all-reduce of a [1, 1, 32, hidden] per-device partial sum across the TP axis.
+    """Fused single-op all-reduce of the per-device decode partial sums across the TP axis, plus the residual add.
+
+    The partial is the packed [1, 1, 32, W] BF16 tensor (packed_partial_memory_config): all_reduce_async time scales
+    with the payload, and the [32, hidden] residual layout would carry 32x more tiles than the one token needs
+    (probes: 4.1 us for the 3-tile packed BF16 payload vs 8.4 us for the 90-tile BF8 residual-layout payload).
+    residual_add unpacks the sum into row 0 of the residual stream.
 
     One persistent scratch buffer and global semaphore per call site ("attn", "moe"), shared by every layer:
     within a layer the attention and MoE all-reduces alternate, and each is an all-rank synchronization, so a
@@ -107,12 +155,15 @@ class DecodeAllReduce:
     """
 
     def __init__(self, mesh_device, hidden_size, cluster_axis, topology=ttnn.Topology.Ring):
+        from .experts.stream import PackedResidualAdd
+
         self.mesh_device = mesh_device
         self.cluster_axis = cluster_axis
         self.topology = topology
         self.num_devices = mesh_device.shape[cluster_axis]
-        self.memory_config = residual_memory_config(mesh_device, hidden_size)
-        buffer_memory_config = width_sharded_memory_config(mesh_device, hidden_size * self.num_devices, RESIDUAL_CORES)
+        self.memory_config = packed_partial_memory_config(mesh_device, hidden_size)
+        packed_width = hidden_size // RESIDUAL_CORES
+        buffer_memory_config = width_sharded_memory_config(mesh_device, packed_width * self.num_devices, 1)
         grid = mesh_device.compute_with_storage_grid_size()
         semaphore_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
@@ -120,8 +171,8 @@ class DecodeAllReduce:
         self.slots = {
             name: (
                 ttnn.empty(
-                    [1, 1, 32, hidden_size * self.num_devices],
-                    dtype=ttnn.bfloat8_b,
+                    [1, 1, 32, packed_width * self.num_devices],
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh_device,
                     memory_config=buffer_memory_config,
@@ -130,13 +181,10 @@ class DecodeAllReduce:
             )
             for name in ("attn", "moe")
         }
+        self.residual_add = PackedResidualAdd(mesh_device, residual_memory_config(mesh_device, hidden_size))
 
     def __call__(self, partial, slot):
-        """partial: BF8 [1, 1, 32, hidden] in self.memory_config. Returns the BF16 sum in the same layout."""
-        if partial.memory_config() != self.memory_config:
-            partial = ttnn.to_memory_config(partial, self.memory_config)
-        if partial.dtype != ttnn.bfloat8_b:
-            partial = ttnn.typecast(partial, ttnn.bfloat8_b)
+        """partial: the packed BF16 [1, 1, 32, W] partial (self.memory_config). Returns the packed BF16 sum."""
         scratch, semaphore = self.slots[slot]
         return ttnn.experimental.all_reduce_async(
             partial,
@@ -149,82 +197,3 @@ class DecodeAllReduce:
             topology=self.topology,
             num_links=DECODE_CCL_LINKS,
         )
-
-
-def matmul_1d_program_config(output_memory_config, k, in0_block_w, grid=None):
-    """1D multicast-in0 matmul config for a [32, K] activation (L1 interleaved) whose [32, N] output is written
-    straight into `output_memory_config` (width-sharded, one rectangular grid). Fused bias/output layout instead of
-    a separate bias add or reshard; `grid` overrides the compute grid for interleaved outputs."""
-    k_tiles = k // ttnn.TILE_SIZE
-    in0_block_w = max(d for d in range(1, in0_block_w + 1) if k_tiles % d == 0)
-    if grid is None:
-        shard_spec = output_memory_config.shard_spec
-        grid = shard_spec.grid.bounding_box().grid_size()
-        per_core_N = shard_spec.shape[1] // ttnn.TILE_SIZE
-    else:
-        grid, per_core_N = ttnn.CoreCoord(*grid[:2]), grid[2]
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=grid,
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        out_block_h=1,
-        out_block_w=per_core_N,
-        per_core_M=1,
-        per_core_N=per_core_N,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
-
-
-def auto_matmul_compute_config(mesh_device, operands_low_precision):
-    """The compute config ttnn.matmul picks when called without a program config: HiFi2 unless both operands are
-    BFP8/BFP4 (then LoFi), no approximation, no FP32 accumulation, packer L1 accumulation. An explicit program
-    config makes ttnn default to LoFi instead, so decode matmuls given program configs pass this to keep the
-    fidelity of the unfused graph."""
-    return ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi if operands_low_precision else ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-
-
-def create_decode_gate_buffers(mesh_device, num_experts, width, tokens):
-    """Constants and in-place output buffers of the decode router gate (ttnn.experimental.deepseek.moe.
-    generalized_moe_gate): L1, one [32, 32] tile per token on one core each. One set serves every layer (owned by
-    the CCL manager): the constants are identical across layers, and each layer copies its top-k out of the output
-    buffers right after its gate, before the next layer's gate overwrites them. L1 buffers reserve their address
-    range in every bank, so per-layer copies would hold ~200 KB of L1 per core for the whole model."""
-    replicate = ttnn.ReplicateTensorToMesh(mesh_device) if isinstance(mesh_device, ttnn.MeshDevice) else None
-    cores = ttnn.num_cores_to_corerangeset(tokens, mesh_device.compute_with_storage_grid_size(), row_wise=True)
-    memory_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(cores, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
-    )
-
-    def to_device(t, dtype, layout):
-        return ttnn.from_torch(
-            t, dtype=dtype, layout=layout, device=mesh_device, memory_config=memory_config, mesh_mapper=replicate
-        )
-
-    def face(t, dtype):
-        """[width] -> the gate's per-token [16, 16] face, transposed within the face."""
-        return to_device(
-            t.reshape(1, 16, 16).transpose(1, 2).contiguous().repeat(tokens, 1, 1), dtype, ttnn.TILE_LAYOUT
-        )
-
-    selection_bias = torch.full((width,), -1e9)
-    selection_bias[:num_experts] = 0.0
-    buffers = {
-        "memory_config": memory_config,
-        "selection_bias": face(selection_bias, ttnn.bfloat16),
-        "expert_ids": face(torch.arange(width, dtype=torch.int32), ttnn.uint16),
-        # Row-major so the top-k slices after the gate are plain row reads.
-        "scores": to_device(torch.zeros(tokens, 32, 32), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
-        "indices": to_device(torch.zeros(tokens, 32, 32, dtype=torch.int32), ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT),
-    }
-    return buffers

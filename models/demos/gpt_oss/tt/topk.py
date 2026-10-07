@@ -15,7 +15,8 @@ import torch
 import ttnn
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
-from .fused_decode import auto_matmul_compute_config, matmul_1d_program_config
+from .experts.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from .fused_decode import ROUTER_DECODE_WEIGHT_DTYPE
 
 
 def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_config=None):
@@ -87,7 +88,7 @@ class TopKRouter:
         )
 
         if indexed_decode:
-            assert ccl_manager is not None, "indexed decode routing shares its gate buffers through the CCL manager"
+            assert ccl_manager is not None, "fused decode routing shares its output buffers through the CCL manager"
             self._init_indexed_decode(mesh_device, torch_weight, torch_bias, tensor_cache_path, ccl_manager)
 
         # Fused op support: matmul + topk + softmax in one kernel
@@ -106,40 +107,20 @@ class TopKRouter:
             self._bias_torch = None
 
     def _init_indexed_decode(self, mesh_device, torch_weight, torch_bias, tensor_cache_path, ccl_manager):
-        # Indexed decode router: ttnn.experimental.deepseek.moe.generalized_moe_gate (top-k + softmax over the
-        # selected logits in one op). The op ranks one 256-expert 16x16 face per token, so the router weight and
-        # linear bias are zero-padded to 256 columns; the phantom experts carry a -1e9 selection bias so they never
-        # rank (the selection bias does not enter the output scores).
-        self.decode_width = 256
-        self.decode_tokens = 1
+        # Fused decode router (experts/stream.py: LinearStream out_mode 4): [hidden, num_experts] + bias streamed from
+        # DRAM, then top-k and the softmax over the selected logits in the same op.
+        self.ccl_manager = ccl_manager
+        banks = mesh_device.dram_grid_size().x
+        layout = None
         if torch_weight is not None:
-            pad = self.decode_width - self.num_experts
-            torch_weight_decode = torch.nn.functional.pad(torch_weight, (0, pad))
-            torch_bias_decode = torch.nn.functional.pad(torch_bias, (0, pad))
-        else:
-            torch_weight_decode = torch_bias_decode = None
-        self.weight_decode = ttnn.as_tensor(
-            torch_weight_decode,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"weight_decode{self.decode_width}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout = stream_linear_layout(torch_weight, torch_bias.reshape(-1), banks)
+        self.weight_stream = as_stream_tensor(
+            mesh_device,
+            [layout] * mesh_device.shape[1] if layout is not None else None,
+            linear_stream_rows(mesh_device, self.hidden_dim, self.num_experts),
+            ROUTER_DECODE_WEIGHT_DTYPE,
+            get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}"),
         )
-        self.bias_decode = ttnn.as_tensor(
-            torch_bias_decode,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"bias_decode{self.decode_width}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        gate = ccl_manager.get_decode_gate_buffers(self.num_experts, self.decode_width, self.decode_tokens)
-        self.gate_memory_config = gate["memory_config"]
-        self.gate_selection_bias = gate["selection_bias"]
-        self.gate_expert_ids = gate["expert_ids"]
-        self.gate_scores = gate["scores"]
-        self.gate_indices = gate["indices"]
 
     def _init_fused_op(self, device, B):
         """Lazily initialize fused op tensors (bias broadcast + output pre-alloc)."""
@@ -191,42 +172,22 @@ class TopKRouter:
         return expert_indices, expert_weights
 
     def decode_indexed(self, hidden_states):
-        """Decode routing for the indexed experts.
+        """Fused decode routing for one token.
 
-        hidden_states: [1, 1, 1 (32), hidden] L1 interleaved (one token).
-        Returns ([1, k] UINT16 row-major expert ids, [1, 1, 1, k] row-major BF16 softmax weights in DRAM)."""
-        n_tiles = self.decode_width // ttnn.TILE_SIZE
-        logits = ttnn.linear(
-            hidden_states,
-            self.weight_decode,
-            bias=self.bias_decode,
-            program_config=matmul_1d_program_config(None, self.hidden_dim, 45, grid=(n_tiles, 1, 1)),
-            # The router keeps the default (HiFi2) fidelity of the unfused graph.
-            compute_kernel_config=auto_matmul_compute_config(hidden_states.device(), operands_low_precision=False),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            dtype=ttnn.bfloat16,
+        hidden_states: the width-sharded [1, 1, 1 (32), hidden] norm output.
+        Returns persistent [1, 32] UINT16 expert ids and BF16 softmax weights holding the top-k in their first k
+        entries (shared by every layer; not to be deallocated)."""
+        router = self.ccl_manager.get_decode_linear_stream(
+            "router",
+            self.hidden_dim // ttnn.TILE_SIZE,
+            self.num_experts,
+            ROUTER_DECODE_WEIGHT_DTYPE,
+            readers=1,
+            out_mode=4,
+            out_page_bytes=64,
+            heads=(self.top_k, self.num_experts),
         )
-        logits = ttnn.reshape(logits, (self.decode_tokens, 16, 16))
-        logits_sharded = ttnn.to_memory_config(logits, self.gate_memory_config)
-        logits.deallocate(True)
-        scores, indices = ttnn.experimental.deepseek.moe.generalized_moe_gate(
-            logits_sharded,
-            bias_tensor=self.gate_selection_bias,
-            input_indices_tensor=self.gate_expert_ids,
-            output_tensor=self.gate_scores,
-            output_indices_tensor=self.gate_indices,
-            eps=1e-20,
-            scaling_factor=1.0,
-            enable_sigmoid=False,
-            topk=self.top_k,
-            output_softmax=True,
-        )
-        logits_sharded.deallocate(True)
-        # The top-k ids / scores are the first k entries of row 0 of each token's buffer.
-        k, b = self.top_k, self.decode_tokens
-        indices_rm = ttnn.slice(indices, [0, 0, 0], [b, 1, k], memory_config=ttnn.L1_MEMORY_CONFIG)
-        scores_rm = ttnn.slice(scores, [0, 0, 0], [b, 1, k], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.reshape(indices_rm, (b, k)), ttnn.reshape(scores_rm, (b, 1, 1, k))
+        return router(hidden_states, self.weight_stream, self.ccl_manager.get_decode_router_out())
 
     def _fused_call(self, hidden_states, use_throughput_experts):
         """Forward pass using fused matmul+topk+softmax kernel.

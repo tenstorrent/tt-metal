@@ -10,6 +10,8 @@ from models.demos.gpt_oss.config import MeshConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
+from ..experts.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from ..fused_decode import OPROJ_DECODE_WEIGHT_DTYPE, QKV_DECODE_WEIGHT_DTYPE
 from .config import AttentionConfig
 
 
@@ -25,8 +27,10 @@ class AttentionWeights:
     sinks: ttnn.Tensor
     # Decode o_proj without the CCL tile padding: the decode all-reduce is a fused all_reduce_async over the full
     # hidden width, so the padded columns (and the slice that removes them) are not needed.
-    o_proj_decode: ttnn.Tensor = None
-    o_proj_bias_decode: ttnn.Tensor = None
+    # Fused decode QKV / o_proj weights + biases in the streamed layout of experts/stream.py (LinearStream); the
+    # o_proj bias is applied on the first TP device only (row-parallel).
+    wqkv_stream: ttnn.Tensor = None
+    o_proj_stream: ttnn.Tensor = None
 
 
 def load_attention_weights(
@@ -37,7 +41,7 @@ def load_attention_weights(
     weight_dtype=ttnn.bfloat8_b,
     bias_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
-    decode_o_proj=False,
+    fused_decode=False,
 ) -> AttentionWeights:
     """
     Load and shard attention weights.
@@ -50,7 +54,7 @@ def load_attention_weights(
         weight_dtype: Data type for weights (default: bfloat8_b)
         bias_dtype: Data type for biases (default: bfloat16)
         tensor_cache_path: Optional path for weight caching
-        decode_o_proj: Also load the unpadded o_proj used by the fused decode path
+        fused_decode: Also load the streamed QKV / o_proj copies used by the fused decode path
 
     Returns:
         AttentionWeights container with all loaded weights
@@ -201,26 +205,35 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    o_proj_decode_tt = o_proj_bias_decode_tt = None
-    if decode_o_proj:
-        o_proj_decode_tt = ttnn.as_tensor(
-            o_proj_decode,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=weight_dtype,
-            mesh_mapper=row_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_decode"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        o_proj_bias_decode_tt = ttnn.as_tensor(
-            o_proj_bias_decode,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=bias_dtype,
-            mesh_mapper=col_mesh_mapper,
-            cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias_decode"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+    wqkv_stream_tt = o_proj_stream_tt = None
+    if fused_decode:
+        # Fused decode: QKV and o_proj (+ bias) as streamed linears, one per-bank layout per TP shard.
+        banks = mesh_device.dram_grid_size().x
+        local_qkv = (config.num_heads + 2 * config.num_kv_heads) * config.head_dim // mesh_config.tp
+        local_heads_dim = config.num_heads * config.head_dim // mesh_config.tp
+        qkv_layouts = o_layouts = None
+        if state_dict:
+            tp = mesh_config.tp
+            qkv_layouts = [
+                stream_linear_layout(w[0, 0], b, banks)
+                for w, b in zip(torch.chunk(qkv_cat, tp, -1), torch.chunk(qkv_bias_cat, tp, -1))
+            ]
+            o_layouts = [
+                stream_linear_layout(w, b, banks)
+                for w, b in zip(torch.chunk(o_proj_decode, tp, -2), torch.chunk(o_proj_bias_decode, tp, -1))
+            ]
+
+        def stream(layouts, name, k, n, dtype):
+            return as_stream_tensor(
+                mesh_device,
+                layouts,
+                linear_stream_rows(mesh_device, k, n),
+                dtype,
+                get_cache_file_name(tensor_cache_path, f"{name}_stream_b{banks}_nb{NBIAS}"),
+            )
+
+        wqkv_stream_tt = stream(qkv_layouts, "wqkv", hidden_size, local_qkv, QKV_DECODE_WEIGHT_DTYPE)
+        o_proj_stream_tt = stream(o_layouts, "o_proj", local_heads_dim, hidden_size, OPROJ_DECODE_WEIGHT_DTYPE)
 
     decode_sinks_tt = ttnn.as_tensor(
         decode_sinks,
@@ -250,6 +263,6 @@ def load_attention_weights(
         o_proj_bias=o_proj_bias_tt,
         decode_sinks=decode_sinks_tt,
         sinks=sinks_tt,
-        o_proj_decode=o_proj_decode_tt,
-        o_proj_bias_decode=o_proj_bias_decode_tt,
+        wqkv_stream=wqkv_stream_tt,
+        o_proj_stream=o_proj_stream_tt,
     )

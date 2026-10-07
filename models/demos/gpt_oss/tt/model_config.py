@@ -185,7 +185,7 @@ class ModelArgs:
             "gpt-oss-20b": {
                 "T3K": [128],
                 "TG": [128],
-            }
+            },
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
@@ -320,6 +320,8 @@ class ModelArgs:
     # skipping the load and hard-failing in ttnn.as_tensor(None, ...) on a missing .tensorbin.
     # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
     WEIGHT_CACHE_FORMAT_VERSION = 1
+    # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
+    FUSED_DECODE_WEIGHTS_VERSION = 2
 
     def weight_cache_is_complete(self, dtype, fused_decode=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
@@ -352,7 +354,7 @@ class ModelArgs:
             return False
         if meta.get("model_name") != self.model_name or meta.get("n_layers") != self.n_layers:
             return False
-        if fused_decode and not meta.get("fused_decode_weights", False):
+        if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
@@ -370,7 +372,7 @@ class ModelArgs:
                         "model_name": self.model_name,
                         "n_layers": self.n_layers,
                         "dtype": str(dtype),
-                        "fused_decode_weights": bool(fused_decode),
+                        "fused_decode_weights": self.FUSED_DECODE_WEIGHTS_VERSION if fused_decode else False,
                     }
                 )
             )

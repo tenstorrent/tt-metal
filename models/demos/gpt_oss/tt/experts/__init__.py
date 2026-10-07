@@ -31,7 +31,7 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
-from .decode import decode_forward, decode_forward_indexed
+from .decode import decode_forward, decode_forward_stream
 from .prefill import prefill_forward
 from .weights import load_decode_expert_weights, load_expert_weights
 
@@ -70,8 +70,8 @@ class Experts:
             program_config: Model-specific program configurations
             weight_dtype: Data type for weights (default: bfloat4_b)
             tensor_cache_path: Optional path for weight caching
-            indexed_decode: Decode computes only the routed experts (indexed sparse_matmul, one token per device,
-                TP without expert parallelism); requires the router's decode_indexed outputs.
+            indexed_decode: Fused decode: only the routed experts are computed (DRAM-streaming ops, one token per
+                device, TP without expert parallelism); requires the router's decode_indexed outputs.
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -92,10 +92,12 @@ class Experts:
         # Cache prefill sparsity (created once, reused for all prefill calls)
         self.prefill_sparsity = self._create_prefill_sparsity()
 
-        # Indexed decode (TP over mesh columns, no expert parallelism): only the routed experts are computed.
+        # Fused decode (TP over mesh columns, no expert parallelism): only the routed experts are computed, by the
+        # DRAM-streaming ops of experts/stream.py (ops and buffers shared by every layer through the CCL manager).
         self.decode_weights = None
+        self.decode_stream = None
         if indexed_decode:
-            assert mesh_config.decode.tp > 1 and mesh_config.decode.ep == 1, "indexed decode needs TP > 1, EP == 1"
+            assert mesh_config.decode.tp > 1 and mesh_config.decode.ep == 1, "fused decode needs TP > 1, EP == 1"
             self.decode_weights = load_decode_expert_weights(
                 mesh_device=mesh_device,
                 config=config,
@@ -104,26 +106,12 @@ class Experts:
                 weight_dtype=weight_dtype,
                 tensor_cache_path=tensor_cache_path,
             )
-            # sparse_matmul still takes a sparsity operand; the indexed mode never reads it.
-            import torch
-
-            self.decode_sparsity_placeholder = ttnn.from_torch(
-                torch.zeros(1, 1, 1, config.num_experts),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
-            # Expert -> device table for the fused score-weighted reduce: under TP every device holds (a shard of)
-            # every expert, so row d maps all experts to device d and each device keeps every routed contribution.
-            num_devices = mesh_device.get_num_devices()
-            self.decode_expert_mapping = ttnn.from_torch(
-                torch.arange(num_devices, dtype=torch.int32).reshape(num_devices, 1).expand(-1, config.num_experts),
-                dtype=ttnn.uint16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            self.decode_stream = ccl_manager.get_decode_expert_stream(
+                config.hidden_size,
+                self.decode_weights.intermediate_padded,
+                config.num_experts_per_tok,
+                config.swiglu_limit,
+                config.alpha,
             )
 
         # For backward compatibility
@@ -175,8 +163,8 @@ class Experts:
         Returns:
             Expert output tensor [1, batch, seq_len, hidden_size]
         """
-        if is_decode and self.decode_weights is not None:
-            return decode_forward_indexed(
+        if is_decode and self.decode_stream is not None:
+            return decode_forward_stream(
                 hidden_states,
                 topk_expert_indices,
                 topk_expert_weights,
@@ -184,8 +172,7 @@ class Experts:
                 config=self.config,
                 mesh_config=self.mesh_config,
                 ccl_manager=self.ccl_manager,
-                sparsity_placeholder=self.decode_sparsity_placeholder,
-                expert_mapping=self.decode_expert_mapping,
+                stream=self.decode_stream,
             )
         # Determine mode based on sequence length
         if is_decode:

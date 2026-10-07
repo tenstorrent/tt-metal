@@ -14,7 +14,8 @@ class CCLManager:
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
         self._decode_all_reduce = {}
-        self._decode_gate_buffers = {}
+        self._decode_expert_stream = {}
+        self._decode_stream_buffers = {}
 
         # Setup semaphores
         self._init_subdevice()
@@ -98,14 +99,95 @@ class CCLManager:
             self._decode_all_reduce[key] = DecodeAllReduce(self.mesh_device, hidden_size, cluster_axis, self.topology)
         return self._decode_all_reduce[key]
 
-    def get_decode_gate_buffers(self, num_experts, width, tokens):
-        """Router-gate constants and output buffers shared by every decoder layer's decode path."""
-        from .fused_decode import create_decode_gate_buffers
+    def get_decode_expert_stream(self, hidden, inter_pad, top_k, swiglu_limit, alpha):
+        """Routed-expert stream ops (experts/stream.py) and their persistent buffers, shared by every decoder layer's
+        decode path: the [k, I_pad] BF16 row-major activation and the packed all-reduce input (get_decode_partial)."""
+        key = (hidden, inter_pad, top_k)
+        if key not in self._decode_expert_stream:
+            from .experts.stream import ExpertDownStream, ExpertGateUpStream
+            from .fused_decode import DOWN_STREAM_READERS, GATE_UP_STREAM_READERS
 
-        key = (num_experts, width, tokens)
-        if key not in self._decode_gate_buffers:
-            self._decode_gate_buffers[key] = create_decode_gate_buffers(self.mesh_device, num_experts, width, tokens)
-        return self._decode_gate_buffers[key]
+            self._decode_expert_stream[key] = {
+                "gate_up": ExpertGateUpStream(
+                    self.mesh_device, hidden, inter_pad, top_k, swiglu_limit, alpha, readers=GATE_UP_STREAM_READERS
+                ),
+                "down": ExpertDownStream(self.mesh_device, hidden, inter_pad, top_k, readers=DOWN_STREAM_READERS),
+                "act": self._persistent_zeros((top_k, inter_pad), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
+                "partial": self.get_decode_partial(hidden),
+            }
+        return self._decode_expert_stream[key]
+
+    def _persistent_zeros(self, shape, dtype, memory_config):
+        import torch
+
+        return ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.int32 if dtype == ttnn.uint16 else torch.float32),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT if len(shape) > 2 else ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=memory_config,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def get_decode_partial(self, hidden):
+        """Packed BF16 [1, 1, 32, W] all-reduce input (fused_decode.packed_partial_memory_config: hidden value h at
+        row h / W, column h % W), written by the streamed o_proj and MoE down of every layer; the rows past
+        hidden / W are never written and stay zero."""
+        from .fused_decode import RESIDUAL_CORES, packed_partial_memory_config
+
+        key = ("partial", hidden)
+        if key not in self._decode_stream_buffers:
+            self._decode_stream_buffers[key] = self._persistent_zeros(
+                (1, 1, 32, hidden // RESIDUAL_CORES),
+                ttnn.bfloat16,
+                packed_partial_memory_config(self.mesh_device, hidden),
+            )
+        return self._decode_stream_buffers[key]
+
+    def get_decode_qkv_heads(self, num_heads, num_kv_heads, head_dim):
+        """BF16 Q / K / V head tensors ([1, 1, heads, head_dim], head h in row h; Q and V on core (0, 0), K on (1, 0):
+        the one-user layout nlp_create_qkv_heads_decode(overlap_qk_coregrid=False) produces), written by the streamed
+        QKV of every layer (padding head rows stay zero)."""
+        key = ("qkv_heads", num_heads, num_kv_heads, head_dim)
+        if key not in self._decode_stream_buffers:
+
+            def heads(n, core):
+                memory_config = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.BufferType.L1,
+                    ttnn.ShardSpec(
+                        ttnn.CoreRangeSet({ttnn.CoreRange(core, core)}),
+                        (-(-n // ttnn.TILE_SIZE) * ttnn.TILE_SIZE, head_dim),
+                        ttnn.ShardOrientation.ROW_MAJOR,
+                    ),
+                )
+                return self._persistent_zeros((1, 1, n, head_dim), ttnn.bfloat16, memory_config)
+
+            self._decode_stream_buffers[key] = (
+                heads(num_heads, ttnn.CoreCoord(0, 0)),
+                heads(num_kv_heads, ttnn.CoreCoord(1, 0)),
+                heads(num_kv_heads, ttnn.CoreCoord(0, 0)),
+            )
+        return self._decode_stream_buffers[key]
+
+    def get_decode_router_out(self):
+        """UINT16 ids / BF16 scores [1, 32] row-major buffers holding the routed top-k (first k entries), written by
+        the streamed router of every layer and read by the expert streams."""
+        key = ("router_out",)
+        if key not in self._decode_stream_buffers:
+            self._decode_stream_buffers[key] = (
+                self._persistent_zeros((1, 32), ttnn.uint16, ttnn.L1_MEMORY_CONFIG),
+                self._persistent_zeros((1, 32), ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG),
+            )
+        return self._decode_stream_buffers[key]
+
+    def get_decode_linear_stream(self, name, *args, **kwargs):
+        """LinearStream op (experts/stream.py) for one decode role, shared by every layer."""
+        from .experts.stream import LinearStream
+
+        if name not in self._decode_stream_buffers:
+            self._decode_stream_buffers[name] = LinearStream(self.mesh_device, *args, **kwargs)
+        return self._decode_stream_buffers[name]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

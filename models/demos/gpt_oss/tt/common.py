@@ -80,11 +80,11 @@ def create_tt_model(
         and not gpt_oss_model_args.weight_cache_is_complete(dtype, fused_decode=True)
     ):
         # Explicit skip of the HF load (--skip-model-load): every weight must come from the cache, and a cache that
-        # was not written by a fused build lacks the fused decode weights (o_proj_decode*, router *_decode256,
-        # experts *_decode_i768), which would otherwise fail later in ttnn.as_tensor(None, ...).
+        # was not written by a fused build lacks the fused decode weights (attention *_stream_*, router weight_stream_*,
+        # experts *_stream_decode_i768), which would otherwise fail later in ttnn.as_tensor(None, ...).
         raise RuntimeError(
             f"The weight cache {gpt_oss_model_args.weight_cache_path(dtype)} has no marker for the fused decode "
-            f"weights (format {gpt_oss_model_args.WEIGHT_CACHE_FORMAT_VERSION}, fused_decode_weights); rebuild it "
+            f"weights (format {gpt_oss_model_args.WEIGHT_CACHE_FORMAT_VERSION}, fused_decode_weights v{gpt_oss_model_args.FUSED_DECODE_WEIGHTS_VERSION}); rebuild it "
             "once with the HF weights loaded (no --skip-model-load, or GPT_OSS_FORCE_MODEL_LOAD=1)."
         )
     loaded_real_weights = False

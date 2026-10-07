@@ -46,7 +46,7 @@ class MLP:
             use_throughput_experts = False
 
         # One decode token per device under TP (no expert parallelism): decode routes and computes only the token's
-        # top-k experts (router.decode_indexed + Experts indexed decode).
+        # top-k experts (router.decode_indexed + Experts streamed decode).
         self.indexed_decode = fused_decode_supported(
             mesh_device, mesh_config, hf_config, use_throughput_experts, tokens_per_device
         )
@@ -175,18 +175,12 @@ class MLP:
             Expert output tensor [batch, seq_len, hidden_size]
         """
         if is_decode and self.indexed_decode:
-            # Indexed decode: the sharded norm output is read interleaved by the router and expert matmuls.
-            moe_input = hidden_states
-            if hidden_states.is_sharded():
-                moe_input = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
-            expert_indices, expert_weights = self.router.decode_indexed(moe_input)
-            output = self.experts(
-                moe_input, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
+            # Fused decode (experts/stream.py): the router (top-k + softmax fused) and the experts read the
+            # width-sharded norm output directly; the routed ids / weights live in shared buffers.
+            expert_indices, expert_weights = self.router.decode_indexed(hidden_states)
+            return self.experts(
+                hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
             )
-            expert_indices.deallocate(True)
-            if moe_input is not hidden_states:
-                moe_input.deallocate(True)
-            return output
         expert_indices, expert_weights = self.router(hidden_states, self.use_throughput_experts)
         expert_output = self.experts(
             hidden_states, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=is_decode

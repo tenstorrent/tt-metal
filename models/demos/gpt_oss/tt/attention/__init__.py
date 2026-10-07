@@ -80,7 +80,7 @@ class Attention:
             mesh_config=mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
-            decode_o_proj=fused_decode,
+            fused_decode=fused_decode,
         )
 
         # Initialize KV cache

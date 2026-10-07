@@ -95,11 +95,22 @@ class DecoderLayer:
         self.fused_decode = self.mlp.indexed_decode
         if self.fused_decode:
             self.residual_memory_config = residual_memory_config(mesh_device, hf_config.hidden_size)
-            ccl_manager.get_decode_all_reduce(hf_config.hidden_size, mesh_config.tp_axis)
+            self.decode_all_reduce = ccl_manager.get_decode_all_reduce(hf_config.hidden_size, mesh_config.tp_axis)
+            # The persistent buffers the streamed decode ops share across layers are allocated here, at model
+            # construction, so none of them is created while a trace is live.
+            attn_config = self.self_attn.config
+            ccl_manager.get_decode_qkv_heads(
+                mesh_config.shard_size(attn_config.num_heads),
+                mesh_config.shard_size(attn_config.num_kv_heads),
+                attn_config.head_dim,
+            )
+            ccl_manager.get_decode_partial(hf_config.hidden_size)
+            ccl_manager.get_decode_router_out()
 
     def _decode_forward(self, hidden_states, position_embeddings, position_idx, page_table, kv_cache):
-        """One decode token: sharded norm -> attention (+ fused all-reduce) -> residual add -> sharded norm -> MoE
-        (+ fused all-reduce) -> residual add. Returns the BF16 residual stream in the width-sharded decode layout."""
+        """One decode token: sharded norm -> attention (+ fused all-reduce of the packed partial) -> residual add (packed
+        sum unpacked into row 0) -> sharded norm -> MoE (+ fused all-reduce) -> residual add. Returns the BF16 residual
+        stream in the width-sharded decode layout."""
         if hidden_states.memory_config() != self.residual_memory_config:
             # First layer: the embedding output enters the decode residual layout.
             embeddings = hidden_states
@@ -116,7 +127,7 @@ class DecoderLayer:
             is_decode=True,
         )
         attn_in.deallocate(True)
-        hidden_states = ttnn.add(residual, attn_out, memory_config=self.residual_memory_config, dtype=ttnn.bfloat16)
+        hidden_states = self.decode_all_reduce.residual_add(residual, attn_out)
         attn_out.deallocate(True)
         residual.deallocate(True)
 
@@ -124,7 +135,7 @@ class DecoderLayer:
         mlp_in = self.post_attention_layernorm.forward_sharded(hidden_states)
         mlp_out = self.mlp(mlp_in, is_decode=True)
         mlp_in.deallocate(True)
-        hidden_states = ttnn.add(residual, mlp_out, memory_config=self.residual_memory_config, dtype=ttnn.bfloat16)
+        hidden_states = self.decode_all_reduce.residual_add(residual, mlp_out)
         mlp_out.deallocate(True)
         residual.deallocate(True)
         return hidden_states
