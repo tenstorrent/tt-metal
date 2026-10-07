@@ -606,9 +606,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                   "workers_noc_y_end"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
-    const auto& reader_hw_config = std::get<m2::DataMovementHardwareConfig>(reader.hw_config);
-    const bool reader_uses_noc1 =
-        reader_hw_config.config_1xx.has_value() && reader_hw_config.config_1xx->noc == NOC::NOC_1;
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = PRE2D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::PRODUCER});
@@ -760,15 +757,14 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
             // For each tile row, the merge core's reader increments the gather_free semaphore on the other cores of
             // its column, logical cores (x, 1) to (x, cores_y - 1), with one multicast. This tells them that its gather
-            // buffer can take their next partial sums. These are the NoC coordinates of that rectangle of cores.
+            // buffer can take their next partial sums. These are the NoC coordinates of that rectangle of cores,
+            // from the lower to the higher coordinates. That is the order a multicast on NOC_0, which the reader
+            // uses, expects, and the only order Quasar's multicast accepts.
             CoreCoord workers_noc_start = {0, 0};
             CoreCoord workers_noc_end = {0, 0};
             if (is_merge_core && cores_y > 1) {
                 workers_noc_start = device->worker_core_from_logical_core({x, 1});
                 workers_noc_end = device->worker_core_from_logical_core({x, cores_y - 1});
-                if (reader_uses_noc1) {
-                    std::swap(workers_noc_start, workers_noc_end);
-                }
             }
 
             m2::AddRuntimeArgsForNode(
