@@ -226,14 +226,19 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
     }
 }
 
-// Accumulate runtime fields that share a group. Constants are already combined
-// in the plan; single fields and GPR transfers are handled directly at emission.
+// Validate runtime assignments and accumulate fields that share a group.
+// Constants are already combined in the plan; single fields and GPR transfers
+// are handled directly at emission.
 template <const auto& Plan, std::size_t Index, typename Operation>
 inline __attribute__((always_inline)) void accumulate_write_data(std::array<std::uint32_t, Plan.group_count>& data, const Operation& operation)
 {
-    if constexpr (is_field_assignment_v<Operation> && !is_constant_field_assignment_v<Operation> && Plan.groups[Plan.group_of[Index]].count > 1)
+    if constexpr (is_field_assignment_v<Operation> && !is_constant_field_assignment_v<Operation>)
     {
-        data[Plan.group_of[Index]] |= encode<Plan.groups[Plan.group_of[Index]].mask>(operation);
+        LLK_ASSERT(operation.value <= (Operation::mask >> Operation::shift), "value exceeds field width");
+        if constexpr (Plan.groups[Plan.group_of[Index]].count > 1)
+        {
+            data[Plan.group_of[Index]] |= encode<Plan.groups[Plan.group_of[Index]].mask>(operation);
+        }
     }
 }
 
