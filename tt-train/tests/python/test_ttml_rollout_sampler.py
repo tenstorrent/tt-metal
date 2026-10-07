@@ -16,10 +16,12 @@ import numpy as np
 import pytest
 
 import ttml
+import ttnn
 
 from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.utils import build_causal_mask, no_grad, run_mode
 from ttml.modules import RunMode
-from ttml.trainers.grpo_trainer import RolloutBatch, grpo_ttml_model
+from ttml.trainers.grpo_trainer import RolloutBatch, grpo_ttml_model, layout_microbatch, place_old_nlog_probs
 from ttml.trainers.grpo_trainer.grpo_ttml_model import setup_ttml_model
 from ttml.trainers.grpo_trainer.ttml_rollout_sampler import TTMLRolloutSampler
 
@@ -220,3 +222,62 @@ def test_qwen3_rollout_sampler_capital_of_france():
     _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH))
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+DESCRIBE = " Name its capital and describe that city in two sentences."
+MIXED_LENGTH_QUESTIONS = [
+    "France." + DESCRIBE,
+    "Japan. I am planning a long trip there next spring and would like to visit the city where the government sits."
+    + DESCRIBE,
+    "Brazil. "
+    + "It is the largest country in South America and many people assume its capital is Rio. " * 4
+    + DESCRIBE,
+]
+
+
+def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch):
+    inputs, targets, mask, Tp = layout_microbatch(batch.prompts, batch.completions, sampler._pad_token)
+    B = inputs.shape[0]
+    with run_mode(model, RunMode.EVAL), no_grad():
+        x = ttml.autograd.Tensor.from_numpy(inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        logits = model(x, build_causal_mask(Tp, device=True))
+        tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+        nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
+        teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32), dtype=np.float32).reshape(B, Tp)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+    sampled = -place_old_nlog_probs(batch.prompts, batch.completions, batch.logprobs, Tp)
+    return teacher, sampled, mask
+
+
+@pytest.mark.requires_device
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "transformer_config, model_source, template_kwargs",
+    [
+        (LLAMA_1B_TRANSFORMER_CONFIG, HF_LLAMA_MODEL_ID, {}),
+        (QWEN3_TRANSFORMER_CONFIG, HF_QWEN3_MODEL_ID, {"enable_thinking": False}),
+    ],
+    ids=["llama", "qwen3"],
+)
+def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
+    transformer_config, model_source, template_kwargs
+):
+    model, tokenizer = setup_ttml_model(transformer_config, DEVICE_CONFIG, model_source)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
+    prompts = [
+        tokenizer.encode(_to_capitals_chat_prompt(tokenizer, q, **template_kwargs)) for q in MIXED_LENGTH_QUESTIONS
+    ]
+    gaps = max(len(p) for p in prompts) - np.array([len(p) for p in prompts])
+    assert gaps.max() >= 32, f"prompts are too close in length to exercise padding: {gaps}"
+
+    batch = sampler.generate(prompts)
+    teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch)
+
+    for b, completion in enumerate(batch.completions):
+        assert len(completion) > 1, f"row {b}: need a multi-token completion, got {completion}"
+        row_mask = mask[b] > 0
+        diff = np.abs(teacher[b, row_mask] - sampled[b, row_mask])
+        assert diff.mean() < 0.05 and diff.max() < 0.5, (
+            f"row {b} (padding gap {gaps[b]}): sampler vs teacher-forced log-prob "
+            f"mean |diff| = {diff.mean():.4f}, max |diff| = {diff.max():.4f}"
+        )
