@@ -91,6 +91,7 @@ def main():
             kv_ver = kv_rows(model, mesh, pos, U, blk)
             fv = feat_host(mesh, vd.feat)  # [rows, U*blk, NL*4096]
             av2, _ = vd.verify(toks, pos, dead)
+            kv_ver2 = kv_rows(model, mesh, pos, U, blk)
             fv2 = feat_host(mesh, vd.feat)
             verify_repeat_equal = bool(torch.equal(fv, fv2))
             vd.close()
@@ -104,8 +105,21 @@ def main():
                 a, b = sd.run()
                 aseq[:, :, t] = a
                 fseq[:, :, t] = feat_host(mesh, sd.feat)
-            sd.close()
             kv_seq = kv_rows(model, mesh, pos, U, blk)
+            for t in range(blk):
+                sd.set_inputs(toks[:, :, t], pos + t, dead)
+                sd.run()
+            kv_seq2 = kv_rows(model, mesh, pos, U, blk)
+            sd.close()
+            rec(
+                "kv_controls",
+                ver1_vs_ver2_max_rel=float(
+                    ((kv_ver[0] - kv_ver2[0]).norm(dim=-1) / kv_ver[0].norm(dim=-1).clamp_min(1e-9)).max()
+                ),
+                seq1_vs_seq2_max_rel=float(
+                    ((kv_seq[0] - kv_seq2[0]).norm(dim=-1) / kv_seq[0].norm(dim=-1).clamp_min(1e-9)).max()
+                ),
+            )
             rel = lambda x, y: ((x - y).norm(dim=-1) / y.norm(dim=-1).clamp_min(1e-9))  # [rows,U,blk]
             rec(
                 "kv_rows",
