@@ -1850,3 +1850,25 @@
 - claim: RING decode MoE hang/race gates (real layers 1,5,16 reused, shared ring buffers+semaphores as in the model, one trace): 48-layer deep trace 1000 replays NO hang at T=1 (0.409 ms/layer), T=8 live 6 (0.958), T=32 live 24 (1.181); bitwise glitch stress (every layer output of every replay vs the first replay, per mesh row): T=8 6 layers x 3000 = 18000 layer-calls 0 glitches, T=32 6 x 6000 = 36000 calls 0 glitches, T=1 (zero-token chips: 4 tokens x 8 experts) 36000 calls 0 glitches (the unified path glitches 2-5 per 18000 calls). So the ring path (all_to_all_dispatch_metadata + moe_compute + fast_reduce + reduce_scatter + all_gather) shows neither the sentinel hang nor the unified/all_reduce glitch in this MoE-only context
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_S_stress6_t32_h48_d2d2e6a1a5b.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1859-72d
+- date: 2026-10-07T18:59:20
+- commit: d6df7a1f3ad
+- branch: ssinghal/mimo-moe
+- host: 30,43,44
+- track: moe
+- status: verified
+- claim: RING decode MoE in the FULL 48-layer model (MIMO_MOE_DECODE=ring, expert op unified for prefill, router fast, library artifacts/moe_C_29b0e1519bb, ring weights from the NFS cache, test_decode_timing_u, execute_trace replay step ms, U=32,1,8,32 order, paired runs on hosts 30 (ring) / 43 (unified), same session conditions): step median unified -> ring: U=1 71.2 -> 47.9 ms (-33%), U=8 90.0 -> 66.3 (-26%), U=32 105.8 -> 86.9 (-18%); ffn_moe part 51.7/66.3/76.3 -> 28.95/44.45/59.55 ms (attention 15.1/17.4/24.0 unchanged). DRAM per bank after model build at U=32: unified copy only free 2399 MB, with the ring copy too free 1131 MB (ring copy = 1268 MB/bank = 10.15 GiB per chip at 47 layers, measured, no KV at 64k in this test)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_W_model_ring_h30_d6df7a1f3ad.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1859-613
+- date: 2026-10-07T18:59:20
+- commit: d6df7a1f3ad
+- branch: ssinghal/mimo-moe
+- host: 30,43,44
+- track: moe
+- status: verified
+- claim: RING decode MoE GSM8K GATE (full 48-layer model, greedy non-thinking, n=128, max_new 512, B=128 users (U=32), traced decode, prefill unified op, MIMO_MOE_DECODE=ring, router fast, library moe_C_29b0e1519bb): run a (host 30) 110/128 = 85.9% (Wilson 78.9-90.9), run b (host 44) 110/128; gate >= 109 PASS; all 128 completions TOKEN-IDENTICAL between the two runs on different hosts (two-run determinism); steady decode median 75.8 / 74.6 ms per step (mixed U as users finish), 1688 tok/s total
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_X_gsm_ring_a_h30_d6df7a1f3ad.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
