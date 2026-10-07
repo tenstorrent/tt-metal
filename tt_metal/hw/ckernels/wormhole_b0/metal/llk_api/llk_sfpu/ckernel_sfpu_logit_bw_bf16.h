@@ -36,6 +36,10 @@ inline void calculate_logit_bw_bf16() {
         }
         vFloat factor = r;
         vFloat grad = dst_reg[32 + d];
+        // A NaN gradient of either sign gives torch's NaN: the pole's copysgn and Wormhole's multiply
+        // would keep a negative one's sign, which the pack stores as -inf.
+        v_if(sfpi::is_nan(grad)) { grad = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
         vFloat product = grad * factor;
         vFloat result = convert<vFloat16b>(product, RoundMode::Nearest);
         {
