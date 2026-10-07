@@ -74,7 +74,7 @@ class Shared:
         self.topology = ttnn.Topology.Linear
 
 
-def build_expert_weights(md, w_of_expert):
+def build_expert_weights(md, w_of_expert, nd_sharded=True):
     """w_of_expert(e) -> (gate [K,N], up [K,N], down [N,K]) bf16 torch. Returns three lists of EPC per-device bfp8 DRAM ND-sharded tensors."""
     mapper = ttnn.ShardTensor2dMesh(md, mesh_shape=md.shape, dims=(0, 1))
     outs = {"gate": [], "up": [], "down": []}
@@ -85,7 +85,7 @@ def build_expert_weights(md, w_of_expert):
             t = ttnn.from_torch(host, mesh_mapper=mapper, layout=ttnn.TILE_LAYOUT, dtype=W_DTYPE)
             t = ttnn.squeeze(ttnn.squeeze(t, dim=0), dim=0)
             outs[proj].append(
-                ttnn.to_device(t, md, memory_config=routed_expert_weight_memory_config(md, t.shape[-1], True))
+                ttnn.to_device(t, md, memory_config=routed_expert_weight_memory_config(md, t.shape[-1], nd_sharded))
             )
     return outs["gate"], outs["up"], outs["down"]
 
@@ -151,7 +151,33 @@ class MiMoPrefillMoE:
         )
         ttnn.deallocate(offsets)
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
-        if self.expert_op == "fused":
+        if self.expert_op == "loop":
+            # bf16-activation path (user decision: activations stay bf16): tilize the dispatched bf16 buffer (stays bf16), then per local expert
+            # extract -> routed_expert_ffn (bf16 intermediates, bfp8 weights, DRAM-interleaved) -> insert in place. Costs max_per_expert rows per expert
+            # (extract is fixed-size) instead of the real count.
+            tiled = ttnn.to_layout(disp2, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            out = tiled
+            for l in range(EPC):
+                toks = dp.extract(
+                    tiled,
+                    region_offsets,
+                    counts,
+                    sh.gidx,
+                    local_expert_id=l,
+                    max_dispatched_tokens_per_expert=sh.max_per_expert,
+                )
+                o = dp.routed_expert_ffn(
+                    toks,
+                    self.gate_projs[l],
+                    self.up_projs[l],
+                    self.down_projs[l],
+                    compute_kernel_config=self.ckc,
+                    output=None,
+                )
+                ttnn.deallocate(toks)
+                out = dp.insert(out, o, region_offsets, counts, sh.gidx, local_expert_id=l)
+                ttnn.deallocate(o)
+        elif self.expert_op == "fused":
             out = ttnn.empty(
                 disp2.shape,
                 dtype=ttnn.bfloat16,
