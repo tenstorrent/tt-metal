@@ -72,13 +72,11 @@ std::vector<tt::tt_metal::TensorTopology> AllBroadcastDeviceOperation::compute_o
     // `cluster_axis` and replicated across the remaining devices on that axis. Every output is therefore
     // Replicate on `cluster_axis` with the other mesh axes inherited from the input. Nothing is concatenated, so
     // the helper's contiguity requirement does not apply (it is the all_reduce / all_broadcast label). No honest
-    // label (nullopt, already warned about): {} keeps the union default.
+    // label (nullopt, already reported): every output keeps the input's label.
     const auto output_topology =
         ttnn::operations::ccl::common::all_broadcast_output_topology(input, operation_attributes.cluster_axis);
-    if (!output_topology.has_value()) {
-        return {};
-    }
-    return std::vector<tt::tt_metal::TensorTopology>(operation_attributes.ring_size, *output_topology);
+    return std::vector<tt::tt_metal::TensorTopology>(
+        operation_attributes.ring_size, output_topology.value_or(input.tensor_topology()));
 }
 
 std::vector<ttnn::Tensor> all_broadcast(

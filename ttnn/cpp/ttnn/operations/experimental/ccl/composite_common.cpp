@@ -351,8 +351,7 @@ ttnn::Tensor composite_all_gather(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_l1_small_for_semaphores,
-    bool require_contiguous_gather) {
+    bool use_l1_small_for_semaphores) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -364,10 +363,9 @@ ttnn::Tensor composite_all_gather(
     // Label of the result: every device on `cluster_axis` ends up with every piece along `gather_dim`. Decided from
     // the caller's tensor up front so a gather the helper refuses (a 1-D-mapped Shard gathered along an outer mesh
     // axis interleaves the pieces) fails before any device work under strict mode; applied to the tensor returned
-    // at the bottom (nullopt, already warned about, leaves the tail's union label in place).
+    // at the bottom (nullopt, already reported, leaves the tail's union label in place).
     const std::optional<tt::tt_metal::TensorTopology> output_topology =
-        ttnn::operations::ccl::common::all_gather_output_topology(
-            input_tensor, cluster_axis, gather_dim, require_contiguous_gather);
+        ttnn::operations::ccl::common::all_gather_output_topology(input_tensor, cluster_axis, gather_dim);
 
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing.

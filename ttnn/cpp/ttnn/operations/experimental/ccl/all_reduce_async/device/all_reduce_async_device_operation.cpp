@@ -93,14 +93,13 @@ AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOpera
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // After all_reduce every device on `cluster_axis` holds the same bytes: Replicate on that axis, the other mesh
     // axes inherited from the input. The helper expands a collapsed 1-D label to one placement per mesh axis first,
-    // so the edit lands on `cluster_axis` rather than index 0. No honest label (nullopt, already warned about): {}
-    // keeps the union default.
+    // so the edit lands on `cluster_axis` rather than index 0. No honest label (nullopt, already reported): the
+    // output keeps the input's label. Returning {} would instead hand the framework the union over the input and
+    // `buffer_tensor`.
+    const auto& input_tensor = tensor_args.input_tensor;
     const auto output_topology = ttnn::operations::ccl::common::all_reduce_output_topology(
-        tensor_args.input_tensor, std::optional<uint32_t>(args.cluster_axis));
-    if (!output_topology.has_value()) {
-        return {};
-    }
-    return {*output_topology};
+        input_tensor, std::optional<uint32_t>(args.cluster_axis));
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllReduceAsyncDeviceOperation::tensor_return_value_t>
