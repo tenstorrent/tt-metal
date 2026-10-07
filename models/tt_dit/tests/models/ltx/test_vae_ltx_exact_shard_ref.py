@@ -180,3 +180,10 @@ def test_runtime_dims_match_blocking_keys(monkeypatch, mesh_shape, height, width
         assert padded[:3] == key_hw[:3] and all(p != k for p, k in zip(padded[3:], key_hw[3:]))
     else:
         assert padded == key_hw
+
+
+def test_exact_shard_default_on(monkeypatch):
+    monkeypatch.delenv("LTX_VAE_EXACT_SHARD", raising=False)
+    assert vae_ltx._exact_shard_enabled()
+    monkeypatch.setenv("LTX_VAE_EXACT_SHARD", "0")
+    assert not vae_ltx._exact_shard_enabled()
