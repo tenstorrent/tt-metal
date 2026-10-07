@@ -89,8 +89,10 @@ ALWI void binary_block(
     std::uint32_t start_itile0,
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
-    std::uint32_t ntiles) {
-    UNPACK((llk_unpack_AB_block(icb0, icb1, start_itile0, start_itile1, ntiles)));
+    std::uint32_t ntiles,
+    std::uint32_t step0 = 1,
+    std::uint32_t step1 = 1) {
+    UNPACK((llk_unpack_AB_block(icb0, icb1, start_itile0, start_itile1, ntiles, step0, step1)));
     MATH(
         constexpr MathFidelity math_fidelity =
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);
@@ -552,6 +554,42 @@ ALWI void sub_block(
         sub_tiles<is_fp32_dest_acc_en>(icb0, icb1, start_itile0 + i, start_itile1 + i, start_idst + i);
     }
 }
+
+#if defined(ARCH_BLACKHOLE)
+// clang-format off
+/**
+ * Blackhole: `ntiles` tile pairs of the op into consecutive DST slots with one unpack call, tile i of A at
+ * start_itile0 + i * step0 and tile i of B at start_itile1 + i * step1. A step of 0 reuses one tile, such as a broadcast
+ * operand. Requires the init of the op's *_tiles form and an acquired DST.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                              | Type     | Valid Range                                    | Required |
+ * |-----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb0            | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | icb1            | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | start_itile0    | The index of the first tile A within the first CB        | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_itile1    | The index of the first tile B within the second CB       | uint32_t | Must be less than the size of the CB           | True     |
+ * | start_idst      | The index of the first tile in DST REG for the result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | ntiles          | The number of tile pairs                                 | uint32_t | start_idst + ntiles <= acquired DST REG size   | True     |
+ * | step0           | The tile index step of A                                 | uint32_t | 0 or more, last tile within the CB             | True     |
+ * | step1           | The tile index step of B                                 | uint32_t | 0 or more, last tile within the CB             | True     |
+ */
+// clang-format on
+template <EltwiseBinaryType eltwise_binary_type, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void binary_block_strided(
+    std::uint32_t icb0,
+    std::uint32_t icb1,
+    std::uint32_t start_itile0,
+    std::uint32_t start_itile1,
+    std::uint32_t start_idst,
+    std::uint32_t ntiles,
+    std::uint32_t step0,
+    std::uint32_t step1) {
+    detail::binary_block<eltwise_binary_type, is_fp32_dest_acc_en>(
+        icb0, icb1, start_itile0, start_itile1, start_idst, ntiles, step0, step1);
+}
+#endif
 
 namespace detail {
 // Single source of truth for the dest-reuse execute. The idst tile is loaded from DST into SrcA

@@ -129,22 +129,29 @@ inline void llk_unpack_AB(
     llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }
 
-// ntiles consecutive tile pairs from one config context: one context acquire per block instead of per tile.
+// ntiles tile pairs from one config context: one context acquire per block instead of per tile. Tile i of A is
+// start_tile_index_a + i * step_a, of B start_tile_index_b + i * step_b; a step of 0 reuses one tile.
 inline void llk_unpack_AB_block(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
     const std::uint32_t start_tile_index_a,
     const std::uint32_t start_tile_index_b,
-    const std::uint32_t ntiles) {
+    const std::uint32_t ntiles,
+    const std::uint32_t step_a = 1,
+    const std::uint32_t step_b = 1) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-    const std::uint32_t stride_a = get_local_cb_interface(operandA_id).fifo_page_size;
-    const std::uint32_t stride_b = get_local_cb_interface(operandB_id).fifo_page_size;
-    const std::uint32_t address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1 + stride_a * start_tile_index_a;
-    const std::uint32_t address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1 + stride_b * start_tile_index_b;
+    const std::uint32_t page_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    const std::uint32_t page_b = get_local_cb_interface(operandB_id).fifo_page_size;
+    const std::uint32_t address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1 + page_a * start_tile_index_a;
+    const std::uint32_t address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1 + page_b * start_tile_index_b;
 
-    LLK_ASSERT(cb_access_within_bounds(operandA_id, start_tile_index_a, ntiles), "Block tile read exceeds CB boundary");
-    LLK_ASSERT(cb_access_within_bounds(operandB_id, start_tile_index_b, ntiles), "Block tile read exceeds CB boundary");
+    LLK_ASSERT(
+        cb_access_within_bounds(operandA_id, start_tile_index_a, step_a * (ntiles - 1) + 1),
+        "Block tile read exceeds CB boundary");
+    LLK_ASSERT(
+        cb_access_within_bounds(operandB_id, start_tile_index_b, step_b * (ntiles - 1) + 1),
+        "Block tile read exceeds CB boundary");
 
     LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
         unpack_src_format[operandA_id],
@@ -172,6 +179,6 @@ inline void llk_unpack_AB_block(
         StateDiscard<std::uint32_t>(ntiles)));
 
     WAYPOINT("UABW");
-    _llk_unpack_AB_block_<BroadcastType::NONE>(address_a, address_b, ntiles, stride_a, stride_b);
+    _llk_unpack_AB_block_<BroadcastType::NONE>(address_a, address_b, ntiles, page_a * step_a, page_b * step_b);
     WAYPOINT("UABD");
 }
