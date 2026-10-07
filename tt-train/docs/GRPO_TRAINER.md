@@ -122,7 +122,6 @@ and `num_generations`. Supported values:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `batch_id` | `int` | Monotonic counter picked by the producer. |
 | `weight_version` | `int` | Which policy version produced this batch. |
 | `prompts` | `List[List[int]]` | `B` prompts, already expanded: each input prompt repeated `num_generations` times, in order. |
 | `completions` | `List[List[int]]` | `B` completions, trimmed at the stop token. |
