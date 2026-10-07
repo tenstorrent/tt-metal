@@ -343,6 +343,24 @@ TEST_F(MeshBufferTest2x4, CircularBufferBackedByMeshBuffer) {
     EXPECT_ANY_THROW(cb_config.set_globally_allocated_address(*dram_buffer));
 }
 
+// ReadShard must size the destination to the bytes enqueue_read_shards will write, for any element type.
+TEST_F(MeshBufferTest2x4, ReadShardSizesDestinationToDeviceLocalSize) {
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buffer = MeshBuffer::create(ReplicatedBufferConfig{.size = 64 << 10}, device_local_config, mesh_device_.get());
+    auto& mesh_cq = mesh_device_->mesh_command_queue();
+
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        std::vector<uint8_t> bytes;
+        ReadShard(mesh_cq, bytes, buffer, coord);
+        EXPECT_EQ(bytes.size() * sizeof(uint8_t), buffer->device_local_size()) << coord;
+
+        std::vector<uint32_t> words;
+        ReadShard(mesh_cq, words, buffer, coord);
+        EXPECT_EQ(words.size() * sizeof(uint32_t), buffer->device_local_size()) << coord;
+    }
+}
+
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
