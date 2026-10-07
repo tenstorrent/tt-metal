@@ -3,9 +3,11 @@
 # - Llama 3.1 8B on QuietBox 2, decode SDPA per device (models/demos/llama31_8b_qb2/tt/decoder.py:242-256, 306-310, 700-709):
 #   paged_scaled_dot_product_attention_decode, 8 q heads, 2 kv heads, head dim 128, bfp8 paged cache of 128-token pages,
 #   q chunk 32, k chunk 256, HiFi4, fp32 DEST; batch 1 (grid 8x4) and 32 (the device grid), position 1279 and 4095.
-# - Llama 3.3 70B on Galaxy, prefill per device at 2048 tokens (models/demos/llama3_70b_galaxy/tt): FF1/FF3 with
-#   w1_w3_prg_config (grid 7x7, in0_block_w 4, 1x8 sub blocks, LoFi bf16 DEST, bfp4 weights), and the QKV matmul (auto
-#   config, HiFi2 fp32 DEST, bfp8 weights).
+# - Llama 3.3 70B on Galaxy, prefill per device (models/demos/llama3_70b_galaxy/tt), FF1/FF3 with bfp4_mlp (LoFi bf16 DEST,
+#   bfp4 weights) as the model runs them: at 2048 and 1024 tokens w1_w3_prg_config(seq_len, False) with the DRAM-sharded
+#   w1 (grid 7x10, in0_block_w 8, 1x4 sub blocks), at 4096 tokens with batch > 1 w1_w3_prg_config(4096, True) with the
+#   interleaved w1 (grid 7x7, in0_block_w 4, 1x8, per_core_M 20); and the QKV matmul (auto config, HiFi2 fp32 DEST, bfp8
+#   weights). Each mode is run full, half, then full again (the same-kernel control).
 # - DiffusionGemma's expert matmuls (concat_moe.py:100-107, the opt-in full sync config): gate/up and down per device.
 # SYNC_OUT saves raw outputs for a bit comparison of the two modes.
 import os as _os
@@ -94,8 +96,39 @@ def _ff13_pc():
     )
 
 
-# (name, in0 shape, in1 shape, in0 dtype, in1 dtype, out dtype, fidelity, approx, fp32 DEST, program config)
+def _ff13_pc_2d(seq_len):
+    # w1_w3_prg_config(seq_len, use_interleaved=False), model_config.py:927-941: the sharded w1 below 4096 tokens
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(7, 10), in0_block_w=8, out_subblock_h=1, out_subblock_w=4,
+        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // 32 // 8), per_core_N=16, transpose_mcast=False,
+        fused_activation=None, fuse_batch=seq_len <= 2048,
+    )
+
+
+def _ff13_pc_4k():
+    # w1_w3_prg_config(4096, use_interleaved=True), model_config.py:943-957: per_core_M 20, the interleaved w1
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(7, 7), in0_block_w=4, out_subblock_h=1, out_subblock_w=8, out_block_h=10,
+        out_block_w=16, per_core_M=20, per_core_N=16, transpose_mcast=False, fused_activation=None, fuse_batch=False,
+    )
+
+
+def _w1_sharded(device):
+    # create_dram_sharded_mem_config(k=2048, n=3840) (model_config.py:1533-1536, 2535-2544) on this card's DRAM banks
+    g = device.dram_grid_size()
+    banks = g.x * g.y
+    width = -(-3840 // (32 * banks)) * 32
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, ttnn.ShardSpec(grid, (2048, width), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+# (name, in0 shape, in1 shape, in0 dtype, in1 dtype, out dtype, fidelity, approx, fp32 DEST, program config[, in1 memory])
 MM_CASES = [
+    ("g70b_ff13_2k_real", (1, 2, 1024, 2048), (1, 1, 2048, 3584), ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat8_b, "LoFi", False, False, lambda: _ff13_pc_2d(2048), _w1_sharded),
+    ("g70b_ff13_1k_real", (1, 1, 1024, 2048), (1, 1, 2048, 3584), ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat8_b, "LoFi", False, False, lambda: _ff13_pc_2d(1024), _w1_sharded),
+    ("g70b_ff13_4k_pm20", (1, 1, 4096, 2048), (1, 1, 2048, 3584), ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat8_b, "LoFi", False, False, _ff13_pc_4k),
     ("g70b_ff13_2k", (1, 2, 1024, 2048), (1, 1, 2048, 3584), ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.bfloat8_b, "LoFi", False, False, _ff13_pc),
     ("g70b_qkv_2k", (1, 1, 2048, 2048), (1, 1, 2048, 1280), ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16, "HiFi2", True, True, None),
     ("dg_gate_up", (1, 1, 256, 2816), (1, 1, 2816, 24576), ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "HiFi4", False, True, None),
@@ -103,23 +136,25 @@ MM_CASES = [
 ]
 FID = {"LoFi": ttnn.MathFidelity.LoFi, "HiFi2": ttnn.MathFidelity.HiFi2, "HiFi4": ttnn.MathFidelity.HiFi4}
 _MM = {}
-MM_IDS = [(c, s) for c in MM_CASES for s in ("full", "half")]
+MM_IDS = [(c, s) for c in MM_CASES for s in ("full", "half", "fullb")]  # fullb: full again, the same-kernel control
 
 
 @pytest.mark.parametrize("case", MM_IDS, ids=[f"{c[0]}_{s}" for c, s in MM_IDS])
 def test_sync_mm(device, case):
-    (name, s0, s1, d0, d1, do, fid, approx, fp32, pc), sync = case
+    (name, s0, s1, d0, d1, do, fid, approx, fp32, pc, *rest), sync = case
+    mem1 = rest[0] if rest else None
     if name not in _MM:
         _MM.clear()
         torch.manual_seed(0)
+        mems = (ttnn.DRAM_MEMORY_CONFIG, mem1(device) if mem1 else ttnn.DRAM_MEMORY_CONFIG)
         _MM[name] = tuple(
-            ttnn.from_torch(torch.randn(s) * sc, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for s, dt, sc in ((s0, d0, 0.1), (s1, d1, 0.02))
+            ttnn.from_torch(torch.randn(s) * sc, dtype=dt, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+            for s, dt, sc, mc in ((s0, d0, 0.1, mems[0]), (s1, d1, 0.02, mems[1]))
         )
     a, b = _MM[name]
     cfg = ttnn.init_device_compute_kernel_config(
         device.arch(), math_fidelity=FID[fid], math_approx_mode=approx, fp32_dest_acc_en=fp32,
-        packer_l1_acc=not name.startswith("dg_"), dst_full_sync_en=(sync == "full"),
+        packer_l1_acc=not name.startswith("dg_"), dst_full_sync_en=(sync != "half"),
     )
     kw = {"program_config": pc()} if pc else {}
     out = ttnn.matmul(a, b, compute_kernel_config=cfg, dtype=do, memory_config=ttnn.DRAM_MEMORY_CONFIG, **kw)
