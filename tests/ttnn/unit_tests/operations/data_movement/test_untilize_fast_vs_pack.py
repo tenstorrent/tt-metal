@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The fast untilize and the plain pack untilize give the same bytes on Blackhole, so the untilize helper may pick
-either for a row (tt-metal#58736). Every bf16 bit pattern, special values included, and every bfp8_b mantissa code at
-every shared exponent with normal bf16 values, untilized to bf16 at the widths the helper moves to the plain pack
-untilize with a 16-bit DEST, and a few it keeps on the fast untilize.
+either for a row (tt-metal#58736). Every bf16 bit pattern, special values included, and every bfp8_b tile byte pair (each
+of the 256 shared exponents with each of the 256 sign and mantissa bytes, written as raw tile bytes), untilized to bf16 at
+the widths the helper moves to the plain pack untilize with a 16-bit DEST, and a few it keeps on the fast untilize.
 """
 
 import pytest
@@ -125,11 +125,10 @@ def _cb(cb_id, dtype, num_pages):
     )
 
 
-def _untilize(device, values, in_dtype, compute_source, extra_args):
-    num_rows, row_datums = values.shape
-    width = row_datums // TILE
+def _untilize(device, tt_in, in_dtype, num_rows, width, compute_source, extra_args):
+    # tt_in holds the input tiles as consecutive pages, in row-major tile order.
+    row_datums = width * TILE
     num_tiles = (num_rows // TILE) * width
-    tt_in = ttnn.from_torch(values, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_out = ttnn.from_torch(
         torch.zeros(num_rows, row_datums, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -182,10 +181,9 @@ def _block(width):
     return max(b for b in range(1, 9) if width % b == 0)
 
 
-def _compare(device, values, in_dtype):
-    width = values.shape[1] // TILE
-    fast = _untilize(device, values, in_dtype, FAST_COMPUTE, [])
-    pack = _untilize(device, values, in_dtype, PACK_COMPUTE, [_block(width)])
+def _compare(device, tt_in, in_dtype, num_rows, width):
+    fast = _untilize(device, tt_in, in_dtype, num_rows, width, FAST_COMPUTE, [])
+    pack = _untilize(device, tt_in, in_dtype, num_rows, width, PACK_COMPUTE, [_block(width)])
     mismatched = (fast != pack).nonzero()
     assert mismatched.numel() == 0, f"{mismatched.shape[0]} datums differ, first {mismatched[:4]}"
 
@@ -196,28 +194,28 @@ def _bf16_patterns(width):
     return bits.to(torch.int16).view(torch.bfloat16).reshape(tile_rows * TILE, width * TILE)
 
 
-def _bfp8_codes(width):
-    # One shared exponent per 16-datum group (a face row): the first datum pins the exponent with the largest mantissa,
-    # the other 15 take the signed 7-bit mantissa codes in turn, at every exponent whose smallest step is a normal bf16.
-    groups = []
-    for exponent in range(-120, 128):
-        step = 2.0 ** (exponent - 6)
-        signed = [(-1.0 if c >= 128 else 1.0) * (c % 128) * step for c in range(256)]
-        for i in range(0, 256, 15):
-            chunk = signed[i : i + 15]
-            groups.append([127 * step] + chunk + [0.0] * (15 - len(chunk)))
-    codes = torch.tensor(groups, dtype=torch.float32).flatten()
-    tile_rows = -(-codes.numel() // (width * TILE * TILE))
-    values = torch.zeros(tile_rows * TILE * width * TILE)
-    values[: codes.numel()] = codes
-    return values.reshape(tile_rows * TILE, width * TILE)
+def _bfp8_raw_tiles(width):
+    # Raw Bfp8_b tiles: 64 shared exponent bytes (one per 16-datum face row), then 1024 sign and mantissa bytes. Face row
+    # g of the input takes exponent g // 16 and the bytes (g % 16) * 16 to (g % 16) * 16 + 15, so the 4096 face rows of
+    # 64 tiles carry every exponent with every sign and mantissa byte.
+    tile_rows = -(-64 // width)
+    num_tiles = tile_rows * width
+    face_row = torch.arange(num_tiles * 64) % 4096
+    exponents = (face_row // 16).to(torch.uint8).reshape(num_tiles, 64)
+    datums = ((face_row % 16).unsqueeze(1) * 16 + torch.arange(16)).to(torch.uint8).reshape(num_tiles, 1024)
+    return torch.cat([exponents, datums], dim=1), tile_rows * TILE
 
 
 @pytest.mark.parametrize("width", [5, 6, 7, 8, 16])
 def test_fast_and_pack_untilize_match_bf16(device, width):
-    _compare(device, _bf16_patterns(width), ttnn.bfloat16)
+    values = _bf16_patterns(width)
+    tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat16, values.shape[0], width)
 
 
 @pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 12, 16, 24])
 def test_fast_and_pack_untilize_match_bfp8(device, width):
-    _compare(device, _bfp8_codes(width), ttnn.bfloat8_b)
+    raw, num_rows = _bfp8_raw_tiles(width)
+    # One page per tile: a row-major uint8 tensor of the raw tile bytes, read into a Bfp8_b input CB.
+    tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat8_b, num_rows, width)
