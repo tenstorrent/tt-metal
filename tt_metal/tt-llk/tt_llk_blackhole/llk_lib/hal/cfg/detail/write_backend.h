@@ -102,6 +102,7 @@ inline __attribute__((always_inline)) void write_word(const std::uint32_t value,
         }
         else
         {
+            // Not atomic against the other RISCs sharing the word.
             const std::uint32_t old_value = cfg[Addr];
             cfg[Addr]                     = (old_value & ~Mask) | data;
         }
@@ -131,19 +132,6 @@ inline __attribute__((always_inline)) void write_word()
     {
         rmw_write_word<Addr, Mask, Data>();
     }
-}
-
-/**
- * @brief Read-modify-write a runtime-masked field of one state-CFG word.
- *
- * Not atomic against the other RISCs sharing the word.
- */
-inline void rmw_state_word_mmio(const std::uint32_t addr32, const std::uint32_t shamt, const std::uint32_t mask, const std::uint32_t value)
-{
-    volatile std::uint32_t* tt_reg_ptr cfg = state_cfg_bank();
-
-    const std::uint32_t old_value = cfg[addr32];
-    cfg[addr32]                   = (old_value & ~mask) | ((value << shamt) & mask);
 }
 
 template <const Field& F, Sec S, std::uint32_t Count, std::size_t ArrayCount>
