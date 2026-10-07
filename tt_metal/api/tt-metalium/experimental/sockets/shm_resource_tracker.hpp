@@ -25,6 +25,11 @@ namespace tt::tt_metal::distributed {
  *
  * A manifest file /dev/shm/tt_socket_manifest_<pid> is maintained so that the
  * stale cleanup can discover descriptor files (whose names don't embed a PID).
+ * Its first line is "start <ticks>", the owner's process start time, so the
+ * scan can tell the owner from an unrelated process that was handed the same
+ * pid after the owner died; a manifest without that line (older image) falls
+ * back to the pid-only check. The remaining lines are "shm <name>" and
+ * "file <path>".
  */
 class ShmResourceTracker {
 public:
@@ -60,6 +65,7 @@ private:
     std::set<std::string> shm_names_;
     std::set<std::string> file_paths_;
     std::string manifest_path_;
+    uint64_t start_time_ = 0;
 };
 
 }  // namespace tt::tt_metal::distributed
