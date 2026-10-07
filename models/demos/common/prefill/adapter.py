@@ -85,6 +85,7 @@ class PrefillRunParams:
     # Drafter checkpoint the runner resolved (DFLASH_HF_MODEL, else the adapter's own default). Carried
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
+    mtp_levels: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -139,6 +140,25 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    supports_mtp: bool = False
+
+    def cache_kind(self, config_id: int) -> str:
+        """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
+        ``"index"`` (a DSA indexer key cache) and treat any other value as an opaque cache they neither
+        decode nor infer a width for; a model may return its own kinds (Kimi-K3: ``"kda_recurrent"``,
+        ``"kda_convolution"``). The default keeps the historical convention (config 1 of a multi-config
+        table is the index cache); a model whose second config is something else overrides this so the
+        producer and the migration driver stop inferring the kind from the config count."""
+        if config_id == 0:
+            return "kvpe"
+        return "index" if config_id == 1 else "other"
+
+    def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
+        """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
+        A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
+        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
+        return 0, real_len
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
@@ -305,9 +325,9 @@ ADAPTER_PATHS = {
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
-    # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
-    "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
+    # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
+    "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).

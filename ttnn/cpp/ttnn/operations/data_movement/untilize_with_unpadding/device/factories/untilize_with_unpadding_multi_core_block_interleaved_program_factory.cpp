@@ -184,7 +184,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
                  {"total_tiles_per_row", total_tiles_per_row}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"start_id", "single_block_size_row_arg", "single_block_size_col_arg"}},
-            .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_reader_datamovement_config(),
         };
     };
 
@@ -217,7 +217,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
                       "single_block_size_col_arg",
                       "sub_block_width_size",
                       "single_sub_block_size_row_arg"}},
-            .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+            .hw_config = ttnn::create_writer_datamovement_config(),
         };
     };
 
@@ -259,7 +259,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         // fp32 unpack is marked for exactly the buffer this kernel reads. Marking both sets'
         // buffers would set it on the cliffrow set's input even when that set is empty -- a
         // buffer that exists on no core -- and would do so in the full-set kernels too.
-        ComputeGen1Config compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             compute_hw_config.unpack_modes = {{in_name, UnpackMode::UnpackToDest}};
         }

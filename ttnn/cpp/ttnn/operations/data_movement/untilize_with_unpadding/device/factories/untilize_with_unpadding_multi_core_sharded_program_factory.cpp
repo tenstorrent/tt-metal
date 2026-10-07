@@ -200,14 +200,14 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             .endpoint_type = DFBEndpointType::PRODUCER,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     /** writer
      */
     KernelSpec writer{
         .unique_id = SH_WRITER,
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (cross_shard_type) {
         writer.source =
@@ -332,7 +332,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         input_dfb_data_format == tt::DataFormat::Float32) {
         compute_kernel_defines.emplace("DST_ACCUM_MODE", "1");
     }
-    ComputeGen1Config compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_hw_config{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_hw_config.unpack_modes = {{SH_IN, UnpackMode::UnpackToDest}};
     }

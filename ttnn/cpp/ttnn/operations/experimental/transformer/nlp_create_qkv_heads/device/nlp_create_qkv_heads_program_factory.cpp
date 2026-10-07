@@ -146,6 +146,14 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     // shared for K, V
     uint32_t q_out_h_tiles = input_shape[2] / TILE_HEIGHT;
     uint32_t q_out_w_tiles = head_dim / TILE_WIDTH;  // tiles along head_dim
+    // Tiles the reader and writer move per NoC barrier; the transposed-K path feeds compute one tile at a time.
+    uint32_t tile_batch = 8;
+    while (q_out_w_tiles % tile_batch != 0) {
+        tile_batch /= 2;
+    }
+    if (operation_attributes.transpose_k_heads) {
+        tile_batch = 1;
+    }
     uint32_t q_out_HtWt = q_out_h_tiles * q_out_w_tiles;
     uint32_t q_out_CHtWt = num_q_heads * q_out_HtWt;
     uint32_t kv_out_CHtWt = num_kv_heads * q_out_HtWt;
@@ -172,8 +180,6 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    IDevice* device = input_tensor.device();
-    const tt::ARCH arch = device->arch();
 
     // Tensor parameters: the Q input, the optional separate KV input, and the three outputs.  The kernels
     // reach them through TensorAccessor(tensor::<name>); the base addresses ride the bindings.
@@ -228,9 +234,10 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
                 {"head_parallel", static_cast<uint32_t>(split.head_parallel)},
                 {"head_tiles", q_out_w_tiles},
                 {"seq_tiles", q_out_h_tiles},
+                {"tile_batch", tile_batch},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_blocks", "in0_tensor_tile_id", "in1_tensor_tile_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     // TODO: Q, K, V doesn't necessarily need to be the same output mem config
     KernelSpec writer{
@@ -273,11 +280,12 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
                 // Non-zero only for the Q head split: output 0 takes the first split_width tiles of every
                 // head row and output 1 (bound as K) the rest.
                 {"split_width", static_cast<uint32_t>(operation_attributes.q_head_split.value_or(0) / TILE_WIDTH)},
+                {"tile_batch", tile_batch},
             },
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_blocks", "q_out_h_dim", "q_out_tensor_tile_id", "k_out_tensor_tile_id", "v_out_tensor_tile_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
     if (read_from_input_tensor_kv) {
         reader.tensor_bindings.push_back(TensorBinding{
@@ -287,11 +295,9 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
     }
 
     // Dataflow buffers
-    // Four-tile capacity: quadruple buffering for the one-tile paths, one batched head transfer otherwise.
-    uint32_t dfb_num_tiles = 4;
+    // Two batches, so the reader fills one while the writer drains the other.
+    uint32_t dfb_num_tiles = std::max<uint32_t>(4, 2 * tile_batch);
 
-    // TODO: Investigate perf allocating full in0_w_tiles with double buffer
-    // uint32_t qv_num_tiles = in0_w_tiles * 2; // double buffer; this runs out of space for generic shapes
     uint32_t qv_num_tiles = dfb_num_tiles;
     Group<DataflowBufferSpec> dataflow_buffers = {
         DataflowBufferSpec{
@@ -317,7 +323,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
         // mantissa). Mirrors the per-dtype promotion in eltwise unary/binary primitives.
         const bool fp32_dest_acc_en = input_tensor.dtype() == tt_metal::DataType::FLOAT32;
 
-        ComputeGen1Config compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
+        ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             // The legacy descriptor left unpack_to_dest_mode empty (unpack to SrcA/B).  With a 32-bit dest
             // and a Float32 input buffer the mode has to be stated explicitly; this is the same mode.
@@ -664,9 +670,6 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
     const bool read_from_input_tensor_kv = input_tensor_kv.has_value();
     auto& output = tensor_return_value;
 
-    IDevice* device = input_tensor.device();
-    const tt::ARCH arch = device->arch();
-
     tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t single_tile_size = tt::tile_size(data_format);
@@ -769,8 +772,8 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
                       "start_q_y",
                       "q_offset",
                       "num_x"}},
-            .hw_config = is_reader_instance ? ttnn::create_reader_datamovement_config(arch)
-                                            : ttnn::create_writer_datamovement_config(arch),
+            .hw_config = is_reader_instance ? ttnn::create_reader_datamovement_config()
+                                            : ttnn::create_writer_datamovement_config(),
             .advanced_options = {.num_runtime_varargs = num_varargs},
         };
         if (reads_kv_heads) {

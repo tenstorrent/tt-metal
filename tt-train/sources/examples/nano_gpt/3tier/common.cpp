@@ -10,6 +10,7 @@
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "utils/training_utils.hpp"
 
 // namespace name can't start with a digit
 namespace three_tier_arch {
@@ -75,7 +76,7 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
     return ranks;
 }
 
-std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
+std::pair<uint32_t, uint32_t> get_effective_max_steps_and_vocab_size(const TrainingConfig &config) {
     auto sequence_length = std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.max_sequence_length; }) {
@@ -126,18 +127,17 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
 
     auto [dataset, vocab_size] = create_dataset(text_or_tokens, sequence_length, config.tokenizer_type, config);
     fmt::print("Dataset size: {}\n", dataset.get_size());
+    const TrainingSteps steps = compute_training_steps(
+        dataset,
+        config.data_path,
+        sequence_length,
+        config.batch_size,
+        config.gradient_accumulation_steps,
+        config.num_mh_workers,
+        config.max_steps,
+        config.num_epochs);
 
-    auto dataset_size = dataset.get_size();
-    auto steps_per_dataset = dataset_size / (config.batch_size * config.gradient_accumulation_steps);
-    if (steps_per_dataset == 0) {
-        throw std::runtime_error(fmt::format(
-            "Dataset of {} samples is smaller than one step of batch_size {} x gradient_accumulation_steps {}",
-            dataset_size,
-            config.batch_size,
-            config.gradient_accumulation_steps));
-    }
-
-    return {steps_per_dataset, vocab_size};
+    return {steps.effective_max_steps, vocab_size};
 }
 
 std::string read_file_to_str(const std::string &file_path) {

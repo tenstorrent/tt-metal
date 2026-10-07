@@ -34,7 +34,6 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     const auto& tail_entry_states = in.tail_entry_states.mesh_tensor();
     const auto& output = outputs[0].mesh_tensor();
     const auto& device = a.device();
-    const auto arch = device.arch();
 
     const uint32_t key_tiles = attrs.key_dim / tt::constants::TILE_WIDTH;
     const uint32_t value_tiles = attrs.value_dim / tt::constants::TILE_WIDTH;
@@ -163,12 +162,12 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
         .compile_time_args =
             {{"Kt", key_tiles}, {"Vt", value_tiles}, {"BH", attrs.batch_heads}, {"G", groups_per_head}},
         .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_common_runtime_varargs = 2 * group_heads},
     };
 
-    auto compute_hardware_config = ttnn::to_compute_hardware_config(arch, attrs.compute_kernel_config);
-    auto& unpack_modes = tt::tt_metal::experimental::unpack_modes(compute_hardware_config);
+    auto compute_hardware_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config);
+    auto& unpack_modes = compute_hardware_config.unpack_modes;
     for (const auto& name :
          {local_a_dfb_name,
           local_b_dfb_name,
@@ -287,7 +286,7 @@ ttnn::device_operation::MeshWorkloadArtifacts AffineExclusiveScanProgramFactory:
     };
 
     kda_factory_detail::bind_chronology(program_spec, program_run_args, in.actual_start, dataflow, compute);
-    kda_factory_detail::bind_actual_end(program_spec, program_run_args, in.actual_end, in.actual_start, dataflow);
+    kda_factory_detail::bind_actual_end(program_spec, program_run_args, in.actual_end, dataflow);
     program_spec.kernels = {std::move(dataflow), std::move(compute)};
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{

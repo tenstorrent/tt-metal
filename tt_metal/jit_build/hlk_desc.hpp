@@ -48,7 +48,7 @@ public:
         buf_narrow_tile_arr(max_dfbs, 0),
         buf_tile_r_dim_arr(max_dfbs, constants::TILE_HEIGHT),
         buf_tile_c_dim_arr(max_dfbs, constants::TILE_WIDTH),
-        buf_tile_size_arr(max_dfbs, constants::BFLOAT8_B_TILE_HW) {}
+        buf_tile_size_arr(max_dfbs, tile_size(DataFormat::Bfp8_b)) {}
 
     DataFormat get_buf_dataformat(int buf_idx) const { return buf_dataformat_arr[buf_idx]; }
 

@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -30,6 +31,25 @@ static_assert(std::is_invocable_v<move_only_function<void()>&>, "must be invocab
 static_assert(
     !std::is_invocable_v<move_only_function<void()>&, int, int>,
     "must not claim to be invocable with a wrong argument list");
+
+// The public surface is std::move_only_function's and nothing more.
+static_assert(std::is_same_v<move_only_function<int(char)>::result_type, int>);
+static_assert(!std::is_invocable_v<const move_only_function<void()>&>, "R(Args...) is not const-callable");
+static_assert(!std::is_constructible_v<move_only_function<void()>, int>, "must reject non-callables");
+static_assert(!std::is_constructible_v<move_only_function<void()>, void (*)(int)>, "must reject a wrong signature");
+static_assert(
+    !std::is_convertible_v<move_only_function<void()>&, detail::MoveOnlyFunctionBase<void()>&>,
+    "the backing type must not be reachable");
+// Concepts, so the private base's inaccessible members read as unsatisfied rather than an error.
+template <typename F>
+concept ExposesHasValue = requires(F& f) { f.has_value(); };
+template <typename F>
+concept ExposesReset = requires(F& f) { f.reset(); };
+template <typename F>
+concept ExposesType = requires(F& f) { f.type(); };
+static_assert(!ExposesHasValue<move_only_function<void()>>, "zoo's accessors must not leak");
+static_assert(!ExposesReset<move_only_function<void()>>, "zoo's accessors must not leak");
+static_assert(!ExposesType<move_only_function<void()>>, "zoo's accessors must not leak");
 
 TEST(MoveOnlyFunctionTest, CPU_InvokesLambda) {
     int calls = 0;
@@ -133,6 +153,32 @@ TEST(MoveOnlyFunctionTest, CPU_MoveAssignLeavesSourceEmpty) {
     EXPECT_EQ(dst(), 42);
 }
 
+// Emptying only the target, not the invoker, made these run the moved-out callable.
+TEST(MoveOnlyFunctionTest, CPU_CallingMovedFromThrows) {
+    move_only_function<int()> src{[p = std::make_unique<int>(42)] { return *p; }};
+    move_only_function<int()> dst{std::move(src)};
+    ASSERT_FALSE(static_cast<bool>(src));         // NOLINT(bugprone-use-after-move)
+    EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
+}
+
+TEST(MoveOnlyFunctionTest, CPU_CallingMoveAssignedFromThrows) {
+    move_only_function<int()> src{[p = std::make_unique<int>(42)] { return *p; }};
+    move_only_function<int()> dst;
+    dst = std::move(src);
+    ASSERT_FALSE(static_cast<bool>(src));         // NOLINT(bugprone-use-after-move)
+    EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
+}
+
+// Same for a heap-stored target, whose move steals the pointer rather than moving the object.
+TEST(MoveOnlyFunctionTest, CPU_CallingMovedFromHeapTargetThrows) {
+    std::uint64_t big[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    move_only_function<std::uint64_t()> src{[big]() { return big[0]; }};
+    move_only_function<std::uint64_t()> dst{std::move(src)};
+    ASSERT_FALSE(static_cast<bool>(src));         // NOLINT(bugprone-use-after-move)
+    EXPECT_THROW(src(), std::bad_function_call);  // NOLINT(bugprone-use-after-move)
+    EXPECT_EQ(dst(), 1u);
+}
+
 // Heap-stored targets corrupt on self-move without the guard in operator=.
 TEST(MoveOnlyFunctionTest, CPU_SelfMoveAssignIsSafe) {
     struct Big {
@@ -158,6 +204,52 @@ TEST(MoveOnlyFunctionTest, CPU_NonEmptyStdFunctionIsEngaged) {
     move_only_function<int()> f{src};
     ASSERT_TRUE(static_cast<bool>(f));
     EXPECT_EQ(f(), 3);
+}
+
+TEST(MoveOnlyFunctionTest, CPU_AssigningNullptrEmpties) {
+    move_only_function<int()> f{[]() { return 1; }};
+    f = nullptr;
+    EXPECT_FALSE(static_cast<bool>(f));
+    EXPECT_TRUE(nullptr == f);
+}
+
+TEST(MoveOnlyFunctionTest, CPU_AssigningCallableReplacesTarget) {
+    move_only_function<int()> f{[]() { return 1; }};
+    f = [p = std::make_unique<int>(2)] { return *p; };
+    EXPECT_EQ(f(), 2);
+}
+
+TEST(MoveOnlyFunctionTest, CPU_SwapExchangesTargets) {
+    move_only_function<int()> a{[]() { return 1; }};
+    move_only_function<int()> b;
+    a.swap(b);
+    EXPECT_FALSE(static_cast<bool>(a));
+    EXPECT_EQ(b(), 1);
+    swap(a, b);
+    EXPECT_EQ(a(), 1);
+    EXPECT_FALSE(static_cast<bool>(b));
+}
+
+TEST(MoveOnlyFunctionTest, CPU_InPlaceConstructsTarget) {
+    struct Adder {
+        int base;
+        int operator()(int x) const { return base + x; }
+    };
+    move_only_function<int(int)> f{std::in_place_type<Adder>, 40};
+    EXPECT_EQ(f(2), 42);
+
+    struct Summer {
+        int total = 0;
+        Summer(std::initializer_list<int> values, int extra) {
+            for (int v : values) {
+                total += v;
+            }
+            total += extra;
+        }
+        int operator()() const { return total; }
+    };
+    move_only_function<int()> g{std::in_place_type<Summer>, {1, 2, 3}, 4};
+    EXPECT_EQ(g(), 10);
 }
 
 // Pinned deliberately: std::move_only_function makes this undefined, so at the C++23 switch this

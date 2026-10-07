@@ -16,6 +16,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/experimental/sender_core_type.hpp>
 
 namespace tt::tt_metal {
 
@@ -24,17 +25,6 @@ class MeshDevice;
 }  // namespace distributed
 
 namespace experimental {
-
-// Sender domain for a GlobalCircularBuffer. Worker = standard sharded GCB where senders
-// are worker cores hosting their own slice of the cb_buffer in L1. Dram = senders are
-// programmable DRAM cores (Blackhole DRISCs) that own their staging L1 separately; the
-// cb_buffer is sharded over receivers only, and the receiver-side config_buffer
-// remote_pages_addr_override slot points at DRISC L1 so the receiver's pages_acked
-// NoC-inc lands on the DRISC side.
-enum class SenderCoreType : uint8_t {
-    Worker = 0,
-    Dram = 1,
-};
 
 // Construct a GlobalCircularBuffer where senders are programmable DRAM cores identified
 // by DRAM bank id. Each bank id is mapped internally to an unused DRAM subchannel (one

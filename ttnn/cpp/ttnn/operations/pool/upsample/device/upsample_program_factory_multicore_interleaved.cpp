@@ -151,7 +151,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .compile_time_args = std::move(reader_cta),
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_page_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     // Writer compile time arguments
@@ -194,7 +194,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
         .tensor_bindings = {metal2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
         .compile_time_args = std::move(writer_cta),
         .runtime_arg_schema = {.runtime_arg_names = {"num_blocks_to_read", "start_block_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     metal2::ProgramSpec spec{
@@ -245,7 +245,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
                         {"per_core_block_cnt", work_per_core_group_1},
                         {"per_core_block_tile_cnt", num_input_tiles_in_row},
                     },
-                .hw_config = metal2::ComputeGen1Config{},
+                .hw_config = metal2::ComputeHardwareConfig{},
             };
             spec.kernels.push_back(compute_g1);
             spec.work_units.push_back(metal2::WorkUnitSpec{
@@ -274,7 +274,7 @@ ttnn::device_operation::ProgramArtifacts UpsampleMultiCoreInterleavedProgramFact
                         {"per_core_block_cnt", work_per_core_group_2},
                         {"per_core_block_tile_cnt", num_input_tiles_in_row},
                     },
-                .hw_config = metal2::ComputeGen1Config{},
+                .hw_config = metal2::ComputeHardwareConfig{},
             };
             spec.kernels.push_back(compute_g2);
             spec.work_units.push_back(metal2::WorkUnitSpec{

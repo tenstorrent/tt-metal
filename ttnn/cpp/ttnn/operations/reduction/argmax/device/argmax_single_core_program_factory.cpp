@@ -126,7 +126,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
     const auto& dim = operation_attributes.dim;
     const bool keepdim = operation_attributes.keepdim;
 
-    const tt::tt_metal::distributed::MeshDevice& device = output.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = output.device();
     const bool reduce_all = not dim.has_value();
 
     // Resource names. Declared function-locally: both argmax factories share a unity-build
@@ -206,7 +206,7 @@ ttnn::device_operation::ProgramArtifacts ArgMaxSingleCoreProgramFactory::create_
                 TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"},
             },
         .compile_time_args = std::move(ctime_args),
-        .hw_config = ttnn::create_reader_datamovement_config(device.arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     ProgramSpec spec{

@@ -104,11 +104,14 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DramShardedConfig& test_
 
     DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = DataMovementGen2Config{};
+        reader_hw_config = DataMovementHardwareConfig{};
     } else {
-        reader_hw_config = DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+        reader_hw_config = DataMovementHardwareConfig{
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                },
         };
     }
     KernelSpec reader_spec{

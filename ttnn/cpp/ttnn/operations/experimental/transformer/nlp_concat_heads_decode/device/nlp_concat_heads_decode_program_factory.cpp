@@ -118,7 +118,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
         }},
         .compile_time_args = std::move(reader_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = in_num_cores_x + in_num_cores_y},
     };
 
@@ -138,7 +138,7 @@ ttnn::device_operation::ProgramArtifacts NLPConcatHeadsDecodeProgramFactory::cre
         }},
         .compile_time_args = std::move(writer_compile_time_args),
         .runtime_arg_schema = {.runtime_arg_names = {"in_tile_offset_by_head"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = in_num_cores_x + in_num_cores_y},
     };
 

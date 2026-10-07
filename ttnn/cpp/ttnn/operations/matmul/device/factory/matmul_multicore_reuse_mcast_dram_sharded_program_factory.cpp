@@ -34,7 +34,7 @@ using tt::tt_metal::experimental::AddRuntimeArgsForNode;
 using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 using tt::tt_metal::experimental::ComputeHardwareConfig;
 using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementGen1Config;
+using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
 using tt::tt_metal::experimental::DFBEndpointType;
 using tt::tt_metal::experimental::DFBSpecName;
@@ -51,7 +51,6 @@ using tt::tt_metal::experimental::Table;
 using tt::tt_metal::experimental::TensorBinding;
 using tt::tt_metal::experimental::TensorParameter;
 using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::unpack_modes;
 using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace ttnn::prim {
@@ -906,7 +905,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             {
                 .runtime_arg_names = {"worker_core_type", "sender_id", "is_last_ktile_padded"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = in0_noc,
+                    },
+            },
         .advanced_options = {.num_runtime_varargs = num_in0_sender_varargs},
     };
     if (shards_per_block > 1) {
@@ -988,7 +994,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                      "num_shard_to_write_back",
                      "reshard_tensor_start_offset"},
             },
-        .hw_config = DataMovementGen1Config{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = in1_noc,
+                    },
+            },
         .advanced_options = {.num_runtime_varargs = num_in1_writer_varargs},
     };
     if (bias.has_value()) {
@@ -1010,13 +1023,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     uint32_t in1_per_core_w = per_core_N_in1_sender;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
 
-    unpack_modes(compute_hw) = {
+    compute_hw.unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {IN1_DFB, UnpackMode::UnpackToSrc},
         {INTERMED0_DFB, UnpackMode::UnpackToSrc},
     };
     if (bias.has_value()) {
-        unpack_modes(compute_hw).insert({BIAS_DFB, UnpackMode::UnpackToSrc});
+        compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
     }
 
     KernelSpec compute{
@@ -1286,7 +1299,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
         *device,
         input_all_cores_storage,
         output_all_cores_storage,
-        ttnn::to_compute_hardware_config(device->arch(), compute_kernel_config),
+        ttnn::to_compute_hardware_config(compute_kernel_config),
         fp32_dest_acc_en,
         packer_l1_acc,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config),

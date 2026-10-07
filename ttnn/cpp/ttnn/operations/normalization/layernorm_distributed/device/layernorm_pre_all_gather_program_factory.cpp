@@ -259,7 +259,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_INPUT_T, .accessor_name = "src"}},
         .compile_time_args = {{"blk", block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt", "Wt", "tile_offset"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -276,10 +276,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE1D_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", writer_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    auto compute_hw = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config);
+    auto compute_hw = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config);
     m2::KernelSpec compute{
         .unique_id = PRE1D_COMPUTE,
         .source = compute_kernel_file,
@@ -310,7 +310,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         compute.dfb_bindings.push_back(m2::DFBBinding{
             .dfb_spec_name = PRE1D_RESIDUAL, .accessor_name = "res", .endpoint_type = m2::DFBEndpointType::CONSUMER});
     }
-    auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+    auto& compute_gen1 = gen1_compute_config(device->arch(), std::get<m2::ComputeHardwareConfig>(compute.hw_config));
     // With the 32-bit Dest register enabled, every Float32 buffer the compute kernel consumes needs an
     // explicit unpack mode. Here each one feeds an FPU op (mul_tiles for x**2, the row reduce for the
     // sums), and the FPU reads its operands out of SrcA/SrcB, so SrcA/B is the mode for all of them.
@@ -590,7 +590,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"NCHt", "Wt", "tile_offset", "is_merge_core", "reduce_core_noc_x", "reduce_core_noc_y", "y"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
     if (fuse_pre_add) {
         reader.dfb_bindings.push_back(m2::DFBBinding{
@@ -607,7 +607,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = PRE2D_OUTPUT_T, .accessor_name = "dst"}},
         .compile_time_args = {{"blk", writer_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "tile_offset"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // Two instances of the one compute source, over disjoint node sets: the merge row additionally
@@ -652,7 +652,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                  {"blk", block_size},
                  {"num_cores_y", cores_y},
                  {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
-            .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
+            .hw_config = ttnn::to_compute_hardware_config(operation_attributes.compute_kernel_config),
         };
         bind_self_loop(compute, PRE2D_X2, "x2");
         if (fuse_pre_add) {
@@ -668,7 +668,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 .accessor_name = "out_final",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
-        auto& compute_gen1 = gen1_compute_config(std::get<m2::ComputeHardwareConfig>(compute.hw_config));
+        auto& compute_gen1 =
+            gen1_compute_config(device->arch(), std::get<m2::ComputeHardwareConfig>(compute.hw_config));
         // Float32 operands use UnpackToDest on the accurate SFPU path and SrcA/SrcB on the FPU path.
         // The reduce scaler and the FPU merge's zero tile are always consumed through SrcA/SrcB.
         if (compute_gen1.enable_32_bit_dest) {
