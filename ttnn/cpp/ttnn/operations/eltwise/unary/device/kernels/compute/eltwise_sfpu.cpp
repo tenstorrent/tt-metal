@@ -16,8 +16,8 @@
 
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
 // The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: a later tile's init re-programs only the op's
-// state another op wrote, square rounds without Prgm0-2 and stores through ADDR_MOD_4 (free here), the reciprocal
-// leaves Prgm0.
+// state another op wrote, square stores through ADDR_MOD_4 (free here) and keeps its rounding constants out of Prgm0-2
+// when another op writes them, the reciprocal leaves Prgm0.
 namespace ckernel {
 #ifdef SFPU_OP_EXP_INCLUDE
 template <bool approx, bool constants, bool upper_macros>
@@ -39,16 +39,18 @@ ALWI void recip_tile_chain_rerecord() { MATH((sfpu::_record_reciprocal_fast_24b_
 ALWI void rsqrt_tile_chain_reinit() { MATH((sfpu::rsqrt_init<APPROX>())); }
 #endif
 #ifdef SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
+template <bool prgm_rounding>
 ALWI void square_tile_chain_init() {
     MATH(llk_math_sfpu_init_once());
-    MATH((sfpu::_square_init_<ADDR_MOD_4, true, false>()));
+    MATH((sfpu::_square_init_<ADDR_MOD_4, prgm_rounding>()));
 }
+template <bool prgm_rounding>
 ALWI void square_tile_chain(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_square,
-        (APPROX, DST_ACCUM_MODE, 32, ADDR_MOD_4, false),
+        (APPROX, DST_ACCUM_MODE, 32, ADDR_MOD_4, prgm_rounding),
         idst,
         VectorMode::None));
 }

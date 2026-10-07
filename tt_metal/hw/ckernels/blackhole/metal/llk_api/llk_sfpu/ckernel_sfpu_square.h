@@ -11,17 +11,15 @@
 
 namespace ckernel::sfpu {
 
-// The ttnn unary chain passes an address mode no other op of the chain programs, skips the counter reset on a later
-// tile and keeps the rounding constants out of Prgm0-2.
-template <uint32_t addr_mod, bool reset_counters, bool prgm_rounding>
+// The ttnn unary chain passes an address mode no other op of the chain programs, and keeps the rounding constants out
+// of Prgm0-2 when another op of the chain writes them.
+template <uint32_t addr_mod, bool prgm_rounding>
 inline void _square_init_() {
     // The paired store walks dest through ADDR_MOD_6, which advances by the two rows
     // the loop just wrote (one sfpi row is two dest counter steps), so the loop body
     // needs no separate increment.
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(addr_mod);
-    if constexpr (reset_counters) {
-        math::reset_counters(p_setrwc::SET_ABD_F);
-    }
+    math::reset_counters(p_setrwc::SET_ABD_F);
 
     if constexpr (prgm_rounding) {
         sfpi::vConstIntPrgm0 = 1;
@@ -30,7 +28,7 @@ inline void _square_init_() {
     }
 }
 
-inline void square_init() { _square_init_<ADDR_MOD_6, true, true>(); }
+inline void square_init() { _square_init_<ADDR_MOD_6, true>(); }
 
 sfpi_inline sfpi::vFloat float32_to_bf16_rne_prgm(sfpi::vFloat in) {
     sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
@@ -67,8 +65,12 @@ inline void calculate_square() {
         for (int d = 0; d < ITERATIONS; d += 2) {
             sfpi::vFloat v0 = sfpi::dst_reg[0];
             sfpi::vFloat v1 = sfpi::dst_reg[1];
-            sfpi::dst_reg[0] = float32_to_bf16_rne_lreg(v0 * v0, one, half, mask);
-            sfpi::dst_reg[1].mode(addr_mod) = float32_to_bf16_rne_lreg(v1 * v1, one, half, mask);
+            sfpi::vFloat r0 = v0 * v0;
+            sfpi::vFloat r1 = v1 * v1;
+            r0 = float32_to_bf16_rne_lreg(r0, one, half, mask);
+            r1 = float32_to_bf16_rne_lreg(r1, one, half, mask);
+            sfpi::dst_reg[0] = r0;
+            sfpi::dst_reg[1].mode(addr_mod) = r1;
         }
         return;
     }

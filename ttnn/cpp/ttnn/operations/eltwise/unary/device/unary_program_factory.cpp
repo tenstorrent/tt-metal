@@ -105,7 +105,8 @@ struct ChainOpState {
 
 // The ops of the chains ttnn and the models build (sigmoid's fast-exp mode, the unary and binary backward chains,
 // the softcapping chains), for float inputs with math_approx_mode off. Any other op keeps the chain on per-tile inits.
-std::optional<ChainOpState> chain_op_state(const EltwiseUnaryWithParam& op, DataType dtype, bool fp32_dest_acc_en) {
+std::optional<ChainOpState> chain_op_state(
+    const EltwiseUnaryWithParam& op, DataType dtype, bool fp32_dest_acc_en, bool square_prgm) {
     if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::BFLOAT8_B) {
         return std::nullopt;
     }
@@ -122,10 +123,15 @@ std::optional<ChainOpState> chain_op_state(const EltwiseUnaryWithParam& op, Data
         case UnaryOpType::MUL_UNARY_SFPU:
         case UnaryOpType::DIV_UNARY_SFPU: return ChainOpState{0, 0, body};
         case UnaryOpType::SQUARE:
-            // The chain form rounds without Prgm0-2 and stores through ADDR_MOD_4, which no other op of this kernel
-            // programs.
+            // The chain form stores through ADDR_MOD_4, which no other op of this kernel programs, and rounds with its
+            // constants in Prgm0-2 or, when another op of the chain writes those, in LRegs set by each call.
             return ChainOpState{
-                kAddrMod4, kAddrMod4, body, "square_tile_chain_init();", nullptr, "square_tile_chain(0);"};
+                (square_prgm && !fp32_dest_acc_en ? kPrgm : 0u) | kAddrMod4,
+                (square_prgm ? kPrgm : 0u) | kAddrMod4,
+                body,
+                fmt::format("square_tile_chain_init<{}>();", square_prgm),
+                nullptr,
+                fmt::format("square_tile_chain<{}>(0);", square_prgm)};
         case UnaryOpType::RSQRT:
             return ChainOpState{
                 kPrgm, kPrgm, body, "", [](uint32_t) { return std::string("rsqrt_tile_chain_reinit();"); }};
@@ -174,10 +180,17 @@ std::map<std::string, std::string> get_chain_init_once_defines(
     if (op_chain.size() < 2) {
         return {};
     }
+    bool square_prgm = true;
+    for (const auto& op : op_chain) {
+        const auto state = chain_op_state(op, dtype, fp32_dest_acc_en, true);
+        if (op.type() != UnaryOpType::SQUARE && state && (state->init & kPrgm) != 0) {
+            square_prgm = false;
+        }
+    }
     std::vector<ChainOpState> states;
     uint32_t call_writes = 0;
     for (const auto& op : op_chain) {
-        auto state = chain_op_state(op, dtype, fp32_dest_acc_en);
+        auto state = chain_op_state(op, dtype, fp32_dest_acc_en, square_prgm);
         if (!state) {
             return {};
         }
