@@ -106,8 +106,16 @@ class MiMoMoEDecode:
         """Sum the 8 per-column partials of the first B rows. MIMO_MOE_AR=ag_sum (default; race agent, commit feabf363015): slice to the B live rows, all_gather over the column axis and
         sum locally (ttnn.all_reduce = reduce_scatter + all_gather left one 32-column tile of one device stale in ~1e-3 of the calls behind dispatch/combine). MIMO_MOE_AR=rs: old all_reduce.
         """
+        mode = os.environ.get("MIMO_MOE_AR", "ag_sum")
+        if (
+            mode == "rs64"
+        ):  # the pre-merge behaviour: all_reduce of the full 64-row partial, then slice (hang repro for the sentinel path)
+            full = ttnn.all_reduce(part, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            o = ttnn.slice(full, [0, 0, 0, 0], [1, 1, B, HIDDEN])
+            ttnn.deallocate(full)
+            return o
         x = ttnn.slice(part, [0, 0, 0, 0], [1, 1, B, HIDDEN])
-        if os.environ.get("MIMO_MOE_AR", "ag_sum") == "rs":
+        if mode == "rs":
             return ttnn.all_reduce(x, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         g = ttnn.all_gather(x, dim=0, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
