@@ -285,15 +285,14 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     {
         for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
         {
-            // Just pool
-            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
             if (tensor_shape.num_faces_c_dim > 1)
             {
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-
-                reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
+                // Pool the first column face: ADDR_MOD_0 steps dest to the next face's first row and the clear
+                // releases SrcA/SrcB for the next column face, so no SETRWCs are needed in between.
+                reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
             }
+            // Pool the last column face of this face row
+            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
             // Reset Dest Counter
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
         }
@@ -434,10 +433,25 @@ inline void reduce_configure_addrmod(const ckernel::TensorShape& tensor_shape)
     }
     else
     {
-        addr_mod_t {
-            .fidelity = {.clr = 1},
+        if constexpr (dim == ReduceDim::REDUCE_COL)
+        {
+            // A column reduce pools one column face per instruction into the row the dest counter points at, and
+            // the next column face of the same face row belongs 16 rows further on (the next face's first row).
+            // Let the pool instruction step the counter there instead of two SETRWCs per face; _llk_math_reduce_
+            // resets the counter after each face row, so the step after the last column face is harmless.
+            addr_mod_t {
+                .dest     = {.incr = 16},
+                .fidelity = {.clr = 1},
+            }
+                .set(ADDR_MOD_0);
         }
-            .set(ADDR_MOD_0);
+        else
+        {
+            addr_mod_t {
+                .fidelity = {.clr = 1},
+            }
+                .set(ADDR_MOD_0);
+        }
 
         if constexpr (type == PoolType::MAX)
         {
