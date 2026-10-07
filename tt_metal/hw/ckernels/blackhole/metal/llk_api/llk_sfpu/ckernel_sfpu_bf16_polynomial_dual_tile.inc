@@ -90,8 +90,16 @@ inline void piecewise_generic_lut_specialized_N_dual(const std::array<float, LUT
 
         // bf16 dst: RNE-round before the store (see single-eval note above).
         // grad * f'(x) is formed at full SFPU precision and rounded to BF16 once.
-        result1 = result1 * dst_reg[32 + d];
-        result2 = result2 * dst_reg[33 + d];
+        // A factor below the smallest normal (one the evaluator flushed, as the composite's own
+        // factor is) gives 0 for any gradient, where an infinite one would make NaN. On Wormhole a NaN
+        // product takes a sign the rounding keeps as an infinity, so it becomes torch's positive NaN.
+        v_if(setsgn(result1, 0) < 1.1754943508222875e-38f) { result1 = 0.0f; }
+        v_else { result1 = result1 * dst_reg[32 + d]; }
+        v_endif;
+        // The second row likewise.
+        v_if(setsgn(result2, 0) < 1.1754943508222875e-38f) { result2 = 0.0f; }
+        v_else { result2 = result2 * dst_reg[33 + d]; }
+        v_endif;
         result1 = convert<vFloat16b>(result1, RoundMode::Nearest);
         result2 = convert<vFloat16b>(result2, RoundMode::Nearest);
         dst_reg[d] = result1;

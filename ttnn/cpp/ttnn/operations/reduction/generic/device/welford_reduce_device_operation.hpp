@@ -36,9 +36,9 @@ struct WelfordReducePlan {
     std::uint32_t post_mul_scaler_bits = 0;
     tt::DataFormat input_format = tt::DataFormat::Float16_b;
     tt::DataFormat output_format = tt::DataFormat::Float16_b;
-    CoreRangeSet all_cores;
-    CoreRangeSet core_group_1;
-    CoreRangeSet core_group_2;
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_group_1;
+    tt::tt_metal::CoreRangeSet core_group_2;
     bool reduce_w = false;
     bool reduce_h = false;
     bool reduce_hw = false;
@@ -99,7 +99,7 @@ ttnn::Tensor welford_reduce(
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     uint32_t reduce_batch_size = 1);
 
 }  // namespace ttnn::prim
