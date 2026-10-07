@@ -47,9 +47,6 @@ OTHER_AXIS = 0  # axis we will sometimes shard on to verify it stays put
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _MGD_FOR_ARCH_AND_SHAPE = {
     ("blackhole", MESH_SHAPE_2X2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_2_2_line_line.textproto"),
-    # Lines and the full galaxy, so _open_mesh_or_skip can open them for suites that parametrise the mesh.
-    ("blackhole", (1, 8)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_8_line_line.textproto"),
-    ("blackhole", (8, 4)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_8_4_line_line.textproto"),
 }
 
 
@@ -569,9 +566,9 @@ class TestCollapsedInputs:
         composite branch (all_gather of the unsqueezed tensor + local sum + reshape). The result is Replicate on axis 0
         and keeps Shard(0) on axis 1: column c holds piece c + piece 2+c. Negative control: before this change the
         composite branch returned {4}, [Replicate] (the inner all_broadcast edited index 0 and the local sum kept it),
-        claiming all four devices identical -- the over-claim tt-train's force_replicate_axes then repeated. With the
-        inner gather now refused as interleaving under strict mode, all_reduce_async passes
-        require_contiguous_gather=false for it and relabels the result itself."""
+        claiming all four devices identical -- the over-claim tt-train's force_replicate_axes then repeated. The inner
+        gather would now be refused as interleaving under strict mode; all_reduce_async runs it inside the helper's
+        CallerRelabelsScope (its label is never read) and relabels the result itself."""
         tensor, data = _collapsed_tensor((4, 1, 1, 32), lambda d: ttnn.shard_tensor_to_mesh_mapper(d, 0), seed=36)
         _assert_collapsed(tensor, 0, "input sanity check")
 

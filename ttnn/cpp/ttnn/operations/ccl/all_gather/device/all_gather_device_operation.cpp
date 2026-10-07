@@ -103,14 +103,13 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
     // spans the whole mesh and every placement becomes Replicate. The helper expands a collapsed 1-D label to one
     // placement per mesh axis first and compares Shard dims normalised, treating an out-of-range dim left behind by
     // a rank-changing op (#52331) as matching nothing, so the old skip-over-invalid-dims workaround is gone.
-    // `dim_from_end` is negative by construction; the helper normalises it. No honest label (nullopt, already warned
-    // about): {} keeps the union default.
-    const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
-        tensor_args.input_tensor, args.cluster_axis, args.dim_from_end);
-    if (!output_topology.has_value()) {
-        return {};
-    }
-    return {*output_topology};
+    // `dim_from_end` is negative by construction; the helper normalises it. No honest label (nullopt, already
+    // reported): the output keeps the input's label. Returning {} would instead hand the framework the union over
+    // every tensor argument, the persistent output tensor's label included.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto output_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(input_tensor, args.cluster_axis, args.dim_from_end);
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create_output_tensors(
