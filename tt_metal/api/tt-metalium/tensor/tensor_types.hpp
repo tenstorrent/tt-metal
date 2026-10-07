@@ -83,6 +83,13 @@ tt::DataFormat cb_dataformat_for(DataType datatype);
  */
 uint32_t tile_size(DataType dtype);
 
+/**
+ * Returns whether the device architecture supports this data type.
+ *
+ * Equivalent to tt::is_data_format_supported(datatype_to_dataformat_converter(dtype), arch); false for INVALID.
+ */
+bool is_data_type_supported(DataType dtype, tt::ARCH arch);
+
 struct NdShardSpec {
     Shape shard_shape;
     CoreRangeSet grid;
