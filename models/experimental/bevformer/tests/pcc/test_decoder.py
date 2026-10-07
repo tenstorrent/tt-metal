@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
     assert_channels_close,
@@ -20,7 +21,6 @@ from models.experimental.bevformer.tt.model_preprocessing import (
     create_decoder_parameters,
     create_reg_branch_parameters,
 )
-from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 CASES = [

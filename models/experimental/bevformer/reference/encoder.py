@@ -44,9 +44,9 @@ from models.experimental.bevformer.model_config import (
     TSA_NUM_POINTS,
 )
 
-from .point_sampling_3d_2d import bev_reference_points, camera_geometry
-from .spatial_cross_attention import SpatialCrossAttention
-from .temporal_self_attention import TemporalSelfAttention
+from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points, camera_geometry
+from models.experimental.bevformer.reference.spatial_cross_attention import SpatialCrossAttention
+from models.experimental.bevformer.reference.temporal_self_attention import TemporalSelfAttention
 
 
 class FFN(nn.Module):

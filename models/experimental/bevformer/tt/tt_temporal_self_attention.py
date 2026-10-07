@@ -19,7 +19,7 @@ import torch
 import ttnn
 from models.experimental.bevformer.model_config import EMBED_DIMS, GRID_DTYPE, NUM_HEADS, TSA_NUM_POINTS
 
-from .tt_ms_deformable_attention import multi_scale_deformable_attn_ttnn
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import multi_scale_deformable_attn_ttnn
 
 
 def tsa_grid_bias(reference_points, num_heads, num_points, dtype):

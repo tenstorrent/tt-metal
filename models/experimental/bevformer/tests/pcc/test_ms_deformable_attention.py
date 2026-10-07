@@ -6,16 +6,17 @@ import torch
 import ttnn
 import pytest
 
-from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
+from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
 from models.experimental.bevformer.tests.common import PRESETS
 
 from models.experimental.bevformer.tests.test_utils import (
-    check_with_tolerances,
     check_with_pcc,
+    check_with_tolerances,
+    print_detailed_comparison,
 )
 
 from models.experimental.bevformer.tt.model_preprocessing import (
@@ -75,9 +76,7 @@ def test_ms_deformable_attention_forward(
     num_levels = preset.num_levels
     num_points = preset.num_points
 
-    # Use spatial shapes from dataset config (limited to num_levels)
-    spatial_shapes_list = preset.spatial_shapes[:num_levels]
-    spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
+    spatial_shapes = torch.tensor(preset.spatial_shapes, dtype=torch.long)
     total_key_length = [h * w for h, w in spatial_shapes.tolist()]
 
     # --------------------------------------------------------------------------- #
