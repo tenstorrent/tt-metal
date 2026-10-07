@@ -27,7 +27,10 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         hidden_streams.storage_type() == StorageType::DEVICE,
         "fused_hyperconnection_pre_post: hidden_streams must be on device");
 
-    TT_FATAL(fused_w.layout() == Layout::TILE, "fused_hyperconnection_pre_post: fused_w must be TILE layout");
+    TT_FATAL(
+        fused_w.layout() == Layout::TILE || fused_w.layout() == Layout::ROW_MAJOR,
+        "fused_hyperconnection_pre_post: fused_w must be TILE or ROW_MAJOR layout, got {}",
+        fused_w.layout());
     TT_FATAL(pre_bias.layout() == Layout::TILE, "fused_hyperconnection_pre_post: pre_bias must be TILE layout");
     TT_FATAL(post_bias.layout() == Layout::TILE, "fused_hyperconnection_pre_post: post_bias must be TILE layout");
     TT_FATAL(
@@ -55,9 +58,10 @@ void validate_tensors(const FusedPrePostParams& attributes, const FusedPrePostIn
         fused_shape.rank());
     TT_FATAL(
         fused_shape[0] == 1 && fused_shape[1] == 1, "fused_hyperconnection_pre_post: fused_w must be [1,1,T,(2+H)*H]");
+    // Columns past (2+H)*H (e.g. a matmul's N padded to a tile) are never read.
     TT_FATAL(
-        fused_shape[-1] == (2 + hc) * hc,
-        "fused_hyperconnection_pre_post: fused_w last dim must be (2+H)*H = {}, got {}",
+        fused_shape[-1] >= (2 + hc) * hc,
+        "fused_hyperconnection_pre_post: fused_w last dim must be at least (2+H)*H = {}, got {}",
         (2 + hc) * hc,
         fused_shape[-1]);
     const uint32_t num_tokens = static_cast<uint32_t>(fused_shape[2]);
@@ -114,7 +118,7 @@ FusedPrePostDeviceOperation::spec_return_value_t FusedPrePostDeviceOperation::co
     const auto& hidden_streams = tensor_args.hidden_streams;
     const uint32_t hc = operation_attributes.num_streams;
     const auto output_layout = tt::tt_metal::TensorLayout(
-        fused_w.dtype(), tt::tt_metal::PageConfig(fused_w.layout()), operation_attributes.output_mem_config);
+        fused_w.dtype(), tt::tt_metal::PageConfig(Layout::TILE), operation_attributes.output_mem_config);
 
     // Per token t of the T == B*S tokens:
     //   post      = 2 * sigmoid(post_w * post_scale + post_bias), emitted as a column [H,1].

@@ -20,9 +20,10 @@ FORCE_INLINE uint32_t tile_face_index(uint32_t r, uint32_t c) {
 
 }  // namespace
 
-// Feeds one core's slice of the T-token grid. fused_w is [1,1,T,(2+H)*H] in TILE layout, so
+// Feeds one core's slice of the T-token grid. fused_w is [1,1,T,>=(2+H)*H]. In TILE layout
 // value k of token t lives in tile (t/32, k/32) at element (t%32, k%32); a whole tile row of
-// fused_w is staged in L1 and mined for every token of this core that falls in it.
+// fused_w is staged in L1 and mined for every token of this core that falls in it. In
+// ROW_MAJOR layout token t is page t, so only that row is staged.
 void kernel_main() {
     const uint32_t fused_w_addr = get_arg_val<uint32_t>(0);
     const uint32_t pre_bias_addr = get_arg_val<uint32_t>(1);
@@ -42,8 +43,10 @@ void kernel_main() {
     constexpr uint32_t cb_post_bias = get_compile_time_arg_val(5);
     constexpr uint32_t cb_hidden = get_compile_time_arg_val(6);
     constexpr uint32_t slice_cb_pages = get_compile_time_arg_val(7);
+    constexpr bool fused_w_row_major = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t fused_w_page_bytes = get_compile_time_arg_val(9);
 
-    constexpr auto fused_w_args = TensorAccessorArgs<8>();
+    constexpr auto fused_w_args = TensorAccessorArgs<10>();
     constexpr auto pre_bias_args = TensorAccessorArgs<fused_w_args.next_compile_time_args_offset()>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto hidden_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
@@ -98,7 +101,11 @@ void kernel_main() {
     //    post_w[k] = fused_w[t][H + k]    (k = 0..H-1)   -> row 0, col k
     //    comb_w[k] = fused_w[t][2H + k]   (k = 0..H*H-1) -> row k/H, col k%H
     auto fused_w_at = [&](uint32_t row, uint32_t k) {
-        return fused_w_ptr[(k >> 5) * tile_elems + tile_face_index(row, k & 31u)];
+        if constexpr (fused_w_row_major) {
+            return fused_w_ptr[k];
+        } else {
+            return fused_w_ptr[(k >> 5) * tile_elems + tile_face_index(row, k & 31u)];
+        }
     };
     auto fill_row0_slice = [&](CircularBuffer& cb, uint32_t row, uint32_t base_k) {
         cb.reserve_back(one_tile);
@@ -118,7 +125,10 @@ void kernel_main() {
         const uint32_t tile_row = token >> 5;
         const uint32_t row = token & 31u;
 
-        if (tile_row != staged_tile_row) {
+        if constexpr (fused_w_row_major) {
+            noc.async_read(fused_w, cb_fw, fused_w_page_bytes, {.page_id = token}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+        } else if (tile_row != staged_tile_row) {
             for (uint32_t c = 0; c < fused_w_row_tiles; ++c) {
                 noc.async_read(
                     fused_w,

@@ -47,8 +47,15 @@ void validate_single_user_tensors(const FusedSingleUserParams& attributes, const
 
     for (const auto* tensor : {&fused_w, &pre_bias, &post_bias, &comb_bias, &hidden_streams}) {
         TT_FATAL(tensor->storage_type() == StorageType::DEVICE, "all fused hyperconnection inputs must be on device");
-        TT_FATAL(tensor->layout() == Layout::TILE, "all fused hyperconnection inputs must use TILE layout");
         TT_FATAL(tensor->dtype() == DataType::BFLOAT16, "all fused hyperconnection inputs must be BFLOAT16");
+    }
+    // fused_w is only read element-wise out of its first row, so either layout works for it.
+    TT_FATAL(
+        fused_w.layout() == Layout::TILE || fused_w.layout() == Layout::ROW_MAJOR,
+        "fused_w must use TILE or ROW_MAJOR layout, got {}",
+        fused_w.layout());
+    for (const auto* tensor : {&pre_bias, &post_bias, &comb_bias, &hidden_streams}) {
+        TT_FATAL(tensor->layout() == Layout::TILE, "fused hyperconnection biases and hidden_streams must use TILE");
     }
 
     const uint32_t hc = attributes.num_streams;
@@ -117,7 +124,7 @@ FusedSingleUserDeviceOperation::spec_return_value_t FusedSingleUserDeviceOperati
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto make_layout = [&](const MemoryConfig& memory_config) {
         return tt::tt_metal::TensorLayout(
-            tensor_args.fused_w.dtype(), tt::tt_metal::PageConfig(tensor_args.fused_w.layout()), memory_config);
+            tensor_args.fused_w.dtype(), tt::tt_metal::PageConfig(Layout::TILE), memory_config);
     };
     const auto& hidden_shape = tensor_args.hidden_streams.logical_shape();
     const uint32_t d = static_cast<uint32_t>(hidden_shape[3]);

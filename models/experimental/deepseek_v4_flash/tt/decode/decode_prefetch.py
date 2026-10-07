@@ -161,8 +161,8 @@ Q_A_GCB_PAGES = 16
 
 def q_a_ring_specs() -> list:
     """The layouts :data:`Q_A_GCB` is sized from, **in the order one layer consumes them**:
-    the attention hyper-connection's ``fn``, q_a, CSA's compressor kv/gate, the FFN
-    hyper-connection's ``fn``, then the TP1 shared expert's gate/up.
+    q_a, CSA's compressor kv/gate, then the TP1 shared expert's gate/up -- led by the
+    hyper-connections' ``fn`` layout, which no longer streams through the ring but pins its page.
 
     All are 32 receivers. The page is the gcd of their slabs: the ``fn`` layout's ``[512, 32]``
     slab, 16 tiles (9 KB at bf4), which is a whole number of rows of the 128-tile q_a /
