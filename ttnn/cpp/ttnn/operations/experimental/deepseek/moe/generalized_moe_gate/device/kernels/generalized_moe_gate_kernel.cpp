@@ -26,8 +26,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-// Gathers token row `token` of a [.., 256] tile tensor into face 0 of the input tile. One read per tile brings
-// both faces' 32 B rows ([row & ~63, + 576) of the tile) into the CB's scratch pages, while faces 1 to 3 are zeroed.
+// Gathers one token row of a [.., 256] tile tensor into face 0; one 64 B aligned 576 B read per tile spans both faces.
 template <typename Accessor>
 void gather_token_row(const Accessor& input, uint32_t input_cb, uint32_t token, uint32_t width_tiles) {
     constexpr uint32_t span = 512 + 64;
@@ -89,10 +88,7 @@ void kernel_main() {
     constexpr bool input_interleaved = get_named_compile_time_arg_val("moe_gate_input_interleaved") == 1;
     constexpr std::uint32_t input_width_tiles = get_named_compile_time_arg_val("moe_gate_input_width_tiles");
 
-    // Setup sharded persistent buffers (all tensor-backed). bias has num_blocks tiles/core (one 256-expert
-    // block per tile); input_indices likewise — block b's tile holds that block's GLOBAL expert ids
-    // (arange + b*256), uploaded by the host. The input is either sharded the same way or gathered here
-    // from the logits tile rows.
+    // Sharded buffers hold num_blocks tiles/core; input_indices block b holds GLOBAL expert ids arange + b*256.
     if constexpr (Core::is_active_core) {
         if constexpr (input_interleaved) {
             // Bias and indices go first, so compute sets up while the token row is in flight.

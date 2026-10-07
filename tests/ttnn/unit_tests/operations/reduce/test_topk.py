@@ -901,9 +901,7 @@ def test_topk_multicore_values_beyond_first_tile_row(num_rows, largest, device):
 
 
 def _tree_merge_sub_core_grid(device, local_x, local_y):
-    # find_topk_core_config keeps one spare column and two spare rows (the final core lives below the local
-    # rectangle) and at W=16384 its makespan model takes the most cores the grid allows, so a
-    # (local_x + 1) x (local_y + 2) sub grid pins the split at exactly local_x * local_y local cores.
+    # find_topk_core_config keeps a spare column and two spare rows, and at W=16384 takes every local core left.
     grid = device.compute_with_storage_grid_size()
     if grid.x < local_x + 1 or grid.y < local_y + 2:
         pytest.skip(f"device grid {grid.x}x{grid.y} cannot host {local_x}x{local_y} local cores plus the final core")
@@ -915,14 +913,7 @@ def _tree_merge_sub_core_grid(device, local_x, local_y):
 @pytest.mark.parametrize("largest", (True, False))
 @pytest.mark.parametrize("stable", (False, True))
 def test_topk_multicore_tree_merge(local_x, local_y, k, largest, stable, device):
-    """
-    Tree merge across the multi-core factory's local cores (issue #56797): with n local cores the local
-    top-k tiles are merged pairwise over log2(n) rounds on the local cores and only core 0 sends to the
-    final core. n is pinned through sub_core_grids (see _tree_merge_sub_core_grid); H=64 gives two tile
-    rows so the per-row credit/data handshake is exercised across rows. stable=True takes the fused-key
-    engine (packed [bf16|u16] keys, no index stream) through the same tree and must keep the torch-stable
-    tie order.
-    """
+    """Pairwise tree merge over n local cores (#56797); H=64 runs the per-row handshake across two tile rows."""
     torch.manual_seed(2007)
     W = 16384
     sub_core_grids = _tree_merge_sub_core_grid(device, local_x, local_y)

@@ -31,8 +31,7 @@ void update_tensor_cb(tt::tt_metal::Program& program, uint8_t cb_index, const Te
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, (*cb_it)->id(), *buffer);
 }
 
-// An interleaved input has no tensor backed CB: the reader, the first kernel of the descriptor, gets its address as
-// the first runtime arg on each core of the bias shard grid.
+// An interleaved input has no tensor backed CB; kernel 0 is the reader, the first kernel of the descriptor.
 void update_reader_input_address(tt::tt_metal::Program& program, const tensor_args_t& tensor_args) {
     constexpr tt::tt_metal::KernelHandle reader_kernel = 0;
     const uint32_t address = tensor_args.input_tensor.buffer()->address();

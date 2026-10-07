@@ -59,8 +59,7 @@ inline DsaQkBatching dsa_qk_batching(uint32_t subblock_basis, uint32_t QC, uint3
     return {qk_batch_heads, qk_col_batch};
 }
 
-// Config for callers that leave program_config unspecified: every head resident, one q tile row per unit and
-// the widest k chunk whose buffers fit L1, which is the full strip path. One head at a time if nothing fits.
+// Default config: all heads resident, the widest k chunk that fits L1 (full strip path), else {} (one head at a time).
 inline IndexerScoreProgramConfig default_program_config(
     uint32_t Hi,
     uint32_t Tt,
@@ -74,8 +73,7 @@ inline IndexerScoreProgramConfig default_program_config(
         if (KC > Tt) {
             continue;
         }
-        // The make_cb sizes of both factories at QC 1 and HB Hi with bf16 accumulation (the mask takes one tile
-        // more than the compression ratio), plus an eighth of slack.
+        // Both factories' make_cb sizes at QC 1 and HB Hi with bf16 accumulation, plus an eighth of slack.
         const uint64_t bytes = uint64_t(Hi) * Dt * q_tile_bytes + 2ull * KC * Dt * k_tile_bytes +
                                (uint64_t(Hi) + key_compression_ratio + 1 + uint64_t(KC) * Hi + 4ull * KC) * bf16_tile;
         if (bytes + bytes / 8 <= l1_budget) {
@@ -85,13 +83,11 @@ inline IndexerScoreProgramConfig default_program_config(
     return {};
 }
 
-// Heads the blocked gate multiply sums in one DEST pass; the packer adds the passes in L1. A 64 head bf16 DEST sum
-// loses more than the multiply at HiFi2 and up; at LoFi the multiply's error dominates and one pass (0) is kept.
+// Heads per DEST pass of the gate multiply; above LoFi a 64 head bf16 DEST sum loses more than the multiply does.
 inline uint32_t gate_mul_heads_per_pass(tt::tt_metal::MathFidelity math_fidelity) {
     return math_fidelity == tt::tt_metal::MathFidelity::LoFi ? 0u : 8u;
 }
 
-// Head streaming q buffer depth: as many head blocks as fit in half the L1 budget, never fewer than before.
 inline uint32_t streaming_q_depth(uint64_t q_block_bytes, uint64_t l1_budget) {
     for (uint32_t depth : {8u, 4u}) {
         if (depth * q_block_bytes <= l1_budget / 2) {

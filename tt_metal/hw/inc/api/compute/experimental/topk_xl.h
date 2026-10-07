@@ -147,8 +147,7 @@ ALWI void topk_xl_rebuild(std::uint32_t idst, bool ascending) {
 }
 
 /**
- * Sorts each 64 row column of a fused K = 1024 tile on its own, after topk_xl_merge of two tiles whose columns
- * topk_xl_local_sort_generic<1024, true> sorted in opposite directions. No transposes, so no SrcB operand.
+ * Sorts each 64 row column of a fused K = 1024 tile; the columns must be bitonic. No transposes, so no SrcB valid.
  */
 template <std::uint32_t K>
 ALWI void topk_xl_rebuild_columns(std::uint32_t idst, bool ascending) {

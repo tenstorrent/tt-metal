@@ -20,8 +20,7 @@ constexpr TopkMetadataBounds calculate_topk_bounds(uint32_t search_len, uint32_t
     };
 }
 
-// The chunks of one row that a single core reduces. A column segment past the row's valid length has no
-// data; it is reduced as one synthetic all -inf chunk so the fused body never waits on an empty stream.
+// A segment past the row's valid length is reduced as one all -inf chunk, so the body never waits on an empty stream.
 struct TopkSegmentBounds {
     uint32_t first_chunk;
     uint32_t num_chunks;

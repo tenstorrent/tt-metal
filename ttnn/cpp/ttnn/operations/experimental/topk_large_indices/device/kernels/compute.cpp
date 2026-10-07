@@ -105,8 +105,7 @@ FORCE_INLINE void sort_classic_chunk(CircularBuffer& input, uint32_t dst, uint32
 }
 
 // FullInit is compile-time and this helper is force-inlined so the hot loop has
-// neither a mode branch nor a repeated full TopK configuration sequence. Columns sorts
-// each 64 row column of the chunk on its own instead of the whole chunk.
+// neither a mode branch nor a repeated full TopK configuration sequence.
 template <uint32_t K, bool FullInit, bool Columns = false>
 FORCE_INLINE void sort_fused_chunk(
     CircularBuffer& input, uint32_t dst, uint32_t active_elements, bool ascending, uint32_t local_chunk_id) {
@@ -126,9 +125,7 @@ FORCE_INLINE void sort_fused_chunk(
     }
 }
 
-// Every body reduces the row chunks [first_chunk, first_chunk + num_chunks) into an unfused
-// [values, indices] survivor at DST slot 0 with row-global indices. The survivor is sorted
-// descending unless final_ascending, which prepares it as merge operand one of another core.
+// Each body reduces its chunks into an unfused survivor at DST slot 0 with row-global indices.
 template <uint32_t K, bool final_ascending>
 FORCE_INLINE void reduce_fused_row(
     CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements) {
@@ -158,8 +155,7 @@ FORCE_INLINE void reduce_fused_row(
     topk_xl_separate_indices_row_major_global<K>(survivor_slot);
 }
 
-// Columns (k <= 64): every column of the survivor keeps the top 64 of its column across the segment's chunks,
-// which holds the segment's top 64, and one full sort ranks them once the segment is done.
+// Columns (k <= 64): the per-column top 64 survivors hold the segment's top 64; one full sort ranks them at the end.
 template <uint32_t K, bool Columns>
 FORCE_INLINE void reduce_segmented_row(
     CircularBuffer& input, uint32_t first_chunk, uint32_t num_chunks, uint32_t tail_elements, bool final_ascending) {
@@ -169,8 +165,7 @@ FORCE_INLINE void reduce_segmented_row(
     constexpr uint32_t segment_slot = 2 * tiles_per_sequence;
 
     const uint32_t end_chunk_total = first_chunk + num_chunks;
-    // Segments follow the row's 32-chunk blocks: the stamp is the chunk id within its block and the
-    // block base is a multiple of 32*K, so it ORs into the decoded index without overlap.
+    // Segments follow the row's 32-chunk blocks, so the stamp is the chunk id within its block.
     uint32_t segment_first = first_chunk;
     for (uint32_t segment = 0; segment_first < end_chunk_total; ++segment) {
         const uint32_t block_end = (segment_first / segment_capacity + 1) * segment_capacity;
@@ -231,8 +226,7 @@ FORCE_INLINE void reduce_segmented_row(
     }
 }
 
-// Tree merge round: the child's unfused [values, indices] survivor lands as raw FP32 tiles and is
-// copied next to our own survivor, then folded in with the same unfused merge the bodies use.
+// Tree merge round: the child's unfused survivor lands as raw FP32 tiles and merges into ours.
 template <uint32_t K>
 FORCE_INLINE void merge_landed_survivor(
     CircularBuffer& landing, uint32_t input_cb, uint32_t survivor_slot, bool final_ascending) {
@@ -381,9 +375,7 @@ void kernel_main() {
         }
     }
     if (num_recv_rounds > 0 || sends_survivor) {
-        // The landed survivor copies and the raw survivor pack leave the unpack to math handshake in a state
-        // that corrupts the first tile of the next program on this core. One datacopy through the source
-        // registers, with nothing packed, puts it back; the tile read is a stale input slot and is discarded.
+        // One discarded datacopy resets unpack/math sync, else the next program's first tile on this core is corrupt.
         reconfig_data_format_srca(input_cb);
         copy_init(input_cb);
         tile_regs_acquire();
