@@ -28,6 +28,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     quasar_mx_smoke,
+    runtime,
     select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
@@ -169,7 +170,7 @@ def generate_qsr_transpose_dest_combinations(
                                         dest_acc,
                                         dest_sync,
                                         math_transpose_faces,
-                                        dimensions,
+                                        runtime(dimensions),
                                     )
                                 )
                             continue
@@ -180,7 +181,7 @@ def generate_qsr_transpose_dest_combinations(
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    dimensions,
+                                    runtime(dimensions),
                                 )
                             )
 
