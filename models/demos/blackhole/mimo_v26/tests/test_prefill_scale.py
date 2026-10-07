@@ -20,6 +20,7 @@ NL = int(E("PS_LAYERS", "4"))
 CH = int(E("PS_CH", "2048"))
 OUT = E("PS_OUT", "/tmp/ps.jsonl")
 CASES = [tuple(int(v) for v in c.split(":")) for c in E("PS_CASES", "4:4096").split(",")]
+WARM = E("PS_TTFT_WARM", "0") == "1"
 GSM = "/mnt/tt-data/ssinghal/mimo-dumps/gsm8k/gsm8k_512.json"
 
 
@@ -104,6 +105,9 @@ def test_prefill_scale(mesh_device):
         st = pf.times[n0:]
         toks = sum(len(p) for row in prompts for p in row)
         ft = pf.first_tokens(res["last"])
+        ttft_first_call_ms = (
+            time.time() - t0
+        ) * 1e3  # prefill (host copies in/out) + final norm + lm_head + host copy; includes eager warm-up/trace capture on case 0
         fin = all(bool(torch.isfinite(v[1]).all()) for v in ft.values())
         rec(
             "prefill_case",
@@ -118,10 +122,27 @@ def test_prefill_scale(mesh_device):
             step_ms_last=round(st[-1], 1),
             tok_per_s_replay=round(toks / (sum(st) / 1e3), 1),
             tok_per_s_wall=round(toks / wall, 1),
+            ttft_first_call_ms=round(ttft_first_call_ms, 1),
             finite=fin,
             first_tokens=[v[0] for v in list(ft.values())[:8]],
             dram_after=dram(md),
         )
         assert fin
+        if (
+            WARM
+        ):  # real warm TTFT: second call of the same case (trace captured, kernels cached), same span as ttft_first_call_ms
+            t0 = time.time()
+            res2 = pf.prefill(prompts)
+            ft2 = pf.first_tokens(res2["last"])
+            ttft_warm_ms = (time.time() - t0) * 1e3
+            rec(
+                "ttft_warm",
+                case_idx=ci,
+                B=B,
+                isl=isl,
+                ttft_warm_ms=round(ttft_warm_ms, 1),
+                same_first_tokens=[v[0] for v in ft2.values()] == [v[0] for v in ft.values()],
+                note="real TTFT: pf.prefill (set_step host copies, all chunks, last-token hidden to host) + first_tokens (final norm, lm_head, host copy), warm",
+            )
     pf.release()
     rec("final_dram", dram=dram(md))
