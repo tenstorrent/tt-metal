@@ -11,6 +11,8 @@ Mapping: dispatch group axis = mesh rows (cluster_axis=0, 4 chips per group); th
 its own tokens; each column returns the PARTIAL weighted sum over its group's experts; the 8 column partials must be summed (reduce over columns).
 """
 
+import os
+
 import torch
 
 import ttnn
@@ -101,11 +103,41 @@ class MiMoPrefillMoE:
         self.cf = cf
         self._shared = {}
         self.last_counts = None
+        self.mm_chunk = int(os.environ.get("MIMO_MM_CHUNK", "256"))
 
     def shared(self, N):
         if N not in self._shared:
             self._shared[N] = Shared(self.md, N, self.cf)
         return self._shared[N]
+
+    def _ffn_mm(self, toks, l):
+        """Plain ttnn matmuls with fp32 accumulation on the extracted tokens (routed_expert_ffn's fixed blocking does not fit fp32 DEST); M chunked."""
+
+        def ffn(t_):
+            g_ = ttnn.matmul(t_, self.gate_projs[l], compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
+            u_ = ttnn.matmul(t_, self.up_projs[l], compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
+            h_ = ttnn.multiply(
+                g_, u_, lhs_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)], dtype=ttnn.bfloat16
+            )
+            ttnn.deallocate(g_)
+            ttnn.deallocate(u_)
+            o_ = ttnn.matmul(h_, self.down_projs[l], compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
+            ttnn.deallocate(h_)
+            return o_
+
+        M, K = toks.shape[-2], toks.shape[-1]
+        ch = self.mm_chunk
+        if M <= ch:
+            return ffn(toks)
+        parts = []
+        for r0 in range(0, M, ch):
+            sl = ttnn.slice(toks, [r0, 0], [min(M, r0 + ch), K])
+            parts.append(ffn(sl))
+            ttnn.deallocate(sl)
+        o = ttnn.concat(parts, dim=-2)
+        for p_ in parts:
+            ttnn.deallocate(p_)
+        return o
 
     def forward(self, x_rm, scores, indices, keep_counts=False):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (router outputs; N = tokens of this mesh row)."""
@@ -166,14 +198,17 @@ class MiMoPrefillMoE:
                     local_expert_id=l,
                     max_dispatched_tokens_per_expert=sh.max_per_expert,
                 )
-                o = dp.routed_expert_ffn(
-                    toks,
-                    self.gate_projs[l],
-                    self.up_projs[l],
-                    self.down_projs[l],
-                    compute_kernel_config=self.ckc,
-                    output=None,
-                )
+                if self.expert_op == "loop":
+                    o = dp.routed_expert_ffn(
+                        toks,
+                        self.gate_projs[l],
+                        self.up_projs[l],
+                        self.down_projs[l],
+                        compute_kernel_config=self.ckc,
+                        output=None,
+                    )
+                else:
+                    o = self._ffn_mm(toks, l)
                 ttnn.deallocate(toks)
                 out = dp.insert(out, o, region_offsets, counts, sh.gidx, local_expert_id=l)
                 ttnn.deallocate(o)
