@@ -118,6 +118,7 @@ inline void perf_binary_source_handshakes(
 #ifndef EB_BLOCK_DEFINED
 constexpr bool EB_BLOCK_UNPACK = false;
 constexpr bool EB_BLOCK_PACK   = false;
+constexpr bool EB_BLOCK_PACK816 = false;
 #endif
 
 #ifdef LLK_TRISC_UNPACK
@@ -484,7 +485,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_pack_block_contiguous_<dest_sync, is_fp32_dest_acc_en>(
                             0, L1_ADDRESS(buffer_Res[block * output_tiles_in_block]), output_tiles_in_block);
                     }
-                    for (std::uint32_t tile = 0; !EB_BLOCK_PACK && tile < output_tiles_in_block; ++tile)
+                    if constexpr (EB_BLOCK_PACK816)
+                    {
+                        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                            0, L1_ADDRESS(buffer_Res[block * output_tiles_in_block]), output_tiles_in_block);
+                    }
+                    for (std::uint32_t tile = 0; !EB_BLOCK_PACK && !EB_BLOCK_PACK816 && tile < output_tiles_in_block; ++tile)
                     {
                         const std::uint32_t res_tile_idx = block * output_tiles_in_block + tile;
                         LLK_ASSERT(

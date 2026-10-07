@@ -19,12 +19,13 @@ class EB_BLOCK(TemplateParameter):
     eb_variant: str = "main"
 
     def convert_to_cpp(self) -> str:
-        u = "true" if self.eb_variant in ("pt_bu", "pt_bu_bp") else "false"
+        u = "true" if self.eb_variant in ("pt_bu", "pt_bu_bp", "pt_bu_bp816") else "false"
         p = "true" if self.eb_variant == "pt_bu_bp" else "false"
-        return f"#define EB_BLOCK_DEFINED 1\nconstexpr bool EB_BLOCK_UNPACK = {u};\nconstexpr bool EB_BLOCK_PACK = {p};"
+        q = "true" if self.eb_variant == "pt_bu_bp816" else "false"
+        return f"#define EB_BLOCK_DEFINED 1\nconstexpr bool EB_BLOCK_UNPACK = {u};\nconstexpr bool EB_BLOCK_PACK = {p};\nconstexpr bool EB_BLOCK_PACK816 = {q};"
 
 
-VARIANTS = {"main": True, "pt": False, "pt_bu": False, "pt_bu_bp": False}
+VARIANTS = {"main": True, "pt": False, "pt_bu": False, "pt_bu_bp": False, "pt_bu_bp816": False}
 CASES = [
     ("bf16_add_lofi", InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b), MathOperation.Elwadd, MathFidelity.LoFi),
     ("bfp8_add_lofi", InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Bfp8_b), MathOperation.Elwadd, MathFidelity.LoFi),
@@ -51,7 +52,7 @@ def test_perf_eltwise_binary_blk(perf_report, case, variant, input_dimensions, d
     if dest_acc == DestAccumulation.Yes and input_dimensions[0] > 128:
         pytest.skip("4 tiles per section with fp32 DEST")
     per_face = VARIANTS[variant]
-    if variant == "pt_bu_bp" and formats.output_format == DataFormat.Bfp8_b:
+    if variant in ("pt_bu_bp", "pt_bu_bp816") and formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("the block pack takes no per-tile exponent section")
     _run_eltwise_binary_test(
         dest_acc,
@@ -76,12 +77,12 @@ def test_perf_eltwise_binary_blk(perf_report, case, variant, input_dimensions, d
 
 @parametrize(
     case=[c[0] for c in CASES],
-    variant=["pt_bu", "pt_bu_bp"],
+    variant=["pt_bu", "pt_bu_bp", "pt_bu_bp816"],
     input_dimensions=[[64, 32], [256, 32], [512, 32]],
 )
 def test_eltwise_binary_blk_functional(case, variant, input_dimensions):
     _, formats, op, fid = next(c for c in CASES if c[0] == case)
-    if variant == "pt_bu_bp" and formats.output_format == DataFormat.Bfp8_b:
+    if variant in ("pt_bu_bp", "pt_bu_bp816") and formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("the block pack takes no per-tile exponent section")
     _run_eltwise_binary_test(
         DestAccumulation.No,

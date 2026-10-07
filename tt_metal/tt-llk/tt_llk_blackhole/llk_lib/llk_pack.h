@@ -610,3 +610,38 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
         TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
     }
 }
+
+// #58816's block pack, measurement only
+/**
+ * @brief Pack num_tiles consecutive 32x32 tiles from the destination register to consecutive L1 tiles with one run of the packer
+ *        program: the PackMode::Default program of @ref _llk_pack_init_ with its outer loop lengthened to num_faces * num_tiles for this run.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, must be PackMode::Default.
+ * @param start_tile_index: Index of the first source tile in the destination register.
+ * @param address: L1 destination address of the first tile.
+ * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
+ * @note Requires the program of @ref _llk_pack_init_<PackMode::Default> for four-face tiles of FACE_R_DIM rows; BFP outputs must use
+ *       @ref _llk_pack_ per tile.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
+{
+    static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
+
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination(address);
+
+    // MOP word bits 19:10: a non-zero outer loop length overrides the programmed one for this run only; bits 9:0 (inner loop) stay programmed.
+    const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
+    TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
+}
