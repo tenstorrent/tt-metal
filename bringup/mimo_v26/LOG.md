@@ -696,3 +696,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6b_1522188db07.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/layer.py
 - data: {"l5_ffn_vs_bf16":0.99965,"l4_ffn_vs_bf16":0.99849,"setmatch_l1_l5":[0.99365,0.98828,0.99121,0.99463,0.98877]}
+
+## E261007-0414-cd3
+- date: 2026-10-07T04:14:54
+- commit: 81eee22f9d0
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: 4-layer smoke (L0..L3 + final norm + lm_head bf16 vocab-sharded) on 4x8, one process, mm experts: (1) dump tokens (16 users x128): device last-token logits vs CPU norm+lm_head of dump L3 h_out: PCC min 0.9998 (mean 0.99992), top-1 agreement 16/16. (2) real GSM8K prompts (chat template, 4 slots x 4 rows with equal lengths per slot, right-padded with pad id): first token + 1 decode step at position len run for TWO ISLs in the same process (S=128 lens 102/101/100/95, then S=256 lens 94/92/90/89), logits finite; 4-layer model emits the same junk token for every prompt (141806, then 143877), as expected for a truncated model (no accuracy claim). Decode path includes MoE decode padded to 64 rows with a per-layer capacity assertion (passed).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke4_81eee22f9d0.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_smoke_model.py
+- data: {"logits_pcc_min":0.9998,"top1_agree":1.0}
