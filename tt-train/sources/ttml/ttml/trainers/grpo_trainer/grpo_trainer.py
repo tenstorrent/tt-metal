@@ -1659,13 +1659,6 @@ class GRPOTrainer:
     # -- training loop -------------------------------------------------------
 
     def train(self) -> None:
-        """Synchronous GRPO training loop.
-
-        Walks the phase helpers above once per generation batch, then per
-        mini-epoch runs ``_optimize`` (fwd-grad against the sampler's pi_old +
-        loss + backward), ``_apply_gradients``, and the metrics/checkpoint
-        bookkeeping.
-        """
         self._setup()
         for cb in self.callbacks:
             cb.on_train_begin(self)
