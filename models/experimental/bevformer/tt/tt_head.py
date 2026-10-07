@@ -28,10 +28,10 @@ from models.experimental.bevformer.model_config import (
     CODE_WL,
     CODE_XY,
     CODE_Z,
+    GRID_DTYPE,
+    SCORE_DTYPE,
 )
 from models.experimental.bevformer.tt.tt_common import layer_norm
-from models.experimental.bevformer.model_config import SCORE_DTYPE
-from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 # TtBEVFormerHead rebuilds the box code by concatenating its parts in channel order:
@@ -70,7 +70,7 @@ class TtBEVFormerHead:
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
         (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``GRID_DTYPE``):
-        ``config/decoder_config.py``'s code layout with cx, cy and cz in metres.
+        ``model_config.py``'s box code layout with cx, cy and cz in metres.
         """
         p = self.params
         bs = bev_embed.shape[0]

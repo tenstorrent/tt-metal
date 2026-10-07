@@ -20,8 +20,15 @@ from types import SimpleNamespace
 import torch
 import ttnn
 
-from ..model_config import DeformableAttentionConfig
-from ..model_config import GRID_DTYPE
+from models.experimental.bevformer.model_config import (
+    EMBED_DIMS,
+    GRID_DTYPE,
+    NUM_CAMS,
+    NUM_HEADS,
+    NUM_LEVELS,
+    SCA_NUM_POINTS,
+    DeformableAttentionConfig,
+)
 from .tt_ms_deformable_attention import TTMSDeformableAttention
 
 
@@ -185,11 +192,11 @@ class TTSpatialCrossAttention:
         device,
         *,
         spatial_shapes,
-        embed_dims=256,
-        num_cams=6,
-        num_heads=8,
-        num_levels=4,
-        num_points=8,
+        embed_dims=EMBED_DIMS,
+        num_cams=NUM_CAMS,
+        num_heads=NUM_HEADS,
+        num_levels=NUM_LEVELS,
+        num_points=SCA_NUM_POINTS,
         grid_dtype=GRID_DTYPE,
         grid_sample_compute_config=None,
     ):

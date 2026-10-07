@@ -23,6 +23,7 @@ https://github.com/fundamentalvision/BEVFormer/blob/master/projects/mmdet3d_plug
 import torch
 
 from models.experimental.bevformer.model_config import (
+    BOX_CENTER,
     CODE_COS,
     CODE_H,
     CODE_SIN,
@@ -30,9 +31,6 @@ from models.experimental.bevformer.model_config import (
     CODE_WL,
     CODE_XY,
     CODE_Z,
-)
-from models.experimental.bevformer.model_config import (
-    BOX_CENTER,
     MAX_NUM,
     NUM_CLASSES,
     PC_RANGE,
@@ -41,7 +39,7 @@ from models.experimental.bevformer.model_config import (
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box predictions (``config/decoder_config.py``'s code, centers in metres) to
+    """Box predictions (``model_config.py``'s box code, centers in metres) to
     ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return torch.cat(
         [

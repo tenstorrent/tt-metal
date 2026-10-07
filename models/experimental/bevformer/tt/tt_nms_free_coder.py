@@ -19,17 +19,20 @@ from models.experimental.bevformer.model_config import (
     CODE_WL,
     CODE_XY,
     CODE_Z,
+    MAX_NUM,
+    NUM_CLASSES,
+    PC_RANGE,
+    POST_CENTER_RANGE,
+    SCORE_DTYPE,
 )
-from models.experimental.bevformer.model_config import MAX_NUM, NUM_CLASSES, PC_RANGE, POST_CENTER_RANGE
 from models.experimental.bevformer.reference.nms_free_coder import filter_boxes
-from models.experimental.bevformer.model_config import SCORE_DTYPE
 
 # Candidates the exact float32 top-k ranks; see TtNMSFreeCoder.topk.
 NUM_CANDIDATES = 512
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box predictions (``config/decoder_config.py``'s code, centers in metres) to
+    """Box predictions (``model_config.py``'s box code, centers in metres) to
     ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return ttnn.concat(
         [

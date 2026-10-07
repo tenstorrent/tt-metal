@@ -114,12 +114,7 @@ def test_ms_deformable_attention_forward(
     ref_model.eval()
 
     # Create preprocessed parameters from PyTorch model
-    tt_parameters = create_ms_deformable_attention_parameters(
-        torch_model=ref_model,
-        device=device,
-        config=config,
-        dtype=ttnn.float32,
-    )
+    tt_parameters = create_ms_deformable_attention_parameters(ref_model, device=device, dtype=ttnn.float32)
 
     # Create ttnn model with preprocessed parameters
     tt_model = TTMSDeformableAttention(

@@ -12,7 +12,7 @@ and memory choices, which the reference does not see.
 Sections:
 - Cameras and images
 - Backbone and FPN
-- BEV grid and perception transformer
+- BEV grid, shared sizes and perception transformer
 - Encoder
 - Decoder and head
 - Box code and coder
@@ -21,8 +21,6 @@ Sections:
 """
 
 from dataclasses import dataclass
-
-import ttnn
 
 # --- Cameras and images -------------------------------------------------------------------------
 
@@ -72,11 +70,14 @@ FPN_KWARGS = dict(
 # The FPN levels' (h, w) for IMAGE_HEIGHT x IMAGE_WIDTH: strides 8 to 64, rounded up.
 SPATIAL_SHAPES = ((116, 200), (58, 100), (29, 50), (15, 25))
 
-# --- BEV grid and perception transformer --------------------------------------------------------
+# --- BEV grid, shared sizes and perception transformer ----------------------------------------
 
 BEV_H = 200
 BEV_W = 200
 EMBED_DIMS = 256
+# Shared by the encoder's and the decoder's attentions and FFNs.
+NUM_HEADS = 8
+FEEDFORWARD_CHANNELS = 512
 NUM_LEVELS = 4
 # (x_min, y_min, z_min, x_max, y_max, z_max) in metres: nuScenes' range, which the BEV grid, the
 # encoder's pillars and the head's box centers share.
@@ -88,10 +89,10 @@ ROTATE_CENTER = (100, 100)
 
 # --- Encoder ------------------------------------------------------------------------------------
 
+# SCA is the spatial cross-attention into the cameras, TSA the temporal self-attention over the
+# previous BEV.
 ENCODER_NUM_LAYERS = 6
-NUM_HEADS = 8
-FEEDFORWARD_CHANNELS = 512
-# The spatial cross-attention's sampling points per head and level, split over the pillar's heights.
+# The SCA's sampling points per head and level, split over the pillar's heights.
 SCA_NUM_POINTS = 8
 NUM_POINTS_IN_PILLAR = 4
 TSA_NUM_POINTS = 4
@@ -133,12 +134,13 @@ MAX_NUM = 300
 
 @dataclass
 class DeformableAttentionConfig:
-    """Sizes of a multi-scale deformable attention (``reference/ms_deformable_attention.py``)."""
+    """Sizes of a multi-scale deformable attention (``reference/ms_deformable_attention.py``);
+    ``num_points`` per head and level differs between its users, so it has no default."""
 
+    num_points: int
     embed_dims: int = EMBED_DIMS
     num_heads: int = NUM_HEADS
     num_levels: int = NUM_LEVELS
-    num_points: int = 4
     batch_first: bool = True
 
     def __post_init__(self):
@@ -148,12 +150,25 @@ class DeformableAttentionConfig:
 
 # --- TTNN precision and memory ------------------------------------------------------------------
 
-# The deformable attentions' reference points and sampling grids, in the encoder and the decoder:
-# in bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the 200x200 BEV grid.
-GRID_DTYPE = ttnn.float32
-# The head's class logits, which the coder ranks: in bfloat16 many of the num_query * num_classes
-# scores tie, and the top-k order departs from the reference's.
-SCORE_DTYPE = ttnn.float32
+# The ttnn dtypes, by name: the PyTorch reference imports this module and must not need ttnn, so
+# ``GRID_DTYPE`` and ``SCORE_DTYPE`` resolve on first access (``__getattr__`` below).
+_TTNN_DTYPES = {
+    # The deformable attentions' reference points and sampling grids, in the encoder and the
+    # decoder: in bfloat16 a point in (0.5, 1) moves in steps of 2^-8, 0.8 px on the 200x200 grid.
+    "GRID_DTYPE": "float32",
+    # The head's class logits, which the coder ranks: in bfloat16 many of the num_query *
+    # num_classes scores tie, and the top-k order departs from the reference's.
+    "SCORE_DTYPE": "float32",
+}
+
+
+def __getattr__(name):
+    if name in _TTNN_DTYPES:
+        import ttnn
+
+        return getattr(ttnn, _TTNN_DTYPES[name])
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # The backbone and FPN, for 6 cameras at 1600x928. Layer indices count the ResNet layers from 0
 # (layer1); level indices the FPN levels from 0 (C3).
@@ -165,8 +180,8 @@ SCORE_DTYPE = ttnn.float32
 # not show it; their weights lack the trained backbone's outlier channels.
 FP32_ACC_STAGES = (2, 3)
 
-# Layers whose activations are kept in DRAM because their convs do not fit in L1; today all
-# four. layer1 and layer2 work on 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), and
+# Layers whose activations are kept in DRAM because their convs do not fit in L1: all four.
+# layer1 and layer2 work on 6 x 232 x 400 x 256 tensors (285 MB in bfloat16), and
 # layer4's 2048-channel 1x1 convs overflow L1 when sharded. The fp32 accumulation layers join
 # them: with fp32 accumulation, layer3's L1-sharded convs fail to allocate (their circular
 # buffers clash with L1 buffers), so layer3 is in DRAM only because of FP32_ACC_STAGES.

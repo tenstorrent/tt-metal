@@ -23,9 +23,8 @@ import dataclasses
 import math
 
 import ttnn
-from models.experimental.bevformer.model_config import CODE_XY, CODE_Z
+from models.experimental.bevformer.model_config import CODE_XY, CODE_Z, GRID_DTYPE
 from models.experimental.bevformer.tt.tt_common import layer_norm
-from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import TTMSDeformableAttention, fp32_grid_sample_config
 
 

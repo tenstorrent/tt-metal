@@ -4,10 +4,18 @@
 """BEVFormer's parameters for the TTNN port: each reference module's weights as its TTNN counterpart
 takes them, on device, with whatever the forward would otherwise compute from the weights alone
 already computed. ``create_bevformer_parameters`` builds the whole detector's.
+
+Sections:
+- Shared helpers: Linears and LayerNorms
+- Deformable attention and encoder
+- Perception transformer
+- Backbone and FPN
+- Decoder
+- Head
+- Detector
 """
 
 from types import SimpleNamespace
-from typing import Optional
 
 import torch
 
@@ -19,217 +27,54 @@ from models.experimental.bevformer.tt.tt_modulated_deform_conv import grid_offse
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 
-# Get default layout and dtype
-DEFAULT_LAYOUT = ttnn.TILE_LAYOUT
 DEFAULT_DTYPE = ttnn.bfloat16
 
 
-def convert_parameterdict_to_object(param_dict):
-    """
-    Convert parameter dictionary to object with dot-notation attribute access.
-    """
-    params_obj = type("Params", (), {})()
-
-    for layer_name, layer_params in param_dict.items():
-        layer_obj = type("Layer", (), {})()
-
-        # Handle case where layer_params might already be an object (not a dict)
-        if hasattr(layer_params, "items"):
-            # layer_params is a dictionary
-            for param_name, param_tensor in layer_params.items():
-                setattr(layer_obj, param_name, param_tensor)
-        else:
-            # layer_params is already an object, copy its attributes
-            if hasattr(layer_params, "__dict__"):
-                for param_name, param_tensor in layer_params.__dict__.items():
-                    setattr(layer_obj, param_name, param_tensor)
-            else:
-                # layer_params is a single tensor/value, store it directly
-                setattr(params_obj, layer_name, layer_params)
-                continue
-
-        setattr(params_obj, layer_name, layer_obj)
-
-    return params_obj
+# --- Shared helpers ---------------------------------------------------------------------------
 
 
-def _build_ttnn_kwargs(dtype=None, layout=None, weights_mesh_mapper=None, device=None):
-    """Build kwargs dict for ttnn.from_torch based on available parameters"""
-    kwargs = {}
-    if dtype is not None:
-        kwargs["dtype"] = dtype
-    if layout is not None:
-        kwargs["layout"] = layout
-    if weights_mesh_mapper is not None:
-        kwargs["mesh_mapper"] = weights_mesh_mapper
-    if device is not None:
-        kwargs["device"] = device
-    return kwargs
+def preprocess_linear_weight(weight, *, device, dtype=DEFAULT_DTYPE):
+    """A Linear's weight transposed to ``(in, out)``, as ``ttnn.linear`` takes it."""
+    return ttnn.from_torch(weight.T.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def _process_linear_layer(layer, device, dtype=None, layout=None, weights_mesh_mapper=None):
-    """Process a PyTorch linear layer into ttnn format with weight and bias"""
-    if dtype is None:
-        dtype = DEFAULT_DTYPE
-    if layout is None:
-        layout = DEFAULT_LAYOUT
-
-    layer_params = {}
-
-    # Process weights and biases - preprocess functions already handle ttnn.from_torch
-    if device is not None:
-        processed_weight = preprocess_linear_weight(
-            layer.weight,
-            dtype=dtype,
-            layout=layout,
-            weights_mesh_mapper=weights_mesh_mapper,
-            device=device,
-        )
-        # processed_weight is already a ttnn tensor with device placement from preprocess function
-        layer_params["weight"] = processed_weight
-
-        if layer.bias is not None:
-            processed_bias = preprocess_linear_bias(
-                layer.bias,
-                dtype=dtype,
-                layout=layout,
-                weights_mesh_mapper=weights_mesh_mapper,
-                device=device,
-            )
-            # processed_bias is already a ttnn tensor with device placement from preprocess function
-            layer_params["bias"] = processed_bias
-        else:
-            layer_params["bias"] = None
-    else:
-        # For None device (testing), just store the original torch tensors
-        layer_params["weight"] = layer.weight.clone().detach()
-        if layer.bias is not None:
-            layer_params["bias"] = layer.bias.clone().detach()
-        else:
-            layer_params["bias"] = None
-    return layer_params
-
-
-# Local preprocessing functions to avoid import issues
-def preprocess_linear_weight(weight, *, dtype=None, layout=None, weights_mesh_mapper=None, device=None):
-    """
-    Preprocess linear layer weight for TTNN (transpose and convert).
-    """
-    if dtype is None:
-        dtype = DEFAULT_DTYPE
-    if layout is None:
-        layout = DEFAULT_LAYOUT
-    weight = weight.T.contiguous()
-
-    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
-    weight = ttnn.from_torch(weight, **kwargs)
-    return weight
-
-
-def preprocess_linear_bias(bias, *, dtype=None, layout=None, weights_mesh_mapper=None, device=None):
-    """
-    Preprocess linear layer bias for TTNN (reshape and convert).
-    """
-    if dtype is None:
-        dtype = DEFAULT_DTYPE
-    if layout is None:
-        layout = DEFAULT_LAYOUT
-    bias = bias.reshape((1, -1))
-
-    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
-    bias = ttnn.from_torch(bias, **kwargs)
-    return bias
+def preprocess_linear_bias(bias, *, device, dtype=DEFAULT_DTYPE):
+    """A Linear's bias as a ``(1, out)`` row."""
+    return ttnn.from_torch(bias.reshape((1, -1)), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 def linear_params(weight, bias, device, dtype):
     """A Linear's ``weight`` and ``bias`` as ``ttnn.linear`` takes them, on ``device``."""
     return SimpleNamespace(
         weight=preprocess_linear_weight(weight, dtype=dtype, device=device),
-        bias=preprocess_linear_bias(bias, dtype=dtype, device=device),
+        bias=None if bias is None else preprocess_linear_bias(bias, dtype=dtype, device=device),
     )
 
 
-def preprocess_ms_deformable_attention_parameters(
-    torch_model,
-    *,
-    device,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """
-    Preprocesses multi-scale deformable attention model parameters from PyTorch to ttnn format.
+def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=DEFAULT_DTYPE):
+    """A LayerNorm's weight and bias, and its ``eps``: ``ttnn.layer_norm`` defaults to 1e-12."""
 
-    Args:
-        torch_model: PyTorch MultiScaleDeformableAttention model
-        device: ttnn device
-        dtype: Target data type for ttnn tensors
-        layout: Target layout for ttnn tensors
-        weights_mesh_mapper: Optional mesh mapper for distributed weights
+    def upload(tensor):
+        return ttnn.from_torch(tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    Returns:
-        ParameterDict containing preprocessed ttnn tensors
-    """
-
-    parameters = {}
-
-    # Process all linear layers using helper function
-    layer_names = ["value_proj", "sampling_offsets", "attention_weights", "output_proj"]
-    for layer_name in layer_names:
-        if hasattr(torch_model, layer_name):
-            layer = getattr(torch_model, layer_name)
-            parameters[layer_name] = _process_linear_layer(
-                layer, device, dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper
-            )
-
-    # Convert flat dictionary to object structure for dot notation access
-    params_obj = convert_parameterdict_to_object(parameters)
-
-    return params_obj
+    return SimpleNamespace(
+        eps=layer_norm.eps,
+        weight=upload(layer_norm.weight),
+        bias=None if layer_norm.bias is None else upload(layer_norm.bias),
+    )
 
 
-def create_ms_deformable_attention_parameters(
-    torch_model_path: Optional[str] = None,
-    torch_model: Optional[torch.nn.Module] = None,
-    *,
-    device,
-    config,
-    dtype=None,
-    layout=None,
-    weights_mesh_mapper=None,
-):
-    """
-    Creates preprocessed parameters for multi-scale deformable attention model.
+# --- Deformable attention and encoder ---------------------------------------------------------
 
-    Args:
-        torch_model_path: Path to saved PyTorch model (optional)
-        torch_model: PyTorch model instance (optional)
-        device: ttnn device
-        config: DeformableAttentionConfig instance
-        dtype: Target data type for ttnn tensors
-        layout: Target layout for ttnn tensors
-        weights_mesh_mapper: Optional mesh mapper for distributed weights
 
-    Returns:
-        ParameterDict containing preprocessed ttnn tensors
-    """
-
-    # Get or create the PyTorch model
-    if torch_model is None:
-        if torch_model_path is not None:
-            torch_model = torch.load(torch_model_path, map_location="cpu")
-        else:
-            from ..reference.ms_deformable_attention import MSDeformableAttention
-
-            torch_model = MSDeformableAttention(config)
-    torch_model.eval()
-
-    return preprocess_ms_deformable_attention_parameters(
-        torch_model,
-        device=device,
-        dtype=dtype,
-        layout=layout,
-        weights_mesh_mapper=weights_mesh_mapper,
+def create_ms_deformable_attention_parameters(torch_model, *, device, dtype=DEFAULT_DTYPE):
+    """``reference.ms_deformable_attention.MSDeformableAttention``'s value, offset, attention and
+    output Linears, as TTMSDeformableAttention takes them."""
+    return SimpleNamespace(
+        **{
+            name: linear_params(getattr(torch_model, name).weight, getattr(torch_model, name).bias, device, dtype)
+            for name in ("value_proj", "sampling_offsets", "attention_weights", "output_proj")
+        }
     )
 
 
@@ -270,37 +115,6 @@ def create_temporal_self_attention_parameters(tsa, device, dtype=DEFAULT_DTYPE):
     )
 
 
-def preprocess_layer_norm_parameters(layer_norm, *, device, dtype=None, layout=None, weights_mesh_mapper=None):
-    """
-    Process LayerNorm parameters for TTNN.
-    """
-    if dtype is None:
-        dtype = DEFAULT_DTYPE
-    if layout is None:
-        layout = DEFAULT_LAYOUT
-
-    # ttnn.layer_norm defaults to epsilon=1e-12; carry the module's own.
-    layer_params = {"eps": layer_norm.eps}
-
-    # Weight (gamma)
-    kwargs = _build_ttnn_kwargs(dtype=dtype, layout=layout, weights_mesh_mapper=weights_mesh_mapper, device=device)
-    if device is not None:
-        layer_params["weight"] = ttnn.from_torch(layer_norm.weight, **kwargs)
-        if layer_norm.bias is not None:
-            layer_params["bias"] = ttnn.from_torch(layer_norm.bias, **kwargs)
-        else:
-            layer_params["bias"] = None
-    else:
-        # For testing with None device
-        layer_params["weight"] = layer_norm.weight.clone().detach()
-        if layer_norm.bias is not None:
-            layer_params["bias"] = layer_norm.bias.clone().detach()
-        else:
-            layer_params["bias"] = None
-
-    return layer_params
-
-
 def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
     """``reference.encoder.BEVFormerLayer`` as TTBEVFormerLayer takes it."""
     ffn = layer.ffns[0].layers
@@ -311,10 +125,7 @@ def create_bevformer_layer_parameters(layer, device, dtype=DEFAULT_DTYPE):
             linear1=linear_params(ffn[0][0].weight, ffn[0][0].bias, device, dtype),
             linear2=linear_params(ffn[1].weight, ffn[1].bias, device, dtype),
         ),
-        norms=[
-            SimpleNamespace(**preprocess_layer_norm_parameters(norm, device=device, dtype=dtype))
-            for norm in layer.norms
-        ],
+        norms=[preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms],
     )
 
 
@@ -341,6 +152,9 @@ def create_bevformer_encoder_parameters(encoder, device, dtype=DEFAULT_DTYPE):
     )
 
 
+# --- Perception transformer --------------------------------------------------------------------
+
+
 def create_perception_transformer_parameters(transformer, device, dtype=DEFAULT_DTYPE):
     """``reference.perception_transformer.PerceptionTransformer`` as TtPerceptionTransformer takes
     it: the encoder's parameters, the CAN-bus MLP, and per FPN level the camera embeddings plus the
@@ -350,7 +164,7 @@ def create_perception_transformer_parameters(transformer, device, dtype=DEFAULT_
         ttnn.from_torch(
             (transformer.cams_embeds + level_embed)[None, :, None, :],
             dtype=dtype,
-            layout=DEFAULT_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=device,
         )
         for level_embed in transformer.level_embeds
@@ -365,13 +179,17 @@ def create_perception_transformer_parameters(transformer, device, dtype=DEFAULT_
         can_bus_mlp=SimpleNamespace(
             linear1=linear_params(mlp[0].weight, mlp[0].bias, device, dtype),
             linear2=linear_params(mlp[2].weight, mlp[2].bias, device, dtype),
-            norm=SimpleNamespace(**preprocess_layer_norm_parameters(mlp.norm, device=device, dtype=dtype)),
+            norm=preprocess_layer_norm_parameters(mlp.norm, device=device, dtype=dtype),
         ),
         level_cams_embeds=level_cams_embeds,
     )
 
 
 # --- Backbone and FPN -------------------------------------------------------------------------
+
+# Each BatchNorm is folded into the conv before it, and every conv's input shape is recorded from one
+# reference forward. The DCN offset rows are reordered to the (x, y) order the device deformable
+# conv reads.
 
 
 def _fold_batch_norm(weight, bias, bn):
@@ -385,7 +203,9 @@ def _fold_batch_norm(weight, bias, bn):
     return weight * scale.view(-1, 1, 1, 1), bias * scale + shift
 
 
-def custom_preprocessor(model, name):
+def _resnet_preprocessor(model, name):
+    """``preprocess_model_parameters``' hook for the ResNet: BatchNorm-folded conv weights, DCN
+    offsets in the device's (x, y) order."""
     parameters = {}
 
     if isinstance(model, ResNet):
@@ -453,7 +273,7 @@ def create_resnet_parameters(model: ResNet, input_tensor, device=None):
     """
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=_resnet_preprocessor,
         device=device,
     )
     parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
@@ -550,7 +370,7 @@ def _cross_attn_parameters(msda, device, dtype):
     """The reference module's parameters and config."""
     if msda.num_levels != 1:
         raise ValueError(f"the decoder cross-attention is single-level, got {msda.num_levels} levels")
-    params = preprocess_ms_deformable_attention_parameters(msda, device=device, dtype=dtype)
+    params = create_ms_deformable_attention_parameters(msda, device=device, dtype=dtype)
     params.config = msda.config
     return params
 
@@ -564,10 +384,7 @@ def _layer_parameters(layer, device, dtype):
             linear1=linear_params(ffn[0][0].weight, ffn[0][0].bias, device, dtype),
             linear2=linear_params(ffn[1].weight, ffn[1].bias, device, dtype),
         ),
-        norms=[
-            SimpleNamespace(**preprocess_layer_norm_parameters(norm, device=device, dtype=dtype))
-            for norm in layer.norms
-        ],
+        norms=[preprocess_layer_norm_parameters(norm, device=device, dtype=dtype) for norm in layer.norms],
     )
 
 
@@ -605,7 +422,7 @@ def _cls_branch_parameters(branch, device, dtype):
     hidden = [
         (
             linear_params(linear.weight, linear.bias, device, dtype),
-            SimpleNamespace(**preprocess_layer_norm_parameters(norm, device=device, dtype=dtype)),
+            preprocess_layer_norm_parameters(norm, device=device, dtype=dtype),
         )
         for linear, norm in zip(linears[:-1], norms, strict=True)
     ]
@@ -648,8 +465,9 @@ def create_bevformer_parameters(model, img, device, dtype=DEFAULT_DTYPE):
     backbone and FPN pin every conv to that shape, so the TT detector only takes it. One reference
     forward of the backbone records the shapes, and the FPN's on its features the levels' ``(h, w)``.
     The BEV queries and their positional encoding are constants of the weights, so they are
-    uploaded here, ``(1, bev_h * bev_w, C)``. ``config`` carries the reference's settings the TT
-    detector is built with, so the two cannot disagree."""
+    uploaded here, ``(1, bev_h * bev_w, C)``. The result's ``config`` carries the reference's
+    settings the TT detector is built with, so the two cannot disagree. ``dtype`` is the transformer's
+    and the head's weights'; the backbone's and FPN's precision is ``model_config``'s."""
     images = img.flatten(0, 1)
     # create_resnet_parameters runs the backbone to record its conv shapes; its features come from
     # that same forward, as a second ResNet101 forward on the CPU takes minutes. The forward runs
@@ -678,7 +496,7 @@ def create_bevformer_parameters(model, img, device, dtype=DEFAULT_DTYPE):
         backbone=backbone,
         neck=create_fpn_parameters(model.img_neck, features),
         transformer=create_perception_transformer_parameters(model.transformer, device, dtype),
-        head=create_head_parameters(model.head, device),
+        head=create_head_parameters(model.head, device, dtype),
         bev_queries=upload(model.bev_embedding.weight),
         bev_pos=upload(model.positional_encoding(model.bev_h, model.bev_w)),
     )

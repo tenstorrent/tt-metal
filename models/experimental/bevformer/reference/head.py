@@ -75,7 +75,7 @@ class BEVFormerHead(nn.Module):
         num_query (int): Object queries.
         num_classes (int): Class logits per query.
         embed_dims (int): Channels of the queries and of the BEV features.
-        code_size (int): Box code channels, see ``config/decoder_config.py``.
+        code_size (int): Box code channels, see ``model_config.py``'s box code.
         pc_range (tuple[float]): Box center range in metres the [0, 1] reference points map to.
         decoder (dict, optional): ``DetectionTransformerDecoder`` arguments; BEVFormer's by default.
 
@@ -110,7 +110,7 @@ class BEVFormerHead(nn.Module):
         """``bev_embed`` is the encoder output ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)`` and box
-        predictions ``(L, bs, num_query, code_size)``: ``config/decoder_config.py``'s code layout
+        predictions ``(L, bs, num_query, code_size)``: ``model_config.py``'s box code layout
         with cx, cy and cz in metres.
         """
         bs = bev_embed.shape[0]
