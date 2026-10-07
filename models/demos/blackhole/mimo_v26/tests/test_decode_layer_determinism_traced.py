@@ -4,6 +4,7 @@ of every layer bitwise between the two executions (per mesh row and slot). The K
 import json
 import os
 import sys
+import time
 
 import torch
 
@@ -75,36 +76,66 @@ def main():
 
         fwd()  # eager warmup (compile); taps leak, fine
         ttnn.synchronize_device(mesh)
+        R = int(E("DEC_REPS", "30"))
+        RE = int(E("DEC_EAGER", "0"))
+        live = alive
+        stats = {}
+        first = None
+        # NO device allocation after the trace capture (it hung the next replay: 'Allocating device buffers is potentially unsafe due to the existence of
+        # an active trace'). All compared taps are concatenated INSIDE the trace into one persistent tensor [1,1,32,len(names)*4096]; one host read per replay.
+        names = [(L, k) for L, t in enumerate(taps_all) for k in t if k in TAPS]
+
+        def pack():
+            return ttnn.concat([taps_all[L][k] for L, k in names], dim=3)
+
+        pack()  # compile
+        fwd()
+        pack()
+        ttnn.synchronize_device(mesh)
         os.environ["MIMO_CHECK_CAP"] = "0"
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
         fwd()
+        big = pack()
         ttnn.end_trace_capture(mesh, tid, cq_id=0)
         ttnn.synchronize_device(mesh)
-        taps_dev = list(taps_all)
-        runs = []
-        R = int(E("DEC_REPS", "30"))
+        comp = ttnn.ConcatMesh2dToTensor(mesh, dims=(0, 1), mesh_shape=tuple(mesh.shape))
+        livem = alive.reshape(alive.shape[0], 1, SLOTS, 1)
+
+        def grab(t):
+            return ttnn.to_torch(t, mesh_composer=comp).reshape(alive.shape[0], mesh.shape[1], SLOTS, len(names), 4096)
+
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+        ref = grab(big).view(torch.int16)
+
+        def check(rep, cur, tag):
+            nonlocal first
+            d = (cur.view(torch.int16) != ref) & livem.unsqueeze(-1)  # [rows, cols, 32, names, 4096]
+            if not d.any():
+                return
+            cnt = d.sum(dim=(2, 4))  # [rows, cols, names]
+            for r, c, j in cnt.nonzero().tolist():
+                L, k = names[j]
+                e = stats.setdefault((L, k), dict(n_reps_bad=0, rows=set(), maxdiff=0.0, devs=set()))
+                e["n_reps_bad"] += 1
+                e["rows"].add(r)
+                e["devs"].add((r, c))
+                e["maxdiff"] = max(e["maxdiff"], float(cnt[r, c, j]))  # = number of differing elements
+                if first is None or (L, k) < first:
+                    first = (L, k)
+                print("DEC_GLITCH", tag, rep, f"L{L}.{k}", (r, c), int(cnt[r, c, j]), flush=True)
+
+        t0 = time.time()
         for rep in range(R):
             ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
-            runs.append([{k: host(mesh, v) for k, v in t.items() if k in TAPS} for t in taps_dev])
-        live = alive
-        # per layer/tap: in how many of the R-1 replays do LIVE slots of each mesh row differ from replay 0?
-        stats = {}
-        first = None
-        for L in range(NL):
-            for k in runs[0][L]:
-                for rep in range(1, R):
-                    d = (runs[0][L][k] - runs[rep][L][k]).abs().amax(dim=-1)  # [rows, cols, 32]
-                    dl = d[live.unsqueeze(1).expand_as(d)]
-                    if dl.numel() and float(dl.max()) > 0:
-                        rows_bad = sorted(
-                            {int(r) for r in (d * live.unsqueeze(1)).amax(dim=(1, 2)).nonzero().flatten().tolist()}
-                        )
-                        e = stats.setdefault((L, k), dict(n_reps_bad=0, rows=set(), maxdiff=0.0))
-                        e["n_reps_bad"] += 1
-                        e["rows"].update(rows_bad)
-                        e["maxdiff"] = max(e["maxdiff"], float(dl.max()))
-                        if first is None or (L, k) < first:
-                            first = (L, k)
+            check(rep, grab(big), "trace")
+            if rep % 50 == 0:
+                print("DEC_PROGRESS trace", rep, round(time.time() - t0), flush=True)
+        for rep in range(RE):  # eager steps compared with the same reference
+            fwd()
+            check(rep, grab(pack()), "eager")
+            if rep % 25 == 0:
+                print("DEC_PROGRESS eager", rep, round(time.time() - t0), flush=True)
+        R = R + RE
         out = {
             f"L{L}.{k}": dict(n_reps_bad=v["n_reps_bad"], rows=sorted(v["rows"]), maxdiff=v["maxdiff"])
             for (L, k), v in sorted(stats.items())
