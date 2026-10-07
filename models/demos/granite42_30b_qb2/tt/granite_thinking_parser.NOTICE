@@ -1,6 +1,0 @@
-IBM Granite thinking parser
-Source: https://huggingface.co/ibm-granite/granite-4.2-30b/blob/9e668ce1c538387ef24d3644e9b0606647762636/granite_thinking_parser.py
-Publisher source SHA256: cd5eef99f559f33dc402e0475174a97dcb43724d7e810149c702e9bbc473048a
-Publisher model-card license metadata: Apache-2.0. See repository LICENSE.
-Delivered SHA256: 3f10f478cae21e2c0af4dcaaf7bff9d60fad5b54193b826ad3e1c992da77f8a3
-Change: repository Black formatting and SPDX/source attribution comments; Python AST equality verified.

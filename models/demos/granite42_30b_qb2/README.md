@@ -41,11 +41,10 @@ export MESH_DEVICE=P300x2
 vllm serve ibm-granite/granite-4.2-30b \
   --revision 9e668ce1c538387ef24d3644e9b0606647762636 \
   --tokenizer-revision 9e668ce1c538387ef24d3644e9b0606647762636 \
-  --tensor-parallel-size 4 --max-model-len 131072 --max-num-seqs 16 \
+  --max-model-len 131072 --max-num-seqs 16 \
   --block-size 32 --max-num-batched-tokens 1024 --enable-chunked-prefill \
   --no-enable-prefix-caching --hf-overrides '{"architectures":["TTGraniteForCausalLM"]}' \
-  --reasoning-parser-plugin "$PWD/models/demos/granite42_30b_qb2/tt/granite_thinking_parser.py" \
-  --reasoning-parser granite_thinking_parser --enable-auto-tool-choice --tool-call-parser qwen3_xml \
+  --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml \
   --additional-config '{"tt":{"fabric_config":"FABRIC_1D_RING","sample_on_device_mode":"all","trace_region_size":134217728}}'
 ```
 
@@ -54,6 +53,8 @@ fork or built-in model registry edit is needed. The adapter declares ring fabric
 before mesh creation. Greedy and bounded top-k sampling (up to 32) run on device.
 The plugin routes full-vocabulary sampling, penalties, and unsupported device
 parameters through host logits. Host and device RNG streams are independent.
+Granite 4.2 uses the same `<think>` delimiters as vLLM's built-in `qwen3`
+reasoning parser, so the server does not need a model-local parser copy.
 
 ## Tests
 
