@@ -94,6 +94,8 @@ class QuantConfig:
     # intermediate ff1 writes and ff2 reads (the largest DRAM stream in the block) and lets ff2's
     # MMRS read block-float pages; ff2's output is pinned back to bf16. None = default.
     ff1_output_dtype: ttnn.DataType | None = None
+    # Sprint 7 (A7). Output dtype of norm_out (proj_out input + its fp32 TP all-gather); None = fp32.
+    norm_out_output_dtype: ttnn.DataType | None = None
 
     @staticmethod
     def default() -> QuantConfig:
@@ -291,6 +293,9 @@ def _all_bf8_lofi_act8_mod16_ff8() -> QuantConfig:
     """
     base = _all_bf8_lofi_act8_mod16()
     base.ff1_output_dtype = ttnn.bfloat8_b
+    # A7: norm_out emits bf16 (halves the fp32 all-gather into proj_out; the diffusers reference
+    # casts to bf16 before proj_out as well).
+    base.norm_out_output_dtype = ttnn.bfloat16
     return base
 
 
@@ -427,6 +432,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
             block.attn1.dummy_joint_as(config.ring_sdpa.input_dtype)
 
     model.norm_out_affine_dtype = config.modulation_affine_dtype
+    model.norm_out_output_dtype = config.norm_out_output_dtype or ttnn.float32
 
     # Log summary
     weight_dtypes = set()
@@ -457,7 +463,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     logger.info(
         f"  Activations: apply_activation_dtype={config.apply_activation_dtype}, "
         f"norm_output_dtype={config.norm_output_dtype}, modulation_affine_dtype={config.modulation_affine_dtype}, "
-        f"per_linear_compute_config={config.per_linear_compute_config}, ff1_output_dtype={config.ff1_output_dtype}"
+        f"per_linear_compute_config={config.per_linear_compute_config}, ff1_output_dtype={config.ff1_output_dtype}, "
+        f"norm_out_output_dtype={config.norm_out_output_dtype}"
     )
     logger.info(
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "

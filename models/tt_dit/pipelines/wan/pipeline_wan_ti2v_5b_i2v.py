@@ -36,6 +36,8 @@ from PIL import Image
 
 import ttnn
 
+from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
+
 from ...utils import tensor
 from ...utils.tensor import float32_tensor
 from .pipeline_wan import WanPipelineConfig
@@ -255,8 +257,15 @@ class WanTI2V5BI2VPipeline(WanTI2V5BPipeline):
         assert timestep.shape[0] == 1, "batch size 1 only"
         self._install_per_token_masks()
 
-        # Row order must match the mask convention: 0 -> row 0, t -> row 1.
-        rows = torch.tensor([0.0, float(t)], dtype=torch.float32).reshape(1, 1, 2, 1)
+        # Row order must match the mask convention: 0 -> row 0, t -> the last row. Since sprint 7
+        # the last row is index 32 (WanTransformer3DModel.TWO_ROW_ALIGNED_TOKENS = 33 rows, zeros
+        # between), so both slices in `_expand_two_row` start on a tile boundary and the
+        # untilize / row-major slice / re-tilize fallback the (1, 1, 2, 1) layout paid on row 1
+        # (3 programs per tensor per step) is gone. Same embedding values: the embedder is
+        # pointwise per row and the MLP reduces along K only.
+        n_rows = WanTransformer3DModel.TWO_ROW_ALIGNED_TOKENS
+        rows = torch.zeros(1, 1, n_rows, 1, dtype=torch.float32)
+        rows[0, 0, n_rows - 1, 0] = float(t)
         return float32_tensor(rows, device=(None if traced else self.mesh_device))
 
     def _install_per_token_masks(self) -> None:
