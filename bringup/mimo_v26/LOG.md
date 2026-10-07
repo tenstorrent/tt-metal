@@ -1922,3 +1922,15 @@
 - claim: FINDINGS from the spec exactness work: (1) DEAD-SLOT CLOBBER: a user that finished (EOS) inside a run keeps being fed as a dead slot at token 0 / position 0, which OVERWRITES position 0 of ITS OWN cache slot; a second decode run reusing that slot's prefilled KV (same process, no re-prefill) then diverges for exactly the finished users (U=1: users 0,1,3 with 114/58/94 tokens diverge at tokens 16/1/15, user 2 (250 tokens) identical; U=4: all users that finished early, and none of the 256-token users), reproducibly across processes; the first plain run and a clean-process spec run agree, the plain repeat and the spec run in the SAME process agree with each other (and not with the first) -> compare against a plain stream from a clean prefill, run plain and spec in separate processes. Pad content beyond the prompt (cyclic vs random token pad rows) does not change any plain stream (checked, 4/4 users identical). Not a problem when slots are re-prefilled before reuse, but a scheduler must never reuse a finished slot's cache without prefill. (2) TRACE INTERLEAVING HANG, third occurrence: the drafter trace captured BEFORE the decode verify trace (draft trace capture+replay, then verify eager+capture+replay) hangs in the verify execute_trace (stack saved, host .41 and .48 both); the drafter eager (no trace) or the drafter traced from round 1 on (verify trace first, SPEC_DR_TRACE=late default) works. Together with E261007-1046-cbd (second prefill replay after a decode trace) this says: the order in which CCL-using traces are first captured/replayed matters; capture order must be prefill, verify/decode, drafter. (3) the verify step is 4.8-5.4x a plain decode step and the traced drafter 84 ms, see the spec entry.
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_48b_u4_c5261577d47.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/prefill.py
+
+## E261007-1705-c97
+- date: 2026-10-07T17:05:24
+- commit: 7d6211c6290
+- branch: ssinghal/mimo-spec
+- host: 41,48
+- track: spec
+- status: verified
+- claim: spec_exact (scorecard format; gate per track 7: stream equals plain decode or divergences are near-ties): 48 layers, GSM8K enable_thinking=false, 256 new tokens, n=20 users (U=1: 4, U=4: 16), greedy spec stream vs plain stream from a clean prefill: STRICT IDENTITY 18/20, the other two users are exact bf16 ties (gap 0.125 = one bf16 ulp at logit 16-32; user 13 token 244 and user 15 token 157), E261007-1703-420; counted identical modulo ties = 20/20. Accepted tokens per round 4.40 (U=1) / 4.33 (U=4).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_y_u4_7d6211c6290.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
+- data: {"n":20,"identical":20,"identical_strict":18,"ties_one_bf16_ulp":2}
