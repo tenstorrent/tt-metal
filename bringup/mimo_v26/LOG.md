@@ -22,3 +22,25 @@
 - evidence: models/demos/blackhole/mimo_v26/tests/test_loader_qkv.py
 - paths: models/demos/blackhole/mimo_v26/reference/loader.py
 - data: {"layout":"per_tp4_rank_qkv","ga_rows_per_rank":3392,"swa_rows_per_rank":3712,"scale_blocks_per_rank_ga":27,"scale_blocks_per_rank_swa":29}
+
+## E261007-0059-fcc
+- date: 2026-10-07T00:59:20
+- commit: e67e7aecf55
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: decision
+- status: verified
+- claim: BLOCKED: no local MiMo-V2.6-Flash checkpoint on /mnt/tt-data (searched ssinghal/, hf-home, hf-cache, hf-home-ds, weights; only config/index/qkv_L0/L1 samples in bringup_study/mimo; sgl.py there is a 404 stub). HuggingFace reachable from this host (HTTP 200). Need coordinator approval to download text-only shards (~170 GB, 65 shards, skip visual/audio) into /mnt/tt-data/ssinghal/mimo-ckpt. Until then: no real-token oracle, no fp4 nibble/e8m0 check, no dumps.
+- evidence: bringup/mimo_v26/SKILL_DEFECTS.md
+- paths: bringup/mimo_v26/SKILL_DEFECTS.md
+
+## E261007-0059-2c0
+- date: 2026-10-07T00:59:20
+- commit: e67e7aecf55
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: skill-defect
+- status: verified
+- claim: tt-model-reference lacks a 'check for local weights / ask before download' step; study sgl.py is a 404 stub; ONBOARDING implies a checkpoint exists. Recorded in SKILL_DEFECTS.md items 4-5.
+- evidence: bringup/mimo_v26/SKILL_DEFECTS.md
+- paths: bringup/mimo_v26/SKILL_DEFECTS.md, .claude/skills/tt-model-reference
