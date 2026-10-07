@@ -95,14 +95,14 @@ def test_as_tensor_with_cache_local_dump(tmp_path, device, height, width):
     assert torch.allclose(torch_input_tensor, ttnn.to_torch(tensor))
 
 
-def test_as_tensor_local_dump_cleans_up_on_failure(tmp_path, monkeypatch):
+def test_as_tensor_local_dump_cleans_up_on_failure(tmp_path, monkeypatch, expect_error):
     def failing_dump(file_name, tensor, mode):
         with open(file_name, "wb") as f:
             f.write(b"partial")
         raise RuntimeError("disk full")
 
     monkeypatch.setattr(ttnn._ttnn.tensor, "dump_tensor_flatbuffer", failing_dump)
-    with pytest.raises(RuntimeError, match="disk full"):
+    with expect_error(RuntimeError, "disk full"):
         ttnn.as_tensor(
             torch.rand((7, 3), dtype=torch.float32),
             dtype=ttnn.float32,
