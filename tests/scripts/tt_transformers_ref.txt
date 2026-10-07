@@ -3,4 +3,6 @@
 # Bump it in an ordinary PR; that PR runs the tt-transformers CI legs.
 # This is a test input, not a dependency. QB2 pins its own runtime copy in
 # models/demos/llama31_8b_qb2/requirements.txt.
-b7d1ab5257da73c588a61720fcfafec246c6fa4f
+# TEMPORARY: head of tenstorrent/tt-transformers#51 (Qwen3-32B T3K trace region). Re-pin to
+# its merge commit on main before this PR merges.
+5a4f1037eb0371d55079b7cb1a0e542fc462db77
