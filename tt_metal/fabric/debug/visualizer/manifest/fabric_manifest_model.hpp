@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
 // The fabric manifest's model. The collector fills in what the router builders know, and the writer
 // (write_fabric_manifest) adds what only ControlPlane and the cluster know (routing plane, peer, cross-host,
@@ -40,6 +42,8 @@ struct L1Region {
 enum class StreamRegister : uint8_t {
     // The increment-on-write credit or slot count.
     BUF_SPACE_AVAILABLE,
+    // A plain read-write register.
+    REMOTE_SRC,
 };
 
 // A stream register reference.
@@ -150,18 +154,74 @@ struct RouterShape {
     bool vc0_bubble_flow_control = false;
 };
 
+// The group a field belongs to. Mainly for logical grouping of information in decode / visualizer.
+enum class FieldCategory : uint8_t {
+    LIFECYCLE,
+    KERNEL_PARAMS,
+    FLOW_CONTROL,
+    CONTROL_INFO,
+};
+
+// The type at an address or in a stream register.
+struct ElementType {
+    FieldType type;
+    uint32_t size = 0;
+};
+
+// Easy accessor to get ElementType from T without manual construction.
+template <typename T>
+constexpr ElementType element_type() {
+    return {field_type<T>(), sizeof(T)};
+}
+
+// What a field's argument is, and what reading it needs. The manifest names a field's kind by its type's name in
+// snake case (kind_name), so renaming one of these structs renames its kind in the manifest.
+namespace kind {
+
+// The address of an `element` in the router's L1.
+struct L1Value {
+    ElementType element;
+};
+
+// A stream id. The field is the stream's `reg` register, which holds an `element`.
+struct Stream {
+    StreamRegister reg = StreamRegister::REMOTE_SRC;
+    ElementType element;
+};
+
+struct Number {};
+
+// 0 or 1.
+struct Flag {};
+
+// One of an enum's values, which readers name by its schema.
+struct Enum {
+    ElementType element;
+    bool (*is_enumerator)(uint32_t value) = nullptr;
+};
+
+}  // namespace kind
+
+using Kind = std::variant<kind::L1Value, kind::Stream, kind::Number, kind::Flag, kind::Enum>;
+
+// A fact the router kernel is fed, read through the field tables (fabric_manifest_fields.hpp).
+struct Field {
+    std::string_view key;
+    // Tag used for logical grouping of information in decode / visualizer.
+    FieldCategory category = FieldCategory::LIFECYCLE;
+    // Describes what the field's value holds.
+    Kind kind;
+    // What the kernel is fed: the address, the stream id or the value.
+    uint32_t arg = 0;
+    // L1Value only: whether the host zeroes the region before launch (get_fabric_router_addresses_to_clear()).
+    bool cleared_by_host = false;
+};
+
 // The credits a sender channel receives back from the peer's receiver.
 struct SenderChannelCredits {
     // Only on VC0 with bubble flow control.
     std::optional<CreditRef> acked;
     CreditRef completed;
-};
-
-// The L1 a sender channel's producer uses to connect and to report where it writes.
-struct SenderChannelControlInfo {
-    L1Region connection;
-    L1Region conn_info;
-    L1Region buffer_index_sem;
 };
 
 // A sender channel that takes packets from its producer and sends them over Ethernet to the peer's receiver.
@@ -171,12 +231,10 @@ struct SenderChannel {
     std::vector<uint32_t> serviced_by;
     // Null when nothing feeds the channel.
     std::optional<SenderChannelProducer> producer;
-    bool is_injection_channel = false;
-    NocWriteConfig producer_credit_return;
     L1Region ring_buffer;
-    StreamRef free_slots;
     SenderChannelCredits credits;
-    SenderChannelControlInfo control_info;
+    // Arguments the kernel is fed for the channel, read through the field table.
+    std::vector<Field> fields;
 };
 
 // A receiver channel that takes packets from the peer's senders over Ethernet, delivers them locally, and forwards
@@ -232,6 +290,10 @@ struct Router {
     Channels channels;
     // Indexed [vc], by edge.
     std::vector<std::vector<DownstreamEdge>> intra_chip_downstream_edges;
+    // Router-wide fields passed to the kernel
+    std::vector<Field> fields;
+    // Per-ERISC fields passed to the kernel, indexed by ERISC id
+    std::vector<std::vector<Field>> erisc_fields;
 };
 
 // Information about a chip.
