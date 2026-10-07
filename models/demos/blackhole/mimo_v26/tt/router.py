@@ -179,3 +179,19 @@ class MiMoGate(TTMoEGate):
         ttnn.deallocate(folded)
         indices = chunks[0] if n_it == 1 else ttnn.concat(chunks, dim=0)
         return ttnn.view(indices[:T, 0, : self.k], (T, 1, 1, self.k))
+
+    def hilo_stages(self, tt_x):
+        """Diagnostics for the hilo kernel path: returns host tensors of each stage (logits fp32, score fp32, folded bf16, kernel indices uint16)."""
+        T = tt_x.shape[2]
+        logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc32, dtype=ttnn.float32)
+        score = ttnn.sigmoid(logits)
+        folded = ttnn.typecast(ttnn.add(score, self._tt_b_lo), ttnn.bfloat16)
+        h = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).clone()
+        out = {"logits": h(logits), "score": h(score), "folded": h(folded)}
+        self.enable_sigmoid = False
+        try:
+            idx = self._run_gate_op_on_scores(ttnn.clone(folded), T)
+        finally:
+            self.enable_sigmoid = self._plain_enable_sigmoid
+        out["kernel_idx"] = h(idx).reshape(T, self.k).clone()
+        return out
