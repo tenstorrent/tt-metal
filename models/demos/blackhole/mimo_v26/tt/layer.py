@@ -285,7 +285,13 @@ class MiMoDecoderLayer:
             if getattr(self, "moe_dec", None) is None:
                 from models.demos.blackhole.mimo_v26.tt.moe_decode import MiMoMoEDecode
 
-                self.moe_dec = MiMoMoEDecode(self.mesh, self.gate, self.moe)
+                self.moe_dec = MiMoMoEDecode(
+                    self.mesh,
+                    self.gate,
+                    self.moe,
+                    router=os.environ.get("MIMO_ROUTER", "exact"),
+                    dead=os.environ.get("MIMO_DEAD", "sentinel"),
+                )
             return self.moe_dec.forward(x, live)
         B = x.shape[2]
         npad = 64 - B
