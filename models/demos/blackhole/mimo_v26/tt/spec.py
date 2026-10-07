@@ -120,6 +120,7 @@ class SpecEngine:
         dr.feat_src = dec.feat
         dr.append()
         t_append = time.perf_counter() - t0
+        self.last = dict(d=d.clone(), post=post.clone(), k=k.clone(), block=block.clone())
         acc = []
         for i, (r, u) in enumerate(self.place_):
             if not alive[r, u]:

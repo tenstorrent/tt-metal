@@ -19,6 +19,7 @@ from models.demos.blackhole.mimo_v26.tt.kv_pool import KVLayout
 from models.demos.blackhole.mimo_v26.tt.model import MiMoModel
 from models.demos.blackhole.mimo_v26.tt.prefill import ChunkedGenerator, ChunkedPrefill
 from models.demos.blackhole.mimo_v26.tt.spec import CAP, SpecEngine
+from models.demos.blackhole.mimo_v26.tt.spec_dev import SpecDevice
 
 E = os.environ.get
 NL = int(E("SPEC_LAYERS", "48"))
@@ -30,6 +31,7 @@ MODE = E(
     "SPEC_MODE", "both"
 )  # plain | spec | both. NOTE finished users of a plain/spec run get position 0 of their slot overwritten (dead-slot rule), so a spec run after a plain run in the same process starts from a clobbered cache: use plain in one process, spec in another (SPEC_REF = tokens json of the plain run)
 REF = E("SPEC_REF", "")
+CHUNK = int(E("SPEC_CHUNK", "4"))
 OUT = E("SPEC_OUT", "/tmp/spec.jsonl")
 CH = 256
 
@@ -144,6 +146,89 @@ def test_spec_exact(mesh_device):
         return
     if REF:
         plain = json.load(open(REF))["plain"]
+    if MODE in ("dev", "devdebug"):
+        eng = SpecEngine(
+            model, pf, dr, U, max_pos, eos, cap=cap, trace=False
+        )  # start(): prefill features -> drafter ring (host, before the loop)
+        eng.start(prompts, NEW, res=pre)
+        first = torch.zeros(4, U, dtype=torch.long)
+        for i_, (r_, u_) in enumerate(eng.place_):
+            first[r_, u_] = eng.out[i_][0]
+        init = (eng.pos.clone(), eng.anchor.clone(), eng.alive.clone(), first, dr.ring_pos.clone())
+        sd = SpecDevice(model, eng.dec, dr, U, max_pos, eos, NEW)
+        if MODE == "devdebug":
+            eng.round()  # host-driven round 1 from the initial state
+            last = eng.last
+            sd.init_state(*init)
+            os.environ["MIMO_CHECK_CAP"] = "0"
+            sd._round()
+            ttnn.synchronize_device(md)
+            g = sd.host_dbg
+            blk = g(sd.dbg["block"]).reshape(4, U, 8).long()
+            arow = g(sd.dbg["arow"]).reshape(4, U, 8).long()
+            kk = g(sd.dbg["k"]).reshape(4, U).long()
+            rec(
+                "devdebug",
+                block_equal=bool(torch.equal(blk, last["block"])),
+                arow_equal=bool(torch.equal(arow, last["post"])),
+                k_equal=bool(torch.equal(kk, last["k"])),
+                host_block=last["block"].tolist(),
+                dev_block=blk.tolist(),
+                host_post=last["post"].tolist(),
+                dev_post=arow.tolist(),
+                host_k=last["k"].tolist(),
+                dev_k=kk.tolist(),
+            )
+            st = sd.read_state()
+            rec(
+                "devdebug_state",
+                pos=st["pos"].tolist(),
+                host_pos=eng.pos.tolist(),
+                anchor=st["anchor"].tolist(),
+                host_anchor=eng.anchor.tolist(),
+                cnt=st["cnt"].tolist(),
+            )
+            return
+        sd.init_state(*init)
+        sd.prepare()
+        n_r, chunk_t, enq_t = sd.run(chunk=CHUNK)
+        st = sd.read_state()
+        out = []
+        for i_, (r_, u_) in enumerate(eng.place_):
+            toks_ = [int(x) for x in st["out"][r_, u_, : int(st["cnt"][r_, u_])]]
+            cut = next((j_ for j_, x in enumerate(toks_) if x in set(eos)), None)
+            toks_ = toks_[: cut + 1] if cut is not None else toks_
+            out.append(toks_[:NEW])
+        ident, first_div = [], []
+        for a, b in zip(plain, out):
+            n_ = min(len(a), len(b))
+            d_ = next((k for k in range(n_) if a[k] != b[k]), None)
+            first_div.append(d_)
+            ident.append(d_ is None and len(a) == len(b))
+        rc = st["rcount"]
+        acc_mean = float(((st["cnt"] - 1).sum() / rc.sum()))
+        v = sorted(chunk_t[1:])
+        ve = sorted(enq_t[1:])
+        rec(
+            "spec_dev",
+            n=len(prompts),
+            identical=sum(ident),
+            first_div=first_div,
+            out_lens=[len(t_) for t_ in out],
+            plain_lens=[len(t_) for t_ in plain],
+            rounds_enqueued=n_r,
+            chunk=CHUNK,
+            alive_rounds_total=int(rc.sum()),
+            accepted_mean=round(acc_mean, 3),
+            chunk_wall_ms_median=round(1e3 * v[len(v) // 2], 2) if v else None,
+            round_ms_median=round(1e3 * v[len(v) // 2] / CHUNK, 2) if v else None,
+            enqueue_only_ms_per_chunk_median=round(1e3 * ve[len(ve) // 2], 3) if ve else None,
+            chunk_walls_ms=[round(1e3 * x, 1) for x in chunk_t],
+            dram=dram(md),
+        )
+        json.dump(dict(plain=plain, spec=out), open(OUT.replace(".jsonl", "_tokens.json"), "w"))
+        sd.release()
+        return
     # ---- spec
     eng = SpecEngine(model, pf, dr, U, max_pos, eos, cap=cap, trace=TRACE)
     eng.start(prompts, NEW, res=pre)

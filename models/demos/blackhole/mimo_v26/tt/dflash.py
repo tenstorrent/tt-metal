@@ -210,11 +210,13 @@ class DFlashDrafter:
         self._h2d(keep.bfloat16(), self.in_keep)
         ttnn.synchronize_device(self.mesh)
 
-    def _append_forward(self):
+    def _append_forward(self, feat=None, acos=None, asin=None, S=None, keep=None):
+        """Optional args = device-computed inputs (device-resident round): feat [1,1,U*R,20480] replicated, acos/asin [1,1,U*R,128], S [U,1,1024,R] bf16 one-hot, keep [U,1,1024,1]."""
         U, R = self.U, self.R
-        if self.feat_src is not None:
+        feat = feat if feat is not None else self.feat_src
+        if feat is not None:
             hp = ttnn.linear(
-                self.feat_src, self.fc_n, dtype=ttnn.bfloat16, compute_kernel_config=_ck()
+                feat, self.fc_n, dtype=ttnn.bfloat16, compute_kernel_config=_ck()
             )  # [1,1,U*R,512] per column
             h = ttnn.all_gather(hp, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
@@ -223,11 +225,13 @@ class DFlashDrafter:
         ttnn.deallocate(hp)
         hn = self._rms(h, self.hidden_norm)
         ttnn.deallocate(h)
-        S = ttnn.reshape(self.in_S, (U, 1, WIN, R))
-        keep = ttnn.reshape(self.in_keep, (U, 1, WIN, HD))
+        S = S if S is not None else ttnn.reshape(self.in_S, (U, 1, WIN, R))
+        keep = keep if keep is not None else ttnn.reshape(self.in_keep, (U, 1, WIN, HD))
+        acos = acos if acos is not None else self.in_acos
+        asin = asin if asin is not None else self.in_asin
         for li, L in enumerate(self.layers):
             k = self._rms(ttnn.linear(hn, L["wk"], dtype=ttnn.bfloat16, compute_kernel_config=_ck()), L["kn"])
-            k = self._rope(k, self.in_acos, self.in_asin)
+            k = self._rope(k, acos, asin)
             v = ttnn.linear(hn, L["wv"], dtype=ttnn.bfloat16, compute_kernel_config=_ck())
             for new, ring in ((k, self.ring_k[li]), (v, self.ring_v[li])):
                 nr = ttnn.to_layout(self._rm_view(new, (U, 1, R, HD)), ttnn.TILE_LAYOUT)
@@ -267,18 +271,23 @@ class DFlashDrafter:
         self._h2d(sin.bfloat16(), self.in_sk)
         ttnn.synchronize_device(self.mesh)
 
-    def _draft_forward(self, nl=5, attn_only_last=False, head=True):
+    def _draft_forward(self, nl=5, attn_only_last=False, head=True, inp=None):
         """nl/attn_only_last/head: profiling variants (run the first nl layers, optionally stop after the attention half of the last one, optionally skip lm_head)."""
         U = self.U
-        e = ttnn.embedding(self.in_tok, self.embed, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # inp (device-resident round): (tok uint32 RM [1,U], mask [U,1,1|64,KPAD], cq [U,1,64,128], sq, ck [U,1,8,128], sk); default = the persistent host-written inputs
+        tok_in = inp[0] if inp is not None else self.in_tok
+        e = ttnn.embedding(tok_in, self.embed, layout=ttnn.ROW_MAJOR_LAYOUT)
         e = ttnn.reshape(e, (U, 1, 1, HIDDEN))
         me = ttnn.reshape(self.mask_emb, (U, 1, 7, HIDDEN))
         x = ttnn.concat([e, me], dim=2)
         ttnn.deallocate(e)
         x = ttnn.to_layout(ttnn.reshape(x, (1, 1, U * BLK, HIDDEN)), ttnn.TILE_LAYOUT)
-        mask = ttnn.reshape(self.in_mask, (U, 1, NQC * BLK, KPAD))
-        cq, sq = ttnn.reshape(self.in_cq, (U, 1, NQC * BLK, HD)), ttnn.reshape(self.in_sq, (U, 1, NQC * BLK, HD))
-        ck, sk = ttnn.reshape(self.in_ck, (U, 1, BLK, HD)), ttnn.reshape(self.in_sk, (U, 1, BLK, HD))
+        if inp is None:
+            mask = ttnn.reshape(self.in_mask, (U, 1, NQC * BLK, KPAD))
+            cq, sq = ttnn.reshape(self.in_cq, (U, 1, NQC * BLK, HD)), ttnn.reshape(self.in_sq, (U, 1, NQC * BLK, HD))
+            ck, sk = ttnn.reshape(self.in_ck, (U, 1, BLK, HD)), ttnn.reshape(self.in_sk, (U, 1, BLK, HD))
+        else:
+            _, mask, cq, sq, ck, sk = inp
         zpad = self.zpad
         for li, L in enumerate(self.layers[:nl]):
             xn = self._rms(x, L["ln1"])
