@@ -82,7 +82,10 @@ constexpr std::uint32_t MATH_DESYNC = 0x44455302;
 
 // Sizes are derived from the arrays, so a depth added to either sweep cannot desync from the count
 // PACK uses to lay out the result buffer.
-constexpr std::uint32_t OCC_DEPTH[] = {0, 8, 32, 128};
+// 8 slots is the knee: the shipped replica fails there, but the window is a few RISC cycles wide, so
+// the position control (a drain after the release) closes it too. 16 is the first depth where the
+// control fails as it should.
+constexpr std::uint32_t OCC_DEPTH[] = {0, 16, 32, 128};
 constexpr std::uint32_t NUM_OCC     = sizeof(OCC_DEPTH) / sizeof(OCC_DEPTH[0]);
 
 constexpr std::uint32_t DIR_NOPS[] = {0, 8, 64, 512};
@@ -138,17 +141,18 @@ static void replica_arm()
 
     for (std::uint32_t trial = 0; trial < TRIALS; trial++)
     {
-        // Arm the field to its old value and confirm it landed, so a later stale reading can only
-        // mean this trial's write has not been processed.
-        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0 /*val*/);
-        tensix_sync();
-
         // Release unconditionally below, so the two mailbox FIFOs stay balanced whatever is read
         // here and the arm still terminates. Select the value HERE, ahead of the config writes:
         // RISC work placed between the writes and the release narrows the window under test -- the
         // Direction arm below measures exactly that, and a select left at the release site costs
-        // the sweep its depth-8 sensitivity.
+        // the sweep its sensitivity at the shallow depths.
         const std::uint32_t release = (mailbox_read(ThreadId::PackThreadId) == PACK_READY) ? MATH_DONE : MATH_DESYNC;
+
+        // Arm the field to its old value and confirm it landed, so a later stale reading can only
+        // mean this trial's write has not been processed. Done after PACK's ready, which it sends
+        // only once its previous sample is taken: armed any earlier, this write races that sample.
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0 /*val*/);
+        tensix_sync();
 
         if constexpr (OCC > 0)
         {
@@ -180,9 +184,9 @@ static void plumbing_arm()
 {
     for (std::uint32_t trial = 0; trial < TRIALS; trial++)
     {
+        const std::uint32_t release = (mailbox_read(ThreadId::PackThreadId) == PACK_READY) ? MATH_DONE : MATH_DESYNC;
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0 /*val*/);
         tensix_sync();
-        const std::uint32_t release = (mailbox_read(ThreadId::PackThreadId) == PACK_READY) ? MATH_DONE : MATH_DESYNC;
         mailbox_write(ThreadId::PackThreadId, release);
     }
 }
@@ -243,15 +247,18 @@ namespace
 volatile std::uint32_t* tt_reg_ptr g_cfg = nullptr;
 std::uint32_t g_desync                   = 0;
 
-inline bool dest_acc_field_set()
+inline bool dest_acc_field_set(volatile std::uint32_t tt_reg_ptr* cfg)
 {
-    return (g_cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] & PCK_DEST_RD_CTRL_Read_32b_data_MASK) != 0;
+    return (cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32] & PCK_DEST_RD_CTRL_Read_32b_data_MASK) != 0;
 }
 
 // One replica measurement loop: count the trials on which the release beat the config write.
 inline std::uint32_t measure()
 {
-    std::uint32_t stale = 0;
+    // Held in a register: the blocking mailbox read is a compiler barrier, and a reload of the
+    // global pointer between the release and the sample would sit on the path being measured.
+    volatile std::uint32_t tt_reg_ptr* cfg = g_cfg;
+    std::uint32_t stale                    = 0;
     for (std::uint32_t trial = 0; trial < TRIALS; trial++)
     {
         // Announce readiness, then park in the blocking read so the release is the only thing
@@ -263,7 +270,7 @@ inline std::uint32_t measure()
             continue;
         }
         TTI_STALLWAIT(REPLICA_STALL, p_stall::TRISC_CFG);
-        if (!dest_acc_field_set())
+        if (!dest_acc_field_set(cfg))
         {
             stale++;
         }
@@ -283,12 +290,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < REAL_TRIALS; i++)
     {
         _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
-        if (dest_acc_field_set())
+        if (dest_acc_field_set(g_cfg))
         {
             real_enabled_seen++;
         }
         _llk_set_fp32_dest_acc_<ThreadId::PackThreadId>();
-        if (!dest_acc_field_set())
+        if (!dest_acc_field_set(g_cfg))
         {
             real_disabled_seen++;
         }
