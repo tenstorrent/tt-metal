@@ -1,0 +1,2 @@
+bits6 head test_bitid.py,test_bitid2.py,test_r3c_prof.py,test_in0_prof.py
+bits6 ts test_bitid.py,test_bitid2.py,test_r3c_prof.py,test_in0_prof.py
