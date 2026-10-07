@@ -33,3 +33,18 @@ n>64 was rejected by the guard. So every blocking the guard accepted keeps its C
 Wait for g14blx03:/var/tmp/fasth3/runner/done/t155-j2-r2.done (j2 refuses at its gate if j1 did not pass).
 Then read j1.log and j2.log. If j1 hits the hugepage error again, record it as an environment failure, not a
 fix failure, and requeue once hugepages are free.
+
+## State (2026-10-07 10:40 UTC): moved to blx01
+- blx03: runner (pid 376797) was already dead. Parked t155-j1-r2 (.job+.state from running/) and t155-j2-r2
+  (from queue/) into /var/tmp/fasth3/runner/parked. Nothing else touched there.
+- blx01: scripts in tt-project/t155/blx01 (copies at g15blx01:/var/tmp/fasth3/t155). Driver started 10:36:51 UTC
+  (pid 1497322): setup155.sh makes worktree /var/tmp/fasth3/t155/b of /var/tmp/fasth3/t48 at bf7db12a149 + fix.diff
+  (commit 4c86a6f7, conv3d_program_factory.cpp aa4ade43a28..c0c02788344), fresh Release build (no ccache), test
+  source = git archive c0c02788344 in t155/src. Then broker jobs j1 64,128,5,4,4 (-t 420, inner 390/370) and j2
+  64,128,7,4,4 (only if j1 passes; -t = j1 +50%). Health gate waits for no other smarton job (so it queues behind
+  #127's t127 driver). At exit it removes the B worktree/build and the JIT cache, keeps logs.
+- t48 on blx01 untouched: bf7db12a149 before (the driver logs it again at cleanup).
+
+## Next
+Wake when `ssh g15blx01 test -e /var/tmp/fasth3/t155/driver.marker`. Read driver.marker, driver.log, j1.log, j2.log
+(T155_PASS/FAIL, 'Output check best vs table', T155_TIMES). Confirm `ls /var/tmp/fasth3/t155/b` is gone.
