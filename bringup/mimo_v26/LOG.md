@@ -639,6 +639,18 @@
 - claim: USER DECISION 2026-10-07 (/goal): agents may build C++ autonomously; use any free host on the cluster, skip hosts that are busy or bad; aim is end-to-end prefill + decode + spec decode on MiMo-V2.6-Flash. Coordinator reading: C++ builds go in PRIVATE build dirs per worktree (never the shared build_Release, never the DeepSeek repo); still NOT authorised: bfp4/fp8-KV, pushing, deleting data, touching or killing foreign jobs, gate weakening.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0346-6df
+- date: 2026-10-07T03:46:23
+- commit: a150b001c4b
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: First on-device decoder layers L0+L1 (dense SwiGLU + SWA/MoE) on 4x8 vs track-0 dump mimo-prefill-s128b16 (B=16,S=128, 4 users/row), real bfp8 weights, expert op mm (bf16 activations, fp32-acc matmuls), exact router. TEACHER FORCED prefill (min over 16 users) L0: attn_out 0.99997, ffn_out 0.99995, h_out 0.99998 vs bf16 dump. L1: attn_out 0.99968, ffn_out 0.99512 (bf16/fp32 dump floor 0.99739; on tokens whose routed expert SET matches the dump 0.99996), h_out 0.99993 (floor 0.99995); router set match 0.95996 (82 flips/2048 tokens, all 82 with gap<0.01 near-ties; track-0 floor 90.6-98.6%). Teacher-forced decode (3 steps, dump dec_in/dec_out, 32 slots/row, MoE decode padded to 64 rows) min PCC L0 0.99997, L1 0.99981. Free-running chain with device embedding (embedding PCC 1.0): h_out vs bf16 dump L0 0.99998, L1 0.99989 (vs fp32 0.9999, floor 0.99995). Weight convert+cache first build: L0 5.5 s, L1 93.6 s (27 tensors); 2-layer test 374 s total.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain2_a150b001c4b.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tests/test_chain_dump.py
+- data: {"l0_h_out":0.99998,"l1_ffn_out_min":0.99512,"l1_set_match":0.95996,"l1_h_out_tf":0.99993,"chain_l1_vs_bf16":0.99989}
 ## E261007-0346-4c1
 - date: 2026-10-07T03:46:11
 - commit: a9f8e9910cd
@@ -661,6 +673,41 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_C_L5_decode_a9f8e9910cd.log
 - paths: models/demos/blackhole/mimo_v26
 
+## E261007-0401-3fc
+- date: 2026-10-07T04:01:16
+- commit: 28b183e4d8b
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: L0..L5 chain on 4x8 vs dump mimo-prefill-s128b16 (B=16,S=128), real bfp8 weights, mm experts (bf16 act), exact router, device embedding (PCC 1.0). FREE-RUNNING h_out PCC (min over 16 users) vs bf16 dump / fp32 dump / bf16-vs-fp32 floor: L0 0.99998/0.99998/1.0; L1 0.99989/0.9999/0.99995; L2 0.99986/0.99987/0.99994; L3 0.99986/0.99987/0.99994; L4 0.99989/0.99989/0.99995; L5 0.99977/0.99978/0.99994 (L5 vs fp32 mean 0.9998). TEACHER-FORCED per layer h_out min PCC vs bf16 dump: 0.99998,0.99993,0.99992,0.99995,0.99995,0.9999 (floor 1.0..0.99994); attn_out min 0.99997,0.99968,0.9991,0.99956,0.99967,0.99997; ffn_out min 0.99995,0.99512,0.99771,0.9978,0.99112,0.92992 (floor 1.0,0.99739,0.99826,0.99627,0.96141,0.99497): L5 ffn_out min user 0.92992 is BELOW floor, and router expert-SET match vs dump routing (device router on device ffn_in) 0.960,0.723,0.763,0.782,0.823 for L1..L5 (flips 82,568,485,447,363 of 2048, ~all with gap<0.01), ffn_out PCC on set-matched tokens 0.99996,0.99974,0.99984,0.99929,0.99943. Decode teacher-forced 3 steps min PCC L0 0.99997, L1 0.99981, L2 0.99893, L3 0.99992, L4 0.99996, L5 0.9874 (step 2). Cache hit path: 123 tensors loaded in 144 s for 6 layers (cache built by 3 hosts in parallel, ~80-110 s per MoE layer). Note the set-match is lower than the track-0 floor (90.6-98.6%) because the device router here sees device-computed ffn_in; a follow-up run feeds the dump ffn_in to separate router from upstream noise.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6_28b183e4d8b.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py
+- data: {"free_chain_l5_vs_bf16":0.99977,"tf_l5_ffn_out_min":0.92992,"tf_l5_dec_min":0.9874}
+
+## E261007-0408-758
+- date: 2026-10-07T04:08:31
+- commit: fd73ec06bc7
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: FFN-only teacher forcing L0..L5 (dump ffn_in -> device exact router + mm bf16-activation experts + column all-reduce), min PCC over 16 users of ffn_out: vs bf16 dump L0 0.99996, L1 0.99936, L2 0.99984, L3 0.99922, L4 0.99849, L5 0.99965; vs fp32 dump = bf16/fp32 floor in every layer (L1 0.99739/0.99739, L2 0.9982/0.99826, L3 0.99625/0.99627, L4 0.96018/0.96141, L5 0.99478/0.99497). Device router on the dump ffn_in: expert-SET match 0.99365,0.98828,0.99121,0.99463,0.98877 for L1..L5 (13,24,18,11,23 flips of 2048, ALL gap<0.01 near-ties). So the low set-match in the chain run (0.72-0.82, E261007-0401-3fc) comes from upstream device attention noise in ffn_in, not from the router/FFN. Expert op mm, cf 4, 4 users x128 tokens per mesh row.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6b_1522188db07.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py
+- data: {"l5_ffn_vs_bf16":0.99965,"l4_ffn_vs_bf16":0.99849,"setmatch_l1_l5":[0.99365,0.98828,0.99121,0.99463,0.98877]}
+
+## E261007-0414-cd3
+- date: 2026-10-07T04:14:54
+- commit: 81eee22f9d0
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: 4-layer smoke (L0..L3 + final norm + lm_head bf16 vocab-sharded) on 4x8, one process, mm experts: (1) dump tokens (16 users x128): device last-token logits vs CPU norm+lm_head of dump L3 h_out: PCC min 0.9998 (mean 0.99992), top-1 agreement 16/16. (2) real GSM8K prompts (chat template, 4 slots x 4 rows with equal lengths per slot, right-padded with pad id): first token + 1 decode step at position len run for TWO ISLs in the same process (S=128 lens 102/101/100/95, then S=256 lens 94/92/90/89), logits finite; 4-layer model emits the same junk token for every prompt (141806, then 143877), as expected for a truncated model (no accuracy claim). Decode path includes MoE decode padded to 64 rows with a per-layer capacity assertion (passed).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke4_81eee22f9d0.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_smoke_model.py
+- data: {"logits_pcc_min":0.9998,"top1_agree":1.0}
 ## E261007-0354-e2f
 - date: 2026-10-07T03:54:31
 - commit: 4e4e06559c5
@@ -717,3 +764,50 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_moebf16uni_L1_h41_23b56c47ac7.log
 - paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
 - data: {"layer":1,"pcc":0.99979,"bit_identical_runs":5}
+
+## E261007-0456-8fe
+- date: 2026-10-07T04:56:09
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: L0..L5 chain re-run with the FAST bf16-activation unified expert op (expert_op=unified, MOE_UNI_BF16_X/INTERMED/OUT=1, private relink lib integ_23b56c47ac7), same test as E261007-0401-3fc: free-running h_out PCC min vs bf16 dump L0..L5 = 0.99998,0.99989,0.99984,0.99984,0.99986,0.99973 (vs fp32 same to 5 digits; floor 1.0,0.99995,0.99994,0.99994,0.99995,0.99994). FFN-only teacher forcing (dump ffn_in) ffn_out vs bf16 dump L1..L5 0.99932,0.9998,0.99917,0.99849,0.99926 (L5 0.99926 vs 0.99965 with mm); vs fp32 = floor-level in all layers (L5 0.99461/0.99497). Teacher-forced decode min over 3 steps L0..L5: 0.99997,0.99981,0.99893,0.99992,0.99996,0.98723 (L5 step 2; same low value as mm 0.9874, 4 live tokens per row, near-tie routing). Router set match unchanged (0.96,0.72,0.76,0.78,0.82 in-chain; 0.994,0.988,0.991,0.995,0.989 on dump ffn_in). Whole 6-layer test (weights from cache 2.8 s, TF prefill+ffn-only+decode+free chain) 41 s. L1-exhaustion fix included: per-gate L1 buffers freed in exact mode.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6u_43f8c5f81d5.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- supersedes: E261007-0401-3fc
+- data: {"free_chain_l5_vs_bf16":0.99973,"ffn_only_l5":0.99926,"dec_l5_min":0.98723}
+
+## E261007-0458-0a3
+- date: 2026-10-07T04:58:52
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 48
+- track: asm
+- status: verified
+- claim: FULL 48-LAYER MODEL first token + 1 decode step on real GSM8K prompts (chat template), 4x8 mesh, unified bf16-activation experts, bfp8 weights (bf16 embedding/lm_head), exact router, ONE process, TWO ISLs (S=128 lens 102/101/100/95 then S=256 lens 94/92/90/89; 16 users each; prompts right-padded with pad id): all 32 first tokens are '<think>' (id 151667) and the decode-step tokens are coherent reasoning openers ('Let', 'First', 'She', 'Total', 'Steve', 'Monday', ...), all logits finite. Weights: 1131 cached tensors loaded in 69.7 s on a warm cache (938 s cold NFS); test 187 s after load. mm expert op on the same 48-layer build also loaded (L1 of the first prefill hit an L1 clash from per-gate L1 buffers, fixed in 43f8c5f81d5). No accuracy claim (no GSM8K scoring yet; no CPU full-model reference by policy).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48u_43f8c5f81d5.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_smoke_model.py
+- data: {"layers":48,"first_token":"<think>","isl":[128,256]}
+
+## E261007-0459-e2c
+- date: 2026-10-07T04:59:12
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: skill-defect
+- status: verified
+- claim: Defects found in assembly: (1) repo .gitignore has 'build_*': a new tt/build_wcache.py was silently untracked (renamed cache_weights.py); kits should warn on gitignored names. (2) host_health.py exits 0 for BUSY and launch.py then queues on the host flock (my chain waited behind the moe job): launch recipe must gate on the verdict. (3) TTMoEGate allocates 4 L1-sharded kernel buffers per instance; 47 layers exhaust L1 and the first rms_norm fails ('static dataflow buffers clash with L1 buffers') at 48 layers though 6 is fine: freed in exact mode in layer.py. (4) One 48-layer launch on host .46 sat 18 min at ~2500% CPU after layer 0 with no progress (killed, own pid); same run on .48 progressed at 25 s/layer: single occurrence, no bad-host claim. (5) launch.py unset-prefix does not unset MOE_UNI_*: pass them explicitly. (6) tests need mesh_device fixtures with FABRIC_1D_RING + l1_small_size 16384.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48b_4bb27d3fd91.log
+- paths: models/common/bringup_kit/launch.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-0459-4db
+- date: 2026-10-07T04:59:12
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: handoff
+- status: verified
+- claim: HANDOFF track 3 (asm), worktree /mnt/tt-data/ssinghal/mimo/wt/asm branch ssinghal/mimo-asm. Code: tt/layer.py (MiMoDecoderLayer prefill/decode, dense L0 + MoE, capacity assertion), tt/model.py (embedding, 48 layers, final norm, lm_head vocab-sharded bf16, prefill_first_token, decode_step), tt/weights.py (flatbuffer cache of sharded bfp8 tensors under /mnt/tt-data/ssinghal/mimo-wcache/v1, ~6.5 GB/MoE layer, all L0-47 built), tt/cache_weights.py (parallel cache builder), tests/test_chain_dump.py, tests/test_smoke_model.py. Evidence: chain L0..L5 free-running h_out PCC >=0.99973 vs bf16 dump (E261007-0456-8fe), FFN-only teacher forcing at floor, 48-layer first token '<think>' on GSM8K prompts for two ISLs (see 48-layer smoke entry). Repro: launch.py --worktree WT --commit C --host H --env MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL --env MOE_UNI_BF16_X=1 --env MOE_UNI_BF16_INTERMED=1 --env MOE_UNI_BF16_OUT=1 --env LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/mimo/artifacts/integ_23b56c47ac7/lib --env MIMO_EXPERT_OP=unified --env SMOKE_LAYERS=48 -- python_env/bin/python -m pytest -x -s -q models/demos/blackhole/mimo_v26/tests/test_smoke_model.py (chain: test_chain_dump.py, CHAIN_LAYERS=6 CHAIN_DECODE=1). NOT done/unverified: no GSM8K accuracy, no traced/chunked/paged prefill or decode loop, no timing (host-timed only), decode dead slots not spread-routed (capacity assertion passes at 4 live/row; spread_pad_routing not wired), decode teacher-forced L5 step 2 min PCC 0.987 (near-tie routing, 4 live tokens), layers 6-47 verified only by finite/plausible tokens not by PCC, per-slot decode positions are shared by all mesh rows (attention decode_set takes one vector), max_pos 512, bf16 lm_head/embedding replicated, MTP not built. Merge notes: ssinghal/mimo merged twice into this branch (LOG.md conflicts resolved by keeping both).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48u_43f8c5f81d5.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests
