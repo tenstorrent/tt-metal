@@ -38,6 +38,7 @@ from .arch_common import _get_parser
 
 arch = get_chip_architecture()
 OperationSchema = _get_parser().OperationSchema
+YAML_SAFE_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
 def _format_loc(loc):
@@ -355,7 +356,7 @@ class FuserConfigSchema(BaseModel):
 
     @classmethod
     def validate_string(cls, yaml_content: str) -> "FuserConfigSchema":
-        config_dict = yaml.safe_load(yaml_content)
+        config_dict = yaml.load(yaml_content, Loader=YAML_SAFE_LOADER)
         try:
             return cls.model_validate(config_dict)
         except ValidationError as e:
@@ -379,7 +380,7 @@ class FuserConfigSchema(BaseModel):
     def load_definition(cls, test_name: str) -> dict:
         yaml_path = cls.resolve_definition_path(test_name)
         with open(yaml_path, "r") as f:
-            config_dict = yaml.safe_load(f)
+            config_dict = yaml.load(f, Loader=YAML_SAFE_LOADER)
 
         if not isinstance(config_dict, dict):
             raise ValueError(f"Invalid config in {yaml_path.name}")

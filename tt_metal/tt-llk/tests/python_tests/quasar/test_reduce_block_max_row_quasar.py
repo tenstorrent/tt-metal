@@ -17,7 +17,7 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, parametrize, runtime
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -42,8 +42,8 @@ TILE_DIMENSIONS = [(32, 32), (16, 32), (8, 32), (4, 32)]
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float16]),
-    block_ct_dim=BLOCK_CT_DIMS,
-    tile_dimensions=TILE_DIMENSIONS,
+    block_ct_dim=runtime(BLOCK_CT_DIMS),
+    tile_dimensions=runtime(TILE_DIMENSIONS),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
 )
 def test_reduce_block_max_row_quasar(

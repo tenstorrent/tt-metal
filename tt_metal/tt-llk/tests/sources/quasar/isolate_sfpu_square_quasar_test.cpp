@@ -47,6 +47,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const Operand& buffer_A      = params.buffer_A;
+    const Operand& buffer_Res    = params.buffer_Res;
+#endif
 
     const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
     LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");
@@ -58,14 +63,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             using Op = SquareSrcs<decltype(layout)::layout>;
             Op::init(
-                L1_ADDRESS(params.buffer_A[0]),
+                L1_ADDRESS(buffer_A[0]),
                 static_cast<DataFormat>(formats.unpack_S_src),
                 srcs_format,
-                L1_ADDRESS(params.buffer_Res[0]),
+                L1_ADDRESS(buffer_Res[0]),
                 static_cast<DataFormat>(formats.pack_S_src),
                 static_cast<DataFormat>(formats.pack_S_dst),
                 IMPLIED_MATH_FORMAT);
-            Op::run(params.TILE_CNT, srcs_format);
+            Op::run(TILE_CNT, srcs_format);
         });
 
     wait_sfpu_idle();

@@ -119,9 +119,9 @@ inline void llk_sfpu_srcs_binary_init(
     const ckernel::TensorShape srcs_shape =
         llk_sfpu_srcs_slice_shape_impl(ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode));
 
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
+    const std::uint8_t bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice0>(
         srcs_shape, l1_in0_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(
+    const std::uint8_t bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp2_Slice1>(
         srcs_shape, l1_in1_addr_16B, static_cast<std::uint32_t>(unpack_S_src_format));
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(unpack_S_dst_format);
     llk_sfpu_srcs_configure_pack_impl(srcs_shape, l1_out_addr_16B, pack_S_src_format, pack_S_dst_format);
@@ -129,9 +129,7 @@ inline void llk_sfpu_srcs_binary_init(
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::TRISC_ID] = !implied_math_format;
 
     _llk_unpack_srcs_config_<1, 1>();
-    _llk_unpack_srcs_binary_mop_config_(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice0>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp2_Slice1>());
+    _llk_unpack_srcs_binary_mop_config_(bfd_a, bfd_b);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_math_eltwise_sfpu_init_();
 }

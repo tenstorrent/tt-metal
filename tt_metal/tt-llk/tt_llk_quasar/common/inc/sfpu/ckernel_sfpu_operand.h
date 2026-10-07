@@ -7,7 +7,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "ckernel.h"
 #include "sfpi.h"
 #include "sfpu_reg.h"
 
