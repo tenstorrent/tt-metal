@@ -5,6 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
+
+#include "internal/tensor/binding_id.h"
 
 template <typename DSpecT>
 struct TensorAccessor;
@@ -44,5 +47,19 @@ inline uint64_t transfer_shard_noc_addr(
     const ::TensorAccessor<DSpec>& accessor, uint32_t shard_id, uint32_t offset, uint8_t noc) {
     return TransferAccess::shard(accessor, shard_id, offset, noc);
 }
+
+// Whether the page iterators may leave a page's software address uncomputed (AccessorPage::kLazyNocAddr): when the
+// Quasar address generator serves the accessor's transfers (a bound accessor, in a Quasar DM build with the ATT
+// backend), the transfer doesn't need it, and AccessorPage::noc_addr() computes it if anything asks.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM) && defined(NOC_ATT_ENABLED) && !defined(TT_TA_ADDRGEN_DISABLE)
+template <typename Accessor, typename = void>
+inline constexpr bool lazy_page_addr_v = false;
+template <typename Accessor>
+inline constexpr bool lazy_page_addr_v<Accessor, std::void_t<decltype(Accessor::DSpec::binding_id)>> =
+    Accessor::DSpec::binding_id != NO_BINDING_ID;
+#else
+template <typename Accessor>
+inline constexpr bool lazy_page_addr_v = false;
+#endif
 
 }  // namespace tensor_accessor::detail

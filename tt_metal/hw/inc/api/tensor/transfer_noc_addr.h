@@ -179,11 +179,11 @@ inline uint64_t transfer_noc_addr(const AccessorPage<Accessor>& page, uint32_t o
             return hw_addr;
         }
         TT_TA_ADDRGEN_COUNT_SW(Dir, info);
-        return static_cast<const Page&>(page).noc_addr() + offset;
+        return page.sw_noc_addr() + offset;
     }
 #endif
     TT_TA_ADDRGEN_COUNT(sw_unsupported);
-    return static_cast<const Page&>(page).noc_addr() + offset;
+    return page.sw_noc_addr() + offset;
 }
 
 // Transfer address of a shard_pages() page. The hardware walk follows the shard's storage order (page_in_shard),
@@ -200,11 +200,11 @@ inline uint64_t transfer_noc_addr(const ShardPage<Accessor>& page, uint32_t offs
             return hw_addr;
         }
         TT_TA_ADDRGEN_COUNT_SW(Dir, info);
-        return static_cast<const Page&>(page).noc_addr() + offset;
+        return page.sw_noc_addr() + offset;
     }
 #endif
     TT_TA_ADDRGEN_COUNT(sw_unsupported);
-    return static_cast<const Page&>(page).noc_addr() + offset;
+    return page.sw_noc_addr() + offset;
 }
 
 // Transfer address of a whole shard, or `offset` bytes into it (ShardView). Consecutive transfers into the same shard

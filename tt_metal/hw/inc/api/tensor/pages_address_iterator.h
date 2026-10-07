@@ -31,6 +31,10 @@ public:
     PagesAddressIteratorSharded(
         const Accessor& accessor, uint32_t start_page_id = 0, uint32_t stride = 1, uint8_t noc = noc_index) :
         accessor(accessor), current_page_id(start_page_id), stride_(stride), noc(noc) {
+        if constexpr (kLazy) {
+            update_current_page();
+            return;
+        }
         if (current_page_id < accessor.dspec().tensor_volume()) {
             // Initialize coordinates and state from page_id
             initialize_from_page_id(start_page_id);
@@ -53,6 +57,10 @@ public:
         current_page_id += stride_;
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             current_page_id = accessor.dspec().tensor_volume();
+            return *this;
+        }
+        if constexpr (kLazy) {
+            update_current_page();
             return *this;
         }
 
@@ -81,6 +89,10 @@ public:
         current_page_id += steps * stride_;
         if (current_page_id >= accessor.dspec().tensor_volume()) {
             current_page_id = accessor.dspec().tensor_volume();
+            return *this;
+        }
+        if constexpr (kLazy) {
+            update_current_page();
             return *this;
         }
 
@@ -116,6 +128,10 @@ public:
     bool operator>=(const PagesAddressIteratorSharded& other) const { return !(*this < other); }
 
 private:
+    // The address generator serves this accessor's transfers: don't track the software address (see
+    // detail::lazy_page_addr_v); a page computes it only if asked.
+    static constexpr bool kLazy = detail::lazy_page_addr_v<Accessor>;
+
     const Accessor& accessor;
     uint32_t current_page_id = 0;   // current page id
     uint64_t current_noc_addr = 0;  // current NOC address for this page
@@ -135,7 +151,10 @@ private:
     uint32_t flattened_shard_id = 0;             // Linear shard id in the shard grid
     uint32_t bank_shard_id = 0;                  // Which shard within the bank this page belongs to
 
-    void update_current_page() { current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor); }
+    void update_current_page() {
+        current_page = AccessorPage<Accessor>(
+            kLazy ? AccessorPage<Accessor>::kLazyNocAddr : current_noc_addr, current_page_id, &accessor, noc);
+    }
 
     // Initialize all state from a page_id (used in constructor and operator+=)
     void initialize_from_page_id(uint32_t page_id) {
@@ -367,8 +386,14 @@ private:
     mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
     void update_current_page() {
-        auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
-        current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor);
+        if constexpr (detail::lazy_page_addr_v<Accessor>) {
+            // The address generator serves the transfer; the page computes its software address only if asked.
+            current_page =
+                AccessorPage<Accessor>(AccessorPage<Accessor>::kLazyNocAddr, current_page_id, &accessor, noc);
+        } else {
+            auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
+            current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor, noc);
+        }
     }
 };
 

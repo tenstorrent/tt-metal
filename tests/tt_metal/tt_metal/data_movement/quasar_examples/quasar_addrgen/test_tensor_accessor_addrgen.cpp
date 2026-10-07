@@ -3018,17 +3018,21 @@ TEST_P(TensorAccessorAddrgenShardedPerf, CyclesPerTransfer) {
     auto per_transfer = [&](uint32_t s) {
         return (static_cast<double>(section(s)) - static_cast<double>(section(0))) / transfers;
     };
-    // One parseable line per case: addrgen_sharded_perf,<layout>,<mode>,<path>,<transfers>,<addr>,<read+bar>,<batched>.
+    // One parseable line per case: addrgen_sharded_perf,<layout>,<mode>,<path>,<transfers>,<addr>,<read+bar>,<batched>,
+    // <loop>. The first three subtract the loop section; <loop> is that section per transfer -- for the iterator modes
+    // it includes the iterator's own stepping (and, on the software path, its address arithmetic), so compare
+    // <loop> + <batched> across paths there.
     log_info(
         tt::LogTest,
-        "addrgen_sharded_perf,{},{},{},{},{:.1f},{:.1f},{:.1f}",
+        "addrgen_sharded_perf,{},{},{},{},{:.1f},{:.1f},{:.1f},{:.1f}",
         lc.name,
         sharded_perf::mode_name(p.mode),
         sharded_perf::path_name(p.path),
         transfers,
         per_transfer(1),
         per_transfer(2),
-        per_transfer(3));
+        per_transfer(3),
+        static_cast<double>(section(0)) / transfers);
     if (p.path == sharded_perf::Path::HwStats) {
         const uint32_t hw = r[10], inel = r[11], unsup = r[12], seeks = r[13], skips = r[14], restores = r[15],
                        fallbacks = r[16], pushes = r[17];
