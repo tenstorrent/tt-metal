@@ -2067,6 +2067,15 @@ void call_binary_sfpu_operation(
     {
         // float elementwise max/min (SFPSWAP min/max). Operands read from two dst tiles.
         constexpr bool IS_MAX = (BINOP == BinaryOp::MAX);
+#if defined(ARCH_BLACKHOLE)
+        if (vector_mode == ckernel::VectorMode::RC)
+        {
+            // One 32-row call, as binary_max_tile and binary_min_tile issue it.
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_max_min, (IS_MAX, 32), dst_index_in0, dst_index_in1, dst_index_out, ckernel::VectorMode::None);
+            return;
+        }
+#endif
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_max_min, (IS_MAX, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
