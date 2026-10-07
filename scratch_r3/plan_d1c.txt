@@ -1,6 +1,6 @@
-d1c head test_rn50m_prof.py conf
-d1c cv2 test_rn50m_prof.py conf
-d1c head test_rn50m_prof.py conf
-d1c cv2 test_rn50m_prof.py conf
-d1c head test_rn50m_prof.py conf
-d1c cv2 test_rn50m_prof.py conf
+d1c head test_rn50m_prof.py
+d1c cv2 test_rn50m_prof.py
+d1c head test_rn50m_prof.py
+d1c cv2 test_rn50m_prof.py
+d1c head test_rn50m_prof.py
+d1c cv2 test_rn50m_prof.py

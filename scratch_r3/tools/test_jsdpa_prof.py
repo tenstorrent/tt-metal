@@ -5,7 +5,7 @@
 import os as _os
 import sys as _sys
 
-if not (_os.environ.get("HWLOCK_HELD") or _os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH")):
+if not (_os.environ.get("HWLOCK_HELD") or _os.path.isfile(_os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", ""))):
     _sys.exit("not under hwlock")
 import os
 
