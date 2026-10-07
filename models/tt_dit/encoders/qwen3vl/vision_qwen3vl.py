@@ -932,10 +932,8 @@ def _reshape_tiled_rows(x: ttnn.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
     """`ttnn.reshape` for a TILE tensor whose row count changes, without the op's per-shape residue.
 
     `ttnn.reshape` on a tiled tensor that folds rows into columns (the merge groups here) goes through
-    `reshape_tiled`, which leaves a device buffer of half the tensor's size allocated for the life of
-    the cached program -- one per distinct shape. The vision patch ladder visits 46 shapes, so on a
-    12 GB chip that is ~0.45 GB of scattered, never-freed blocks in the DiT's heap (measured 2026-10-02,
-    WH 4x8). The row-major round trip is a plain view between two layout conversions and leaves nothing.
+    `reshape_tiled`, which leaves a buffer of half the tensor's size allocated per distinct shape for the
+    life of the cached program. The row-major round trip is a plain view between two layout conversions.
     """
     rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     view = ttnn.reshape(rm, shape)

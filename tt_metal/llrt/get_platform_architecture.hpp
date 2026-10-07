@@ -81,9 +81,8 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
     // If running in mock mode, derive architecture from provided cluster descriptor
     if (rtoptions.get_target_device() == tt::TargetDevice::Mock ||
         rtoptions.get_target_device() == tt::TargetDevice::Emule) {
-        // Parse each descriptor once. This is on the hot path of ttnn.get_arch_name(), which model code
-        // calls per op; re-parsing the cluster YAML cost ~5 ms per call on a 32-chip descriptor.
-        // Keyed by path rather than call_once because tests open several mock descriptors in one process.
+        // Parse each descriptor once: ttnn.get_arch_name() lands here per op in model code. Keyed by path
+        // rather than call_once because tests open several mock descriptors in one process.
         static std::mutex mock_arch_mutex;
         static std::unordered_map<std::string, tt::ARCH> mock_arch_by_path;
         const std::string& path = rtoptions.get_mock_cluster_desc_path();
