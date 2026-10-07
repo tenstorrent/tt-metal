@@ -3,7 +3,7 @@ device captures (attn_out, ffn_out, h_out, router sets), next to the oracle's ow
 
     python -m ...probes.device_vs_oracle <device_dir> <out.jsonl> [--layers 6-47]
 
-Per layer row (jsonl): type (swa/global); for t in attn_out, ffn_out, h_out: pcc and rel L2 of device vs oracle_fp32, device vs oracle_bf16, and the floor
+Per layer row (jsonl): type (swa/global); for t in attn_out, ffn_out, h_out: pcc, rel L2, best scalar scale_alpha (device ~ alpha*oracle) and rel after rescale of device vs oracle_fp32; rel_over_floor and a flag (>=5x floor or |alpha-1|>=1%), device vs oracle_bf16, and the floor
 oracle_bf16 vs oracle_fp32; router: frac of tokens with identical 8-expert set device vs oracle_fp32 (oracle router on oracle ffn_in), the same oracle_bf16 vs
 oracle_fp32 (floor), device vs router(device ffn_in) in fp32 (isolates the device router op), slot overlap, and near-tie share of flips (fp32 oracle route_gap <
 tau for tau 0.01/0.02); weight rel error on identical sets.
@@ -29,7 +29,10 @@ def rel(a, b):
 
 
 def cmp(a, b):
-    return {"pcc": pcc(a, b), "rel": rel(a, b)}
+    """pcc (scale-invariant, blind to a global scale error), rel L2, best scalar alpha with a ~ alpha*b and rel L2 after that rescale."""
+    af, bf = a.float(), b.float()
+    alpha = ((af * bf).sum() / (bf * bf).sum()).item()
+    return {"pcc": pcc(a, b), "rel": rel(a, b), "scale_alpha": alpha, "rel_after_alpha": rel(af, alpha * bf)}
 
 
 def sets_equal(i1, i2):
@@ -70,6 +73,11 @@ def main():
                 "dev_vs_bf16": cmp(d[t], r16[t]),
                 "floor_bf16_vs_fp32": cmp(r16[t], r32[t]),
             }
+            row[t]["rel_over_floor"] = row[t]["dev_vs_fp32"]["rel"] / row[t]["floor_bf16_vs_fp32"]["rel"]
+            # flag: >= 5x its floor OR best scalar |alpha - 1| >= 1% (PCC is blind to a global scale error)
+            row[t]["flag"] = bool(
+                row[t]["rel_over_floor"] >= 5 or abs(row[t]["dev_vs_fp32"]["scale_alpha"] - 1) >= 0.01
+            )
         di, dw = d["routing_idx"], d["routing_w"].float()
         f32i, f32w, gap = r32["routing_idx"], r32["routing_w"], r32["route_gap"]
         rt = {}
@@ -98,11 +106,13 @@ def main():
         print(
             L,
             row["type"],
-            "h_out dev/fp32 pcc %.6f rel %.4f | floor rel %.4f | set_eq dev %.3f floor %.3f"
+            "h_out dev/fp32 pcc %.6f rel %.4f | floor rel %.4f | alpha attn %.3f ffn %.3f | set_eq dev %.3f floor %.3f"
             % (
                 row["h_out"]["dev_vs_fp32"]["pcc"],
                 row["h_out"]["dev_vs_fp32"]["rel"],
                 row["h_out"]["floor_bf16_vs_fp32"]["rel"],
+                row["attn_out"]["dev_vs_fp32"]["scale_alpha"],
+                row["ffn_out"]["dev_vs_fp32"]["scale_alpha"],
                 rt["set_equal_dev_vs_fp32"],
                 rt["set_equal_floor_bf16_vs_fp32"],
             ),
