@@ -7,6 +7,7 @@
 //   act = relu when apply_relu, else identity (raw dot). num_out_groups==1 sums all heads -> 1 plane;
 //   >1 keeps the groups separate. Heads stream in DEST passes (half-sync bf16); q/w resident when they fit.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "indexer_score_runtime_args.hpp"
 #include "indexer_schedule.hpp"
 
@@ -133,8 +134,17 @@ inline void set_mul_mode() {
     mul_bcast_cols_init(qk_cb, w_cb);
     // acc_to_dest=1: each mul MACs onto the same DEST tile (head 0 seeds the acquire-zeroed reg), so the
     // chunk's head reduction needs one pack, not a per-head packer-L1-acc RMW.
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_eltwise_binary_init<
+          ckernel::EltwiseBinaryType::ELWMUL,
+          ckernel::BroadcastType::COL,
+          MATH_FIDELITY,
+          ckernel::EltwiseBinaryReuseDestType::NONE,
+          ckernel::detail::bcast_src_dvalid<ckernel::EltwiseBinaryType::ELWMUL>>(qk_cb, w_cb, 1 /*acc_to_dest*/)));
+#else
     MATH((llk_math_eltwise_binary_init<ckernel::EltwiseBinaryType::ELWMUL, ckernel::BroadcastType::COL, MATH_FIDELITY>(
         qk_cb, w_cb, 1 /*acc_to_dest*/)));
+#endif
 }
 
 /** Mul+accumulate `chunk_heads` resident heads via hw MAC: dst0 += sum_h qk[h]*w[w_base+h], packed once
