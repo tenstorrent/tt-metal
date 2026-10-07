@@ -13,6 +13,8 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_defs.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -49,12 +51,17 @@ inline void _llk_unpack_A_sdpa_mop_config_(
     }
 }
 
+/**
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the math init. PerTile publishes each two-face tile
+ *         of eight-row faces once, read with one UNPACR into rows 0 to 15 of the bank.
+ */
 template <
     std::uint32_t num_tiles,
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest                          = false>
+    bool unpack_to_dest                          = false,
+    SrcDvalid src_dvalid                         = SrcDvalid::PerFace>
 inline void _llk_unpack_A_sdpa_init_(
     const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
@@ -67,6 +74,19 @@ inline void _llk_unpack_A_sdpa_init_(
 
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
+
+    if constexpr (src_dvalid == SrcDvalid::PerTile)
+    {
+        static_assert(BType == BroadcastType::NONE && !unpack_to_dest, "SrcDvalid::PerTile unpacks SrcA");
+        LLK_ASSERT(num_faces == 2 && face_r_dim == MAX_FPU_ROWS, "SrcDvalid::PerTile takes two faces of eight rows");
+        TTI_SETADCXX(p_setadc::UNP_A, 2 * MAX_FPU_ROWS * FACE_C_DIM - 1, 0x0);
+        // AddrMode bits 1:0 step the L1 face (Ch0 Z) by the tile's two faces
+        static constexpr std::uint32_t unpack_srca_tile =
+            TT_OP_UNPACR(SrcA, 0b10, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+        ckernel_template tmp(1, num_tiles, unpack_srca_tile);
+        tmp.program();
+        return;
+    }
 
     // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
     // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) ==

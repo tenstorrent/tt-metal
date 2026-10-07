@@ -37,15 +37,39 @@
 
 namespace ckernel {
 
+namespace detail {
+// A kernel that defines SDPA_BCAST_COL_REUSE_PER_TILE_HANDOFF true (seen by all three threads) before this header hands
+// each L tile of its srcB-reuse multiply to math as one source bank (SrcDvalid::PerTile); every other kernel keeps the
+// per-face one.
+#if defined(SDPA_BCAST_COL_REUSE_PER_TILE_HANDOFF)
+constexpr SrcDvalid SDPA_REUSE_MUL_SRC_DVALID =
+    (SDPA_BCAST_COL_REUSE_PER_TILE_HANDOFF) ? SrcDvalid::PerTile : SrcDvalid::PerFace;
+#else
+constexpr SrcDvalid SDPA_REUSE_MUL_SRC_DVALID = SrcDvalid::PerFace;
+#endif
+template <EltwiseBinaryType op>
+constexpr SrcDvalid sdpa_reuse_src_dvalid =
+    op == EltwiseBinaryType::ELWMUL ? SDPA_REUSE_MUL_SRC_DVALID : SrcDvalid::PerFace;
+}  // namespace detail
+
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     std::uint32_t num_tiles,
     bool dense = false>
 ALWI void sdpa_bcast_col_reuse_tiles_init(std::uint32_t icb0) {
-    UNPACK((llk_unpack_A_sdpa_init<num_tiles, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE>(
-        false, false, icb0)));
-    MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<eltwise_binary_type, num_tiles, MATH_FIDELITY, dense>(
-        icb0, icb0, false)));
+    UNPACK((llk_unpack_A_sdpa_init<
+            num_tiles,
+            BroadcastType::NONE,
+            false,
+            EltwiseBinaryReuseDestType::NONE,
+            false,
+            detail::sdpa_reuse_src_dvalid<eltwise_binary_type>>(false, false, icb0)));
+    MATH((llk_math_sdpa_bcast_col_srcb_reuse_init_with_operands<
+          eltwise_binary_type,
+          num_tiles,
+          MATH_FIDELITY,
+          dense,
+          detail::sdpa_reuse_src_dvalid<eltwise_binary_type>>(icb0, icb0, false)));
 }
 
 template <bool clear_dest = false>

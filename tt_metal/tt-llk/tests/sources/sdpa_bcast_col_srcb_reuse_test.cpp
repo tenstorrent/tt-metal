@@ -69,9 +69,10 @@ static constexpr std::uint32_t DST_INDEX = 0;
 // constexpr the generated build header declares (helpers/sdpa_bcast_utils.py), so the value lives in python only and
 // the unpack/pack sides read the same constant the math mop does.
 
-// This advance test exercises the MUL (softmax-scale) instantiation, LoFi fidelity.
-static constexpr EltwiseBinaryType SDPA_OP  = EltwiseBinaryType::ELWMUL;
-static constexpr MathFidelity SDPA_FIDELITY = MathFidelity::LoFi;
+// This advance test exercises the MUL (softmax-scale) instantiation, at the fidelity the variant sets (MATH_FIDELITY), with the
+// per-face hand-off or, when the variant clears per_face_handoff, the per-tile one (SrcDvalid::PerTile on both threads).
+static constexpr EltwiseBinaryType SDPA_OP = EltwiseBinaryType::ELWMUL;
+#define SDPA_SRC_DVALID (per_face_handoff ? SrcDvalid::PerFace : SrcDvalid::PerTile)
 
 // The MOP's ELWMULs ACCUMULATE into DEST (verified on p100a: with clear_dest == false the packed result is
 // seed + A0*bcast_col(P1) + A1*bcast_col(P2), i.e. the column-source seed still sitting in DEST[DST_INDEX]
@@ -130,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Step 2: SDPA SrcA-only unpack init programs the MOP; the base unpack_A execute then streams the operand tiles
     // into SrcA. set_srcb_dummy_valid injects the stall + SrcB SET_DVALID (no real data) that the math preamble
     // STALLWAIT(SRCB_VLD) waits on before it MOVD2Bs DEST into SrcB.
-    _llk_unpack_A_sdpa_init_<NUM_TILES, BroadcastType::NONE>(
+    _llk_unpack_A_sdpa_init_<NUM_TILES, BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, false, SDPA_SRC_DVALID>(
         0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, params.in0_face_r_dim, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
 
     // The dummy SrcB valid MUST be issued BEFORE the operand unpacks, matching the demo call order
@@ -189,9 +190,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     //   preamble  -> STALLWAIT(SRCB_VLD) on the unpacker's dummy SrcB valid, then MOVD2B DEST rows -> SrcB.
     //   execute   -> DEST[DST_INDEX] = SrcA(operand) * broadcast_col(scale).
     //   postamble -> SETRWC CLR_B (release the reused SrcB).
-    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, SDPA_FIDELITY>(num_faces, 0 /* acc_to_dest */);
+    _llk_math_sdpa_bcast_col_srcb_reuse_init_<SDPA_OP, NUM_TILES, MATH_FIDELITY, false, SDPA_SRC_DVALID>(num_faces, 0 /* acc_to_dest */);
     _llk_math_sdpa_bcast_col_srcb_reuse_preamble_<DST_SYNC, is_fp32_dest_acc_en, CLEAR_DEST>();
-    _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, SDPA_FIDELITY, CLEAR_DEST>(DST_INDEX);
+    _llk_math_sdpa_bcast_col_srcb_reuse_<SDPA_OP, NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY, CLEAR_DEST>(DST_INDEX);
     _llk_math_sdpa_bcast_col_srcb_reuse_postamble_();
 
     _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
