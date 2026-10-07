@@ -210,26 +210,11 @@ def _scan_chunks(
     return RecurrenceResult(output=output, final_state=final_states)
 
 
-def _distributed_prefix(
-    transform: _AffineTransform,
-    initial_state: ttnn.Tensor,
-    *,
-    sequence_parallel_axis: int,
-    compute_config: ttnn.DeviceComputeKernelConfig,
-    actual_start: ttnn.Tensor,
-    local_rows: int,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Compose one affine transform per chip in chronological order.
-
-    The transforms are gathered as BF16; ``chain_affine_transforms`` derives the order from
-    ``actual_start`` and applies them with FP32 accumulation. Return the local entry state and
-    the replicated final carry on each independent TP line.
-    """
+def _pack_transform(transform: _AffineTransform) -> ttnn.Tensor:
+    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the prefix gathers."""
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
     value_dim = transform_b.shape[-1]
-    output_memory = KDA_OUTPUT_MEMORY_CONFIG
-
     # Precision boundary: FP32 composition is transported as BF16. Rounding is elementwise, so
     # packing in FP32 (in L1) and narrowing once matches narrowing each half before packing.
     packed = ttnn.concat(
@@ -240,7 +225,26 @@ def _distributed_prefix(
         dim=3,
         memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
     )
-    packed = ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=output_memory)
+    return ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
+
+
+def _distributed_prefix(
+    packed: ttnn.Tensor,
+    initial_state: ttnn.Tensor,
+    *,
+    sequence_parallel_axis: int,
+    compute_config: ttnn.DeviceComputeKernelConfig,
+    actual_start: ttnn.Tensor,
+    local_rows: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Compose one affine transform per chip in chronological order.
+
+    ``packed`` is this chip's BF16 [1, BH, K, K+V] transform of [A | B] rows. The transforms are
+    gathered as BF16; ``chain_affine_transforms`` derives the order from ``actual_start`` and
+    applies them with FP32 accumulation. Return the local entry state and the replicated final
+    carry on each independent TP line.
+    """
+    output_memory = KDA_OUTPUT_MEMORY_CONFIG
     gathered = ttnn.all_gather(
         packed,
         dim=0,
@@ -426,7 +430,7 @@ def _partition_prefix(
         compute_kernel_config=compute_config.affine_prefix,
     )
     return _distributed_prefix(
-        _AffineTransform(a, b),
+        _pack_transform(_AffineTransform(a, b)),
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.affine_prefix,
@@ -452,43 +456,63 @@ def _scan_sp_grouped_chunks(
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
     )
-    parts = ttnn.experimental.kda.summarize_chunk_recurrence(
-        *grouped.as_kernel_args(),
-        groups_per_head=groups,
-        actual_start=actual_start,
-        actual_end=actual_end,
-        sequence_parallel_axis=sequence_parallel_axis,
-        memory_config=memory,
-        compute_kernel_config=compute_config.preparation,
-    )
-    head_a, head_b, tail_a, tail_b = parts
-    head = _AffineTransform(head_a, head_b)
-    local_entry_state, prefix_final_state = _partition_prefix(
-        head,
-        initial_state,
-        groups_per_head=groups,
-        local_rows=geometry.local_rows,
-        actual_start=actual_start,
-        actual_end=actual_end,
-        sequence_parallel_axis=sequence_parallel_axis,
-        compute_config=compute_config,
-    )
-    # The chronological prefix ends where the split tail begins, supplying its seed.
-    group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
-        head_a,
-        head_b,
-        local_entry_state,
-        groups,
-        local_rows=geometry.local_rows,
-        tail_a=tail_a,
-        tail_b=tail_b,
-        tail_entry_states=prefix_final_state,
-        actual_start=actual_start,
-        actual_end=actual_end,
-        sequence_parallel_axis=sequence_parallel_axis,
-        memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
-        compute_kernel_config=compute_config.affine_prefix,
-    )
+    if groups == 1:
+        # One group per head: the summary writes the packed transform the prefix gathers (the identity for a rank
+        # without a head), and the group enters at the rank's own entry state.
+        (packed,) = ttnn.experimental.kda.summarize_chunk_recurrence(
+            *grouped.as_kernel_args(),
+            groups_per_head=groups,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            sequence_parallel_axis=sequence_parallel_axis,
+            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+            compute_kernel_config=compute_config.preparation,
+            packed_head=True,
+        )
+        group_entry_states, prefix_final_state = _distributed_prefix(
+            packed,
+            initial_state,
+            sequence_parallel_axis=sequence_parallel_axis,
+            compute_config=compute_config.affine_prefix,
+            actual_start=actual_start,
+            local_rows=geometry.local_rows,
+        )
+    else:
+        head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
+            *grouped.as_kernel_args(),
+            groups_per_head=groups,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            sequence_parallel_axis=sequence_parallel_axis,
+            memory_config=memory,
+            compute_kernel_config=compute_config.preparation,
+        )
+        local_entry_state, prefix_final_state = _partition_prefix(
+            _AffineTransform(head_a, head_b),
+            initial_state,
+            groups_per_head=groups,
+            local_rows=geometry.local_rows,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            sequence_parallel_axis=sequence_parallel_axis,
+            compute_config=compute_config,
+        )
+        # The chronological prefix ends where the split tail begins, supplying its seed.
+        group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
+            head_a,
+            head_b,
+            local_entry_state,
+            groups,
+            local_rows=geometry.local_rows,
+            tail_a=tail_a,
+            tail_b=tail_b,
+            tail_entry_states=prefix_final_state,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            sequence_parallel_axis=sequence_parallel_axis,
+            memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
+            compute_kernel_config=compute_config.affine_prefix,
+        )
     scan = _scan_chunks(
         grouped,
         group_entry_states,
