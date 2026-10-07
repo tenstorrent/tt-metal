@@ -110,6 +110,7 @@ def main():
                     pcc=round(pcc(a, b), 7),
                     max_abs=float((a - b).abs().max()),
                     rel_l2=float((a - b).norm() / (b.norm() + 1e-30)),
+                    alpha_ag_over_rs=float((a.double() * b.double()).sum() / ((b.double() ** 2).sum() + 1e-30)),
                 )
             medA, medB = statistics.median(tms["ag_sum"]), statistics.median(tms["rs64"])
             rec(
