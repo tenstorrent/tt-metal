@@ -49,7 +49,13 @@ def main():
     ap.add_argument("--B", type=int, default=16)
     ap.add_argument("--steps", type=int, default=3)
     ap.add_argument("--dtype", default="bf16", choices=["bf16", "fp32"])
-    ap.add_argument("--start", type=int, default=0, help="first GSM8K test row")
+    ap.add_argument(
+        "--prompts",
+        default="gsm8k",
+        choices=["gsm8k", "book"],
+        help="gsm8k: chat prompt+gold solution rows; book: Frankenstein windows in a chat prompt",
+    )
+    ap.add_argument("--start", type=int, default=0, help="first GSM8K test row / book token offset")
     ap.add_argument("--out", required=True)
     ap.add_argument(
         "--tf_dir",
@@ -61,10 +67,19 @@ def main():
     dt = torch.bfloat16 if a.dtype == "bf16" else torch.float32
     os.makedirs(a.out, exist_ok=True)
     ck = Ld.Ckpt()
-    toks, texts, dec = P.gsm8k_tokens(a.B, a.S, start=a.start, steps=a.steps)
+    toks, texts, dec = (P.gsm8k_tokens if a.prompts == "gsm8k" else P.book_tokens)(
+        a.B, a.S, start=a.start, steps=a.steps
+    )
     sha = P.sha256_tokens(toks)
     torch.save(
-        {"prefill_tokens": toks, "decode_tokens": dec, "sha256": sha, "texts": texts, "start_row": a.start},
+        {
+            "prefill_tokens": toks,
+            "decode_tokens": dec,
+            "sha256": sha,
+            "texts": texts,
+            "start_row": a.start,
+            "prompts": a.prompts,
+        },
         os.path.join(a.out, "tokens.pt"),
     )
     print("prompts sha256", sha, flush=True)

@@ -44,3 +44,32 @@ def gsm8k_tokens(B, S, start=0, tok=None, steps=0):
 
 def sha256_tokens(t):
     return hashlib.sha256(t.to(torch.int64).numpy().tobytes()).hexdigest()
+
+
+BOOK = "/mnt/tt-data/ssinghal/tests/tt-metal/models/tt_transformers/demo/context_cache/4c1a705addfd44fe41b8ce06d83e3fd5"  # Project Gutenberg Frankenstein (public domain), read-only
+BOOK_SHA256 = "7810cd483cffcf2cc8a1d8f0d5807931e69d4f48cd14149b8c76f88af82fead3"
+BOOK_QUESTION = "\n\nExplicitly state the quotes directly taken from the book inside double quotes literally, and summarise the story."
+
+
+def book_tokens(B, S, start=0, tok=None, steps=0):
+    """B rows of EXACTLY S real tokens: chat template [user: <book window> + question] + generation prompt; windows are disjoint slices of the book text
+    (after the Gutenberg START marker), window b starts at book token start + b*S. With steps>0 also returns the next `steps` book tokens per row (teacher-forced
+    decode tokens)."""
+    tok = tok or tokenizer()
+    text = open(BOOK).read()
+    text = text[text.index("*** START OF THE PROJECT GUTENBERG EBOOK") :]
+    body = tok(text, add_special_tokens=False)["input_ids"]
+    probe = tok.apply_chat_template([{"role": "user", "content": "XQXQ"}], tokenize=False, add_generation_prompt=True)
+    pre_txt, post_txt = probe.split("XQXQ")
+    pre = tok(pre_txt, add_special_tokens=False)["input_ids"]
+    post = tok(BOOK_QUESTION + post_txt, add_special_tokens=False)["input_ids"]
+    n = S - len(pre) - len(post)
+    rows, dec, texts = [], [], []
+    for b in range(B):
+        o = start + b * S
+        rows.append(pre + body[o : o + n] + post)
+        dec.append(body[o + n : o + n + steps])
+        texts.append(tok.decode(rows[-1]))
+    t = torch.tensor(rows)
+    assert t.shape == (B, S)
+    return (t, texts, torch.tensor(dec)) if steps else (t, texts)
