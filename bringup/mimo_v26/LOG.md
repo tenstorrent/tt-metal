@@ -148,3 +148,73 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dump_s128b16_fp32_L0-5.log
 - paths: models/demos/blackhole/mimo_v26/reference
 - data: {"rel_h_out":[0.00259,0.00309,0.00630,0.00435,0.00356,0.00272],"router_set_equal":[null,0.986,0.906,0.936,0.945,0.937]}
+
+## E261007-0242-981
+- date: 2026-10-07T02:42:36
+- commit: 0f46e26c5b9
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: dump
+- status: verified
+- claim: DUMP S=512 B=4 L0-5 (L5 = global path): bf16 chain /mnt/tt-data/ssinghal/mimo-dumps/mimo-prefill-s512b4, fp32 chain /mnt/tt-data/ssinghal/mimo-dumps/mimo-prefill-s512b4-f32 (noise.pt). Prompts: 4 disjoint 512-token windows of Frankenstein (Project Gutenberg, public domain, file sha256 7810cd48...fead3, read in place from the DSV4 tt_transformers context_cache) wrapped in the MiMo chat template with the DSV4 'quote and summarise' question; prompt sha256 c139b1779c3324c425106e6f5efa6580d97a0b5459a426016e75aadae5ecd3d5. Same file layout as the S=128 dump. Noise floor (teacher-forced fp32 vs bf16): h_out rel L2 0.26% L0, 0.41/0.58/0.42/0.38/0.40% L1-L5; identical expert sets 98.5/92.9/92.2/93.8/94.1% (slot overlap 99.0-99.8%). L5 route_gap<0.01 for 82% of tokens. Repro: ref_prefill_dump --layers 0-5 --prompts book --S 512 --B 4 --dtype bf16|fp32 [--tf_dir <bf16 dir>].
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dump_s512b4_bf16_L0-5.log
+- paths: models/demos/blackhole/mimo_v26/reference
+- data: {"S":512,"B":4,"sha256":"c139b1779c3324c425106e6f5efa6580d97a0b5459a426016e75aadae5ecd3d5","rel_h_out":[0.00258,0.00413,0.00579,0.00422,0.00376,0.00401],"router_set_equal":[null,0.985,0.929,0.922,0.9375,0.941]}
+
+## E261007-0242-e11
+- date: 2026-10-07T02:42:36
+- commit: 0f46e26c5b9
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: dump
+- status: verified
+- claim: DUMP S=2048 B=1 L0-5 bf16 chain: /mnt/tt-data/ssinghal/mimo-dumps/mimo-prefill-s2048b1 (no fp32 variant by instruction). Prompt: Frankenstein tokens 0.. in the chat template + quote/summarise question (same builder), sha256 98a359e229fb69d926a223193555d65cb82071f4591b0a1b4c164654df2d930c. CPU ~16 s/layer fwd + ~12 s weight load. Global L5: k [1,4,2048,192], v [1,4,2048,128]; SWA ring [1,8,128,*]. L5 route_gap<0.01 for 81%.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dump_s2048b1_bf16_L0-5.log
+- paths: models/demos/blackhole/mimo_v26/reference
+- data: {"S":2048,"B":1,"sha256":"98a359e229fb69d926a223193555d65cb82071f4591b0a1b4c164654df2d930c"}
+
+## E261007-0242-191
+- date: 2026-10-07T02:42:36
+- commit: 0f46e26c5b9
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: dump
+- status: verified
+- claim: DUMP S=8192 B=1 L0-5 bf16 chain: /mnt/tt-data/ssinghal/mimo-dumps/mimo-prefill-s8192b1 (2.3 GB), global path included (L5 k [1,4,8192,192]). Prompt: Frankenstein start in the chat template (exactly 8192 tokens), sha256 e38e6e111a3cb4d6a17a0c775c0d5995b31c84ba67788fb369faa4b01ec1313c. CPU ~15-20 s/layer. No fp32 variant. Caveat: SWA windows only see 128 keys, so this dump mainly exercises the global L0/L5 attention at long S and RoPE positions to 8191.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dump_s8192b1_bf16_L0-5.log
+- paths: models/demos/blackhole/mimo_v26/reference
+- data: {"S":8192,"B":1,"sha256":"e38e6e111a3cb4d6a17a0c775c0d5995b31c84ba67788fb369faa4b01ec1313c"}
+
+## E261007-0242-1c5
+- date: 2026-10-07T02:42:36
+- commit: 31782cc4ca0
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: tool
+- status: verified
+- claim: Teacher-forced single-layer oracle CLI: python -m models.demos.blackhole.mimo_v26.reference.single_layer --layer N --h-in <tensor|layer_*.pt|prefill dict> --out o.pt [--dtype bf16|fp32] [--dec-in dec.pt]; any layer 0-47, writes prefill{h_in..h_out, routing_idx/w/route_gap}, state (global k/v or SWA ring), decode steps. pytest tests/test_single_layer.py: reproduces the chain dump for L3 (h_out maxabs<1e-2), and runs finite with right shapes on a random real-scale input (per-channel mean/std of the real L5 output) for SWA L20, SWA L46, global L47 (4 passed, 51 s).
+- evidence: models/demos/blackhole/mimo_v26/tests/test_single_layer.py
+- paths: models/demos/blackhole/mimo_v26/reference/single_layer.py, models/demos/blackhole/mimo_v26/tests/test_single_layer.py
+
+## E261007-0242-7cc
+- date: 2026-10-07T02:42:37
+- commit: 31782cc4ca0
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: dataset
+- status: verified
+- claim: GSM8K accuracy sets (no model run): /mnt/tt-data/ssinghal/mimo-dumps/gsm8k/gsm8k_128.json (sha256 of templated prompts 7bff43ed33869d3355d9a6a4bcc0387c80e5e2ef48d272fe6f91a9fc92394271, max 135 prompt tokens) and gsm8k_512.json (sha256 f5be16c2d438187236f472cdc36958cb8d2bbea75b97ff85e8e833c092b53edc, max 148 tokens): first 128/512 rows of /mnt/tt-data/ssinghal/datasets/gsm8k_test.jsonl (same rows/order as DSV4 gsm8k_o0..o448; the DSV4 128-set questions == rows 0-127, checked), MiMo chat template applied (add_generation_prompt, no system prompt), gold = normalised number after ####, prompt_ids stored. Scorer reference/score_gsm8k.py: extraction rule copied from DSV4 reference/e2e_analyze.py extract/norm (as used by tools/score_gsm.py and wt/h43c/score_gsm_big.py): last '#### x', else last \\boxed{x}, else last number; self-test: gold solutions score 512/512. Usage: score_gsm8k.py <set.json> <outputs.json> [--min-correct K]. Note the template ends the prompt at '<|im_start|>assistant\\n' (check whether thinking mode needs a prefix before the device runs).
+- evidence: /mnt/tt-data/ssinghal/mimo-dumps/gsm8k/gsm8k_512.json
+- paths: models/demos/blackhole/mimo_v26/reference/gsm8k_set.py, models/demos/blackhole/mimo_v26/reference/score_gsm8k.py
+- data: {"sha256_128":"7bff43ed33869d3355d9a6a4bcc0387c80e5e2ef48d272fe6f91a9fc92394271","sha256_512":"f5be16c2d438187236f472cdc36958cb8d2bbea75b97ff85e8e833c092b53edc"}
+
+## E261007-0242-e3b
+- date: 2026-10-07T02:42:37
+- commit: 31782cc4ca0
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: decision
+- status: inferred
+- claim: NO published GSM8K figure for MiMo-V2.6-Flash exists in the local sources: the technical report (44 pp.) benchmark tables are agentic (SWE/code/visual/cyber) and README has none, so the GSM8K gate threshold cannot be derived from the paper (coordinator to decide). MTP findings (reference/MTP_NOTES.md, page refs): report sec 2.4 (p.5-6, Table 1) 'MTP module' = the 5-layer DFlash drafter (block 8 = 1+7 tokens, window 1024), NOT the 3 in-checkpoint layers; p.32-33: RL rollouts use block-6 DFlash replacing 'MTP-3 inherited from SFT', accepted length +31.3% vs MTP-3; p.4: MTP is SWA + dense-FFN based. The report says nothing on eh_proj concat order, chaining, window or shared embed/head of MTP-3; no sglang source on disk (sgl.py is a 404 stub). Checkpoint facts measured: 3 layers, eh_proj [4096,8192], enorm/hnorm/input/pre_mlp/final norms, SWA-dim qkv fp8 + sink, dense 16384 FFN, no own embed/head. Everything structural is INFERRED (DeepSeek-V3-style).
+- evidence: models/demos/blackhole/mimo_v26/reference/MTP_NOTES.md
+- paths: models/demos/blackhole/mimo_v26/reference/MTP_NOTES.md
