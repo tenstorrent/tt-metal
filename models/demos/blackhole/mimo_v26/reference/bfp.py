@@ -5,14 +5,17 @@ Validated against a real ttnn host roundtrip in tests/test_bfp.py when a saved r
 import torch
 
 
-def bfp8_roundtrip(x, group=16):
+def bfp8_roundtrip(x, group=16, mode="nearest"):
     shp = x.shape
     xf = x.float().reshape(-1, group) if shp[-1] % group == 0 else None
     assert xf is not None, "last dim must be a multiple of 16"
     mx = xf.abs().amax(-1, keepdim=True)
     e = torch.floor(torch.log2(mx.clamp_min(1e-38)))
     scale = torch.pow(2.0, e - 6)  # one mantissa step
-    m = torch.round(xf / scale).clamp(-127, 127)
+    r = xf / scale
+    m = (torch.round(r) if mode == "nearest" else torch.trunc(r)).clamp(
+        -127, 127
+    )  # mode 'trunc' = round toward zero (hardware packer-style)
     out = torch.where(mx > 0, m * scale, torch.zeros_like(xf))
     return out.reshape(shp)
 
