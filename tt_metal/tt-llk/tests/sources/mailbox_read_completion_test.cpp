@@ -48,7 +48,7 @@ inline std::uint32_t released_side()
     for (std::uint32_t i = 0; i < CYCLES; i++)
     {
         mailbox_write(ThreadId::MathThreadId, READY);
-        [[maybe_unused]] const std::uint32_t release = mailbox_read(ThreadId::MathThreadId);
+        (void)mailbox_read(ThreadId::MathThreadId);
         seen += read_field(cfg) == expected_field(i) ? 1 : 0;
     }
     return seen;
