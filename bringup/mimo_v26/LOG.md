@@ -1358,3 +1358,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_needle_f_5199ce2a696.jsonl
 - paths: models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/prefill.py
 - data: {"needle_hits":24,"needle_of":24,"isls":[65000,32000,16000],"depths":[10,50,70,90]}
+
+## E261007-1057-ec7
+- date: 2026-10-07T10:57:36
+- commit: 37c8f06e7db
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: COORDINATOR: (1) host .35 added to bad_hosts.txt as SUSPECT after 3 prefill-trace hangs and an ethernet-core timeout seen by the prefill agent (E261007-1046-*); same configs fine on .30/.48; no reset by me. (2) After merge 408f8a19033 (decode path changed layer.py/model.py/prefill.py) the scorecard shows 1/16 PASS because earlier evidence is STALE by the paths rule: a full re-gate at the final integration tip is planned after the small-U and race work merge. (3) Open bug: with a decode trace captured, a second ISL's prefill replay followed by decode replay hangs in the first decode replay (reproduced on .48 and .30, stack saved by the prefill agent): relevant to reconfigure(U); workaround one ISL per process.
+- evidence: -
+- paths: models/common/bringup_kit/bad_hosts.txt
