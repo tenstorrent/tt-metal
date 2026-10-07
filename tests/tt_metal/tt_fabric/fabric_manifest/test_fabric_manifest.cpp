@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
+#include <tt_stl/overloaded.hpp>
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -32,6 +34,7 @@
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 
@@ -45,6 +48,7 @@ const ControlPlane& control_plane() { return tt::tt_metal::MetalContext::instanc
 // ============ Helpers ============
 
 using manifest::chip_key;
+using manifest::kind_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
@@ -169,7 +173,9 @@ void check_top_level(
     FabricConfig fabric_config,
     std::filesystem::file_time_type suite_start) {
     EXPECT_EQ(
-        keys_of(manifest), (std::set<std::string>{"manifest_version", "kind", "run", "fabric_context", "meshes"}));
+        keys_of(manifest),
+        (std::set<std::string>{"manifest_version", "kind", "run", "fabric_context", "vocabulary", "meshes"}));
+    EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds"}));
     EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
     EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
@@ -206,8 +212,10 @@ void check_top_level(
     EXPECT_EQ(block.at("is_2d_routing"), is_2d);
     EXPECT_TRUE(block.at("multi_txq").is_boolean());
 
+    // Other ranks write their manifests into the same directory, and may still be writing.
+    const auto temp_prefix = manifest_path.filename().string() + ".tmp.";
     for (const auto& entry : std::filesystem::directory_iterator(manifest_path.parent_path())) {
-        EXPECT_EQ(entry.path().string().find(".tmp."), std::string::npos) << entry.path();
+        EXPECT_FALSE(entry.path().filename().string().starts_with(temp_prefix)) << entry.path();
     }
 }
 
@@ -316,7 +324,14 @@ void check_router_blocks(const std::vector<RouterEntry>& routers) {
         EXPECT_EQ(
             keys_of(*entry.router),
             (std::set<std::string>{
-                "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges"}));
+                "identity",
+                "link",
+                "shape",
+                "credit_counters",
+                "channels",
+                "intra_chip_downstream_edges",
+                "fields",
+                "eriscs"}));
         EXPECT_EQ(keys_of(entry.router->at("channels")), (std::set<std::string>{"senders", "receivers"}));
     }
 }
@@ -669,13 +684,12 @@ bool expect_serviced_by(const json& serviced_by, uint32_t num_active_eriscs) {
     return !serviced_by.empty();
 }
 
-// A channel is active exactly when one ERISC runs it. Every VC0 channel is in a VC the kernel runs, only VC0
+// A channel is active exactly when an ERISC runs it. Every VC0 channel is in a VC the kernel runs, only VC0
 // senders other than the worker channel are carried by the mux, and only a router with a trimming profile has
 // trimmed channels. Returns whether the channel is active.
 bool expect_channel_status(
     const json& channel, const json& shape, bool is_sender, uint32_t vc, uint32_t ch, uint32_t num_active_eriscs) {
     const bool serviced = expect_serviced_by(channel.at("serviced_by"), num_active_eriscs);
-    EXPECT_LE(channel.at("serviced_by").size(), 1u);
     const auto status = channel.at("status").get<std::string>();
     EXPECT_EQ(status == lower_enum_name(manifest::ChannelStatus::ACTIVE), serviced) << status;
     if (status == lower_enum_name(manifest::ChannelStatus::VC_NOT_SERVICED)) {
@@ -705,6 +719,66 @@ void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, bool act
         ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
 }
 
+// A field is written as its table entry says: its category and kind, then a region, a stream register or a value.
+void expect_field(const json& entry, const manifest::RouterField& field) {
+    EXPECT_EQ(entry.at("category"), lower_enum_name(field.category.value));
+    EXPECT_EQ(entry.at("kind"), kind_name(field.kind.value));
+    const auto schema = [](const manifest::ElementType& element) { return schema_name(element.type, element.size); };
+    std::set<std::string> keys = {"category", "kind"};
+    std::visit(
+        ttsl::overloaded{
+            [&](const manifest::kind::L1Value& kind) {
+                keys.insert(k_region_keys.begin(), k_region_keys.end());
+                EXPECT_EQ(entry.at("schema"), schema(kind.element));
+                EXPECT_EQ(entry.at("size"), kind.element.size);
+            },
+            [&](const manifest::kind::Stream& kind) {
+                keys.insert({"stream_id", "register", "schema"});
+                EXPECT_EQ(entry.at("register"), lower_enum_name(kind.reg));
+                EXPECT_EQ(entry.at("schema"), schema(kind.element));
+                const auto stream_id = entry.at("stream_id").get<uint32_t>();
+                EXPECT_TRUE(
+                    stream_id < StreamRegAssignments::num_eth_stream_registers || stream_id == k_unused_stream_id)
+                    << stream_id;
+            },
+            [&](const manifest::kind::Number&) {
+                keys.insert("value");
+                EXPECT_TRUE(entry.at("value").is_number_unsigned());
+            },
+            [&](const manifest::kind::Flag&) {
+                keys.insert("value");
+                EXPECT_TRUE(entry.at("value").is_boolean());
+            },
+            [&](const manifest::kind::Enum& kind) {
+                keys.insert({"value", "schema"});
+                EXPECT_EQ(entry.at("schema"), schema(kind.element));
+                EXPECT_TRUE(kind.is_enumerator(entry.at("value").get<uint32_t>())) << entry.at("value");
+            },
+        },
+        field.kind.value);
+    EXPECT_EQ(keys_of(entry), keys);
+}
+
+// `fields` holds exactly `table`'s fields, each written as its entry says, with a category and kind the manifest's
+// vocabulary lists.
+void expect_fields(const json& fields, std::span<const manifest::RouterField> table, const json& vocabulary) {
+    const auto listed = [&](const char* list, const json& name) {
+        return std::ranges::find(vocabulary.at(list), name) != vocabulary.at(list).end();
+    };
+    std::set<std::string> expected_keys;
+    for (const auto& field : table) {
+        const std::string key(field.key.value);
+        expected_keys.insert(key);
+        if (fields.contains(key)) {
+            SCOPED_TRACE(key);
+            expect_field(fields.at(key), field);
+            EXPECT_TRUE(listed("categories", fields.at(key).at("category")));
+            EXPECT_TRUE(listed("kinds", fields.at(key).at("kind")));
+        }
+    }
+    EXPECT_EQ(keys_of(fields), expected_keys);
+}
+
 // A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel (the
 // tensix mux on VC0 in mux mode), or a different router on the same chip and routing plane, feeding at most one
 // channel per VC; in 1D a router and its producer feed each other. Nothing feeds a channel the mux carries. Credits
@@ -713,8 +787,6 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
     const auto& fabric_context = manifest.at("fabric_context");
     const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
     const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
-    const auto num_nocs = tt::tt_metal::MetalContext::instance().hal().get_num_nocs();
-    const auto cmd_bufs = noc_cmd_buf_names();
 
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
@@ -747,16 +819,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                 const auto& sender = senders.at(vc_key).at(ch_key);
                 EXPECT_EQ(
                     keys_of(sender),
-                    (std::set<std::string>{
-                        "status",
-                        "serviced_by",
-                        "producer",
-                        "is_injection_channel",
-                        "producer_credit_return",
-                        "ring_buffer",
-                        "free_slots",
-                        "credits",
-                        "control_info"}));
+                    (std::set<std::string>{"status", "serviced_by", "producer", "ring_buffer", "credits", "fields"}));
 
                 const bool serviced = expect_channel_status(sender, shape, true, vc, ch, num_active_eriscs);
 
@@ -786,20 +849,8 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     }
                 }
 
-                const auto& injection = sender.at("is_injection_channel");
-                ASSERT_TRUE(injection.is_boolean());
-                if (injection.get<bool>()) {
-                    EXPECT_TRUE(builder_config::bubble_flow_control_enabled_on_vc(vc));
-                }
-
-                const auto& credit_return = sender.at("producer_credit_return");
-                EXPECT_EQ(keys_of(credit_return), (std::set<std::string>{"noc", "cmd_buf"}));
-                EXPECT_LT(credit_return.at("noc").get<uint32_t>(), num_nocs);
-                EXPECT_TRUE(cmd_bufs.contains(credit_return.at("cmd_buf").get<std::string>()))
-                    << credit_return.at("cmd_buf");
-
                 expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size, serviced);
-                expect_stream(sender.at("free_slots"), serviced);
+                expect_fields(sender.at("fields"), manifest::k_sender_channel_fields, manifest.at("vocabulary"));
 
                 const auto& credits = sender.at("credits");
                 const bool acked = vc == 0 && vc0_bubble_flow_control;
@@ -822,19 +873,6 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     uses_counters,
                     compact,
                     serviced);
-
-                const auto& control_info = sender.at("control_info");
-                EXPECT_EQ(
-                    keys_of(control_info), (std::set<std::string>{"connection", "conn_info", "buffer_index_sem"}));
-                expect_value_region(control_info.at("connection"), "u32", sizeof(uint32_t));
-                expect_value_region(
-                    control_info.at("conn_info"),
-                    "struct:EDMChannelWorkerLocationInfo",
-                    sizeof(EDMChannelWorkerLocationInfo));
-                expect_value_region(
-                    control_info.at("buffer_index_sem"),
-                    "struct:SenderChannelProducerCursor",
-                    sizeof(SenderChannelProducerCursor));
             }
         }
         EXPECT_EQ(keys_of(senders), expected_vc_keys);
@@ -1017,6 +1055,28 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
     }
 }
 
+// Each router has exactly the table's fields it should, router-wide and on each ERISC, each written as its entry says.
+void check_router_fields(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const auto& vocabulary = manifest.at("vocabulary");
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& router = *entry.router;
+        const auto num_active_eriscs = router.at("shape").at("num_active_eriscs").get<uint32_t>();
+
+        expect_fields(router.at("fields"), manifest::k_router_fields, vocabulary);
+        std::set<std::string> expected_eriscs;
+        for (uint32_t risc_id = 0; risc_id < num_active_eriscs; ++risc_id) {
+            expected_eriscs.insert(fmt::format("erisc{}", risc_id));
+        }
+        EXPECT_EQ(keys_of(router.at("eriscs")), expected_eriscs);
+        for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
+            SCOPED_TRACE(risc_key);
+            EXPECT_EQ(keys_of(erisc), (std::set<std::string>{"fields"}));
+            expect_fields(erisc.at("fields"), manifest::k_erisc_fields, vocabulary);
+        }
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -1057,6 +1117,7 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::RECEIVER_COMPLETION), "receiver_completion");
 
     EXPECT_EQ(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE), "buf_space_available");
+    EXPECT_EQ(lower_enum_name(manifest::StreamRegister::REMOTE_SRC), "remote_src");
 
     EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::ACTIVE), "active");
     EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::VC_NOT_SERVICED), "vc_not_serviced");
@@ -1067,6 +1128,17 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
+
+    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::LIFECYCLE), "lifecycle");
+    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::KERNEL_PARAMS), "kernel_params");
+    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::FLOW_CONTROL), "flow_control");
+    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::CONTROL_INFO), "control_info");
+
+    EXPECT_EQ(kind_name<manifest::kind::L1Value>(), "l1_value");
+    EXPECT_EQ(kind_name<manifest::kind::Stream>(), "stream");
+    EXPECT_EQ(kind_name<manifest::kind::Number>(), "number");
+    EXPECT_EQ(kind_name<manifest::kind::Flag>(), "flag");
+    EXPECT_EQ(kind_name<manifest::kind::Enum>(), "enum");
 
     EXPECT_EQ(schema_name(field::Uint{}, 4), "u32");
     EXPECT_EQ(schema_name(field::Uint{}, 1), "u8");
@@ -1120,6 +1192,9 @@ TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manife
 
 TEST_F(Fabric1DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }

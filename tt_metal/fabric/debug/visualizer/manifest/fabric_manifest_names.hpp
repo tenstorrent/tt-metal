@@ -35,6 +35,24 @@ std::string lower_enum_name(E value) {
     return name;
 }
 
+// The manifest's spelling of a field kind: its type's name in snake case, e.g. kind::L1Value is "l1_value".
+template <typename K>
+std::string kind_name() {
+    std::string name;
+    for (const char c : enchantum::type_name<K>) {
+        if (std::isupper(static_cast<unsigned char>(c)) && !name.empty()) {
+            name += '_';
+        }
+        name += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return name;
+}
+
+template <typename... Kinds>
+std::string kind_name(const std::variant<Kinds...>& kind) {
+    return std::visit([]<typename K>(const K&) { return kind_name<K>(); }, kind);
+}
+
 // Meshes, chips and routers are maps keyed M<mesh_id>, C<fabric_chip_id> and <direction><routing_plane>.
 
 inline std::string mesh_key(MeshId mesh_id) { return fmt::format("M{}", *mesh_id); }

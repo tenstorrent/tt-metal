@@ -7,11 +7,14 @@
 #include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include <algorithm>
 #include <array>
 #include <numeric>
+#include <span>
+#include <variant>
 
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
@@ -20,6 +23,7 @@
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 
@@ -247,6 +251,69 @@ manifest::NocCmdBuf emitted_cmd_buf(
     return noc_cmd_buf(cmd_buf);
 }
 
+// The channel a per-channel field is read for. Zero for router and ERISC fields.
+struct FieldIndex {
+    uint32_t compact = 0;
+    uint32_t fabric_position = 0;
+};
+
+// `arg`'s name, with the channel's index in its {}.
+std::string arg_name(const manifest::NamedArg& arg, const FieldIndex& index) {
+    switch (arg.index) {
+        case manifest::ArgIndex::NONE: return std::string(arg.name);
+        case manifest::ArgIndex::COMPACT: return fmt::format(fmt::runtime(arg.name), index.compact);
+        case manifest::ArgIndex::FABRIC_POSITION: return fmt::format(fmt::runtime(arg.name), index.fabric_position);
+    }
+    TT_THROW("Fabric manifest: unknown argument index {}", static_cast<int>(arg.index));
+}
+
+// `field`, given the value of its source.
+manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg) {
+    const std::string_view key = field.key.value;
+    const manifest::Kind& kind = field.kind.value;
+    TT_FATAL(
+        !std::holds_alternative<manifest::kind::Flag>(kind) || arg <= 1,
+        "Fabric manifest: field {} is a flag, but is {}",
+        key,
+        arg);
+    if (const auto* enum_kind = std::get_if<manifest::kind::Enum>(&kind)) {
+        TT_FATAL(
+            enum_kind->is_enumerator(arg),
+            "Fabric manifest: field {} is {}, which is not a {}",
+            key,
+            arg,
+            manifest::schema_name(enum_kind->element.type, enum_kind->element.size));
+    }
+    return {
+        .key = key,
+        .category = field.category.value,
+        .kind = kind,
+        .arg = arg,
+        .cleared_by_host = std::holds_alternative<manifest::kind::L1Value>(kind) && is_cleared_by_host(inputs, arg),
+    };
+}
+
+// The fields in `table`, for the channel at `index` when the table is per channel. `read_arg` reads a named argument
+// by its name.
+template <typename ReadArg>
+std::vector<manifest::Field> collect_fields(
+    const ManifestRouterInputs& inputs,
+    std::span<const manifest::RouterField> table,
+    const FieldIndex& index,
+    const ReadArg& read_arg) {
+    std::vector<manifest::Field> fields;
+    for (const auto& field : table) {
+        const uint32_t value = std::visit(
+            ttsl::overloaded{
+                [&](const manifest::NamedArg& arg) { return read_arg(arg_name(arg, index)); },
+                [&](const manifest::BuilderMember& member) { return member.read(inputs.erisc_builder, index.compact); },
+            },
+            field.source);
+        fields.push_back(make_field(inputs, field, value));
+    }
+    return fields;
+}
+
 // A sender channel's indices. The kernel indexes its per-channel tables by the compact index, over this router's
 // own counts, except the free-slots stream table, which it indexes by the fabric position, over the fabric's
 // maximum counts (StreamAssignment).
@@ -332,13 +399,6 @@ manifest::ChannelStatus collect_status(
     const std::vector<uint32_t>& serviced_by,
     bool carried_by_mux,
     bool trimmed) {
-    TT_FATAL(
-        serviced_by.size() <= 1,
-        "Fabric manifest: VC{} {} channel {} is serviced by {} ERISCs, which would race on its pointers and counters",
-        vc,
-        kind,
-        channel,
-        serviced_by.size());
     if (!serviced_by.empty()) {
         return manifest::ChannelStatus::ACTIVE;
     }
@@ -439,8 +499,6 @@ manifest::SenderChannelCredits collect_sender_credits(
 manifest::SenderChannel collect_sender_channel(
     const ChannelContext& ctx, const SenderChannelIndex& index, bool vc0_bubble_flow_control) {
     const auto& inputs = ctx.inputs;
-    const auto& erisc_builder = inputs.erisc_builder;
-    const auto& config = erisc_builder.config;
     const auto& args = inputs.named_ct_args_per_risc;
     const uint32_t c = index.compact;
 
@@ -455,44 +513,19 @@ manifest::SenderChannel collect_sender_channel(
         ctx.mux_mode && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
         ctx.trimming.has_value() && !ctx.trimming->is_sender_channel_used(c));
     sender.producer = collect_sender_producer(ctx, index);
-
-    sender.is_injection_channel = erisc_builder.sender_channel_is_traffic_injection_channel_array.at(c);
-    check_named_arg(args, fmt::format("SENDER_CH_{}_IS_INJECTION", c), sender.is_injection_channel ? 1 : 0);
-
-    sender.producer_credit_return = {
-        .noc = emitted_noc(args, fmt::format("SENDER_CH_{}_ACK_NOC_ID", c), config.sender_channel_ack_noc_ids[c]),
-        .cmd_buf = emitted_cmd_buf(
-            args, fmt::format("SENDER_CH_{}_ACK_CMD_BUF_ID", c), config.sender_channel_ack_cmd_buf_ids[c]),
-    };
-
     sender.ring_buffer = ring_buffer_region(
         inputs,
         ctx.allocator.get_sender_channel_base_address(index.vc, index.channel),
         ctx.allocator.get_sender_channel_number_of_slots(index.vc, index.channel));
-    sender.free_slots =
-        assigned_stream(ctx, fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", index.fabric_position));
     sender.credits = collect_sender_credits(ctx, index, vc0_bubble_flow_control);
+    sender.fields = collect_fields(
+        inputs,
+        manifest::k_sender_channel_fields,
+        {.compact = c, .fabric_position = index.fabric_position},
+        [&](const std::string& name) { return emitted_value(args, name); });
 
-    const size_t conn_info_address = config.sender_channels_worker_conn_info_base_address[c];
-    check_named_arg(
-        args, fmt::format("LOCAL_SENDER_CH_{}_CONN_INFO_ADDR", c), static_cast<uint32_t>(conn_info_address));
-    // The kernel takes these two addresses from its runtime args, not its compile-time args.
-    const size_t connection_address = config.sender_channels_connection_semaphore_address[c];
-    const size_t buffer_index_sem_address = config.sender_channels_buffer_index_semaphore_address[c];
-    TT_FATAL(
-        erisc_builder.sender_channels_connection_semaphore_id[c] == connection_address &&
-            erisc_builder.sender_channels_buffer_index_semaphore_id[c] == buffer_index_sem_address,
-        "Fabric manifest: sender channel {}'s runtime args do not hold its semaphore addresses",
-        c);
-    sender.control_info = {
-        .connection = l1_value<uint32_t>(inputs, connection_address),
-        .conn_info = l1_value<EDMChannelWorkerLocationInfo>(inputs, conn_info_address),
-        .buffer_index_sem = l1_value<SenderChannelProducerCursor>(inputs, buffer_index_sem_address),
-    };
-
-    // A serviced channel polls its free-slots register and, when its credits are on registers, its credit registers.
+    // A serviced channel polls its credit registers, when its credits are on registers.
     if (!sender.serviced_by.empty()) {
-        require_allocated("sender", index.vc, index.channel, "free_slots", sender.free_slots);
         if (const auto* stream = std::get_if<manifest::StreamRef>(&sender.credits.completed)) {
             require_allocated("sender", index.vc, index.channel, "completed", *stream);
         }
@@ -684,9 +717,8 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(
     const auto& config = erisc_builder.config;
     const auto& adapter = *erisc_builder.receiver_channel_to_downstream_adapter;
     const auto& connections = adapter.get_downstream_connections(vc);
+    // The kernel never forwards on VC2.
     if (vc == 2) {
-        TT_FATAL(
-            connections.empty(), "Fabric manifest: the router has VC2 downstream edges, which the kernel never uses");
         return {};
     }
     check_named_arg(
@@ -782,6 +814,16 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
     const auto ctx = make_channel_context(inputs);
     auto channels = collect_channels(ctx, shape);
     auto edges = collect_router_edges(ctx, channels);
+
+    const auto& args = inputs.named_ct_args_per_risc;
+    auto fields = collect_fields(
+        inputs, manifest::k_router_fields, {}, [&](const std::string& name) { return emitted_value(args, name); });
+    std::vector<std::vector<manifest::Field>> erisc_fields;
+    for (const auto& risc_args : args) {
+        erisc_fields.push_back(collect_fields(inputs, manifest::k_erisc_fields, {}, [&](const std::string& name) {
+            return get_named_arg(risc_args, name);
+        }));
+    }
     return {
         .identity = collect_identity(inputs.location),
         .link = collect_link(inputs),
@@ -789,6 +831,8 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
         .credit_counters = collect_credit_counters(inputs),
         .channels = std::move(channels),
         .intra_chip_downstream_edges = std::move(edges),
+        .fields = std::move(fields),
+        .erisc_fields = std::move(erisc_fields),
     };
 }
 
