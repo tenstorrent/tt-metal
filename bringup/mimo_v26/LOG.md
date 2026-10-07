@@ -465,3 +465,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_attn_dump_db7dbcd991c.log
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests
 - data: {"layer_type":"swa_moe+global_moe attention","pcc":0.99973,"pcc_swa":0.99973,"pcc_ga":0.99997,"kv_pcc_min":0.99988,"decode_pcc_min":0.99996}
+
+## E261007-0318-bfb
+- date: 2026-10-07T03:18:29
+- commit: 76fba8807cb
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER DECISION 2026-10-07: keep expert activations bf16 (layer-5 MoE PCC 0.9915-0.9949 with the unified op's internal bfp8 activations, E261007-0251-c0a / -559). Weights stay bfp8. Next: bf16-activation expert path with existing ops, no C++; any C++ patch still needs separate approval.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
