@@ -23,7 +23,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         in0: "input_A"
         in1: "input_B"
         operation: "ReduceBlockMaxRuntime"
@@ -31,5 +31,5 @@ operations:
         math_fidelity: "HiFi2"
     pack:
       - output: "reduce_block_max_runtime_out"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         packer: "Packer"

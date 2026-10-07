@@ -82,6 +82,9 @@ SWEEP_PARAMETERS: dict[str, dict[str, SweepParameter]] = {
     "math": {
         "operation": _SFPU_OPERATION,
         "approximation_mode": _SFPU_APPROXIMATION_MODE,
+        "unpack_to_dest": SweepParameter(
+            value_type=bool, all_values=(False, True), node_types=("Fpu",)
+        ),
     },
     "pack": {
         "operation": _SFPU_OPERATION,
@@ -203,15 +206,27 @@ def validated_fuser_configs(
     ):
         return
 
+    valid_count = 0
+    rejected_count = 0
+    first_error = None
     for case_name, config_dict in expand_fuser_configs(test_name, definition):
         try:
             config = FuserConfigSchema.load(case_name, config_dict)
         except ValueError as error:
             if case_name == test_name:
                 raise
+            rejected_count += 1
+            if first_error is None:
+                first_error = str(error)
             logger.debug(f"Excluding invalid fuser sweep case {case_name}: {error}")
             continue
+        valid_count += 1
         yield case_name, config
+
+    if not valid_count:
+        raise ValueError(
+            f"Fuser sweep '{test_name}' has no valid cases ({rejected_count} rejected)"
+        )
 
 
 def collect_fuser_cases(yaml_files):

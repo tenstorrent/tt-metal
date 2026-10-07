@@ -20,7 +20,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         in0: "input_A"
         in1: "input_B"
         operation: "Reduce"
@@ -31,5 +31,5 @@ operations:
         enforce_fp32_accumulation: true
     pack:
       - output: "reduce_col_out"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         packer: "Packer"

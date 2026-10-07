@@ -13,12 +13,12 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        block_size: [32, 256]
+        block_tiles: [1, 8]
         in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerTilizeA"
         math_fidelity: "HiFi2"
     pack:
       - output: "datacopy_tilize_out"
-        block_size: [32, 256]
+        block_tiles: [1, 8]
         packer: "Packer"

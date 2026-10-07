@@ -1,30 +1,32 @@
-# Datacopy (unpack_to_dest), then UnarySfpu Exp calculates Exp for tile 0.
+# Datacopy through SrcA or unpack_to_dest, then UnarySfpu Exp.
 
 dest_acc: true
 
 operands:
   - name: "input_A"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 128]
     format: "Float32"
   - name: "datacopy_out"
+    tile_dims: [[16, 32], [32, 16], [32, 32]]
     dims: [32, 128]
     format: "Float32"
 
 operations:
   - math:
       - type: "Fpu"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         in0: "input_A"
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
-        unpack_to_dest: true
+        unpack_to_dest: all
       - type: "UnarySfpu"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         operation: "Exp"
         approximation_mode: false
         iterations: 32
     pack:
       - output: "datacopy_out"
-        block_size: [32, 128]
+        block_tiles: [1, 4]
         packer: "Packer"

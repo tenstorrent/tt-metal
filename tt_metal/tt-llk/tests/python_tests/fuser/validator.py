@@ -377,7 +377,25 @@ def parse_sfpu_operation(value, supported_ops, kind: str) -> MathOperation:
     return value
 
 
-class UnarySfpuMathSchema(BaseModel):
+class BlockSchema(BaseModel):
+    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
+    block_tiles: Optional[
+        Tuple[Annotated[int, Field(gt=0)], Annotated[int, Field(gt=0)]]
+    ] = None
+
+    @model_validator(mode="after")
+    def validate_block_units(self):
+        if self.block_tiles is not None and "block_size" in self.model_fields_set:
+            raise ValueError("Specify either block_size or block_tiles, not both")
+        return self
+
+    def resolve_block_size(self, tile_r: int, tile_c: int):
+        if self.block_tiles is not None:
+            rows, cols = self.block_tiles
+            self.block_size = [rows * tile_r, cols * tile_c]
+
+
+class UnarySfpuMathSchema(BlockSchema):
     """Base schema for unary SFPU math nodes (type="UnarySfpu").
 
     Each architecture subclass sets _sfpu_cls (runtime SFPU class).
@@ -395,7 +413,6 @@ class UnarySfpuMathSchema(BaseModel):
     iterations: Literal[8, 32] = 8
     fill_const_value: float = 1.0
     indexes: Optional[Union[str, IndexesSchema]] = None
-    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("operation", mode="before")
     @classmethod
@@ -485,7 +502,7 @@ class TopKSfpuMathSchema(BaseModel):
         return None
 
 
-class BinarySfpuMathSchema(BaseModel):
+class BinarySfpuMathSchema(BlockSchema):
     """Base schema for binary SFPU math nodes (type="BinarySfpu").
 
     Each architecture subclass sets _sfpu_cls (runtime SFPU class).
@@ -502,7 +519,6 @@ class BinarySfpuMathSchema(BaseModel):
     approximation_mode: ApproximationMode = ApproximationMode.No
     iterations: Literal[8, 32] = 8
     indexes: Optional[Union[str, IndexesSchema]] = None
-    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("operation", mode="before")
     @classmethod
@@ -533,7 +549,7 @@ class TernarySfpuMathSchema(BinarySfpuMathSchema):
         return parse_sfpu_operation(v, cls._sfpu_ops, "ternary")
 
 
-class FpuMathSchemaBase(BaseModel):
+class FpuMathSchemaBase(BlockSchema):
     """Base schema for FPU math nodes (type="Fpu").
 
     Each architecture subclass sets _fpu_map, _unpacker_map, and _output_dims
@@ -563,7 +579,6 @@ class FpuMathSchemaBase(BaseModel):
     in0: Optional[str] = None
     in1: Optional[str] = None
     indexes: Optional[Union[str, IndexesSchema]] = None
-    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @property
     def has_transpose(self) -> bool:
@@ -653,7 +668,7 @@ class FpuMathSchemaBase(BaseModel):
         return fn(src_a, src_b)
 
 
-class PackSchema(BaseModel):
+class PackSchema(BlockSchema):
     model_config = ConfigDict(extra="forbid")
 
     _packer_map: ClassVar[dict] = {}
@@ -665,7 +680,6 @@ class PackSchema(BaseModel):
     relu_threshold: float = 0.0
     pack_l1_accumulation: L1Accumulation = L1Accumulation.No
     indexes: Optional[Union[str, IndexesSchema]] = None
-    block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
     @field_validator("packer", mode="after")
     @classmethod
@@ -813,6 +827,8 @@ class OperationSchemaBase(BaseModel):
         capacity = dest_tile_capacity(tile_shape, self.dest_sync, dest_acc)
 
         def node_block_dims(schema):
+            if isinstance(schema, BlockSchema):
+                schema.resolve_block_size(tile_r, tile_c)
             block_r, block_c = schema.block_size
             if block_r % tile_r != 0 or block_c % tile_c != 0:
                 raise ValueError(

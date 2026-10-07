@@ -1,5 +1,5 @@
 # Matmul with the MatmulPacker.
-# A 64x64 block (2x2 tiles) tiles the 8x8 output tile grid exactly, so the
+# A 2x2-tile block tiles each output tile grid exactly, so the
 # MOP's L1 row stride (block_tiles_x * num_subblocks_c_dim = tile_count_x)
 # matches the dense row-major L1 layout the fuser golden expects.
 
@@ -20,7 +20,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         in0: "input_A"
         in1: "input_B"
         operation: "Matmul"
@@ -28,5 +28,5 @@ operations:
         math_fidelity: "HiFi2"
     pack:
       - output: "matmul_out"
-        block_size: [64, 64]
+        block_tiles: [2, 2]
         packer: "MatmulPacker"

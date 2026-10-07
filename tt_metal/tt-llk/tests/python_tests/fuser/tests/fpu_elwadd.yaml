@@ -17,7 +17,7 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        block_size: [64, 128]
+        block_tiles: [2, 4]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwadd"
@@ -25,5 +25,5 @@ operations:
         math_fidelity: "LoFi"
     pack:
       - output: "elwadd_out"
-        block_size: [64, 128]
+        block_tiles: [2, 4]
         packer: "Packer"
