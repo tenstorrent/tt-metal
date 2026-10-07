@@ -48,7 +48,6 @@ class TextEncoder:
         use_torch: bool,
     ) -> None:
         self._device = device
-        self._ccl_manager = ccl_manager
         self._parallel_config = parallel_config
         self._tokenizer = transformers.Qwen2Tokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer")
 
@@ -59,7 +58,6 @@ class TextEncoder:
         self._sequence_length_buckets = sorted(set(sequence_length_buckets))
 
         self._torch_encoder: transformers.Qwen2_5_VLForConditionalGeneration | None = None
-        self._checkpoint: Qwen25VlCheckpoint | None = None
         self._encoder: Qwen25VlEncoder | None = None
         # One tracer per encoder input length, created on first use.
         self._tracers: dict[int, Tracer] = {}
@@ -70,42 +68,11 @@ class TextEncoder:
             )
             self._torch_encoder.eval()
         else:
-            self._checkpoint = Qwen25VlCheckpoint(checkpoint_name, subfolder="text_encoder")
-            self.load()
-
-    def is_loaded(self) -> bool:
-        return self._torch_encoder is not None or self._encoder is not None
-
-    def load(self) -> None:
-        """Builds the encoder with its weights, after construction or ``unload``."""
-        if self.is_loaded():
-            return
-        assert self._checkpoint is not None
-
-        logger.info("loading text encoder weights to device...")
-        with self._reshape():
-            self._encoder = self._checkpoint.build(
-                device=self._device,
-                parallel_config=self._parallel_config,
-                ccl_manager=self._ccl_manager,
-            )
-        ttnn.synchronize_device(self._device)
-
-    def unload(self) -> None:
-        """Drops the encoder, which frees its weights.
-
-        The traces are released and dropped with it: they would read the weights from their old
-        addresses after a reload, and they hold the encoder through its ``forward``.
-        """
-        if self._encoder is None:
-            return
-
-        logger.info("unloading text encoder weights...")
-        for tracer in self._tracers.values():
-            tracer.release_trace()
-        self._tracers.clear()
-        self._encoder = None
-        ttnn.synchronize_device(self._device)
+            logger.info("loading text encoder weights to device...")
+            checkpoint = Qwen25VlCheckpoint(checkpoint_name, subfolder="text_encoder")
+            with self._reshape():
+                self._encoder = checkpoint.build(device=device, parallel_config=parallel_config, ccl_manager=ccl_manager)
+            ttnn.synchronize_device(device)
 
     @torch.no_grad()
     def encode_cfg(

@@ -27,15 +27,15 @@ from ....utils.test import line_params_req_exact_devices
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, encoder_tp, topology, num_links",
+    "mesh_device, cfg, sp, tp, encoder_tp, encoder_fsdp, topology, num_links",
     [
-        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), ttnn.Topology.Linear, 1],
-        [(2, 4), (2, 0), (1, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
+        [(2, 2), (2, 0), (1, 0), (2, 1), (2, 1), None, ttnn.Topology.Linear, 1],
+        [(2, 4), (1, 0), (2, 0), (4, 1), (4, 1), (2, 0), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), None, ttnn.Topology.Linear, 4],
     ],
     ids=[
         "2x2sp1tp2",
-        "2x4sp1tp4",
+        "2x4sp2tp4",
         "4x8sp4tp4",
     ],
     indirect=["mesh_device"],
@@ -64,6 +64,7 @@ def test_qwenimage_pipeline(
     sp: tuple[int, int],
     tp: tuple[int, int],
     encoder_tp: tuple[int, int],
+    encoder_fsdp: tuple[int, int] | None,
     topology: ttnn.Topology,
     num_links: int,
     no_prompt: bool,
@@ -81,7 +82,7 @@ def test_qwenimage_pipeline(
         config=QwenImagePipelineConfig.default(
             mesh_shape=mesh_device.shape,
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
-            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuples(tp=encoder_tp, sp=None, fsdp=encoder_fsdp),
             use_torch_text_encoder=use_torch_text_encoder,
             use_torch_vae_decoder=False,
             num_links=num_links,

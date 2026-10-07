@@ -446,7 +446,6 @@ class WanVaeDecoder2DAdapter:
         parallel_config: VaeHWParallelConfig,
         ccl_manager: CCLManager,
         use_torch: bool,
-        load_weights: bool = True,
     ) -> None:
         self._name = checkpoint_name
         self._parallel_config = parallel_config
@@ -474,60 +473,31 @@ class WanVaeDecoder2DAdapter:
             self._tt_latents_mean = None
         else:
             self._torch_vae = None
-            self._decoder = self._build_decoder()
+            self._decoder = WanVaeDecoder2D(
+                base_dim=hf_config["base_dim"],
+                decoder_base_dim=hf_config.get("decoder_base_dim"),
+                z_dim=hf_config["z_dim"],
+                dim_mult=hf_config["dim_mult"],
+                num_res_blocks=hf_config["num_res_blocks"],
+                out_channels=hf_config.get("out_channels", 3),
+                is_residual=hf_config.get("is_residual", False),
+                device=self._device,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
+            )
             self._tracer = Tracer(self._rescale_and_decode, device=self._device, clone_prep_inputs=False)
             self._tt_latents_std = tensor.from_torch(torch.tensor(hf_config["latents_std"]), device=self._device)
             self._tt_latents_mean = tensor.from_torch(torch.tensor(hf_config["latents_mean"]), device=self._device)
 
-            if load_weights:
-                self.load()
-
-    def is_loaded(self) -> bool:
-        return self._torch_vae is not None or (self._decoder is not None and self._decoder.is_loaded())
-
-    def load(self) -> None:
-        if self.is_loaded():
-            return
-
-        if self._decoder is None:
-            self._decoder = self._build_decoder()
-        cache.load_model(
-            self._decoder,
-            get_torch_state_dict=self._load_torch_state_dict,
-            model_name=self._name.split("/")[-1],
-            subfolder="vae",
-            parallel_config=self._parallel_config,
-            mesh_shape=tuple(self._device.shape),
-            mesh_device=self._device,
-        )
-        ttnn.synchronize_device(self._device)
-
-    def unload(self) -> None:
-        """Drops the decoder, which frees its weights. ``load`` builds a new one.
-
-        Also releases the trace, which would read the weights from their old addresses after a reload.
-        """
-        if self._torch_vae is not None or self._decoder is None:
-            return
-
-        self._tracer.release_trace()
-        self._decoder = None
-        ttnn.synchronize_device(self._device)
-
-    def _build_decoder(self) -> WanVaeDecoder2D:
-        hf_config = self._hf_config
-        return WanVaeDecoder2D(
-            base_dim=hf_config["base_dim"],
-            decoder_base_dim=hf_config.get("decoder_base_dim"),
-            z_dim=hf_config["z_dim"],
-            dim_mult=hf_config["dim_mult"],
-            num_res_blocks=hf_config["num_res_blocks"],
-            out_channels=hf_config.get("out_channels", 3),
-            is_residual=hf_config.get("is_residual", False),
-            device=self._device,
-            parallel_config=self._parallel_config,
-            ccl_manager=self._ccl_manager,
-        )
+            cache.load_model(
+                self._decoder,
+                get_torch_state_dict=self._load_torch_state_dict,
+                model_name=self._name.split("/")[-1],
+                subfolder="vae",
+                parallel_config=self._parallel_config,
+                mesh_shape=tuple(self._device.shape),
+                mesh_device=self._device,
+            )
 
     def _load_torch_state_dict(self) -> dict[str, torch.Tensor]:
         torch_vae = AutoencoderKLWan.from_pretrained(self._name, subfolder="vae")
