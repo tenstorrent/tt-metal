@@ -307,7 +307,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // pack_gqa_heads: Q [B, NQH, Sq, d] is scheduled as [B, NKH, gqa_pack * Sq, d] (identical memory for a
     // tile-aligned, unpadded Sq), so the per-head K/V chains cover a whole GQA group. Only the concatenated
     // output layout needs the true head and sequence length (writer defines below).
-    const uint32_t gqa_pack = operation_attributes.pack_gqa_heads ? q_shape[1] / NKH : 1;
+    const uint32_t gqa_pack = operation_attributes.pack_gqa_heads && q_shape[1] != k_shape[1] ? q_shape[1] / NKH : 1;
     const uint32_t NQH = q_shape[1] / gqa_pack, Sq = q_shape[2] * gqa_pack;
 
     // In flash mla prefill, we have to support the case where NKH != NVH
@@ -590,6 +590,16 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = use_causal_kernel;
 
+    // Single-K-chunk row sums on the math thread (compute_streaming.hpp): normalize takes a whole row group's
+    // denominators from the exp'd scores, so the recip scratch CB must hold a row group. The kernel uses the path only
+    // where this flag allows it, so sizing and use cannot disagree; every other call keeps the 1-tile scratch.
+    // The kernel derives the row group from its DEST_AUTO_LIMIT, which full sync doubles (dest_helpers.hpp).
+    const uint32_t kernel_dst_size = dst_full_sync_en ? 2 * dst_size : dst_size;
+    const uint32_t norm_row_h =
+        ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, kernel_dst_size, Sq_chunk_t);
+    const bool sum_rows_from_scores = use_streaming_compute && device->arch() == tt::ARCH::BLACKHOLE &&
+                                      !use_attention_sink && Sq_chunk_t % norm_row_h == 0;
+
     // reuse_kv: a core keeps K/V in its CBs across consecutive Q chunks of the same (batch, KV head), so it needs
     // the whole K sequence in one chunk; the K/V chains between cores are not built (below).
     const bool reuse_kv = operation_attributes.reuse_kv;
@@ -757,6 +767,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 29: unified zigzag remap
         static_cast<uint32_t>(windowed_mode),         // arg 28: K-range narrowing (bounds from the ctrl CB)
         reuse_kv ? NQH / NKH : 0u,                    // arg 29: K/V reuse, scheduled Q heads per KV head (0 = off)
+        static_cast<uint32_t>(sum_rows_from_scores),  // arg 30: single-K-chunk row sums on the math thread
     };
 
     std::map<std::string, std::string> defines_map;
@@ -881,14 +892,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
     }
 
-    // Streaming compute v2: recip scratch CB for normalize_row_streaming, one tile per row of a normalize row group
-    // (the single-K-chunk path computes a whole row group's 1/sum at once).
+    // Streaming compute v2: recip scratch CB for normalize_row_streaming, one tile, or one per row of a normalize row
+    // group when the single-K-chunk path may compute a whole row group's 1/sum at once (sum_rows_from_scores).
     // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
     if (use_streaming_compute) {
-        cb_ids.recip_scratch = allocate_tile_cb(
-            ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t),
-            im_tile_size,
-            im_df);
+        cb_ids.recip_scratch = allocate_tile_cb(sum_rows_from_scores ? norm_row_h : 1, im_tile_size, im_df);
     }
 
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);

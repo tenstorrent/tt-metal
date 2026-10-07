@@ -91,6 +91,21 @@ def test_sdpa_pack_gqa_heads_concat_wrap_non_streaming(device, b, nh, nkv, s, d,
     assert_with_pcc(torch_out, ttnn.to_torch(out).float(), 0.999)
 
 
+def test_sdpa_pack_gqa_heads_mha_is_a_no_op(device):
+    """Without GQA (nqh == nkh) the flag changes nothing, so a call it would otherwise reject (causal) is accepted and
+    bit-identical to the same call without it: models can set it on every layer, MHA or GQA."""
+    torch.manual_seed(0)
+    q, k, v = (
+        ttnn.from_torch(torch.randn(1, 8, 256, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(3)
+    )
+    outs = [
+        ttnn.to_torch(ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True, pack_gqa_heads=p))
+        for p in (False, True)
+    ]
+    assert torch.equal(outs[0], outs[1])
+
+
 def test_sdpa_pack_gqa_heads_rejects_causal_and_mask(device, expect_error):
     q, k, v = (
         ttnn.from_torch(torch.randn(1, n, 256, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

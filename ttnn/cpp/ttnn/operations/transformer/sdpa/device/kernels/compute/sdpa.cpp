@@ -51,6 +51,8 @@ void kernel_main() {
     constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
     // reuse_kv: Q heads per KV head, to tell whether consecutive Q chunks of a core share K/V. 0 = off.
     constexpr uint32_t kv_reuse_group = get_compile_time_arg_val(29);
+    // Host-gated single-K-chunk row sums on the math thread; the recip scratch CB is sized for them only when set.
+    constexpr bool sum_rows_from_scores = get_compile_time_arg_val(30) == 1;
 
     const uint32_t num_phases = get_arg_val<uint32_t>(0);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(1);
@@ -70,7 +72,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 30;
+    constexpr uint32_t cb_arg_offset = 31;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -181,7 +183,8 @@ void kernel_main() {
             cb_attention_sink,
             use_provided_mask,
             use_windowed_narrowing,
-            cb_windowed_k_range>(
+            cb_windowed_k_range,
+            sum_rows_from_scores>(
             global_q_count,
             k_num_chunks,
             cb_out_im_A,

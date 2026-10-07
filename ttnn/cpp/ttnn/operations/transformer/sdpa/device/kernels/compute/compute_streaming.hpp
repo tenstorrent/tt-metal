@@ -1413,7 +1413,9 @@ template <
     bool has_q_base_tiles = false,
     // Circular sliding KV cache: mask K origins come from the work plan, not from
     // inverting local cache rows (ambiguous once chunk groups alias one local slab).
-    bool circular_kv_cache = false>
+    bool circular_kv_cache = false,
+    // Host gate for the single-K-chunk row sums from the scores (the host sizes the recip scratch for them).
+    bool sum_rows_from_scores = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -1460,7 +1462,7 @@ static void sdpa_inner_loop_step(
     constexpr bool sum_from_scores_ok = false;
 #else
     constexpr bool sum_from_scores_ok =
-        !ring_mode && !kt_inplace_v && !use_attention_sink && (Sq_chunk_t % norm_row_h == 0);
+        sum_rows_from_scores && !ring_mode && !kt_inplace_v && !use_attention_sink && (Sq_chunk_t % norm_row_h == 0);
 #endif
     const bool sum_from_scores = sum_from_scores_ok && is_first_iter && is_last_iter;
     static_assert(!(use_padded_mask && ring_mode), "use_padded_mask and ring_mode are mutually exclusive");
@@ -2159,7 +2161,8 @@ template <
     uint32_t cb_attention_sink = INVALID_CB,
     bool use_provided_mask = false,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = INVALID_CB>
+    uint32_t cb_windowed_k_range = INVALID_CB,
+    bool sum_rows_from_scores = false>
 void sdpa_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -2321,7 +2324,10 @@ void sdpa_standard_v2(
                 sliding_window_size,
                 use_attention_sink,
                 cb_attention_sink,
-                use_provided_mask>(
+                use_provided_mask,
+                false,  // has_q_base_tiles
+                false,  // circular_kv_cache
+                sum_rows_from_scores>(
                 prev,
                 cur,
                 is_last,

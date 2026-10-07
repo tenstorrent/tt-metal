@@ -40,9 +40,11 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 attrs.windowed_mode == WindowedMode::None && !attrs.use_mla,
             "SDPA reuse_kv supports non-causal, unmasked, unchunked, non-windowed, non-MLA attention only");
     }
-    if (attrs.pack_gqa_heads) {
+    // pack_gqa_heads is a no-op without GQA (NQH == NKH), so MHA calls that set it take no extra constraints.
+    if (attrs.pack_gqa_heads && tensors.q.logical_shape()[1] != tensors.k.logical_shape()[1]) {
         const auto& q_shape = tensors.q.logical_shape();
         const auto& k_shape = tensors.k.logical_shape();
+        TT_FATAL(k_shape[1] > 0, "SDPA pack_gqa_heads needs a nonzero K head count");
         TT_FATAL(
             !attrs.is_causal && !tensors.attn_mask.has_value() && !attrs.chunk_start_idx.has_value() &&
                 !tensors.chunk_start_idx_tensor.has_value() && !tensors.page_table.has_value() &&

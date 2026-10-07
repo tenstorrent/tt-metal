@@ -37,7 +37,7 @@ def _torch_mask(mode, b, s, user_mask):
     return None
 
 
-def _run(device, mode, q, k, v, user_mask, q_chunk, k_chunk):
+def _run(device, mode, q, k, v, user_mask, q_chunk, k_chunk, dst_full_sync_en=False):
     b, _, s, _ = q.shape
     tt = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     pc = ttnn.SDPAProgramConfig(
@@ -47,7 +47,11 @@ def _run(device, mode, q, k, v, user_mask, q_chunk, k_chunk):
         exp_approx_mode=False,
     )
     ck = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        dst_full_sync_en=dst_full_sync_en,
     )
     kwargs = dict(program_config=pc, compute_kernel_config=ck, is_causal=mode in ("causal", "windowed_causal"))
     if mode == "mask":
@@ -95,3 +99,24 @@ def test_sdpa_single_k_chunk(device, mode, b, nh, nkv, s, d, q_chunk):
     assert worst < 0.1, f"single K chunk vs torch: an output row is off by a factor {1 + worst:.4f}"
     ok, pcc = comp_pcc(chunked, single, 0.999)
     assert ok, f"single K chunk vs {(_round_up(s, TILE) + 127) // 128} K chunks: {pcc}"
+
+
+# Full DST sync doubles the kernel's DEST limit, which can double the normalize row group (d=256: a 1x8 output subblock
+# gets 2-row groups at 16 DST tiles, 1-row at 8); the host must size the recip scratch for the kernel's row group.
+@pytest.mark.parametrize("d", [128, 256])
+@pytest.mark.parametrize("q_chunk", [64, 128])
+@pytest.mark.timeout(300)
+def test_sdpa_single_k_chunk_full_sync(device, d, q_chunk):
+    torch.manual_seed(0)
+    b, nh, nkv, s = 1, 8, 2, 256
+    q, k, v = (torch.randn(b, n, s, d) for n in (nh, nkv, nkv))
+    single = _run(device, "none", q, k, v, None, q_chunk, s, dst_full_sync_en=True)
+    g = nh // nkv
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        q, k.repeat_interleave(g, dim=1), v.repeat_interleave(g, dim=1)
+    )
+    ok, pcc = comp_pcc(gt, single, 0.995)
+    assert ok, f"single K chunk, full DST sync vs torch: {pcc}"
+    row_scale = (single * gt).sum(-1) / (gt * gt).sum(-1)
+    worst = (row_scale - 1).abs().max().item()
+    assert worst < 0.1, f"an output row is off by a factor {1 + worst:.4f}"
