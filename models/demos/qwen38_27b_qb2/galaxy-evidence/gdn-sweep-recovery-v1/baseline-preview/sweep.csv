@@ -1,0 +1,42 @@
+input_tokens,concurrency,batch_per_replica,status,tokens_per_second_per_user,aggregate_decode_tokens_per_second,ttft_p50_s,aggregate_input_tokens_per_second,aggregate_e2e_tokens_per_second,ttft_p90_s,tpot_ms,reason
+131072,8,8,completed,15.447724459023577,123.58179567218862,215.14467971306294,4875.902335487082,4.5844019544274985,215.15347046591341,64.734453456403,
+131072,4,4,completed,20.638385655372435,82.55354262148974,107.82699132198468,4864.893376944692,4.491993447154995,107.83837594697252,48.453402155496946,
+131072,16,16,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+131072,1,1,completed,25.977621091501202,25.977621091501202,28.2753696590662,4637.931412776962,3.8595767350144574,28.282852226868272,38.49467187459896,
+131072,2,2,completed,23.256892327613237,46.51378465522647,53.999906949233264,4857.809418508778,4.3053891185446185,54.00791969988495,42.99800617869679,
+131072,32,32,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+131072,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+262016,8,8,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+262016,4,4,completed,16.420557191643752,65.68222876657501,285.0910928840749,3677.1045842867875,1.748481837458324,285.09166278364137,60.89927329073154,
+262016,16,16,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+262016,1,1,completed,21.383487237814766,21.383487237814766,73.60124970087782,3560.558478778017,1.6092448186638109,73.60331137301401,46.765057021737334,
+262016,2,2,completed,19.503110802844066,39.00622160568813,142.45353323686868,3679.5902588937442,1.718517216847776,142.46725231409073,51.27387164585938,
+262016,32,32,capacity_guard,,,,,,,,Exceeds the current per-replica context or KV allocation guard
+262016,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+32768,8,8,completed,21.632427877339413,173.0594230187153,39.25735174724832,6695.784837813152,22.69082435005473,39.258385873399675,46.226896290616025,
+32768,4,4,completed,25.547515193107262,102.19006077242905,19.815965842921287,6639.173618092578,20.65594571820896,19.820625273976475,39.142749987278634,
+32768,16,16,completed,13.079926082194563,209.278817315113,80.00198810687289,6565.491496401578,22.828709371686475,80.00529977912083,76.45303144039015,
+32768,1,1,completed,34.11703650559322,34.11703650559322,5.2426200159825385,6267.487210611767,14.277495426016053,5.24327505202964,29.310869361002613,
+32768,2,2,completed,29.597493417751725,59.19498683550345,9.930333050899208,6624.39654646415,18.001290576297286,9.934030138887465,33.786644898795004,
+32768,32,32,failed,,,,,,,,"TT_FATAL @ /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tt_metal/impl/allocator/bank_manager.cpp:495: false
+info:
+Out of Memory: Not enough space to allocate 1342177280 B DRAM buffer across 8 banks, where each bank needs to store 167772160 B, but bank size is 4247339392 B (allocated: 3911053056 B, free: 336286336 B, largest free block: 125829120 B)
+backtrace:
+ --- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal-install/lib/libtt_metal.so(+0xa78231) [0x76b63b878231]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, tt::tt_metal::CoreRangeSet const&, std::optional<unsigned int>, ttsl::StrongType<unsigned int, tt::tt_metal::AllocatorIDTag>, std::vector<std::pair<unsigned long, unsigned long>, std::allocator<std::pair<unsigned long, unsigned long> > > const&, std::optional<std::unordered_set<unsigned int, std::hash<unsigned int>, std::equal_to<unsigned int>, std::allocator<unsigned int> > > const&)
+ --- tt::tt_metal"
+32768,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+8192,8,8,not_run,,,,,,,,
+8192,4,4,not_run,,,,,,,,
+8192,16,16,not_run,,,,,,,,
+8192,1,1,not_run,,,,,,,,
+8192,2,2,not_run,,,,,,,,
+8192,32,32,not_run,,,,,,,,
+8192,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows
+128,8,8,not_run,,,,,,,,
+128,4,4,not_run,,,,,,,,
+128,16,16,not_run,,,,,,,,
+128,1,1,not_run,,,,,,,,
+128,2,2,not_run,,,,,,,,
+128,32,32,not_run,,,,,,,,
+128,64,64,implementation_guard,,,,,,,,Batches above 32 require wider token buffers and a projection supporting multiple tile rows

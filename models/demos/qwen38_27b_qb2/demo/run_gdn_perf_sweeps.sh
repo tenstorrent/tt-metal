@@ -6,6 +6,7 @@ QWEN_TASK_ROOT=${1:?Provide the isolated runtime directory}
 QWEN_MODEL_SOURCE=${2:?Provide the pinned candidate source checkout}
 QWEN_SWEEP_ROOT=${3:?Provide a new sweep directory}
 QWEN_VALIDATION_DIR=${4:?Provide the completed kernel validation directory}
+QWEN_PREVIOUS_SWEEP_ROOT=${5:-}
 mkdir "$QWEN_SWEEP_ROOT"
 export PATH="$QWEN_TASK_ROOT/python_env/bin:$PATH"
 export TT_METAL_HOME="$QWEN_TASK_ROOT/metal"
@@ -61,7 +62,15 @@ for QWEN_SWEEP_VARIANT in native single-step; do
     fi
     export QWEN_PRECISION_CONFIG="$QWEN_MODEL_SOURCE/models/demos/qwen38_27b_qb2/config/$QWEN_POLICY_FILE"
     export QWEN_SWEEP_RESULTS="$QWEN_SWEEP_ROOT/$QWEN_SWEEP_VARIANT"
-    timeout --signal=TERM --kill-after=180 21600 /bin/bash "$QWEN_TASK_ROOT/source/scripts/run_safe_pytest.sh" \
-        "$QWEN_MODEL_SOURCE/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py" \
-        -vv -s --timeout=21000 --junitxml="$QWEN_SWEEP_RESULTS/hardware.xml"
+    QWEN_RESUME_ARGS=()
+    if [[ -n "$QWEN_PREVIOUS_SWEEP_ROOT" && -f "$QWEN_PREVIOUS_SWEEP_ROOT/$QWEN_SWEEP_VARIANT/sweep.json" ]]; then
+        # A queued variant has no measurements to reuse.
+        if python -c 'import json,sys; sys.exit(json.load(open(sys.argv[1]))["state"] == "queued")' \
+            "$QWEN_PREVIOUS_SWEEP_ROOT/$QWEN_SWEEP_VARIANT/sweep.json"; then
+            QWEN_RESUME_ARGS+=(--resume "$QWEN_PREVIOUS_SWEEP_ROOT/$QWEN_SWEEP_VARIANT/sweep.json")
+        fi
+    fi
+    python -m models.demos.qwen38_27b_qb2.demo.run_sweep_attempts \
+        --task "$QWEN_TASK_ROOT" --source "$QWEN_MODEL_SOURCE" --results "$QWEN_SWEEP_RESULTS" \
+        "${QWEN_RESUME_ARGS[@]}"
 done

@@ -1,0 +1,665 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/qwen38-artifacts-20261007/gdn-integration-source-v9
+configfile: pytest.ini
+plugins: timeout-2.4.0, benchmark-5.2.3, cov-7.0.0, split-0.11.0, dash-2.15.0, anyio-4.15.1, github-actions-annotate-failures-0.3.0, repeat-0.9.4
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 204 items
+
+models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_alignment_preserves_context_and_covers_every_candidate_tail PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_cpu_reference_honors_shuffled_pages_and_independent_causal_bounds PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_accuracy_rejects_scaled_output_and_one_bad_user PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_fast_but_inaccurate_candidate_cannot_win_and_drift_is_explicit PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_chunks_preserve_prefix PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_default_path_stays_serial PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_equal_lengths_group_without_mixing_rows PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_invalid_length_rejected_before_model PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_ragged_reordered_unaligned_and_single_fall_back SUBPASSED(lengths=[64, 128], slots=[0, 1], starts=[0, 0])
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_ragged_reordered_unaligned_and_single_fall_back SUBPASSED(lengths=[64, 64], slots=[2, 0], starts=[0, 0])
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_ragged_reordered_unaligned_and_single_fall_back SUBPASSED(lengths=[64, 64], slots=[0, 1], starts=[1, 1])
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_ragged_reordered_unaligned_and_single_fall_back SUBPASSED(lengths=[64], slots=[0], starts=[0])
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_ragged_reordered_unaligned_and_single_fall_back PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_skip_only_intermediate_chunk_logits PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_decode_requests_compact_embedding PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_embedding_skips_public_batch_expansion PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_layer_boundary_stays_compact PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_single_request_decode_keeps_public_contract PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=1)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=2)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=3)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=4)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=5)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=6)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=7)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=8)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=9)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=10)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=11)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=12)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=13)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=14)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=15)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership SUBPASSED(count=16)
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_default_rope_indices_keep_padded_rows_in_range PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_flushing_suspended_state_preserves_prefill_updates PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_new_requests_can_discard_only_when_all_resident_slots_reset PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_prefill_refresh_keeps_resident_addresses_and_does_not_overwrite_reset PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_rejects_invalid_slots_and_capacity PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_resident_state_publishes_only_at_transition PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_transitions_preserve_accumulated_state PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_batch_encoding_is_unwrapped_before_generation_and_receipt PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens2] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens3] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_real_tokenizer_matches_passing_single_replica_prompt PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[partial] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[failed] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[slow] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[overlap] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[missing] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[nan] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_launch_preserves_qualified_groups_and_independent_engine_capacity PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_every_worker_must_match_its_qualified_group PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_changed_precision_or_model_source_requires_new_qualification PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_precision_environment_override_is_bound_to_qualification PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_qualified_override_reaches_server_workers PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_changed_nested_kernel_requires_new_qualification PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_keeps_existing_trace_buffers_across_batch_changes PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[65] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[True] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[1.5] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_recurrence_policy_is_explicit_and_backward_compatible PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-12] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-96] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-120] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-121] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-192] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-768] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-12] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-96] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-120] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-121] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-192] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-768] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-12] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-96] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-120] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-121] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-192] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-768] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args2] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args3] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[-1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[3] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[8] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[2.0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[True] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_accuracy_checks_each_head_and_rejects_scaling PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[3] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[-1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[2.0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[True] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_prefetch_capacity_preserves_output_ownership_and_l1_bound[1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_prefetch_capacity_preserves_output_ownership_and_l1_bound[2] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_prefetch_capacity_preserves_output_ownership_and_l1_bound[4] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_fused_normalization_keeps_private_scratch_within_l1[1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_fused_normalization_keeps_private_scratch_within_l1[2] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_fused_normalization_keeps_private_scratch_within_l1[4] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_parallel_ranks_and_nested_stages_are_not_double_counted PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[missing_end] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[wrong_end] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[missing_rank] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[duplicate] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[trace] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[nan] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_missing_device_timing_is_reported_as_incomplete PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_long_context_priority_retains_capacity_and_short_context_control PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_prefill_drain_bounds_records_for_each_chunk PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_failed_prefill_does_not_mask_failure_with_profiler_drain PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_checks_both_filesystems[artifacts] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_checks_both_filesystems[jit] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_stops_prefill_at_chunk_boundaries[before] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_stops_prefill_at_chunk_boundaries[after] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_precision_policy.py::test_existing_artifact_still_uses_native_decode PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_precision_policy.py::test_attention_override_preserves_weights_and_prefill PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_precision_policy.py::test_unsupported_attention_is_rejected PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_failed_sampling_does_not_mark_new_signature_warm PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_new_cache_discards_old_signature_history PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_new_count_and_dtype_release_before_new_programs SUBPASSED(signature='bfloat16', count=2)
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_new_count_and_dtype_release_before_new_programs SUBPASSED(signature='float32', count=2)
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_new_count_and_dtype_release_before_new_programs PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_repeated_signature_retains_a_new_decode_trace PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_unseen_signature_releases_before_pack_and_sampling PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_startup_warmup.py::StartupWarmupTests::test_all_occupancies_then_reset_and_restore_table PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_startup_warmup.py::StartupWarmupTests::test_default_off_and_b1_do_not_change_state PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_prefill_startup_warmup.py::StartupWarmupTests::test_failure_restores_state_without_marking_ready PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-False-0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-True-0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-True-124] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-False-0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-True-0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-True-124] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_recovery_preserves_windows_ranks_and_device_timings PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_missing_compact_row_remains_visible PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[duplicate] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[device] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[trace] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[capture] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[unclosed] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_fast_replica_timestamp_is_not_charged_slow_wait[order0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_fast_replica_timestamp_is_not_charged_slow_wait[order1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_propagates_sync_failure PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items0-order0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items1-order1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items2-order2] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items3-order3] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_vllm_adapter_uses_the_qualified_environment_artifact PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_wrong_override_fails_before_weights_or_model_allocation PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_missing_override_cannot_fall_back_to_default_under_candidate_receipt PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_all_actual_worker_policies_must_match_before_evaluation PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_boundary_lengths_are_eligible SUBPASSED(length=1)
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_boundary_lengths_are_eligible SUBPASSED(length=4095)
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_boundary_lengths_are_eligible SUBPASSED(length=4096)
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_boundary_lengths_are_eligible PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_capture_restores_resident_state_not_stale_scheduler_state PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_failed_fallback_capture_releases_all_three_handles PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_failed_fallback_sampling_leaves_signature_unwarmed PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_failed_fourth_capture_closes_and_releases_every_partial_handle PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_fallback_captures_sampler_as_third_trace_without_prefill_trace PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_fallback_releases_before_first_pack_and_persistent_allocation PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_fallback_temporaries_are_dead_before_trace_replay PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_long_other_slot_and_continuation_use_public_fallback SUBPASSED(ends=(4097,), starts=(0,), slots=(0,))
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_long_other_slot_and_continuation_use_public_fallback SUBPASSED(ends=(3,), starts=(0,), slots=(2,))
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_long_other_slot_and_continuation_use_public_fallback SUBPASSED(ends=(35,), starts=(32,), slots=(0,))
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_long_other_slot_and_continuation_use_public_fallback PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_multirow_continuation_keeps_exact_old_slicing_and_packed_order PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_opt_in_groups_equal_prompts_before_sampling PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_owned_and_external_cache_replacement_discard_staging_after_release SUBPASSED(method='_ensure_cache')
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_owned_and_external_cache_replacement_discard_staging_after_release SUBPASSED(method='bind_cache')
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_owned_and_external_cache_replacement_discard_staging_after_release PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_preparation_mode_change_releases_before_new_persistent_allocations PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_release_drops_four_handles_but_can_keep_preparation PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_release_publishes_resident_state_after_releasing_traces PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_serving_captures_fourth_sampler_over_owned_output PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_single_fresh_row_refreshes_table_before_owned_prefill_and_samples_once PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_single_slot_prefill_uses_resident_state PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_single_slot_reset_zeros_resident_state_in_place PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_standalone_keeps_three_trace_contract PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_unseen_fallback_count_invalidates_before_pack_but_retains_staging PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_warm_sampling_replays_the_prefill_sampler_nonblocking PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'cache': <object object at 0x7a67fae8c160>})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'ends': (0,), 'starts': (0,)})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'ends': (3,), 'starts': (-1,)})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'ends': (3,), 'starts': (3,)})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'ends': (3,), 'slots': (4,)})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'ends': (3, 4), 'slots': (0, 0), 'starts': (0, 0)})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'ends': (8193,)})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects SUBPASSED(kwargs={'ends': (3,), 'tokens': tensor([[1, 2]])})
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillAdapterTests::test_device_branch_passes_full_rows_and_absolute_ends_once PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillAdapterTests::test_host_branch_keeps_public_slicing_and_skips_token_helper PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sharded_prefill.py::ShardedPrefillScopeTests::test_decode_contract_restored_on_success_and_failure SUBPASSED(fail=False)
+models/demos/qwen38_27b_qb2/tests/unit/test_sharded_prefill.py::ShardedPrefillScopeTests::test_decode_contract_restored_on_success_and_failure SUBPASSED(fail=True)
+models/demos/qwen38_27b_qb2/tests/unit/test_sharded_prefill.py::ShardedPrefillScopeTests::test_decode_contract_restored_on_success_and_failure PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sharded_prefill.py::ShardedPrefillScopeTests::test_grouped_prefill_preserves_inactive_slots_and_last_token_order PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_only_allocator_dram_oom_can_restart_after_clean_shutdown PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_preserves_completed_cells_and_retries_legacy_failure PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_model_or_workload_change[source_sha256-value0] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_model_or_workload_change[precision-value1] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_model_or_workload_change[output_tokens-256] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_changed_runtime_knob PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[trace] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[tokens] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[missing_repeat] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[summary] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_accuracy_failure_cannot_be_resumed_as_capacity PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_known_oom_stays_visible_and_does_not_become_a_measurement PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_restarts_only_clean_oom_and_preserves_attempts SWEEP_ATTEMPT_BEGIN /tmp/pytest-of-ttuser/pytest-54/test_controller_restarts_only_0/results/attempt-01
+SWEEP_ALLOCATION_FAILURE: recorded failed cell; remaining cells will use a fresh process
+SWEEP_ATTEMPT_BEGIN /tmp/pytest-of-ttuser/pytest-54/test_controller_restarts_only_0/results/attempt-02
+PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_stops_on_unclean_or_nonallocator_failure[2-True-error0] SWEEP_ATTEMPT_BEGIN /tmp/pytest-of-ttuser/pytest-54/test_controller_stops_on_uncle0/results/attempt-01
+PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_stops_on_unclean_or_nonallocator_failure[1-False-error1] SWEEP_ATTEMPT_BEGIN /tmp/pytest-of-ttuser/pytest-54/test_controller_stops_on_uncle1/results/attempt-01
+PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_stops_on_unclean_or_nonallocator_failure[1-True-error2] SWEEP_ATTEMPT_BEGIN /tmp/pytest-of-ttuser/pytest-54/test_controller_stops_on_uncle2/results/attempt-01
+PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_plan_keeps_output_room_and_distinguishes_untested_capacity PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_galaxy_plan_requires_actual_eight_replica_measurements PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_metrics_keep_decode_and_end_to_end_time_separate PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_cold_trace_capture_cannot_be_reported_as_warm PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_missing_request_latencies_rejected PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_input_rate_uses_timed_prefill_without_confusing_ttft_or_decode PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_input_rate_rejects_missing_prefill_timing PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_wider_batch_plan_marks_implementation_limit_separately_from_memory PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[architecture-model] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[architecture-decoder] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[product-model] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[product-decoder] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[shape-model] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[shape-decoder] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[device_count-model] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[device_count-decoder] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_accepts_tp4_replica[ClusterType.P300_X2] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_accepts_tp4_replica[ClusterType.BLACKHOLE_GALAXY] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_default_topology_matches_fabric[ClusterType.P300_X2-Topology.Ring-FabricConfig.FABRIC_1D_RING] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_default_topology_matches_fabric[ClusterType.BLACKHOLE_GALAXY-Topology.Linear-FabricConfig.FABRIC_1D] PASSED
+models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_explicit_qualified_ring_and_invalid_topology PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/qwen38-artifacts-20261007/gdn-sweep-recovery-unit-v5.xml -
+============================= slowest 25 durations =============================
+0.59s call     models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_real_tokenizer_matches_passing_single_replica_prompt
+0.02s call     models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_accuracy_checks_each_head_and_rejects_scaling
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-True-0]
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-True-124]
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-True-0]
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-True-124]
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_preserves_completed_cells_and_retries_legacy_failure
+0.01s call     models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-False-0]
+
+(15 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_alignment_preserves_context_and_covers_every_candidate_tail
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_cpu_reference_honors_shuffled_pages_and_independent_causal_bounds
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_accuracy_rejects_scaled_output_and_one_bad_user
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_attention_tuning.py::test_fast_but_inaccurate_candidate_cannot_win_and_drift_is_explicit
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_chunks_preserve_prefix
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_default_path_stays_serial
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_equal_lengths_group_without_mixing_rows
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_invalid_length_rejected_before_model
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_ragged_reordered_unaligned_and_single_fall_back
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_batched_prefill.py::BatchedPrefillDispatchTests::test_skip_only_intermediate_chunk_logits
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_decode_requests_compact_embedding
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_embedding_skips_public_batch_expansion
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_layer_boundary_stays_compact
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_compact_decode.py::CompactDecodeHostTests::test_single_request_decode_keeps_public_contract
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_all_occupancies_and_state_ownership
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_default_rope_indices_keep_padded_rows_in_range
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_flushing_suspended_state_preserves_prefill_updates
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_new_requests_can_discard_only_when_all_resident_slots_reset
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_prefill_refresh_keeps_resident_addresses_and_does_not_overwrite_reset
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_rejects_invalid_slots_and_capacity
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_resident_state_publishes_only_at_transition
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_decode_buckets.py::DecodeBucketsTests::test_transitions_preserve_accumulated_state
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_batch_encoding_is_unwrapped_before_generation_and_receipt
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens2]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_invalid_prompt_rejected_before_device_work[tokens3]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_prompt.py::test_real_tokenizer_matches_passing_single_replica_prompt
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[partial]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[failed]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[slow]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[overlap]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[missing]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_invalid_qualification_cannot_authorize_serving[nan]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_launch_preserves_qualified_groups_and_independent_engine_capacity
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_every_worker_must_match_its_qualified_group
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_changed_precision_or_model_source_requires_new_qualification
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_precision_environment_override_is_bound_to_qualification
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_qualified_override_reaches_server_workers
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_galaxy_serving.py::test_changed_nested_kernel_requires_new_qualification
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_keeps_existing_trace_buffers_across_batch_changes
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[65]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[True]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_workspace_rejects_unqualified_batches[1.5]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_single_token_prefill_keeps_chunked_scan_and_decode_uses_in_place_step
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_decode_integration.py::test_recurrence_policy_is_explicit_and_backward_compatible
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-12]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-96]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-120]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-121]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-192]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[1-768]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-12]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-96]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-120]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-121]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-192]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[2-768]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-12]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-96]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-120]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-121]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-192]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_disjoint_complete_work[4-768]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args2]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_invalid_geometry[args3]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[-1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[3]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[8]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[2.0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_value_partition[True]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_accuracy_checks_each_head_and_rejects_scaling
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[3]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[-1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[2.0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_reject_unsupported_input_lookahead[True]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_prefetch_capacity_preserves_output_ownership_and_l1_bound[1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_prefetch_capacity_preserves_output_ownership_and_l1_bound[2]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_prefetch_capacity_preserves_output_ownership_and_l1_bound[4]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_fused_normalization_keeps_private_scratch_within_l1[1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_fused_normalization_keeps_private_scratch_within_l1[2]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_gdn_step_work.py::test_fused_normalization_keeps_private_scratch_within_l1[4]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_parallel_ranks_and_nested_stages_are_not_double_counted
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[missing_end]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[wrong_end]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[missing_rank]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[duplicate]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[trace]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_invalid_measurements_cannot_be_reported[nan]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_missing_device_timing_is_reported_as_incomplete
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_long_context_priority_retains_capacity_and_short_context_control
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_prefill_drain_bounds_records_for_each_chunk
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_failed_prefill_does_not_mask_failure_with_profiler_drain
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_checks_both_filesystems[artifacts]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_checks_both_filesystems[jit]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_stops_prefill_at_chunk_boundaries[before]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_layer_profile_report.py::test_storage_guard_stops_prefill_at_chunk_boundaries[after]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_precision_policy.py::test_existing_artifact_still_uses_native_decode
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_precision_policy.py::test_attention_override_preserves_weights_and_prefill
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_precision_policy.py::test_unsupported_attention_is_rejected
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_failed_sampling_does_not_mark_new_signature_warm
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_new_cache_discards_old_signature_history
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_new_count_and_dtype_release_before_new_programs
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_repeated_signature_retains_a_new_decode_trace
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_sampling_trace.py::PrefillSamplingTraceTests::test_unseen_signature_releases_before_pack_and_sampling
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_startup_warmup.py::StartupWarmupTests::test_all_occupancies_then_reset_and_restore_table
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_startup_warmup.py::StartupWarmupTests::test_default_off_and_b1_do_not_change_state
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_prefill_startup_warmup.py::StartupWarmupTests::test_failure_restores_state_without_marking_ready
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-False-0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-True-0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[False-True-124]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-False-0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-True-0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_profile_queue.py::test_bounded_diagnostics_never_bypass_qualification[True-True-124]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_recovery_preserves_windows_ranks_and_device_timings
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_missing_compact_row_remains_visible
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[duplicate]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[device]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[trace]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[capture]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_recover_layer_profile.py::test_corrupt_join_is_rejected[unclosed]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_fast_replica_timestamp_is_not_charged_slow_wait[order0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_fast_replica_timestamp_is_not_charged_slow_wait[order1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_propagates_sync_failure
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items0-order0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items1-order1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items2-order2]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_replica_timing.py::test_completion_rejects_invalid_order[items3-order3]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_vllm_adapter_uses_the_qualified_environment_artifact
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_wrong_override_fails_before_weights_or_model_allocation
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_missing_override_cannot_fall_back_to_default_under_candidate_receipt
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_precision.py::test_all_actual_worker_policies_must_match_before_evaluation
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_boundary_lengths_are_eligible
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_capture_restores_resident_state_not_stale_scheduler_state
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_failed_fallback_capture_releases_all_three_handles
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_failed_fallback_sampling_leaves_signature_unwarmed
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_failed_fourth_capture_closes_and_releases_every_partial_handle
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_fallback_captures_sampler_as_third_trace_without_prefill_trace
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_fallback_releases_before_first_pack_and_persistent_allocation
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_fallback_temporaries_are_dead_before_trace_replay
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_long_other_slot_and_continuation_use_public_fallback
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_multirow_continuation_keeps_exact_old_slicing_and_packed_order
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_opt_in_groups_equal_prompts_before_sampling
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_owned_and_external_cache_replacement_discard_staging_after_release
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_preparation_mode_change_releases_before_new_persistent_allocations
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_release_drops_four_handles_but_can_keep_preparation
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_release_publishes_resident_state_after_releasing_traces
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_serving_captures_fourth_sampler_over_owned_output
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_single_fresh_row_refreshes_table_before_owned_prefill_and_samples_once
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_single_slot_prefill_uses_resident_state
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_single_slot_reset_zeros_resident_state_in_place
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_standalone_keeps_three_trace_contract
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_unseen_fallback_count_invalidates_before_pack_but_retains_staging
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_warm_sampling_replays_the_prefill_sampler_nonblocking
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillTraceTests::test_wrong_cache_and_invalid_geometry_fail_before_device_effects
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillAdapterTests::test_device_branch_passes_full_rows_and_absolute_ends_once
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_serving_prefill_trace.py::ServingPrefillAdapterTests::test_host_branch_keeps_public_slicing_and_skips_token_helper
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sharded_prefill.py::ShardedPrefillScopeTests::test_decode_contract_restored_on_success_and_failure
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sharded_prefill.py::ShardedPrefillScopeTests::test_grouped_prefill_preserves_inactive_slots_and_last_token_order
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_only_allocator_dram_oom_can_restart_after_clean_shutdown
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_preserves_completed_cells_and_retries_legacy_failure
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_model_or_workload_change[source_sha256-value0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_model_or_workload_change[precision-value1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_model_or_workload_change[output_tokens-256]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rejects_changed_runtime_knob
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[trace]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[tokens]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[missing_repeat]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_resume_rechecks_raw_measurements[summary]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_accuracy_failure_cannot_be_resumed_as_capacity
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_known_oom_stays_visible_and_does_not_become_a_measurement
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_restarts_only_clean_oom_and_preserves_attempts
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_stops_on_unclean_or_nonallocator_failure[2-True-error0]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_stops_on_unclean_or_nonallocator_failure[1-False-error1]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_recovery.py::test_controller_stops_on_unclean_or_nonallocator_failure[1-True-error2]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_plan_keeps_output_room_and_distinguishes_untested_capacity
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_galaxy_plan_requires_actual_eight_replica_measurements
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_metrics_keep_decode_and_end_to_end_time_separate
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_cold_trace_capture_cannot_be_reported_as_warm
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_missing_request_latencies_rejected
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_input_rate_uses_timed_prefill_without_confusing_ttft_or_decode
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_input_rate_rejects_missing_prefill_timing
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_sweep_report.py::test_wider_batch_plan_marks_implementation_limit_separately_from_memory
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[architecture-model]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[architecture-decoder]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[product-model]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[product-decoder]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[shape-model]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[shape-decoder]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[device_count-model]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_rejects_unsupported_mesh_before_loading_weights[device_count-decoder]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_accepts_tp4_replica[ClusterType.P300_X2]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_accepts_tp4_replica[ClusterType.BLACKHOLE_GALAXY]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_default_topology_matches_fabric[ClusterType.P300_X2-Topology.Ring-FabricConfig.FABRIC_1D_RING]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_default_topology_matches_fabric[ClusterType.BLACKHOLE_GALAXY-Topology.Linear-FabricConfig.FABRIC_1D]
+PASSED models/demos/qwen38_27b_qb2/tests/unit/test_topology.py::test_explicit_qualified_ring_and_invalid_topology
+============= 204 passed, 2 warnings, 40 subtests passed in 2.90s ==============
+2026-10-07 22:54:10.284 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-10-07 22:54:12.360 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="flat list"
+2026-10-07 22:54:12.360 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="flat list"
+2026-10-07 22:54:12.361 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="flat list"
+2026-10-07 22:54:12.361 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="flat list"
+2026-10-07 22:54:12.361 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="flat list"
+2026-10-07 22:54:12.362 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="flat list"
+2026-10-07 22:54:12.362 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="flat list"
+2026-10-07 22:54:12.362 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="flat list"
+2026-10-07 22:54:12.956 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.957 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.958 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.958 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.959 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.959 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.959 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.960 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.960 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.960 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.962 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.962 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="[Qq]ualification"
+2026-10-07 22:54:12.963 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="all eight"
+2026-10-07 22:54:12.964 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="all eight"
+2026-10-07 22:54:12.964 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:12.964 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:12.966 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:12.966 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:12.967 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:12.967 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:12.968 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:12.968 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:12.968 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:12.968 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:12.971 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:12.971 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:12.972 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="cache allocation"
+2026-10-07 22:54:12.972 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="cache allocation"
+2026-10-07 22:54:12.973 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="batches"
+2026-10-07 22:54:12.973 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="batches"
+2026-10-07 22:54:12.974 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="batches"
+2026-10-07 22:54:12.974 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="batches"
+2026-10-07 22:54:12.975 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="batches"
+2026-10-07 22:54:12.975 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="batches"
+2026-10-07 22:54:12.976 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="batches"
+2026-10-07 22:54:12.976 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="batches"
+2026-10-07 22:54:12.985 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Unsupported decode recurrence"
+2026-10-07 22:54:12.985 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Unsupported decode recurrence"
+2026-10-07 22:54:13.019 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be positive"
+2026-10-07 22:54:13.019 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be positive"
+2026-10-07 22:54:13.020 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be positive"
+2026-10-07 22:54:13.020 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be positive"
+2026-10-07 22:54:13.021 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be positive"
+2026-10-07 22:54:13.021 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be positive"
+2026-10-07 22:54:13.022 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be positive"
+2026-10-07 22:54:13.022 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be positive"
+2026-10-07 22:54:13.022 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Value splits"
+2026-10-07 22:54:13.023 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Value splits"
+2026-10-07 22:54:13.023 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Value splits"
+2026-10-07 22:54:13.023 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Value splits"
+2026-10-07 22:54:13.024 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Value splits"
+2026-10-07 22:54:13.024 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Value splits"
+2026-10-07 22:54:13.025 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Value splits"
+2026-10-07 22:54:13.025 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Value splits"
+2026-10-07 22:54:13.026 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Value splits"
+2026-10-07 22:54:13.026 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Value splits"
+2026-10-07 22:54:13.027 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Value splits"
+2026-10-07 22:54:13.027 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Value splits"
+2026-10-07 22:54:13.046 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Input buffer items"
+2026-10-07 22:54:13.046 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Input buffer items"
+2026-10-07 22:54:13.047 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Input buffer items"
+2026-10-07 22:54:13.047 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Input buffer items"
+2026-10-07 22:54:13.048 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Input buffer items"
+2026-10-07 22:54:13.048 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Input buffer items"
+2026-10-07 22:54:13.049 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Input buffer items"
+2026-10-07 22:54:13.049 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Input buffer items"
+2026-10-07 22:54:13.049 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Input buffer items"
+2026-10-07 22:54:13.049 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Input buffer items"
+2026-10-07 22:54:13.060 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.061 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.062 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.063 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.064 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.064 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.065 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.065 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.066 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.066 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.067 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.067 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="signpost|measurements|Duplicate|Trace|Invalid"
+2026-10-07 22:54:13.071 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="prefill failed"
+2026-10-07 22:54:13.071 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="prefill failed"
+2026-10-07 22:54:13.072 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="Profiler storage guard: artifacts"
+2026-10-07 22:54:13.072 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="Profiler storage guard: artifacts"
+2026-10-07 22:54:13.073 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="Profiler storage guard: jit"
+2026-10-07 22:54:13.073 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="Profiler storage guard: jit"
+2026-10-07 22:54:13.074 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="Profiler storage guard"
+2026-10-07 22:54:13.074 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="Profiler storage guard"
+2026-10-07 22:54:13.075 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="Profiler storage guard"
+2026-10-07 22:54:13.075 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="Profiler storage guard"
+2026-10-07 22:54:13.078 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Unsupported decode attention"
+2026-10-07 22:54:13.079 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Unsupported decode attention"
+2026-10-07 22:54:13.086 | INFO     | models.demos.qwen38_27b_qb2.tt.generator_vllm:warmup_model_prefill:358 - Qwen3.8 prefill startup warmup: {"chunk": 128, "occupancies": [1, 2, 3, 4], "seconds": 0.0014136931858956814, "cache_reset": true}
+2026-10-07 22:54:13.156 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.156 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.158 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.158 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.159 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.159 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.160 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.160 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.161 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.161 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Duplicate|mismatch|Trace|Incomplete"
+2026-10-07 22:54:13.165 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="device synchronization failed"
+2026-10-07 22:54:13.165 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="device synchronization failed"
+2026-10-07 22:54:13.166 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.166 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.167 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.167 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.168 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.168 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.169 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.169 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="permutation of nonempty replicas"
+2026-10-07 22:54:13.171 | INFO     | models.demos.qwen38_27b_qb2.tt.generator_vllm:initialize_vllm_model:56 - Qwen3.8 vLLM precision: {'config_id': 'baseline_bfp4_lofi_head_bfp8_hifi2', 'weight_groups': {'attention': 'bfloat4_b', 'output': 'bfloat4_b', 'gate': 'bfloat4_b', 'up': 'bfloat4_b', 'down': 'bfloat4_b', 'head': 'bfloat8_b'}, 'compute_fidelities': {'attention': 'LoFi', 'output': 'LoFi', 'gate': 'LoFi', 'up': 'LoFi', 'down': 'LoFi', 'head': 'HiFi2'}, 'fp32_dest_acc_en': True, 'layer_exceptions': {}, 'activation_dtype': {'attention': 'bfloat16', 'mlp': 'bfloat16'}, 'residual_dtype': 'bfloat16', 'ccl_dtype': 'bfloat16', 'kv_cache_dtype': 'bfloat8_b', 'logits_dtype': 'bfloat16', 'sampling_dtype': 'bfloat16', 'norm_dtype': 'bfloat16', 'embedding_dtype': 'bfloat16', 'recurrent_dtype': 'float32', 'convolution_dtype': 'bfloat16', 'sensitive_compute_fidelity': 'HiFi4', 'final_norm_compute_fidelity': 'HiFi2', 'token_dtype': 'uint32', 'max_context': 262144, 'decode_attention': 'accurate_full_tile', 'decode_recurrence': 'native'}
+2026-10-07 22:54:13.172 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="refusing weight loading"
+2026-10-07 22:54:13.173 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="refusing weight loading"
+2026-10-07 22:54:13.174 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="refusing weight loading"
+2026-10-07 22:54:13.175 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="refusing weight loading"
+2026-10-07 22:54:13.176 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="all eight workers"
+2026-10-07 22:54:13.176 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="all eight workers"
+2026-10-07 22:54:13.176 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:13.176 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:13.214 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:13.215 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:13.216 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:13.216 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:13.217 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="differs"
+2026-10-07 22:54:13.218 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="differs"
+2026-10-07 22:54:13.219 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="runtime configuration"
+2026-10-07 22:54:13.219 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="runtime configuration"
+2026-10-07 22:54:13.220 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="warmup is incomplete"
+2026-10-07 22:54:13.221 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="warmup is incomplete"
+2026-10-07 22:54:13.222 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="repeatability evidence"
+2026-10-07 22:54:13.222 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="repeatability evidence"
+2026-10-07 22:54:13.223 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="repeatability evidence"
+2026-10-07 22:54:13.224 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="repeatability evidence"
+2026-10-07 22:54:13.225 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="accounting differs"
+2026-10-07 22:54:13.225 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="accounting differs"
+2026-10-07 22:54:13.226 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="not a DRAM allocation"
+2026-10-07 22:54:13.227 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="not a DRAM allocation"
+2026-10-07 22:54:13.233 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="refusing automatic recovery"
+2026-10-07 22:54:13.234 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="refusing automatic recovery"
+2026-10-07 22:54:13.236 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="refusing automatic recovery"
+2026-10-07 22:54:13.236 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="refusing automatic recovery"
+2026-10-07 22:54:13.238 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] RuntimeError message="refusing automatic recovery"
+2026-10-07 22:54:13.239 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] RuntimeError message="refusing automatic recovery"
+2026-10-07 22:54:13.242 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="warmup is incomplete"
+2026-10-07 22:54:13.242 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="warmup is incomplete"
+2026-10-07 22:54:13.243 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="Invalid measurement"
+2026-10-07 22:54:13.243 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="Invalid measurement"
+2026-10-07 22:54:13.244 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="measured prefill duration"
+2026-10-07 22:54:13.245 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="measured prefill duration"
+2026-10-07 22:54:13.247 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.247 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.248 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.248 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.249 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.249 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.251 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.251 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.252 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.252 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.253 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.254 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.255 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.255 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.256 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.256 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="requires a Blackhole TP4"
+2026-10-07 22:54:13.261 | INFO     | conftest:expect_error_:960 - [EXPECTED_ERROR BEGIN] ValueError message="must be Linear or Ring"
+2026-10-07 22:54:13.261 | INFO     | conftest:expect_error_:965 - [EXPECTED_ERROR END] ValueError message="must be Linear or Ring"
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

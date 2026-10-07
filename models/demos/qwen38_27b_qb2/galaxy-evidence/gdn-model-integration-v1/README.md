@@ -113,3 +113,55 @@ The native harness currently submits replica prefills sequentially. Its
 aggregate input rate reflects that schedule; it is not a parallel-prefill
 capacity estimate. The existing 1,179,648-token per-replica allocation guard
 is a configuration limit, not a measured physical OOM boundary.
+
+## Sweep allocation failure and recovery
+
+The v1 native sweep completed 12 cells and stopped at B32 / 32K after 5,229.73
+seconds. Prefill's MLP down projection could not allocate its 1.34 GB output:
+each DRAM bank needed 160 MiB contiguously but the largest free block was
+120 MiB, despite roughly 321 MiB total free per bank. A fresh-process retry
+also failed during prefill, this time requesting a 2.68 GB buffer. It loaded
+the model in 297.34 seconds and exited after 357.93 seconds. Both failures
+closed devices cleanly. Prior sweep allocations are therefore not necessary
+to trigger the failure; this does not establish a decode-kernel defect or
+the maximum physical KV capacity.
+
+The preserved measurements include:
+
+| ISL | Batch per TP4 | Input tokens/s during prefill | Output tokens/s during decode | Output tokens/s/user |
+|---:|---:|---:|---:|---:|
+| 32,768 | 16 | 6,565.49 | 209.28 | 13.08 |
+| 131,072 | 8 | 4,875.90 | 123.58 | 15.45 |
+| 262,016 | 4 | 3,677.10 | 65.68 | 16.42 |
+
+These are the matched native control, not measurements of the candidate.
+`../gdn-sweep-recovery-v1/baseline-preview/index.html` provides all 12 points
+with raw data and exportable graphs.
+
+`run_gdn_perf_sweeps.sh` now accepts an optional fifth argument, the previous
+sweep root. It copies valid completed cells into new attempt receipts after
+checking model and precision hashes, runtime settings, prompt tokens, raw
+timings and repeatability. Original receipts remain intact. An allocator
+OOM closes the current process; only after confirmed device cleanup does
+`run_sweep_attempts.py` start another process for the remaining cells. Such
+cells retain `oom` status, and the final sweep becomes `completed_with_oom`.
+Accuracy failures, changed source/settings, dispatch failures, timeouts and
+unclean shutdown stop the controller. A completed measurement loop does not
+mean every configuration passed or fits in memory.
+
+Recovery validation passed 204 CPU tests and 40 subtests, including the real
+tokenizer check. A first regression-test attempt exposed a missing required error-message
+argument to the repository's `expect_error` fixture; that test-only issue was
+corrected before launch. The v2 launch then stopped before hardware because
+the copied snapshot omitted the tokenizer test's baseline JSON fixture. The
+v3 snapshot restores that unchanged fixture, and all CPU tests pass with the
+pinned tokenizer present. Its hardware collection then exposed another
+omitted snapshot file, `pytest.ini`: discovery wandered into an unused stale
+weights mount. Snapshot v9 restores the working configuration; the controller
+also passes explicit pytest root/config paths. Collection through the actual
+safe runner passes before the next launch. The recovery service is
+`qwen38-gdn-perf-sweeps-v4-20261007.service`, using immutable source snapshot
+`gdn-integration-source-v9`, the same native runtime, a 14-hour outer limit,
+six hours per variant and the shared device lock. The 12 completed native
+measurements were verified reusable before launch. The candidate sweep is
+queued after the remaining native cells; full-Galaxy scaling remains pending.

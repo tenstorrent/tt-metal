@@ -186,7 +186,9 @@ def render(report, directory):
             if log_y and completed:
                 axis.set_yscale("log")
             elif not log_y:
-                axis.set_ylim(bottom=0)
+                values = [row["summary"][key] for row in completed if key in row["summary"]]
+                ceiling = max(values + ([40] if key == "tokens_per_second_per_user" else [1]))
+                axis.set_ylim(0, ceiling * 1.12)
             axis.grid(alpha=0.18)
             handles, labels = axis.get_legend_handles_labels()
             if handles:
@@ -203,7 +205,7 @@ def render(report, directory):
                     fontsize=12,
                 )
         figure.suptitle(
-            f"Qwen3.8-27B · {report['replicas']} × TP4 · {len(completed)}/{supported} measured cells · "
+            f"Qwen3.8-27B · {report.get('recurrence_variant', 'native')} · {report['replicas']} × TP4 · {len(completed)}/{supported} measured cells · "
             f"{report['state']}",
             fontsize=15,
             fontweight="bold",

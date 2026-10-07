@@ -14,6 +14,7 @@ import torch
 
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
+from models.demos.qwen38_27b_qb2.tests.sweep_recovery import is_dram_allocation_error, resume_measurements
 from models.demos.qwen38_27b_qb2.tests.sweep_report import render, save_report, summarize
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 
@@ -131,6 +132,7 @@ def test_galaxy_perf_sweep():
             assert len(gen.model.layers) == 64
             report.setdefault("setup_s_per_replica", []).append(time.perf_counter() - tick)
         report["precision"] = generators[0].model.precision
+        resume_measurements(report, json.loads(os.environ.get("QWEN_SWEEP_RESUME_FROM", "[]")))
         report["state"] = "running"
         passage = (
             "The scientific method tests explanations against observations. "
@@ -138,14 +140,18 @@ def test_galaxy_perf_sweep():
         )
         base = generators[0].tokenizer.encode(passage, add_special_tokens=False)
         for cell in report["cells"]:
-            if cell["status"] in ("capacity_guard", "implementation_guard"):
+            if cell["status"] in ("capacity_guard", "implementation_guard", "oom"):
+                continue
+            length, batch = cell["input_tokens"], cell["batch_per_replica"]
+            ids = (base * (length // len(base) + 1))[:length]
+            prompt_hash = hashlib.sha256(json.dumps(ids).encode()).hexdigest()
+            if cell["status"] == "completed":
+                assert cell["prompt_sha256"] == prompt_hash, "Resume prompt tokens differ"
                 continue
             active_cell = cell
             cell["status"] = "running"
+            cell["prompt_sha256"] = prompt_hash
             save_report(report, directory)
-            length, batch = cell["input_tokens"], cell["batch_per_replica"]
-            ids = (base * (length // len(base) + 1))[:length]
-            cell["prompt_sha256"] = hashlib.sha256(json.dumps(ids).encode()).hexdigest()
             prompts = torch.tensor([ids] * batch, dtype=torch.int64)
             print(f"SWEEP_CELL_BEGIN isl={length} batch={batch} replicas={len(generators)}", flush=True)
             for gen in generators:
@@ -174,12 +180,16 @@ def test_galaxy_perf_sweep():
             save_report(report, directory)
             render(report, directory)
             print(f"SWEEP_CELL_COMPLETE {json.dumps(cell['summary'])}", flush=True)
-        report["state"] = "completed"
+        report["state"] = (
+            "completed_with_oom" if any(cell["status"] == "oom" for cell in report["cells"]) else "completed"
+        )
     except BaseException as error:
-        report["state"] = "failed"
-        report["error"] = dict(type=type(error).__name__, message=str(error)[:1000])
+        allocation_failure = active_cell is not None and is_dram_allocation_error(error)
+        report["state"] = "allocation_failed" if allocation_failure else "failed"
+        report["error"] = dict(type=type(error).__name__, message=str(error))
         if active_cell is not None and active_cell["status"] == "running":
-            active_cell["status"] = "failed"
+            active_cell["status"] = "oom" if allocation_failure else "failed"
+            active_cell["error"] = report["error"]
             active_cell["reason"] = report["error"]["message"]
         for cell in report["cells"]:
             if cell["status"] == "queued":
@@ -191,7 +201,16 @@ def test_galaxy_perf_sweep():
             render(report, directory)
         finally:
             try:
-                for gen in generators:
-                    gen.close()
+                try:
+                    for gen in generators:
+                        ttnn.synchronize_device(gen.mesh)
+                        gen.close()
+                finally:
+                    ttnn.close_mesh_device(parent)
+                report["cleanup_completed"] = True
+            except BaseException as error:
+                report["cleanup_completed"] = False
+                report["cleanup_error"] = dict(type=type(error).__name__, message=str(error))
+                raise
             finally:
-                ttnn.close_mesh_device(parent)
+                save_report(report, directory)

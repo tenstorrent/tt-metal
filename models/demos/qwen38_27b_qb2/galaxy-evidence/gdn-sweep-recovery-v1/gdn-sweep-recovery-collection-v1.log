@@ -1,0 +1,41 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/qwen38-artifacts-20261007/gdn-integration-source-v9
+configfile: pytest.ini
+plugins: timeout-2.4.0, benchmark-5.2.3, cov-7.0.0, split-0.11.0, dash-2.15.0, anyio-4.15.1, github-actions-annotate-failures-0.3.0, repeat-0.9.4
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+<Dir gdn-integration-source-v9>
+  <Dir models>
+    <Dir demos>
+      <Package qwen38_27b_qb2>
+        <Package tests>
+          <Module test_galaxy_perf_sweep.py>
+            Opt-in full-model native sweep; all hardware access must be serialized.
+            <Function test_galaxy_perf_sweep>
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/ttuser/qwen38-artifacts-20261007/gdn-sweep-recovery-collection-v1.xml -
+========================== 1 test collected in 1.81s ===========================
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: pytest /home/ttuser/qwen38-artifacts-20261007/gdn-integration-source-v9/models/demos/qwen38_27b_qb2/tests/test_galaxy_perf_sweep.py --rootdir=/home/ttuser/qwen38-artifacts-20261007/gdn-integration-source-v9 -c /home/ttuser/qwen38-artifacts-20261007/gdn-integration-source-v9/pytest.ini --collect-only -q --tb=short --junitxml=/home/ttuser/qwen38-artifacts-20261007/gdn-sweep-recovery-collection-v1.xml
+========================================
+2026-10-07 22:54:17.776 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+========================================
+SAFE_PYTEST_RESULT: PASS
