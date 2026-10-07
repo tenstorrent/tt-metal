@@ -39,6 +39,16 @@ def main():
                 gen.reconfigure(U, KVLayout(users=U, max_pos=max_pos, chunk=S))
             prompts = [it["prompt_ids"] for it in items[: 4 * U]]
             ms, toks = {False: [], True: []}, {}
+            extra = [int(v) for v in E("FB_EOS_EXTRA", "").split(",") if v]
+            if E("FB_EOS_AUTO"):  # a frequent token of a plain run becomes an extra eos
+                gen.dec.set_feedback(False)
+                from collections import Counter
+
+                cnt = Counter(t for o in gen.generate(prompts, steps, S=S)["tokens"] for t in o[8:])
+                extra = [t for t, _ in cnt.most_common(int(E("FB_EOS_AUTO")) + 1)][1:]
+            if extra:  # make users finish early so the device-side eos / dead handling is exercised
+                gen.eos = set(gen.eos) | set(extra)
+                gen.dec.eos = tuple(sorted(gen.eos))
             for rd in range(rounds):
                 for fb in (False, True):
                     gen.dec.set_feedback(fb)
@@ -57,6 +67,12 @@ def main():
             enq = (time.perf_counter() - t0) / 20
             ttnn.synchronize_device(mesh)
             pipe = (time.perf_counter() - t0) / 20
+            diff = None
+            for i, (x, y) in enumerate(zip(toks[False], toks[True])):
+                if x != y:
+                    j = next((j for j in range(min(len(x), len(y))) if x[j] != y[j]), min(len(x), len(y)))
+                    diff = [i, j, len(x), len(y)]
+                    break
             line = json.dumps(
                 dict(
                     case="fb_ab",
@@ -66,6 +82,7 @@ def main():
                     nofeedback_ms=ms[False],
                     feedback_ms=ms[True],
                     tokens_equal=toks[False] == toks[True],
+                    first_diff_user_step_lens=diff,
                     trace_pipelined_ms=round(pipe * 1e3, 3),
                     enqueue_ms_per_step=round(enq * 1e3, 3),
                 )
