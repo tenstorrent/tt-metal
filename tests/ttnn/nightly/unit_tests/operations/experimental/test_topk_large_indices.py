@@ -262,8 +262,8 @@ TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 # regressions and unexpected speedups that should trigger baseline review.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_173_000),
-    ("bounded_cache", 2, 102400, 56320, 1536, 221_000),
+    ("prefill", 640, 51200, None, 1536, 1_149_000),
+    ("bounded_cache", 2, 102400, 56320, 1536, 216_600),
 ]
 
 
