@@ -38,7 +38,8 @@ L1_RESERVE = 64 * 1024  # L1 kept free on compute cores beyond the CBs and the h
 XPORT_CB_BYTES = 112 * 1024  # transport CB sizing (reference)
 XPORT_GROUP_MAX = 8
 INC_EVERY = 8  # arrival-counter increment cadence (blackhole-fabric rule 4)
-XPORT_ADD_BLOCK_MAX = 4  # transport add: max tiles per CB handshake / DEST batch (fp32 DEST half-sync holds 4)
+DEST_TILES_16B = 8  # DEST capacity in 16-bit tiles (half-sync); a 32-bit DEST (fp32_dest_acc_en) holds half
+XPORT_ADD_BLOCK_MAX = DEST_TILES_16B // 2  # transport add: tiles per CB handshake / DEST batch (always fp32 DEST)
 
 NOC0 = ttnn.NOC.NOC_0
 NOC1 = ttnn.NOC.NOC_1
@@ -64,7 +65,9 @@ def _divisors_desc(n):
 
 def _tile_bytes(dtype):
     return (
-        int(ttnn.tile_size(dtype)) if hasattr(ttnn, "tile_size") else {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}[dtype]
+        int(ttnn.tile_size(dtype))
+        if hasattr(ttnn, "tile_size")
+        else {ttnn.float32: 4096, ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}[dtype]
     )
 
 
@@ -96,6 +99,7 @@ class Blocking:
     out_subblock_w: int
     a_tile_bytes: int
     w_tile_bytes: int
+    acc_dtype: object  # cb_partial_accum page format: follows the DEST width (fp32_dest_acc_en)
     acc_tile_bytes: int
 
 
@@ -117,7 +121,8 @@ def _plan_blocking(*, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype,
         )
 
     a_tile, w_tile = _tile_bytes(a_dtype), _tile_bytes(w_dtype)
-    acc_tile = 4096 if fp32_acc else 2048
+    acc_dtype = ttnn.float32 if fp32_acc else ttnn.bfloat16
+    acc_tile = _tile_bytes(acc_dtype)
     accum = cm * cn * acc_tile
     budget = l1_cb_budget
     # R1: the block-invariant operand X resident for all G blocks, the other (Y) streamed.
@@ -145,7 +150,7 @@ def _plan_blocking(*, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype,
             raise ValueError("matmul_reduce_scatter: per-core block does not fit L1 even with one-tile K-blocks")
         a_res = w_res = False
 
-    dest_limit = 4 if fp32_acc else 8
+    dest_limit = DEST_TILES_16B // 2 if fp32_acc else DEST_TILES_16B
     sb_w = next(d for d in _divisors_desc(cn) if d <= dest_limit)
     sb_h = next(d for d in _divisors_desc(cm) if d * sb_w <= dest_limit)
     return Blocking(
@@ -170,6 +175,7 @@ def _plan_blocking(*, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype,
         out_subblock_w=sb_w,
         a_tile_bytes=a_tile,
         w_tile_bytes=w_tile,
+        acc_dtype=acc_dtype,
         acc_tile_bytes=acc_tile,
     )
 
@@ -347,7 +353,6 @@ def create_mesh_program_descriptor(
 
     a_pages = cm * blk.Kt if blk.a_resident else OPERAND_DEPTH * cm * blk.k_block_tiles
     w_pages = blk.Kt * cn if blk.w_resident else OPERAND_DEPTH * blk.k_block_tiles * cn
-    acc_dtype = ttnn.float32 if blk.acc_tile_bytes == 4096 else ttnn.bfloat16
     xport_pages = xp.cap_segs * xp.seg_tiles
     # transport add block: the largest divisor of the transport CB ring <= the DEST batch (blocks never straddle the wrap)
     xport_add_block = next(d for d in _divisors_desc(xport_pages) if d <= XPORT_ADD_BLOCK_MAX)
@@ -373,7 +378,7 @@ def create_mesh_program_descriptor(
         cbs = [
             _cb(CB_ACT_OPERAND, a_pages, blk.a_tile_bytes, a.dtype, rect_set),
             _cb(CB_WEIGHT_OPERAND, w_pages, blk.w_tile_bytes, w.dtype, rect_set),
-            _cb(CB_PARTIAL_ACCUM, block_tiles, blk.acc_tile_bytes, acc_dtype, rect_set),
+            _cb(CB_PARTIAL_ACCUM, block_tiles, blk.acc_tile_bytes, blk.acc_dtype, rect_set),
             ttnn.cb_descriptor_from_sharded_tensor(CB_PARTIAL_HANDOFF, handoff),
         ]
         # per compute-order index: block, consumer kind (0 fwd ports, 1 bwd ports, 2 finals), cumulative acks

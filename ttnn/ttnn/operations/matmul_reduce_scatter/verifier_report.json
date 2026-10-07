@@ -1,0 +1,33 @@
+{
+ "source": "python3 -m eval.verify_supported /tmp/mmrs_golden_v3 ttnn.operations.matmul_reduce_scatter (full per-cell report kept in the results dir; summary only here)",
+ "summary": {
+  "total": 1041,
+  "supported_pass": 375,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 660,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 0,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 0,
+  "no_axes_found": 6
+ },
+ "xfail_expected_by_gap": {
+  "dtype=bfloat8_b": 312,
+  "weight_dtype=bfloat4_b": 156,
+  "dtype=bfloat8_b+weight_dtype=bfloat4_b": 156,
+  "topology=Ring": 36
+ },
+ "no_axes_found": [
+  "eval/golden_tests/matmul_reduce_scatter/test_regression.py::test_rank_identity[0]",
+  "eval/golden_tests/matmul_reduce_scatter/test_regression.py::test_rank_identity[1]",
+  "eval/golden_tests/matmul_reduce_scatter/test_regression.py::test_block_placement[0]",
+  "eval/golden_tests/matmul_reduce_scatter/test_regression.py::test_block_placement[1]",
+  "eval/golden_tests/matmul_reduce_scatter/test_regression.py::test_deterministic[0]",
+  "eval/golden_tests/matmul_reduce_scatter/test_regression.py::test_deterministic[1]"
+ ]
+}

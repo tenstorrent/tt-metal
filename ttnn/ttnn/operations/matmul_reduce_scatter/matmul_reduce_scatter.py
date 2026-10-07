@@ -154,9 +154,42 @@ def _links(mesh_device, groups, num_links):
 
 
 _PLAN_CACHE = {}
+_SEM_CACHE = {}
+NUM_SEMS = 7  # arrival fwd / bwd, ready fence, block ready, block ack x 3 (fwd ports, bwd ports, finals)
+
+
+def _l1_cb_capacity(mesh_device):
+    """Bytes of worker L1 the allocator manages per core (allocator base .. end of L1): the region shared by the static
+    CBs (growing up from the base) and L1 buffers (growing down from the end). NOT get_max_worker_l1_unreserved_size(),
+    which also counts the kernel-config ring buffer below the allocator base and so over-budgets the CBs."""
+    return int(ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1).total_bytes_per_bank)
+
+
+def _get_sems(mesh_device, cluster_axis, num_links):
+    """Global semaphores, shared by every plan with the same (mesh, cluster_axis, num_links).
+
+    One set per transport identity, over the whole worker grid: the port / final cores (placement depends on
+    num_links only) then always receive ready-fence and arrival increments from the same neighbours (cluster_axis), so
+    sharing across plans keeps the fence semantics of reusing one plan; every kernel re-arms what it consumed, so the
+    counters are zero between calls. Per-plan semaphores would accumulate L1 allocations across the distinct shapes a
+    model runs (bounded here at 4 sets per mesh)."""
+    key = (id(mesh_device), cluster_axis, num_links)
+    if key not in _SEM_CACHE:
+        grid = mesh_device.compute_with_storage_grid_size()
+        cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        sems = tuple(ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(NUM_SEMS))
+        ttnn.synchronize_device(mesh_device)  # every counter zero before any chip's first call increments a neighbour's
+        _SEM_CACHE[key] = (mesh_device, sems)
+    return _SEM_CACHE[key][1]
 
 
 def _get_plan(mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtype, w_dtype, fp32_acc, fidelity):
+    """Host plan + the persistent DRAM relay scratch, cached per plan key (global semaphores: `_get_sems`).
+
+    The L1 hand-off buffer is NOT cached here: a persistent L1 allocation per plan key would accumulate across the
+    distinct shapes a model (or a test session) runs on one mesh and eventually clash with a later plan's CB region
+    (and permanently steal L1 from every other op). It is allocated per call (`_allocate_handoff`); the generic_op
+    program cache patches its CB address on a hit (UpdateDynamicCircularBufferAddress)."""
     key = (id(mesh_device), cluster_axis, num_links, M, K, N, scatter_dim, a_dtype, w_dtype, fp32_acc, str(fidelity))
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key][1]
@@ -169,38 +202,25 @@ def _get_plan(mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtyp
     if num_banks % (2 * L):
         raise ValueError(f"matmul_reduce_scatter: {num_banks} DRAM banks do not split into {2 * L} bank sets")
     comp_rows, comp_cols = pl.grid_y - pl.transport_rows, pl.grid_x
-    # L1 a compute core can give to its CBs: the unreserved region minus the hand-off shard and a fixed reserve.
-    l1_free = int(ttnn.device.get_max_worker_l1_unreserved_size()) - L1_RESERVE
-    blk = None
+    # L1 a compute core can give to its CBs: the allocator's L1 region minus the hand-off shard and a fixed reserve.
+    l1_free = _l1_cb_capacity(mesh_device) - L1_RESERVE
+    plan_args = dict(
+        comp_rows=comp_rows,
+        comp_cols=comp_cols,
+        Mt=M // 32,
+        Kt=K // 32,
+        Nt=N // 32,
+        G=G,
+        scatter_dim=scatter_dim,
+        a_dtype=a_dtype,
+        w_dtype=w_dtype,
+        fp32_acc=fp32_acc,
+    )
     # the hand-off shard depends on the per-core block; the factorization does not depend on L1, so solve once with
     # the full budget to get the block, then re-solve the K-block / regime with the shard taken out
-    probe = _plan_blocking(
-        comp_rows=comp_rows,
-        comp_cols=comp_cols,
-        Mt=M // 32,
-        Kt=K // 32,
-        Nt=N // 32,
-        G=G,
-        scatter_dim=scatter_dim,
-        a_dtype=a_dtype,
-        w_dtype=w_dtype,
-        fp32_acc=fp32_acc,
-        l1_cb_budget=l1_free,
-    )
+    probe = _plan_blocking(**plan_args, l1_cb_budget=l1_free)
     handoff_bytes = HANDOFF_DEPTH * probe.core_m_tiles * probe.core_n_tiles * BF16_TILE_BYTES
-    blk = _plan_blocking(
-        comp_rows=comp_rows,
-        comp_cols=comp_cols,
-        Mt=M // 32,
-        Kt=K // 32,
-        Nt=N // 32,
-        G=G,
-        scatter_dim=scatter_dim,
-        a_dtype=a_dtype,
-        w_dtype=w_dtype,
-        fp32_acc=fp32_acc,
-        l1_cb_budget=l1_free - handoff_bytes,
-    )
+    blk = _plan_blocking(**plan_args, l1_cb_budget=l1_free - handoff_bytes)
     assert BLOCKS_IN_FLIGHT == 1, "blocks_in_flight > 1 is not built"
     xp = _plan_transport(blk)
 
@@ -220,18 +240,7 @@ def _get_plan(mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtyp
         ttnn.BufferType.L1,
         ttnn.ShardSpec(compute_set, (shard_tiles * 32, 32), ttnn.ShardOrientation.ROW_MAJOR),
     )
-    handoff_l1 = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([len(compute_cores) * shard_tiles * 32, 32]),
-        ttnn.bfloat16,
-        ttnn.TILE_LAYOUT,
-        mesh_device,
-        handoff_mem,
-    )
-    xport_cores = pl.fwd_ports + pl.bwd_ports + pl.finals
-    all_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in xport_cores + compute_cores])
-    # arrival fwd / bwd, ready fence, block ready, block ack x 3 (fwd ports, bwd ports, finals)
-    sems = tuple(ttnn.create_global_semaphore(mesh_device, all_set, 0) for _ in range(7))
-    ttnn.synchronize_device(mesh_device)  # every counter zero before any chip's first call increments a neighbour's
+    sems = _get_sems(mesh_device, cluster_axis, L)
     plan = dict(
         G=G,
         groups=groups,
@@ -241,11 +250,19 @@ def _get_plan(mesh_device, cluster_axis, num_links, M, K, N, scatter_dim, a_dtyp
         blk=blk,
         xp=xp,
         relay_scratch=relay_scratch,
-        handoff_l1=handoff_l1,
+        handoff_shape=ttnn.Shape([len(compute_cores) * shard_tiles * 32, 32]),
+        handoff_mem=handoff_mem,
         sems=sems,
     )
     _PLAN_CACHE[key] = (mesh_device, plan)
     return plan
+
+
+def _allocate_handoff(mesh_device, plan):
+    """Per-call L1 backing of cb_partial_handoff (one HEIGHT shard of handoff_depth slots per compute core)."""
+    return ttnn.allocate_tensor_on_device(
+        plan["handoff_shape"], ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, plan["handoff_mem"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -314,13 +331,14 @@ def matmul_reduce_scatter(
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG
     )
+    handoff_l1 = _allocate_handoff(mesh_device, plan)
     sems = tuple(int(ttnn.get_global_semaphore_address(s)) for s in plan["sems"])
     desc = create_mesh_program_descriptor(
         mesh_device,
         a=input_tensor,
         w=weight,
         scratch=plan["relay_scratch"],
-        handoff=plan["handoff_l1"],
+        handoff=handoff_l1,
         output=output,
         sems=sems,
         blk=blk,
@@ -332,4 +350,4 @@ def matmul_reduce_scatter(
         num_links=plan["num_links"],
         compute_config=cfg,
     )
-    return ttnn.generic_op([input_tensor, weight, plan["relay_scratch"], plan["handoff_l1"], output], desc)
+    return ttnn.generic_op([input_tensor, weight, plan["relay_scratch"], handoff_l1, output], desc)

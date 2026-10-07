@@ -33,7 +33,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axe
 | `operand_depth`, `handoff_depth` | 2 (Phase 0) | host constants |
 | `seg_tiles` | ≤ `max_payload // 2048` (≤ 7 at 14336 B) | live fabric config |
 | `xport_group` | `max(1, min(8, 112 KiB // (2·seg_bytes)))` | reference sizing |
-| `L1_CB_BUDGET` | per-core L1 available to CBs minus the `handoff_l1` shard | device query at plan time |
+| `L1_CB_BUDGET` | allocator L1 bank size (`ttnn.get_memory_view(mesh, L1).total_bytes_per_bank`, 1,461,248 B on Blackhole) − `L1_RESERVE` (64 KiB: global semaphores, misc) − the `handoff_l1` shard | device query at plan time (verifier fix: was `get_max_worker_l1_unreserved_size()` = 1,531,904 B, which also counts the kernel-config ring below the allocator base → R1 `-2` plans over-budgeted by 70.6 KB and clashed with the hand-off shard) |
 
 ## Total per-core footprint
 
@@ -76,6 +76,14 @@ multicast injected; links 6.9 MB on the busiest direction (70.9 us at 2 × 48.5 
 > DRAM-scratch fused DRAM bound stays below the binding term (FOCUS 66.9 < links 70.9 us; GLM 89.3 <
 > compute 118.9; MiMo 91.1 < links 129.7), so R1 does not move the roofline; the landing address is a
 > per-stream runtime arg and every arrival read is already counter-gated, so R5 stays reachable.
+
+## Persistent vs per-call L1 (verifier, Phase 0)
+
+| Allocation | Lifetime | Why |
+|------------|----------|-----|
+| `handoff_l1` (L1, HEIGHT_SHARDED, `handoff_depth·core_m_tiles·core_n_tiles` bf16 tiles per compute core) | **per call** (allocated in the entry point, freed when the call returns; the generic_op program cache re-points `cb_partial_handoff` on a hit) | it was cached per plan key: every distinct shape / config kept its shard resident, the shards accumulated from the top of L1 and clashed with a later plan's CB region (golden: hundreds of `Statically allocated circular buffers ... clash with L1 buffers`), and they permanently stole L1 from every other op of a model |
+| 7 global semaphores | per `(mesh, cluster_axis, num_links)` over the whole worker grid (≤ 4 sets per mesh) | per-plan sets accumulated the same way; the port/final placement depends on `num_links` only and the neighbours on `cluster_axis` only, so sharing within that key keeps the ready-fence semantics of re-using one plan |
+| `relay_scratch` (DRAM) | per plan key | DRAM; grows with the number of distinct plans (≈ `(G+1)·B` each) — recorded as a known issue, not an L1 term |
 
 ## Implementation notes (ttnn-implementer, Phase 0)
 
