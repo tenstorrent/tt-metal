@@ -7,13 +7,23 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_getitem import (
+    run_getitem_RAW_MAJOR,
+    run_moreh_geitem_tilized_one_index,
+)
 
 pytestmark = pytest.mark.use_module_device
+
+# A ROW_MAJOR input runs the Rm factory, which can't index the last (W) dim. A TILE input runs the Tilized factory,
+# which builds separate kernels when W is indexed, and a ROW_MAJOR_INDEX or TILIZE_INDEX variant per index layout.
+# Every nightly getitem test is skipped on Blackhole (#12349); the Tilized cases here are too.
 
 
 def run_moreh_getitem_test(
     input_shape, layout, device, index_dims=(0,), index_size=4, dtype=ttnn.bfloat16, row_major_index=True
 ):
+    # Not the nightly helpers: they take one index dim only, and they reseed to 2, so a program-cache test would
+    # see the same data on both runs and miss a cache hit that reads a stale address.
     torch_dtype = torch.int32 if dtype == ttnn.int32 else torch.bfloat16
     torch_input = torch.randint(0, 10, input_shape, dtype=torch_dtype)
     torch_indices = [torch.randint(-input_shape[dim], input_shape[dim] - 1, (index_size,)) for dim in index_dims]
@@ -36,82 +46,82 @@ def run_moreh_getitem_test(
 
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
-    "input_shape, layout",
+    "shape_index_dim, dtype, index_size",
     [
-        ([10, 70], ttnn.ROW_MAJOR_LAYOUT),
-        pytest.param([7, 70], ttnn.TILE_LAYOUT, marks=skip_for_blackhole("Mismatching on Blackhole, see #12349")),
+        # A rank-5 input indexed on each dim the Rm factory allows: N, C, D, H.
+        ([[10, 2, 5, 7, 70], 0], torch.bfloat16, 4),
+        ([[10, 2, 5, 7, 70], 1], torch.bfloat16, 4),
+        ([[10, 2, 5, 7, 70], 2], torch.bfloat16, 4),
+        ([[10, 2, 5, 7, 70], 3], torch.bfloat16, 4),
+        # A rank-2 input is padded to 5 dims on the host.
+        ([[10, 70], 0], torch.bfloat16, 4),
+        ([[10, 5, 70], 1], torch.int32, 4),
+        ([[10, 70], 0], torch.bfloat16, 100),
     ],
-    ids=["row_major", "tile"],
+    ids=["n", "c", "d", "h", "rank_2", "int32", "index_size_100"],
 )
-def test_moreh_getitem(input_shape, layout, device):
+def test_moreh_getitem_row_major(shape_index_dim, dtype, index_size, device):
     torch.manual_seed(0)
-    run_moreh_getitem_test(input_shape, layout, device)
+    run_getitem_RAW_MAJOR(shape_index_dim, dtype, index_size, device)
+
+
+@skip_for_blackhole("Mismatching on Blackhole, see #12349")
+@pytest.mark.merge_gate
+@pytest.mark.parametrize(
+    "shape_index_dim, row_major_index",
+    [
+        ([[10, 5, 64], 1], True),
+        ([[7, 70], 0], False),
+        # Indexing the last dim runs the *_tilize_w kernels, which pick elements out of 16-wide tile faces.
+        ([[1, 5, 7, 3, 80], 4], True),
+        ([[5, 64], 1], False),
+    ],
+    ids=["h_row_major_index", "h_tile_index", "w_row_major_index", "w_tile_index"],
+)
+def test_moreh_getitem_tilized(shape_index_dim, row_major_index, device):
+    torch.manual_seed(0)
+    run_moreh_geitem_tilized_one_index(shape_index_dim, torch.bfloat16, 4, row_major_index, device)
 
 
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
-    "input_shape, layout, index_dims, index_size, dtype, row_major_index",
+    "input_shape, layout, index_dims",
     [
-        # ROW_MAJOR input can't be indexed on its last (W) dim.
-        ([10, 5, 70], ttnn.ROW_MAJOR_LAYOUT, [1], 4, ttnn.bfloat16, True),
-        ([10, 5, 7, 70], ttnn.ROW_MAJOR_LAYOUT, [2], 4, ttnn.bfloat16, True),
-        ([10, 2, 5, 7, 70], ttnn.ROW_MAJOR_LAYOUT, [3], 4, ttnn.bfloat16, True),
-        ([10, 3, 5, 7, 80], ttnn.ROW_MAJOR_LAYOUT, [2, 3], 4, ttnn.bfloat16, True),
-        ([10, 15, 7, 80], ttnn.ROW_MAJOR_LAYOUT, [0, 1, 2], 4, ttnn.bfloat16, True),
-        ([10, 70], ttnn.ROW_MAJOR_LAYOUT, [0], 100, ttnn.bfloat16, True),
-        ([10, 5, 70], ttnn.ROW_MAJOR_LAYOUT, [1], 4, ttnn.int32, True),
+        ([10, 3, 5, 7, 80], ttnn.ROW_MAJOR_LAYOUT, [2, 3]),
+        ([10, 15, 7, 80], ttnn.ROW_MAJOR_LAYOUT, [0, 1, 2]),
         pytest.param(
-            [10, 5, 64],
+            [10, 5, 7, 70],
             ttnn.TILE_LAYOUT,
-            [1],
-            4,
-            ttnn.bfloat16,
-            True,
-            marks=skip_for_blackhole("Mismatching on Blackhole, see #12349"),
-        ),
-        pytest.param(
-            [7, 70],
-            ttnn.TILE_LAYOUT,
-            [0],
-            4,
-            ttnn.bfloat16,
-            False,
+            [2, 3],
             marks=skip_for_blackhole("Mismatching on Blackhole, see #12349"),
         ),
     ],
-    ids=[
-        "rank_3",
-        "rank_4",
-        "rank_5",
-        "two_indices",
-        "three_indices",
-        "index_size_100",
-        "int32",
-        "tile_index_on_h",
-        "tile_index_tensor",
-    ],
+    ids=["row_major_two_indices", "row_major_three_indices", "tile_two_indices_with_w"],
 )
-def test_moreh_getitem_corner_cases(input_shape, layout, index_dims, index_size, dtype, row_major_index, device):
+def test_moreh_getitem_multi_index(input_shape, layout, index_dims, device):
     torch.manual_seed(0)
-    run_moreh_getitem_test(
-        input_shape,
-        layout,
-        device,
-        index_dims=index_dims,
-        index_size=index_size,
-        dtype=dtype,
-        row_major_index=row_major_index,
-    )
+    run_moreh_getitem_test(input_shape, layout, device, index_dims=index_dims)
 
 
 @pytest.mark.merge_gate
-def test_moreh_getitem_program_cache(device):
+@pytest.mark.parametrize(
+    "layout",
+    [
+        ttnn.ROW_MAJOR_LAYOUT,
+        pytest.param(ttnn.TILE_LAYOUT, marks=skip_for_blackhole("Mismatching on Blackhole, see #12349")),
+    ],
+    ids=["row_major", "tile"],
+)
+def test_moreh_getitem_program_cache(layout, device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_getitem_test([10, 70], ttnn.ROW_MAJOR_LAYOUT, device)
+    run_moreh_getitem_test([10, 70], layout, device)
     num_program_cache_entries = device.num_program_cache_entries()
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
+    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
+    # so creating it runs no device program of its own.
     tt_placeholder = ttnn.from_torch(torch.zeros([10, 70]), dtype=ttnn.bfloat16, device=device)
-    run_moreh_getitem_test([10, 70], ttnn.ROW_MAJOR_LAYOUT, device)
+    run_moreh_getitem_test([10, 70], layout, device)
     assert device.num_program_cache_entries() == num_program_cache_entries

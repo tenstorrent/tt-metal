@@ -4,150 +4,129 @@
 
 import pytest
 import torch
-import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import comp_allclose
-from tests.ttnn.unit_tests.operations.test_utils import (
-    TILE_HEIGHT,
-    TILE_WIDTH,
-    get_compute_kernel_options,
-    to_torch,
-    to_ttnn,
+from models.common.utility_functions import comp_allclose, skip_for_blackhole
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_layer_norm import (
+    make_input_tensors,
+    run_moreh_layer_norm,
+    run_moreh_layer_norm_backward,
+    run_moreh_layer_norm_backward_with_gamma_or_beta,
+    torch_layer_norm,
 )
+from tests.ttnn.unit_tests.operations.test_utils import get_compute_kernel_options, to_torch, to_ttnn
 
 pytestmark = pytest.mark.use_module_device
 
-EPS = 1e-5
+# With normalized_dims=1 the op writes mean/rstd wrong whenever they hold more than one value (only every 16th
+# value is correct), so mean/rstd are only requested there for single-row inputs.
 
 
-def run_moreh_layer_norm_test(
-    input_shape, normalized_dims, device, elementwise_affine=True, create_mean_rstd=True, fp32_dest_acc_en=False
-):
-    normalized_shape = input_shape[-normalized_dims:]
-    mean_rstd_shape = input_shape[:-normalized_dims]
-    mean_rstd_dims = list(range(-normalized_dims, 0))
-
-    torch_input = torch.randint(-2, 3, input_shape, dtype=torch.bfloat16)
-    torch_gamma = torch.rand(normalized_shape, dtype=torch.bfloat16) * 2 - 1.05 if elementwise_affine else None
-    torch_beta = torch.rand(normalized_shape, dtype=torch.bfloat16) * 2 - 1.05 if elementwise_affine else None
-    torch_output = F.layer_norm(torch_input, normalized_shape, weight=torch_gamma, bias=torch_beta, eps=EPS)
-    torch_mean = torch_input.mean(dim=mean_rstd_dims, keepdim=True)
-    torch_rstd = (((torch_input - torch_mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True) + EPS).rsqrt()
-
-    tt_mean = tt_rstd = None
-    if create_mean_rstd:
-        tt_mean = to_ttnn(torch.full(mean_rstd_shape, float("nan"), dtype=torch.bfloat16), device=device)
-        tt_rstd = to_ttnn(torch.full(mean_rstd_shape, float("nan"), dtype=torch.bfloat16), device=device)
-    tt_output, tt_mean, tt_rstd = ttnn.moreh_layer_norm(
-        to_ttnn(torch_input, device=device),
-        normalized_dims,
-        EPS,
-        to_ttnn(torch_gamma, device=device),
-        to_ttnn(torch_beta, device=device),
-        mean=tt_mean,
-        rstd=tt_rstd,
-        compute_kernel_config=get_compute_kernel_options(fp32_dest_acc_en),
+@pytest.mark.merge_gate
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims, elementwise_affine",
+    [
+        # normalized_dims=1 reduces each row (REDUCE_ROW); 20 is unaligned, so the reader masks W.
+        (([1, 20], 1), True),
+        (([1, 32], 1), False),
+        # normalized_dims=2 reduces whole tiles (REDUCE_SCALAR); 77 x 109 makes the reader mask both H and W.
+        (([2, 77, 109], 2), True),
+        (([2, 64, 64], 2), False),
+    ],
+    ids=["lastdim_affine", "lastdim_no_affine_aligned", "hw_affine", "hw_no_affine_aligned"],
+)
+def test_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, device):
+    torch.manual_seed(0)
+    run_moreh_layer_norm(
+        input_shape_normalized_dims, elementwise_affine, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False
     )
 
-    # As in nightly, normalizing over more dims accumulates more bf16 error in the output.
-    tolerance = 0.1 if normalized_dims == 1 else 0.15
-    passing, out = comp_allclose(torch_output, to_torch(tt_output), rtol=tolerance, atol=tolerance)
-    assert passing, out
-    if not create_mean_rstd:
-        assert tt_mean is None and tt_rstd is None
-        return
-    passing, out = comp_allclose(torch_mean, to_torch(tt_mean, shape=torch_mean.shape), rtol=0.1, atol=0.1)
-    assert passing, out
-    passing, out = comp_allclose(torch_rstd, to_torch(tt_rstd, shape=torch_rstd.shape), rtol=0.1, atol=0.1)
-    assert passing, out
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize(
+    "input_shape_normalized_dims, fp32_dest_acc_en",
+    [
+        (([2, 3, 45, 45], 3), False),
+        (([1, 20], 1), True),
+        # 2 x 500 x 1000 = 512 tiles per normalized group: too big for L1, so the large (streaming) kernels run.
+        (([1, 2, 500, 1000], 2), False),
+    ],
+    ids=["normalized_dims_3", "fp32_dest_acc", "large_algorithm"],
+)
+def test_moreh_layer_norm_corner_cases(input_shape_normalized_dims, fp32_dest_acc_en, device):
+    torch.manual_seed(0)
+    run_moreh_layer_norm(
+        input_shape_normalized_dims, True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=fp32_dest_acc_en
+    )
 
 
-def run_moreh_layer_norm_backward_test(input_shape, normalized_dims, device, has_gamma=True, has_beta=True):
-    normalized_shape = input_shape[-normalized_dims:]
-    mean_rstd_shape = input_shape[:-normalized_dims]
-    mean_rstd_dims = list(range(-normalized_dims, 0))
-
-    torch_input = torch.randint(-2, 3, input_shape, dtype=torch.bfloat16, requires_grad=True)
-    torch_gamma = (torch.rand(normalized_shape, dtype=torch.bfloat16) * 2 - 1.05).requires_grad_()
-    torch_beta = (torch.rand(normalized_shape, dtype=torch.bfloat16) * 2 - 1.05).requires_grad_()
-    torch_gamma = torch_gamma if has_gamma else None
-    torch_beta = torch_beta if has_beta else None
-    torch_output_grad = torch.randint(-2, 3, input_shape, dtype=torch.bfloat16)
-    torch_output = F.layer_norm(torch_input, normalized_shape, weight=torch_gamma, bias=torch_beta, eps=EPS)
-    torch_output.backward(torch_output_grad)
-    torch_mean = torch_input.detach().mean(dim=mean_rstd_dims, keepdim=True)
-    torch_rstd = (((torch_input.detach() - torch_mean) ** 2).mean(dim=mean_rstd_dims, keepdim=True) + EPS).rsqrt()
-
-    def nan_tensor(shape, enabled=True):
-        return to_ttnn(torch.full(shape, float("nan"), dtype=torch.bfloat16), device=device) if enabled else None
-
-    tt_input_grad, tt_gamma_grad, tt_beta_grad = ttnn.moreh_layer_norm_backward(
-        to_ttnn(torch_output_grad, device=device),
-        to_ttnn(torch_input.detach(), device=device),
-        to_ttnn(torch_mean, device=device, shape=mean_rstd_shape),
-        to_ttnn(torch_rstd, device=device, shape=mean_rstd_shape),
-        normalized_dims,
-        gamma=to_ttnn(torch_gamma.detach(), device=device) if has_gamma else None,
-        input_grad=nan_tensor(input_shape),
-        gamma_grad=nan_tensor(normalized_shape, has_gamma),
-        beta_grad=nan_tensor(normalized_shape, has_beta),
+@pytest.mark.merge_gate
+def test_moreh_layer_norm_allocated_output_no_mean_rstd(device):
+    torch.manual_seed(0)
+    # Not run_moreh_layer_norm: it always passes `output`, and with create_mean_rstd=False it doesn't check that
+    # mean/rstd come back as None. 109 spans four tiles in W.
+    input_shape = [3, 77, 109]
+    cpu_input, cpu_gamma, cpu_beta, _ = make_input_tensors(input_shape, 1, True)
+    expected_output, _, _ = torch_layer_norm(cpu_input, normalized_dims=1, eps=1e-5, gamma=cpu_gamma, beta=cpu_beta)
+    tt_output, tt_mean, tt_rstd = ttnn.moreh_layer_norm(
+        to_ttnn(cpu_input, device=device),
+        1,
+        1e-5,
+        to_ttnn(cpu_gamma, device=device),
+        to_ttnn(cpu_beta, device=device),
         compute_kernel_config=get_compute_kernel_options(False),
     )
 
-    passing, out = comp_allclose(torch_input.grad, to_torch(tt_input_grad), rtol=0.1, atol=0.5)
+    assert tt_mean is None and tt_rstd is None
+    passing, out = comp_allclose(expected_output, to_torch(tt_output, shape=input_shape), rtol=0.1, atol=0.1)
     assert passing, out
-    if has_gamma:
-        passing, out = comp_allclose(torch_gamma.grad, to_torch(tt_gamma_grad), rtol=0.1, atol=0.5)
-        assert passing, out
-    else:
-        assert tt_gamma_grad is None
-    if has_beta:
-        passing, out = comp_allclose(torch_beta.grad, to_torch(tt_beta_grad), rtol=0.1, atol=0.5)
-        assert passing, out
-    else:
-        assert tt_beta_grad is None
 
 
-@pytest.mark.merge_gate
-def test_moreh_layer_norm(device):
-    torch.manual_seed(0)
-    run_moreh_layer_norm_test([1, 20], 1, device)
-
-
+# On Blackhole gamma_grad is wrong when it reduces over both a batch dim and H, so every backward shape reduces
+# gamma_grad/beta_grad over H only or over the batch only.
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
-    "input_shape, normalized_dims, elementwise_affine",
+    "input_shape_normalized_dims, elementwise_affine",
     [
-        ([1, 20], 1, False),
-        ([2, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13], 2, True),
-        ([2, 3, TILE_HEIGHT + 13, TILE_WIDTH + 13], 3, True),
+        # Both grads requested, so the input_grad and gamma_beta_grad factories both run.
+        (([20, 30], 1), True),
+        (([20, 30], 2), True),
+        (([6, 64, 64], 2), True),
+        # No gamma/beta: input_grad without gamma, and the gamma_beta_grad factory is skipped.
+        (([20, 30], 1), False),
     ],
-    ids=["no_affine", "normalized_dims_2", "normalized_dims_3"],
+    ids=["lastdim_unaligned", "hw_unaligned", "hw_aligned_batch", "no_affine"],
 )
-def test_moreh_layer_norm_corner_cases(input_shape, normalized_dims, elementwise_affine, device):
+def test_moreh_layer_norm_backward(input_shape_normalized_dims, elementwise_affine, device):
     torch.manual_seed(0)
-    run_moreh_layer_norm_test(input_shape, normalized_dims, device, elementwise_affine=elementwise_affine)
-
-
-# lastdim_multi_tile leaves out mean/rstd: with normalized_dims=1 the op writes them wrong whenever they hold more
-# than one value per row (only every 16th value is correct).
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "input_shape",
-    [[1, 20], [3, 2 * TILE_HEIGHT + 13, 3 * TILE_WIDTH + 13]],
-    ids=["single_tile", "lastdim_multi_tile"],
-)
-def test_moreh_layer_norm_no_mean_rstd(input_shape, device):
-    torch.manual_seed(0)
-    run_moreh_layer_norm_test(input_shape, 1, device, create_mean_rstd=False)
+    run_moreh_layer_norm_backward(
+        input_shape_normalized_dims, elementwise_affine, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False
+    )
 
 
 @pytest.mark.merge_gate
-def test_moreh_layer_norm_fp32_dest_acc(device):
+@pytest.mark.parametrize("gamma_or_beta", [True, False], ids=["gamma_only", "beta_only"])
+def test_moreh_layer_norm_backward_gamma_or_beta(gamma_or_beta, device):
     torch.manual_seed(0)
-    # fp32_dest_acc_en switches the intermediate buffers to Float32.
-    run_moreh_layer_norm_test([1, 20], 1, device, fp32_dest_acc_en=True)
+    run_moreh_layer_norm_backward_with_gamma_or_beta(
+        ([20, 30], 1), gamma_or_beta, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False
+    )
+
+
+@pytest.mark.merge_gate
+def test_moreh_layer_norm_backward_fp32_dest_acc(device):
+    torch.manual_seed(0)
+    run_moreh_layer_norm_backward(([20, 30], 1), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=True)
+
+
+@skip_for_blackhole("Mismatching on BH, see #12349")
+@pytest.mark.merge_gate
+def test_moreh_layer_norm_backward_large_algorithm(device):
+    torch.manual_seed(0)
+    # 512 tiles per normalized group: too big for L1, so the input_grad factory runs its large (streaming) kernels.
+    run_moreh_layer_norm_backward(
+        ([1, 2, 500, 1000], 2), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False
+    )
 
 
 @pytest.mark.merge_gate
@@ -155,57 +134,26 @@ def test_moreh_layer_norm_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_layer_norm_test([1, 20], 1, device)
+    run_moreh_layer_norm(([1, 20], 1), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False)
     num_program_cache_entries = device.num_program_cache_entries()
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
     # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
     tt_placeholder = to_ttnn(torch.zeros([1, 20]), device=device)
-    run_moreh_layer_norm_test([1, 20], 1, device)
+    run_moreh_layer_norm(([1, 20], 1), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False)
     assert device.num_program_cache_entries() == num_program_cache_entries
 
 
 @pytest.mark.merge_gate
-def test_moreh_layer_norm_backward(device):
+def test_moreh_layer_norm_backward_program_cache(device):
     torch.manual_seed(0)
-    # Passing input_grad plus gamma_grad/beta_grad runs both the input-grad and the gamma/beta-grad factories.
-    # Not ([2, 20, 30], 1): gamma_grad is wrong on Blackhole when it reduces over both a batch dim and H.
-    run_moreh_layer_norm_backward_test([6, 2 * TILE_HEIGHT, 2 * TILE_WIDTH], 2, device)
-
-
-# Every shape reduces gamma_grad/beta_grad over H only or over nothing, to avoid the Blackhole bug above.
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "input_shape, normalized_dims, has_gamma, has_beta",
-    [
-        ([20, 30], 1, True, True),
-        ([20, 30], 2, True, True),
-        ([20, 30], 1, True, False),
-        ([20, 30], 1, False, True),
-        ([20, 30], 1, False, False),
-    ],
-    ids=["lastdim_unaligned", "hw_unaligned", "gamma_only", "beta_only", "no_affine"],
-)
-def test_moreh_layer_norm_backward_corner_cases(input_shape, normalized_dims, has_gamma, has_beta, device):
-    torch.manual_seed(0)
-    run_moreh_layer_norm_backward_test(input_shape, normalized_dims, device, has_gamma=has_gamma, has_beta=has_beta)
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "mean_shape",
-    [[2, 33], [1, 64]],
-    ids=["wrong_volume", "same_volume_wrong_shape"],
-)
-def test_moreh_layer_norm_backward_rejects_wrong_mean_shape(mean_shape, device, expect_error):
-    torch.manual_seed(0)
-    input_shape = [2, TILE_HEIGHT, 2 * TILE_WIDTH]
-    tt_input = to_ttnn(torch.randint(-2, 3, input_shape, dtype=torch.bfloat16), device=device)
-
-    with expect_error(RuntimeError, "mean must have logical shape"):
-        ttnn.moreh_layer_norm_backward(
-            to_ttnn(torch.randint(-2, 3, input_shape, dtype=torch.bfloat16), device=device),
-            tt_input,
-            to_ttnn(torch.zeros(mean_shape, dtype=torch.bfloat16), device=device),
-            to_ttnn(torch.ones(input_shape[:-1], dtype=torch.bfloat16), device=device),
-            1,
-            input_grad=to_ttnn(torch.zeros(input_shape, dtype=torch.bfloat16), device=device),
-        )
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
+    device.clear_program_cache()
+    run_moreh_layer_norm_backward(([20, 30], 1), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False)
+    num_program_cache_entries = device.num_program_cache_entries()
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
+    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
+    tt_placeholder = to_ttnn(torch.zeros([20, 30]), device=device)
+    run_moreh_layer_norm_backward(([20, 30], 1), True, 1e-5, ttnn.bfloat16, device, compute_kernel_options=False)
+    assert device.num_program_cache_entries() == num_program_cache_entries

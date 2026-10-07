@@ -7,149 +7,218 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc
-from tests.ttnn.unit_tests.operations.test_utils import (
-    TILE_HEIGHT,
-    TILE_WIDTH,
-    create_ttnn_tilized_tensor,
-    get_compute_kernel_options,
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_logsoftmax import (
+    run_moreh_logsoftmax_backward_test,
+    run_moreh_logsoftmax_test,
 )
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_softmax import (
+    run_moreh_softmax_backward_test,
+    run_moreh_softmax_test,
+)
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_softmin import (
+    run_moreh_softmin_backward_test,
+    run_moreh_softmin_test,
+)
+from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tensor, get_compute_kernel_options
 
 pytestmark = pytest.mark.use_module_device
 
-SoftmaxStrategy = ttnn.operations.moreh.SoftmaxOpParallelizationStrategy
-SoftmaxBackwardStrategy = ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy
+Strategy = ttnn.operations.moreh.SoftmaxOpParallelizationStrategy
+BackwardStrategy = ttnn.operations.moreh.SoftmaxBackwardOpParallelizationStrategy
 
-INPUT_SHAPE = [2, TILE_HEIGHT, TILE_WIDTH]
-# The nightly not-multiple-of-32 shapes: the reduced dim spans three tiles, the last one masked.
-W_UNALIGNED_SHAPE = [1, 1, 10, TILE_WIDTH * 2 + 10]
-H_UNALIGNED_SHAPE = [1, 1, TILE_HEIGHT * 2 + 10, TILE_WIDTH]
-
-# On a rank-3 input: dim 2 is W, dim 1 is H, dim 0 is C (only the large C factory exists).
+# Each factory with the strategy that forces it. Every shape spans several tiles along dim, so the large factories
+# stream more than one pass.
+FACTORIES = [
+    ([2, 32, 128], 2, Strategy.SMALL_W, BackwardStrategy.SMALL_W),
+    ([2, 32, 128], 2, Strategy.LARGE_W, BackwardStrategy.LARGE_W),
+    ([2, 128, 32], 1, Strategy.SMALL_H, BackwardStrategy.SMALL_H),
+    ([2, 128, 32], 1, Strategy.LARGE_H, BackwardStrategy.LARGE_H),
+    ([15, 32, 32], 0, Strategy.LARGE_C, BackwardStrategy.LARGE_C),
+]
 FACTORY_IDS = ["w_small", "w_large", "h_small", "h_large", "c_large"]
 
-CORNER_CASE_IDS = [
-    "w_large_multi_tile",
-    "h_large_multi_tile",
-    "c_large_multi_tile",
-    "w_small_unaligned",
-    "w_large_unaligned",
-    "h_small_unaligned",
-    "h_large_unaligned",
-    "c_rank_4",
-    "fp32_acc",
+# The compute kernels pick the op with defines: SOFTMAX or SOFTMIN, plus LOG for logsoftmax.
+# (forward helper, backward helper, forward tolerance, backward tolerance)
+OPS = [
+    (run_moreh_softmax_test, run_moreh_softmax_backward_test, 0.05, 0.05),
+    (run_moreh_softmin_test, run_moreh_softmin_backward_test, 0.05, 0.05),
+    (run_moreh_logsoftmax_test, run_moreh_logsoftmax_backward_test, 0.1, 0.5),
 ]
+OP_IDS = ["softmax", "softmin", "logsoftmax"]
+
+# The reduced dim spans three tiles, the last one partly filled, so the readers mask it.
+UNALIGNED = [
+    ([1, 1, 10, 74], 3, Strategy.SMALL_W, BackwardStrategy.SMALL_W),
+    ([1, 1, 10, 74], 3, Strategy.LARGE_W, BackwardStrategy.LARGE_W),
+    ([1, 1, 74, 32], 2, Strategy.SMALL_H, BackwardStrategy.SMALL_H),
+    ([1, 1, 74, 32], 2, Strategy.LARGE_H, BackwardStrategy.LARGE_H),
+]
+UNALIGNED_IDS = ["w_small", "w_large", "h_small", "h_large"]
 
 
-def run_moreh_softmax_test(
-    ttnn_op,
-    torch_op,
-    input_shape,
-    dim,
-    tol,
-    device,
-    strategy=SoftmaxStrategy.NONE,
-    fp32_dest_acc_en=False,
-    provide_output=False,
-):
-    torch_input = torch.randint(0, 4, input_shape).to(torch.bfloat16) + 100
-    torch_output = torch_op(torch_input, dim)
+# Not the nightly helpers: they pad tiles with 0, which an unmasked softmax sum or backward reduce absorbs, so a
+# broken mask would pass. NaN padding makes it fail. They also can't pass a provided output to the backward op.
+def run_moreh_softmax_nan_pad_test(shape, dim, strategy, device, provide_output=False):
+    torch_input = torch.randint(0, 4, shape).to(torch.bfloat16) + 100
+    torch_output = torch.softmax(torch_input, dim)
 
-    tt_input = create_ttnn_tilized_tensor(torch_input, device, ttnn.bfloat16)
-    tt_output = create_ttnn_tilized_tensor(torch.zeros(input_shape), device, ttnn.bfloat16) if provide_output else None
-    tt_output = ttnn.to_torch(
-        ttnn_op(
-            tt_input,
-            dim,
-            output_tensor=tt_output,
-            strategy=strategy,
-            compute_kernel_config=get_compute_kernel_options(fp32_dest_acc_en),
-        )
+    tt_output = create_ttnn_tilized_tensor(torch.zeros(shape), device, ttnn.bfloat16) if provide_output else None
+    tt_output = ttnn.moreh_softmax(
+        create_ttnn_tilized_tensor(torch_input, device, ttnn.bfloat16),
+        dim,
+        output_tensor=tt_output,
+        strategy=strategy,
+        compute_kernel_config=get_compute_kernel_options(False),
     )
 
-    passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output, rtol=tol, atol=tol)
+    passing, output_pcc = comp_allclose_and_pcc(torch_output, ttnn.to_torch(tt_output), rtol=0.05, atol=0.05)
     assert passing, output_pcc
 
 
-def run_moreh_softmax_backward_test(
-    ttnn_op,
-    torch_op,
-    input_shape,
-    dim,
-    tol,
-    device,
-    strategy=SoftmaxBackwardStrategy.NONE,
-    fp32_dest_acc_en=False,
-    provide_output=False,
-):
-    torch_input = torch.randint(0, 4, input_shape).to(torch.bfloat16).requires_grad_(True)
-    torch_output_grad = torch.randint(0, 4, input_shape).to(torch.bfloat16)
-    torch_output = torch_op(torch_input, dim)
+def run_moreh_softmax_backward_nan_pad_test(shape, dim, strategy, device, provide_output=False):
+    torch_input = torch.randint(0, 4, shape).to(torch.bfloat16).requires_grad_(True)
+    torch_output_grad = torch.randint(0, 4, shape).to(torch.bfloat16)
+    torch_output = torch.softmax(torch_input, dim)
     torch_output.backward(torch_output_grad)
 
-    tt_output = create_ttnn_tilized_tensor(torch_output.detach(), device, ttnn.bfloat16)
-    tt_output_grad = create_ttnn_tilized_tensor(torch_output_grad, device, ttnn.bfloat16)
-    tt_input_grad = (
-        create_ttnn_tilized_tensor(torch.zeros(input_shape), device, ttnn.bfloat16) if provide_output else None
-    )
-    tt_input_grad = ttnn.to_torch(
-        ttnn_op(
-            tt_output,
-            tt_output_grad,
-            dim,
-            input_grad_tensor=tt_input_grad,
-            strategy=strategy,
-            compute_kernel_config=get_compute_kernel_options(fp32_dest_acc_en),
-        )
+    tt_input_grad = create_ttnn_tilized_tensor(torch.zeros(shape), device, ttnn.bfloat16) if provide_output else None
+    tt_input_grad = ttnn.moreh_softmax_backward(
+        create_ttnn_tilized_tensor(torch_output.detach(), device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(torch_output_grad, device, ttnn.bfloat16),
+        dim,
+        input_grad_tensor=tt_input_grad,
+        strategy=strategy,
+        compute_kernel_config=get_compute_kernel_options(False),
     )
 
-    passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, tt_input_grad, rtol=tol, atol=tol)
+    passing, output_pcc = comp_allclose_and_pcc(torch_input.grad, ttnn.to_torch(tt_input_grad), rtol=0.05, atol=0.05)
     assert passing, output_pcc
 
 
 @pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "dim, strategy",
-    [
-        (2, SoftmaxStrategy.SMALL_W),
-        (2, SoftmaxStrategy.LARGE_W),
-        (1, SoftmaxStrategy.SMALL_H),
-        (1, SoftmaxStrategy.LARGE_H),
-        (0, SoftmaxStrategy.LARGE_C),
-    ],
-    ids=FACTORY_IDS,
-)
-def test_moreh_softmax(dim, strategy, device):
+@pytest.mark.parametrize("op", OPS, ids=OP_IDS)
+@pytest.mark.parametrize("factory", FACTORIES, ids=FACTORY_IDS)
+def test_moreh_softmax(factory, op, device):
     torch.manual_seed(0)
-    run_moreh_softmax_test(ttnn.moreh_softmax, torch.softmax, INPUT_SHAPE, dim, 0.05, device, strategy)
+    shape, dim, strategy, _ = factory
+    run_test, _, tol, _ = op
+    run_test(
+        shape,
+        dim,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        tol,
+        tol,
+        True,
+        strategy=strategy,
+        compute_kernel_options=False,
+    )
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("op", OPS, ids=OP_IDS)
+@pytest.mark.parametrize("factory", FACTORIES, ids=FACTORY_IDS)
+def test_moreh_softmax_backward(factory, op, device):
+    torch.manual_seed(0)
+    shape, dim, _, strategy = factory
+    _, run_test, _, tol = op
+    run_test(
+        shape,
+        dim,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        tol,
+        tol,
+        True,
+        strategy=strategy,
+        compute_kernel_options=False,
+    )
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("factory", FACTORIES, ids=FACTORY_IDS)
+def test_moreh_softmax_fp32_dest_acc(factory, device):
+    torch.manual_seed(0)
+    shape, dim, strategy, _ = factory
+    run_moreh_softmax_test(
+        shape,
+        dim,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        0.05,
+        0.05,
+        True,
+        strategy=strategy,
+        compute_kernel_options=True,
+    )
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("factory", FACTORIES, ids=FACTORY_IDS)
+def test_moreh_softmax_backward_fp32_dest_acc(factory, device):
+    torch.manual_seed(0)
+    shape, dim, _, strategy = factory
+    run_moreh_softmax_backward_test(
+        shape,
+        dim,
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        0.05,
+        0.05,
+        True,
+        strategy=strategy,
+        compute_kernel_options=True,
+    )
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("unaligned", UNALIGNED, ids=UNALIGNED_IDS)
+def test_moreh_softmax_unaligned(unaligned, device):
+    torch.manual_seed(0)
+    shape, dim, strategy, _ = unaligned
+    run_moreh_softmax_nan_pad_test(shape, dim, strategy, device)
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("unaligned", UNALIGNED, ids=UNALIGNED_IDS)
+def test_moreh_softmax_backward_unaligned(unaligned, device):
+    torch.manual_seed(0)
+    shape, dim, _, strategy = unaligned
+    run_moreh_softmax_backward_nan_pad_test(shape, dim, strategy, device)
 
 
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
-    "input_shape, dim, strategy, fp32_dest_acc_en",
+    "shape",
     [
-        ([2, TILE_HEIGHT, TILE_WIDTH * 4], 2, SoftmaxStrategy.LARGE_W, False),
-        ([2, TILE_HEIGHT * 4, TILE_WIDTH], 1, SoftmaxStrategy.LARGE_H, False),
-        ([15, TILE_HEIGHT, TILE_WIDTH], 0, SoftmaxStrategy.LARGE_C, False),
-        (W_UNALIGNED_SHAPE, 3, SoftmaxStrategy.SMALL_W, False),
-        (W_UNALIGNED_SHAPE, 3, SoftmaxStrategy.LARGE_W, False),
-        (H_UNALIGNED_SHAPE, 2, SoftmaxStrategy.SMALL_H, False),
-        (H_UNALIGNED_SHAPE, 2, SoftmaxStrategy.LARGE_H, False),
-        ([2, 3, TILE_HEIGHT * 2, TILE_WIDTH], 1, SoftmaxStrategy.LARGE_C, False),
-        (W_UNALIGNED_SHAPE, 3, SoftmaxStrategy.NONE, True),
+        [2, 32, 128],
+        # 64 tiles in a row: past the small factory's 512 KB circular-buffer budget, so the op picks the large one.
+        [1, 1, 32, 2048],
     ],
-    ids=CORNER_CASE_IDS,
+    ids=["picks_w_small", "picks_w_large"],
 )
-def test_moreh_softmax_corner_cases(input_shape, dim, strategy, fp32_dest_acc_en, device):
+def test_moreh_softmax_auto_strategy(shape, device):
     torch.manual_seed(0)
+    # No strategy: the op picks the factory from dim and size.
     run_moreh_softmax_test(
-        ttnn.moreh_softmax, torch.softmax, input_shape, dim, 0.05, device, strategy, fp32_dest_acc_en=fp32_dest_acc_en
+        shape, len(shape) - 1, ttnn.bfloat16, ttnn.TILE_LAYOUT, device, 0.05, 0.05, True, compute_kernel_options=False
     )
 
 
 @pytest.mark.merge_gate
 def test_moreh_softmax_provided_output(device):
     torch.manual_seed(0)
-    run_moreh_softmax_test(ttnn.moreh_softmax, torch.softmax, INPUT_SHAPE, 2, 0.05, device, provide_output=True)
+    run_moreh_softmax_nan_pad_test([2, 32, 128], 2, Strategy.SMALL_W, device, provide_output=True)
+
+
+@pytest.mark.merge_gate
+def test_moreh_softmax_backward_provided_output(device):
+    torch.manual_seed(0)
+    run_moreh_softmax_backward_nan_pad_test([2, 32, 128], 2, BackwardStrategy.SMALL_W, device, provide_output=True)
 
 
 @pytest.mark.merge_gate
@@ -157,69 +226,15 @@ def test_moreh_softmax_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_softmax_test(ttnn.moreh_softmax, torch.softmax, INPUT_SHAPE, 2, 0.05, device)
+    run_moreh_softmax_nan_pad_test([2, 32, 128], 2, Strategy.SMALL_W, device)
     num_program_cache_entries = device.num_program_cache_entries()
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros(INPUT_SHAPE), device, ttnn.bfloat16)
-    run_moreh_softmax_test(ttnn.moreh_softmax, torch.softmax, INPUT_SHAPE, 2, 0.05, device)
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
+    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
+    # so creating it runs no device program of its own.
+    tt_placeholder = ttnn.from_torch(torch.zeros([2, 32, 128]), dtype=ttnn.bfloat16, device=device)
+    run_moreh_softmax_nan_pad_test([2, 32, 128], 2, Strategy.SMALL_W, device)
     assert device.num_program_cache_entries() == num_program_cache_entries
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "dim, strategy",
-    [
-        (2, SoftmaxBackwardStrategy.SMALL_W),
-        (2, SoftmaxBackwardStrategy.LARGE_W),
-        (1, SoftmaxBackwardStrategy.SMALL_H),
-        (1, SoftmaxBackwardStrategy.LARGE_H),
-        (0, SoftmaxBackwardStrategy.LARGE_C),
-    ],
-    ids=FACTORY_IDS,
-)
-def test_moreh_softmax_backward(dim, strategy, device):
-    torch.manual_seed(0)
-    run_moreh_softmax_backward_test(
-        ttnn.moreh_softmax_backward, torch.softmax, INPUT_SHAPE, dim, 0.05, device, strategy
-    )
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "input_shape, dim, strategy, fp32_dest_acc_en",
-    [
-        ([2, TILE_HEIGHT, TILE_WIDTH * 4], 2, SoftmaxBackwardStrategy.LARGE_W, False),
-        ([2, TILE_HEIGHT * 4, TILE_WIDTH], 1, SoftmaxBackwardStrategy.LARGE_H, False),
-        ([15, TILE_HEIGHT, TILE_WIDTH], 0, SoftmaxBackwardStrategy.LARGE_C, False),
-        (W_UNALIGNED_SHAPE, 3, SoftmaxBackwardStrategy.SMALL_W, False),
-        (W_UNALIGNED_SHAPE, 3, SoftmaxBackwardStrategy.LARGE_W, False),
-        (H_UNALIGNED_SHAPE, 2, SoftmaxBackwardStrategy.SMALL_H, False),
-        (H_UNALIGNED_SHAPE, 2, SoftmaxBackwardStrategy.LARGE_H, False),
-        ([2, 3, TILE_HEIGHT * 2, TILE_WIDTH], 1, SoftmaxBackwardStrategy.LARGE_C, False),
-        (W_UNALIGNED_SHAPE, 3, SoftmaxBackwardStrategy.NONE, True),
-    ],
-    ids=CORNER_CASE_IDS,
-)
-def test_moreh_softmax_backward_corner_cases(input_shape, dim, strategy, fp32_dest_acc_en, device):
-    torch.manual_seed(0)
-    run_moreh_softmax_backward_test(
-        ttnn.moreh_softmax_backward,
-        torch.softmax,
-        input_shape,
-        dim,
-        0.05,
-        device,
-        strategy,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-    )
-
-
-@pytest.mark.merge_gate
-def test_moreh_softmax_backward_provided_output(device):
-    torch.manual_seed(0)
-    run_moreh_softmax_backward_test(
-        ttnn.moreh_softmax_backward, torch.softmax, INPUT_SHAPE, 2, 0.05, device, provide_output=True
-    )
 
 
 @pytest.mark.merge_gate
@@ -227,69 +242,12 @@ def test_moreh_softmax_backward_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_softmax_backward_test(ttnn.moreh_softmax_backward, torch.softmax, INPUT_SHAPE, 2, 0.05, device)
+    run_moreh_softmax_backward_nan_pad_test([2, 32, 128], 2, BackwardStrategy.SMALL_W, device)
     num_program_cache_entries = device.num_program_cache_entries()
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros(INPUT_SHAPE), device, ttnn.bfloat16)
-    run_moreh_softmax_backward_test(ttnn.moreh_softmax_backward, torch.softmax, INPUT_SHAPE, 2, 0.05, device)
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
+    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
+    # so creating it runs no device program of its own.
+    tt_placeholder = ttnn.from_torch(torch.zeros([2, 32, 128]), dtype=ttnn.bfloat16, device=device)
+    run_moreh_softmax_backward_nan_pad_test([2, 32, 128], 2, BackwardStrategy.SMALL_W, device)
     assert device.num_program_cache_entries() == num_program_cache_entries
-
-
-@pytest.mark.merge_gate
-def test_moreh_logsoftmax(device):
-    torch.manual_seed(0)
-    run_moreh_softmax_test(ttnn.moreh_logsoftmax, torch.nn.functional.log_softmax, INPUT_SHAPE, 2, 0.1, device)
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("input_shape, dim", [(W_UNALIGNED_SHAPE, 3)], ids=["w_unaligned"])
-def test_moreh_logsoftmax_corner_cases(input_shape, dim, device):
-    torch.manual_seed(0)
-    run_moreh_softmax_test(ttnn.moreh_logsoftmax, torch.nn.functional.log_softmax, input_shape, dim, 0.1, device)
-
-
-@pytest.mark.merge_gate
-def test_moreh_logsoftmax_backward(device):
-    torch.manual_seed(0)
-    run_moreh_softmax_backward_test(
-        ttnn.moreh_logsoftmax_backward, torch.nn.functional.log_softmax, INPUT_SHAPE, 2, 0.5, device
-    )
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("input_shape, dim", [(W_UNALIGNED_SHAPE, 3)], ids=["w_unaligned"])
-def test_moreh_logsoftmax_backward_corner_cases(input_shape, dim, device):
-    torch.manual_seed(0)
-    run_moreh_softmax_backward_test(
-        ttnn.moreh_logsoftmax_backward, torch.nn.functional.log_softmax, input_shape, dim, 0.5, device
-    )
-
-
-@pytest.mark.merge_gate
-def test_moreh_softmin(device):
-    torch.manual_seed(0)
-    run_moreh_softmax_test(ttnn.moreh_softmin, torch.nn.functional.softmin, INPUT_SHAPE, 2, 0.05, device)
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("input_shape, dim", [(H_UNALIGNED_SHAPE, 2)], ids=["h_unaligned"])
-def test_moreh_softmin_corner_cases(input_shape, dim, device):
-    torch.manual_seed(0)
-    run_moreh_softmax_test(ttnn.moreh_softmin, torch.nn.functional.softmin, input_shape, dim, 0.05, device)
-
-
-@pytest.mark.merge_gate
-def test_moreh_softmin_backward(device):
-    torch.manual_seed(0)
-    run_moreh_softmax_backward_test(
-        ttnn.moreh_softmin_backward, torch.nn.functional.softmin, INPUT_SHAPE, 2, 0.05, device
-    )
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize("input_shape, dim", [(H_UNALIGNED_SHAPE, 2)], ids=["h_unaligned"])
-def test_moreh_softmin_backward_corner_cases(input_shape, dim, device):
-    torch.manual_seed(0)
-    run_moreh_softmax_backward_test(
-        ttnn.moreh_softmin_backward, torch.nn.functional.softmin, input_shape, dim, 0.05, device
-    )
