@@ -289,7 +289,6 @@ inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_
             tile_regs_release();
         }
     } else {
-        // The first pass overwrites the accumulator slots, the later ones L1-accumulate onto them.
         for (uint32_t h0 = 0; h0 < reduce_heads; h0 += mul_heads_per_pass) {
             const uint32_t h1 = (h0 + mul_heads_per_pass < reduce_heads) ? h0 + mul_heads_per_pass : reduce_heads;
             pack_reconfig_l1_acc(h0 == 0 ? 0 : 1);

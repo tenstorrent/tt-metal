@@ -2,43 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The single face units of topk_route_finish run these kernels; the half tile units keep
-// reader_topk_route_finish_gather.cpp and writer_topk_route_finish_tiles.cpp.
-//
-// topk_route_finish writer: gather THIS RISC'S SHARE of the per-unit load (unit rows
-// [8, 16); the reader owns rows [0, 8) — see topk_route_finish_gather_common_faces.hpp for the
-// row-disjointness argument and the shared trid double-wave pipeline), then drain the
-// completed staged face-pair halves into the two TILE outputs. Each staged page is
-// byte-for-byte the output tile's face-pair range (see the reader's face-math comment), so
-// a unit is exactly two contiguous page writes:
-//
-//   unit(row_tile, kt, half) -> output page row_tile * k_tiles + kt,
-//     values:  1024 B at byte offset half * 1024 (bf16 tile page = 2048 B)
-//     indices: index_half_bytes at offset half * index_half_bytes (u16 page = 2048 B,
-//              u32 page = 4096 B)
-//
-// Both offsets are multiples of 16 B, satisfying the (write-side) DRAM/L1 NoC alignment.
-//
-// Split protocol (why this cannot deadlock or race): per unit u this kernel
-//   1. computes the unit's staging page addresses BEFORE wait_front — get_read_ptr() is
-//      plain local pointer state (fifo_rd_ptr), it never blocks, and it already points at
-//      the page unit u will occupy: both kernels walk the same unit order, this kernel is
-//      the CBs' only consumer, and its own pop of unit u-2 is what freed that page (units
-//      0 and 1 use never-touched pages). Writing into it before the reader's push is safe
-//      because everything this kernel writes (its zero-fill ranges and its gather stores)
-//      lives in rows [8, 16) — 32 B face rows the reader never touches (the reader's
-//      reserve_back only moves credits, it writes no bytes);
-//   2. zeroes its row ranges, reads its own <=8 index-stick segments into private scratch,
-//      and gathers rows [8, 16) into the staging page (per-trid barriers inside
-//      gather_unit_rows drain all of its reads before returning);
-//   3. THEN calls wait_front — the reader's push guarantees rows [0, 8) and their zero
-//      fill are complete — and only then issues the output writes, write-barriers, pops.
-// The only cross-RISC blocking edges are the single producer/consumer pair: the reader
-// blocks only in reserve_back (waiting on this kernel's pops) and its own NoC barriers
-// (hardware-bounded); this kernel blocks only in wait_front (waiting on the reader's
-// pushes) and its own NoC barriers. The gather happens strictly BEFORE wait_front and
-// blocks only on hardware-bounded barriers, so by induction on the unit index every unit
-// terminates — no wait cycle exists.
+// Single face unit version of writer_topk_route_finish_tiles.cpp, which documents the split protocol.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -55,9 +19,9 @@ void kernel_main() {
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_unit = get_arg_val<uint32_t>(2);
     const uint32_t num_units = get_arg_val<uint32_t>(3);
-    const uint32_t src_addr = get_arg_val<uint32_t>(4);             // TILE bf16 logits
-    const uint32_t idx_addr = get_arg_val<uint32_t>(5);             // RM u32 index sticks
-    const uint32_t logical_rows = get_arg_val<uint32_t>(6);         // R
+    const uint32_t src_addr = get_arg_val<uint32_t>(4);  // TILE bf16 logits
+    const uint32_t idx_addr = get_arg_val<uint32_t>(5);  // RM u32 index sticks
+    const uint32_t logical_rows = get_arg_val<uint32_t>(6);
     const uint32_t row_tiles_per_batch = get_arg_val<uint32_t>(7);  // R_p / 32
     const uint32_t k_rounded = get_arg_val<uint32_t>(8);
 
@@ -65,8 +29,8 @@ void kernel_main() {
     constexpr uint32_t width_tiles = get_compile_time_arg_val(1);  // W_p / 32
     constexpr uint32_t cb_values = get_compile_time_arg_val(2);
     constexpr uint32_t cb_indices = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_stick = get_compile_time_arg_val(4);          // writer-private scratch
-    constexpr uint32_t cb_bounce = get_compile_time_arg_val(5);         // writer-private scratch
+    constexpr uint32_t cb_stick = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_bounce = get_compile_time_arg_val(5);
     constexpr uint32_t value_half_bytes = get_compile_time_arg_val(6);  // 1024
     constexpr uint32_t index_half_bytes = get_compile_time_arg_val(7);  // 1024 (u16) / 2048 (u32)
     constexpr bool index_is_u32 = get_compile_time_arg_val(8) == 1;
@@ -76,8 +40,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<decltype(indices_args)::next_compile_time_args_offset()>();
     constexpr auto idx_args = TensorAccessorArgs<decltype(src_args)::next_compile_time_args_offset()>();
 
-    // Page sizes (2048 B bf16 / 2048 or 4096 B index tiles, 2048 B source tiles /
-    // k_rounded*4 B sticks) are baked compile-time by the host's TensorAccessorArgs.
+    // Page sizes (2048 or 4096 B index tiles, k_rounded * 4 B sticks) come baked in the host's TensorAccessorArgs.
     const auto values_out = TensorAccessor(values_args, values_addr);
     const auto indices_out = TensorAccessor(indices_args, indices_addr);
     const auto src = TensorAccessor(src_args, src_addr);
@@ -89,8 +52,7 @@ void kernel_main() {
     DataflowBuffer dfb_stick(cb_stick);    // writer-private scratch: never pushed
     DataflowBuffer dfb_bounce(cb_bounce);  // writer-private scratch: never pushed
 
-    // Scratch bases are fixed for the whole kernel (1-page CBs, nothing pushed); CB bases
-    // are 64 B aligned, which the bounce slots and 128 B stick rows rely on.
+    // Scratch bases stay fixed (nothing pushed); the 64 B bounce slots rely on the allocator's 64 B CB alignment.
     const uint32_t stick_base = dfb_stick.get_write_ptr();
     const uint32_t bounce_base = dfb_bounce.get_write_ptr();
     const CoreLocalMem<uint32_t> stick_dst(stick_base);
@@ -111,13 +73,11 @@ void kernel_main() {
         const uint32_t valid_cols = cols_left < ncols ? cols_left : ncols;
         const uint32_t my_rows = valid_cols == 0 ? 0 : (valid_rows > rows_per_risc ? valid_rows - rows_per_risc : 0);
 
-        // Unit u's staging page addresses, read BEFORE wait_front (see the split-protocol
-        // comment at the top for why this is safe).
+        // Read before wait_front: this RISC writes only rows [8, 16), which the reader never touches.
         const uint32_t val_base = dfb_values.get_read_ptr();
         const uint32_t idx_out_base = dfb_indices.get_read_ptr();
 
-        // Issue this RISC's stick-segment reads (rows [8, 8+my_rows), locally indexed from
-        // 0 in the private scratch) so their flight overlaps the zero-fill below.
+        // Stick reads for rows [8, 8 + my_rows), indexed from 0 in scratch, overlap the zero fill below.
         for (uint32_t j = 0; j < my_rows; ++j) {
             noc.async_read(
                 idx,
@@ -139,9 +99,7 @@ void kernel_main() {
         }
 
         if (my_rows > 0) {
-            // Plain barrier: only the stick reads are outstanding here (both gather trids
-            // were drained before the previous unit's output writes, and the previous
-            // unit's writes were write-barriered before its pop).
+            // Only the stick reads are outstanding: the gather trids drained before the previous unit's writes.
             noc.async_read_barrier();
             gather_unit_rows<index_is_u32>(
                 noc,
@@ -160,8 +118,7 @@ void kernel_main() {
                 col0 + valid_cols);
         }
 
-        // The reader's push guarantees rows [0, 8) and their zero fill are complete; this
-        // kernel's own rows [8, 16) were completed above. The staged halves are now whole.
+        // The reader's push means rows [0, 8) and their zero fill are complete.
         dfb_values.wait_front(1);
         dfb_indices.wait_front(1);
 
@@ -181,8 +138,7 @@ void kernel_main() {
             {.offset_bytes = 0},
             {.page_id = page, .offset_bytes = half * index_half_bytes + face0 * index_bytes});
 
-        // Both staged pages are about to be recycled by the reader; the writes must have
-        // fully landed before the credits go back.
+        // The writes must land before the pops hand the staged pages back to the reader.
         noc.async_write_barrier();
         dfb_values.pop_front(1);
         dfb_indices.pop_front(1);

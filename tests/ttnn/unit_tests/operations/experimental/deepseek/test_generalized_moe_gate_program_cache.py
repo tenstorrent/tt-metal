@@ -28,8 +28,7 @@ import ttnn
 
 
 def _allocate(device, batch_size, topk, enable_sigmoid, output_softmax, seed, interleaved_input=False):
-    """Build the 5 height-sharded tensors (the input as [tokens, 256] tile rows in DRAM when interleaved_input).
-    The caller keeps the returned tensors alive."""
+    """Build the 5 gate tensors (input as DRAM tile rows when interleaved_input); the caller keeps them alive."""
     input_shape = (batch_size, 8, 32)
     reshaped_input_shape = (batch_size, 16, 16)
     input_tile = ttnn.Tile((32, 32))

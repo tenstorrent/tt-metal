@@ -1174,8 +1174,7 @@ def test_topk_large_indices_valid_end_varies_across_trace_replays(device):
 
 
 # ---------------------------------------------------------------------------
-# Column split: with fewer rows than cores each row is cut into K-chunk segments, one core per
-# (row, segment), and the segment survivors are merged across cores in a binary tree.
+# Column split: with fewer rows than cores each row is cut into segments whose survivors merge in a core tree.
 # ---------------------------------------------------------------------------
 
 
@@ -1264,8 +1263,7 @@ def test_topk_large_indices_column_split_valid_length(device, k, num_rows, n, va
 
 @pytest.mark.parametrize("k,n,valid_length", [(512, 131072, 40000), (2048, 131072, 3000)])
 def test_topk_large_indices_column_split_metadata_empty_segments(device, k, n, valid_length):
-    # With an on-device length the host splits the physical width, so the segments past the valid
-    # prefix carry no data and must fold in as -inf survivors.
+    # The host splits the physical width, so segments past the on-device length fold in as -inf survivors.
     torch.manual_seed(3)
     torch_input = torch.randn(1, n, dtype=torch.bfloat16)
     torch_input[:, valid_length:] = 300.0
@@ -1297,8 +1295,7 @@ def test_topk_large_indices_column_split_matches_single_core(device, k, n):
 
 
 # ---------------------------------------------------------------------------
-# Column body: with k <= 64 every column of a K 1024 chunk keeps its own top 64 across the chunks, so the
-# winners of a row can crowd into one column. 160 rows keep every row on its own core on any Blackhole grid.
+# Column body: k <= 64, each column of a K 1024 chunk keeps its own top 64; 160 rows keep each row on one core.
 # ---------------------------------------------------------------------------
 
 
@@ -1375,8 +1372,7 @@ def test_topk_large_indices_column_body_valid_length(device, valid_length):
 
 
 def test_topk_large_indices_column_body_metadata_empty_segments(device):
-    # 8 rows of 131072 take the column body with a column split, and the segments past the on-device length
-    # fold in as -inf survivors through the tree merge.
+    # 8 rows of 131072 take the column body with a column split; segments past the length fold in as -inf.
     k, valid_length = 32, 40000
     torch.manual_seed(5)
     torch_input = torch.randn(8, 131072, dtype=torch.bfloat16)

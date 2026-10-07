@@ -19,8 +19,7 @@ enum Compute { compute_search_length = 0 };
 enum Writer { output_address = 0 };
 }  // namespace topk_common_args
 
-// Per-core argument layout. A row is split into column segments of whole K chunks; the segment's
-// survivors are merged across cores in a binary tree whose round r pairs segment i with i + 2^r.
+// Per-core args. A row splits into segments of whole K chunks; tree round r merges segment i + 2^r into i.
 namespace topk_core_args {
 enum Reader { reader_start_row = 0, reader_num_rows = 1, reader_seg_first_chunk = 2, reader_seg_end_chunk = 3 };
 enum Compute {

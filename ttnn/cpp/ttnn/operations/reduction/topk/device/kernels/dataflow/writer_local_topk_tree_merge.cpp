@@ -9,8 +9,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
 
-// Each write is drained before its slot is popped: the compute's next pack could otherwise overwrite the slot
-// while the NoC is still reading it.
+// Drain each write before popping its slot, or the compute's next pack can overwrite it mid NoC read.
 void send_tiles(
     const Noc& noc,
     DataflowBuffer& src_dfb,
@@ -34,29 +33,27 @@ void send_tiles(
 }
 
 void kernel_main() {
-    // Compile time args
-    constexpr std::uint32_t receiver_sem_id = get_compile_time_arg_val(0);           // Final core readiness signal
-    constexpr std::uint32_t sender_sem_id = get_compile_time_arg_val(1);             // Local core completion signal
-    constexpr std::uint32_t noc_final_x = get_compile_time_arg_val(2);               // Final core X coordinate
-    constexpr std::uint32_t noc_final_y = get_compile_time_arg_val(3);               // Final core Y coordinate
-    constexpr std::uint32_t Ht = get_compile_time_arg_val(4);                        // Height tiles to process
-    constexpr std::uint32_t K = get_compile_time_arg_val(5);                         // TopK value
-    constexpr std::uint32_t Kt = get_compile_time_arg_val(6);                        // TopK in tile units (ceil(K/32))
-    constexpr std::uint32_t values_dfb_index = get_compile_time_arg_val(7);          // Local TopK values output
-    constexpr std::uint32_t output_ind_dfb_index = get_compile_time_arg_val(8);      // Local TopK indices output
-    constexpr std::uint32_t final_values_dfb_index = get_compile_time_arg_val(9);    // Final aggregation values buffer
-    constexpr std::uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);  // Final aggregation indices buffer
-    constexpr std::uint32_t landing_values_dfb_index = get_compile_time_arg_val(11);   // Tree-merge landing (values)
-    constexpr std::uint32_t landing_indices_dfb_index = get_compile_time_arg_val(12);  // Tree-merge landing (indices)
-    constexpr std::uint32_t credit_sem_id = get_compile_time_arg_val(13);              // Parent freed its landing slot
-    constexpr std::uint32_t data_sem_id = get_compile_time_arg_val(14);                // Child landed its tiles
-    constexpr std::uint32_t tree_rounds = get_compile_time_arg_val(15);                // Tree merge rounds
+    constexpr std::uint32_t receiver_sem_id = get_compile_time_arg_val(0);  // Final core readiness signal
+    constexpr std::uint32_t sender_sem_id = get_compile_time_arg_val(1);    // Local core completion signal
+    constexpr std::uint32_t noc_final_x = get_compile_time_arg_val(2);
+    constexpr std::uint32_t noc_final_y = get_compile_time_arg_val(3);
+    constexpr std::uint32_t Ht = get_compile_time_arg_val(4);
+    constexpr std::uint32_t K = get_compile_time_arg_val(5);
+    constexpr std::uint32_t Kt = get_compile_time_arg_val(6);
+    constexpr std::uint32_t values_dfb_index = get_compile_time_arg_val(7);
+    constexpr std::uint32_t output_ind_dfb_index = get_compile_time_arg_val(8);
+    constexpr std::uint32_t final_values_dfb_index = get_compile_time_arg_val(9);
+    constexpr std::uint32_t final_indices_dfb_index = get_compile_time_arg_val(10);
+    constexpr std::uint32_t landing_values_dfb_index = get_compile_time_arg_val(11);
+    constexpr std::uint32_t landing_indices_dfb_index = get_compile_time_arg_val(12);
+    constexpr std::uint32_t credit_sem_id = get_compile_time_arg_val(13);  // Parent freed its landing slot
+    constexpr std::uint32_t data_sem_id = get_compile_time_arg_val(14);    // Child landed its tiles
+    constexpr std::uint32_t tree_rounds = get_compile_time_arg_val(15);
 
-    // Runtime args
-    const std::uint32_t final_slot = get_arg_val<std::uint32_t>(0);       // Slot in the final core's gather buffer
-    const std::uint32_t num_recv_rounds = get_arg_val<std::uint32_t>(1);  // Rounds in which this core receives
-    const bool sends_to_final = get_arg_val<std::uint32_t>(2) == 1;       // Survivor of the tree
-    const std::uint32_t dest_noc_x = get_arg_val<std::uint32_t>(3);       // Parent (or final core) coordinates
+    const std::uint32_t final_slot = get_arg_val<std::uint32_t>(0);  // Slot in the final core's gather buffer
+    const std::uint32_t num_recv_rounds = get_arg_val<std::uint32_t>(1);
+    const bool sends_to_final = get_arg_val<std::uint32_t>(2) == 1;  // Survivor of the tree
+    const std::uint32_t dest_noc_x = get_arg_val<std::uint32_t>(3);  // Parent (or final core) coordinates
     const std::uint32_t dest_noc_y = get_arg_val<std::uint32_t>(4);
     const std::uint32_t self_noc_x = get_arg_val<std::uint32_t>(5);  // Own coordinates for the landing-slot copy
     const std::uint32_t self_noc_y = get_arg_val<std::uint32_t>(6);
@@ -71,13 +68,11 @@ void kernel_main() {
     DataflowBuffer landing_values_dfb(landing_values_dfb_index);
     const DataflowBuffer final_values_dfb(final_values_dfb_index);
 
-    // Memory transfer configuration
     const std::uint32_t tile_bytes_values = values_dfb.get_entry_size();
 
     // The landing CB is one 2*Kt slot cycled whole, so its base is the same address on every local core.
     const std::uint32_t landing_values_base = landing_values_dfb.get_write_ptr();
 
-    // Base address in the final core's L1 with the offset for this core's contribution
     const std::uint32_t final_values_base = final_values_dfb.get_write_ptr() + final_slot * tile_bytes_values * Kt;
 
 #if !defined(TOPK_FUSED_STABLE_KEYS)
@@ -91,7 +86,7 @@ void kernel_main() {
 #endif
 
     std::uint32_t landed = 0;  // Partner deliveries so far; data_sem counts them monotonically across rows
-    for (std::uint32_t j = 0; j < Ht; ++j) {  // For each height row
+    for (std::uint32_t j = 0; j < Ht; ++j) {
         // Tree merge rounds this core receives in: land own tiles and the round r child's tiles in one slot.
         for (std::uint32_t r = 0; r < num_recv_rounds; ++r) {
             const std::uint32_t child_noc_x = get_arg_val<std::uint32_t>(child_coords_arg_base + 2 * r);
@@ -118,7 +113,7 @@ void kernel_main() {
 #endif
         }
 
-        // Survivors go to the final core, losers into the second half of the parent's landing slot.
+        // The tree root sends to the final core, every other core into the second half of its parent's landing slot.
         std::uint32_t dest_values_base = landing_values_base + Kt * tile_bytes_values;
         if (sends_to_final) {
             receiver_sem.wait(VALID);
@@ -135,18 +130,15 @@ void kernel_main() {
 
         // All per-tile writes were drained before their slots were popped above.
         if (sends_to_final) {
-            // Signal completion: increment sender semaphore by Kt (number of tiles sent)
             sender_sem.up(noc, dest_noc_x, dest_noc_y, Kt);
             noc.async_atomic_barrier();
 
-            // Reset receiver semaphore to prepare for next round
             receiver_sem.set(INVALID);
         } else {
             data_sem.up(noc, dest_noc_x, dest_noc_y, 1);
             noc.async_atomic_barrier();
         }
-    }  // j loop
+    }
 
-    // Ensure all atomic operations complete before kernel termination
     noc.async_atomic_barrier();
 }

@@ -772,10 +772,7 @@ TEST_F(ReductionSmoke, TopkMultiCoreRows64) {
 // - Among all valid power-of-two splits, the function selects the one that
 //   minimizes the makespan score kLocalCostFactor * Wt_local +
 //   kFinalCostFactor * Wt_final (constants defined next to the sweep in
-//   topk_utils.cpp, fitted to silicon measurements). With the tree merge
-//   (Blackhole) the score is kLocalCostFactor * Wt_local +
-//   kTreeRoundCostFactor * log2(num_cores) + kFinalCostFactor * Kt and a split
-//   has to be wider than k. Warning to future
+//   topk_utils.cpp, fitted to silicon measurements). Warning to future
 //   editors: a greedy first-valid / max-cores pick is NOT equivalent -- it
 //   maximizes the serial final-stage gather and measures slower on silicon,
 //   so don't simplify the sweep back to that.
@@ -826,8 +823,7 @@ TEST(TopkCoreConfigModel, SelectsFittedMakespanMinimum) {
         {2048, 32, 128, 8, 2},
         {4096, 32, 256, 8, 2},
     }};
-    // Tree merge rows: the minimum of 7 * Wt_local + 3 * log2(num_cores) + 2 * Kt over the valid splits wider
-    // than k, with the landing and workspace CBs in the local core's L1.
+    // Tree merge rows: argmin of 7 * Wt_local + 3 * log2(num_cores) + 2 * Kt over the valid splits wider than k.
     const std::array<Case, 7> tree_cases{{
         {8192, 64, 128, 8, 8},
         {8192, 50, 128, 8, 8},

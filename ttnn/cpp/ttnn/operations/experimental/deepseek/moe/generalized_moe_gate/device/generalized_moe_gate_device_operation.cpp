@@ -64,8 +64,7 @@ void GeneralizedMoeGateDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(output_tensor.dtype() == DataType::BFLOAT16, "output_tensor must be BFLOAT16");
     TT_FATAL(output_indices_tensor.dtype() == DataType::UINT16, "output_indices_tensor must be UINT16");
 
-    // The input is either one 256 block tile per core (sharded), or the [.., tokens, 256] tile tensor the
-    // router matmul produces, from which the reader gathers one token row per core.
+    // A non sharded input is the router matmul's [.., tokens, 256] tile tensor; the reader gathers one row per core.
     const bool input_interleaved = !input_tensor.is_sharded();
     TT_FATAL(bias_tensor.is_sharded(), "bias_tensor must be sharded");
     TT_FATAL(input_indices_tensor.is_sharded(), "input_indices_tensor must be sharded");

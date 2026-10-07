@@ -168,8 +168,7 @@ uint32_t finish_units_per_tile(const Tensor& input, const Tensor& indices, uint3
     const uint32_t reader_rows = rows / 16 * 8 + std::min(rows % 16, 8u);
     const uint32_t batches = input.physical_volume() / (padded[-2] * padded[-1]);
     const uint32_t noc_gathers = batches * std::max(reader_rows, rows - reader_rows) * k_rounded;
-    // Single faces halve each core's gather latency, but past 6144 gathers on the busier NoC that NoC sets the time:
-    // there the half tile units are faster on up to 39 cores and the face units from 40 half units on (p100a).
+    // Measured on p100a: face units win up to 6144 gathers on the busier NoC, past that only from 40 half units.
     const bool faces_fit = 2 * half_units <= num_cores;
     return faces_fit && (noc_gathers <= 6144 || half_units >= 40) ? 4 : 2;
 }
@@ -237,7 +236,6 @@ TopkRouteFinishProgramFactory::cached_program_t TopkRouteFinishProgramFactory::c
         values_cb_index,
         indices_cb_index,
         split.index_is_u32 ? 1u : 0u};
-    // Single face units run their own kernels; the half tile units keep the original ones.
     const bool faces = split.units_per_tile == 4;
     if (faces) {
         reader_compile_args.push_back(split.units_per_tile);

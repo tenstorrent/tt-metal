@@ -2,50 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The single face units of topk_route_finish run these kernels; the half tile units keep
-// reader_topk_route_finish_gather.cpp and writer_topk_route_finish_tiles.cpp.
-//
-// topk_route_finish reader: per work unit (one 16-row face-pair half of one output tile),
-// gather THIS RISC'S SHARE of the selected bf16 logits straight out of the TILE-layout
-// source and assemble it into the unit's value and index staging halves. The gather is
-// split across both data-movement RISCs: this reader (BRISC) owns unit rows [0, 8), the
-// writer (NCRISC) owns rows [8, 16) — see topk_route_finish_gather_common_faces.hpp for the
-// row-disjointness argument and the trid double-wave pipeline both sides share.
-//
-// Per unit(row_tile, kt, half):
-//   1. Issue the reads for this RISC's <=8 index-stick segments: for each valid owned row,
-//      a valid_cols*4 B slice of that row's RM u32 index stick at byte offset kt*128
-//      (both 64 B aligned -- Blackhole DRAM reads require 64 B alignment on both ends).
-//   2. Zero THIS RISC's row ranges of both staging halves while the stick reads fly
-//      (always: cheaper than tracking which of the four padding cases applies, and it
-//      guarantees the zero-filled-tile-padding contract). The writer zeroes rows [8, 16).
-//   3. Barrier the stick reads, then gather each selected element with a 64 B NoC read
-//      from the source tile's face-row region into a rotating bounce slot — 32-deep waves
-//      on alternating trids, retiring the previous wave while the current one flies.
-//   4. Push both halves to the writer. The push carries only "rows [0, 8) and their zero
-//      fill are done"; the writer completes rows [8, 16) itself before writing out.
-//
-// TILE face math (32x32 tile = four 16x16 faces stored contiguously, [f0|f1 / f2|f3],
-// bf16 face = 512 B, face row = 32 B):
-//
-//   SOURCE side -- element (wr, wc) of a tile, wr = row & 31, wc = idx & 31:
-//     byte = (wr>>4)<<10 | (wc>>4)<<9 | (wr&15)<<5 | (wc&15)<<1
-//   (face index (wr>>4)*2 + (wc>>4) selects a 512 B face, (wr&15) the 32 B face row,
-//   (wc&15) the 2 B element). The unit spans one source row-tile, so the source page is
-//   row_tile*width_tiles + (idx>>5) and wr = half*16 + lr for local row lr in [0,16).
-//
-//   OUTPUT side -- the unit IS one face-pair of the output tile: rows
-//   [half*16, half*16+16) are faces {2*half, 2*half+1}, i.e. bytes
-//   [half*1024, half*1024+1024) of the 2048 B bf16 tile page. For output element
-//   (lr, c) (c = column within the output tile, c < 32): wr_out = half*16 + lr, so
-//   wr_out>>4 == half and wr_out&15 == lr, and the full-tile formula splits into the
-//   page base half*1024 (applied by the WRITER as the page offset) plus the staging
-//   offset
-//     off16 = (c>>4)<<9 | lr<<5 | (c&15)<<1
-//   -- the staging half is byte-for-byte the tile's face-pair range, so the writer can
-//   blast it with one contiguous write. The u32 index staging doubles every term
-//   (4 B elements, 1024 B faces, 64 B face rows), i.e. off32 = off16 << 1; u16 index
-//   staging uses off16 unchanged.
+// Single face unit version of reader_topk_route_finish_gather.cpp, which documents the gather and the face math.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -62,7 +19,7 @@ void kernel_main() {
     const uint32_t idx_addr = get_arg_val<uint32_t>(1);  // RM u32 index sticks
     const uint32_t start_unit = get_arg_val<uint32_t>(2);
     const uint32_t num_units = get_arg_val<uint32_t>(3);
-    const uint32_t logical_rows = get_arg_val<uint32_t>(4);         // R
+    const uint32_t logical_rows = get_arg_val<uint32_t>(4);
     const uint32_t row_tiles_per_batch = get_arg_val<uint32_t>(5);  // R_p / 32
     const uint32_t k_rounded = get_arg_val<uint32_t>(6);
 
@@ -77,8 +34,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<8>();
     constexpr auto idx_args = TensorAccessorArgs<decltype(src_args)::next_compile_time_args_offset()>();
 
-    // Page sizes are baked compile-time by the host's TensorAccessorArgs (2048 B tiles /
-    // k_rounded*4 B sticks).
+    // Page sizes (2048 B tiles, k_rounded * 4 B sticks) come baked in the host's TensorAccessorArgs.
     const auto src = TensorAccessor(src_args, src_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
 
@@ -88,9 +44,7 @@ void kernel_main() {
     DataflowBuffer dfb_values(cb_values);
     DataflowBuffer dfb_indices(cb_indices);
 
-    // Scratch bases are fixed for the whole kernel (1-page CBs, nothing pushed). The CB
-    // allocator aligns CB bases to the 64 B DRAM alignment, which the 64 B bounce slots
-    // and 128 B stick rows rely on.
+    // Scratch bases stay fixed (nothing pushed); the 64 B bounce slots rely on the allocator's 64 B CB alignment.
     const uint32_t stick_base = dfb_stick.get_write_ptr();
     const uint32_t bounce_base = dfb_bounce.get_write_ptr();
     const CoreLocalMem<uint32_t> stick_dst(stick_base);
@@ -103,9 +57,7 @@ void kernel_main() {
         const uint32_t batch = row_tile / row_tiles_per_batch;
         const uint32_t row_in_batch0 = (row_tile % row_tiles_per_batch) * 32 + half * half_rows;
 
-        // Row clamp: rows at or past logical R are tile-height padding (stay zero). Units
-        // that are ALL padding still run: they exist to zero their face-pair. This RISC
-        // owns rows [0, 8) of the unit.
+        // Rows past logical_rows are tile padding; all padding units still run to zero their faces.
         const uint32_t rows_left = row_in_batch0 < logical_rows ? logical_rows - row_in_batch0 : 0;
         const uint32_t valid_rows = rows_left < half_rows ? rows_left : half_rows;
         const uint32_t col_base = kt * tile_width + col0;
@@ -118,9 +70,7 @@ void kernel_main() {
         const uint32_t val_base = dfb_values.get_write_ptr();
         const uint32_t idx_out_base = dfb_indices.get_write_ptr();
 
-        // Issue this RISC's stick-segment reads first so their flight overlaps the
-        // zero-fill below: row lr's stick is page batch*R + row_in_batch0 + lr; the unit's
-        // columns start at u32 offset kt*32.
+        // Stick reads go first so their flight overlaps the zero fill below.
         for (uint32_t lr = 0; lr < my_rows; ++lr) {
             noc.async_read(
                 idx,
@@ -130,8 +80,7 @@ void kernel_main() {
                 {.offset_bytes = lr * stick_seg_bytes + col0 * 4});
         }
 
-        // Zero this RISC's row ranges of the staging faces this unit covers (the writer zeroes rows
-        // [8, 16)), so every staging byte the unit writes out is zeroed by exactly one RISC.
+        // The writer zeroes rows [8, 16), so every staging byte written out is zeroed by exactly one RISC.
         const uint32_t face0 = col0 / 16;
         const uint32_t face1 = face0 + ncols / 16;
         zero_half_rows<2>(val_base, 0, rows_per_risc, face0, face1);
@@ -142,8 +91,7 @@ void kernel_main() {
         }
 
         if (my_rows > 0) {
-            // Plain barrier: only the stick reads are outstanding here (both gather trids
-            // were drained before the previous unit's push).
+            // Only the stick reads are outstanding: the gather trids drained before the previous push.
             noc.async_read_barrier();
             gather_unit_rows<index_is_u32>(
                 noc,

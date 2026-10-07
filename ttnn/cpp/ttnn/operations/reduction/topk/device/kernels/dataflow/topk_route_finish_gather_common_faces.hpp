@@ -2,36 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The single face units of topk_route_finish run these kernels; the half tile units keep
-// reader_topk_route_finish_gather.cpp and writer_topk_route_finish_tiles.cpp.
-//
-// Shared per-unit gather machinery for topk_route_finish, used by BOTH data-movement RISCs:
-// the reader (BRISC) gathers unit rows [0, 8) and the writer (NCRISC) gathers rows [8, 16).
-//
-// Row-split safety (why two RISCs may fill the same staging page concurrently): a staged
-// half is the output tile's face-pair range — two contiguous faces of 16 rows each, one
-// row = 16 elements. The staging offset of element (lr, c) is
-//   off16 = (c>>4)<<9 | lr<<5 | (c&15)<<1        (bf16 values / u16 indices; u32 doubles it)
-// so row lr occupies byte range [lr*32, lr*32+32) WITHIN each 512 B face: lr in [0,8)
-// touches only bytes [0,256) of each face, lr in [8,16) only [256,512). The two RISCs
-// therefore write disjoint 32 B face rows (disjoint words), both for the gather stores and
-// for the split zero-fill — no synchronization is needed on the staging bytes themselves.
-//
-// Wave pipeline (trid double-buffering): gather reads are issued in 32-deep waves whose
-// packets are tagged with alternating NoC transaction ids (wave_trid0 + parity). The tag is
-// applied through the sticky NOC_PACKET_TAG register — noc_async_read_set_trid() once per
-// wave; every read issued from the read cmd buffer inherits it until it is re-set (the same
-// stickiness Noc::set_async_read_state documents). While wave B's reads are in flight, wave
-// A is retired with a per-trid barrier (noc_async_read_barrier_with_trid via
-// Noc::async_read_barrier<NocOptions::TXN_ID>) followed by extraction — so extraction and
-// the next wave's issue overlap the previous wave's flight instead of every wave paying a
-// full-drain stall. The 64-slot bounce buffer holds exactly the two in-flight waves.
-// The tag register is sticky, so between waves the OTHER reads issued from the read cmd
-// buffer (index-stick reads) also carry the current wave trid; that is safe because every
-// read -- tagged or not -- bumps noc_reads_num_issued, making the plain read barrier a
-// global superset of any per-trid barrier. gather_unit_rows resets the tag to 0 before
-// returning so traffic after it is genuinely untagged. Waves use trids 1 and 2, at most
-// 32 reads outstanding per trid, far under the 255-per-trid hardware counter.
+// Single face unit version of topk_route_finish_gather_common.hpp, which documents the row split and trid waves.
 
 #pragma once
 
@@ -51,10 +22,7 @@ constexpr uint32_t bounce_slot_bytes = 64;            // Blackhole DRAM-read ali
 constexpr uint32_t gather_wave = 32;                  // reads in flight per trid wave
 constexpr uint32_t wave_trid0 = 1;                    // waves use trids {1, 2}; 0 stays untagged
 
-// Zero rows [lr0, lr1) of one staged half. elem_bytes = 2 (bf16 values / u16 indices) or
-// 4 (u32 indices); face/row strides scale with it (see off16 above: u32 doubles every term).
-// Decodes a work unit into its tile position and the face-pair columns it covers. With four
-// units per tile a unit is one face, so col0 is 16 for the odd units.
+// With four units per tile a unit is one face, so col0 is 16 for the odd units.
 struct UnitPos {
     uint32_t row_tile;
     uint32_t kt;
@@ -75,10 +43,11 @@ inline UnitPos decode_unit(uint32_t u, uint32_t k_tiles, uint32_t units_per_tile
         face_units ? 16 : tile_width};
 }
 
+// Zero rows [lr0, lr1) of faces [face0, face1) of one staged half; elem_bytes 4 (u32 indices) doubles every stride.
 template <uint32_t elem_bytes>
 inline void zero_half_rows(uint32_t base, uint32_t lr0, uint32_t lr1, uint32_t face0, uint32_t face1) {
-    constexpr uint32_t row_bytes = 16 * elem_bytes;  // 16 elements per face row
-    constexpr uint32_t face_bytes = 16 * row_bytes;  // 16 rows per face
+    constexpr uint32_t row_bytes = 16 * elem_bytes;
+    constexpr uint32_t face_bytes = 16 * row_bytes;
     for (uint32_t face = face0; face < face1; ++face) {
         volatile tt_l1_ptr uint32_t* p =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + face * face_bytes + lr0 * row_bytes);
@@ -88,12 +57,7 @@ inline void zero_half_rows(uint32_t base, uint32_t lr0, uint32_t lr1, uint32_t f
     }
 }
 
-// Gather unit rows [lr_begin, lr_begin + nrows) into the staged halves.
-//
-// stick_l1 holds the calling RISC's staged index-stick segments, locally indexed: local row
-// j corresponds to global unit row lr = lr_begin + j. The caller must have barriered the
-// stick reads before calling. On return every gathered element has been extracted into the
-// staging halves and NO tagged reads remain outstanding (both wave trids are drained).
+// Needs the stick reads barriered (stick_l1 row j is unit row lr_begin + j); returns with both wave trids drained.
 template <bool index_is_u32, typename SrcAccessor>
 inline void gather_unit_rows(
     const Noc& noc,
@@ -139,7 +103,7 @@ inline void gather_unit_rows(
         const uint32_t lr = lr_begin + j;
         for (uint32_t c = col_begin; c < col_end; ++c) {
             const uint32_t index_value = stick_l1[j * tile_width + c];
-            // Source: wr = half*16 + lr, wc = index_value & 31 (see the reader's face math).
+            // Source element (half * 16 + lr, index_value & 31); face math in reader_topk_route_finish_gather.cpp.
             const uint32_t src_page = row_tile * width_tiles + (index_value >> 5);
             const uint32_t byte =
                 (half << 10) | (((index_value >> 4) & 1) << 9) | (lr << 5) | ((index_value & 15) << 1);
@@ -154,8 +118,7 @@ inline void gather_unit_rows(
             pend_idxv[parity][cnt] = index_value;
 
             if (++cnt == gather_wave) {
-                // This wave is full and in flight; before reusing the OTHER wave's slots,
-                // retire it.
+                // This wave is in flight; retire the OTHER wave before reusing its slots.
                 if (other_in_flight) {
                     noc.async_read_barrier<NocOptions::TXN_ID>({.trid = wave_trid0 + (parity ^ 1)});
                     extract(parity ^ 1, gather_wave);
@@ -176,9 +139,7 @@ inline void gather_unit_rows(
         noc.async_read_barrier<NocOptions::TXN_ID>({.trid = wave_trid0 + parity});
         extract(parity, cnt);
     }
-    // The tag register is sticky across kernel exit (firmware resets it at boot, not per
-    // launch): restore 0 so later reads -- this kernel's and the next kernel's on this
-    // RISC -- are untagged.
+    // The trid tag is sticky across kernel exit (reset at boot, not per launch), so restore 0.
     noc_async_read_set_trid(0, noc.get_noc_id());
 }
 

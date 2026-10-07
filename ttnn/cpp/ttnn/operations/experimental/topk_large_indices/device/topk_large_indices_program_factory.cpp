@@ -86,8 +86,7 @@ uint32_t max_tree_rounds_for(uint32_t num_cores) {
     return rounds;
 }
 
-// Merge tree of one row's column segments: in round r segment i with i % 2^(r+1) == 0 receives the
-// survivors of segment i + 2^r. Segment 0 receives in every round and writes the row.
+// Round r: segment i with i % 2^(r+1) == 0 merges segment i + 2^r; segment 0 receives every round and writes the row.
 struct TreePosition {
     uint32_t num_recv_rounds = 0;
     bool sends_survivor = false;
@@ -188,8 +187,6 @@ void set_runtime_args(
 }
 
 uint32_t column_segments_for(uint32_t num_rows, uint32_t num_chunks, uint64_t num_cores) {
-    // Largest power-of-two column split that still gives every (row, segment) its own core and every
-    // segment at least one whole K chunk. Rows that are not fewer than the cores keep the row split.
     uint32_t num_segments = 1;
     while (static_cast<uint64_t>(num_rows) * (2ull * num_segments) <= num_cores && 2u * num_segments <= num_chunks) {
         num_segments *= 2;
@@ -200,9 +197,7 @@ uint32_t column_segments_for(uint32_t num_rows, uint32_t num_chunks, uint64_t nu
 }  // namespace
 
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, uint32_t num_cores) {
-    // A column of a K 1024 chunk that keeps its own top 64 holds every one of the row's top 64 it has seen, so
-    // with k <= 64 a chunk only needs a column sort and a column merge, and a segment one full sort at its end.
-    // That pays from four chunks per row segment on Blackhole.
+    // The column body (k <= 64) pays from four chunks per row segment on Blackhole.
     constexpr uint32_t column_body_min_chunks = 4;
     if (k <= 64) {
         const uint32_t chunks = tt::div_up(input_last_dim, to_uint32(LlkTargetK::K1024));
@@ -213,15 +208,11 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t num_rows, uint32_t input_
 
     const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));
 
-    // Segmented fusion handles every width with one binary; rows of at most 32
-    // chunks naturally execute as one segment. Gate on the snapped LLK K so
-    // public k values in [528, 1008] get the same fused body as k=1024.
+    // Gate on the snapped LLK K so public k in [528, 1008] gets the k=1024 body; <= 32 chunks run as one segment.
     if (llk_k >= to_uint32(LlkTargetK::K1024)) {
         return ComputeBodyMode::FusedSegmented;
     }
 
-    // The classic body re-inits, splits and merges per chunk, so a wide row at K 512 used to
-    // cost more per element than the same row at K 1024. Segmented fusion is cheaper past 32 chunks too.
     const uint32_t physical_chunks = tt::div_up(input_last_dim, llk_k);
     return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::FusedSegmented;
 }
@@ -245,7 +236,7 @@ std::vector<CoreRowAssignment> derive_core_row_assignments(
                 continue;
             }
             const uint32_t segment = static_cast<uint32_t>(unit % num_segments);
-            // Whole chunks split as evenly as possible; the last segment's last chunk carries the row tail.
+            // The last segment's last chunk carries the row tail.
             const uint64_t seg_first_chunk = static_cast<uint64_t>(segment) * num_chunks / num_segments;
             const uint64_t seg_end_chunk = static_cast<uint64_t>(segment + 1) * num_chunks / num_segments;
             assignments.push_back(CoreRowAssignment{
@@ -309,17 +300,15 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t llk_k = body_mode == ComputeBodyMode::ColumnSegmented ? to_uint32(LlkTargetK::K1024)
                                                                          : to_uint32(snap_to_llk_target_k(k));
     const uint32_t tiles_per_sequence = (llk_k + tt::constants::TILE_HW - 1) / tt::constants::TILE_HW;
-    // Runtime row counts are patched through runtime args; they reach the program hash only through the body
-    // mode (k <= 64). The caller-selected structural core grid is fixed in the hash, so cache hits can change
-    // shape without ever creating kernels or CBs on cores owned by another subdevice.
+    // Row counts are runtime args, hashed only through the body mode (k <= 64). The core grid is hashed, so a cache
+    // hit never creates kernels or CBs on cores owned by another subdevice.
 
     constexpr uint32_t cb_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_indices = tt::CBIndex::c_1;
     constexpr uint32_t cb_indices_scratch = tt::CBIndex::c_2;
     // Reader-to-compute mailbox for the derived chunk count and tail length. It also receives the metadata read.
     constexpr uint32_t cb_meta = tt::CBIndex::c_3;
-    // Column-split merge tree: a child's unfused [values, indices] survivor tiles land here (one slot, so the
-    // address is identical on every core), and leave a sending core through cb_send.
+    // Column split tree: a child's survivor lands in cb_landing (one slot, same address on every core).
     constexpr uint32_t cb_landing = tt::CBIndex::c_4;
     constexpr uint32_t cb_send = tt::CBIndex::c_5;
 

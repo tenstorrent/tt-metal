@@ -2715,8 +2715,7 @@ inline void _topk_xl_rebuild_generic_(const std::uint32_t dst_index, const bool 
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
 }
 
-// Sorts each 64 row column of a K=1024 tile on its own. A fused merge of two tiles whose columns were sorted
-// in opposite directions by `_topk_xl_local_sort_generic_<1024, true>` leaves every column bitonic.
+// Sorts each 64 row column of a K=1024 tile; every column must be bitonic (merge of opposite sorted columns).
 template <std::uint32_t K>
 inline void _topk_xl_rebuild_columns_(const std::uint32_t dst_index, const bool ascending)
 {

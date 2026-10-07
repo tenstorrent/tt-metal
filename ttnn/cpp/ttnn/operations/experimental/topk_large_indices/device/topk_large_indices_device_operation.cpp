@@ -38,8 +38,7 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
 void validate_runtime_args(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
-    // Shape reaches the program hash only through the compute body mode and is otherwise patched through
-    // runtime args, so keep these checks on both cache miss and cache hit.
+    // Shape is patched through runtime args (hashed only via the body mode), so check on both cache miss and hit.
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     TT_FATAL(input.buffer() != nullptr, "topk_large_indices input must have an allocated buffer");
 
