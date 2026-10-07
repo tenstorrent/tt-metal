@@ -17,6 +17,8 @@
  * an addcmul operation: output = a + scalar * (input + intermediate) * b.
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
