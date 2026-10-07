@@ -399,17 +399,29 @@ public:
             // register does not overflow
             DEBUG_SANITIZE_NOC_TXN_ID(noc_id_, noc_opts.trid);
             WAYPOINT("NAWW");
+            const uint32_t vc =
+                has_flag(opts, NocOptions::CUSTOM_VC) ? static_cast<uint32_t>(noc_opts.vc) : NOC_UNICAST_WRITE_VC;
+            uint64_t dst_noc_addr;
+            if constexpr (noc_may_push_v<Dst>) {
+                // The destination address may already be in the write command buffer (pushed by the address
+                // generator).
+                dst_noc_addr = get_dst_ptr_or_cmd_buf(dst, dst_args);
+                if (noc_traits_t<Dst>::in_cmd_buf(dst_noc_addr)) {
+                    noc_traits_t<Dst>::template write<posted, /*use_trid=*/true>(
+                        get_src_ptr<AddressType::LOCAL_L1>(src, src_args), size_bytes, noc_id_, vc, noc_opts.trid);
+                    WAYPOINT("NWPD");
+                    return;
+                }
+            } else {
+                dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
+            }
             auto src_addr = get_src_ptr<AddressType::LOCAL_L1>(src, src_args);
-            auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
             if constexpr (enable_noc_tracing) {
                 RECORD_NOC_EVENT_WITH_ADDR(
                     NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
             }
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, size_bytes);
             constexpr bool one_packet = max_page_size <= NOC_MAX_BURST_SIZE;
-            const uint32_t vc = has_flag(opts, NocOptions::CUSTOM_VC)
-                                    ? static_cast<uint32_t>(noc_opts.vc)
-                                    : NOC_UNICAST_WRITE_VC;
             ncrisc_noc_fast_write_any_len<noc_mode, true, one_packet>(
                 noc_id_,
                 write_cmd_buf,
@@ -602,12 +614,10 @@ public:
             DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_addr, src_addr, size_bytes);
 
             WAYPOINT("NWPW");
+            // The addresses above: each endpoint is asked once per transfer (a stateful transfer address, such as the
+            // Quasar address-generator walk, advances when asked).
             ncrisc_noc_write_any_len_with_state<noc_mode, posted>(
-                noc_id_,
-                write_cmd_buf,
-                get_src_ptr<AddressType::LOCAL_L1>(src, src_args),
-                (uint32_t)get_dst_ptr<AddressType::NOC>(dst, dst_args),
-                size_bytes);
+                noc_id_, write_cmd_buf, src_addr, (uint32_t)dst_addr, size_bytes);
             WAYPOINT("NWPD");
         }
     }

@@ -626,12 +626,83 @@ inline bool plan_cross_bank(const Accessor& acc, uint32_t page_id, uint8_t noc, 
     return true;
 }
 
-// Sharded: prefer one BANK_MIDDLE programming across the shards of page_id's band (plan_cross_bank); otherwise resolve
-// page_id in software and let the address generator walk its contiguous run in that one bank.
+// One row of a band whose shards wrap around the banks (k >= 1, more shards along k than banks, round-robin: e.g. 3
+// shards per row on 2 banks land on banks 0, 1, 0, the third one shard slot deeper). No single programming walks the
+// band -- a row ends mid-cycle -- but one BANK_MIDDLE programming walks a row: a segment, the next bank, ..., and a
+// bank wrap steps the outer loop to the next shard slot in each bank. Applies when every shard j of the row sits on
+// bank (c0 + j) % B at slot (c0 + j) / B, B = the accessor's bank count, all banks one ascending stride-1 selector run.
+template <typename Accessor>
+inline bool plan_row_round_robin(const Accessor& acc, uint32_t page_id, uint8_t noc, Seek& seek) {
+    const ShardedPosition pos = sharded_position(acc, page_id);
+    if (pos.k < 1 || pos.extent_k % pos.shard_k != 0) {
+        return false;
+    }
+    const uint32_t shards_k = pos.extent_k / pos.shard_k;
+    const uint32_t num_banks = acc.dspec().num_banks();
+    if (num_banks < 2 || shards_k <= num_banks) {
+        return false;  // no wrap within the row (plan_cross_bank's case, or a single bank)
+    }
+    const uint32_t page_size = acc.get_aligned_page_size();
+    const uint32_t segment = pos.shard_k * pos.inner_volume;                    // pages
+    const uint64_t segment_bytes = static_cast<uint64_t>(segment) * page_size;  // one row of a shard
+    // A bank holds its shards back to back, one whole (padded) shard per slot.
+    const uint64_t slot_bytes = static_cast<uint64_t>(acc.dspec().shard_volume()) * page_size;
+    const uint32_t row_start = page_id - pos.coord_k * pos.inner_volume - pos.inner_flat;
+    const uint64_t addr0 = ::tensor_accessor::detail::transfer_noc_addr(acc, row_start, 0, noc);
+    const noc_att::Window& window =
+        noc_att::map_window(ACTIVE_ATT_MAP, noc_att::matching_window_class(ACTIVE_ATT_MAP, addr0));
+    const uint32_t selector0 = window.selector(addr0);
+    const uint64_t local0 = window.local_address(addr0);
+    // The first wrap (a shard whose selector isn't one more than its left neighbour's) gives the row's first bank:
+    // shard w is bank 0, so the row starts at bank c0 = B - w.
+    uint32_t w = 1;
+    while (w < shards_k && window.selector(::tensor_accessor::detail::transfer_noc_addr(
+                               acc, row_start + w * segment, 0, noc)) == selector0 + w) {
+        ++w;
+    }
+    if (w > num_banks) {
+        return false;
+    }
+    const uint32_t c0 = (num_banks - w) % num_banks;
+    if (selector0 < c0) {
+        return false;
+    }
+    const uint32_t base = selector0 - c0;
+    for (uint32_t j = 1; j < shards_k; ++j) {
+        const uint64_t addr = ::tensor_accessor::detail::transfer_noc_addr(acc, row_start + j * segment, 0, noc);
+        const uint32_t b = c0 + j;
+        if (!window.matches(addr) || window.selector(addr) != base + b % num_banks ||
+            window.local_address(addr) != local0 + static_cast<uint64_t>(b / num_banks) * slot_bytes) {
+            return false;
+        }
+    }
+    const uint32_t shard_j = pos.coord_k / pos.shard_k;
+    const uint32_t b = c0 + shard_j;
+    seek.prog.banking = overlay::BankingConfig{
+        .endpoint_id_shift = window.endpoint_shift,
+        .size = num_banks,
+        .skip = 1,
+        .base = base,
+        .current = b % num_banks,
+        .bank_order = overlay::BANK_MIDDLE,
+    };
+    seek.prog.inner_stride = page_size;
+    seek.prog.inner_start =
+        static_cast<uint64_t>((pos.coord_k % pos.shard_k) * pos.inner_volume + pos.inner_flat) * page_size;
+    seek.prog.inner_end = segment_bytes;
+    seek.prog.outer_start = window.compare + local0 + static_cast<uint64_t>(b / num_banks) * slot_bytes;
+    seek.prog.outer_stride = slot_bytes;
+    seek.run_end = row_start + pos.extent_k * pos.inner_volume;  // the end of this row
+    return true;
+}
+
+// Sharded: prefer one BANK_MIDDLE programming across the shards of page_id's band (plan_cross_bank), or across one row
+// when the band's shards wrap around the banks (plan_row_round_robin); otherwise resolve page_id in software and let
+// the address generator walk its contiguous run in that one bank.
 template <typename Accessor>
 TT_TA_SEEK_NOINLINE inline Seek plan_sharded(const Accessor& acc, uint32_t page_id, uint8_t noc) {
     Seek seek;
-    if (plan_cross_bank(acc, page_id, noc, seek)) {
+    if (plan_cross_bank(acc, page_id, noc, seek) || plan_row_round_robin(acc, page_id, noc, seek)) {
         return seek;
     }
     seek.prog = plan_single_bank(

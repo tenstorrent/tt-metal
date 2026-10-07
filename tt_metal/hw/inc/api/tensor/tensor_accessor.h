@@ -760,13 +760,18 @@ public:
         get_noc_addr_fn([](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
         }),
-        transfer_noc_addr_fn([](const void* accessor, bool write, uint32_t page_idx, uint32_t offset, uint8_t noc) {
-            const auto& a = *static_cast<const Accessor*>(accessor);
-            return write ? tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Write>(
-                               a, page_idx, offset, noc)
-                         : tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read>(
-                               a, page_idx, offset, noc);
-        }) {
+        transfer_noc_addr_fn(
+            [](const void* accessor, bool write, bool may_push, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+                using tensor_accessor::TransferDir;
+                const auto& a = *static_cast<const Accessor*>(accessor);
+                if (write) {
+                    return may_push
+                               ? tensor_accessor::transfer_noc_addr<TransferDir::Write, true>(a, page_idx, offset, noc)
+                               : tensor_accessor::transfer_noc_addr<TransferDir::Write>(a, page_idx, offset, noc);
+                }
+                return may_push ? tensor_accessor::transfer_noc_addr<TransferDir::Read, true>(a, page_idx, offset, noc)
+                                : tensor_accessor::transfer_noc_addr<TransferDir::Read>(a, page_idx, offset, noc);
+            }) {
         // Op-to-op R/W inference: past this point the accessor's type is erased, so a NoC transfer through the wrapper
         // can't name its tensor, and the wrapper can't tell which the kernel will do.
         tt_buf_rw::note_read_write<tt_buf_rw::binding_of<Accessor>>();
@@ -777,15 +782,17 @@ public:
     }
 
     // Address for a NoC transfer of the page -- only for the noc_traits_t path; see transfer_noc_addr.h. The direction
-    // is known where the wrapper is used, but the accessor's type is erased here, so it travels as an argument.
-    template <tensor_accessor::TransferDir Dir>
+    // (and whether the caller can take a pushed address) is known where the wrapper is used, but the accessor's type is
+    // erased here, so they travel as arguments.
+    template <tensor_accessor::TransferDir Dir, bool MayPush = false>
     uint64_t transfer_noc_addr(uint32_t page_idx, uint32_t offset, uint8_t noc) const {
-        return transfer_noc_addr_fn(accessor_ptr, Dir == tensor_accessor::TransferDir::Write, page_idx, offset, noc);
+        return transfer_noc_addr_fn(
+            accessor_ptr, Dir == tensor_accessor::TransferDir::Write, MayPush, page_idx, offset, noc);
     }
 
 private:
     using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
-    using TransferNocAddrFn = uint64_t (*)(const void*, bool, uint32_t, uint32_t, uint8_t);
+    using TransferNocAddrFn = uint64_t (*)(const void*, bool, bool, uint32_t, uint32_t, uint8_t);
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;

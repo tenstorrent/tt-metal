@@ -466,8 +466,8 @@ void expect_transfer_stats(
         EXPECT_GE(seeks, 1u) << counts << " -- a walk must be programmed before its first pop";
     }
     // Push: a hit on the direction's first side writes the address straight into the command buffer. Every endpoint
-    // but ShardView (base + offset) and the type-erased wrapper can take it.
-    const bool push_endpoint = iter_mode != IterMode::ShardView && iter_mode != IterMode::Wrapper;
+    // but ShardView (base + offset: later transfers into the shard need the base in software) can take it.
+    const bool push_endpoint = iter_mode != IterMode::ShardView;
     if (!push_endpoint) {
         EXPECT_EQ(pushes, 0u) << counts << " -- this endpoint never takes a pushed address";
     } else if (!expected_fallbacks.has_value()) {
@@ -1723,6 +1723,232 @@ INSTANTIATE_TEST_SUITE_P(
         return info.param.src_layout + "_to_" + info.param.dst_layout;
     });
 
+// ============================================================================
+// TensorAccessor API coverage: every iteration / NoC API on a bound accessor, through the walker
+// ============================================================================
+//
+// ta_api_copy copies src to dst through a scratchpad (one slot per page) with one API per mode -- see the kernel for
+// the list -- so each API's transfer addresses take the TensorAccessor transfer path. Not covered:
+// - the stateful set_*_state / *_with_state APIs: not supported on the address-generator path. On Quasar a
+//   command-buffer register write is a RoCC instruction, so keeping state saves ~2 cycles a transfer, and
+//   *_with_state keeps the address's high 32 bits, which hold ATT selector and window bits that differ between banks.
+// - async_write_zeros: DRAM pages are addressed in software (zero-fill isn't a streaming path), and local L1 is zeroed
+//   by the iDMA zero device with no remote address.
+// The strided modes run several threads, each copying the pages (or shards) it owns. Checks the data, that every
+// address request went through transfer_noc_addr (and, with ATT, through the address generator), and which modes push.
+namespace api_cov {
+
+constexpr auto kKernel = "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_api_copy.cpp";
+constexpr uint32_t kReportStride = 64;
+constexpr uint32_t kDoneMarker = 0x600DD00Du;
+
+enum class Mode : uint32_t {
+    PagesDefault = 0,
+    ShardPagesPartial = 1,
+    TxnIdL1 = 2,
+    InlineDwWrite = 3,
+    StridedPages = 4,
+    StridedShardPages = 5,
+};
+
+std::string mode_name(Mode m) {
+    switch (m) {
+        case Mode::PagesDefault: return "PagesDefault";
+        case Mode::ShardPagesPartial: return "ShardPagesPartial";
+        case Mode::TxnIdL1: return "TxnIdL1";
+        case Mode::InlineDwWrite: return "InlineDwWrite";
+        case Mode::StridedPages: return "StridedPages";
+        case Mode::StridedShardPages: return "StridedShardPages";
+    }
+    return "?";
+}
+
+// Modes whose transfers go through a push-capable NoC path (Noc::async_read / async_write, generic or TXN_ID).
+bool may_push(Mode m) { return m != Mode::InlineDwWrite; }
+
+struct Param {
+    std::string layout;
+    Mode mode;
+    uint32_t threads = 1;
+};
+
+std::string param_name(const Param& p) {
+    return p.layout + "_" + mode_name(p.mode) + (p.threads > 1 ? fmt::format("_{}Threads", p.threads) : "");
+}
+
+void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
+
+std::vector<Param> params() {
+    std::vector<Param> out;
+    auto add = [&](Mode m, std::initializer_list<const char*> layouts, uint32_t threads = 1) {
+        for (const char* l : layouts) {
+            out.push_back({l, m, threads});
+        }
+    };
+    add(Mode::PagesDefault,
+        {"InterleavedDram", "InterleavedL1", "HeightL1", "WidthL1", "NdRoundRobinL1", "NdBlockRoundRobinL1"});
+    add(Mode::ShardPagesPartial, {"HeightL1", "WidthDram", "NdRoundRobinL1", "NdBlockRoundRobinL1"});
+    add(Mode::TxnIdL1, {"InterleavedDram", "InterleavedL1", "HeightL1", "NdBlockRoundRobinL1"});
+    add(Mode::InlineDwWrite, {"InterleavedL1", "HeightL1"});
+    for (uint32_t t : {2u, 3u}) {
+        add(Mode::StridedPages,
+            {"InterleavedDram", "InterleavedL1", "HeightL1", "NdRoundRobinL1", "NdBlockRoundRobinL1"},
+            t);
+    }
+    add(Mode::StridedShardPages, {"HeightL1", "WidthL1", "NdRoundRobinL1", "NdBlockRoundRobinL1"}, 2);
+    return out;
+}
+
+}  // namespace api_cov
+
+class TensorAccessorAddrgenApi : public QuasarMeshDeviceSingleCardFixture,
+                                 public ::testing::WithParamInterface<api_cov::Param> {};
+
+TEST_P(TensorAccessorAddrgenApi, CopiesThroughWalker) {
+    using namespace unit_tests::dm::ta_addrgen;
+    using api_cov::Mode;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    const auto cases = layout_cases();
+    const auto it = std::find_if(cases.begin(), cases.end(), [&](const LayoutCase& c) { return c.name == p.layout; });
+    ASSERT_NE(it, cases.end()) << p.layout;
+    const LayoutCase lc = resolve_grid(device, *it);
+    if (const auto reason = skip_reason(device, lc); !reason.empty()) {
+        GTEST_SKIP() << lc.name << ": " << reason;
+    }
+    const m2::NodeCoord node{0, 0};
+    const uint32_t page_size = page_size_bytes(lc);
+    const uint32_t pages = num_pages(lc);
+    const uint32_t words_per_page = page_size / sizeof(uint32_t);
+    const TensorSpec tensor_spec = make_tensor_spec(lc);
+    MeshTensor src_tensor = MeshTensor::allocate_on_device(device, tensor_spec);
+    MeshTensor dst_tensor = MeshTensor::allocate_on_device(device, tensor_spec);
+
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{"api"},
+        .source = std::filesystem::path{api_cov::kKernel},
+        .num_threads = p.threads,
+        .compile_time_args = {{"mode", static_cast<uint32_t>(p.mode)}, {"num_pages", pages}},
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    kernel.scratchpad_bindings.push_back(m2::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    m2::test_helpers::BindTensorParameterToKernel(kernel, "src", "src");
+    m2::test_helpers::BindTensorParameterToKernel(kernel, "dst", "dst");
+    kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
+    for (const auto& [name, value] : addrgen_bringup_defines(device)) {
+        kernel.compiler_options.defines.emplace(name, value);
+    }
+    m2::ProgramSpec spec{
+        .name = "ta_api_copy",
+        .kernels = {kernel},
+        .scratchpads = {m2::ScratchpadSpec{
+            .unique_id = m2::ScratchpadSpecName{"pad"}, .size_per_node = pages * page_size}},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"api"})},
+    };
+    spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src"}, .spec = tensor_spec});
+    spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"dst"}, .spec = tensor_spec});
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    auto report = make_l1_region(device, p.threads * api_cov::kReportStride);
+    const uint32_t report_addr = static_cast<uint32_t>(report->address());
+    std::vector<uint32_t> report_init(p.threads * api_cov::kReportStride / sizeof(uint32_t), 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, report_addr, report_init);
+
+    m2::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"api"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}})}};
+    run_args.tensor_args.emplace(m2::TensorParamName{"src"}, std::cref(src_tensor));
+    run_args.tensor_args.emplace(m2::TensorParamName{"dst"}, std::cref(dst_tensor));
+    m2::SetProgramRunArgs(program, run_args);
+
+    std::vector<uint32_t> src_data(pages * words_per_page);
+    for (uint32_t i = 0; i < src_data.size(); ++i) {
+        src_data[i] = 0x5A000000u ^ (i * 2654435761u);
+    }
+    // dst starts zeroed, so a page the kernel skipped shows.
+    std::vector<uint32_t> dst_init(pages * words_per_page, 0u);
+    slow_dispatch::WriteToBuffer(src_tensor.mesh_buffer(), src_data);
+    slow_dispatch::WriteToBuffer(dst_tensor.mesh_buffer(), dst_init);
+    std::vector<uint32_t> readback;
+    slow_dispatch::ReadFromBuffer(src_tensor.mesh_buffer(), readback);
+    ASSERT_EQ(readback, src_data) << "source staging not visible before launch";
+    slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), readback);
+    ASSERT_EQ(readback, dst_init) << "destination staging not visible before launch";
+
+    auto workload = LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> out;
+    slow_dispatch::ReadFromBuffer(dst_tensor.mesh_buffer(), out);
+    ASSERT_EQ(out.size(), src_data.size());
+    for (uint32_t pg = 0; pg < pages; ++pg) {
+        for (uint32_t w = 0; w < words_per_page; ++w) {
+            const uint32_t idx = (pg * words_per_page) + w;
+            uint32_t expected = src_data[idx];
+            if (p.mode == Mode::InlineDwWrite) {
+                expected = w == 0 ? (0xD0D00000u | pg) : 0u;
+            }
+            ASSERT_EQ(out[idx], expected) << "first mismatch at page " << pg << " word " << w;
+        }
+    }
+
+    std::vector<uint32_t> r;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report_addr, p.threads * api_cov::kReportStride, r));
+    const bool walkable = interleaved_banks_walkable(device, lc.buffer_type);
+    uint32_t hw = 0, inel = 0, unsup = 0, fallbacks = 0, requests = 0, pushes = 0, seeks = 0;
+    for (uint32_t t = 0; t < p.threads; ++t) {
+        const uint32_t* w = &r[t * api_cov::kReportStride / sizeof(uint32_t)];
+        ASSERT_EQ(w[13], api_cov::kDoneMarker) << "thread " << t << " never finished";
+        log_info(
+            tt::LogTest,
+            "{} thread {}: {} requests: hw {} ({} pushed, {} seeks, {} skips, {} restores), sw fallbacks {}, "
+            "sw_ineligible {}, sw_unsupported {}",
+            api_cov::param_name(p),
+            t,
+            w[4],
+            w[0],
+            w[12],
+            w[3],
+            w[5],
+            w[6],
+            w[10],
+            w[1],
+            w[2]);
+        EXPECT_GT(w[4], 0u) << "thread " << t << " moved nothing";
+        hw += w[0];
+        inel += w[1];
+        unsup += w[2];
+        seeks += w[3];
+        requests += w[4];
+        fallbacks += w[10];
+        pushes += w[12];
+    }
+    EXPECT_EQ(hw + inel + unsup + fallbacks, requests) << "an address request bypassed transfer_noc_addr";
+    if (!att_enabled()) {
+        EXPECT_EQ(unsup, requests);
+        return;
+    }
+    EXPECT_EQ(unsup, 0u) << "a bound accessor's transfer must try the address generator";
+    if (lc.memory_layout != TensorMemoryLayout::INTERLEAVED || walkable) {
+        EXPECT_EQ(inel, 0u);
+        EXPECT_GT(hw, 0u);
+    }
+    if (api_cov::may_push(p.mode)) {
+        EXPECT_GT(pushes, 0u) << "streaming transfers through Noc::async_read / async_write should push";
+        EXPECT_LE(pushes + seeks, hw);
+    } else {
+        EXPECT_EQ(pushes, 0u) << "this API takes the address in software (pop)";
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    Api,
+    TensorAccessorAddrgenApi,
+    ::testing::ValuesIn(api_cov::params()),
+    [](const ::testing::TestParamInfo<api_cov::Param>& info) { return api_cov::param_name(info.param); });
+
 // Randomized fuzz layer: same fixture/body as PatternMatrix, params drawn by fuzz_cases() instead of
 // the curated matrix(). Deterministic by default; see fuzz_cases() for the seed/count env overrides.
 INSTANTIATE_TEST_SUITE_P(
@@ -2268,43 +2494,46 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::ValuesIn(loop_probe::configs()),
     [](const ::testing::TestParamInfo<loop_probe::Config>& info) { return info.param.name; });
 
-// Repro for the HW team (addrgen_rdreg_hazard.cpp): back-to-back address-generator register reads (rd_reg) hang,
-// fenced ones don't. One test per read pattern so a hang takes down only its own process; run them one at a time
-// (each hang holds the emulator until its session times out). Manual only, not in the regression yaml.
-namespace rdreg_hazard {
+// Repro for the HW team (addrgen_fence_repro.cpp): which steps of a walk's spill hang when the 3 position-register
+// reads of the save are followed by one fence instead of a fence each. Each case is a prefix of AddrgenLoopProbe's
+// BankInner2OuterSpill. One test per process: a hang holds the emulator until its session times out. Manual only, not
+// in the regression yaml.
+namespace fence_repro {
 
-struct Mode {
+struct Case {
     const char* name;
-    uint32_t mode;
+    uint32_t stage;
+    uint32_t fence_mode;  // see addrgen_fence_repro.cpp: 0 fence each, 1 back to back + fence, 2 use each, 3 use each +
+                          // fence
 };
 
-}  // namespace rdreg_hazard
+}  // namespace fence_repro
 
-class AddrgenRdRegHazard : public QuasarMeshDeviceSingleCardFixture,
-                           public ::testing::WithParamInterface<rdreg_hazard::Mode> {};
+class AddrgenFenceRepro : public QuasarMeshDeviceSingleCardFixture,
+                          public ::testing::WithParamInterface<fence_repro::Case> {};
 
-TEST_P(AddrgenRdRegHazard, ReadsPosition) {
+TEST_P(AddrgenFenceRepro, SaveRestore) {
     namespace m2 = experimental;
-    const auto& m = GetParam();
+    const auto& c = GetParam();
     auto& device = *devices_.at(0);
     const m2::NodeCoord node{0, 0};
-    constexpr uint32_t kNumPops = 3;
-    constexpr uint32_t kReportWords = 8;
+    constexpr uint32_t kReportWords = 16;
     auto report = unit_tests::dm::ta_addrgen::make_l1_region(device, kReportWords * sizeof(uint32_t));
     std::vector<uint32_t> report_init(kReportWords, 0xDEADBEEF);
     slow_dispatch::WriteToL1(device, node, report->address(), report_init);
 
     m2::KernelSpec kernel{
         .unique_id = m2::KernelSpecName{"probe"},
-        .source = std::filesystem::path{"tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/"
-                                        "addrgen_rdreg_hazard.cpp"},
+        .source =
+            std::filesystem::path{
+                "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/addrgen_fence_repro.cpp"},
         .num_threads = 1,
-        .compile_time_args = {{"mode", m.mode}, {"num_pops", kNumPops}},
+        .compile_time_args = {{"stage", c.stage}, {"fence_mode", c.fence_mode}},
         .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
         .hw_config = m2::DataMovementHardwareConfig{},
     };
     m2::ProgramSpec spec{
-        .name = "addrgen_rdreg_hazard",
+        .name = "addrgen_fence_repro",
         .kernels = {kernel},
         .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"probe"})},
     };
@@ -2319,30 +2548,50 @@ TEST_P(AddrgenRdRegHazard, ReadsPosition) {
 
     std::vector<uint32_t> r;
     ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report->address(), kReportWords * sizeof(uint32_t), r));
-    ASSERT_EQ(r[6], 0x600DD00Du) << m.name << ": kernel never finished";
+    ASSERT_EQ(r[14], 0x600DD00Du) << c.name << ": kernel never finished";
     auto word = [&](uint32_t i) { return (static_cast<uint64_t>(r[2 * i + 1]) << 32) | r[2 * i]; };
-    // Two banks, bank inner, inner stride 0x40: three pops leave the walk at bank 1, inner address 0x40, outer 0.
     log_info(
         tt::LogTest,
-        "addrgen rd_reg {}: bank_current {} inner_address 0x{:x} outer_address 0x{:x}",
-        m.name,
+        "addrgen fence repro {}: saved bank {} inner 0x{:x} outer 0x{:x}; pops 0x{:x} 0x{:x} 0x{:x}",
+        c.name,
         word(0),
         word(1),
-        word(2));
-    EXPECT_EQ(word(0), 1u) << m.name;
-    EXPECT_EQ(word(1), 0x40u) << m.name;
-    EXPECT_EQ(word(2), 0u) << m.name;
+        word(2),
+        word(3),
+        word(4),
+        word(5));
+    // Two banks, bank inner, inner stride 0x40: 3 pops leave the walk at bank 1, inner 0x40, outer 0, and the next 3
+    // are bank 1 + 0x40, bank 0 + 0x80, bank 1 + 0x80.
+    EXPECT_EQ(word(0), 1u) << c.name;
+    EXPECT_EQ(word(1), 0x40u) << c.name;
+    EXPECT_EQ(word(2), 0u) << c.name;
+    if (c.stage >= 2) {
+        constexpr uint64_t kBank1 = uint64_t{1} << 26;
+        EXPECT_EQ(word(3), kBank1 + 0x40) << c.name;
+        EXPECT_EQ(word(4), 0x80u) << c.name;
+        EXPECT_EQ(word(5), kBank1 + 0x80) << c.name;
+    }
+    if (c.stage >= 3) {
+        EXPECT_EQ(word(6), 0x40u) << c.name << ": INNER_ADDRESS after the restore";
+    }
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    Patterns,
-    AddrgenRdRegHazard,
+    Spill,
+    AddrgenFenceRepro,
     ::testing::Values(
-        rdreg_hazard::Mode{"FenceEach", 0},
-        rdreg_hazard::Mode{"BackToBack", 1},
-        rdreg_hazard::Mode{"FenceAfter", 2},
-        rdreg_hazard::Mode{"FenceBefore", 3}),
-    [](const ::testing::TestParamInfo<rdreg_hazard::Mode>& info) { return std::string(info.param.name); });
+        fence_repro::Case{"SaveFenceEach", 0, 0},
+        fence_repro::Case{"SaveFenceAfter", 0, 1},
+        fence_repro::Case{"RestoreFenceEach", 1, 0},
+        fence_repro::Case{"RestoreFenceAfter", 1, 1},
+        fence_repro::Case{"ContinueFenceEach", 2, 0},
+        fence_repro::Case{"ContinueFenceAfter", 2, 1},
+        fence_repro::Case{"SnapshotFenceEach", 3, 0},
+        fence_repro::Case{"SnapshotFenceAfter", 3, 1},
+        fence_repro::Case{"SaveUseEach", 0, 2},
+        fence_repro::Case{"SaveUseEachFenceAfter", 0, 3},
+        fence_repro::Case{"SnapshotUseEach", 3, 2}),
+    [](const ::testing::TestParamInfo<fence_repro::Case>& info) { return std::string(info.param.name); });
 
 // Transfer-address microbenchmark (ta_perf_reader.cpp): the same kernel built with the address-generator path and
 // with the software path (TT_TA_ADDRGEN_DISABLE), timed with rdcycle over page-id orders taken from ttnn kernels.
@@ -2561,6 +2810,253 @@ INSTANTIATE_TEST_SUITE_P(
     TensorAccessorAddrgenPerf,
     ::testing::ValuesIn(perf::params()),
     [](const ::testing::TestParamInfo<perf::Param>& info) { return perf::param_name(info.param); });
+
+// Sharded transfer-address microbenchmark (ta_perf_sharded.cpp): every sharded layout family, read in page-id order,
+// with pages(), with shard_pages() and through ShardView; HW vs SW, cycles per transfer. Tensors are larger than the
+// functional matrix's (128-192 pages of 2 KB) so per-seek costs average out the way they would on real tensors.
+// Reports only, no pass/fail on timing. Manual run.
+namespace sharded_perf {
+
+constexpr auto kKernel =
+    "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_addrgen/kernels/ta_perf_sharded.cpp";
+constexpr uint32_t kReportWords = 18;
+enum class Mode : uint32_t { PageId = 0, Pages = 1, ShardPages = 2, ShardView = 3 };
+enum class Path { Hw, Sw, HwStats };
+
+struct Param {
+    unit_tests::dm::ta_addrgen::LayoutCase layout;
+    Mode mode;
+    Path path;
+};
+
+std::string mode_name(Mode m) {
+    switch (m) {
+        case Mode::PageId: return "PageId";
+        case Mode::Pages: return "Pages";
+        case Mode::ShardPages: return "ShardPages";
+        case Mode::ShardView: return "ShardView";
+    }
+    return "?";
+}
+
+std::string path_name(Path p) { return p == Path::Hw ? "Hw" : p == Path::Sw ? "Sw" : "HwStats"; }
+
+std::string param_name(const Param& p) {
+    return fmt::format("{}_{}_{}", p.layout.name, mode_name(p.mode), path_name(p.path));
+}
+
+void PrintTo(const Param& p, std::ostream* os) { *os << param_name(p); }
+
+std::vector<unit_tests::dm::ta_addrgen::LayoutCase> layouts() {
+    using unit_tests::dm::ta_addrgen::LayoutCase;
+    constexpr uint32_t kCols = 512;  // 2 KB row-major pages of uint32
+    return {
+        // One shard per bank, split on rows: one BANK_MIDDLE walk for the whole tensor.
+        {.name = "HeightL1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+         .rows = 128,
+         .cols = kCols,
+         .shard_rows = 64,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1}},
+        // Split on columns: page ids alternate banks every page.
+        {.name = "WidthL1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+         .rows = 64,
+         .cols = 2 * kCols,
+         .shard_rows = 64,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1}},
+        {.name = "SingleBankHeightDram",
+         .buffer_type = BufferType::DRAM,
+         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+         .rows = 128,
+         .cols = kCols,
+         .shard_rows = 128,
+         .shard_cols = kCols,
+         .shard_grid = {1, 1}},
+        {.name = "HeightDram",  // needs >= 2 DRAM banks
+         .buffer_type = BufferType::DRAM,
+         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+         .rows = 128,
+         .cols = kCols,
+         .shard_rows = 64,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1}},
+        {.name = "WidthDram",  // needs >= 2 DRAM banks
+         .buffer_type = BufferType::DRAM,
+         .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
+         .rows = 64,
+         .cols = 2 * kCols,
+         .shard_rows = 64,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1}},
+        // ND: rank 3, 8 shards round-robin over 2 banks (bank loop wraps into the next slot).
+        {.name = "NdRank3L1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+         .rows = 16,
+         .cols = kCols,
+         .nd_outer = 8,
+         .shard_rows = 16,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1}},
+        {.name = "NdRoundRobinL1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
+         .rows = 128,
+         .cols = kCols,
+         .shard_rows = 16,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1},
+         .nd_round_robin = true},
+        // ND blocked: 4 bands of 2 shards (one walk per band).
+        {.name = "NdBlockRoundRobinL1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+         .rows = 64,
+         .cols = 2 * kCols,
+         .shard_rows = 16,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1},
+         .nd_round_robin = true},
+        // ND blocked, 3 shards per band on 2 banks: the bank cycle wraps mid-row (one walk per row).
+        {.name = "NdBlockRoundRobin3WideL1",
+         .buffer_type = BufferType::L1,
+         .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
+         .rows = 64,
+         .cols = 3 * kCols,
+         .shard_rows = 16,
+         .shard_cols = kCols,
+         .shard_grid = {2, 1},
+         .nd_round_robin = true},
+    };
+}
+
+std::vector<Param> params() {
+    std::vector<Param> out;
+    for (const auto& lc : layouts()) {
+        for (Mode m : {Mode::PageId, Mode::Pages, Mode::ShardPages, Mode::ShardView}) {
+            for (Path path : {Path::Hw, Path::Sw, Path::HwStats}) {
+                out.push_back({lc, m, path});
+            }
+        }
+    }
+    return out;
+}
+
+}  // namespace sharded_perf
+
+class TensorAccessorAddrgenShardedPerf : public QuasarMeshDeviceSingleCardFixture,
+                                         public ::testing::WithParamInterface<sharded_perf::Param> {};
+
+TEST_P(TensorAccessorAddrgenShardedPerf, CyclesPerTransfer) {
+    using namespace unit_tests::dm::ta_addrgen;
+    const auto& p = GetParam();
+    auto& device = *devices_.at(0);
+    if (!att_enabled()) {
+        GTEST_SKIP() << "needs TT_METAL_NOC_ATT (the address-generator path is ATT-only)";
+    }
+    const LayoutCase lc = p.layout;
+    if (const auto reason = skip_reason(device, lc); !reason.empty()) {
+        GTEST_SKIP() << lc.name << ": " << reason;
+    }
+    const m2::NodeCoord node{0, 0};
+    const uint32_t page_size = page_size_bytes(lc);
+    const TensorSpec tensor_spec = make_tensor_spec(lc);
+    ASSERT_EQ(tensor_spec.compute_page_size_bytes(), page_size);
+    MeshTensor tensor = MeshTensor::allocate_on_device(device, tensor_spec);
+
+    m2::KernelSpec kernel{
+        .unique_id = m2::KernelSpecName{"perf"},
+        .source = std::filesystem::path{sharded_perf::kKernel},
+        .num_threads = 1,
+        .compile_time_args = {{"mode", static_cast<uint32_t>(p.mode)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"report_addr"}},
+        .hw_config = m2::DataMovementHardwareConfig{},
+    };
+    kernel.scratchpad_bindings.push_back(m2::KernelSpec::ScratchpadBinding{
+        .scratchpad_spec_name = m2::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    m2::test_helpers::BindTensorParameterToKernel(kernel, "src", "src");
+    if (p.path == sharded_perf::Path::Sw) {
+        kernel.compiler_options.defines.emplace(kDisableAddrgenDefine, "1");
+    }
+    if (p.path == sharded_perf::Path::HwStats) {
+        kernel.compiler_options.defines.emplace(kAddrgenStatsDefine, "1");
+    }
+    m2::ProgramSpec spec{
+        .name = "ta_addrgen_sharded_perf",
+        .kernels = {kernel},
+        .scratchpads = {m2::ScratchpadSpec{.unique_id = m2::ScratchpadSpecName{"pad"}, .size_per_node = page_size}},
+        .work_units = {m2::test_helpers::MakeMinimalWorkUnit("wu", node, {"perf"})},
+    };
+    spec.tensor_parameters.push_back({.unique_id = m2::TensorParamName{"src"}, .spec = tensor_spec});
+    Program program = m2::MakeProgramFromSpec(device, spec);
+
+    constexpr uint32_t kReportBytes = sharded_perf::kReportWords * sizeof(uint32_t);
+    auto report = make_l1_region(device, kReportBytes);
+    const uint32_t report_addr = static_cast<uint32_t>(report->address());
+    std::vector<uint32_t> report_init(sharded_perf::kReportWords, 0xDEADBEEF);
+    slow_dispatch::WriteToL1(device, node, report_addr, report_init);
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        {.kernel = m2::KernelSpecName{"perf"},
+         .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"report_addr", report_addr}})}};
+    params.tensor_args.emplace(m2::TensorParamName{"src"}, std::cref(tensor));
+    m2::SetProgramRunArgs(program, params);
+    auto workload = LaunchProgram(device, std::move(program));
+
+    std::vector<uint32_t> r;
+    ASSERT_TRUE(slow_dispatch::ReadFromL1(device, node, report_addr, kReportBytes, r));
+    ASSERT_EQ(r.size(), sharded_perf::kReportWords);
+    const uint32_t transfers = r[8];
+    ASSERT_NE(transfers, 0xDEADBEEFu) << "kernel never wrote its report";
+    ASSERT_GE(transfers, num_pages(lc));
+    auto section = [&](uint32_t s) { return (static_cast<uint64_t>(r[2 * s + 1]) << 32) | r[2 * s]; };
+    auto per_transfer = [&](uint32_t s) {
+        return (static_cast<double>(section(s)) - static_cast<double>(section(0))) / transfers;
+    };
+    // One parseable line per case: addrgen_sharded_perf,<layout>,<mode>,<path>,<transfers>,<addr>,<read+bar>,<batched>.
+    log_info(
+        tt::LogTest,
+        "addrgen_sharded_perf,{},{},{},{},{:.1f},{:.1f},{:.1f}",
+        lc.name,
+        sharded_perf::mode_name(p.mode),
+        sharded_perf::path_name(p.path),
+        transfers,
+        per_transfer(1),
+        per_transfer(2),
+        per_transfer(3));
+    if (p.path == sharded_perf::Path::HwStats) {
+        const uint32_t hw = r[10], inel = r[11], unsup = r[12], seeks = r[13], skips = r[14], restores = r[15],
+                       fallbacks = r[16], pushes = r[17];
+        log_info(
+            tt::LogTest,
+            "addrgen_sharded_perf_stats,{},{},hw={},sw_ineligible={},sw_unsupported={},seeks={},skips={},restores={},"
+            "fallbacks={},pushes={}",
+            lc.name,
+            sharded_perf::mode_name(p.mode),
+            hw,
+            inel,
+            unsup,
+            seeks,
+            skips,
+            restores,
+            fallbacks,
+            pushes);
+        // Three sections go through the transfer path (addr, read, batched).
+        EXPECT_EQ(hw + inel + unsup + fallbacks, 3 * transfers);
+        EXPECT_EQ(unsup, 0u);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ShardedPerf,
+    TensorAccessorAddrgenShardedPerf,
+    ::testing::ValuesIn(sharded_perf::params()),
+    [](const ::testing::TestParamInfo<sharded_perf::Param>& info) { return sharded_perf::param_name(info.param); });
 
 // Raw address-generator cost breakdown (addrgen_raw_perf.cpp): pop, push and issue costs without the walker, against
 // the software address and the walker as shipped. Also checks that pushed addresses read the right pages. Manual run.
