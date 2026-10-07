@@ -8,6 +8,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Hardsigmoid
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/binary/sfpu/basic.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"  // Optional
+#if WORK_QUEUE
+#include "unary_work_queue_tiles.hpp"
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -23,33 +26,48 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
-    ckl::eltwise_chain(
-        ckl::IterationShape::tiles(num_tiles),
-        ckl::CopyTile<
-            ckl::input(
-                dfb_input_id,
-                ckl::WaitPolicy::PerTile,
-                kIsInt ? ckl::PopPolicy::PerTile : ckl::PopPolicy::None,
-                ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
-        ckl::Hardsigmoid<ckl::Dst::D0>{},
-        ckl::Optional<
-            kIsFloat32,
+    auto process = [&](uint32_t count) {
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(count),
             ckl::CopyTile<
                 ckl::input(
-                    dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::Dst::D1>>{},
-        ckl::Optional<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
-        ckl::Optional<
-            kIsFloat,
-            ckl::DestReuseBinary<
-                ckl::BinaryFpuOp::Mul,
-                ckl::input(
-                    dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-                ckl::DestReuseType::DEST_TO_SRCA>>{},
-        ckl::PackTile<ckl::output(
-            dfb_output_id,
-            ckl::ReservePolicy::PerTile,
-            ckl::PushPolicy::PerTile,
-            ckl::DataFormatReconfig::Disabled)>{});
+                    dfb_input_id,
+                    ckl::WaitPolicy::PerTile,
+                    kIsInt ? ckl::PopPolicy::PerTile : ckl::PopPolicy::None,
+                    ckl::DataFormatReconfig::Disabled),
+                ckl::Dst::D0>{},
+            ckl::Hardsigmoid<ckl::Dst::D0>{},
+            ckl::Optional<
+                kIsFloat32,
+                ckl::CopyTile<
+                    ckl::input(
+                        dfb_input_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::Dst::D1>>{},
+            ckl::Optional<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
+            ckl::Optional<
+                kIsFloat,
+                ckl::DestReuseBinary<
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::input(
+                        dfb_input_id,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::PerTile,
+                        ckl::DataFormatReconfig::Disabled),
+                    ckl::DestReuseType::DEST_TO_SRCA>>{},
+            ckl::PackTile<ckl::output(
+                dfb_output_id,
+                ckl::ReservePolicy::PerTile,
+                ckl::PushPolicy::PerTile,
+                ckl::DataFormatReconfig::Disabled)>{});
+    };
+#if WORK_QUEUE
+    for (uint32_t n = unary_wq::next_chunk_tiles(); n != 0; n = unary_wq::next_chunk_tiles()) {
+        process(n);
+    }
+#else
+    process(num_tiles);
+#endif
 }

@@ -13,6 +13,9 @@
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
+#if WORK_QUEUE
+#include "unary_work_queue_tiles.hpp"
+#endif
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -25,26 +28,35 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input, cb_output);
     copy_init(cb_input);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
+    auto process = [&](uint32_t count) {
+        for (uint32_t i = 0; i < count; ++i) {
+            tile_regs_acquire();
 
-        dfb_in.wait_front(1);
-        dfb_out.reserve_back(1);
+            dfb_in.wait_front(1);
+            dfb_out.reserve_back(1);
 
-        copy_tile(cb_input, 0, 0);
+            copy_tile(cb_input, 0, 0);
 
 #ifdef SFPU_OP_CHAIN_0
-        SFPU_OP_CHAIN_0
+            SFPU_OP_CHAIN_0
 #endif
 
-        tile_regs_commit();
-        tile_regs_wait();
+            tile_regs_commit();
+            tile_regs_wait();
 
-        pack_tile(0, cb_output);
+            pack_tile(0, cb_output);
 
-        dfb_in.pop_front(1);
-        dfb_out.push_back(1);
+            dfb_in.pop_front(1);
+            dfb_out.push_back(1);
 
-        tile_regs_release();
+            tile_regs_release();
+        }
+    };
+#if WORK_QUEUE
+    for (uint32_t n = unary_wq::next_chunk_tiles(); n != 0; n = unary_wq::next_chunk_tiles()) {
+        process(n);
     }
+#else
+    process(num_tiles);
+#endif
 }
