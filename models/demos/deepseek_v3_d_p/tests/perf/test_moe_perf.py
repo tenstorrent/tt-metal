@@ -39,10 +39,10 @@ _CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and toru
 # Record-only: one local run on a different fabric from every sibling row, so the margin admits any
 # measurement. Replace both with the first CI result on this fabric.
 _MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
-# Midpoint of two LoudBox runs, 35025551183 and 35025541781, which agree to 0.39%. 10% rather than
-# the sibling rows' 3% because this keeps moving while the branch is pre-merge; re-cut it tight once
-# landed.
-_MISTRAL4_MOE_LB_8X1_NS = 4_781_146
+# Single LoudBox run 37547491707 (LoFi SDPA, 8256 B packets, padding-aware gate). Previously the
+# midpoint of runs 35025551183 and 35025541781 (4_781_146). 10% rather than the sibling rows' 3%
+# because this keeps moving while the branch is pre-merge; re-cut it tight once landed.
+_MISTRAL4_MOE_LB_8X1_NS = 4_204_313
 _MISTRAL4_MOE_LB_8X1_MARGIN = 0.10
 
 
