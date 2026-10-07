@@ -78,9 +78,9 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 580
+    wh_n300_civ2: 749
     bh_p100: 545
-    bh_p150b_civ2: 565
+    bh_p150b_civ2: 724
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
@@ -119,10 +119,10 @@ ttnn:
   unit_tier3:
     wh_n150: 4
   device_perf:
-    bh_p150b_civ2: 19
+    bh_p150b_civ2: 239
     wh_n150: 10
     wh_llmbox_perf: 8
-    wh_n300_civ2: 10
+    wh_n300_civ2: 230
   integration:
     wh_llmbox: 30
     wh_galaxy: 100
@@ -157,6 +157,7 @@ train:
   unit:
     bh_p100: 105
     bh_p150b_civ2: 90
+    bh_quietbox_2: 50
   perf:
     bh_p100: 160
     bh_p150b_civ2: 400
