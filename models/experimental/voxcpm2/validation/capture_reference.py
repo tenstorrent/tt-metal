@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Capture native, uncompiled VoxCPM2 generation on CUDA; no device fallback."""
 import argparse
@@ -15,12 +16,26 @@ from .manifest import SCHEMA_VERSION, TensorRecorder, sha256_file
 
 UPSTREAM_REVISION = "f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629"
 FORWARD_COMPONENTS = (
-    "base_lm", "residual_lm", "feat_encoder", "fsq_layer", "enc_to_lm_proj",
-    "fusion_concat_proj", "lm_to_dit_proj", "res_to_dit_proj", "stop_proj",
-    "stop_actn", "stop_head", "feat_decoder", "feat_decoder.estimator",
+    "base_lm",
+    "residual_lm",
+    "feat_encoder",
+    "fsq_layer",
+    "enc_to_lm_proj",
+    "fusion_concat_proj",
+    "lm_to_dit_proj",
+    "res_to_dit_proj",
+    "stop_proj",
+    "stop_actn",
+    "stop_head",
+    "feat_decoder",
+    "feat_decoder.estimator",
 )
-METHOD_COMPONENTS = (("base_lm", "forward_step"), ("residual_lm", "forward_step"),
-                     ("audio_vae", "encode"), ("audio_vae", "decode"))
+METHOD_COMPONENTS = (
+    ("base_lm", "forward_step"),
+    ("residual_lm", "forward_step"),
+    ("audio_vae", "encode"),
+    ("audio_vae", "decode"),
+)
 
 
 def _resolve(model, name):
@@ -35,20 +50,33 @@ def _wrap_method(recorder, component, method, module=None):
         event = recorder.begin(component, args, kwargs)
         position = None
         if component.endswith(".forward_step") and module is not None:
-            position_tensor = kwargs.get("position_id", args[1] if len(args) > 1 else None)
+            position_tensor = kwargs.get(
+                "position_id", args[1] if len(args) > 1 else None
+            )
             position = int(position_tensor.item())
-            caches = [module.kv_cache.get_layer_cache(i) for i in range(len(module.layers))]
+            caches = [
+                module.kv_cache.get_layer_cache(i) for i in range(len(module.layers))
+            ]
             event["kv_cache_capacity"] = int(caches[0][0].shape[2])
             event["state_before"] = recorder.snapshot(
-                [(key[:, :, :position, :], val[:, :, :position, :]) for key, val in caches],
-                event["key"] + "/state_before")
+                [
+                    (key[:, :, :position, :], val[:, :, :position, :])
+                    for key, val in caches
+                ],
+                event["key"] + "/state_before",
+            )
         output = method(*args, **kwargs)
         recorder.end(event, output)
         if position is not None:
             event["state_after"] = recorder.snapshot(
-                [(key[:, :, :position + 1, :], val[:, :, :position + 1, :]) for key, val in caches],
-                event["key"] + "/state_after")
+                [
+                    (key[:, :, : position + 1, :], val[:, :, : position + 1, :])
+                    for key, val in caches
+                ],
+                event["key"] + "/state_after",
+            )
         return output
+
     return call
 
 
@@ -69,15 +97,34 @@ def _replace_method(module, name, replacement):
 def install_capture(stack, model, recorder):
     # Methods are wrapped, not reconstructed. This includes forward_step calls
     # which bypass torch Module.forward hooks in the official autoregressive loop.
-    codec_components = ["audio_vae.decoder", "audio_vae.encoder", "audio_vae.encoder.fc_mu"]
-    codec_components.extend("audio_vae.decoder.model." + name for name, _ in model.audio_vae.decoder.model.named_children())
+    codec_components = [
+        "audio_vae.decoder",
+        "audio_vae.encoder",
+        "audio_vae.encoder.fc_mu",
+    ]
+    codec_components.extend(
+        "audio_vae.decoder.model." + name
+        for name, _ in model.audio_vae.decoder.model.named_children()
+    )
     for name in (*FORWARD_COMPONENTS, *codec_components):
         module = _resolve(model, name)
-        stack.enter_context(_replace_method(module, "forward", _wrap_method(recorder, name + ".forward", module.forward)))
+        stack.enter_context(
+            _replace_method(
+                module,
+                "forward",
+                _wrap_method(recorder, name + ".forward", module.forward),
+            )
+        )
     for name, method_name in METHOD_COMPONENTS:
         module = _resolve(model, name)
         method = getattr(module, method_name)
-        stack.enter_context(_replace_method(module, method_name, _wrap_method(recorder, name + "." + method_name, method, module)))
+        stack.enter_context(
+            _replace_method(
+                module,
+                method_name,
+                _wrap_method(recorder, name + "." + method_name, method, module),
+            )
+        )
     original = model._inference
 
     def inference(*args, **kwargs):
@@ -85,14 +132,19 @@ def install_capture(stack, model, recorder):
         # Upstream reseeds immediately before this call. Save the state that
         # produced diffusion noise, rather than merely the process initial seed.
         recorder.snapshot(torch.get_rng_state(), event["key"] + "/rng/cpu")
-        recorder.snapshot(torch.cuda.get_rng_state(model.device), event["key"] + "/rng/cuda")
+        recorder.snapshot(
+            torch.cuda.get_rng_state(model.device), event["key"] + "/rng/cuda"
+        )
         generator = original(*args, **kwargs)
         try:
             for index, output in enumerate(generator):
-                event.setdefault("yields", []).append(recorder.snapshot(output, event["key"] + f"/yield/{index}"))
+                event.setdefault("yields", []).append(
+                    recorder.snapshot(output, event["key"] + f"/yield/{index}")
+                )
                 yield output
         finally:
             generator.close()
+
     stack.enter_context(_replace_method(model, "_inference", inference))
 
 
@@ -101,25 +153,35 @@ def _official_source():
     direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
     revision = direct_url.get("vcs_info", {}).get("commit_id")
     if revision != UPSTREAM_REVISION:
-        raise RuntimeError(f"Install official voxcpm from pinned git revision {UPSTREAM_REVISION}; installed revision is {revision!r}")
+        raise RuntimeError(
+            f"Install official voxcpm from pinned git revision {UPSTREAM_REVISION}; installed revision is {revision!r}"
+        )
     url = direct_url.get("url", "").removesuffix(".git")
-    if url not in ("https://github.com/OpenBMB/VoxCPM", "https://github.com/openbmb/VoxCPM"):
+    if url not in (
+        "https://github.com/OpenBMB/VoxCPM",
+        "https://github.com/openbmb/VoxCPM",
+    ):
         raise RuntimeError(f"Unexpected voxcpm source URL: {url}")
     return {"revision": revision, "url": url, "version": distribution.version}
 
 
 def capture_reference(args):
     if not re.fullmatch(r"[0-9a-f]{40}", args.checkpoint_revision):
-        raise ValueError("--checkpoint-revision must be an exact 40-character commit SHA")
+        raise ValueError(
+            "--checkpoint-revision must be an exact 40-character commit SHA"
+        )
     if not args.text.strip():
         raise ValueError("--text must be nonempty")
     device = torch.device(args.device)
     if device.type != "cuda" or not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required for the official reference; CPU/MPS fallback is disabled")
+        raise RuntimeError(
+            "CUDA is required for the official reference; CPU/MPS fallback is disabled"
+        )
     torch.cuda.set_device(device)
     device = torch.device("cuda", torch.cuda.current_device())
     source = _official_source()
     from voxcpm.model.voxcpm2 import VoxCPM2Model
+
     checkpoint = args.checkpoint.resolve()
     config_path = checkpoint / "config.json"
     config = json.loads(config_path.read_text())
@@ -142,45 +204,100 @@ def capture_reference(args):
     devices = {p.device.type for p in model.parameters()}
     if devices != {"cuda"}:
         raise RuntimeError(f"Native model parameters must all be CUDA, got {devices}")
-    generation = dict(target_text=args.text, prompt_text=args.prompt_text or "",
-                      prompt_wav_path=str(args.prompt_wav.resolve()) if args.prompt_wav else "",
-                      reference_wav_path=str(args.reference_wav.resolve()) if args.reference_wav else "",
-                      min_len=args.min_len, max_len=args.max_len,
-                      inference_timesteps=args.inference_timesteps, cfg_value=args.cfg_value,
-                      retry_badcase=False, trim_silence_vad=False, seed=args.seed)
+    generation = dict(
+        target_text=args.text,
+        prompt_text=args.prompt_text or "",
+        prompt_wav_path=str(args.prompt_wav.resolve()) if args.prompt_wav else "",
+        reference_wav_path=str(args.reference_wav.resolve())
+        if args.reference_wav
+        else "",
+        min_len=args.min_len,
+        max_len=args.max_len,
+        inference_timesteps=args.inference_timesteps,
+        cfg_value=args.cfg_value,
+        retry_badcase=False,
+        trim_silence_vad=False,
+        seed=args.seed,
+    )
     with ExitStack() as stack, torch.inference_mode():
         install_capture(stack, model, recorder)
         waveform = model.generate(**generation)
     torch.cuda.synchronize(device)
     recorder.snapshot(waveform, "waveform")
     import soundfile as sf
-    sf.write(output / "reference.wav", waveform.detach().cpu().float().squeeze().numpy(), model.sample_rate, subtype="FLOAT")
+
+    sf.write(
+        output / "reference.wav",
+        waveform.detach().cpu().float().squeeze().numpy(),
+        model.sample_rate,
+        subtype="FLOAT",
+    )
     files = {}
     for path in sorted(checkpoint.iterdir()):
         if path.is_file():
-            files[path.name] = {"sha256": sha256_file(path), "bytes": path.stat().st_size}
+            files[path.name] = {
+                "sha256": sha256_file(path),
+                "bytes": path.stat().st_size,
+            }
     prompt_files = {}
-    for name, path in (("prompt_wav", args.prompt_wav), ("reference_wav", args.reference_wav)):
+    for name, path in (
+        ("prompt_wav", args.prompt_wav),
+        ("reference_wav", args.reference_wav),
+    ):
         if path:
-            prompt_files[name] = {"path": str(path.resolve()), "sha256": sha256_file(path)}
+            prompt_files[name] = {
+                "path": str(path.resolve()),
+                "sha256": sha256_file(path),
+            }
     source["model_file_sha256"] = sha256_file(inspect.getfile(VoxCPM2Model))
-    versions = {name: importlib.metadata.version(name) for name in ("torch", "numpy", "transformers", "soundfile", "safetensors")}
-    manifest = {
-        "schema_version": SCHEMA_VERSION, "complete": True, "oracle": "official_voxcpm2_cuda", "backend": "cuda",
-        "source": source,
-        "checkpoint": {"repository": args.checkpoint_repo, "revision": args.checkpoint_revision, "files": files},
-        "cuda": {"device": str(device), "device_name": torch.cuda.get_device_name(device),
-                 "capability": list(torch.cuda.get_device_capability(device)), "runtime": torch.version.cuda,
-                 "uuid": str(getattr(torch.cuda.get_device_properties(device), "uuid", "unavailable")),
-                 "cudnn": torch.backends.cudnn.version()},
-        "versions": versions, "python": platform.python_version(), "generation": generation,
-        "prompt_files": prompt_files, "last_successful_seed": model.last_successful_seed,
-        "rng": {"seed": args.seed, "torch_states": "inference/000000/rng/{cpu,cuda}",
-                "tf32": False, "compile": False, "retries": False},
-        "sample_rate": model.sample_rate, "wav": {"file": "reference.wav", "sha256": sha256_file(output / "reference.wav")},
-        "events": recorder.events, "tensors": recorder.tensors,
+    versions = {
+        name: importlib.metadata.version(name)
+        for name in ("torch", "numpy", "transformers", "soundfile", "safetensors")
     }
-    (output / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "complete": True,
+        "oracle": "official_voxcpm2_cuda",
+        "backend": "cuda",
+        "source": source,
+        "checkpoint": {
+            "repository": args.checkpoint_repo,
+            "revision": args.checkpoint_revision,
+            "files": files,
+        },
+        "cuda": {
+            "device": str(device),
+            "device_name": torch.cuda.get_device_name(device),
+            "capability": list(torch.cuda.get_device_capability(device)),
+            "runtime": torch.version.cuda,
+            "uuid": str(
+                getattr(torch.cuda.get_device_properties(device), "uuid", "unavailable")
+            ),
+            "cudnn": torch.backends.cudnn.version(),
+        },
+        "versions": versions,
+        "python": platform.python_version(),
+        "generation": generation,
+        "prompt_files": prompt_files,
+        "last_successful_seed": model.last_successful_seed,
+        "rng": {
+            "seed": args.seed,
+            "torch_states": "inference/000000/rng/{cpu,cuda}",
+            "tf32": False,
+            "compile": False,
+            "retries": False,
+        },
+        "sample_rate": model.sample_rate,
+        "wav": {
+            "file": "reference.wav",
+            "sha256": sha256_file(output / "reference.wav"),
+        },
+        "events": recorder.events,
+        "tensors": recorder.tensors,
+    }
+    (output / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, allow_nan=False) + "\n"
+    )
     return manifest
 
 
@@ -188,8 +305,17 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--checkpoint-repo", default="openbmb/VoxCPM2")
-    parser.add_argument("--checkpoint-revision", required=True, help="Exact Hugging Face checkpoint commit")
-    parser.add_argument("--output", type=Path, required=True, help="New directory; never overwrite an oracle")
+    parser.add_argument(
+        "--checkpoint-revision",
+        required=True,
+        help="Exact Hugging Face checkpoint commit",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="New directory; never overwrite an oracle",
+    )
     parser.add_argument("--text", required=True)
     parser.add_argument("--prompt-text")
     parser.add_argument("--prompt-wav", type=Path)

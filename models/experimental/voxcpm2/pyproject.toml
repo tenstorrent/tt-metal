@@ -1,7 +1,7 @@
 [project]
 name = "tt-metal-voxcpm2"
 version = "0.1.0"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "torch==2.8.0",
     "numpy>=1.26,<3",
@@ -30,3 +30,5 @@ tt-runtime = [
 
 [tool.uv]
 package = false
+# Device runtime and reference capture are qualified on Linux x86-64.
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]

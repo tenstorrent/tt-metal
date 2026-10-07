@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Versioned on-disk tensor records, with integrity checks."""
 import hashlib
@@ -18,6 +19,7 @@ def sha256_file(path):
 
 class TensorRecorder:
     """Snapshot nested inputs immediately, before upstream can mutate KV buffers."""
+
     def __init__(self, directory):
         self.directory = Path(directory)
         (self.directory / "tensors").mkdir(parents=True, exist_ok=True)
@@ -30,23 +32,32 @@ class TensorRecorder:
             cpu = value.detach().cpu().clone()
             torch.save(cpu, self.directory / filename)
             self.tensors[key] = {
-                "file": filename, "shape": list(value.shape), "dtype": str(value.dtype),
-                "source_device": str(value.device), "sha256": sha256_file(self.directory / filename),
+                "file": filename,
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+                "source_device": str(value.device),
+                "sha256": sha256_file(self.directory / filename),
             }
             return {"tensor": key}
         if isinstance(value, dict):
             return {str(k): self.snapshot(v, f"{key}/{k}") for k, v in value.items()}
         if isinstance(value, (list, tuple)):
-            return {"sequence_type": type(value).__name__, "items": [self.snapshot(v, f"{key}/{i}") for i, v in enumerate(value)]}
+            return {
+                "sequence_type": type(value).__name__,
+                "items": [self.snapshot(v, f"{key}/{i}") for i, v in enumerate(value)],
+            }
         if value is None or isinstance(value, (str, bool, int, float)):
             return value
         raise TypeError(f"Cannot capture {key}: unsupported {type(value).__name__}")
 
     def begin(self, component, args, kwargs):
         key = f"{component}/{sum(e['component'] == component for e in self.events):06d}"
-        event = {"component": component, "key": key,
-                 "args": self.snapshot(args, key + "/args"),
-                 "kwargs": self.snapshot(kwargs, key + "/kwargs")}
+        event = {
+            "component": component,
+            "key": key,
+            "args": self.snapshot(args, key + "/args"),
+            "kwargs": self.snapshot(kwargs, key + "/kwargs"),
+        }
         self.events.append(event)
         return event
 
@@ -62,9 +73,13 @@ def load_manifest(directory, *, require_cuda=True):
     if manifest.get("complete") is not True:
         raise ValueError("Incomplete capture")
     if require_cuda:
-        if manifest.get("oracle") != "official_voxcpm2_cuda" or not manifest.get("cuda", {}).get("device_name"):
+        if manifest.get("oracle") != "official_voxcpm2_cuda" or not manifest.get(
+            "cuda", {}
+        ).get("device_name"):
             raise ValueError("Reference must be an official CUDA capture")
-        if not manifest.get("source", {}).get("revision") or not manifest.get("checkpoint", {}).get("revision"):
+        if not manifest.get("source", {}).get("revision") or not manifest.get(
+            "checkpoint", {}
+        ).get("revision"):
             raise ValueError("Reference revisions are missing")
     for name, record in manifest["tensors"].items():
         path = directory / record["file"]
@@ -77,7 +92,9 @@ def load_manifest(directory, *, require_cuda=True):
 
 def load_tensor(directory, manifest, name):
     record = manifest["tensors"][name]
-    value = torch.load(Path(directory) / record["file"], map_location="cpu", weights_only=True)
+    value = torch.load(
+        Path(directory) / record["file"], map_location="cpu", weights_only=True
+    )
     if list(value.shape) != record["shape"] or str(value.dtype) != record["dtype"]:
         raise ValueError(f"Tensor metadata mismatch: {name}")
     return value
@@ -89,11 +106,17 @@ def materialize_snapshot(directory, manifest, value):
         if set(value) == {"tensor"}:
             return load_tensor(directory, manifest, value["tensor"])
         if set(value) == {"sequence_type", "items"}:
-            items = [materialize_snapshot(directory, manifest, item) for item in value["items"]]
+            items = [
+                materialize_snapshot(directory, manifest, item)
+                for item in value["items"]
+            ]
             if value["sequence_type"] == "tuple":
                 return tuple(items)
             if value["sequence_type"] == "list":
                 return items
             raise ValueError("Unsupported captured sequence type")
-        return {key: materialize_snapshot(directory, manifest, item) for key, item in value.items()}
+        return {
+            key: materialize_snapshot(directory, manifest, item)
+            for key, item in value.items()
+        }
     return value

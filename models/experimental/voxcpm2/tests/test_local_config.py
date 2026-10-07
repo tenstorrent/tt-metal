@@ -21,7 +21,12 @@ class TestLocalConfig(unittest.TestCase):
             "scale_depth": 1.4,
             "no_rope": False,
         }
-        self.component = {"hidden_dim": 1024, "ffn_dim": 4096, "num_heads": 16, "num_layers": 4}
+        self.component = {
+            "hidden_dim": 1024,
+            "ffn_dim": 4096,
+            "num_heads": 16,
+            "num_layers": 4,
+        }
 
     def test_inherits_numerically_significant_settings_without_mutation(self):
         local = make_local_config(self.base, self.component)
@@ -41,7 +46,9 @@ class TestLocalConfig(unittest.TestCase):
 
     def test_explicit_kv_channels_allows_distinct_attention_width(self):
         self.component.update(hidden_dim=1025, kv_channels=64)
-        self.assertEqual(make_local_config(self.base, self.component)["kv_channels"], 64)
+        self.assertEqual(
+            make_local_config(self.base, self.component)["kv_channels"], 64
+        )
 
     def test_rejects_boolean_as_layer_count(self):
         self.component["num_layers"] = True
