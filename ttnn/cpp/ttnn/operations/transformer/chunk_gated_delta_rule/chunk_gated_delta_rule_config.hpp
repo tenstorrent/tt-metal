@@ -50,4 +50,16 @@ struct ChunkGdnFusedProgramConfig {
 using ChunkGdnProgramConfig =
     std::variant<ChunkGdnMonoProgramConfig, ChunkGdnPhasedProgramConfig, ChunkGdnFusedProgramConfig>;
 
+enum class ChunkGdnWyInverse : uint32_t {
+    // The forward-substitution solve wherever it is supported (Blackhole, chunk_size == 32), Horner everywhere else.
+    AUTO = 0,
+    // invert_block: quadrant split, two 15-term Horner inverses and an exact off-diagonal on the matrix
+    // engine (~60 LLK calls per chunk). Every architecture and chunk size; the reference the solve is
+    // validated against.
+    HORNER = 1,
+    // One SFPU forward-substitution solve reading the pre-negated factor as fp32 in place. Blackhole-only,
+    // chunk_size == 32, fused and phased paths (the mono program is Horner-only).
+    FORWARD_SUBSTITUTION = 2,
+};
+
 }  // namespace ttnn::transformer

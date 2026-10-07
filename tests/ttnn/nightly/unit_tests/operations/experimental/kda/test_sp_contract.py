@@ -452,3 +452,56 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
                 )
             for tensor in (*tensors, head_tt, tail_tt, actual_start, result):
                 ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("axis", [0, 1])
+def test_sp_chain_affine_transforms_order(mesh_device, axis):
+    """Every rank's entry state and the final carry follow the chronological rank order from actual_start."""
+    heads, key_dim, value_dim, local_rows = 2, 64, 96, 64
+    sp_size = tuple(mesh_device.shape)[axis]
+    generator = torch.Generator().manual_seed(4127)
+    eye = torch.eye(key_dim).expand(sp_size, heads, -1, -1)
+    # Non-commuting, BF16-representable transitions: a reordered chain fails loudly.
+    a = (0.9 * eye + 0.05 * torch.randn(sp_size, heads, key_dim, key_dim, generator=generator)).bfloat16().float()
+    b = (0.05 * torch.randn(sp_size, heads, key_dim, value_dim, generator=generator)).bfloat16().float()
+    seed = initial_state(heads, key_dim, value_dim)
+    transforms = ttnn.from_torch(
+        torch.cat([a, b], dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    initial = ttnn.from_torch(
+        seed,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    before = [_shards(transforms), _shards(initial)]
+    # Aligned and split starts on every first rank, plus one past the mesh span that wraps.
+    starts = [first_rank * local_rows + offset for first_rank in range(sp_size) for offset in (0, 32)]
+    starts.append((sp_size + 1) * local_rows + 32)
+    for start in starts:
+        first_rank = (start // local_rows) % sp_size
+        carry = seed
+        entries = {}
+        for step in range(sp_size):
+            rank = (first_rank + step) % sp_size
+            entries[rank] = carry
+            carry = a[rank] @ carry + b[rank]
+        entry, final = ttnn.experimental.kda.chain_affine_transforms(
+            transforms,
+            initial,
+            actual_start=make_actual_start(mesh_device, start),
+            local_rows=local_rows,
+            sequence_parallel_axis=axis,
+        )
+        for index, (local_entry, local_final) in enumerate(zip(_shards(entry), _shards(final), strict=True)):
+            rank = _rank(index, mesh_device, axis)
+            label = f"axis={axis} start={start} rank={rank} device={index}"
+            assert_accurate(entries[rank], local_entry, name=f"entry {label}", pcc_threshold=0.999)
+            assert_accurate(carry, local_final, name=f"final {label}", pcc_threshold=0.999)
+    _assert_immutable([transforms, initial], before)
