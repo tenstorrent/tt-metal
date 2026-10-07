@@ -207,7 +207,7 @@ public:
     std::vector<chan_id_t> get_forwarding_eth_chans_to_chip(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id, RoutingDirection forwarding_direction) const;
 
-    stl::Span<const ChipId> get_intra_chip_neighbors(
+    ttsl::Span<const ChipId> get_intra_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
     std::unordered_map<MeshId, std::vector<ChipId>> get_chip_neighbors(
         FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const;
