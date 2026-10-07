@@ -40,7 +40,7 @@ struct UnifiedMatmulPlan {
     uint32_t C_slice_M_tiles = 0;
     uint32_t C_slice_N_tiles = 0;
     uint32_t K_chunk_tiles = 0;
-    uint32_t num_K_chunks = 0;  // K_tiles / K_chunk_tiles
+    uint32_t K_chunks_per_C_slice = 0;  // K_tiles / K_chunk_tiles; every compute thread multiplies all of them
     uint32_t subblock_M_tiles = 0;
     uint32_t subblock_N_tiles = 0;
     // C slice dims rounded up to subblock multiples (equal when the subblock divides the slice).
@@ -57,9 +57,9 @@ struct UnifiedMatmulPlan {
     uint32_t C_entries_per_thread = 0;
 
     // DM threads per core (Quasar DM cores; one each elsewhere). Reader thread t reads the A and B slices of K
-    // chunks t, t + num_reader_threads, ... of every C slice (num_reader_threads divides num_K_chunks) into its own
-    // part of the A and B DFBs, which the compute threads' waits take in turn. Writer thread t writes the shares of
-    // compute threads t, t + num_writer_threads, ... (num_writer_threads divides num_compute_threads).
+    // chunks t, t + num_reader_threads, ... of every C slice (num_reader_threads divides K_chunks_per_C_slice) into
+    // its own part of the A and B DFBs, which the compute threads' waits take in turn. Writer thread t writes the
+    // shares of compute threads t, t + num_writer_threads, ... (num_writer_threads divides num_compute_threads).
     uint32_t num_reader_threads = 1;
     uint32_t num_writer_threads = 1;
     // A and B slices each operand DFB holds (a multiple of num_reader_threads), and C slices in flight (C_slice
