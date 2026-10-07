@@ -109,7 +109,7 @@ def main():
 
         def check(rep, cur, tag):
             nonlocal first
-            d = (cur.view(torch.int16) != ref) & livem.unsqueeze(-1).unsqueeze(-1)  # [rows, cols, 32, names, 4096]
+            d = (cur.view(torch.int16) != ref) & livem.unsqueeze(-1)  # [rows, cols, 32, names, 4096]
             if not d.any():
                 return
             cnt = d.sum(dim=(2, 4))  # [rows, cols, names]
