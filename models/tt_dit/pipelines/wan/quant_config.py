@@ -90,6 +90,10 @@ class QuantConfig:
     # linear run its own LinearQuantConfig. Off for the measured presets so their numbers stay
     # reproducible; on in the act8 family.
     per_linear_compute_config: bool = False
+    # Sprint 7 (A6). Output dtype of ff1 (ff2's input). bfloat8_b halves the 16.7 MB per-block
+    # intermediate ff1 writes and ff2 reads (the largest DRAM stream in the block) and lets ff2's
+    # MMRS read block-float pages; ff2's output is pinned back to bf16. None = default.
+    ff1_output_dtype: ttnn.DataType | None = None
 
     @staticmethod
     def default() -> QuantConfig:
@@ -277,7 +281,21 @@ def _all_bf8_lofi_act8_mod16() -> QuantConfig:
     return base
 
 
+def _all_bf8_lofi_act8_mod16_ff8() -> QuantConfig:
+    """`all_bf8_lofi_act8_mod16` plus a bfloat8_b ff1 output into ff2 (sprint 7, A6).
+
+    Halves the [M, inner/tp] intermediate between ff1 and ff2 (16.7 MB per block at 720p, the
+    largest DRAM stream per block) and feeds the ff2 MMRS block-float pages; ff2's output is pinned
+    bf16. New LoFi combination (bf8 in0 x bf8 ff2 weight): 20 s PCC test under a watchdog first.
+    Expected 1-3 % of the step; PCC- and fidelity-gated.
+    """
+    base = _all_bf8_lofi_act8_mod16()
+    base.ff1_output_dtype = ttnn.bfloat8_b
+    return base
+
+
 QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
+QuantConfig.all_bf8_lofi_act8_mod16_ff8 = staticmethod(_all_bf8_lofi_act8_mod16_ff8)
 QuantConfig.all_bf8_lofi_act8_out8 = staticmethod(_all_bf8_lofi_act8_out8)
 QuantConfig.all_bf8_lofi_act8_mod16 = staticmethod(_all_bf8_lofi_act8_mod16)
 
@@ -376,6 +394,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
         block.per_linear_compute_config = config.per_linear_compute_config
         block.attn1.per_linear_compute_config = config.per_linear_compute_config
         block.attn2.per_linear_compute_config = config.per_linear_compute_config
+        # ff1 output dtype (A6).
+        block.ffn.ff1_output_dtype = config.ff1_output_dtype
 
         # Self-attention linears
         _apply_linear_config(block.attn1.to_qkv, config.self_attn_qkv, arch, f"blocks[{idx}].attn1.to_qkv", **act)
@@ -437,7 +457,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     logger.info(
         f"  Activations: apply_activation_dtype={config.apply_activation_dtype}, "
         f"norm_output_dtype={config.norm_output_dtype}, modulation_affine_dtype={config.modulation_affine_dtype}, "
-        f"per_linear_compute_config={config.per_linear_compute_config}"
+        f"per_linear_compute_config={config.per_linear_compute_config}, ff1_output_dtype={config.ff1_output_dtype}"
     )
     logger.info(
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
@@ -508,6 +528,7 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_bf8_lofi_act8",
             "all_bf8_lofi_act8_out8",
             "all_bf8_lofi_act8_mod16",
+            "all_bf8_lofi_act8_mod16_ff8",
         ]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)
