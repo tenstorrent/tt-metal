@@ -31,6 +31,8 @@ keep weight/mapping init and per-iteration scratch separated from the forward lo
 
 from __future__ import annotations
 
+import os
+
 import torch
 from loguru import logger
 from ttnn.experimental.moe_compute_utils import (
@@ -41,6 +43,11 @@ from ttnn.experimental.moe_compute_utils import (
 
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
+
+
+def _expert_weight_dtype():
+    """bfloat4_b by default; MOE_COMPUTE_BFP8_WEIGHTS=1 selects bfloat8_b (must match the program factory's weight CB format, patched moe_compute)."""
+    return ttnn.bfloat8_b if os.environ.get("MOE_COMPUTE_BFP8_WEIGHTS", "0") != "0" else ttnn.bfloat4_b
 
 
 def _tt_to_torch_dtype(tt_dtype):
@@ -535,11 +542,11 @@ class _TTMoEDecodeExpertState:
         )
 
         tt_w0_w1 = ttnn.experimental.quantize_weights_via_host(
-            tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=weight_mem_configs.w0_w1
+            tt_w0_w1_prepped, dtype=_expert_weight_dtype(), memory_config=weight_mem_configs.w0_w1
         )
         ttnn.deallocate(tt_w0_w1_prepped)
         tt_w2 = ttnn.experimental.quantize_weights_via_host(
-            tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=weight_mem_configs.w2
+            tt_w2_prepped, dtype=_expert_weight_dtype(), memory_config=weight_mem_configs.w2
         )
         ttnn.deallocate(tt_w2_prepped)
         logger.info("Prepared and quantized w0/w1 and w2 to bfloat4_b on mesh")

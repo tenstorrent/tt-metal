@@ -33,16 +33,27 @@ link = [c for c in cmds if " -o ttnn/_ttnncpp.so " in c][0]
 procs = []
 objmap = {}
 for op in a.ops:
-    cc = [c for c in cmds if f"/{op}/CMakeFiles/" in c and "unity_0_cxx.cxx.o -c" in c]
+    if op.startswith(
+        "file:"
+    ):  # any unity TU that includes this source file (ops grouped into several unity TUs, e.g. experimental/ccl)
+        needle = op[5:]
+        cc = []
+        for c in cmds:
+            m0 = re.search(r" -c (\S+unity_\d+_cxx\.cxx)", c)
+            if m0 and needle in open(m0.group(1)).read():
+                cc.append(c)
+    else:
+        cc = [c for c in cmds if f"/{op}/CMakeFiles/" in c and "unity_0_cxx.cxx.o -c" in c]
     assert len(cc) == 1, (op, len(cc))
     cc = cc[0]
-    m = re.search(r"-o (\S+unity_0_cxx\.cxx\.o)", cc)
+    m = re.search(r"-o (\S+unity_\d+_cxx\.cxx\.o)", cc)
     shared_obj_rel = m.group(1)
-    src = re.search(r" -c (\S+unity_0_cxx\.cxx)", cc).group(1)
+    src = re.search(r" -c (\S+unity_\d+_cxx\.cxx)", cc).group(1)
     unity = open(src).read().replace(SHARED + "/ttnn/cpp/", W + "/ttnn/cpp/")
-    uf = f"{OUT}/obj/{op}_unity_0_cxx.cxx"
+    tag = re.sub(r"[^A-Za-z0-9_]", "_", op)
+    uf = f"{OUT}/obj/{tag}_unity_0_cxx.cxx"
     open(uf, "w").write(unity)
-    of = f"{OUT}/obj/{op}_unity_0_cxx.cxx.o"
+    of = f"{OUT}/obj/{tag}_unity_0_cxx.cxx.o"
     cc = cc.replace(" -c " + src, " -c " + uf).replace("-o " + shared_obj_rel, "-o " + of)
     cc = re.sub(r" -MD| -MT \S+| -MF \S+", "", cc)
     cc = cc.replace(f"-I{SHARED}/ttnn/cpp ", f"-I{W}/ttnn/cpp -I{SHARED}/ttnn/cpp ", 1)

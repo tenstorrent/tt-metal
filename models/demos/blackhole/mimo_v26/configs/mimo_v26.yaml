@@ -1,0 +1,24 @@
+# MiMo-V2.6-Flash MoE decode on a 4x8 Blackhole Galaxy (47 MoE layers, 256 routed experts top-8, sigmoid + selection-only bias, no shared expert, no clamp)
+mesh_shape: [4, 8]
+cluster_axis: 0
+batch_per_device: 4
+hidden_size: 4096
+select_experts_k: 8
+num_routed_experts: 256
+num_shared_experts: 0
+has_bias: false
+
+n_group: 1
+score_func: sigmoid
+routed_scaling_factor: 1.0
+score_correction_bias: true
+
+compute:
+  intermediate_size: 2048
+  activation_type: SILU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential

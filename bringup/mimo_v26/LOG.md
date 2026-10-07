@@ -1806,3 +1806,25 @@
 - claim: regate handoff: branch ssinghal/mimo-regate, measured commit b1a54e1a53f (harness guard 26f6086a01c + test_prefill_scale real TTFT b1a54e1a53f on top of 448d1005cde); 12/13 required gates re-measured PASS (first_token, spec_exact, hosted_oracle untouched); gsm8k passes by one (110/128); prefill replay-only throughput regressed 21959 -> 16905 tok/s (not investigated). Repro: launch.py --host H --commit b1a54e1a53f --env MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL --env LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/mimo/artifacts/integ_73c014eb46d/lib ... see regate_* logs in /mnt/tt-data/ssinghal/mimo-logs
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_gsm_h47_b1a54e1a53f.log
 - paths: models/demos/blackhole/mimo_v26/tests/harness.py
+
+## E261007-1649-8a2
+- date: 2026-10-07T16:49:22
+- commit: 7279090f3c4
+- branch: ssinghal/mimo-moe
+- host: 30,40,47,48
+- track: moe
+- status: verified
+- claim: RING decode MoE (DSV4 decode block pattern: router_select -> all_to_all_dispatch_metadata -> moe_compute (ring matmul + fused combine) -> tilize + deepseek_moe_fast_reduce_nc_fused -> reduce_scatter) at MiMo dims on the REAL 4x8 mesh, real layer 5, dump hidden states (first U of the 32 sampled tokens per row), bfp8 ring weights via the ported DSV4 patch (MOE_COMPUTE_BFP8_WEIGHTS, FP32_ACC, FIDELITY env in moe_compute_program_factory.cpp + tt_moe_decode.py weight dtype), traced, host-timed 30 replays. TOTAL ms/layer (router route_v + dispatch + moe_compute + fast_reduce + reduce_scatter) at U=1/8/32: bfp8 HiFi3+fp32acc (ACCURATE: alpha 1.0030/1.0032/1.0002, rel L2 0.0051/0.0080/0.0066 vs dump ffn_out (floor 0.0051), PCC 0.99999/0.99997/0.99998) 0.265/1.015/1.134 [moe_compute stage 0.160/0.892/1.020]; HiFi4 same numerics 0.302/1.258/1.425; HiFi2+fp32acc (rel 0.027/0.021/0.016, alpha 1.027/1.008/1.000) 0.241/0.764/0.858; LoFi+fp32acc (identical numerics to HiFi2) 0.57/0.64 at U=8/32; LoFi bf16 DEST (DSV4 default: alpha 0.87-0.99, rel 0.14-0.23, NOT usable) 0.208/0.565/0.642; bfp4 LoFi 0.206/0.505/0.567. Current unified-op path (spread32, fast router, 3 real layers): 0.847/1.558/1.717. Fixed ring tail stages: router 0.035-0.048, dispatch 0.010-0.021, fast_reduce 0.033-0.057, reduce_scatter 0.014-0.025. 3 runs identical, trace==eager in every row. Single-card moe_compute (compute_only, T=32, 8 experts): bfp4 LoFi 0.396 ms, bfp8 LoFi 0.475 ms (214 MB -> 450 GB/s = near DRAM floor), bfp8 HiFi3+fp32acc 0.975, HiFi4 1.26 (PCC 0.999988). => ring path saves 0.58/0.54/0.58 ms per layer vs unified (27/25/27 ms per token at 47 layers) at accurate numerics, but moe_compute is math-bound at HiFi3 (LoFi 0.52 ms vs HiFi3 1.02 ms at U=32): targets 0.6 (U=8) / 0.8 (U=32) NOT reached with accurate numerics (1.015 / 1.134)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Q_ring_bfp8_hifi3_f32_r2_h30_7279090f3c4.log
+- paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute, models/demos/blackhole/mimo_v26/tests/test_moe_ring_decode.py, models/common/modules/moe/tt_moe_decode.py
+
+## E261007-1649-5c4
+- date: 2026-10-07T16:49:22
+- commit: 7279090f3c4
+- branch: ssinghal/mimo-moe
+- host: 30,40,47,48
+- track: moe
+- status: verified
+- claim: EXPERT PLACEMENT / load imbalance analysis (CPU, real routing histograms of 47 layers: L1-5 bf16 dump, L6-47 device capture, 2048 tokens each): mean active experts per chip for a decode batch of B tokens (B=4U): 3.3 (U=8), 4.3 (U=16), 5.3 (U=32). Default mapping (e -> col e//32, row (e%32)//8): expected max/mean chip load 1.65/1.50/1.38 at U=8/16/32; balanced assignment (LPT on the layer's own histogram) 1.006-1.012 in expectation. But on HELD-OUT prompts (histogram from 8 prompts, evaluated on the other 8, 100 random batches, realized max/mean of active experts per chip) default 1.92/1.66/1.47 vs balanced 1.72/1.51/1.37: only ~10% better. Most of the max/mean gap at decode batch sizes is Poisson noise of few active experts per chip, not systematic hot experts. Placement gain estimate: ~0.04 ms/layer on the expert stage (~2 ms/token): low priority
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Q_ring_bfp8_hifi3_f32_r2_h30_7279090f3c4.log
+- paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute, models/demos/blackhole/mimo_v26/tests/test_moe_ring_decode.py, models/common/modules/moe/tt_moe_decode.py
