@@ -8,6 +8,8 @@ import os
 import torch
 from loguru import logger
 
+from models.demos.gemma4.tt.warmup_isls import ENV_VAR as WARMUP_ISLS_ENV_VAR
+from models.demos.gemma4.tt.warmup_isls import warmup_prefill_isls
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
@@ -1104,6 +1106,43 @@ def _warmup_gemma4_prefill_sweep(
         logger.info("Vision encoder warmup completed")
 
 
+def _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, *, prefill_forward_fn=None) -> None:
+    """One eager batch-1 prefill per ``GEMMA4_WARMUP_PREFILL_ISLS`` length, once
+    per process, so the first real request at that length does not pay the
+    shape compile. Runs on the plugin's first (compile) warmup pass; the
+    capture pass finds the flag set. See ``models.demos.gemma4.tt.warmup_isls``.
+    """
+    if getattr(generator, "_warmed_prefill_isl_ladder", False):
+        return
+    generator._warmed_prefill_isl_ladder = True
+    model_args = generator.model_args[0]
+    base = model_args.get_warmup_prefill_supported_seq_lens()
+    ladder = warmup_prefill_isls(getattr(model_args, "max_seq_len", None), already_warmed=base)
+    if not ladder:
+        return
+    prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
+    chunk = int(getattr(model_args, "max_prefill_chunk_size", GEMMA4_DEFAULT_PREFILL_CHUNK))
+    for model_id in range(generator.data_parallel):
+        for isl in ladder:
+            warmup_args = generator._mock_tokens(1, isl, kv_cache, model_id)
+            if warmup_args.get("page_table") is None and isl > chunk:
+                logger.warning(
+                    "Skipping prefill warmup at ISL {}: longer than the {}-token chunk with paged attention off",
+                    isl,
+                    chunk,
+                )
+                break
+            logger.info("Warming up eager prefill at ISL {} ({})", isl, WARMUP_ISLS_ENV_VAR)
+            prefill_forward(
+                **warmup_args,
+                kv_cache=kv_cache,
+                enable_trace=False,
+                model_id_warmup=model_id,
+                sampling_params=None,
+                warmup_prefill=False,
+            )
+
+
 def warmup_gemma4_model_prefill(
     generator,
     kv_cache,
@@ -1142,6 +1181,7 @@ def warmup_gemma4_model_prefill(
         greedy_only=greedy_only,
         prefill_forward_fn=prefill_forward_fn,
     )
+    _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, prefill_forward_fn=prefill_forward_fn)
     # Once-only: tt_transformers calls warmup_model_prefill on *every*
     # prefill (warmup_prefill=True). The batched helper early-returns via
     # already_warmed_up_prefill, but this 8192 sp1 capture used to re-run
