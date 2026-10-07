@@ -201,7 +201,8 @@ class YuvVideoExport:
     byte-identical to one. PyAV encodes with the GIL released, so the worker does not stall the caller.
 
     ``yuv_planar`` is read until :meth:`finish` returns; the fast YUV gather reuses its output buffer across
-    calls, so the caller must not run another decode before then.
+    calls, so the caller must not run another decode before then. It may also be a deferred array (with
+    ``shape`` and ``result()``), which the worker resolves before encoding.
     """
 
     def __init__(self, yuv_planar, output_path: str, fps: int = 24, audio_sampling_rate: int | None = None) -> None:
@@ -238,6 +239,8 @@ class YuvVideoExport:
         import av
 
         try:
+            if hasattr(yuv_planar, "result"):
+                yuv_planar = yuv_planar.result()
             # Wrap each frame in place: a copy per frame (~0.45 GB per clip) is as slow as the ultrafast encode itself.
             for frame_array in yuv_planar:
                 frame = av.VideoFrame.from_numpy_buffer(np.ascontiguousarray(frame_array), format="yuv420p")
