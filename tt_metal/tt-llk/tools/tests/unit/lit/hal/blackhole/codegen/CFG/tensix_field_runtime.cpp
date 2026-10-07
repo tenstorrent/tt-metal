@@ -4,6 +4,8 @@
 
 // RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -c %s -o %t.o
 // RUN: %{blackhole_objdump} -dr %t.o | FileCheck %s --enable-var-scope
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -c %s -o %t.assert.o
+// RUN: %{blackhole_objdump} -d %t.assert.o | FileCheck %s --check-prefix=ASSERT
 
 #include <cstdint>
 
@@ -31,6 +33,56 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_0(std::
 // CHECK: add a0,a0,[[OPA]]
 // CHECK: sw a0,0({{a[0-7]}})
 // CHECK-NEXT: ret
+
+#ifdef ENABLE_LLK_ASSERT
+
+// Runtime assignments must validate values before masking, even when a group
+// has only one member or the invalid assignment is not its first member.
+extern "C" void write_runtime_group_single_overflow()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(2));
+}
+
+// ASSERT-LABEL: <write_runtime_group_single_overflow>:
+// ASSERT-NOT: sw
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_group_later_overflow()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, 1>(), cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(2));
+}
+
+// ASSERT-LABEL: <write_runtime_group_later_overflow>:
+// ASSERT-NOT: sw
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_thread_group_overflow()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(cfg::set<cfg::AddrMod[cfg::SrcA].Incr, cfg::Sec::S0>(64));
+}
+
+// ASSERT-LABEL: <write_runtime_thread_group_overflow>:
+// ASSERT-NOT: sw
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_group_valid_boundaries()
+{
+    cfg::write<cfg::Access::TensixCfgUnit>(
+        cfg::set<cfg::PrngSeed::Seed_Val, cfg::Sec::S0>(0xffffffffu),
+        cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(1),
+        cfg::set<cfg::AddrMod[cfg::SrcA].Incr, cfg::Sec::S0>(63),
+        cfg::set<cfg::AddrMod[cfg::SrcA].CR, cfg::Sec::S0>(1));
+}
+
+// ASSERT-LABEL: <write_runtime_group_valid_boundaries>:
+// ASSERT-NOT: ebreak
+// ASSERT: ret
+
+#endif
 
 extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_straddle(std::uint32_t format)
 {

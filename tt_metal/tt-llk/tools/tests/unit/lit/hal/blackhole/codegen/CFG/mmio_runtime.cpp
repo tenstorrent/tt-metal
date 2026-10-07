@@ -6,6 +6,8 @@
 // RUN: FileCheck %s --enable-var-scope --check-prefixes=CHECK,T0 < %t.t0.s
 // RUN: %{blackhole_tensix_compile} %{blackhole_pack_thread} -S %s -o %t.t2.s
 // RUN: FileCheck %s --enable-var-scope --check-prefixes=CHECK,T2 < %t.t2.s
+// RUN: %{blackhole_tensix_compile} %{blackhole_unpack_thread} -DENABLE_LLK_ASSERT -S %s -o %t.assert.s
+// RUN: FileCheck %s --check-prefix=ASSERT < %t.assert.s
 
 #include <array>
 #include <cstdint>
@@ -41,6 +43,30 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_field(std::u
 // CHECK-NEXT: xor [[DATA]],[[DATA]],[[OLD]]
 // CHECK-NEXT: sw [[DATA]],0([[BANK]])
 // CHECK-NEXT: ret
+
+#ifdef ENABLE_LLK_ASSERT
+
+extern "C" void write_runtime_mmio_group_single_overflow()
+{
+    cfg::write<cfg::Access::MMIO>(cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(2));
+}
+
+// ASSERT-LABEL: {{^}}write_runtime_mmio_group_single_overflow:
+// ASSERT-NOT: sw {{[a-z0-9]+}},
+// ASSERT: ebreak
+// ASSERT: ret
+
+extern "C" void write_runtime_mmio_group_later_overflow()
+{
+    cfg::write<cfg::Access::MMIO>(cfg::set<cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, 1>(), cfg::set<cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0>(2));
+}
+
+// ASSERT-LABEL: {{^}}write_runtime_mmio_group_later_overflow:
+// ASSERT-NOT: sw {{[a-z0-9]+}},
+// ASSERT: ebreak
+// ASSERT: ret
+
+#endif
 
 extern "C" __attribute__((noinline, used)) void write_runtime_state_field_section(std::uint32_t format)
 {
