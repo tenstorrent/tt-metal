@@ -111,6 +111,16 @@ class ParallelFeedForward(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
         )
+        # Output dtype of ff1 (the activation ff2 consumes): None keeps the default (bf16 under a
+        # pinned output). bfloat8_b halves the largest DRAM stream per block (the [M, inner/tp]
+        # intermediate, 16.7 MB at the TI2V-5B 720p shape) and ff2's output is then pinned back to
+        # bf16 explicitly. Set by a quant config (Wan `QuantConfig.ff1_output_dtype`, sprint 7 A6).
+        self.ff1_output_dtype: ttnn.DataType | None = None
+
+    def _ff2_output_dtype(self):
+        # ff2 follows its input dtype by default; with a block-float ff1 output pin it to bf16 so
+        # the residual stream and the fused norms never see a block-float tensor.
+        return ttnn.bfloat16 if self.ff1_output_dtype is not None else None
 
     def forward(
         self,
@@ -135,9 +145,13 @@ class ParallelFeedForward(Module):
             default_block_size=default_block_size,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            dtype=self.ff1_output_dtype,
         )
         return self.ff2(
-            ff1_out, compute_kernel_config=compute_kernel_config, use_persistent_buffer=use_persistent_buffer
+            ff1_out,
+            compute_kernel_config=compute_kernel_config,
+            use_persistent_buffer=use_persistent_buffer,
+            dtype=self._ff2_output_dtype(),
         )
 
     def forward_fused_addcmul(
@@ -169,6 +183,7 @@ class ParallelFeedForward(Module):
             core_grid=core_grid,
             force_transpose=force_transpose,
             use_persistent_buffer=use_persistent_buffer,
+            dtype=self.ff1_output_dtype,
         )
         return self.ff2.forward_fused_addcmul(
             ff1_out,
@@ -177,4 +192,5 @@ class ParallelFeedForward(Module):
             scalar=scalar,
             compute_kernel_config=compute_kernel_config,
             use_persistent_buffer=use_persistent_buffer,
+            dtype=self._ff2_output_dtype(),
         )
