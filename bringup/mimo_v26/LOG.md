@@ -812,6 +812,16 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48u_43f8c5f81d5.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests
 
+## E261007-0509-4c0
+- date: 2026-10-07T05:09:36
+- commit: d699f503706
+- branch: ssinghal/mimo-asm
+- host: 48
+- track: asm
+- status: verified
+- claim: DEVICE per-layer dump EXISTS: /mnt/tt-data/ssinghal/mimo-dumps/mimo-device-s128b16/ (layer_0..47.pt + logits.pt, 4.85 GB). Free-running 48-layer device prefill (unified bf16-activation experts, bfp8 weights), same 16 GSM8K sequences/tokens as mimo-prefill-s128b16 (B=16, S=128, user b = mesh row b//4, slot b%4). layer_L.pt = {'prefill': {h_in, attn_in, attn_out, ffn_in, ffn_out, h_out [16,128,4096] bf16 (h_in = DEVICE h_out of layer L-1, i.e. chained), routing_idx [2048,8] int64 and routing_w [2048,8] float32 for L>=1 (device router, token order b*128+s), no route_gap/state/decode}, 'meta'}; logits.pt = {logits [16,152576] float32 of position 127, norm_in [16,4096] bf16 (last-token hidden before final norm), prefill_tokens}. Sanity: all fields finite at L47; h_out PCC vs CPU bf16 dump L0..L5 0.99998,0.99994,0.99989,0.99987,0.99988,0.99976 (whole-tensor). Last-token argmax decodes to plausible continuations of the dump texts ('The', ',', ' day', ' cheaper', ...). Capture run takes ~4 min incl. weight load. Repro: CAP_OUT=<dir> pytest tests/test_capture_device.py with the unified env (see handoff).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_capture48_d699f503706.log
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_capture_device.py
 ## E261007-0502-8d6
 - date: 2026-10-07T05:02:47
 - commit: 4169b64e156
@@ -822,6 +832,65 @@
 - claim: DECISIONS (coordinator, 2026-10-07, at 4169b64e156): (1) GSM8K gate protocol uses chat template with enable_thinking=false ('<think></think>' after the assistant tag, chat_template.jinja line 93); thinking-mode accuracy not measured. (2) File ownership for the next stage: tt/attention.py decode + tt/decode.py + tt/generator.py = attn agent; tt/prefill.py = asm agent; tt/moe*.py router*.py = moe agent; tt/kv_pool.py shared, layout agreed via LOG/notes; tt/layer.py tt/model.py changes via coordinator. (3) Per-layer gate for layers 6..47: reference agent runs the CPU oracle teacher-forced on DEVICE-captured per-layer inputs (mimo-device-s128b16), not a full CPU model run. (4) Spec decode drafter choice (MTP-3 vs DFlash) pending user decision; MTP oracle hypotheses built on device-captured hidden states first.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0514-f37
+- date: 2026-10-07T05:14:25
+- commit: 0972f38a750
+- branch: ssinghal/mimo-asm
+- host: DC16-2-BG-0204-u20-44
+- track: asm
+- status: inferred
+- claim: KV POOL LAYOUT PROPOSAL for the decode agent (not yet exercised on device): see bringup/mimo_v26/notes/kv_pool.md and tt/kv_pool.py (KVLayout). Per-layer per-device [nblocks,1,64,192] bf16 K and V (V padded), slots 0..U-1 own blocks, slots U..31 alias a scratch region; GA table [32, max_pos/64] contiguous per slot; SWA ring R = CH/64+8 blocks, logical block i -> ring block i%R, decode modulo R*64; one table per layer KIND shared by all layers; per-row lengths. 64k DRAM per chip for all caches: U=4 2.06 GiB, U=8 4.03 GiB (arithmetic, not measured).
+- evidence: -
+- paths: bringup/mimo_v26/notes/kv_pool.md, models/demos/blackhole/mimo_v26/tt/kv_pool.py
+
+## E261007-0524-d40
+- date: 2026-10-07T05:24:24
+- commit: afd3e45361a
+- branch: ssinghal/mimo-asm
+- host: 35,48,43
+- track: asm
+- status: verified
+- claim: FIRST TRACED CHUNKED PREFILL (tt/prefill.py ChunkedPrefill: whole-model chunk forward captured in ONE trace, row-sharded device inputs rope_idx/fill_pt/sdpa_pt/chunk_start/tokens, paged KV pool of tt/kv_pool.py with scratch slot for idle rows), L0..L5, unified bf16 experts, vs track-0 CPU dumps; replay bit-identical to the eager-warmup+trace run in all 3 runs. (a) s2048b1 CH=2048 (row 0 only, other rows idle->scratch): hidden after L5 at all 2048 positions PCC 0.99972, first-token logits PCC 0.99945 top1 1/1; KV vs dump K min 0.99974 (GA L5)/0.99993+ others, V[:128] min 0.9993 (GA L5), V pad dims exactly 0; hand-off (per layer decode of 3 dump steps reading the pool) min PCC 0.99986 L0-L5; chunk step 55.7 ms (6 layers, 2048 tok/row, replay incl. host input copy). (b) s512b4 CH=256 (2 chunks/user, 1 user per row, 4 rows): hidden L5 0.99931, logits PCC 0.99817 top1 3/4 (near-tie), KV K min 0.99963 V min 0.99915, hand-off decode min 0.99959 L2 / 0.99991 L5, step 12.6-12.9 ms. (c) s128b16 CH=128 (4 chunks, 4 users/row): hidden L5 0.99974, logits 0.99977 top1 16/16, KV K min 0.99953 V 0.9991, hand-off decode min 0.99893 (L2 s0), L5 step2 0.98713 (same near-tie value as chain test), step 11.0 ms. Ring for SWA = CH/64+8 blocks, decode modulo R*64 works with chunked-prefill-written rings. Pad tokens of ragged last chunks repeat the prompt cyclically. NOT yet: ragged multi-user rows (>1 user per row per chunk queue exercised only in (c)), 8192/64k, 48 layers, DRAM gate, two ISLs in one process.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_s2048b1_ch2048_afd3e45361a.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
+- data: {"s2048_hidden_l5":0.99972,"step_ms_6L_2048":55.7,"handoff_min":0.99959}
+
+## E261007-0533-cdf
+- date: 2026-10-07T05:33:20
+- commit: a43e4229c9f
+- branch: ssinghal/mimo-asm
+- host: 35,43,47
+- track: asm
+- status: verified
+- claim: Traced chunked prefill L0..L5 (unified bf16 experts) vs dumps, more cases at a43e4229c9f: (1) RAGGED MULTI-USER ROWS: s128b16 truncated to lengths 128/100/64/33 per slot (4 users per mesh row, 4 steps CH=128, pad tokens cyclic): hidden after L5 at all real positions PCC min 0.9996 (per user 0.9996-0.99977), logits PCC 0.9997 top1 15/16, KV GA K min 0.99959 V 0.99908 (SWA KV compared only where the dump ring covers the truncated positions), replay bit-identical; decode hand-off skipped (ragged lengths need per-row decode positions). (2) SEVERAL CHUNKS PER USER: s2048b1 with CH=512 (4 chunks): hidden L5 0.99972, logits 0.99945, KV K min 0.99974 V 0.9993, hand-off decode min 0.99986, step 20.0-20.9 ms (512 tok/row); (3) s8192b1 CH=2048 (4 chunks, GA reads the growing paged cache): hidden L5 0.99977, logits 0.99962 top1 1/1, KV K 0.99977 V 0.9993, hand-off decode min 0.99983, step 55.9-58.2 ms per 2048-token chunk (6 layers, row 0 busy, others on scratch). All replays bit-identical.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_s8192_ch2048_a43e4229c9f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
+- data: {"ragged_hidden_min":0.9996,"s8192_hidden":0.99977}
+
+## E261007-0533-fb3
+- date: 2026-10-07T05:33:53
+- commit: a43e4229c9f
+- branch: ssinghal/mimo-asm
+- host: 48
+- track: asm
+- status: verified
+- claim: 4-LAYER (L0-L3, 1 GA + 3 SWA) chunked traced prefill at scale, real GSM8K text concatenated to the ISL, 4 users (1 per mesh row), CH=2048, unified bf16 experts, TWO ISLs in ONE process 64k -> 8k -> 64k: step (2048 tokens per row) 23.5 ms first / 30.0 median / 36.7 last at 64k (GA chunk cost grows with cache length), 24.1 ms median at 8k; replay-only 0.956 s per 64k user per row (4 users in parallel) = 274k tok/s aggregate for 4 layers (hint; scales ~1/layers), first case wall 25 s includes eager warm-up + trace capture, repeat 64k wall 1.84 s. DRAM per bank (ttnn memory view, 8 banks/chip): before build free 3882.4 MB, after build 3592.1 MB free (290.3 allocated: weights + KV pool max_pos 67584, 1 slot/row), after 64k 3589.8, after 8k 3589.8, after second 64k 3589.8: FREE DRAM IDENTICAL after each ISL (no leak across ISLs), +2.3 MB/bank only for the trace/io tensors. All logits finite. Built with PS_LAYERS=4 so first tokens are junk (no accuracy claim).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps4_64k_a43e4229c9f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
+- data: {"step_ms_64k_median_4L":30.0,"free_mb_per_bank_after":3589.8}
+
+## E261007-0557-332
+- date: 2026-10-07T05:57:13
+- commit: 990094ad6bc
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: asm
+- status: verified
+- claim: FULL 48-LAYER chunked traced prefill, memory_fit cells, real GSM8K text concatenated to the ISL, CH=2048 per mesh row, unified bf16 experts, bfp8 weights, KV pool sized to the cell (KVLayout users=B/4, max_pos=ISL+8 rounded to 2048), no OOM in any cell, all logits finite. FREE DRAM per bank after prefill (ttnn memory view, 8 banks/chip, so x8 = per chip; measured, not arithmetic): (B=4,ISL 4096) 2321.0 MB/bank = 18.1 GiB/chip free (after build 2324.7, weights+pool 1557.8 MB/bank allocated); (16,4096) 2278.3 MB/bank (17.8 GiB/chip); (4,65536) 2000.2 MB/bank (15.6 GiB/chip, after build 2003.9); (16,65536) 1805.7 MB/bank (14.1 GiB/chip, after build 1809.4). Chip DRAM 3882.4 MB/bank before build. Trace+io after first prefill costs only 3.7 MB/bank. TWO/THREE ISLs in one process (4 users, 64k -> 8k -> 64k): free DRAM identical (2000.2 MB/bank) after each case. Replay step (2048 tokens per row, 4 rows in parallel = 8192 tokens): 370-376 ms at 4k and 8k (median 375/391), 382 ms first chunk -> 445 median -> 505 ms last chunk at 64k (global-attention cost grows with cache length). Prefill tokens/s (replay only, real tokens over summed replay time): 21.9k at 4k (B=4 and B=16), 18.4k at 64k (B=4 and B=16); 64k per user: 14.2 s (B=4, 32 steps, 4 users in parallel), 56.9 s for 16 users (128 steps). Wall includes eager warm-up + trace capture (20-33 s first case). Weights load from the warm/cold NFS cache: 816-1260 s when 4 loaders ran at once (152 s alone). First tokens at 64k of the concatenated GSM8K text are not meaningful (no accuracy claim).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps48_16_65536_990094ad6bc.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
+- data: {"free_mb_bank":{"4_4096":2321.0,"16_4096":2278.3,"4_65536":2000.2,"16_65536":1805.7},"tok_s_4k":21900,"tok_s_64k":18400}
 ## E261007-0529-93f
 - date: 2026-10-07T05:29:09
 - commit: 56601b284bb
@@ -942,3 +1011,13 @@
 - claim: Host .46 added to bad_hosts.txt as SUSPECT after two anomalies by two agents (FW init failure at device open while host_health said OK; a 48-layer run stuck at ~2500% CPU for 18 min). Not a proven fault; no reset was done (not mine to reset); skip until a clean canary. host_health.py cannot detect FW-init failures (defect).
 - evidence: -
 - paths: models/common/bringup_kit/bad_hosts.txt
+## E261007-0559-bd9
+- date: 2026-10-07T05:59:42
+- commit: 34b6fa4ef62
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: MERGE CANDIDATE ssinghal/mimo-asm @ 34b6fa4ef62 (ssinghal/mimo merged in, incl. moe_decode.py): re-check after merge, s2048b1 CH=512 L0..L5 traced chunked prefill: hidden L5 PCC 0.99972, logits 0.99945 top1 1/1, replay bit-identical, hand-off decode min 0.99986 over L0-L5 (decode MoE uses spread_pad_routing for the padding rows). Contents: tt/prefill.py, tt/kv_pool.py, layer.chunk(), model layout kwarg, tests test_prefill_handoff.py / test_prefill_scale.py / test_capture_device.py, notes/kv_pool.md.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_merged_34b6fa4ef62.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt
