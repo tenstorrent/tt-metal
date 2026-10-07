@@ -51,7 +51,13 @@ void py_module(nb::module_& mod) {
         .def_rw("sub_core_grids", &SDPAProgramConfig::sub_core_grids)
         .def_rw("q_chunk_size", &SDPAProgramConfig::q_chunk_size)
         .def_rw("k_chunk_size", &SDPAProgramConfig::k_chunk_size)
-        .def_rw("exp_approx_mode", &SDPAProgramConfig::exp_approx_mode)
+        .def_rw(
+            "exp_approx_mode",
+            &SDPAProgramConfig::exp_approx_mode,
+            "Picks the exponential at the rescale, first column and attention sink sites, and the softmax exponential "
+            "of the legacy compute kernel. The streaming prefill kernels always run the approximate softmax "
+            "exponential; with fp32_dest_acc_en set and exp_approx_mode False, SDPA prefill keeps the legacy kernel, "
+            "so its softmax runs the accurate exponential.")
         .def_rw("max_cores_per_head_batch", &SDPAProgramConfig::max_cores_per_head_batch)
         .def_rw("max_k_splits", &SDPAProgramConfig::max_k_splits)
         .def_rw("matmul_math_fidelity", &SDPAProgramConfig::matmul_math_fidelity)
