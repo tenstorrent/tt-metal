@@ -13,13 +13,17 @@ from pathlib import Path
 
 import pytest
 import torch
+from transformers import AutoTokenizer
 
 import ttnn
+from models.demos.qwen38_27b_qb2.tests.galaxy_prompt import qualification_prompt
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
+from models.demos.qwen38_27b_qb2.tt.model import checkpoint_path
 
 
 @pytest.mark.skipif(os.getenv("QWEN_GALAXY_SMOKE") != "1", reason="explicit allocated-Galaxy hardware test")
 def test_full_model_galaxy_replica():
+    tokens = qualification_prompt(AutoTokenizer.from_pretrained(checkpoint_path(), local_files_only=True))
     torch.set_num_threads(8)
     assert ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
     output = Path(os.environ["QWEN_GALAXY_RECEIPT"])
@@ -32,12 +36,6 @@ def test_full_model_galaxy_replica():
         gen = build_generator(Path(__file__).resolve().parents[1], mesh, topology=ttnn.Topology.Linear)
         setup_s = time.perf_counter() - started
         print(f"GALAXY_SETUP_COMPLETE seconds={setup_s:.3f}", flush=True)
-        prompt = gen.tokenizer.apply_chat_template(
-            [{"role": "user", "content": "Explain in one short sentence why leaves are green."}],
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-        tokens = gen.tokenizer(prompt, add_special_tokens=False)["input_ids"]
         print("GALAXY_FIRST_GENERATION_BEGIN", flush=True)
         first = gen.generate(tokens, 128)
         cold_perf = dict(gen.last_perf)

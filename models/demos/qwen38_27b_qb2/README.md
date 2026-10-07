@@ -65,6 +65,24 @@ sender and a 15-minute execution limit. The allocated-host job is
 `qwen38-fabric-torus-neighbors-20261006.service`; it is queued behind the replica
 test, so the wraparound links are not yet qualified.
 
+The first eight-replica attempt loaded all eight copies, then failed before the
+first inference: Transformers returned a `BatchEncoding` from tokenized chat
+templating, while the test expected a list of token IDs. Writing that object to
+JSON obscured the original type error and skipped explicit cleanup. Both smoke
+and replica tests now prepare the same plain token list before opening devices;
+six host regressions pass, including the actual pinned tokenizer matching the
+passing baseline's 63 IDs. Replica receipts now preserve loading progress,
+physical device IDs and failure details, and cleanup runs even if saving fails.
+
+The first fabric job also failed before running its selected test: the filter
+needed the `name.` prefix. The corrected argument is
+`--filter name.2DTorusXYNeighborExchange`. This was a launch-argument error, not
+a measured link failure. The following safe runner reset the Galaxy and began
+the TP4 sweep. Corrected fabric and eight-replica jobs are queued behind that
+sweep as `qwen38-fabric-torus-neighbors-v2-20261006.service` and
+`qwen38-metal-galaxy-eight-replicas-v2-20261006.service`. Neither gate is passed
+yet. Raw failure/host-test receipts are retained in `galaxy-evidence/`.
+
 ## Measured input-length and concurrency sweep
 
 The requested artifact runs one TP4 replica first, then the full Galaxy. The
@@ -92,8 +110,9 @@ readback. These are native generator timings, excluding HTTP/router overhead.
 Default model knobs match the initial Galaxy baseline. This sweep does not
 qualify model accuracy or the future optimized configuration.
 
-Current job: `qwen38-perf-sweep-tp4-v1-20261006.service`, queued after replica and
-fabric checks. Results are under `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
+Current job: `qwen38-perf-sweep-tp4-v1-20261006.service`, loading the TP4 model
+after the first replica/fabric attempts. Results are under
+`TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
 the artifact entrypoint and updates after each completed cell. Five host tests
 validate the metric accounting and reject cold captures as warm measurements.
 No sweep cells have been measured at publication. Initialize with `--replicas 8`

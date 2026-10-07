@@ -17,9 +17,12 @@ from pathlib import Path
 
 import pytest
 import torch
+from transformers import AutoTokenizer
 
 import ttnn
+from models.demos.qwen38_27b_qb2.tests.galaxy_prompt import qualification_prompt
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
+from models.demos.qwen38_27b_qb2.tt.model import checkpoint_path
 
 
 def decode_window(generators, prompt, output_tokens, read_order):
@@ -71,6 +74,7 @@ def test_concurrent_galaxy_replicas():
     assert 2 <= count <= 8
     output_tokens, repeats = 128, 5
     output = Path(os.environ["QWEN_GALAXY_RECEIPT"])
+    prompt = qualification_prompt(AutoTokenizer.from_pretrained(checkpoint_path(), local_files_only=True))
     torch.set_num_threads(8)
     assert ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
     configure_fabric(topology=ttnn.Topology.Linear)
@@ -80,7 +84,9 @@ def test_concurrent_galaxy_replicas():
         parent_mesh=[8, 4],
         replica_mesh=[1, 4],
         topology="linear",
-        replicas_executed=count,
+        replicas_requested=count,
+        replicas_executed=0,
+        state="loading",
         output_tokens=output_tokens,
         repeats=repeats,
         warmup=[],
@@ -88,6 +94,8 @@ def test_concurrent_galaxy_replicas():
         concurrent=[],
         timing_scope="traced decode plus device sampling; synchronized host completion; no prefill/readback",
         passed=False,
+        prompt_tokens=prompt,
+        loaded=[],
     )
     try:
         for i in range(count):
@@ -96,14 +104,13 @@ def test_concurrent_galaxy_replicas():
             gen = build_generator(Path(__file__).resolve().parents[1], mesh, topology=ttnn.Topology.Linear)
             generators.append(gen)
             assert len(gen.model.layers) == 64
+            report["loaded"].append(
+                dict(replica=i, setup_s=time.perf_counter() - started, device_ids=list(mesh.get_device_ids()))
+            )
+            output.write_text(json.dumps(report, indent=2) + "\n")
             print(f"GALAXY_REPLICA_LOADED replica={i} seconds={time.perf_counter() - started:.3f}", flush=True)
         assert len({id(gen.model.ccl) for gen in generators}) == count
-        prompt = generators[0].tokenizer.apply_chat_template(
-            [{"role": "user", "content": "Explain in one short sentence why leaves are green."}],
-            tokenize=True,
-            add_generation_prompt=True,
-        )
-        report["prompt_tokens"] = prompt
+        report["state"] = "warming"
         reference = None
         for i, gen in enumerate(generators):
             tokens = gen.generate(prompt, output_tokens)
@@ -111,20 +118,26 @@ def test_concurrent_galaxy_replicas():
                 reference = tokens
             assert tokens == reference, f"Replica {i} differs from replica 0 during warmup"
             report["warmup"].append(dict(replica=i, perf=dict(gen.last_perf)))
+            report["replicas_executed"] = i + 1
+            output.write_text(json.dumps(report, indent=2) + "\n")
             print(f"GALAXY_REPLICA_WARMED replica={i}", flush=True)
         assert len({id(gen.cache) for gen in generators}) == count
         report["reference_tokens"] = reference
         report["text"] = generators[0].tokenizer.decode(reference)
+        report["state"] = "isolated"
         for i, gen in enumerate(generators):
             samples = [decode_window([gen], prompt, output_tokens, [0]) for _ in range(repeats)]
             report["isolated"].append(dict(replica=i, samples=samples))
             assert all(row["replicas"][0]["output_tokens"] == reference for row in samples)
+            output.write_text(json.dumps(report, indent=2) + "\n")
             print(f"GALAXY_ISOLATED_COMPLETE replica={i}", flush=True)
+        report["state"] = "concurrent"
         for repeat in range(repeats):
             order = [(repeat + i) % count for i in range(count)]
             result = decode_window(generators, prompt, output_tokens, order)
             report["concurrent"].append(result)
             assert all(row["output_tokens"] == reference for row in result["replicas"])
+            output.write_text(json.dumps(report, indent=2) + "\n")
             print(f"GALAXY_CONCURRENT_COMPLETE repeat={repeat} seconds={result['wall_s']:.3f}", flush=True)
         comparisons = []
         for i in range(count):
@@ -139,9 +152,18 @@ def test_concurrent_galaxy_replicas():
         )
         assert all(row["ratio"] <= 1.03 for row in comparisons), comparisons
         report["passed"] = True
+        report["state"] = "completed"
+    except BaseException as error:
+        report["state"] = "failed"
+        report["error"] = dict(type=type(error).__name__, message=str(error)[:1000])
+        raise
     finally:
         # Preserve measured failures as well as passes before releasing devices.
-        output.write_text(json.dumps(report, indent=2) + "\n")
-        for gen in generators:
-            gen.close()
-        ttnn.close_mesh_device(parent)
+        try:
+            output.write_text(json.dumps(report, indent=2) + "\n")
+        finally:
+            try:
+                for gen in generators:
+                    gen.close()
+            finally:
+                ttnn.close_mesh_device(parent)

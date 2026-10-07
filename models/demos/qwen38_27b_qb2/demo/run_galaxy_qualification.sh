@@ -7,6 +7,17 @@ set -euo pipefail
 # import only the Python model modifications from the separate Metal worktree.
 QWEN_TASK_ROOT=${1:?Provide the isolated Qwen runtime directory}
 QWEN_RUN_DIR=${2:?Provide a new receipt directory}
+if [[ -n "${QWEN_WAIT_FOR_UNIT:-}" ]]; then
+    echo "Waiting for $QWEN_WAIT_FOR_UNIT before qualification"
+    while true; do
+        QWEN_PREVIOUS_STATE=$(systemctl --user show "$QWEN_WAIT_FOR_UNIT" -p ActiveState --value)
+        case "$QWEN_PREVIOUS_STATE" in
+            inactive|failed) break ;;
+            active|activating|deactivating) sleep 5 ;;
+            *) echo "Unrecognized predecessor state: $QWEN_PREVIOUS_STATE" >&2; exit 3 ;;
+        esac
+    done
+fi
 mkdir "$QWEN_RUN_DIR"
 export PATH="$QWEN_TASK_ROOT/python_env/bin:$PATH"
 export TT_METAL_HOME="$QWEN_TASK_ROOT/metal"

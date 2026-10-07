@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="2401.048" timestamp="2026-10-07T02:55:04.757245+00:00" hostname="bh-glx-EXP-d02u07"><testcase classname="models.demos.qwen38_27b_qb2.tests.test_galaxy_replicas" name="test_concurrent_galaxy_replicas" time="2399.920"><properties><property name="start_timestamp" value="2026-10-07T02:55:05" /><property name="end_timestamp" value="2026-10-07T03:35:05" /></properties><failure message="TypeError: Object of type BatchEncoding is not JSON serializable">@pytest.mark.skipif(
+        os.getenv("QWEN_GALAXY_REPLICAS", "1") == "1", reason="explicit multi-replica allocated-Galaxy test"
+    )
+    def test_concurrent_galaxy_replicas():
+        count = int(os.environ["QWEN_GALAXY_REPLICAS"])
+        assert 2 &lt;= count &lt;= 8
+        output_tokens, repeats = 128, 5
+        output = Path(os.environ["QWEN_GALAXY_RECEIPT"])
+        torch.set_num_threads(8)
+        assert ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        configure_fabric(topology=ttnn.Topology.Linear)
+        parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
+        generators = []
+        report = dict(
+            parent_mesh=[8, 4],
+            replica_mesh=[1, 4],
+            topology="linear",
+            replicas_executed=count,
+            output_tokens=output_tokens,
+            repeats=repeats,
+            warmup=[],
+            isolated=[],
+            concurrent=[],
+            timing_scope="traced decode plus device sampling; synchronized host completion; no prefill/readback",
+            passed=False,
+        )
+        try:
+            for i in range(count):
+                mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(i, 0))
+                started = time.perf_counter()
+                gen = build_generator(Path(__file__).resolve().parents[1], mesh, topology=ttnn.Topology.Linear)
+                generators.append(gen)
+                assert len(gen.model.layers) == 64
+                print(f"GALAXY_REPLICA_LOADED replica={i} seconds={time.perf_counter() - started:.3f}", flush=True)
+            assert len({id(gen.model.ccl) for gen in generators}) == count
+            prompt = generators[0].tokenizer.apply_chat_template(
+                [{"role": "user", "content": "Explain in one short sentence why leaves are green."}],
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+            report["prompt_tokens"] = prompt
+            reference = None
+            for i, gen in enumerate(generators):
+&gt;               tokens = gen.generate(prompt, output_tokens)
+
+../metal-galaxy/models/demos/qwen38_27b_qb2/tests/test_galaxy_replicas.py:109:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;models.demos.qwen38_27b_qb2.tt.generator.Qwen38Generator object at 0x7198b91e7c40&gt;
+prompt_token_ids = {'input_ids': [248045, 8678, 198, 24342, 286, 4879, 369, 716, 310, 830, 11553, 13, 5044, 1683, 15060, 1472, 279, 3274, 11, 9307, 1328, 30800, 11, 2814, 47675, 25605, 11, 321, 60445, 55404, 11, 27224, 11, 321, 30246, 303, 279, 1534, 4087, 13, 248046, 198, 248045, 846, 198, 814, 20139, 303, 799, 2716, 11316, 3069, 10583, 513, 5983, 13, 248046, 198, 248045, 74455, 198, 248068, 198], 'attention_mask': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+max_new_tokens = 128, next_input = None, enable_trace = True
+defer_token_readback = True, trace_prefill = True, host_sampling = None
+top_k = 1, top_p = 0.0, temperature = 1.0
+
+    def generate(
+        self,
+        prompt_token_ids,
+        max_new_tokens,
+        *,
+        next_input=None,
+        enable_trace=True,
+        defer_token_readback=True,
+        trace_prefill=True,
+        host_sampling=None,
+        top_k=1,
+        top_p=0.0,
+        temperature=1.0,
+        seed=0,
+        **kwargs,
+    ):
+        if not enable_trace:
+            raise ValueError("Readiness and generation require traced decode")
+        if (
+            max_new_tokens &lt; 0
+            or not prompt_token_ids
+            or len(prompt_token_ids) + max(0, max_new_tokens - 1) &gt; self.model.context
+        ):
+            raise ValueError("Invalid generation length or context")
+        if max_new_tokens == 0:
+            return []
+        compat = self.host_sampling if host_sampling is None else host_sampling
+        deferred = bool(defer_token_readback and not compat and next_input is None and max_new_tokens &gt; 1)
+        if compat and top_k != 1:
+            raise ValueError("Host compatibility implements greedy sampling; use device sampling for top-k/top-p")
+        start = time.perf_counter()
+        before_request = self.counters.copy()
+        self.set_sampling_params(top_k=top_k, top_p=top_p, temperature=temperature, seed=seed)
+        cache = self._ensure_cache(1, len(prompt_token_ids) + max_new_tokens - 1)
+        if deferred:
+            self._ensure_history(max_new_tokens - 1)
+        self.reset()
+        # Bound trace storage to one existing prefill chunk. Longer prompts
+        # retain the full-context, chunked eager path without limiting inputs.
+        use_prefill_trace = bool(trace_prefill and len(prompt_token_ids) &lt;= 4096)
+        if use_prefill_trace:
+&gt;           padded = self._prefill_for_generate(torch.tensor([prompt_token_ids]))
+E           RuntimeError: Could not infer dtype of tokenizers.Encoding
+
+../metal-galaxy/models/demos/qwen38_27b_qb2/tt/generator.py:888: RuntimeError
+
+During handling of the above exception, another exception occurred:
+
+    @pytest.mark.skipif(
+        os.getenv("QWEN_GALAXY_REPLICAS", "1") == "1", reason="explicit multi-replica allocated-Galaxy test"
+    )
+    def test_concurrent_galaxy_replicas():
+        count = int(os.environ["QWEN_GALAXY_REPLICAS"])
+        assert 2 &lt;= count &lt;= 8
+        output_tokens, repeats = 128, 5
+        output = Path(os.environ["QWEN_GALAXY_RECEIPT"])
+        torch.set_num_threads(8)
+        assert ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        configure_fabric(topology=ttnn.Topology.Linear)
+        parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
+        generators = []
+        report = dict(
+            parent_mesh=[8, 4],
+            replica_mesh=[1, 4],
+            topology="linear",
+            replicas_executed=count,
+            output_tokens=output_tokens,
+            repeats=repeats,
+            warmup=[],
+            isolated=[],
+            concurrent=[],
+            timing_scope="traced decode plus device sampling; synchronized host completion; no prefill/readback",
+            passed=False,
+        )
+        try:
+            for i in range(count):
+                mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(i, 0))
+                started = time.perf_counter()
+                gen = build_generator(Path(__file__).resolve().parents[1], mesh, topology=ttnn.Topology.Linear)
+                generators.append(gen)
+                assert len(gen.model.layers) == 64
+                print(f"GALAXY_REPLICA_LOADED replica={i} seconds={time.perf_counter() - started:.3f}", flush=True)
+            assert len({id(gen.model.ccl) for gen in generators}) == count
+            prompt = generators[0].tokenizer.apply_chat_template(
+                [{"role": "user", "content": "Explain in one short sentence why leaves are green."}],
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+            report["prompt_tokens"] = prompt
+            reference = None
+            for i, gen in enumerate(generators):
+                tokens = gen.generate(prompt, output_tokens)
+                if reference is None:
+                    reference = tokens
+                assert tokens == reference, f"Replica {i} differs from replica 0 during warmup"
+                report["warmup"].append(dict(replica=i, perf=dict(gen.last_perf)))
+                print(f"GALAXY_REPLICA_WARMED replica={i}", flush=True)
+            assert len({id(gen.cache) for gen in generators}) == count
+            report["reference_tokens"] = reference
+            report["text"] = generators[0].tokenizer.decode(reference)
+            for i, gen in enumerate(generators):
+                samples = [decode_window([gen], prompt, output_tokens, [0]) for _ in range(repeats)]
+                report["isolated"].append(dict(replica=i, samples=samples))
+                assert all(row["replicas"][0]["output_tokens"] == reference for row in samples)
+                print(f"GALAXY_ISOLATED_COMPLETE replica={i}", flush=True)
+            for repeat in range(repeats):
+                order = [(repeat + i) % count for i in range(count)]
+                result = decode_window(generators, prompt, output_tokens, order)
+                report["concurrent"].append(result)
+                assert all(row["output_tokens"] == reference for row in result["replicas"])
+                print(f"GALAXY_CONCURRENT_COMPLETE repeat={repeat} seconds={result['wall_s']:.3f}", flush=True)
+            comparisons = []
+            for i in range(count):
+                isolated = statistics.median(row["replicas"][0]["tpot_ms"] for row in report["isolated"][i]["samples"])
+                concurrent = statistics.median(row["replicas"][i]["tpot_ms"] for row in report["concurrent"])
+                comparisons.append(
+                    dict(replica=i, isolated_tpot_ms=isolated, concurrent_tpot_ms=concurrent, ratio=concurrent / isolated)
+                )
+            report["comparisons"] = comparisons
+            report["aggregate_decode_tokens_per_s"] = (
+                count * (output_tokens - 1) / statistics.median(row["wall_s"] for row in report["concurrent"])
+            )
+            assert all(row["ratio"] &lt;= 1.03 for row in comparisons), comparisons
+            report["passed"] = True
+        finally:
+            # Preserve measured failures as well as passes before releasing devices.
+&gt;           output.write_text(json.dumps(report, indent=2) + "\n")
+
+../metal-galaxy/models/demos/qwen38_27b_qb2/tests/test_galaxy_replicas.py:144:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+../python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/json/__init__.py:238: in dumps
+    **kw).encode(obj)
+../python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/json/encoder.py:201: in encode
+    chunks = list(chunks)
+../python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/json/encoder.py:431: in _iterencode
+    yield from _iterencode_dict(o, _current_indent_level)
+../python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/json/encoder.py:405: in _iterencode_dict
+    yield from chunks
+../python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/json/encoder.py:438: in _iterencode
+    o = _default(o)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;json.encoder.JSONEncoder object at 0x718d54788670&gt;
+o = {'input_ids': [248045, 8678, 198, 24342, 286, 4879, 369, 716, 310, 830, 11553, 13, 5044, 1683, 15060, 1472, 279, 3274, 11, 9307, 1328, 30800, 11, 2814, 47675, 25605, 11, 321, 60445, 55404, 11, 27224, 11, 321, 30246, 303, 279, 1534, 4087, 13, 248046, 198, 248045, 846, 198, 814, 20139, 303, 799, 2716, 11316, 3069, 10583, 513, 5983, 13, 248046, 198, 248045, 74455, 198, 248068, 198], 'attention_mask': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]}
+
+    def default(self, o):
+        """Implement this method in a subclass such that it returns
+        a serializable object for ``o``, or calls the base implementation
+        (to raise a ``TypeError``).
+
+        For example, to support arbitrary iterators, you could
+        implement default like this::
+
+            def default(self, o):
+                try:
+                    iterable = iter(o)
+                except TypeError:
+                    pass
+                else:
+                    return list(iterable)
+                # Let the base class default method raise the TypeError
+                return JSONEncoder.default(self, o)
+
+        """
+&gt;       raise TypeError(f'Object of type {o.__class__.__name__} '
+                        f'is not JSON serializable')
+E       TypeError: Object of type BatchEncoding is not JSON serializable
+
+../python-install/cpython-3.10.19-linux-x86_64-gnu/lib/python3.10/json/encoder.py:179: TypeError</failure></testcase></testsuite></testsuites>

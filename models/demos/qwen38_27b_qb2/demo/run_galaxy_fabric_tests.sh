@@ -9,7 +9,7 @@ test -x "$QWEN_TASK_ROOT/metal-fabric-build/test/tt_metal/tt_fabric/test_infra/t
 mkdir "$QWEN_RUN_DIR"
 exec 9>/tmp/tt-device.lock
 echo "Waiting for the allocated Galaxy device lock"
-flock --timeout 6000 9
+flock --timeout "${QWEN_DEVICE_LOCK_TIMEOUT_SECONDS:-6000}" 9
 if [[ -e /tmp/tt-device.dirty ]]; then
     echo "Previous hardware job left the device marked dirty; recovery is required" >&2
     exit 3
@@ -28,7 +28,7 @@ timeout --kill-after=30s 15m /bin/bash -e -o pipefail tools/scaleout/exabox/run_
     --hosts localhost --image none --config 4x8 --mpi-if none \
     --test-binary "$QWEN_TASK_ROOT/metal-fabric-build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric" \
     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml \
-    --filter 2DTorusXYNeighborExchange --num-packets 1000 --output "$QWEN_RUN_DIR"
+    --filter name.2DTorusXYNeighborExchange --num-packets 1000 --output "$QWEN_RUN_DIR"
 # Only a successful test clears our marker. A failure/timeout leaves it for the
 # existing safe pytest runner's explicit reset on the next hardware attempt.
 rm -f /tmp/tt-device.dirty
