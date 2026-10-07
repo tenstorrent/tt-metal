@@ -2300,9 +2300,18 @@ public:
              programmable_core_type_index < hal.get_programmable_core_type_count();
              ++programmable_core_type_index) {
             const auto core_type = hal.get_programmable_core_type(programmable_core_type_index);
-            if (core_type == HalProgrammableCoreType::ACTIVE_ETH || core_type == HalProgrammableCoreType::IDLE_ETH) {
-                // Fast dispatch no longer targets ethernet cores. Remaining launch-message targets are
-                // TENSIX (multicast) and any non-multicast programmable cores such as DRAM (unicast below).
+            if (core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+                // Fast dispatch no longer targets active ethernet. Reject a non-empty active-eth kernel group loudly
+                // rather than silently dropping its launch (which would let Enqueue/Finish report completion without
+                // the ethernet work running). Slow/host dispatch is unaffected -- it doesn't go through this path.
+                TT_FATAL(
+                    program.get_kernel_groups(programmable_core_type_index).empty(),
+                    "Fast dispatch to ACTIVE_ETH is unsupported; use slow/host dispatch instead");
+                continue;
+            }
+            if (core_type == HalProgrammableCoreType::IDLE_ETH) {
+                // Fast dispatch not supported on idle ethernet. Remaining launch-message targets are TENSIX
+                // (multicast) and any non-multicast programmable cores such as DRAM (unicast below).
                 continue;
             }
             for (auto& kernel_group : program.get_kernel_groups(programmable_core_type_index)) {
@@ -3663,8 +3672,8 @@ void reset_worker_dispatch_state_on_device(
         SubDeviceId sub_device_id(static_cast<uint8_t>(i));
         uint32_t expected_num_workers = expected_num_workers_completed[i];
         if (reset_launch_msg_state) {
-            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id) +
-                                    mesh_device->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
+            // The reset go-signal is multicast to TENSIX workers; wait for their acknowledgements.
+            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
         }
         if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
             command_sequence.add_dispatch_wait(
