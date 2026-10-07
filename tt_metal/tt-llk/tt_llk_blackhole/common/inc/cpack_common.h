@@ -700,12 +700,11 @@ inline void program_packer_destination(std::uint32_t addr)
     // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
     if constexpr (!keep_output_addr)
     {
-        // Byte writes from immediates need no GPR and no THCON fence; byte 3 (bit 31) is set by the row pack init and kept by
-        // every other writer of the register (fast tilize, which writes plain addresses, restores it in its uninit).
+        // Single-cycle byte writes from immediates: no GPR, fence or NOP. Byte 3 (bit 31) is set by the row pack init and kept
+        // by every other writer of the register (fast tilize, which writes plain addresses, restores it in its uninit).
         TT_RMWCIB0(0xff, addr & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
         TT_RMWCIB1(0xff, (addr >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
         TT_RMWCIB2(0xff, (addr >> 16) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
-        TTI_DMANOP; // the instruction right after the write must not consume the value it writes
         return;
     }
     std::uint32_t new_l1_addr = (1 << 31) | addr;
