@@ -110,6 +110,15 @@ inline __attribute__((always_inline)) void save_position_addrgen(AddrgenPosition
     p.outer_address = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, OUTER_ADDRESS));
 }
 
+// Move a side to another position of its current program: write only the three position registers. The program (loop
+// strides and ends, banking) is untouched, so this is a cheap restart of the same walk elsewhere.
+template <AddrGen ADDRGEN, Side SIDE>
+inline __attribute__((always_inline)) void set_position_addrgen(const AddrgenPosition& p) {
+    __builtin_riscv_ttrocc_addrgen_wr_reg(ADDRGEN, OVERLAY_AG_REG(SIDE, BANK_CURRENT) / 8, p.bank_current);
+    __builtin_riscv_ttrocc_addrgen_wr_reg(ADDRGEN, OVERLAY_AG_REG(SIDE, INNER_ADDRESS) / 8, p.inner_address);
+    __builtin_riscv_ttrocc_addrgen_wr_reg(ADDRGEN, OVERLAY_AG_REG(SIDE, OUTER_ADDRESS) / 8, p.outer_address);
+}
+
 template <AddrGen ADDRGEN, Side SIDE>
 inline __attribute__((always_inline)) void restore_addrgen(const AddrgenProgram& prog, const AddrgenPosition& pos) {
     BankingConfig banking = prog.banking;

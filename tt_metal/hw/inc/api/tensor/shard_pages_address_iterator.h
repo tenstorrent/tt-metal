@@ -56,12 +56,16 @@ public:
         }
 
         // Calculate NOC address for the final position
-        const auto bank_shard = accessor.shard_to_bank(shard_id);
-        PageMapping current_page_mapping{
-            .bank_id = bank_shard.bank_id,
-            .bank_page_offset =
-                (bank_shard.shard_in_bank * accessor.dspec().shard_volume()) + current_page_id_in_shard};
-        current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
+        if constexpr (kLazy) {
+            current_noc_addr = ShardPage<Accessor>::kLazyNocAddr;
+        } else {
+            const auto bank_shard = accessor.shard_to_bank(shard_id);
+            PageMapping current_page_mapping{
+                .bank_id = bank_shard.bank_id,
+                .bank_page_offset =
+                    (bank_shard.shard_in_bank * accessor.dspec().shard_volume()) + current_page_id_in_shard};
+            current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
+        }
         ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         update_current_page();
     }
@@ -85,7 +89,9 @@ public:
         }
 
         do {
-            current_noc_addr += accessor.get_aligned_page_size();
+            if constexpr (!kLazy) {
+                current_noc_addr += accessor.get_aligned_page_size();
+            }
             current_page_id_in_shard++;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;
@@ -109,7 +115,9 @@ public:
         }
 
         do {
-            current_noc_addr += steps * accessor.get_aligned_page_size();
+            if constexpr (!kLazy) {
+                current_noc_addr += steps * accessor.get_aligned_page_size();
+            }
             current_page_id_in_shard += steps;
             if (current_page_id_in_shard >= end_page_id_in_shard) {
                 current_page_id_in_shard = end_page_id_in_shard;
@@ -152,6 +160,9 @@ public:
     bool operator>=(const ShardPagesAddressIterator& other) const { return !(*this < other); }
 
 private:
+    // The address generator serves this accessor's transfers: skip the software address (detail::lazy_page_addr_v).
+    static constexpr bool kLazy = detail::lazy_page_addr_v<Accessor>;
+
     const Accessor& accessor;
     uint32_t current_page_id_in_shard = 0;
     uint32_t end_page_id_in_shard = 0;
@@ -167,8 +178,8 @@ private:
 
     void update_current_page() {
         if (current_page_id_in_shard < end_page_id_in_shard) {
-            current_page =
-                ShardPage<Accessor>(current_noc_addr, page_id(), &accessor, current_shard_id, current_page_id_in_shard);
+            current_page = ShardPage<Accessor>(
+                current_noc_addr, page_id(), &accessor, current_shard_id, current_page_id_in_shard, noc);
         }
     }
 

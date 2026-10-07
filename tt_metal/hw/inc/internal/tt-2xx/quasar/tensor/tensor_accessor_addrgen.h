@@ -223,10 +223,23 @@ inline constexpr uint32_t walk_shift = interleaved_window<Accessor::DSpec::is_dr
 // a larger jump uses software and re-takes the hardware when the stream continues.
 inline constexpr uint32_t kMaxSkip = 64;
 
+// Short-run fallback: a seek costs hundreds of cycles of software (and more where the recipe takes several address
+// computations to decide), so a walk whose seeks keep covering fewer than kMinRun indices is slower than software.
+// After two such seeks in a row the walk uses software for good (stride 0 marks it). Row-recipe walks restart cheaply
+// and never count. TT_TA_ADDRGEN_MIN_RUN overrides (0 turns it off).
+#if defined(TT_TA_ADDRGEN_MIN_RUN)
+inline constexpr uint32_t kMinRun = TT_TA_ADDRGEN_MIN_RUN;
+#else
+inline constexpr uint32_t kMinRun = 4;
+#endif
+inline constexpr uint8_t kShortSeeksToSoftware = 2;
+
 // One walk: on a side (sides[]) or parked (parked[]). All zero = free: thread_local zero-initialized storage (.tbss)
 // starts fresh for every kernel launch.
 struct SideState {
-    uint64_t last_addr;  // ShardBases: the base popped for `shard` (ShardView transfers repeat it with offsets)
+    // ShardBases: the base popped for `shard` (ShardView transfers repeat it with offsets). Pages, row-recipe walks
+    // (row_pages != 0): the outer-loop value at the current row's start, for a cheap restart at the next row.
+    uint64_t last_addr;
     uint32_t owner;      // walk_key of the walk; 0 = free
     uint32_t next;       // index the hardware produces on the next pop
     uint32_t stride;     // indices the hardware advances per pop
@@ -234,7 +247,8 @@ struct SideState {
     uint32_t last;       // index of the previous request on this walk
     uint32_t last_gap;   // gap of the last request that wasn't a hit (a hit's gap is the stride; see serve())
     uint32_t miss_gap;   // gap of the last request served in software (a repeat re-takes the hardware)
-    uint32_t shard;      // ShardPages: the shard being walked. ShardBases: the shard of last_addr
+    uint32_t shard;  // ShardPages: the shard being walked. ShardBases: the shard of last_addr. Pages, row walks: the
+                     // row step
     // The walk's programming minus its start position, kept so a spilled walk can be reloaded: a spill reads back only
     // the position (overlay::save_position_addrgen). Narrowed to fit: bank-local strides and ends fit 32 bits and the
     // bank registers are 8 bits; a programming that doesn't fit is not restorable and is dropped instead of parked.
@@ -247,9 +261,14 @@ struct SideState {
     uint8_t bank_skip;
     uint8_t bank_shift;
     uint8_t bank_order;
-    uint8_t has_base;    // ShardBases: last_addr is valid
+    uint8_t has_base;    // ShardBases: last_addr is valid. Pages, row walks: the bank each row starts on
     uint8_t restorable;  // the programming fits the fields above
     uint8_t streaming;   // the last request was a hit: the next index of the current programming
+    // Row restart (plan_row_round_robin): pages per row (0: not a row walk) and rows left in the band after the
+    // current one; each row after the first is a 3-register position write instead of a seek.
+    uint16_t row_pages;
+    uint8_t rows_left;
+    uint8_t short_seeks;  // consecutive seeks that covered fewer than kMinRun indices
 };
 static_assert(sizeof(SideState) == 64 && sizeof(SideState) % sizeof(uint64_t) == 0);
 struct ParkedWalk {
@@ -309,6 +328,13 @@ struct WalkProgram {
 struct Seek {
     WalkProgram prog;
     uint32_t run_end = UINT32_MAX;
+    // Row recipe: the run is one row; the next rows_left rows of the band are the same programming at
+    // outer + k * row_step, starting on bank row_bank (see plan_row_round_robin).
+    uint32_t row_pages = 0;
+    uint32_t rows_left = 0;
+    uint32_t row_step = 0;
+    uint32_t row_bank = 0;
+    uint64_t row_outer = 0;  // the outer-loop value at the current row's start
 };
 
 // A generator is reset once, the first time this kernel uses either of its sides, to clear whatever an earlier kernel
@@ -375,6 +401,13 @@ inline __attribute__((always_inline)) void push_side(uint32_t amount) {
     } else {
         __builtin_riscv_ttrocc_addrgen_push_dest_pop_x(overlay::ADDRGEN_0, amount - 1);
     }
+}
+
+// Row restart: put side S at a new position of its current programming.
+template <uint32_t S>
+inline void set_side_position(uint32_t bank, uint64_t inner, uint64_t outer) {
+    overlay::set_position_addrgen<side_generator<S>, side_of<S>>(
+        overlay::AddrgenPosition{.inner_address = inner, .outer_address = outer, .bank_current = bank});
 }
 
 // Spill: read side S's position back (its programming is already in sides[S]).
@@ -693,6 +726,12 @@ inline bool plan_row_round_robin(const Accessor& acc, uint32_t page_id, uint8_t 
     seek.prog.outer_start = window.compare + local0 + static_cast<uint64_t>(b / num_banks) * slot_bytes;
     seek.prog.outer_stride = slot_bytes;
     seek.run_end = row_start + pos.extent_k * pos.inner_volume;  // the end of this row
+    // The band's next rows are the same programming one shard row (segment) further into every slot.
+    seek.row_pages = pos.extent_k * pos.inner_volume;
+    seek.rows_left = rows_left_in_band(acc, pos) - 1;
+    seek.row_step = static_cast<uint32_t>(segment_bytes);
+    seek.row_bank = c0;
+    seek.row_outer = window.compare + local0;
     return true;
 }
 
@@ -718,6 +757,21 @@ TT_TA_SEEK_NOINLINE inline uint64_t reseek(
     const Seek seek = Planner::plan(pc, pa, pn, i);
     program_side<S>(seek.prog);
     s.run_end = seek.run_end;
+    if (seek.row_pages != 0 && seek.row_pages <= UINT16_MAX && (seek.row_step >> 31) == 0) {
+        s.row_pages = static_cast<uint16_t>(seek.row_pages);
+        s.rows_left = static_cast<uint8_t>(seek.rows_left < 255 ? seek.rows_left : 255);
+        s.shard = seek.row_step;
+        s.has_base = static_cast<uint8_t>(seek.row_bank);
+        s.last_addr = seek.row_outer;
+        s.short_seeks = 0;
+    } else {
+        s.row_pages = 0;
+        if constexpr (Planner::kShortRunFallback && kMinRun != 0) {
+            // Two seeks in a row that each cover fewer than kMinRun indices: this walk is cheaper in software.
+            const bool short_run = seek.run_end - i < kMinRun;
+            s.short_seeks = short_run ? static_cast<uint8_t>(s.short_seeks + 1) : 0;
+        }
+    }
     s.stride = stride;
     s.last_gap = stride;
     s.miss_gap = 0;
@@ -738,6 +792,10 @@ template <uint32_t S, typename Planner>
 TT_TA_SEEK_NOINLINE inline bool serve_slow(
     uint32_t i, const void* pc, uint32_t pa, uint8_t pn, uint64_t& out, PopInfo& info) {
     SideState& s = sides[S];
+    if (s.short_seeks >= kShortSeeksToSoftware) {
+        TT_TA_NOTE(info, fallback);  // short-run fallback: this walk uses software from now on
+        return false;
+    }
     const uint32_t last = s.streaming ? s.next - s.stride : s.last;
     if (i == s.next && i < s.run_end) {
         s.next = i + s.stride;
@@ -761,6 +819,20 @@ TT_TA_SEEK_NOINLINE inline bool serve_slow(
         s.streaming = 0;
         TT_TA_NOTE(info, skipped);
         out = pop_side<S>(step);
+        return true;
+    }
+    if (i == s.next && i == s.run_end && s.row_pages != 0 && s.rows_left != 0 && s.stride == 1) {
+        // Row walk at the end of its row, and the next row is in the same band: same programming, one shard row
+        // further. Write the position only.
+        --s.rows_left;
+        s.last_addr += s.shard;
+        set_side_position<S>(s.has_base, 0, s.last_addr);
+        s.run_end = i + s.row_pages;
+        s.next = i + 1;
+        s.last = i;
+        s.streaming = 0;
+        TT_TA_NOTE(info, seeked);
+        out = pop_side<S>(1);
         return true;
     }
     if (i == s.next) {
@@ -987,6 +1059,7 @@ inline __attribute__((always_inline)) bool walk(
 // runs in the cold functions.
 template <typename Accessor>
 struct PagesPlanner {
+    static constexpr bool kShortRunFallback = true;
     static Seek plan(const void* pc, uint32_t, uint8_t noc, uint32_t i) {
         const Accessor& acc = *static_cast<const Accessor*>(pc);
         if constexpr (Accessor::DSpec::is_interleaved) {
@@ -1000,6 +1073,7 @@ struct PagesPlanner {
 
 template <typename Accessor>
 struct ShardPagesPlanner {
+    static constexpr bool kShortRunFallback = false;  // one seek per shard by design
     static Seek plan(const void* pc, uint32_t shard_id, uint8_t noc, uint32_t i) {
         const Accessor& acc = *static_cast<const Accessor*>(pc);
         const uint32_t page_size = acc.get_aligned_page_size();
@@ -1151,6 +1225,7 @@ TT_TA_SEEK_NOINLINE inline Seek plan_shard_bases(const Accessor& acc, uint32_t s
 
 template <typename Accessor>
 struct ShardBasesPlanner {
+    static constexpr bool kShortRunFallback = false;  // a base serves every offset into its shard
     static Seek plan(const void* pc, uint32_t, uint8_t noc, uint32_t i) {
         return plan_shard_bases(*static_cast<const Accessor*>(pc), i, noc);
     }
