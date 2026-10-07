@@ -10,7 +10,9 @@
 #include <utility>
 
 #include "../access_types.h"
-#include "ckernel.h"
+// TODO(njokovic) issue #58443: Move instruction-buffer ownership to HAL and remove this dependency.
+#include "ckernel.h" // TT_* emission uses ckernel::instrn_buffer.
+#include "llk_assert.h"
 #include "state_bank.h"
 #include "write_operands.h"
 #include "write_plan.h"
@@ -19,6 +21,14 @@ namespace hal::cfg::detail
 {
 
 // Hardware emission: runtime values, MMIO arrays, and constant Tensix instructions.
+
+template <const Field& F>
+inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t section, const std::uint32_t value)
+{
+    LLK_ASSERT(section < F.count, "section index out of range for this register");
+    LLK_ASSERT(value <= 0xffffu, "prepacked thread CFG value exceeds 16 bits");
+    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & 0xffffu);
+}
 
 template <std::uint32_t Addr>
 inline constexpr void rmwcib_check_address()
