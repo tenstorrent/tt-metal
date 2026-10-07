@@ -106,13 +106,12 @@ def main():
                 fseq[:, :, t] = feat_host(mesh, sd.feat)
             sd.close()
             kv_seq = kv_rows(model, mesh, pos, U, blk)
-            kdiff = (kv_ver[0] != kv_seq[0]).any(-1)  # [rows,U,blk]
-            vdiff = (kv_ver[1] != kv_seq[1]).any(-1)
+            rel = lambda x, y: ((x - y).norm(dim=-1) / y.norm(dim=-1).clamp_min(1e-9))  # [rows,U,blk]
             rec(
                 "kv_rows",
                 U=U,
-                k_rows_differ_per_t=kdiff.float().mean((0, 1)).tolist(),
-                v_rows_differ_per_t=vdiff.float().mean((0, 1)).tolist(),
+                k_rel_err_max_per_t=rel(kv_ver[0], kv_seq[0]).amax((0, 1)).tolist(),
+                v_rel_err_max_per_t=rel(kv_ver[1], kv_seq[1]).amax((0, 1)).tolist(),
             )
             match = av == aseq
             fvr = fv.reshape(ROWS, U, blk, -1)
