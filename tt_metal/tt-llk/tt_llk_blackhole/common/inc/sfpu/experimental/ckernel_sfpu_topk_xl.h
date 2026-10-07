@@ -1189,18 +1189,12 @@ inline void bitonic_sort_len_16_alt(bool ascending)
     TTI_SFPTRANSP(0, 0, 0, 0);
 }
 
-// Sort length-32: Step 5 + Steps 4 & 3 + transpose + Steps 4 & 3 again.
-// Used to build len=32 bitonic runs from sorted len=16 sub-runs.
-inline void bitonic_sort_len_32(bool ascending)
+// Steps 4 and 3, transpose, steps 4 and 3 again: sort length-32 after its step 5. Each step swaps the two register
+// halves alike, and the transpose acts on each half alone.
+inline void bitonic_sort_len_32_steps_4_3(bool ascending)
 {
     if (ascending)
     {
-        // Step 5 — stride 16.
-        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
-
         // Step 4 — stride 8.
         TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
@@ -1231,12 +1225,6 @@ inline void bitonic_sort_len_32(bool ascending)
     }
     else
     {
-        // Step 5 — stride 16.
-        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
-        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
-
         // Step 4 — stride 8.
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
         TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
@@ -1266,6 +1254,112 @@ inline void bitonic_sort_len_32(bool ascending)
         TTI_SFPTRANSP(0, 0, 0, 0);
     }
 }
+
+// Sort length-32: Step 5 + Steps 4 & 3 + transpose + Steps 4 & 3 again.
+// Used to build len=32 bitonic runs from sorted len=16 sub-runs.
+inline void bitonic_sort_len_32(bool ascending)
+{
+    if (ascending)
+    {
+        // Step 5 — stride 16.
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+    }
+    else
+    {
+        // Step 5 — stride 16.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+    }
+    bitonic_sort_len_32_steps_4_3(ascending);
+}
+
+#if TOPK_XL_FUSED_MACRO
+namespace topk_xl_fused_macro
+{
+
+// The loads of a stride-16 sort_len_32 group with its step 5 under them: macro i loads LREG4+i and swaps it with
+// LREG i (the step groups' words) on the two cycles after its delay of i, ordered so the four swaps run at the 4th, 6th,
+// 8th and 10th instruction; their scheduled store-backs are overwritten by the group's stores. An ascending group
+// loads the second strip into LREG0..3.
+template <int group_2_offset, bool ascending>
+inline void len32_loads()
+{
+    constexpr int near = ascending ? group_2_offset : 0;
+    constexpr int far  = ascending ? 0 : group_2_offset;
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, near + 0);
+    TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 12) | 1);
+    TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 0) | 1);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, near + 12);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, near + 4);
+    TTI_SFPLOADMACRO((1 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 4) | 1);
+    TTI_SFPLOADMACRO((2 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 8) | 1);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, near + 8);
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+template <int group_2_offset, int inc_dst_addr, bool ascending>
+inline void len32_stores()
+{
+    constexpr int near = ascending ? group_2_offset : 0;
+    constexpr int far  = ascending ? 0 : group_2_offset;
+    static_assert(inc_dst_addr == 32, "the stride-16 sort_len_32 groups advance one face row");
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, near + 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, near + 4);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, near + 8);
+    TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, near + 12);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, far + 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, far + 4);
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, far + 8);
+    TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_6, far + 12);
+}
+
+constexpr int len32_loads_len  = 11;
+constexpr int len32_stores_len = 8;
+
+// Out of line: the K = 2048 math image has little room.
+inline NOINLINE void bitonic_sort_len_32_tail(bool ascending)
+{
+    bitonic_sort_len_32_steps_4_3(ascending);
+}
+
+// Records the loads and stores of a stride-16 sort_len_32 group in direction dir (slots 0 and 10) and runs the group.
+inline NOINLINE void record_len32_group(const bool dir)
+{
+    if (dir)
+    {
+        load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<16, true>(); });
+    }
+    else
+    {
+        load_replay_buf<Exec>(0, len32_loads_len, [] { len32_loads<16, false>(); });
+    }
+    bitonic_sort_len_32_tail(dir);
+    if (dir)
+    {
+        load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<16, 32, true>(); });
+    }
+    else
+    {
+        load_replay_buf<Exec>(len32_loads_len, len32_stores_len, [] { len32_stores<16, 32, false>(); });
+    }
+}
+
+inline NOINLINE void replay_len32_group(const bool dir)
+{
+    lltt::replay(0, len32_loads_len);
+    bitonic_sort_len_32_tail(dir);
+    lltt::replay(len32_loads_len, len32_stores_len);
+}
+
+} // namespace topk_xl_fused_macro
+#endif // TOPK_XL_FUSED_MACRO
 
 // Smallest-stride merge step (Step 6 — stride 32). Pairs the lower 4 LREGs
 // with the upper 4 LREGs across the full lane block.
@@ -1560,7 +1654,7 @@ inline void transpose_N_faces()
 // identical to the previous non-templated `canonical_big_block_with_replay`
 // — the `if constexpr` branches collapse to the same instruction stream.
 template <int row_scale_factor>
-inline void canonical_big_block_with_replay(bool dir)
+inline void canonical_big_block_with_replay_body(bool dir)
 {
     constexpr int consecutive_32_offset = 16;
 
@@ -1602,14 +1696,28 @@ inline void canonical_big_block_with_replay(bool dir)
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
         // ── Sub-block C: `row_scale_factor` × (load<16> + sort_32 + store<16, 32>) ──
-        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
-        bitonic_sort_len_32(dir);
-        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
-        for (int i = 1; i < row_scale_factor; i++)
+#if TOPK_XL_FUSED_MACRO
+        // K = 1024 records too often per group for the macro loads to pay.
+        if constexpr (row_scale_factor >= 4)
         {
-            lltt::replay(0, 8);
+            topk_xl_fused_macro::record_len32_group(dir);
+            for (int i = 1; i < row_scale_factor; i++)
+            {
+                topk_xl_fused_macro::replay_len32_group(dir);
+            }
+        }
+        else
+#endif
+        {
+            load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
             bitonic_sort_len_32(dir);
-            lltt::replay(8, 8);
+            load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
+            for (int i = 1; i < row_scale_factor; i++)
+            {
+                lltt::replay(0, 8);
+                bitonic_sort_len_32(dir);
+                lltt::replay(8, 8);
+            }
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     }
@@ -1622,6 +1730,25 @@ inline void canonical_big_block_with_replay(bool dir)
         bitonic_sort_len_32(dir);
         store16_rows_x2<consecutive_32_offset, 32>();
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    }
+}
+
+// Out of line: its call sites are many, and the K = 2048 math image has little room.
+inline NOINLINE void canonical_big_block_2048(bool dir)
+{
+    canonical_big_block_with_replay_body<4>(dir);
+}
+
+template <int row_scale_factor>
+inline void canonical_big_block_with_replay(bool dir)
+{
+    if constexpr (row_scale_factor >= 4)
+    {
+        canonical_big_block_2048(dir);
+    }
+    else
+    {
+        canonical_big_block_with_replay_body<row_scale_factor>(dir);
     }
 }
 
@@ -1729,6 +1856,14 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 
         // ── Phase 3 — stride-16 sort_32 (4 effective iters) ────────────────
         // `dir` flips once per outer pass below.
+#if TOPK_XL_FUSED_MACRO
+        topk_xl_fused_macro::record_len32_group(dir);
+        topk_xl_fused_macro::replay_len32_group(dir);
+        dir = !dir;
+        topk_xl_fused_macro::record_len32_group(dir);
+        topk_xl_fused_macro::replay_len32_group(dir);
+        dir = !dir;
+#else
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<consecutive_32_offset>(); });
         bitonic_sort_len_32(dir);
         load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<consecutive_32_offset, 32>(); });
@@ -1743,6 +1878,7 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         bitonic_sort_len_32(dir);
         lltt::replay(8, 8);
         dir = !dir;
+#endif
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
         // ── Phase 4 — build bitonic sequences of length 128 ────────────────
