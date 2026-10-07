@@ -93,3 +93,25 @@ def test_tosa_scatter_zero_volume(N, K, W, C, input_layout, device):
     result = ttnn.to_torch(ttnn_output)
     if result.numel():
         assert_allclose(result, torch_output, rtol=1e-3)
+
+
+# Same as test_scatter_zero_volume_rejects_invalid_operands: the empty path runs the device
+# operation's validation itself, and nothing else would catch its removal.
+@pytest.mark.parametrize(
+    "input_dtype, index_dtype, source_dtype, expected_message",
+    [
+        (ttnn.bfloat16, ttnn.int32, ttnn.float32, "input_dtype differs from src_dtype"),
+        (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "index_dtype"),
+    ],
+)
+def test_tosa_scatter_zero_volume_rejects_invalid_operands(
+    input_dtype, index_dtype, source_dtype, expected_message, device, expect_error
+):
+    def make(shape, dtype):
+        torch_dtype = select_torch_dtype(dtype)
+        return ttnn.from_torch(
+            torch.zeros(shape, dtype=torch_dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+
+    with expect_error(RuntimeError, expected_message):
+        ttnn.tosa_scatter(make([2, 0, 4], input_dtype), make([2, 0], index_dtype), make([2, 0, 4], source_dtype))
