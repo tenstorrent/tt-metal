@@ -1,0 +1,243 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Spec-decode VERIFY step (virtual users, block=8) vs 8 sequential plain decode steps, token exact, plus the 5-layer-style hidden capture.
+For U in DEC_US (1,2,4) users per mesh row on a DEC_LAYERS-layer model (one build, Generator.reconfigure between U), ragged real GSM8K prompts:
+  1. prefill, then ONE verify step over blocks [t0, d1..d7] (random token ids, so no draft is 'right') at positions len..len+7 of every user. Done FIRST on a freshly prefilled cache whose
+     positions >= len hold pad junk: a clobbered or invisible same-step KV write would change the result (stale correct data cannot hide it).
+  2. re-prefill, then 8 sequential decode steps (block=1 Decoder) feeding the same tokens at the same positions.
+  Gate: argmax of virtual user t == argmax of sequential step t for every row, user, t (token exact); captured hidden states (all layers) of verify == sequential: bit-identical or PCC >= 0.9999.
+Env: DEC_LAYERS(4) DEC_US(1,2,4) DEC_BLOCK(8) DEC_TRACE(1)."""
+import json
+import os
+import sys
+
+import torch
+
+import ttnn
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from attn_ref import pcc  # noqa: E402
+from decode_common import gsm_prompts  # noqa: E402
+from harness import close_mesh, dram, open_mesh_full  # noqa: E402
+
+from models.demos.blackhole.mimo_v26.reference.prompts import tokenizer  # noqa: E402
+from models.demos.blackhole.mimo_v26.tt.decode import Decoder  # noqa: E402
+from models.demos.blackhole.mimo_v26.tt.generator import Generator  # noqa: E402
+from models.demos.blackhole.mimo_v26.tt.kv_pool import KVLayout  # noqa: E402
+from models.demos.blackhole.mimo_v26.tt.model import MiMoModel  # noqa: E402
+
+E = os.environ.get
+OUT = E("DEC_OUT", "/tmp/verify_decode.jsonl")
+ROWS = 4
+
+
+def rec(case, **kw):
+    kw["case"] = case
+    s = json.dumps(kw, default=str)
+    print("DEC_RESULT " + s, flush=True)
+    open(OUT, "a").write(s + "\n")
+
+
+def feat_host(mesh, t):
+    dts = ttnn.get_device_tensors(t)
+    cols = mesh.shape[1]
+    return torch.cat([ttnn.to_torch(dts[r * cols]).float() for r in range(ROWS)], 0)[:, 0]  # [rows, B, F]
+
+
+def kv_rows(model, mesh, pos, U, blk, layer=0, col=0, lo=0):
+    """K and V rows of positions pos..pos+blk-1 of every (row, user) for `layer`, device column `col`: [rows, U, blk, 192] each"""
+    a = model.layers[layer].attn
+    cols = mesh.shape[1]
+    kd, vd = ttnn.get_device_tensors(a.k_cache), ttnn.get_device_tensors(a.v_cache)
+    ks, vs = torch.zeros(ROWS, U, blk, 192), torch.zeros(ROWS, U, blk, 192)
+    for r in range(ROWS):
+        kc, vc = ttnn.to_torch(kd[r * cols + col]).float(), ttnn.to_torch(vd[r * cols + col]).float()
+        for u in range(U):
+            for t in range(blk):
+                p = int(pos[r, u]) + t + lo
+                bl = int(a.page_table[u][(p // 64) % a.ring_blocks]) if a.ring_blocks else int(a.page_table[u][p // 64])
+                ks[r, u, t], vs[r, u, t] = kc[bl, 0, p % 64], vc[bl, 0, p % 64]
+    return ks, vs
+
+
+def main():
+    NL = int(E("DEC_LAYERS", "4"))
+    Us = [int(v) for v in E("DEC_US", "1,2,4").split(",")]
+    blk = int(E("DEC_BLOCK", "8"))
+    trace = E("DEC_TRACE", "1") == "1"
+    tok = tokenizer()
+    items = gsm_prompts(4 * max(Us), tok)
+    S, max_pos = 256, 512
+    mesh = open_mesh_full()
+    try:
+        model = MiMoModel(mesh, n_layers=NL, layout=KVLayout(users=Us[0], max_pos=max_pos, chunk=S), log=lambda s: None)
+        gen = Generator(model, max_pos, trace=trace, keep_logits=False, U=Us[0])
+        g = torch.Generator().manual_seed(5)
+        for k, U in enumerate(Us):
+            if k > 0:
+                gen.reconfigure(U, KVLayout(users=U, max_pos=max_pos, chunk=S))
+            n = ROWS * U
+            prompts = [it["prompt_ids"] for it in items[:n]]
+            place = gen.place(n)
+            pos = torch.zeros(ROWS, U, dtype=torch.long)
+            for i, (r, s) in enumerate(place):
+                pos[r, s] = len(prompts[i])
+            toks = torch.randint(1000, 100000, (ROWS, U, blk), generator=g)
+            dead = torch.zeros(ROWS, U, dtype=torch.bool)
+            cap = tuple(int(v) for v in E("DEC_CAPTURE", ",".join(str(i) for i in range(NL))).split(","))
+            NC = len(cap)
+            # 1. verify on a fresh prefill
+            gen.prefill(prompts, S)
+            kv_pre = kv_rows(model, mesh, pos, U, blk)
+            vd = Decoder(model, trace=trace, U=U, block=blk, capture=cap)
+            av, bv = vd.verify(toks, pos, dead)
+            kv_ver = kv_rows(model, mesh, pos, U, blk)
+            dev0 = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[0]).flatten().tolist()
+            rec(
+                "verify_device_inputs_row0",
+                cur=dev0(vd.pos["cur"]),
+                idx=dev0(vd.pos["idx"]),
+                upd=[dev0(u_) for u_ in (vd.upd or [])],
+                pt=ttnn.to_torch(
+                    ttnn.get_device_tensors(model.layers[0].attn._dec_states[(U * blk, blk)][0])[0]
+                ).tolist(),
+                tok=dev0(vd.tok),
+            )
+            kvw_ver = kv_rows(model, mesh, pos, U, 4 * blk, lo=-8)  # window pos-8 .. pos+24 of the verify cache
+            fv = feat_host(mesh, vd.feat)  # [rows, U*blk, NL*4096]
+            av2, _ = vd.verify(toks, pos, dead)
+            kv_ver2 = kv_rows(model, mesh, pos, U, blk)
+            fv2 = feat_host(mesh, vd.feat)
+            verify_repeat_equal = bool(torch.equal(fv, fv2))
+            vd.close()
+            # 2. sequential on a fresh prefill
+            gen.prefill(prompts, S)
+            sd = Decoder(model, trace=trace, U=U, block=1, capture=cap)
+            aseq = torch.zeros(ROWS, U, blk, dtype=torch.long)
+            fseq = torch.zeros(ROWS, U, blk, NC * 4096)
+            for t in range(blk):
+                sd.set_inputs(toks[:, :, t], pos + t, dead)
+                a, b = sd.run()
+                aseq[:, :, t] = a
+                fseq[:, :, t] = feat_host(mesh, sd.feat)
+            kv_seq = kv_rows(model, mesh, pos, U, blk)
+            kvw_seq = kv_rows(model, mesh, pos, U, 4 * blk, lo=-8)
+            disp = []
+            for u in range(U):
+                row = []
+                for t in range(blk):
+                    a = kv_ver[0][0, u, t]
+                    errs = (kvw_seq[0][0, u] - a).norm(dim=-1) / a.norm().clamp_min(1e-9)
+                    j = int(errs.argmin())
+                    row.append((j - 8 - t, round(float(errs[j]), 3)))
+                disp.append(row)
+            if E("DEC_HOST_K", "1") == "1":
+                from models.demos.blackhole.mimo_v26.reference.loader import Ckpt, dequant_qkv
+                from models.demos.blackhole.mimo_v26.tests.attn_ref import apply_rope, rope_cos_sin
+
+                ck = Ckpt()
+                p0 = "model.layers.0."
+                qkv0 = dequant_qkv(
+                    0, ck.get(p0 + "self_attn.qkv_proj.weight"), ck.get(p0 + "self_attn.qkv_proj.weight_scale_inv")
+                )
+                k_w = qkv0[64 * 192 : 64 * 192 + 4 * 192]  # column 0 -> kv head 0
+                ln = ck.get(p0 + "input_layernorm.weight").float()
+                emb = ck.get("model.embed_tokens.weight")
+                errv, errs_ = [], []
+                for u in range(U):
+                    for t in range(blk):
+                        h = emb[int(toks[0, u, t])].float()
+                        h = h * torch.rsqrt(h.pow(2).mean() + 1e-6) * ln
+                        kk = (h.bfloat16().float() @ k_w[:192].T).reshape(1, 192)
+                        c, sn = rope_cos_sin(torch.tensor([int(pos[0, u]) + t]), 1e7)
+                        kk = apply_rope(kk, c, sn)[0]
+                        errv.append(round(float((kv_ver[0][0, u, t] - kk).norm() / kk.norm()), 3))
+                        errs_.append(round(float((kv_seq[0][0, u, t] - kk).norm() / kk.norm()), 3))
+                rec(
+                    "host_k_check_row0",
+                    note="rel err of device K row vs host-computed K (layer 0 kv head 0), u-major then t",
+                    verify_cache=errv,
+                    sequential_cache=errs_,
+                )
+            rec(
+                "verify_write_landed",
+                note="rel diff of verify cache row vs the row right after prefill (0 = the verify write never landed), row0, u-major then t",
+                rel=[
+                    round(float((kv_ver[0][0, u, t] - kv_pre[0][0, u, t]).norm() / kv_pre[0][0, u, t].norm()), 3)
+                    for u in range(U)
+                    for t in range(blk)
+                ],
+            )
+            rec(
+                "kv_displacement_row0",
+                note="(best matching sequential position - intended, rel err) per user, t",
+                disp=disp,
+            )
+            for t in range(blk):
+                sd.set_inputs(toks[:, :, t], pos + t, dead)
+                sd.run()
+            kv_seq2 = kv_rows(model, mesh, pos, U, blk)
+            sd.close()
+            rec(
+                "kv_controls",
+                ver1_vs_ver2_max_rel=float(
+                    ((kv_ver[0] - kv_ver2[0]).norm(dim=-1) / kv_ver[0].norm(dim=-1).clamp_min(1e-9)).max()
+                ),
+                seq1_vs_seq2_max_rel=float(
+                    ((kv_seq[0] - kv_seq2[0]).norm(dim=-1) / kv_seq[0].norm(dim=-1).clamp_min(1e-9)).max()
+                ),
+            )
+            rel = lambda x, y: ((x - y).norm(dim=-1) / y.norm(dim=-1).clamp_min(1e-9))  # [rows,U,blk]
+            rec(
+                "kv_rows",
+                U=U,
+                k_rel_err_r0=rel(kv_ver[0], kv_seq[0])[0].round(decimals=3).tolist(),
+                k_rel_err_r1=rel(kv_ver[0], kv_seq[0])[1].round(decimals=3).tolist(),
+                lens_r0=[int(pos[0, u]) for u in range(U)],
+                k_rel_err_max_per_t=rel(kv_ver[0], kv_seq[0]).amax((0, 1)).tolist(),
+                v_rel_err_max_per_t=rel(kv_ver[1], kv_seq[1]).amax((0, 1)).tolist(),
+            )
+            match = av == aseq
+            fvr = fv.reshape(ROWS, U, blk, -1)
+            ident = bool(torch.equal(fvr, fseq))
+            pcs = [pcc(fvr[r, u, t], fseq[r, u, t]) for r in range(ROWS) for u in range(U) for t in range(blk)]
+            sl = lambda l, t: slice(l * 4096, (l + 1) * 4096)
+            per_layer = [
+                round(
+                    min(
+                        pcc(fvr[r, u, t, sl(l, t)], fseq[r, u, t, sl(l, t)])
+                        for r in range(ROWS)
+                        for u in range(U)
+                        for t in range(blk)
+                    ),
+                    5,
+                )
+                for l in range(len(cap))
+            ]
+            per_t0 = [
+                round(
+                    min(pcc(fvr[r, u, 0, sl(l, 0)], fseq[r, u, 0, sl(l, 0)]) for r in range(ROWS) for u in range(U)), 5
+                )
+                for l in range(len(cap))
+            ]
+            rec(
+                "verify_vs_sequential",
+                verify_repeat_bit_identical=verify_repeat_equal,
+                per_layer_pcc_min=per_layer,
+                per_layer_pcc_min_t0=per_t0,
+                U=U,
+                B=n,
+                virtual_rows=U * blk,
+                lens=[len(p) for p in prompts][:8],
+                argmax_equal_frac=float(match.float().mean()),
+                argmax_all_equal=bool(match.all()),
+                mismatches=[(int(r), int(u), int(t)) for r, u, t in match.logical_not().nonzero()][:8],
+                feat_bit_identical=ident,
+                feat_pcc_min=round(min(pcs), 6),
+                dram=dram(mesh),
+            )
+    finally:
+        close_mesh(mesh)
+
+
+if __name__ == "__main__":
+    main()
