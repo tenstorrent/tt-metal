@@ -546,24 +546,16 @@ void reduce_c_row_group(
     tile_regs_commit();
     tile_regs_wait();
 
-#ifdef ARCH_BLACKHOLE
-    pack_block_mop(0, out_cb, group_size);
-#else
     for (uint32_t i = 0; i < group_size; i++) {
         pack_tile<false>(i, out_cb);
     }
-#endif
 
     // Dual-write: same DST data to writer's staging CB (e.g. cb_max_out).
     // DST is read non-destructively by pack, so this is safe before tile_regs_release().
     if (mirror_cb != INVALID_CB) {
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, mirror_cb, group_size);
-#else
         for (uint32_t i = 0; i < group_size; i++) {
             pack_tile<false>(i, mirror_cb);
         }
-#endif
     }
 
     tile_regs_release();
@@ -696,13 +688,9 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
         configure_single_tile_pack(out_cb);
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, out_cb, tiles_per_row);
-#else
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             pack_tile<false>(i, out_cb);
         }
-#endif
 
         tile_regs_release();
     }
@@ -898,13 +886,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, normalized_out_cb, cur_batch);
-#else
                 for (uint32_t j = 0; j < cur_batch; ++j) {
                     pack_tile(j, normalized_out_cb);
                 }
-#endif
                 tile_regs_release();
             }
             CircularBuffer(normalized_out_cb).push_back(head_dim_t_);
