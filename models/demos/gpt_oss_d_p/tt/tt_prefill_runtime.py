@@ -57,6 +57,19 @@ def resolve_chunk_sizes(default_chunk_size: int, additional_chunk_sizes: tuple, 
     return sizes
 
 
+def resolve_dflash_execution(
+    *, checkpoint_enabled: bool, handoff_requested: bool, kv_tail: Optional[bool]
+) -> tuple[bool, bool]:
+    """Return ``(accumulate_features, run_kv_tail)`` for one prefill call.
+
+    ``None`` means the production default (run the tail whenever the checkpoint
+    is enabled); explicit ``False`` keeps the independently measured
+    feature-only path feature-only.
+    """
+    run_kv_tail = checkpoint_enabled if kv_tail is None else bool(kv_tail)
+    return handoff_requested or run_kv_tail, run_kv_tail
+
+
 @dataclass
 class TtPrefillRuntimeConfig:
     num_layers: int  # layers built/cached by this runtime (== model total for single-rank)
@@ -95,6 +108,7 @@ class TtPrefillRuntimeConfig:
     # environment variables; adapters resolve deployment configuration.
     dflash_checkpoint_path: Optional[Path] = None
     dflash_weight_dtype: ttnn.DataType = ttnn.bfloat16
+    dflash_kv_weight_dtype: ttnn.DataType = ttnn.bfloat8_b
 
     @property
     def sp_factor(self) -> int:
@@ -132,6 +146,9 @@ class TtPrefillRuntime:
         self._slot_chunk_size = {}  # slot_id -> chunk size its current sequence started with
         self.dflash_config = None
         self.dflash_accumulator = None
+        self.dflash_kv_config = None
+        self.dflash_kv_builder = None
+        self.dflash_kv_cache = None
 
         self._build_model(state_dict)
         if config.owns_kv_cache:
@@ -175,7 +192,10 @@ class TtPrefillRuntime:
             self._build_dflash_accumulator()
 
     def _build_dflash_accumulator(self) -> None:
+        from models.demos.gpt_oss_d_p.utils.general_utils import get_default_num_links
+
         from .dflash import DFlashPrefillConfig, TtDFlashFeatureAccumulator, load_dflash_fc_weight
+        from .dflash_kv import DFlashKVConfig, TtDFlashKVBuilder, load_dflash_kv_weights
 
         # Publishing a complete handoff requires observing all five target
         # layers. Transport of pipeline-rank partial sums belongs to P/D.
@@ -199,9 +219,28 @@ class TtPrefillRuntime:
             tp_axis=self.config.tp_axis,
             dtype=self.config.dflash_weight_dtype,
         )
+        dflash_kv_config = DFlashKVConfig.from_checkpoint(
+            self.config.dflash_checkpoint_path,
+            expected_hidden_size=self.hf_config.hidden_size,
+            expected_head_dim=self.hf_config.head_dim,
+        )
+        self.dflash_kv_config = dflash_kv_config
+        self.dflash_kv_builder = TtDFlashKVBuilder(
+            self.mesh_device,
+            dflash_kv_config,
+            load_dflash_kv_weights(dflash_kv_config),
+            max_seq_len=self.config.max_seq_len,
+            chunk_sizes=self.chunk_sizes,
+            sp_axis=self.config.sp_axis,
+            tp_axis=self.config.tp_axis,
+            topology=self.config.topology,
+            num_links=get_default_num_links(self.mesh_device),
+            weight_dtype=self.config.dflash_kv_weight_dtype,
+        )
         logger.info(
             f"Enabled GPT-OSS DFlash prefill features from {dflash_config.checkpoint_path}; "
-            f"target layers={dflash_config.target_layer_ids}, pre-norm width={dflash_config.hidden_size}"
+            f"target layers={dflash_config.target_layer_ids}, pre-norm width={dflash_config.hidden_size}, "
+            f"drafter KV layers={dflash_kv_config.num_hidden_layers}"
         )
 
     def _allocate_kv_cache(self) -> None:
@@ -225,6 +264,16 @@ class TtPrefillRuntime:
             chunk_sizes=self.chunk_sizes,
             sliding_window=getattr(self.hf_config, "sliding_window", 128),
         )
+        if self.dflash_kv_config is not None:
+            self.dflash_kv_cache = allocate_kv_cache(
+                self.mesh_device,
+                num_layers=self.dflash_kv_config.num_hidden_layers,
+                max_seq_len=self.config.max_seq_len,
+                sp_axis=self.config.sp_axis,
+                num_users=self.config.num_users,
+                head_dim=self.dflash_kv_config.head_dim,
+                cache_dtype=self.config.cache_dtype,
+            )
         self.kv_cache_allocated = True
 
     def _build_indexed_rope(self) -> None:
@@ -256,6 +305,18 @@ class TtPrefillRuntime:
         if isinstance(kv_caches, GptOssKVCache):
             return kv_caches
         return kv_caches[0]
+
+    def _resolve_dflash_kv(self, kv_caches) -> GptOssKVCache:
+        if self.dflash_kv_builder is None:
+            raise RuntimeError("DFlash KV requested without a configured DFlash checkpoint")
+        if kv_caches is None:
+            if self.dflash_kv_cache is None:
+                raise RuntimeError("runtime has no DFlash KV cache (owns_kv_cache=False): pass kv_caches")
+            return self.dflash_kv_cache
+        try:
+            return kv_caches[1]
+        except (IndexError, TypeError) as exc:
+            raise RuntimeError("DFlash-enabled engine cache bundle must contain target and drafter caches") from exc
 
     def make_chunk_input(self, token_ids: list, chunk_size: Optional[int] = None) -> ttnn.Tensor:
         """Build one chunk's device input for ``prefill_chunk``.
@@ -362,6 +423,7 @@ class TtPrefillRuntime:
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
         dflash_handoff: bool = False,
         dflash_sink=None,
+        dflash_kv_tail: Optional[bool] = None,
     ) -> Any:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
         ``kv_caches``). Returns None (skip_lm_head) — the populated cache is the output.
@@ -419,13 +481,18 @@ class TtPrefillRuntime:
         else:
             on_layer_complete = None
 
-        wants_dflash = dflash_handoff or dflash_sink is not None
-        if wants_dflash and self.dflash_accumulator is None:
+        wants_dflash_result = dflash_handoff or dflash_sink is not None
+        accumulate_dflash_features, run_dflash_kv = resolve_dflash_execution(
+            checkpoint_enabled=self.dflash_accumulator is not None,
+            handoff_requested=wants_dflash_result,
+            kv_tail=dflash_kv_tail,
+        )
+        if accumulate_dflash_features and self.dflash_accumulator is None:
             raise RuntimeError(
-                "DFlash handoff requested but no checkpoint was configured; "
+                "DFlash execution requested but no checkpoint was configured; "
                 "set TtPrefillRuntimeConfig.dflash_checkpoint_path"
             )
-        if wants_dflash and not self.config.is_last_rank:
+        if accumulate_dflash_features and not self.config.is_last_rank:
             raise RuntimeError("DFlash handoff can only be published by the final prefill rank")
 
         # SP maps each chunk to contiguous row blocks. Slice only the tile
@@ -433,7 +500,7 @@ class TtPrefillRuntime:
         # its owning SP row and exact row within that tile on host.
         model_last_token = get_last_token
         owner_row = final_in_tile = None
-        if wants_dflash:
+        if wants_dflash_result:
             relative_last = actual_end - actual_start - 1
             seq_local = chunk_size // self.config.sp_factor
             owner_row = relative_last // seq_local
@@ -449,16 +516,37 @@ class TtPrefillRuntime:
             cached_len=actual_start,
             user_id=slot_id,
             get_last_token=model_last_token,
-            skip_lm_head=False if wants_dflash else skip_lm_head,
+            skip_lm_head=False if wants_dflash_result else skip_lm_head,
             indexed_rope=True,
             on_layer_complete=on_layer_complete,
-            dflash_accumulator=self.dflash_accumulator if wants_dflash else None,
+            dflash_accumulator=self.dflash_accumulator if accumulate_dflash_features else None,
         )
         enqueue_ms = (time.perf_counter() - enqueue_started) * 1000.0
-        if wants_dflash:
+        if accumulate_dflash_features:
+            model_out, reduced_hidden = out
+        if run_dflash_kv:
+            dflash_kv = self._resolve_dflash_kv(kv_caches)
+            self.dflash_kv_builder.forward(
+                reduced_hidden,
+                dflash_kv,
+                slot_id=slot_id,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                chunk_size=chunk_size,
+                on_layer_complete=on_layer_complete,
+                layer_ack_base=self.hf_config.num_hidden_layers,
+            )
+            if not wants_dflash_result:
+                ttnn.deallocate(reduced_hidden)
+                if self.config.is_last_rank and skip_lm_head and model_out is not None:
+                    model_out.deallocate(True)
+                    return None
+                return model_out
+
+        if wants_dflash_result:
             from .dflash import DFlashFeatureLayout, DFlashPrefillResult
 
-            logits_tt, reduced_hidden = out
+            logits_tt = model_out
             assert owner_row is not None and final_in_tile is not None
             shards = ttnn.get_device_tensors(logits_tt)
             mesh_cols = self.config.mesh_shape[1]
@@ -515,18 +603,43 @@ class TtPrefillRuntime:
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 
+    def layer_ack_layers(self, global_count: int, local_count: int) -> tuple[int, int]:
+        """Extend the runner's dense target-layer ACK space with the drafter KV tail.
+
+        The follow-up is intentionally single-rank: the same runtime owns all 36
+        target layers and emits the eight drafter-layer ACKs after their K/V
+        writes.  Both the global reorder modulus and this rank's local count must
+        include those records.
+        """
+        if self.dflash_kv_builder is None:
+            return global_count, local_count
+        draft_layers = self.dflash_kv_config.num_hidden_layers
+        return global_count + draft_layers, local_count + draft_layers
+
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
-        """One ``KvCacheStage`` anchored on K, for the runner's device-map / stage-layout gather.
+        """Describe target K plus the drafter K/V allocations for stage-layout gather.
 
         Single-rank, so ``build_kv_chunk_table`` ignores the gathered layouts and resolves each K/V
-        config's own ``buffer_address()``; this one stage only satisfies the runner's gather."""
+        config's own ``buffer_address()``.  Publishing both drafter allocations still makes aliasing
+        and ownership explicit and matches the generic DFlash migration contract."""
         from models.demos.common.prefill.runners.migration import KvCacheStage
 
         kv = self._resolve_kv(kv_caches)
         assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
         first_layer_idx = self.config.first_layer_idx if first_layer_idx is None else int(first_layer_idx)
         num_my_layers = self.config.num_layers if num_my_layers is None else int(num_my_layers)
-        return [KvCacheStage(int(kv.k.buffer_address()), first_layer_idx, num_my_layers)]
+        stages = [KvCacheStage(int(kv.k.buffer_address()), first_layer_idx, num_my_layers)]
+        if self.dflash_kv_builder is not None:
+            dflash_kv = self._resolve_dflash_kv(kv_caches)
+            for cache in (dflash_kv.k, dflash_kv.v):
+                stages.append(
+                    KvCacheStage(
+                        int(cache.buffer_address()),
+                        self.hf_config.num_hidden_layers,
+                        self.dflash_kv_config.num_hidden_layers,
+                    )
+                )
+        return stages
 
     def build_kv_chunk_table(
         self,
@@ -546,6 +659,7 @@ class TtPrefillRuntime:
 
         kv = self._resolve_kv(kv_caches)
         assert not kv.bounded_sliding, "bounded_sliding_kv_cache is incompatible with KV migration"
+        dflash_kv = self._resolve_dflash_kv(kv_caches) if self.dflash_kv_builder is not None else None
         c = self.config
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -558,6 +672,8 @@ class TtPrefillRuntime:
             chunk_size=c.default_chunk_size,
             num_kv_heads=self.hf_config.num_key_value_heads,
             head_dim=self.hf_config.head_dim,
+            dflash_kv_cache=dflash_kv,
+            dflash_num_layers=(self.dflash_kv_config.num_hidden_layers if self.dflash_kv_config else 0),
             path=path,
         )
 
@@ -585,7 +701,12 @@ class TtPrefillRuntime:
             ttnn.deallocate(sl)
             return block
 
-        return [_block(kv.k), _block(kv.v)]
+        blocks = [_block(kv.k), _block(kv.v)]
+        if self.dflash_kv_builder is not None:
+            dflash_kv = self._resolve_dflash_kv(kv_caches)
+            num_layers = self.dflash_kv_config.num_hidden_layers
+            blocks.extend((_block(dflash_kv.k), _block(dflash_kv.v)))
+        return blocks
 
     def gather_layer(
         self, slot_id: int, layer_idx: int, n_tokens: int, kv_caches=None, chunk_size=None, written_tokens=None
@@ -629,6 +750,89 @@ class TtPrefillRuntime:
         k = torch.stack([gather(k_cache, c) for c in range(nkv)], dim=0).unsqueeze(0)
         v = torch.stack([gather(v_cache, c) for c in range(nkv)], dim=0).unsqueeze(0)
         return k, v, resident
+
+    def gather_dflash_layer(
+        self,
+        slot_id: int,
+        layer_idx: int,
+        n_tokens: int,
+        kv_caches=None,
+        chunk_size=None,
+    ):
+        """Read one drafter layer's context K/V in natural token order."""
+        if self.dflash_kv_config is None:
+            raise RuntimeError("DFlash KV readback requires a configured DFlash checkpoint")
+        kv = self._resolve_dflash_kv(kv_caches)
+        if not 0 <= layer_idx < self.dflash_kv_config.num_hidden_layers:
+            raise ValueError(f"DFlash layer {layer_idx} out of range [0, {self.dflash_kv_config.num_hidden_layers})")
+        sp = self.config.sp_factor
+        cols = self.config.tp_factor
+        chunk_size = chunk_size if chunk_size is not None else self.config.default_chunk_size
+        positions = blockcyclic_positions(sp, chunk_size, self.config.max_seq_len)
+        rows = torch.nonzero((positions >= 0) & (positions < n_tokens), as_tuple=True)[0]
+        rows = rows[torch.argsort(positions[rows])]
+        batch_idx = slot_id * self.dflash_kv_config.num_hidden_layers + layer_idx
+
+        def gather(cache_tensor, col):
+            tensors = ttnn.get_device_tensors(cache_tensor)
+            device_rows = torch.cat(
+                [ttnn.to_torch(tensors[row * cols + col])[batch_idx, 0].float() for row in range(sp)],
+                dim=0,
+            )
+            return device_rows[rows]
+
+        k = torch.stack(
+            [gather(kv.k, head) for head in range(self.dflash_kv_config.num_key_value_heads)], dim=0
+        ).unsqueeze(0)
+        v = torch.stack(
+            [gather(kv.v, head) for head in range(self.dflash_kv_config.num_key_value_heads)], dim=0
+        ).unsqueeze(0)
+        return k, v
+
+    def dflash_kv_cache_pcc_check(
+        self,
+        reduced_hidden: torch.Tensor,
+        *,
+        slot_id: int,
+        kv_caches=None,
+        start_pos: int = 0,
+        chunk_size=None,
+    ) -> float:
+        """Compare all eight generated drafter K/V layers with the pure-torch context path."""
+        from models.common.utility_functions import comp_pcc
+
+        from .dflash_kv import load_dflash_kv_weights, reference_dflash_kv
+
+        if self.dflash_kv_config is None:
+            raise RuntimeError("DFlash KV PCC requires a configured DFlash checkpoint")
+        if start_pos != 0:
+            raise NotImplementedError("DFlash PCC readback currently validates a sequence starting at position zero")
+        reference_k, reference_v = reference_dflash_kv(
+            reduced_hidden,
+            load_dflash_kv_weights(self.dflash_kv_config),
+            self.dflash_kv_config,
+            start_pos=start_pos,
+        )
+        n_tokens = reduced_hidden.shape[-2]
+        minimum = 1.0
+        for layer_idx in range(self.dflash_kv_config.num_hidden_layers):
+            actual_k, actual_v = self.gather_dflash_layer(
+                slot_id,
+                layer_idx,
+                n_tokens,
+                kv_caches=kv_caches,
+                chunk_size=chunk_size,
+            )
+            expected_k = reference_k[layer_idx].reshape(
+                1, self.dflash_kv_config.num_key_value_heads, n_tokens, self.dflash_kv_config.head_dim
+            )
+            expected_v = reference_v[layer_idx].reshape_as(expected_k)
+            pcc_k = float(comp_pcc(expected_k.float(), actual_k.float(), 0.0)[1])
+            pcc_v = float(comp_pcc(expected_v.float(), actual_v.float(), 0.0)[1])
+            minimum = min(minimum, pcc_k, pcc_v)
+            logger.info(f"[dflash-kv-pcc] layer {layer_idx}: K={pcc_k:.5f} V={pcc_v:.5f}")
+        logger.info(f"[dflash-kv-pcc] min across 8 layers: {minimum:.5f}")
+        return minimum
 
     def _kv_diag(self, gL, g_k, dev_k, g_v, dev_v, out_dir):
         """Bring-up diagnostic (gated by GPT_OSS_KV_DUMP) to localize a per-position K RoPE error.

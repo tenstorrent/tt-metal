@@ -64,6 +64,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"
+    dflash_num_layers = 8
 
     # --- test metadata ---
     hf_repo_id = "openai/gpt-oss-120b"
@@ -121,22 +122,40 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
         layer_types = getattr(hf_config, "layer_types", None)
         if layer_types is not None:
             layer_types = list(layer_types)[params.first_layer_idx : params.first_layer_idx + params.num_layers]
-        return GptOssKvCaches(
-            [
+        caches = [
+            allocate_kv_cache(
+                mesh_device,
+                num_layers=params.num_layers,
+                max_seq_len=params.max_seq_len,
+                sp_axis=params.sp_axis,
+                num_users=params.num_users,
+                head_dim=hf_config.head_dim,
+                layer_types=layer_types,
+                bounded_sliding_kv_cache=bounded,
+                chunk_sizes=(params.chunk_size,),
+                sliding_window=getattr(hf_config, "sliding_window", 128),
+            )
+        ]
+        dflash_checkpoint = _resolve_dflash_checkpoint_path()
+        if dflash_checkpoint is not None:
+            from models.demos.gpt_oss_d_p.tt.dflash_kv import DFlashKVConfig
+
+            dflash = DFlashKVConfig.from_checkpoint(
+                dflash_checkpoint,
+                expected_hidden_size=hf_config.hidden_size,
+                expected_head_dim=hf_config.head_dim,
+            )
+            caches.append(
                 allocate_kv_cache(
                     mesh_device,
-                    num_layers=params.num_layers,
+                    num_layers=dflash.num_hidden_layers,
                     max_seq_len=params.max_seq_len,
                     sp_axis=params.sp_axis,
                     num_users=params.num_users,
-                    head_dim=hf_config.head_dim,
-                    layer_types=layer_types,
-                    bounded_sliding_kv_cache=bounded,
-                    chunk_sizes=(params.chunk_size,),
-                    sliding_window=getattr(hf_config, "sliding_window", 128),
+                    head_dim=dflash.head_dim,
                 )
-            ]
-        )
+            )
+        return GptOssKvCaches(caches)
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Build the GPT-OSS model + runtime for this rank. The runtime is stateless w.r.t. the KV
@@ -184,6 +203,29 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             state_dict=state_dict,
             config=runtime_config,
         )
+
+    def cache_kind(self, config_id: int) -> str:
+        """Classify the per-head target and drafter migration configs."""
+        target_configs = 2 * self.model_config.NUM_KEY_VALUE_HEADS
+        if 0 <= config_id < target_configs:
+            return "gqa"
+        if target_configs <= config_id < 2 * target_configs:
+            return "dflash"
+        return "other"
+
+    def cache_layer_rows(self, config_id: int, num_layers: int) -> dict[int, int]:
+        """Map each sparse config to the global layer rows it actually publishes."""
+        kind = self.cache_kind(config_id)
+        if kind == "gqa":
+            return {layer: layer for layer in range(num_layers)}
+        if kind == "dflash":
+            return {num_layers + layer: num_layers + layer for layer in range(self.dflash_num_layers)}
+        return {}
+
+    def cache_head_dim(self, config_id: int):
+        if self.cache_kind(config_id) in ("gqa", "dflash"):
+            return self.model_config.HEAD_DIM
+        return None
 
     @property
     def reference_model_cls(self):

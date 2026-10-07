@@ -227,6 +227,7 @@ def main() -> int:
                 max_seq_len=PADDED_TOKENS,
                 mesh_shape=(ROWS, COLS),
                 default_chunk_size=PADDED_TOKENS,
+                num_users=2,
                 weight_cache_path=model_args.weight_cache_path(ttnn.bfloat8_b),
                 topology=ttnn.Topology.Linear if linear else ttnn.Topology.Ring,
                 dflash_checkpoint_path=draft_path,
@@ -236,7 +237,7 @@ def main() -> int:
         runtime.compile()
         padded = token_ids + [0] * (PADDED_TOKENS - REAL_TOKENS)
 
-        def run(enabled: bool):
+        def run(*, handoff: bool, kv_tail: bool):
             inp = runtime.make_chunk_input(padded, PADDED_TOKENS)
             out = runtime.prefill_chunk(
                 inp,
@@ -244,7 +245,8 @@ def main() -> int:
                 actual_start=0,
                 actual_end=REAL_TOKENS,
                 chunk_size=PADDED_TOKENS,
-                dflash_handoff=enabled,
+                dflash_handoff=handoff,
+                dflash_kv_tail=kv_tail,
             )
             ttnn.synchronize_device(mesh)
             return out
@@ -253,13 +255,19 @@ def main() -> int:
         disabled_times = []
         for _ in range(iters):
             started = time.perf_counter()
-            run(False)
+            run(handoff=False, kv_tail=False)
             disabled_times.append(time.perf_counter() - started)
+        feature_only_times = []
+        for _ in range(iters):
+            started = time.perf_counter()
+            feature_result = run(handoff=True, kv_tail=False)
+            feature_only_times.append(time.perf_counter() - started)
+            ttnn.deallocate(feature_result.reduced_hidden)
         enabled_times = []
         result = None
         for _ in range(iters):
             started = time.perf_counter()
-            next_result = run(True)
+            next_result = run(handoff=True, kv_tail=True)
             enabled_times.append(time.perf_counter() - started)
             if result is not None:
                 ttnn.deallocate(result.reduced_hidden)
@@ -285,6 +293,14 @@ def main() -> int:
         export_started = time.perf_counter()
         reduced = _to_host_reduced(mesh, result)[:REAL_TOKENS]
         export_ms = (time.perf_counter() - export_started) * 1000.0
+        dflash_kv_pcc = runtime.dflash_kv_cache_pcc_check(
+            reduced,
+            slot_id=0,
+            chunk_size=PADDED_TOKENS,
+        )
+        dflash_kv_min = float(os.getenv("GPT_OSS_DFLASH_DRAFT_KV_PCC_MIN", "0.999"))
+        if dflash_kv_pcc < dflash_kv_min:
+            gate_failures.append(f"drafter KV PCC {dflash_kv_pcc:.5f} < {dflash_kv_min}")
         aggregate = per_position = None
         golden_token = None
         if seed is not None:
@@ -313,7 +329,7 @@ def main() -> int:
         handoff_out = Path(os.getenv("PREFILL_DFLASH_HANDOFF_OUT", "generated/gptoss_dflash_handoff_1k.pt"))
         spec_trace = _write_consumer_fixture(handoff_out, seed, token_ids, result, reduced)
         _gate_consumer_compatibility()
-        accuracy = f"KV_PCC={kv_pcc:.5f} y0={result.y0}"
+        accuracy = f"KV_PCC={kv_pcc:.5f} DFLASH_KV_PCC={dflash_kv_pcc:.5f} y0={result.y0}"
         if aggregate is not None and per_position is not None:
             accuracy += (
                 f" RH_REF_POS={len(per_position)} RH_PCC={aggregate:.5f} "
@@ -325,8 +341,9 @@ def main() -> int:
             accuracy += f" y0_ref={golden_token}"
         print(f"[dflash-prefill] {accuracy}", flush=True)
         print(
-            f"[dflash-prefill] latency disabled/enabled median="
+            f"[dflash-prefill] latency target/feature-only/feature+KV median="
             f"{statistics.median(disabled_times) * 1000:.1f}/"
+            f"{statistics.median(feature_only_times) * 1000:.1f}/"
             f"{enabled_median * 1000:.1f} ms ({enabled_tsu:.1f} tokens/s); "
             f"feature_export={export_ms:.1f} ms; enqueue_breakdown={result.timings_ms}",
             flush=True,
