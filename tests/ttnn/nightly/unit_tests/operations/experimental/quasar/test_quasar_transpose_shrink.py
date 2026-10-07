@@ -73,12 +73,26 @@ def test_quasar_transpose_wh_sharded_rm_l1_budget_counts_tiles(device):
     W is sized so the old element-count estimate fits in free L1 while the real allocation does not;
     the op must then fall back to permute instead of overflowing L1 at CB allocation.
     """
-    tile_bytes, H, num_cores = 2048, 64, 2
+    tile_dim, tile_bytes, elem_bytes = 32, 2048, 2  # bfloat16
+    H, num_cores = 64, 2
+    Ht = H // tile_dim
     cb_limit = ttnn._ttnn.reports.get_device_info(device).cb_limit
-    W = (cb_limit // 196 + cb_limit // 320) // 2 // 32 * 32
-    Ht, Wt = H // 32, W // 32
-    free_l1 = cb_limit - (H // num_cores) * W * 2
-    elementwise_estimate = (2 * W + 2 * H + H * W) * 2
+
+    # Free L1 on a shard core is cb_limit minus the resident input shard, which is (H / num_cores) * W * elem_bytes.
+    # Both estimates are affine in W: bytes = slope * W + const, so each bound on W is solvable in closed form.
+    shard_slope = (H // num_cores) * elem_bytes
+    old_slope = (2 + H) * elem_bytes  # (2W + 2H + H*W) elements
+    old_const = 2 * H * elem_bytes
+    real_slope = (2 + Ht) * tile_bytes // tile_dim  # (2Wt + 2Ht + Ht*Wt) tiles
+    real_const = 2 * Ht * tile_bytes
+    # Old estimate fits free L1 below w_old_fits; real allocation overflows it above w_real_overflows.
+    w_old_fits = (cb_limit - old_const) // (old_slope + shard_slope)
+    w_real_overflows = (cb_limit - real_const) // (real_slope + shard_slope)
+    W = (w_old_fits + w_real_overflows) // 2 // tile_dim * tile_dim
+
+    Wt = W // tile_dim
+    free_l1 = cb_limit - shard_slope * W
+    elementwise_estimate = old_slope * W + old_const
     allocated = (2 * Wt + 2 * Ht + Ht * Wt) * tile_bytes
     if not elementwise_estimate < free_l1 < allocated:
         pytest.skip(f"No W separates the estimates on this device (cb_limit={cb_limit})")

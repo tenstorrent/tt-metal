@@ -191,10 +191,9 @@ inline Tensor transpose_(
             if (a.layout() == Layout::ROW_MAJOR) {
                 // Only compute the RM WH CB-vs-L1 budget when actually on the RM WH path:
                 // the allocator query and padded-shape arithmetic are wasted work otherwise.
-                const uint64_t Wt = tt::div_up(a.logical_shape()[3], tt::constants::TILE_WIDTH);
-                const uint64_t Ht = tt::div_up(a.logical_shape()[2], tt::constants::TILE_HEIGHT);
-                const uint64_t tile_size = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(a.dtype()));
-                const uint64_t cb_size_for_rm = (2 * Wt + 2 * Ht + Ht * Wt) * tile_size;
+                const uint32_t W_padded = round_up(a.logical_shape()[3], tt::constants::TILE_WIDTH);
+                const uint32_t H_padded = round_up(a.logical_shape()[2], tt::constants::TILE_HEIGHT);
+                const uint32_t cb_size_for_rm = (2 * W_padded + 2 * H_padded + H_padded * W_padded) * a.element_size();
                 auto* device = a.device();
                 auto lowest_address = device->lowest_occupied_compute_l1_address();
                 uint32_t max_l1_space =
