@@ -4,8 +4,12 @@
 
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one.
-#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+#ifndef BINARY_NG_BLOCK
+#define BINARY_NG_BLOCK 0
+#endif
+// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one, except
+// in the block sections (BINARY_NG_BLOCK), whose block unpack takes it for every op.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK)
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 
@@ -84,15 +88,26 @@ ALWI void process_tile(
     // Sharded operand and output: up to a DEST section of tiles against the one broadcast tile per acquire.
     for (uint32_t j = tile_start; j < freq;) {
         const uint32_t n = (freq - j) < BCAST_OTHER_CHUNK ? (freq - j) : BCAST_OTHER_CHUNK;
+        PREPROCESS(OTHER_OP, CircularBuffer(CB_PRE_OTHER), CircularBuffer(CB_POST_OTHER), CircularBuffer(cb_out), n);
         EXP_CB_POST_OTHER.wait_front(n);
         exp_dfb_out.reserve_back(n);
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
+#endif
         tile_regs_acquire();
+#if BINARY_NG_BLOCK
+        binary_block_strided<BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs, 0, 0, 0, n, BCAST_INPUT ? 1 : 0, BCAST_INPUT ? 0 : 1);
+#else
         for (uint32_t i = 0; i < n; ++i) {
 #if BCAST_INPUT
             BINARY_OP(cb_post_lhs, cb_post_rhs, i, 0, i);
 #else
             BINARY_OP(cb_post_lhs, cb_post_rhs, 0, i, i);
 #endif
+        }
+#endif
+        for (uint32_t i = 0; i < n; ++i) {
+            PROCESS_POST_ACTIVATIONS(i);
         }
         tile_regs_commit();
 

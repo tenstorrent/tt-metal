@@ -195,7 +195,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 const std::uint32_t block_tiles = INPUT_NUM_TILES_IN_BLOCK;
                 const std::uint32_t stride_a    = num_total_tiles > 1 ? L1_ADDRESS(buffer_A[1]) - L1_ADDRESS(buffer_A[0]) : 0;
-                const std::uint32_t stride_b    = num_total_tiles > 1 ? L1_ADDRESS(buffer_B[1]) - L1_ADDRESS(buffer_B[0]) : 0;
+                const std::uint32_t stride_b =
+                    (unpack_ab_block == 2 || num_total_tiles == 1) ? 0 : L1_ADDRESS(buffer_B[1]) - L1_ADDRESS(buffer_B[0]);
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
                     for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(INPUT_NUM_BLOCKS); ++block)
