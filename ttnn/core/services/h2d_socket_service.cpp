@@ -678,8 +678,10 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         H2DWorkerSyncArgs worker_sync;
         if (cfg_.worker_cores.has_value()) {
             const auto& worker_range = cfg_.worker_cores.value();
-            const auto start_phys = d->worker_core_from_logical_core(worker_range.start_coord);
-            const auto end_phys = d->worker_core_from_logical_core(worker_range.end_coord);
+            const auto start_phys =
+                mesh_device_->worker_core_from_logical_core(core.device_coord, worker_range.start_coord);
+            const auto end_phys =
+                mesh_device_->worker_core_from_logical_core(core.device_coord, worker_range.end_coord);
             worker_sync.enabled = true;
             worker_sync.data_ready_sem_addr = static_cast<uint32_t>(data_ready_sem_->address());
             worker_sync.consumed_counter_addr = static_cast<uint32_t>(consumed_addrs_.at(core.device_coord));

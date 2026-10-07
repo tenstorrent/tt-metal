@@ -1416,6 +1416,20 @@ CoreCoord MeshDeviceImpl::worker_core_from_logical_core(const CoreCoord& logical
         return device->worker_core_from_logical_core(logical_core);
     });
 }
+CoreCoord MeshDeviceImpl::virtual_core_from_logical_core(
+    const MeshCoordinate& coord, const CoreCoord& logical_coord, const CoreType& core_type) const {
+    TT_FATAL(
+        view_->impl().is_local(coord),
+        "virtual_core_from_logical_core: MeshCoordinate {} maps to a device this host does not drive. The "
+        "logical-to-virtual mapping is read from that chip's SoC descriptor, which is available only for local "
+        "devices.",
+        coord);
+    return view_->impl().get_device(coord)->virtual_core_from_logical_core(logical_coord, core_type);
+}
+CoreCoord MeshDeviceImpl::worker_core_from_logical_core(
+    const MeshCoordinate& coord, const CoreCoord& logical_core) const {
+    return virtual_core_from_logical_core(coord, logical_core, CoreType::WORKER);
+}
 CoreCoord MeshDeviceImpl::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
     return validate_and_get_reference_value(this->get_devices(), [virtual_coord](const auto* device) {
         return device->logical_core_from_worker_core(virtual_coord);
@@ -2057,6 +2071,13 @@ CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_co
 }
 CoreCoord MeshDevice::worker_core_from_logical_core(const CoreCoord& logical_core) const {
     return pimpl_->worker_core_from_logical_core(logical_core);
+}
+CoreCoord MeshDevice::virtual_core_from_logical_core(
+    const MeshCoordinate& coord, const CoreCoord& logical_coord, const CoreType& core_type) const {
+    return pimpl_->virtual_core_from_logical_core(coord, logical_coord, core_type);
+}
+CoreCoord MeshDevice::worker_core_from_logical_core(const MeshCoordinate& coord, const CoreCoord& logical_core) const {
+    return pimpl_->worker_core_from_logical_core(coord, logical_core);
 }
 CoreCoord MeshDevice::logical_core_from_worker_core(const CoreCoord& virtual_coord) const {
     return pimpl_->logical_core_from_worker_core(virtual_coord);

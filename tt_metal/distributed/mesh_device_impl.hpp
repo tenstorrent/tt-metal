@@ -295,6 +295,9 @@ public:
         NOC noc, const MeshCoordinate& coord) const;
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+    CoreCoord virtual_core_from_logical_core(
+        const MeshCoordinate& coord, const CoreCoord& logical_coord, const CoreType& core_type) const;
+    CoreCoord worker_core_from_logical_core(const MeshCoordinate& coord, const CoreCoord& logical_core) const;
     CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;

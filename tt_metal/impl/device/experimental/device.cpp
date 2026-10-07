@@ -110,14 +110,7 @@ CoreCoord worker_core_from_logical_core(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinate& mesh_coord,
     const CoreCoord& logical_core) {
-    const auto& mesh_device_impl = mesh_device.impl();
-    TT_FATAL(
-        mesh_device_impl.is_local(mesh_coord),
-        "worker_core_from_logical_core: MeshCoordinate {} maps to a device this rank does not drive. The "
-        "logical-to-virtual worker mapping is read from that chip's SoC descriptor, which is available only for "
-        "local devices.",
-        mesh_coord);
-    return mesh_device_impl.get_device(mesh_coord)->worker_core_from_logical_core(logical_core);
+    return mesh_device.worker_core_from_logical_core(mesh_coord, logical_core);
 }
 
 }  // namespace tt::tt_metal::experimental::Device

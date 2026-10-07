@@ -132,6 +132,15 @@ public:
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
+
+    // Per-device core translation. The coordinate-less overloads above require every local device to agree on the
+    // logical-to-virtual mapping and throw when they do not; the mapping of DRAM and ethernet cores depends on each
+    // chip's harvesting, so it is only exact once a device is named. Defined only for coordinates this host drives:
+    // the mapping is read from that chip's SoC descriptor, which this host holds only for local devices. Throws for
+    // remote and out-of-bounds coordinates.
+    CoreCoord virtual_core_from_logical_core(
+        const MeshCoordinate& coord, const CoreCoord& logical_coord, const CoreType& core_type) const;
+    CoreCoord worker_core_from_logical_core(const MeshCoordinate& coord, const CoreCoord& logical_core) const;
     CoreCoord logical_core_from_worker_core(const CoreCoord& virtual_coord) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
@@ -230,12 +239,18 @@ public:
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
     [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
+        "Retrieving physical devices fails for remote coordinates in distributed contexts. Use "
+        "get_fabric_node_id(coord) "
+        "to name a device, virtual_core_from_logical_core(coord, ...) / worker_core_from_logical_core(coord, ...) for "
+        "per-device core translation, and the coordinate-less MeshDevice accessors (grid_size, l1_size_per_core, "
+        "allocator, ...) for properties that are uniform across the mesh. This will be removed after 28-02-2026.")]]
     IDevice* get_device(ChipId physical_device_id) const;
     [[deprecated(
-        "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
-        "28-02-2026.")]]
+        "Retrieving physical devices fails for remote coordinates in distributed contexts. Use "
+        "get_fabric_node_id(coord) "
+        "to name a device, virtual_core_from_logical_core(coord, ...) / worker_core_from_logical_core(coord, ...) for "
+        "per-device core translation, and the coordinate-less MeshDevice accessors (grid_size, l1_size_per_core, "
+        "allocator, ...) for properties that are uniform across the mesh. This will be removed after 28-02-2026.")]]
     IDevice* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
