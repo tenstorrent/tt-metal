@@ -17,16 +17,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS
-from models.experimental.bevformer.reference.bevformer import BEVFormer, build_bevformer_base, load_bevformer_checkpoint
+from models.experimental.bevformer.reference.bevformer import build_bevformer_base, load_bevformer_checkpoint
 from models.experimental.bevformer.tests.common import (
     BEV_SHAPES,
     assert_channels_close,
     assert_pcc,
-    build_reference_backbone,
-    build_reference_fpn,
-    build_reference_head,
-    build_reference_transformer,
+    build_reference_bevformer,
     center_channels,
     frame_metas,
     random_image_batch,
@@ -43,21 +39,13 @@ NUM_FRAMES = 2
 PCC_THRESHOLD = 0.95
 
 
-def build_reference_bevformer():
+def build_reference_model():
     bev_h, bev_w = BEV_SHAPES["base"]
     if CHECKPOINT is None:
-        model = BEVFormer(
-            build_reference_backbone(),
-            build_reference_fpn(),
-            build_reference_transformer(ENCODER_NUM_LAYERS),
-            build_reference_head((bev_h, bev_w)),
-            bev_h,
-            bev_w,
-        )
-    else:
-        model = build_bevformer_base(bev_h, bev_w)
-        state_dict = torch.load(CHECKPOINT, map_location="cpu", weights_only=False)["state_dict"]
-        load_bevformer_checkpoint(model, state_dict)
+        return build_reference_bevformer((bev_h, bev_w))
+    model = build_bevformer_base(bev_h, bev_w)
+    state_dict = torch.load(CHECKPOINT, map_location="cpu", weights_only=False)["state_dict"]
+    load_bevformer_checkpoint(model, state_dict)
     return model.eval().requires_grad_(False)
 
 
@@ -70,7 +58,7 @@ def test_bevformer(device, reset_seeds):
     """Each frame's BEV, class logits and boxes; the second frame takes each side's own first-frame
     BEV as its previous BEV, with the ego's rotation and shift."""
     generator = torch.Generator().manual_seed(0)
-    torch_model = build_reference_bevformer()
+    torch_model = build_reference_model()
     img = random_image_batch()[None]
     frames = frame_metas(1, NUM_FRAMES, generator)
 
