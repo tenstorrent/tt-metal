@@ -700,6 +700,7 @@ autofix_annotate() {
          n: (if .state == "pr_open" then "\($eo) *autofix draft \(.pr.url | prlink) — needs your review* (targeted CI running)"
              elif .state == "ci_passed" then "\($eo) *autofix draft \(.pr.url | prlink) — CI ✅, needs your review*"
              elif .state == "ci_failed" then "\($eo) *autofix draft \(.pr.url | prlink) — CI ❌, needs your look*"
+             elif .state == "ready_to_merge" then "\($eo) *autofix \(.pr.url | prlink) — ready to merge*"
              elif .state == "merged" then "\($em) autofix \(.pr.url | prlink) merged, not in this run yet"
              elif .state == "fixed_upstream" then "\($em) already fixed on main by \(fixref)\(if (.fix_author // "") != "" then " by @\(.fix_author)" else "" end), not in this run yet"
              elif .state == "fix_pending" then "\($eo) fix in progress\(if (.fix_author // "") != "" then " by @\(.fix_author)" else "" end): open PR \(.fix_pr.url | prlink)"
