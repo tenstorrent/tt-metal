@@ -260,6 +260,14 @@ def _check_gathered_shape(
     )
 
 
+VERIFY_REPLICAS_ENV = "TTML_CHECKPOINT_VERIFY_REPLICAS"
+
+
+def _verify_replicas_from_env() -> bool:
+    """`save_checkpoint`'s replica check unless `TTML_CHECKPOINT_VERIFY_REPLICAS` says off (unset means on)."""
+    return os.environ.get(VERIFY_REPLICAS_ENV, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 def save_checkpoint(
     path: str,
     *,
@@ -267,7 +275,7 @@ def save_checkpoint(
     model_params=None,
     optimizer=None,
     expected_shapes: dict[str, tuple] | None = None,
-    verify_replicas: bool = True,
+    verify_replicas: bool | None = None,
     display_progress: bool = False,
 ) -> None:
     """Write `header` (opaque) plus `model_params` and/or the `optimizer`'s state to `path`.
@@ -292,12 +300,16 @@ def save_checkpoint(
     Names in `expected_shapes` that no tensor of this checkpoint carries raise `ValueError` before anything is
     gathered or written, so a check cannot pass vacuously.
 
-    `verify_replicas` (default on) byte-compares every copy a tensor's label calls a replica before one copy is
+    `verify_replicas` (on unless disabled) byte-compares every copy a tensor's label calls a replica before one copy is
     saved, for model parameters and optimizer state alike, and raises `ReplicaMismatchError` naming the tensor if
     they differ: a `Replicate` label over data that differs would otherwise be saved as one device's copy. This is
     the check that covers a parameter whose own label is wrong in that direction. It reads every copy, so each
-    tensor briefly takes its replicated size in host memory; `False` restores the label-trusting gather.
+    tensor briefly takes its replicated size in host memory; `False` restores the label-trusting gather. Left at
+    `None`, it follows the `TTML_CHECKPOINT_VERIFY_REPLICAS` environment variable (`0`/`false`/`no`/`off` disables
+    it for every save in the process, with no code change); an explicit `True`/`False` overrides the variable.
     """
+    if verify_replicas is None:
+        verify_replicas = _verify_replicas_from_env()
     manifest = {}
     records = []  # (group, path, name, tensor) in stream order
     if model_params is not None:
