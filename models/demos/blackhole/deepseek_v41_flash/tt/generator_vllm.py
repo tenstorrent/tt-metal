@@ -113,7 +113,7 @@ class DeepseekV41ForCausalLM:
         )
         return cls(Generator([model], [args], mesh_device, tokenizer=args.tokenizer), max_batch_size, max_seq_len)
 
-    def __init__(self, generator, max_num_seqs, max_seq_len):
+    def __init__(self, generator, max_num_seqs, max_seq_len, *, vllm_config=None):
         self.generator = generator  # tt/generator.Generator (auto_chunk); the model is generator.m
         self.m = generator.m
         self.max_num_seqs, self.max_seq_len = int(max_num_seqs), int(max_seq_len)
@@ -125,6 +125,18 @@ class DeepseekV41ForCausalLM:
         self.timing = {}
         self._warm = False
         self._calls = {"prefill": 0, "decode": 0}
+
+    # vLLM inspects this protocol (``is_text_generation_model``: __init__(vllm_config), embed_input_ids, forward(input_ids, positions), compute_logits) to resolve
+    # ``--runner generate`` while building the ModelConfig, BEFORE the TT plugin loads the model; the architecture is the TT-only ``TTDeepseekV41ForCausalLM`` (no upstream
+    # class), so without these stubs ModelConfig fails with "This model does not support `--runner generate`". Execution is through prefill_forward / decode_forward.
+    def embed_input_ids(self, input_ids):
+        raise NotImplementedError("Use the TT plugin prefill_forward/decode_forward interface")
+
+    def forward(self, input_ids, positions):
+        raise NotImplementedError("Use the TT plugin prefill_forward/decode_forward interface")
+
+    def compute_logits(self, hidden_states):
+        raise NotImplementedError("The DSV4.1 generator owns the LM head and the (greedy) sampling")
 
     @classmethod
     def get_max_tokens_all_users(

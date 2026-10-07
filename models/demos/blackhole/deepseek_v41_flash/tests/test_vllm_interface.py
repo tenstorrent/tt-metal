@@ -363,3 +363,13 @@ def test_chat_template_matches_checkpoint_encoder():
     ):
         got = tok.apply_chat_template(msgs, chat_template=tpl, tokenize=False, add_generation_prompt=True)
         assert got == encode_messages(msgs, thinking_mode="chat")
+
+
+def test_class_satisfies_vllm_text_generation_protocol():
+    """ModelConfig resolves --runner generate through vLLM's is_text_generation_model before the TT plugin loads the model (stubs: embed_input_ids / forward / compute_logits)."""
+    pytest.importorskip("vllm")
+    from vllm.model_executor.models.interfaces_base import is_text_generation_model
+
+    from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM
+
+    assert is_text_generation_model(DeepseekV41ForCausalLM)
