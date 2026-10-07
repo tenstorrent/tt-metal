@@ -721,7 +721,6 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     zones = profiler_data.zones().frame()
     if zones.empty:
         return
-    # Plain Python over the few zones of one run: a pandas groupby here cost more host time than the kernel run.
     begins = zones["timestamp"].to_numpy()
     ends = begins + zones["duration"].to_numpy()
     # Identity is the name: marker_id is a per-callsite hash, different on every thread.
