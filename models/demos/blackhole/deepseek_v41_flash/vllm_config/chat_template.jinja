@@ -1,0 +1,9 @@
+{#- DeepSeek-V4.1 chat (non-thinking) prompt format = encoding/encoding.py encode_messages(thinking_mode="chat") for system / user / assistant text turns. -#}
+{{- bos_token -}}
+{%- for m in messages -%}
+{%- if m['role'] == 'system' -%}<｜System｜>{{ m['content'] }}
+{%- elif m['role'] == 'user' -%}<｜User｜>{{ m['content'] }}
+{%- elif m['role'] == 'assistant' -%}<｜Assistant｜></think>{{ m['content'] }}{{ eos_token }}
+{%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}<｜Assistant｜></think>{%- endif -%}
