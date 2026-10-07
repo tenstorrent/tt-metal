@@ -622,7 +622,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
+#ifdef ARCH_WORMHOLE
+        constexpr bool round_to_bf16 = !APPROX_MODE && !is_fp32_dest_acc_en;
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, round_to_bf16>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
@@ -635,7 +640,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sqrt_init<APPROX_MODE>);
-        ckernel::sfpu::sqrt_bf16_tile_init<!is_fp32_dest_acc_en>();
+        ckernel::sfpu::sqrt_bf16_tile_init<!is_fp32_dest_acc_en && !FAST_MODE && !APPROX_MODE && ITERATIONS == 32>();
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {

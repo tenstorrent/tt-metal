@@ -100,7 +100,7 @@ void matmul_single_core(
     // the compute kernel is using the other tile). This number can be adjusted based on the use case. But geberally
     // diminishing returns observed after several tiles.
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t num_input_tiles = 2;
     CircularBufferConfig cb_src0_config =
