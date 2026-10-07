@@ -14,7 +14,7 @@ from harness import close_mesh, dram, open_mesh_full  # noqa: E402
 from models.demos.blackhole.mimo_v26.reference.prompts import tokenizer  # noqa: E402
 from models.demos.blackhole.mimo_v26.reference.score_gsm8k import extract, wilson  # noqa: E402
 from models.demos.blackhole.mimo_v26.tt.generator import Generator  # noqa: E402
-from models.demos.blackhole.mimo_v26.tt.kv_pool import KVPoolLayout  # noqa: E402
+from models.demos.blackhole.mimo_v26.tt.kv_pool import KVLayout  # noqa: E402
 from models.demos.blackhole.mimo_v26.tt.model import MiMoModel  # noqa: E402
 
 E = os.environ.get
@@ -40,8 +40,8 @@ def main():
     allitems = gsm_prompts(NMAX, tok, START)
     maxlen = max(len(it["prompt_ids"]) for it in allitems)
     S = max(256, -(-maxlen // 128) * 128)
-    max_pos = -(-(S + NEWMAX + 8) // 256) * 256
-    pool = KVPoolLayout(max_pos=max_pos, ring_blocks=S // 64 + 8, slots=32)
+    max_pos = -(-(S + NEWMAX + 8) // S) * S
+    pool = KVLayout(users=-(-NMAX // 4), max_pos=max_pos, chunk=S)
     mesh = open_mesh_full()
     try:
         t0 = time.time()
@@ -51,7 +51,7 @@ def main():
             max_pos=max_pos,
             users=32,
             ring_blocks=pool.ring_blocks,
-            pool=pool,
+            layout=pool,
             log=lambda s: print(s, flush=True) if "layer 47" in s or "layer 0 " in s else None,
         )
         rec(
@@ -76,13 +76,22 @@ def main():
             for i, it in enumerate(items):
                 txt = tok.decode(r["tokens"][i], skip_special_tokens=True)
                 texts[it["idx"]] = txt
-                if extract(txt) == it["gold"]:
+                try:
+                    got = extract(txt)
+                except OverflowError:  # reference/score_gsm8k.norm overflows on 'inf'-sized numbers (defect, logged)
+                    got = None
+                if got == it["gold"]:
                     ok.append(it["idx"])
             lo, hi = wilson(len(ok), N)
             med = steady[len(steady) // 2] if steady else None
-            same = None
+            same, diff = None, None
             if (N, NEW) in prev:
                 same = prev[(N, NEW)] == r["tokens"]
+                diff = [
+                    (i, next((k for k, (a, b) in enumerate(zip(x, y)) if a != b), min(len(x), len(y))))
+                    for i, (x, y) in enumerate(zip(prev[(N, NEW)], r["tokens"]))
+                    if x != y
+                ][:20]
             prev[(N, NEW)] = r["tokens"]
             rec(
                 "result",
@@ -107,6 +116,7 @@ def main():
                 gen_lens=[len(t) for t in r["tokens"]][:16],
                 finished_eos=sum(int(any(x in gen.eos for x in t)) for t in r["tokens"]),
                 identical_to_previous_run_same_scenario=same,
+                first_diff_user_step=diff,
                 session="dedicated process, scenarios run sequentially in one process, trace=%s, unpaired, host-timed replay+candidate readback"
                 % E("GSM_TRACE", "1"),
                 dram_after=dram(mesh),

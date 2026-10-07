@@ -16,7 +16,7 @@ from .score_gsm8k import norm
 GSM8K = "/mnt/tt-data/ssinghal/datasets/gsm8k_test.jsonl"
 
 
-def build(n, tok=None):
+def build(n, tok=None, enable_thinking=None):
     from .prompts import tokenizer
 
     tok = tok or tokenizer()
@@ -24,7 +24,10 @@ def build(n, tok=None):
     items = []
     for i, r in enumerate(rows):
         txt = tok.apply_chat_template(
-            [{"role": "user", "content": r["question"]}], tokenize=False, add_generation_prompt=True
+            [{"role": "user", "content": r["question"]}],
+            tokenize=False,
+            add_generation_prompt=True,
+            **({} if enable_thinking is None else {"enable_thinking": enable_thinking}),
         )
         items.append(
             {
@@ -36,15 +39,20 @@ def build(n, tok=None):
             }
         )
     sha = hashlib.sha256(json.dumps([it["prompt"] for it in items], ensure_ascii=False).encode()).hexdigest()
-    return {"n": n, "sha256": sha, "dataset": GSM8K, "items": items}
+    return {"n": n, "enable_thinking": enable_thinking, "sha256": sha, "dataset": GSM8K, "items": items}
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--n", type=int, required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument(
+        "--no-thinking",
+        action="store_true",
+        help="enable_thinking=False: the template appends <think></think> after the assistant tag (GSM8K gate decision)",
+    )
     a = ap.parse_args()
-    d = build(a.n)
+    d = build(a.n, enable_thinking=False if a.no_thinking else None)
     os.makedirs(os.path.dirname(a.out), exist_ok=True)
     json.dump(d, open(a.out, "w"), ensure_ascii=False)
     print(a.out, "n", d["n"], "sha256", d["sha256"], "max prompt tokens", max(len(i["prompt_ids"]) for i in d["items"]))

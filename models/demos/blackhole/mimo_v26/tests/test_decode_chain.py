@@ -16,7 +16,7 @@ from harness import close_mesh, dram, open_mesh_full  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.demos.blackhole.mimo_v26.tt.generator import Generator  # noqa: E402
-from models.demos.blackhole.mimo_v26.tt.kv_pool import KVPoolLayout  # noqa: E402
+from models.demos.blackhole.mimo_v26.tt.kv_pool import KVLayout  # noqa: E402
 from models.demos.blackhole.mimo_v26.tt.model import MiMoModel  # noqa: E402
 
 E = os.environ.get
@@ -39,7 +39,7 @@ def main():
     n, steps = len(items), orc["steps"]
     prompts = [it["prompt_ids"] for it in items]
     max_pos = 512
-    pool = KVPoolLayout(max_pos=max_pos, ring_blocks=256 // 64 + 8, slots=32)
+    pool = KVLayout(users=4, max_pos=max_pos, chunk=256)
     mesh = open_mesh_full()
     try:
         model = MiMoModel(
@@ -48,7 +48,7 @@ def main():
             max_pos=max_pos,
             users=32,
             ring_blocks=pool.ring_blocks,
-            pool=pool,
+            layout=pool,
             log=lambda s: print(s, flush=True),
         )
         rec("env", layers=NL, n=n, steps=steps, lens=[len(p) for p in prompts], dram=dram(mesh))

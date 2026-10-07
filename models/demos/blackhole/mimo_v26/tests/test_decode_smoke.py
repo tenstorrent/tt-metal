@@ -10,7 +10,7 @@ from harness import close_mesh, dram, open_mesh_full  # noqa: E402
 
 from models.demos.blackhole.mimo_v26.reference.prompts import tokenizer  # noqa: E402
 from models.demos.blackhole.mimo_v26.tt.generator import Generator  # noqa: E402
-from models.demos.blackhole.mimo_v26.tt.kv_pool import KVPoolLayout  # noqa: E402
+from models.demos.blackhole.mimo_v26.tt.kv_pool import KVLayout  # noqa: E402
 from models.demos.blackhole.mimo_v26.tt.model import MiMoModel  # noqa: E402
 
 E = os.environ.get
@@ -28,11 +28,11 @@ def main():
     NL, N, STEPS = int(E("DEC_LAYERS", "2")), int(E("DEC_N", "6")), int(E("DEC_STEPS", "8"))
     tok = tokenizer()
     prompts = [it["prompt_ids"] for it in gsm_prompts(N, tok)]
-    pool = KVPoolLayout(max_pos=512, ring_blocks=12, slots=32)
+    pool = KVLayout(users=8, max_pos=512, chunk=256)
     mesh = open_mesh_full()
     try:
         model = MiMoModel(
-            mesh, n_layers=NL, max_pos=512, users=32, ring_blocks=12, pool=pool, log=lambda s: print(s, flush=True)
+            mesh, n_layers=NL, max_pos=512, users=32, ring_blocks=12, layout=pool, log=lambda s: print(s, flush=True)
         )
         outs = {}
         for name, trace in (("eager", False), ("traced", True)):
