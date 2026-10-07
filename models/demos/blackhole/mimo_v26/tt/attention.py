@@ -202,9 +202,16 @@ class MiMoAttention:
 
     def prefill_io(self, S: int):
         """Persistent device tensors a prefill chunk of S tokens reads (update them with prefill_set before each call / trace replay)."""
-        assert S % 256 == 0
+        assert S % 128 == 0
+        qc = min(256, S)
         return dict(
             S=S,
+            cfg=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
+                q_chunk_size=qc,
+                k_chunk_size=qc,
+                exp_approx_mode=False,
+            ),
             rope_idx=self._persist(torch.zeros(1, S, dtype=torch.int32), ttnn.uint32),
             fill_pt=self._persist(torch.zeros(1, S // BLOCK, dtype=torch.int32), ttnn.int32),
             sdpa_pt=self._persist(
@@ -215,7 +222,7 @@ class MiMoAttention:
 
     def prefill_set(self, io, chunk_start: int, user: int):
         S = io["S"]
-        assert chunk_start % 256 == 0 and chunk_start + S <= self.max_pos
+        assert chunk_start % min(256, S) == 0 and chunk_start + S <= self.max_pos
         full = self.logical_page_row(user)
         nb0 = chunk_start // BLOCK
         host = dict(
@@ -250,7 +257,7 @@ class MiMoAttention:
         ttnn.experimental.paged_fill_cache(self.v_cache, v, io["fill_pt"], batch_idx=0)
         ttnn.deallocate(kr)
         ttnn.deallocate(v)
-        kw = dict(chunk_start_idx_tensor=io["start"], program_config=self.pre_cfg, compute_kernel_config=_k_hifi2())
+        kw = dict(chunk_start_idx_tensor=io["start"], program_config=io["cfg"], compute_kernel_config=_k_hifi2())
         if self.cfg.window:
             kw.update(sliding_window_size=self.cfg.window, attention_sink=self.sink_pre)
         o = ttnn.transformer.chunked_scaled_dot_product_attention(qr, self.k_cache, self.v_cache, io["sdpa_pt"], **kw)
