@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Same as fpu_reduce_block_max_tiny_fp32 but the unpacker is configured at runtime instead of compile time.
+
+supported_archs: ["wormhole", "blackhole"]
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float32"
+  - name: "input_B"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float32"
+    stimuli: 1.0
+  - name: "reduce_block_max_tiny_fp32_runtime_out"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float32"
+
+operations:
+  - math:
+      - type: "Fpu"
+        block_size: [16, 128]
+        in0: "input_A"
+        in1: "input_B"
+        operation: "ReduceBlockMaxRuntime"
+        unpacker: "ReduceBlockMaxRuntimeUnpacker"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "reduce_block_max_tiny_fp32_runtime_out"
+        block_size: [16, 128]
+        packer: "Packer"
