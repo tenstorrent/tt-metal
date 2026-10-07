@@ -78,7 +78,7 @@ def dequant_fp4_weight(w, s, block=32):
 
 class Ckpt:
     def __init__(self, path=None):
-        self.path = path or os.environ["MIMO_CKPT"]
+        self.path = path or os.environ.get("MIMO_CKPT", "/mnt/tt-data/MiMo-V2.6-Flash-RL")
         with open(os.path.join(self.path, "model.safetensors.index.json")) as f:
             self.wm = json.load(f)["weight_map"]
         self._open = {}
