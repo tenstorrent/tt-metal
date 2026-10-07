@@ -1636,7 +1636,9 @@ _BF16_STOCK_SPECIALS = {
         ChipArchitecture.WORMHOLE: (
             "neg_inf",
             "neg_nan",
+            "neg_subnormal",
             "pos_nan",
+            "pos_subnormal",
         )
     },
 }
@@ -1646,18 +1648,29 @@ _BF16_STOCK_SPECIALS = {
 _BF16_SETUP_OPS = [
     MathOperation.Reciprocal,
 ]
-# Every instance of those ops on BF16 and FP32 data, approximate and accurate, either DEST.
-# The setup runs after the shared init, so an instance the BF16 kernel does not replace must
-# still pass the nightly sweep's own check.
-_BF16_SETUP_PARAMS = _sweep_params(
-    [
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
-    ],
-    _BF16_SETUP_OPS,
-    [ApproximationMode.No, ApproximationMode.Yes],
-    STANDARD_DIMENSIONS,
-)
+# The (approximation, fast mode) instances each op's BF16 kernel replaces with FP32 DEST off, read
+# from its kernel's gate. Export compiles every other instance's init and tile from this tree and
+# from stock and refuses the PR unless they are identical, so only these instances run here.
+_BF16_REPLACED_INSTANCES = {
+    MathOperation.Reciprocal: (
+        (ApproximationMode.No, FastMode.No),
+        (ApproximationMode.No, FastMode.Yes),
+    ),
+}
+_BF16_SETUP_PARAMS = [
+    params
+    for params in _sweep_params(
+        [
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        ],
+        _BF16_SETUP_OPS,
+        [ApproximationMode.No, ApproximationMode.Yes],
+        STANDARD_DIMENSIONS,
+    )
+    if params[4] == DestAccumulation.No
+    and (params[1], params[3]) in _BF16_REPLACED_INSTANCES[params[2]]
+]
 
 
 @pytest.mark.parametrize(
@@ -1665,9 +1678,10 @@ _BF16_SETUP_PARAMS = _sweep_params(
     _BF16_SETUP_PARAMS,
     ids=[build_param_id(_UNARY_SWEEP_ARGNAMES, p) for p in _BF16_SETUP_PARAMS],
 )
-def test_eltwise_unary_sfpu_bf16_setup_keeps_stock(
+def test_eltwise_unary_sfpu_bf16_replaced_instances(
     formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
 ):
+    """Every instance the BF16 kernel replaces, on BF16 and FP32 data, against the sweep's golden."""
     test_eltwise_unary_sfpu(
         formats, approx_mode, mathop, fast_mode, dest_acc, input_dimensions
     )

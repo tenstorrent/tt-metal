@@ -78,9 +78,9 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 580
+    wh_n300_civ2: 753
     bh_p100: 545
-    bh_p150b_civ2: 565
+    bh_p150b_civ2: 728
     bh_quietbox_2: 65
     bh_p300: 15
     wh_llmbox_civ2: 40
@@ -455,7 +455,7 @@ models:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
     wh_llmbox: 342
-    bh_loudbox: 290
+    bh_loudbox: 320
     bh_galaxy: 65
     wh_n150: 65
 umd:

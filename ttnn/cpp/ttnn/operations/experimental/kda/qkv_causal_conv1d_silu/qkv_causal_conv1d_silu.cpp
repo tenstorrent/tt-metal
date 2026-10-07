@@ -29,7 +29,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const auto kernel_config = init_device_compute_kernel_config(
         input.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/false);

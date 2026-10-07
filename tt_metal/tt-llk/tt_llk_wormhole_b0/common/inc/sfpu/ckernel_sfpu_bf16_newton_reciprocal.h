@@ -12,7 +12,7 @@ namespace ckernel::sfpu::bf16
 // The mantissa_quadratic reciprocal (root_n = 1), two DEST rows per replay. Each row:
 //   s = sign(x) 2^(254 - e) = (0x7F800000 - bits(x) with its mantissa cleared) * 0.5
 //   n = -m, m = |x|'s mantissa in [1, 2)
-//   y = (c0 n + c1) n + c2;  t = n y + 1;  y = y (t t + t) + y;  result = y s, rounded to BF16.
+//   y = (c0 n + c1) n + c2;  t = n y + 1;  y = y (t t + t) + y;  result = (y rounded to BF16) s.
 // With the seed's 1.01% error e, y (1 + t + t^2) = (1 + e^3) / m rounds correctly for every
 // mantissa; stock's one Newton step, y t + y, leaves two mantissas 0.5116 ULP off.
 // The seed is the one stock's reciprocal init loads into Prgm0..2, read and never written.
@@ -44,14 +44,17 @@ inline void newton_reciprocal_pair()
     TTI_SFPMULI(0x3f00, p_sfpu::LREG5, 0);
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LREG0, p_sfpu::LREG0, 0); // y = y u + y
     TTI_SFPMAD(p_sfpu::LREG4, p_sfpu::LREG6, p_sfpu::LREG4, p_sfpu::LREG4, 0);
-    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // y s
-    TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
+    // Round y to BF16 before the scale: s is a power of two, so y s is then exact and equals the
+    // rounded product wherever that is normal. Rounding after the multiply instead flushed the
+    // product just below 2^-126 at x = +-2^126, whose correctly rounded result is 2^-126.
     TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::LREG0,
                       sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B); // fp32 -> bf16 RNE
+    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // y s
+    TTI_SFPMUL(p_sfpu::LREG4, p_sfpu::LREG5, p_sfpu::LCONST_0, p_sfpu::LREG4, 0);
     // ADDR_MOD_2 (ADDR_MOD_6 past the SFPU's +4 base) keeps stock's dest += 2, which other unary
     // SFPU ops read, so each store advances.
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_2, 0);
-    TTI_SFP_STOCH_RND(sfpi::SFPSTOCHRND_RND_EVEN, 0, p_sfpu::LREG4, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_2, 0);
 }
 
