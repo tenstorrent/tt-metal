@@ -469,10 +469,6 @@ def _skip_decode_warm() -> bool:
     return os.environ.get("MINIMAX_H3_WARMUP_SKIP_DECODE_WARM", "0") == "1"
 
 
-def _skip_oom_rungs() -> bool:
-    return os.environ.get("MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS", "0") == "1"
-
-
 def _is_host_rank() -> bool:
     return not ttnn.using_distributed_env() or int(ttnn.distributed_context_get_rank()) == 0
 
@@ -541,7 +537,6 @@ class MiniMaxH3Pipeline:
         )
         self._log_generation = True
         self._buckets: dict[int, _BucketState] = {}
-        self.unfittable_rungs: list[int] = []
         self._force_bucket: int | None = None
         self._force_prompt_pad: int | None = None
         self._force_vision_pad: int | None = None
@@ -2301,29 +2296,14 @@ class MiniMaxH3Pipeline:
             shrink = rung not in overrides
             request = overrides.get(rung, shrunk)
             if bucket is None or not bucket.warm:
-                try:
-                    request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
-                except RuntimeError as error:
-                    # Diagnostic mode (MINIMAX_H3_WARMUP_SKIP_OOM_RUNGS=1): a rung whose forced
-                    # request runs out of device memory is reported and skipped, so one warmup
-                    # walks the whole ladder and names the largest rung this mesh can bind. The
-                    # OOM is a host-side allocator failure raised before dispatch, so the device
-                    # is left consistent; the skipped rung is NOT servable in this process.
-                    if "Out of Memory" not in str(error) or not _skip_oom_rungs():
-                        raise
-                    self.unfittable_rungs.append(rung)
-                    self._host_log(f"rung {rung} does not fit in device memory; skipped (diagnostic mode)")
-                    continue
+                # A rung whose forced request does not fit raises the allocator's "Out of Memory" here,
+                # before dispatch: the first unfittable rung ends the warmup.
+                request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
                 if request is None:
                     continue
                 if shrink:
                     shrunk = request
             fitted[rung] = request
-        if self.unfittable_rungs:
-            self._host_log(
-                f"rungs that do not fit: {sorted(self.unfittable_rungs)}; largest that binds: "
-                f"{max(fitted) if fitted else None}"
-            )
         return fitted
 
     def _capture_traces(
