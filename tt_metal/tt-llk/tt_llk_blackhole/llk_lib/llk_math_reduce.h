@@ -37,8 +37,8 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): a datum whose low byte is
-    // zero would be flushed to 0 mid-reduction. The preserve value is set by _llk_math_reduce_init_ and held for the op.
+    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag): the caller sets it to preserve,
+    // or a datum whose low byte is zero would be flushed to 0 mid-reduction.
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -118,7 +118,23 @@ inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
 }
 
 /**
- * @brief Advance the dest counter past the current face row so the next row writes to the correct offset.
+ * @brief Pool one row of faces and release the source banks of every face.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
+ * @param num_faces_c_dim: Number of column faces in the row.
+ */
+template <PoolType type, bool high_fidelity>
+inline void reduce_row_pool_all_faces_release(const std::uint32_t num_faces_c_dim)
+{
+    for (std::uint32_t col_num = 0; col_num < num_faces_c_dim; col_num++)
+    {
+        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
+    }
+}
+
+/**
+ * @brief Advance the dest counter to the next face row without releasing the source banks.
  *
  * @param is_narrow_tile: True when tile width < tile height (num_faces_c < num_faces_r), halving the stride.
  */
@@ -130,7 +146,7 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-    TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 }
 
 /**
@@ -267,18 +283,24 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
-            // The transpose needs the preserve value of the Src zero flag; re-asserted per tile in case a reconfig moved it.
-            math::_configure_preserve_zero_flag_state_();
-
-            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-            reduce_row_perform_transpose<is_int_fpu_en>();
-
+            // The pools run under the operand default of the Src zero flag and the transposes under preserve: both face
+            // rows are pooled first, so the flag changes twice per tile; the last face's banks stay for the transposes.
+            math::_configure_default_zero_flag_state_();
             if (tensor_shape.num_faces_r_dim > 1)
             {
+                reduce_row_pool_all_faces_release<type, high_fidelity>(tensor_shape.num_faces_c_dim);
                 reduce_row_advance_dest(is_narrow_tile);
-                reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-                reduce_row_perform_transpose<is_int_fpu_en>();
             }
+            reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
+
+            math::_configure_preserve_zero_flag_state_();
+            if (tensor_shape.num_faces_r_dim > 1)
+            {
+                TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+                reduce_row_perform_transpose<is_int_fpu_en>();
+                reduce_row_advance_dest(is_narrow_tile);
+            }
+            reduce_row_perform_transpose<is_int_fpu_en>();
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
         else
@@ -563,16 +585,8 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // MAX ROW adds the pooled row back through SrcB with ELWADD, which reads the Src zero flag, so it runs under the
-    // preserve value (restored by _llk_math_reduce_uninit_); every other specialisation takes the operand-driven default.
-    if constexpr (dim == ReduceDim::REDUCE_ROW && type == PoolType::MAX)
-    {
-        math::_configure_preserve_zero_flag_state_();
-    }
-    else
-    {
-        math::_configure_default_zero_flag_state_();
-    }
+    // MAX ROW switches the Src zero flag per tile (its transposes run under preserve; the uninit restores the default).
+    math::_configure_default_zero_flag_state_();
 }
 
 /**
