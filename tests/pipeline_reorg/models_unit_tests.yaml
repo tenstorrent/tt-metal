@@ -1205,8 +1205,9 @@
 # HuggingFace mounts at /mnt/MLPerf/huggingface (wh_n150: the shared cloud MLPerf NFS; bh_quietbox_2:
 # /mnt/models/huggingface at YYZ4). The first run on each mount downloads the ~140 GB ref2va snapshot
 # (transformer_ref, text_encoder, vae, audio_vae) into it, which needs a dispatch with
-# mlperf-read-only=false; later runs find it cached. Nearly all of the remaining time is kernel JIT on
-# the host CPU (~55 min cold on a galaxy host).
+# mlperf-read-only=false; later runs find it cached (144 GB landed in 3:13 on an N150 VM). Nearly all of
+# the remaining time is kernel JIT on the host CPU: ~55 min cold on a galaxy host, ~2.5 h on an N150 VM
+# (ladder walk 44 min, VAE warm 8, audio warm 30, prompt-encoder warm ~40; run 37635885906).
 # See models/tt_dit/models/MiniMaxH3_mock_oom.md.
 - name: Minimax H3 Ref2VA Memory Test
   cmd: |
@@ -1224,10 +1225,10 @@
   model: minimax-h3
   skus:
     wh_n150:
-      timeout: 200  # first run: ~140 GB snapshot download + cold JIT; cached runs should fit in ~90
+      timeout: 240  # cold JIT on the VM ~2.5 h plus job setup; the snapshot download adds ~4 min
       tier: 3
     bh_quietbox_2:
-      timeout: 200  # first run: ~140 GB snapshot download + cold JIT; cached runs should fit in ~90
+      timeout: 240
       tier: 3
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

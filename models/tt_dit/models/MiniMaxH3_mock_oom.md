@@ -275,7 +275,7 @@ still allocated at the end of the walk); the full warmup costs the compile-only 
 10 min warm and 55 min cold per the table above.
 
 The test matrix entry is `tests/pipeline_reorg/models_unit_tests.yaml` ("Minimax H3 Ref2VA Memory
-Test", model `minimax-h3`, `wh_n150` and `bh_quietbox_2`, tier 3, 200 min each). The mock ignores the
+Test", model `minimax-h3`, `wh_n150` and `bh_quietbox_2`, tier 3, 240 min each). The mock ignores the
 runner's silicon, so the SKUs are chosen for their weights mounts at `/mnt/MLPerf/huggingface`: the
 shared cloud MLPerf NFS on the N150 VMs, the YYZ4 HuggingFace tree on the quietboxes. The entry points the descriptor at the checked-in `tt-cluster-descriptors`
 6U yaml, unsets `TT_METAL_WATCHER` (every CI job exports it, and on the mock the watcher's reads come
@@ -288,6 +288,14 @@ ref2va snapshot (transformer_ref, text_encoder, vae, audio_vae) into that mount 
 VMs' `/mnt/MLPerf` had no snapshot), and sets `MINIMAX_H3_DRAM_PROBE=1` so a failure comes with the
 per-owner attribution. A random-weights mode for the pipeline would lift the weights requirement and
 let the test run on the CPU-only fabric lane (`.github/workflows/fabric-cpu-only-tests-impl.yaml`).
+
+Measured on an N150 cloud VM (run 37635885906, 2026-10-07, cold kernel cache): the 60-file, 144 GB
+snapshot download took 3:13 (~750 MB/s into the shared NFS); mesh open plus pipeline construction
+7 min; the 17-rung ladder walk 44 min; VAE decode warm 8 min (+1156 programs); audio decode warm 30 min
+(+1563 programs); the prompt-encoder envelope warm did not finish inside the test's then 2-hour marker.
+The VM is roughly 2.5x slower than the galaxy host at JIT, so the cold run is about 2.5 h; the entry's
+job timeout is 240 min and the test's marker 3 h. CI does not persist the kernel cache between jobs, so
+every CI run is a cold run.
 
 The first run of this test was itself a demonstration. It was written with the t2va meshes'
 `l1_small_size=65536`, and 23 s after the mesh opened the vision tower's windowed SDPA failed with
