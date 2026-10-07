@@ -21,7 +21,7 @@ import ttnn
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-@pytest.mark.parametrize("tokens", [32])
+@pytest.mark.parametrize("tokens", [32, 16, 8])
 def test_moe_compute_timing(mesh_device, mesh_shape, tokens, monkeypatch):
     orig = ttnn.experimental.moe_compute
     state = {}
