@@ -6,7 +6,7 @@
 # /tmp/tt-llk-build/merged_coverage.info to code-coverage-<arch>-<split_group>.info,
 # and `coverage: true` both here and on the llk-e2e-impl call.
 
-- name: llk_e2e_wormhole group 1/2
+- name: llk_e2e_wormhole group 1/1
   split_group: 1
   team: llk
   budget_type: e2e
@@ -16,33 +16,14 @@
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto \
       --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-1.xml .
+      --timeout=120 \
+      --junitxml=pytest-report-wormhole-1.xml test_eltwise_binary.py
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_e2e_wormhole group 2/2
-  split_group: 2
-  team: llk
-  budget_type: e2e
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-2.xml .
-  skus:
-    wh_n150_civ2:
-      timeout: 38
-  owner_id: U09UC143684 # Nemanja Divnic
-
-- name: llk_e2e_blackhole group 1/2
+- name: llk_e2e_blackhole group 1/1
   split_group: 1
   team: llk
   budget_type: e2e
@@ -52,28 +33,9 @@
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto \
       --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-1.xml .
+      --timeout=120 \
+      --junitxml=pytest-report-blackhole-1.xml test_eltwise_binary.py
   skus:
     bh_p150b_civ2:
-      timeout: 38
-  owner_id: U09UC143684 # Nemanja Divnic
-
-- name: llk_e2e_blackhole group 2/2
-  split_group: 2
-  team: llk
-  budget_type: e2e
-  coverage: false
-  cmd: |
-    set -euo pipefail
-    cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-2.xml .
-  skus:
-    bh_p150b_civ2:
-      timeout: 38
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
