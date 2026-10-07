@@ -88,8 +88,8 @@ def test_tosa_scatter_zero_volume(N, K, W, C, input_layout, device):
 
     ttnn_output = ttnn.tosa_scatter(ttnn_input, ttnn_index, ttnn_source)
 
-    assert ttnn_output.shape == ttnn_input.shape
-    assert ttnn_output.dtype == ttnn_input.dtype
+    assert ttnn_output.shape == ttnn_input.shape, f"shape {ttnn_output.shape} != input {ttnn_input.shape}"
+    assert ttnn_output.dtype == ttnn_input.dtype, f"dtype {ttnn_output.dtype} != input {ttnn_input.dtype}"
     result = ttnn.to_torch(ttnn_output)
     if result.numel():
         assert_allclose(result, torch_output, rtol=1e-3)

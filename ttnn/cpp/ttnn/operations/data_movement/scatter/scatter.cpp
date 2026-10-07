@@ -281,6 +281,18 @@ Tensor scatter(
     // memory_config is not applied here, as on the rank-0 path above.
     if (original_input_tensor_lshape == ttnn::Shape{} || original_index_tensor_lshape == ttnn::Shape{} ||
         input_tensor.logical_volume() == 0 || original_index_tensor_lshape[normalized_dim] == 0) {
+        // validate_inputs above covers only ranks and shapes. The dtype, index dtype, sharding,
+        // buffer and device-residency rules live in the device operation, and returning here skips
+        // them - so an empty call would accept operands a non-empty call rejects. Run them first.
+        // It reads only the tensors, never the attributes, and does no arithmetic, so it is safe
+        // on an empty operand.
+        ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
+            ttnn::prim::ScatterParams{
+                normalized_dim,
+                output_memory_config.value_or(input_tensor.memory_config()),
+                get_scatter_reduction_type_from_string(opt_reduction_string),
+                sub_core_grid},
+            ttnn::prim::ScatterInputs{input_tensor, index_tensor, source_tensor});
         return input_tensor;
     }
     const auto original_layout = input_tensor.layout();

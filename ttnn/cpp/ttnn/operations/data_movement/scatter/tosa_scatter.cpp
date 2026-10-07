@@ -135,6 +135,22 @@ Tensor tosa_scatter(
     // above pins it to (N, W, C) with N and C from input and W from index, so an empty source always
     // implies an empty input or an empty index. See #56881.
     if (input_tensor.logical_volume() == 0 || index_tensor.logical_volume() == 0) {
+        // validate_tensors above checks shapes only - no dtypes, sharding, buffers or device
+        // residency - and returning here skips the device operation that does. Run it, or an empty
+        // call accepts operands a non-empty call rejects. It reads only the tensors and does no
+        // arithmetic, so it is safe on an empty operand.
+        //
+        // One difference worth naming: the index dtype rule is applied here to the original index,
+        // while the non-empty path converts the index to UINT16 before the prim sees it. TOSA
+        // indices are integral (the tests use INT32 and UINT32), which both forms accept; a
+        // non-integral index is rejected here and merely converted there.
+        ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
+            ttnn::prim::ScatterParams{
+                operations::data_movement::LAST_DIMENSION,
+                output_memory_config.value_or(input_tensor.memory_config()),
+                operations::data_movement::scatter::ScatterReductionType::INVALID,
+                std::nullopt},
+            ttnn::prim::ScatterInputs{input_tensor, index_tensor, source_tensor});
         return input_tensor;
     }
 
