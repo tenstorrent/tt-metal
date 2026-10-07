@@ -1568,3 +1568,51 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_AA4_verify_gate4_final.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py
 - data: {"layers":4,"U":[1,2,4],"argmax_equal":1.0,"feat_bit_identical":1,"verify_repeat_bit_identical":1}
+## E261007-1505-aa2
+- date: 2026-10-07T15:05:52
+- commit: b5e70f78d96
+- branch: ssinghal/mimo-race
+- host: 40
+- track: decode
+- status: verified
+- claim: DETERMINISM GATE PASS: two identical GSM8K n=128 runs (gsm8k_128_nothink, max_new 512, greedy, 48 layers, 4x8, MIMO_EXPERT_OP=unified MIMO_DEAD=spread32 default, MIMO_MOE_AR=ag_sum default, lib integ_73c014eb46d, commit b5e70f78d96, scenarios 128:512 twice in ONE process, test_gsm8k_decode.py) are TOKEN-IDENTICAL for all 128 users on host 40 (identical_to_previous_run_same_scenario=True, first_diff_user_step=[], 110/128 = 85.9% correct both runs, steady step 107.1/106.7 ms) AND on host 43 (same, 110/128 both); the completions of host 40 and host 43 are also identical for all 128 users (cross-host hint: texts json equal). Before the fix the same pair diverged for 20+ users (E261007-0836-176). Accuracy 110/128 vs earlier 113/112 on the old numerics path: within the Wilson interval (78.9-90.9), gate >=109 passes by one
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_Q_gsm_pair_h40_b5e70f78d96.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py
+- supersedes: E261007-0836-176
+- data: {"runs":2,"bit_identical":1,"hosts_identical":2,"n":128,"correct":110}
+
+## E261007-1506-59b
+- date: 2026-10-07T15:06:13
+- commit: 9390e86b264
+- branch: ssinghal/mimo-race
+- host: 30
+- track: decode
+- status: verified
+- claim: COST of the column-reduce workaround, PAIRED in one process (48 layers, 4x8 host 30, unified, spread32, router exact, two traces alive, 5 alternating rounds x 30 blocking replays, host-timed, lib integ_73c014eb46d): step ms ag_sum (new) vs rs64 (old all_reduce of the 64-row partial): U=1 73.58 vs 72.53 (+1.05 ms, +1.45%), U=8 85.82 vs 84.88 (+0.94, +1.1%), U=32 99.00 vs 98.85 (+0.15, +0.15%); rounds agree within 0.03 ms. ~22 us per MoE layer at U=1. AGREEMENT of the two modes on the same state (live rows, PCC / rel L2): ffn_out L1 0.999997/0.28%, L5 0.99907..0.99987/2.0..4.5%, L16 0.9985..0.9995/3.3..5.7%, final hidden 0.9992..0.9994/3.5..4.0% (max abs 5..11 on massive-activation entries). The mode difference is bf16 summation order (all_gather+sum vs reduce_scatter), amplified over layers; NOT a bias test: no oracle alpha was computed here (only the GSM8K n=128 110/128 under ag_sum and the determinism pair vouch for the end result). Cross-check: E261007-1432-327 ag_sum steps 71.0/90.1/106.2 ms (router fast)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_T_ab_h30_9390e86b264.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_allreduce_ab.py
+- data: {"u1_delta_ms":1.053,"u8_delta_ms":0.938,"u32_delta_ms":0.152}
+
+## E261007-1512-81c
+- date: 2026-10-07T15:12:05
+- commit: 9b48d653b51
+- branch: ssinghal/mimo-race
+- host: 43
+- track: correctness
+- status: verified
+- claim: SCALE/ALPHA of the column reduce variants vs the exact fp32 sum of the 8 per-column bf16 partials (4x8, R=32 rows, D=4096, normal(0,0.5) with 64 massive channels): ag_sum (default compute config) alpha 1.00010, rel L2 0.17%; ag_sum with fp32 cfg identical (same); all_gather+fp32 typecast+sum alpha 0.999995 rel 0.17% (the 0.17% is the bf16 output rounding); ttnn.all_reduce alpha 1.00126 (+0.13% systematic) rel 0.30%. So the workaround is not low-biased and is closer to exact than the old all_reduce. Full-model paired A/B (same state, ag_sum vs rs64): alpha(ag/rs) of ffn_out L1 0.99918/0.99924 (U=32/U=1), L5 0.99782/0.99367, L16 0.99904/0.99446, L30 0.9958/0.99301, final hidden 0.99638/0.99357: consistent with the old path's +0.13% per layer compounding, not with a low bias in ag_sum; PCC L1 0.999996, L5 0.9991-0.9997, L16 0.9991-0.9994, final 0.9993-0.9995 (E261007-1506-59b + race_T2_ab_h43). No oracle-based alpha table was re-run (no decode oracle dumps for L6+ on this path)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_U_colnum_h43_9b48d653b51.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_colreduce_numerics.py
+- data: {"alpha_ag_sum":1.0001,"alpha_all_reduce":1.00126}
+
+## E261007-1556-ce9
+- date: 2026-10-07T15:56:23
+- commit: b5e70f78d96
+- branch: ssinghal/mimo-race
+- host: 47
+- track: decode
+- status: verified
+- claim: OTHER all_reduce SITES in context: inventory (all ttnn.all_reduce(cluster_axis=1, memory_config=DRAM), bf16 tile, default ring/links, no topology arg): (a) tt/attention.py:222 _all_reduce, decode o_proj partial [1,1,U,4096] (line 412) and prefill o_proj partial [1,1,CH,4096] (line 305); (b) tt/layer.py:170 all_reduce_cols: dense FFN of L0 decode [1,1,U,4096] / prefill [1,1,CH,4096] (line 182) and prefill MoE reduce [1,1,N,4096] (line 195, ffn_moe); (c) tt/moe_decode.py decode MoE reduce (fixed: ag_sum default); (d) lm_head: no collective in tt/*.py (no all_gather/reduce_scatter anywhere else; moe_prefill.py:189 only a debug barrier). IN-CONTEXT STRESS, bitwise vs replay 0, all with the unfixed all_reduce at these sites: decode attention + dense FFN: 6 real layers (L0 dense + 5 MoE, SWA and global) traced step, 32 GSM8K users, attn_out and ffn_out of all layers, 3000 replays + 100 eager steps (MoE reduce on ag_sum so any event is attention/dense): 0 glitches in 18600 attention all_reduce calls and 3100 dense-FFN calls (host 47, lib integ_73c014eb46d, race_R_sites_dec6); prefill attention + dense + MoE reduce: traced chunked prefill of 6 layers, CH=512, one real-text user per mesh row, output hidden state [4,8,512,4096] of 3000 replays bitwise vs replay 0 (18000 attention + 3000 dense + 15000 MoE prefill all_reduce calls): 0 events (host 44, race_S_prefill6). So no site other than the decode MoE reduce glitched at 1e-4 sensitivity (the MoE site glitched 8-23 per 36000-72000 calls = 2-3e-4); upper 95% bound for a site with 18000 clean calls ~1.7e-4, i.e. NOT excluded at the MoE rate. Why the decode MoE site: untested; what differs from the clean sites is the preceding dispatch/combine + post_combine_reduce (fabric traffic on the row axis) right before the column all_reduce
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_R_sites_dec6_h47_b5e70f78d96.log
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py, models/demos/blackhole/mimo_v26/tests/test_prefill_determinism_traced.py
+- data: {"attn_decode_calls":18600,"dense_calls":3100,"prefill_calls":36000,"events":0}

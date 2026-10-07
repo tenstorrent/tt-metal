@@ -77,7 +77,7 @@
       "kind": "determinism",
       "min_runs": 2,
       "required": true,
-      "evidence": ["E261007-0836-176"],
+      "evidence": ["E261007-1505-aa2"],
       "note": "REQUIRED. two identical runs, bit-identical outputs"
     },
     {
