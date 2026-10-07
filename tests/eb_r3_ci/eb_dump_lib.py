@@ -14,6 +14,15 @@ import torch
 import ttnn
 
 TOGGLES = (
+    "EB_R3_NONE",
+    "EB_R3_MULTI_PASS",
+    "EB_R3_PROBE_CHUNK_INIT",
+    "EB_R3_NATIVE_BCAST",
+    "EB_R3_NATIVE_ROW",
+    "EB_R3_SECTIONS_ANY",
+    "EB_R3_NO_PRE_BLOCK",
+    "EB_R3_NO_PRE_SECTIONS",
+    "EB_R3_NO_NATIVE",
     "EB_R3_PER_FACE",
     "EB_R3_FIDELITY",
     "EB_R3_NO_BLOCK",
