@@ -32,3 +32,15 @@
 - 2026-10-07 05:02 UTC, blx01, broker job 732 (smarton, task t188), chips 16-23 (tray 3) left PCIe; broker holding/recovering (bridge resets 734/735 failed). t183 not submitted.
 - 2026-10-07 05:30 UTC: light wake, blx01 unreachable over ssh (No route to host; likely rebooting after tray 3 drop). A/B not submitted.
 - 2026-10-07 08:42 UTC: blx01 healthy; A/B submitted as broker job 769 (queued behind ltx-host 768). Next: when done, do steps 3-4.
+
+## Result (2026-10-07, job 769, blx01 4x8, warm, DEFAULT prompt, build bf7db12a149 + py 4bf7c675899)
+Odd gens off, even gens on (LTX_AUDIO_OVERLAP=1). Runtime 174.7 s, exit 0, no drops.
+| seed | off E2E | on E2E | off VAE-end->audio-end | on |
+| 0 | 5.707 | 5.651 | 398 ms | 407 ms |
+| 1 | 5.645 | 5.676 | 395 | 407 |
+| 2 | 5.728 | 5.708 | 386 | 408 |
+| 3 | 5.703 | 5.688 | 399 | 405 |
+| 4 | 5.681 | 5.704 | 383 | 401 |
+Mean off 5.693 s, on 5.685 s: -7 ms, within noise. VAE forward 0.5 s both arms. STAGE_SPLIT mel_vae 36-42 ms, vocoder+bwe 336-358 ms both arms.
+Bit identity (decoded rawvideo + s16le PCM md5): off == on == ref_t48_f6b8 for all 5 seeds, video and audio.
+Verdict: lands default off (gain < 100 ms). Host YUV assembly is not on the critical path in any meaningful way; real overlap needs device concurrency (audio on a disjoint submesh), which costs VAE chips.
