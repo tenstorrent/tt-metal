@@ -762,3 +762,17 @@ def test_prefill_slot_allocation_and_eviction():
     assert 0 not in resume and 2 in resume and 0 not in m.pf_slot_of
     assert alloc([(3, 0)], resume) == {3: 1} and 2 not in resume  # same for row 1
     assert alloc([(1, 0)], resume) == {1: 0}  # a restarted prompt of the slot's own owner keeps the slot
+
+
+def test_configured_spec_k_from_the_server_command_line(monkeypatch):
+    f = DeepseekV41ForCausalLM.configured_spec_k
+    monkeypatch.delenv("DSV41_VLLM_SPEC_K", raising=False)
+    monkeypatch.setattr("sys.argv", ["run", "--model", "x"])
+    assert f() == 0
+    cfg = '{"method":"custom_class","model":"vllm_tt_plugin.model_owned_drafter","num_speculative_tokens":3}'
+    monkeypatch.setattr("sys.argv", ["run", "--speculative_config", cfg, "--no-async-scheduling"])
+    assert f() == 3
+    monkeypatch.setattr("sys.argv", ["run", "--speculative-config=" + cfg])
+    assert f() == 3
+    monkeypatch.setattr("sys.argv", ["run", "--speculative-config", '{"method":"ngram","num_speculative_tokens":3}'])
+    assert f() == 0

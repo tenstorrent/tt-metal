@@ -182,19 +182,27 @@ class DeepseekV41ForCausalLM:
     # ---- speculative decoding: configuration ----------------------------------------------------------------------------------------------
     @staticmethod
     def configured_spec_k():
-        """Draft length of the server's ``speculative_config`` (0 = plain decode). Read from the vLLM config being loaded (``get_current_vllm_config``); DSV41_VLLM_SPEC_K is a fallback for
-        runs outside a vLLM config context (tests / scripts)."""
+        """Draft length of the server's ``speculative_config`` (0 = plain decode). The loader hands ``initialize_vllm_model`` no vLLM config (``get_current_vllm_config`` is the default one in the
+        engine process), so the server's own command line is read (sys.argv survives the engine-core spawn); DSV41_VLLM_SPEC_K is an explicit override for scripts / tests.
+        """
         env = os.environ.get("DSV41_VLLM_SPEC_K")
         if env:
             return int(env)
-        try:
-            from vllm.config import get_current_vllm_config
+        import json
 
-            sc = get_current_vllm_config().speculative_config
-            if sc is not None and getattr(sc, "method", None) == "custom_class":
-                return int(sc.num_speculative_tokens)
-        except Exception:  # no config context / no vllm
-            pass
+        argv = sys.argv
+        for i, a in enumerate(argv):
+            flag, eq, val = a.partition("=")
+            if flag.replace("_", "-") != "--speculative-config":
+                continue
+            if not eq:
+                val = argv[i + 1] if i + 1 < len(argv) else "{}"
+            try:
+                cfg = json.loads(val)
+            except ValueError:
+                return 0
+            if cfg.get("method") == "custom_class":
+                return int(cfg.get("num_speculative_tokens", 0))
         return 0
 
     @classmethod
