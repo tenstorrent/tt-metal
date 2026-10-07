@@ -6,7 +6,8 @@
 
 Env: BASE_SECONDS (10), BASE_HEIGHT/BASE_WIDTH (768/1344), BASE_UPSCALE ("1920x1080"; "" = none), BASE_STEPS (50), BASE_WARM_STEPS (2),
 BASE_SEEDS ("0"), BASE_FIRST / BASE_LAST (keyframe paths; BASE_LAST optional), BASE_PROMPT,
-BASE_VSA_SPARSITY (unset = dense), BASE_OUT (artifact root).
+BASE_VSA_SPARSITY (unset = dense), BASE_VSA_RING_GATHER ("ring_attention" | "fused_kv"; set = vsa_ring_sdpa),
+BASE_OUT (artifact root).
 BASE_WARM_STEPS=0 skips the warmup: stage rows then include first-call program creation (JIT binaries still
 come from the on-disk cache), for clips whose warm+timed pair does not fit one broker job. Each seed writes mp4, latents, stills and a
 timings json as soon as it finishes, so a job cut short by the broker keeps what completed.
@@ -68,8 +69,12 @@ def test_fasth3_fl2va_baseline(mesh_device, reset_seeds):
     if sparsity is not None:
         from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
 
-        vsa_config = MiniMaxH3VSAConfig(sparsity=float(sparsity))
+        ring_gather = os.environ.get("BASE_VSA_RING_GATHER")
+        ring_kwargs = dict(ring=True, ring_gather=ring_gather) if ring_gather else {}
+        vsa_config = MiniMaxH3VSAConfig(sparsity=float(sparsity), **ring_kwargs)
     mode = "dense" if vsa_config is None else f"vsa{sparsity}"
+    if vsa_config is not None and vsa_config.ring:
+        mode += f"_ring_{vsa_config.ring_gather}"
     num_frames = align_num_frames(round(seconds * MINIMAX_H3_FPS))
     tag = f"fl2va_{height}p_{seconds:g}s_{mode}_{steps}steps"
     out_dir = out_root / tag
