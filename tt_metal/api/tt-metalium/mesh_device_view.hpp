@@ -5,11 +5,7 @@
 #pragma once
 
 #include <memory>
-#include <tuple>
 #include <vector>
-#include <unordered_map>
-#include <optional>
-#include <functional>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_config.hpp>
@@ -21,7 +17,6 @@
 namespace tt::tt_metal::distributed {
 
 // Forward declarations
-class MeshDevice;
 class MeshDeviceViewImpl;
 
 /**

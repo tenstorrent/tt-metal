@@ -15,7 +15,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -118,7 +117,7 @@ public:
     MeshDevice* device() const;
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
-    DeviceAddr address() const { return address_; };
+    DeviceAddr address() const { return address_; }
 
     MeshBufferLayout global_layout() const;
     const MeshBufferConfig& global_config() const { return config_; }

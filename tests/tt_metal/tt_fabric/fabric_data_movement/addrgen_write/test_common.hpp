@@ -6,13 +6,13 @@
 
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace tt::tt_fabric::test {
 
-// Import ChipId from distributed namespace
-using ChipId = tt::tt_metal::distributed::ChipId;
+using ChipId = tt::ChipId;
 
 // API variants for addrgen overload testing
 enum class AddrgenApiVariant {

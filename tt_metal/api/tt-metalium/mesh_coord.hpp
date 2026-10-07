@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 
@@ -380,7 +381,7 @@ public:
         MeshCoordinateRange::Iterator coord_iter_;
         size_t linear_index_ = 0;
 
-        // Provides mutable access to the container value along with the coordinate from the range iterator.
+        // Provides read-only access to the container value along with the coordinate from the range iterator.
         ValueProxy value_proxy_;
     };
 

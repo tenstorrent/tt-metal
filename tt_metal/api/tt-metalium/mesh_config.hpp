@@ -4,13 +4,13 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal::distributed {
-
-using ChipId = int;
 
 // Specifies the configuration of a MeshDevice.
 class MeshDeviceConfig {
