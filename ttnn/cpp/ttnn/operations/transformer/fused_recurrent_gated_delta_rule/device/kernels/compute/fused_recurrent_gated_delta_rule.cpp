@@ -16,6 +16,7 @@
 // Per-token tiles are [1, D] (token in row 0, rows 1..31 host-zero-padded), so the outer-product
 // update k^T (x) u is a matmul with inner dim 1 whose 31 padding lanes are zero and vanish.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
