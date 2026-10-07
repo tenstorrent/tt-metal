@@ -54,3 +54,7 @@ Box: blx01 (g15blx01), everything under /var/tmp/fasth3/t170 (nothing under blx0
 - 2026-10-07 light wake: fast5 scored BATCH FAIL vs ref_dv145 (PCC 0.874 mean, worst 0.674; PSNR 22.2 dB, worst 18.1);
   VBench subj 0.888 (= baseline5). blx01 res/summary_configs5b.md missing (check driver_fast res dir for fast5 timing).
   Needs judgment: view data/g15/t170/fast5/vbench/seed*_cmp_f*.png, decide gate/adaln defaults.
+- 2026-10-07 00:25 UTC standard wake: visual 5-seed check of fast5 clean (trajectory drift only); VBench = baseline5.
+  Flipped LTX_FUSE_GATE_ON_DEVICE / LTX_FUSE_NORM_ADALN defaults on (2aae332c37b, test_ltx_fused_defaults.py).
+  Landed a3216e1486d + 2aae332c37b on ttp/t48-ltx25-integrated as f6b806516cc. Results: tmp/t170/RESULTS.md.
+  Left on blx01: /var/tmp/fasth3/t170 (tree hardlinks + res mp4s) — cleanup pending (followup).
