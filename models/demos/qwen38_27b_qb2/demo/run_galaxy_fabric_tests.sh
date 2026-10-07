@@ -24,7 +24,8 @@ unset TT_METAL_DEVICE_PROFILER TT_METAL_PROFILER_MID_RUN_DUMP TT_METAL_PROFILER_
 cd "$TT_METAL_HOME"
 # -e and pipefail propagate a failing test binary through the upstream log/tee
 # pipeline. The outer persistent unit also bounds the time spent waiting above.
-timeout --kill-after=30s 15m /bin/bash -e -o pipefail tools/scaleout/exabox/run_fabric_tests.sh \
+timeout --kill-after=30s 15m /bin/bash -e -o pipefail \
+    "$QWEN_TASK_ROOT/metal-galaxy/tools/scaleout/exabox/run_fabric_tests.sh" \
     --hosts localhost --image none --config 4x8 --mpi-if none \
     --test-binary "$QWEN_TASK_ROOT/metal-fabric-build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric" \
     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_neighbor_exchange.yaml \

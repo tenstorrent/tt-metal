@@ -1,0 +1,24 @@
+{
+  "hardware_tests_passed": true,
+  "wrapper_exit_status": 1,
+  "wrapper_passed": false,
+  "tests_executed": 8,
+  "tests_failed": 0,
+  "log_sha256": "e4cd8dfcf0da8e887311410edb902790b2719f897eb1d4e9e5d209fb47af7b51",
+  "test_filter": "name.2DTorusXYNeighborExchange",
+  "packets_per_sender": 1000,
+  "diagnosis": "Empty rankfile cleanup returns false under bash -e in EXIT trap; reproduced without hardware. Six fixed cleanup regressions pass.",
+  "markers": [
+    "[1,0]<stdout>: 2026-10-07 05:39:53.018 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_1_ntype_unicast_write (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:39:55.244 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_1_ntype_atomic_inc (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:39:56.465 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_1_ntype_fused_atomic_inc (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:39:57.668 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_1_ntype_unicast_scatter_write (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:39:58.839 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_2_ntype_unicast_write (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:40:01.188 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_2_ntype_atomic_inc (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:40:02.572 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_2_ntype_fused_atomic_inc (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:40:03.902 | info     |            Test | Running Test: 2DTorusXYNeighborExchange_num_links_2_ntype_unicast_scatter_write (test_tt_fabric.cpp:266)",
+    "[1,0]<stdout>: 2026-10-07 05:40:05.301 | info     |            Test | Tests: 8 executed, 0 failed (test_tt_fabric.cpp:398)",
+    "[1,0]<stdout>: 2026-10-07 05:40:05.301 | info     |            Test | All tests completed successfully (test_tt_fabric.cpp:411)"
+  ],
+  "host_log": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/fabric-torus-neighbors-v2/fabric_tests_20261007_053936.log"
+}

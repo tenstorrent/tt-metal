@@ -904,7 +904,11 @@ write_quad_split_rankfile() {
 }
 
 cleanup_run_artifacts() {
-    [[ -n "$Z_RANKFILE" ]] && rm -f "$Z_RANKFILE"
+    # With errexit enabled, a false final test in an EXIT trap changes a
+    # successful non-Z run's exit status to 1. No rank file is normal there.
+    if [[ -n "$Z_RANKFILE" ]]; then
+        rm -f "$Z_RANKFILE"
+    fi
 }
 trap cleanup_run_artifacts EXIT
 
