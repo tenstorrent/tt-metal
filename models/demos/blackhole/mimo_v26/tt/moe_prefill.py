@@ -76,7 +76,7 @@ class Shared:
         self.topology = ttnn.Topology.Linear
 
 
-def build_expert_weights(md, w_of_expert, nd_sharded=True):
+def build_expert_weights(md, w_of_expert, nd_sharded=True, dtype=None):
     """w_of_expert(e) -> (gate [K,N], up [K,N], down [N,K]) bf16 torch. Returns three lists of EPC per-device bfp8 DRAM ND-sharded tensors."""
     mapper = ttnn.ShardTensor2dMesh(md, mesh_shape=md.shape, dims=(0, 1))
     outs = {"gate": [], "up": [], "down": []}
@@ -84,7 +84,7 @@ def build_expert_weights(md, w_of_expert, nd_sharded=True):
         ws = [[w_of_expert(global_expert(r, c, l)) for c in range(COLS)] for r in range(ROWS)]
         for i, proj in enumerate(("gate", "up", "down")):
             host = torch.stack([torch.stack([ws[r][c][i] for c in range(COLS)]) for r in range(ROWS)])  # [R,C,K,N]
-            t = ttnn.from_torch(host, mesh_mapper=mapper, layout=ttnn.TILE_LAYOUT, dtype=W_DTYPE)
+            t = ttnn.from_torch(host, mesh_mapper=mapper, layout=ttnn.TILE_LAYOUT, dtype=dtype or W_DTYPE)
             t = ttnn.squeeze(ttnn.squeeze(t, dim=0), dim=0)
             outs[proj].append(
                 ttnn.to_device(t, md, memory_config=routed_expert_weight_memory_config(md, t.shape[-1], nd_sharded))
@@ -104,6 +104,9 @@ class MiMoPrefillMoE:
         self._shared = {}
         self.last_counts = None
         self.mm_chunk = int(os.environ.get("MIMO_MM_CHUNK", "256"))
+        self.mm_interm = (
+            ttnn.bfloat16
+        )  # dtype of gate/up/activated in the mm path (ttnn.float32 for the precision study)
 
     def shared(self, N):
         if N not in self._shared:
@@ -114,10 +117,10 @@ class MiMoPrefillMoE:
         """Plain ttnn matmuls with fp32 accumulation on the extracted tokens (routed_expert_ffn's fixed blocking does not fit fp32 DEST); M chunked."""
 
         def ffn(t_):
-            g_ = ttnn.matmul(t_, self.gate_projs[l], compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
-            u_ = ttnn.matmul(t_, self.up_projs[l], compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
+            g_ = ttnn.matmul(t_, self.gate_projs[l], compute_kernel_config=self.ckc, dtype=self.mm_interm)
+            u_ = ttnn.matmul(t_, self.up_projs[l], compute_kernel_config=self.ckc, dtype=self.mm_interm)
             h_ = ttnn.multiply(
-                g_, u_, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)], dtype=ttnn.bfloat16
+                g_, u_, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)], dtype=self.mm_interm
             )
             ttnn.deallocate(g_)
             ttnn.deallocate(u_)

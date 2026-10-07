@@ -116,8 +116,12 @@ def test_moe_scale_alpha(mesh_device):
         [N, 1, 1, TOPK],
     )
     w_bf = w_d.bfloat16().float()[:, :NT]
-    for op in OPS:
-        wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op not in ("mm", "loop")))
+    for opname in OPS:
+        # op names: unified | mm | mm_f32int (fp32 gate/up/activated) | mm_bf16w (bf16 weights instead of bfp8) | mm_hifi4 | mm_bf16w_f32int
+        op = "mm" if opname.startswith("mm") else opname
+        wdt = ttnn.bfloat16 if "bf16w" in opname else None
+        wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op not in ("mm", "loop")), dtype=wdt)
+        print(f"RESULT variant {opname}", flush=True)
         # (d) device-read weights vs dequantised bf16: slot 0 gate on a few devices
         ratios = []
         for r, c in ((0, 0), (1, 3), (3, 7)):
@@ -128,7 +132,7 @@ def test_moe_scale_alpha(mesh_device):
             ratios.append(
                 f"e{e}: mean ratio {float(dev[:n].abs().sum() / ref[:n].abs().sum()):.5f} maxdiff {float((dev[:n] - ref[:n]).abs().max()):.2e}"
             )
-        print(f"RESULT op={op} (d) device weights vs dequantised bf16 (gate, slot 0): {ratios}", flush=True)
+        print(f"RESULT op={opname} (d) device weights vs dequantised bf16 (gate, slot 0): {ratios}", flush=True)
         um = MiMoPrefillMoE(
             md, wts, ckc=make_ckc("hifi2", fp32acc=True, packer_l1_acc=(op != "fused")), expert_op=op, cf=4
         )
@@ -149,7 +153,8 @@ def test_moe_scale_alpha(mesh_device):
                 S1[r][msk] = dc[msk]
         ttnn.deallocate(comb)
         print(
-            f"RESULT L{LAYER} op={op} A experts+dispatch+combine vs oracle per-slot outputs: {stats(S1, O)}", flush=True
+            f"RESULT L{LAYER} op={opname} A experts+dispatch+combine vs oracle per-slot outputs: {stats(S1, O)}",
+            flush=True,
         )
         red_host = (S1 * w_bf.unsqueeze(-1)).sum(2)  # fp32 weighted sum of device expert outputs (bf16 weights)
         # B/C: final
@@ -166,11 +171,11 @@ def test_moe_scale_alpha(mesh_device):
         )
         ttnn.deallocate(part)
         print(
-            f"RESULT L{LAYER} op={op} B reduce stage: device final vs fp32 weighted sum of device expert outputs: {stats(out, red_host)}",
+            f"RESULT L{LAYER} op={opname} B reduce stage: device final vs fp32 weighted sum of device expert outputs: {stats(out, red_host)}",
             flush=True,
         )
         print(
-            f"RESULT L{LAYER} op={op} C total: device final vs fp32 oracle: {stats(out, ref_fp32)} ; PCC {pcc(out, ref_fp32):.5f}; (fp32 sum of device expert outputs with fp32 weights vs oracle: {stats((S1 * wf.unsqueeze(-1)).sum(2), ref_fp32)})",
+            f"RESULT L{LAYER} op={opname} C total: device final vs fp32 oracle: {stats(out, ref_fp32)} ; PCC {pcc(out, ref_fp32):.5f}; (fp32 sum of device expert outputs with fp32 weights vs oracle: {stats((S1 * wf.unsqueeze(-1)).sum(2), ref_fp32)})",
             flush=True,
         )
         for lst in wts:
