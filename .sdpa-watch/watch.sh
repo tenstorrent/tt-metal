@@ -687,9 +687,16 @@ autofix_annotate() {
     def fixref: ((.reason // "") | (capture("#(?<n>[0-9]{4,6})") // {}) | .n) as $n
                 | ([ (if $n then "<\($gh)/pull/\($n)|#\($n)>" else empty end),
                      (commitlink(.fix_sha) | select(. != "")) ] | join(" "));
+    # Distinctive words, for matching a ledger record to a digest bullet when
+    # their names differ (the watcher and the triage agent label separately).
+    def toks: ascii_downcase | [scan("[a-z0-9_]{4,}")] | unique
+              - ["test","tests","infra","kimi","with","from","that","this","failed","failure","error",
+                 "sdpa","device","model","owner","runner","none","than","band","into","only","never"];
+    def blabel: (((capture("^• `(?<l>[^`]*)`") // {}) | .l) // "");
     [ .sigs[] | select(.workflow == $w)
       | {f: (.test | split("::") | last | split("[") | first),
          short: (.test | split("::") | last), r: ((.last_seen.number // "") | tostring),
+         tk: ("\(.test) \(.job) \(.summary // "") \(.error_key // "")" | toks),
          n: (if .state == "pr_open" then "\($eo) draft PR \(.pr.url | prlink), targeted CI running"
              elif .state == "ci_passed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ✅, awaiting review"
              elif .state == "ci_failed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ❌"
@@ -702,22 +709,27 @@ autofix_annotate() {
       | select(.n != null and (.f | length) > 3) ] as $notes
     | (($b | capture("_run #(?<n>[0-9]+)_") // {}) | .n // "") as $rn
     | ($b | split("\n")) as $lines
-    | [ $lines[] | select(startswith("• ")) | (((capture("^• `(?<l>[^`]*)`") // {}) | .l) // "") ] as $labels
-    # A failure of THIS run whose name matches no bullet (the watcher and the
-    # triage agent can label one failure differently) still gets its note,
-    # as its own line; failures not in the shown run get none.
+    | [ $lines | to_entries[] | select(.value | startswith("• "))
+        | {i: .key, l: (.value | blabel), tk: (.value | toks)} ] as $bul
+    # Each note goes to: the bullet(s) whose label contains the test name;
+    # else, for a failure of THIS run, the bullet sharing the most distinctive
+    # words (>= 3); else its own ↳ line. Failures not in the shown run get none.
     | [ $notes[] | . as $nt
-        | select($rn != "" and $nt.r == $rn and ([ $labels[] | select(length > 0 and contains($nt.f)) ] | length) == 0)
-        | "↳ `\(.short)` — \(.n)" ] as $extra
-    | ($lines
-       | map(if startswith("• ") then
-               (((capture("^• `(?<l>[^`]*)`") // {}) | .l) // "") as $l
-               | ([ $notes[] | . as $nt | select(($l | length) > 0 and ($l | contains($nt.f))) | .n ] | unique) as $m
-               | if ($m | length) > 0 then . + " — " + ($m | join(" · ")) else . end
-             else . end)) as $out
+        | ([ $bul[] | select((.l | length) > 0 and (.l | contains($nt.f))) | .i ]) as $exact
+        | if ($exact | length) > 0 then {n: $nt.n, at: $exact}
+          elif $nt.r == $rn and $rn != "" then
+            ([ $bul[] | {i, ov: ([.tk[] as $t | $nt.tk | index($t) | select(. != null)] | length)} ]
+             | max_by(.ov) // {ov: 0}) as $best
+            | if $best.ov >= 3 then {n: $nt.n, at: [$best.i]} else {n: $nt.n, at: [], extra: "↳ `\($nt.short)` — \($nt.n)"} end
+          else empty end ] as $plan
+    | ($lines | to_entries
+       | map(.key as $k | .value as $v
+             | ([ $plan[] | select(.at | index($k)) | .n ] | unique) as $m
+             | if ($m | length) > 0 then $v + " — " + ($m | join(" · ")) else $v end)) as $out
+    | ([ $plan[] | .extra // empty ] | unique) as $extra
     | (if ($extra | length) > 0 and ($out | length) > 0 and ($out[-1] | startswith("http"))
-       then $out[:-1] + ($extra | unique) + [$out[-1]] else $out + ($extra | unique) end)
-    | join("\n")' "$AUTOFIX_LEDGER" 2>/dev/null) && [[ -n "$out" ]] || out="$block"
+       then $out[:-1] + $extra + [$out[-1]] else $out + $extra end)
+    | join("\n")' "$AUTOFIX_LEDGER" 2>>"${AGENT_ERR:-/dev/null}") && [[ -n "$out" ]] || out="$block"
   printf '%s' "$out"
 }
 
