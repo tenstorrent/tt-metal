@@ -64,9 +64,18 @@ def resolve_routed_expert_impl(model_cfg) -> str:
 
 
 def flat_routed_expert_supported(
-    mesh_device, activation, weights_dtype, emb_dim: int, max_tokens: int, has_biases: bool, experts_per_chip: int
+    mesh_device,
+    activation,
+    weights_dtype,
+    emb_dim: int,
+    hidden_dim: int,
+    max_tokens: int,
+    has_biases: bool,
+    experts_per_chip: int,
+    num_routed_experts: int,
 ) -> Optional[str]:
-    """None when the flat op can run this configuration, else the reason it cannot."""
+    """None when the flat op can run this configuration, else the reason it cannot. Ends by asking the op's planner
+    itself (cached, host only), so a shape it has no layout for falls back instead of failing in the constructor."""
     if mesh_device.arch() != ttnn.Arch.BLACKHOLE:
         return "Blackhole only"
     if activation not in FLAT_ACTIVATIONS:
@@ -77,10 +86,24 @@ def flat_routed_expert_supported(
         return "expert biases not implemented"
     if emb_dim % 256 != 0:
         return f"emb_dim {emb_dim} not a multiple of 256"
+    if hidden_dim % 32 != 0:
+        return f"hidden_dim {hidden_dim} not a multiple of 32"
     if not 1 <= experts_per_chip <= FLAT_MAX_EXPERTS_PER_CHIP:
         return f"{experts_per_chip} local experts (1..{FLAT_MAX_EXPERTS_PER_CHIP})"
     if max_tokens < FLAT_MIN_TOKENS_PER_EXPERT:
         return f"max tokens per expert {max_tokens} < {FLAT_MIN_TOKENS_PER_EXPERT}"
+    try:
+        ttnn._ttnn.operations.experimental.flat_routed_expert_plan(
+            mesh_device,
+            emb_dim,
+            hidden_dim,
+            experts_per_chip,
+            num_routed_experts,
+            max_tokens,
+            weights_bf8=weights_dtype == ttnn.bfloat8_b,
+        )
+    except RuntimeError as error:
+        return f"no layout for this shape ({str(error).splitlines()[0]})"
     return None
 
 
@@ -272,7 +295,15 @@ class TtFlatRoutedExpert(LightweightModule):
         """
         super().__init__()
         reason = flat_routed_expert_supported(
-            mesh_device, activation, weights_dtype, emb_dim, max_tokens, False, experts_per_chip
+            mesh_device,
+            activation,
+            weights_dtype,
+            emb_dim,
+            hidden_dim,
+            max_tokens,
+            False,
+            experts_per_chip,
+            num_routed_experts,
         )
         if reason is not None:
             raise NotImplementedError(f"TtFlatRoutedExpert: {reason}")

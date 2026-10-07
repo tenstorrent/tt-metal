@@ -52,7 +52,8 @@ ttnn::Tensor gather_host_tiles(
             "gather_host_tiles: source {} must be interleaved (its tiles in row-major order)",
             i);
         TT_FATAL(
-            s.host_storage().buffer().shard_coords() == ref.host_storage().buffer().shard_coords(),
+            s.host_storage().buffer().shape() == ref.host_storage().buffer().shape() &&
+                s.host_storage().buffer().shard_coords() == ref.host_storage().buffer().shard_coords(),
             "gather_host_tiles: source {} is distributed over different shards",
             i);
         const auto [bytes, count] = tile_geometry(s.tensor_spec());
@@ -87,9 +88,16 @@ ttnn::Tensor gather_host_tiles(
     TT_FATAL(tile_bytes % sizeof(uint32_t) == 0, "gather_host_tiles: tile size {} not word aligned", tile_bytes);
 
     const auto& ref_buffer = ref.host_storage().buffer();
-    auto dst_buffer = DistributedHostBuffer::create(ref_buffer.shape());
-    const std::vector<distributed::MeshCoordinate> coords(
-        ref_buffer.shard_coords().begin(), ref_buffer.shard_coords().end());
+    // A copy of the first source's buffer keeps its global shape, local extent and distributed context (on a
+    // multi-host mesh only this host's shards are held); every local shard is then replaced below. Shard buffers
+    // are shared on copy, and emplace_shard rebinds the copy's slot, so the source is untouched.
+    DistributedHostBuffer dst_buffer = ref_buffer;
+    std::vector<distributed::MeshCoordinate> coords;
+    for (const auto& coord : ref_buffer.shard_coords()) {
+        if (ref_buffer.is_local(coord)) {
+            coords.push_back(coord);
+        }
+    }
     dst_buffer.emplace_shards(
         coords,
         [&](const distributed::MeshCoordinate& coord) {

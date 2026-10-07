@@ -321,7 +321,8 @@ class TtMoe(LightweightModule):
                 expert's weights once). Same inputs and output, so dispatch and combine are unchanged; the
                 hybrid threshold and the weight DRAM placement do not apply to it. Where the flat op cannot run
                 (not Blackhole, < 256 tokens per expert of capacity, > 64 local experts, an unsupported
-                activation / dtype) it logs why and falls back to "unified".
+                activation / dtype, a shape the op's planner has no layout for) it logs why and falls back to
+                "unified".
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -510,24 +511,6 @@ class TtMoe(LightweightModule):
             init_zeros=False,
         )
 
-        # Build (group, chip, local_expert) -> global expert id table, sharded
-        # across the EP mesh so each device holds (1, 1, experts_per_chip).
-        # Then squeeze the two leading singleton dims so each device has a 1D
-        # (experts_per_chip,) lookup vector (required by extract/insert validators).
-        global_expert_idx_tt = ttnn.from_torch(
-            ExpertMapping.create_global_expert_idx_table(
-                experts_per_chip=experts_per_chip,
-                dispatch_group_size=dispatch_group_size,
-                num_dispatch_groups=num_dispatch_groups,
-            ),
-            mesh_mapper=get_ep_mesh_mapper(mesh_device),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            dtype=ttnn.uint32,
-        )
-        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
-        global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
-
         # Initialize routed expert
         if routed_expert_impl not in ("unified", "flat"):
             raise ValueError(f"routed_expert_impl must be 'unified' or 'flat', got {routed_expert_impl!r}")
@@ -537,9 +520,11 @@ class TtMoe(LightweightModule):
                 routed_expert_activation,
                 routed_expert_weights_dtype,
                 self.routed_emb_dim,
+                hidden_dim,
                 max_dispatched_tokens_per_expert,
                 has_biases=False,
                 experts_per_chip=experts_per_chip,
+                num_routed_experts=num_routed_experts,
             )
             if reason is not None:
                 logger.warning(f"TtMoe layer {layer_idx}: flat routed expert unavailable ({reason}); using unified")
@@ -562,6 +547,23 @@ class TtMoe(LightweightModule):
                 activation=routed_expert_activation,
             )
         else:
+            # Build (group, chip, local_expert) -> global expert id table, sharded
+            # across the EP mesh so each device holds (1, 1, experts_per_chip).
+            # Then squeeze the two leading singleton dims so each device has a 1D
+            # (experts_per_chip,) lookup vector (required by extract/insert validators).
+            global_expert_idx_tt = ttnn.from_torch(
+                ExpertMapping.create_global_expert_idx_table(
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                ),
+                mesh_mapper=get_ep_mesh_mapper(mesh_device),
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                dtype=ttnn.uint32,
+            )
+            global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+            global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
             self.routed_expert = TtRoutedExpert(
                 mesh_device=mesh_device,
                 experts_per_chip=experts_per_chip,

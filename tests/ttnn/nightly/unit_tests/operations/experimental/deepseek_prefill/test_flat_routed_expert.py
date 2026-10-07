@@ -53,6 +53,15 @@ MODELS = [
     ),
 ]
 
+# Tensor-parallel slices of the K2 expert: the op splits these over 2 (I 512) and 3 (I 1024) core subgrids, a
+# layout the three model shapes (all one subgrid) never reach. Not shipped by any model today; covered so the layout
+# and the kernels stay right for them.
+SUBGRID_SHAPES = [
+    ("k2_tp4_i512", KimiK27Config.EMB_SIZE, 512, ttnn.RoutedExpertActivation.Silu, ACTIVATION_SILU),
+    ("k2_tp2_i1024", KimiK27Config.EMB_SIZE, 1024, ttnn.RoutedExpertActivation.Silu, ACTIVATION_SILU),
+]
+SHAPES = MODELS + SUBGRID_SHAPES
+
 # Per local expert token counts: ragged, one empty, one past a 128-row sub-block, one not a multiple of 32.
 COUNTS = [200, 0, 37, 512, 1, 131]
 MAX_TOKENS = 640  # dispatch capacity per expert; the op needs >= 256
@@ -165,7 +174,7 @@ def run_flat_routed_expert(mesh_device, emb_dim, hidden_dim, activation, torch_a
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("model, emb_dim, hidden_dim, activation, torch_activation", MODELS, ids=[m[0] for m in MODELS])
+@pytest.mark.parametrize("model, emb_dim, hidden_dim, activation, torch_activation", SHAPES, ids=[m[0] for m in SHAPES])
 @pytest.mark.skipif(not is_blackhole(), reason="flat_routed_expert is Blackhole-only")
 def test_flat_routed_expert(mesh_device, device_params, model, emb_dim, hidden_dim, activation, torch_activation):
     run_flat_routed_expert(mesh_device, emb_dim, hidden_dim, activation, torch_activation)
@@ -317,7 +326,7 @@ def _golden_flat_layout(weights, lay, dtype, mesh_device):
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("model, emb_dim, hidden_dim, activation, torch_activation", MODELS, ids=[m[0] for m in MODELS])
+@pytest.mark.parametrize("model, emb_dim, hidden_dim, activation, torch_activation", SHAPES, ids=[m[0] for m in SHAPES])
 @pytest.mark.parametrize("weights_dtype", [ttnn.bfloat4_b, ttnn.bfloat8_b], ids=["bf4", "bf8"])
 @pytest.mark.skipif(not is_blackhole(), reason="flat_routed_expert is Blackhole-only")
 def test_flat_routed_expert_layout_parity(
@@ -325,6 +334,13 @@ def test_flat_routed_expert_layout_parity(
 ):
     """The tile-gather layout (from torch weights, and from the per-expert cache alone) equals the golden layout
     value for value, every tensor, padding included; and building from the cache writes nothing into it."""
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_flat_routed_expert import flat_routed_expert_supported
+
+    why = flat_routed_expert_supported(
+        mesh_device, activation, weights_dtype, emb_dim, hidden_dim, MAX_TOKENS, False, 3, 3
+    )
+    if why is not None:
+        pytest.skip(f"the op has no layout here: {why}")
     E = 3
     torch.manual_seed(1)
     weights = [
@@ -348,14 +364,41 @@ def test_flat_routed_expert_layout_parity(
     )
     from_torch = TtFlatRoutedExpert(mesh_device, torch_weights=weights, **kw)
     _write_expert_cache(weights, mesh_device, weights_dtype, tmp_path)
-    before = sorted(p.name for p in tmp_path.iterdir())
+    snapshot = lambda: sorted((p.name, p.stat().st_size, p.stat().st_mtime_ns) for p in tmp_path.iterdir())
+    before = snapshot()
     from_cache = TtFlatRoutedExpert(
         mesh_device, torch_weights=None, weight_cache_path=tmp_path, cache_name_prefix=_PREFIX, **kw
     )
-    assert sorted(p.name for p in tmp_path.iterdir()) == before, "TtFlatRoutedExpert wrote into the cache directory"
+    assert snapshot() == before, "TtFlatRoutedExpert wrote into the cache directory"
 
     golden = _golden_flat_layout(weights, from_torch.plan, weights_dtype, mesh_device)
     for name, ref in golden.items():
         for label, module in (("torch", from_torch), ("cache", from_cache)):
             got = ttnn.to_torch(getattr(module, name)).float().reshape(ref.shape)
             assert torch.equal(got, ref), f"{name} ({label}): max |diff| {(got - ref).abs().max().item()}"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.skipif(not is_blackhole(), reason="flat_routed_expert is Blackhole-only")
+def test_flat_routed_expert_supported(mesh_device, device_params):
+    """The fallback decision: every shipped shape is accepted, and a shape the op's planner has no layout for (an I
+    and dtype with no gate/up split that fits) is refused with a reason rather than failing later in the
+    constructor."""
+    from models.demos.deepseek_v3_d_p.tt.moe.tt_flat_routed_expert import flat_routed_expert_supported
+
+    def reason(
+        emb_dim, hidden_dim, activation=ttnn.RoutedExpertActivation.Silu, epc=8, max_tokens=MAX_TOKENS, dtype=None
+    ):
+        return flat_routed_expert_supported(
+            mesh_device, activation, dtype or ttnn.bfloat4_b, emb_dim, hidden_dim, max_tokens, False, epc, 8 * epc
+        )
+
+    for name, emb_dim, hidden_dim, activation, _ in SHAPES:
+        assert reason(emb_dim, hidden_dim, activation) is None, name
+    # bfp8 weights at I 1024 leave the planner no gate/up split that fits L1 (bfp4 has one).
+    assert reason(KimiK27Config.EMB_SIZE, 1024, dtype=ttnn.bfloat8_b) is not None
+    assert reason(KimiK27Config.EMB_SIZE, 2040) is not None  # not whole tiles
+    assert reason(KimiK27Config.EMB_SIZE, 2048, max_tokens=128) is not None
+    assert reason(KimiK27Config.EMB_SIZE, 2048, epc=65) is not None
