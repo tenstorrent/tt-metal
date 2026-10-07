@@ -108,3 +108,14 @@
 - claim: Prefill-style MoE on 4x8 (host 40), bfp8 weights (DRAM ND-sharded), MiMo dims 256 experts top-8 8/chip K=4096 N=2048, SYNTHETIC random hidden/gate/weights (not real tokens): masked_bincount+offset_cumsum+dispatch+unified_routed_expert_moe(Silu, no clamp)+combine+post_combine_reduce, column partials summed on host, vs dense torch bf16-weight fp32-math MoE: PCC 0.99925 per mesh row (per-token min 0.99914) N=512/row; same at N=64 and 2048 (commit 1227f2c3d8a); hifi2 and lofi identical (config seems ignored); skew case (1/3 tokens to experts 0-7, commit 9dffe3fdbb0) PCC 0.99924, worst chip load 5952 of 8416 rows (cf=4); 2 runs bit-identical; no capacity overflow. moe_fused_swiglu (bf16 out, packer_l1_acc must be false) PCC 0.99948. bfp8 prefill path works WITHOUT C++. Logs: moe_B_prefill_unified_hifi2_n512.log, moe_B_unified_lofi_n512.log, moe_B_fused_hifi2_n512.log, moe_B_unified_skew_n512.log
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_prefill_unified_hifi2_n512.log
 - paths: models/demos/blackhole/mimo_v26, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
+
+## E261007-0203-fac
+- date: 2026-10-07T02:03:17
+- commit: 479ee2847b3
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: bfp8 vs real MiMo fp4 experts (layers 1,20,46 x experts 0,137,255 x gate/up/down, device layout [K,N]; DSV4 nibble order low-first, e8m0=2^(s-127), sanity: 15/16 codes used, absmax 0.06-1.0, scales e8m0 118-125): bf16 holds the dequantised values exactly; bfp8 (host pack and device typecast identical) reproduces 24/27 tensors bit-exactly; 3 tensors differ in 1-27 of 8.4M values (L1 e0 gate: 27, max abs 1.95e-3; L46 down_proj: 6-17 values, max abs 7.8e-3, absmax 1.0); PCC >= 0.99999992. So bfp8 is essentially, not strictly, lossless (rare small values in a 16-block beside large ones)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_bfp8_exact_479ee2847b3.log
+- paths: models/demos/blackhole/mimo_v26/tests/test_bfp8_checkpoint_exact.py
