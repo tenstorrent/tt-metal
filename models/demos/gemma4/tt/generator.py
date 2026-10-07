@@ -11,7 +11,8 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
-from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.attention.operations import effective_block_size
+from models.demos.gemma4.tt.common import GEMMA4_CP_PREFILL_CHUNK, create_tt_model, gemma4_cp_prefill_engaged
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
     chunked_prefill_trace_enabled,
@@ -130,6 +131,51 @@ def resolve_batched_prefill_chunk_users(padded_batch: int, prefill_seq_len: int)
     return supported[-1] if supported else 1
 
 
+def mask_page_table_columns_past_allocation(page_tables, prompt_lens, block_sizes):
+    """Zero every page-table column past each request's own allocation.
+
+    Plugin rows keep earlier occupants' block ids past the live prefix and the padded K/V fill follows them,
+    so route those writes to vLLM's null block 0. Returns ``(tables, zeroed_columns)``; inputs are not mutated.
+    """
+    if page_tables is None or prompt_lens is None:
+        return page_tables, 0
+    try:
+        lens = [int(p) for p in (prompt_lens.tolist() if hasattr(prompt_lens, "tolist") else list(prompt_lens))]
+    except (TypeError, ValueError):
+        return page_tables, 0
+    out = []
+    zeroed = 0
+    done = {}
+    for i, pt in enumerate(page_tables):
+        bs = block_sizes[i] if i < len(block_sizes) else None
+        if not isinstance(pt, torch.Tensor) or bs is None or int(bs) <= 0:
+            out.append(pt)
+            continue
+        key = (id(pt), int(bs))
+        if key in done:
+            out.append(done[key])
+            continue
+        table = pt if pt.dim() > 1 else pt.unsqueeze(0)
+        masked = None
+        for r in range(min(int(table.shape[0]), len(lens))):
+            if lens[r] <= 0:
+                continue
+            first_free = -(-lens[r] // int(bs))
+            if first_free >= int(table.shape[1]):
+                continue
+            stale = int((table[r, first_free:] != 0).sum())
+            if stale == 0:
+                continue
+            if masked is None:
+                masked = table.clone()
+            masked[r, first_free:] = 0
+            zeroed += stale
+        result = pt if masked is None else (masked if pt.dim() > 1 else masked[0])
+        done[key] = result
+        out.append(result)
+    return out, zeroed
+
+
 def _load_text_tokenizer(model_path):
     # The 12B tokenizer config can advertise multimodal extra_special_tokens as
     # a list (for example ["<|video|>"]), while this transformers version expects
@@ -172,6 +218,8 @@ def _patch_model_args(
     # Overrides: GEMMA4_GEN_PREFILL_CHUNK=<n>, GEMMA4_DEMO_SINGLE_CHUNK=1 (legacy
     # full-ISL single chunk for A/B / correctness — avoid on long ISL).
     _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
+    if _chunk_override <= 0 and gemma4_cp_prefill_engaged(mesh_device):
+        _chunk_override = GEMMA4_CP_PREFILL_CHUNK
     _force_single = os.environ.get("GEMMA4_DEMO_SINGLE_CHUNK", "0") != "0"
     _needs_chunk_for_dram = (not _force_single) and should_auto_enable_chunked_bounded(
         max_seq_len,
@@ -253,30 +301,17 @@ class ChunkedPrefillPageTableGuardMixin:
     """
 
     @staticmethod
-    def _match_page_table_row(page_table_1row, page_tables_per_layer) -> int | None:
-        """Return the batch row whose page-table prefix matches ``page_table_1row``."""
-        if page_table_1row is None or not page_tables_per_layer:
-            return None
-        if not isinstance(page_table_1row, torch.Tensor):
-            return None
+    def _page_table_row_matches(page_table_1row, page_tables_per_layer, row) -> bool:
+        """True when some multi-row per-layer table has ``row`` equal to the slice's prefix."""
         pt = page_table_1row if page_table_1row.dim() > 1 else page_table_1row.unsqueeze(0)
-        if int(pt.shape[0]) != 1:
-            return None
-        candidates = [
-            p for p in page_tables_per_layer if isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1
-        ]
-        if not candidates:
-            return 0
         pt32 = pt[0].to(dtype=torch.int32)
-        for ref in candidates:
-            cols = min(int(pt32.shape[0]), int(ref.shape[1]))
-            if cols <= 0:
+        for ref in page_tables_per_layer:
+            if not (isinstance(ref, torch.Tensor) and ref.dim() > 1 and int(ref.shape[0]) > row):
                 continue
-            ref32 = ref.to(dtype=torch.int32)
-            for r in range(int(ref32.shape[0])):
-                if torch.equal(pt32[:cols], ref32[r, :cols]):
-                    return r
-        return None
+            cols = min(int(pt32.shape[0]), int(ref.shape[1]))
+            if cols > 0 and torch.equal(pt32[:cols], ref[row, :cols].to(dtype=torch.int32)):
+                return True
+        return False
 
     def _prepare_decode_trace_once(self, kv_cache, page_table, on_device_sampling):
         """Opt out of the hoisted decode-trace preparation (upstream #53551).
@@ -307,13 +342,10 @@ class ChunkedPrefillPageTableGuardMixin:
         return
 
     def _activate_sequential_per_layer_row(self, page_table) -> None:
-        """Slice multi-row hybrid page-table stash to the active sequential user.
+        """Slice the multi-row hybrid page-table stash to the active sequential user.
 
-        Under bounded sliding the bridge keeps per-layer tables (full vs sliding)
-        and also stuffs the remapped *sliding* table into legacy ``page_table``.
-        Sequential tt_transformers then passes ``user_id=0`` with a 1-row slice —
-        without this, every user writes/reads batch row 0 of the per-layer stash
-        (and chunked full-attn fill uses ``full_pt[0]``).
+        The shared loop prefills users in row order with ``user_id=0``, so the row cursor identifies the request
+        and the 1-row slice only confirms it (slice contents are not unique under lane rings).
         """
         if page_table is None or not isinstance(page_table, torch.Tensor):
             return
@@ -321,6 +353,8 @@ class ChunkedPrefillPageTableGuardMixin:
         if int(pt.shape[0]) != 1:
             return
         for m in self.model:
+            if getattr(m, "_sequential_row_active", False):
+                continue  # nested call inside this request's traced entry
             active = getattr(m, "_active_page_tables_per_layer", None)
             if not active:
                 continue
@@ -329,10 +363,18 @@ class ChunkedPrefillPageTableGuardMixin:
                 if not any(isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1 for p in active):
                     continue
                 m._sequential_batch_page_tables = active
+                m._sequential_row_cursor = 0
                 batch_host = active
-            row = self._match_page_table_row(pt, batch_host)
-            if row is None:
-                continue
+            row = int(getattr(m, "_sequential_row_cursor", 0))
+            rows = max(int(p.shape[0]) for p in batch_host if isinstance(p, torch.Tensor) and p.dim() > 1)
+            if row >= rows:
+                raise ValueError(f"sequential prefill activated row {row} of {rows}-row per-layer page tables")
+            if int(pt.max()) > 0 and not self._page_table_row_matches(pt, batch_host, row):
+                raise ValueError(
+                    f"sequential prefill: legacy page-table slice {pt[0, :4].tolist()} does not match row {row} "
+                    "of the per-layer tables"
+                )
+            m._sequential_row_cursor = row + 1
             sliced = []
             for p in batch_host:
                 if isinstance(p, torch.Tensor) and p.dim() > 1 and int(p.shape[0]) > 1:
@@ -346,8 +388,7 @@ class ChunkedPrefillPageTableGuardMixin:
             # returns existing B=1 device buffers *without* refreshing content.
             # Without this H2D, users after the first keep reading/writing user
             # 0's block IDs (full-attn cross-chunk SDPA + sliding ring fill).
-            if hasattr(m, "update_persistent_per_layer_page_tables"):
-                m.update_persistent_per_layer_page_tables(sliced)
+            self._install_per_layer_page_tables(m, sliced, writer="prefill")
 
     def _clear_sequential_batch_page_tables(self) -> None:
         """Put the full-batch per-layer tables back after sequential prefill."""
@@ -356,9 +397,49 @@ class ChunkedPrefillPageTableGuardMixin:
             if batch_host is None:
                 continue
             m._active_page_tables_per_layer = batch_host
-            if hasattr(m, "update_persistent_per_layer_page_tables"):
-                m.update_persistent_per_layer_page_tables(batch_host)
+            self._install_per_layer_page_tables(m, batch_host, writer="prefill")
+            m._sequential_row_cursor = 0
             del m._sequential_batch_page_tables
+
+    @staticmethod
+    def _page_tables_rows(page_tables_per_layer):
+        """Row count that keys a per-layer table list's persistent device buffers
+        (the same rule as ``Gemma4Model._host_page_tables_batch``)."""
+        for pt in page_tables_per_layer or []:
+            if isinstance(pt, torch.Tensor):
+                return int(pt.shape[0]) if pt.dim() > 1 else 1
+        return None
+
+    @classmethod
+    def _install_per_layer_page_tables(cls, model, page_tables_per_layer, *, writer):
+        """H2D the per-layer tables into the persistent buffers for their row count and record the writer.
+
+        Prefill and decode share those buffers; decode must re-upload before replaying after a prefill write.
+        """
+        if not hasattr(model, "update_persistent_per_layer_page_tables"):
+            return
+        model.update_persistent_per_layer_page_tables(page_tables_per_layer)
+        rows = cls._page_tables_rows(page_tables_per_layer)
+        if rows is None:
+            return
+        writers = getattr(model, "_g4_page_table_writer_by_rows", None)
+        if writers is None:
+            writers = {}
+            model._g4_page_table_writer_by_rows = writers
+        writers[rows] = writer
+
+    @classmethod
+    def _page_tables_written_by_prefill(cls, models, per_submesh) -> bool:
+        """Whether any submesh's persistent buffers for these tables' row count
+        were last written by prefill (so decode must re-upload before replay)."""
+        for model, tables in zip(models, per_submesh or []):
+            rows = cls._page_tables_rows(tables)
+            if rows is None:
+                continue
+            writers = getattr(model, "_g4_page_table_writer_by_rows", None) or {}
+            if writers.get(rows) == "prefill":
+                return True
+        return False
 
     def _effective_paged_block_size(self, kv_cache):
         """Effective block_size the paged ops address this model's K/V cache with.
@@ -376,16 +457,27 @@ class ChunkedPrefillPageTableGuardMixin:
         zero-pad (clobbering earlier chunks' KV).
         """
         block_size = get_block_size(kv_cache)
+        # Groups can end up with different effective block sizes (e.g. 31B at TP=4: sliding 64,
+        # full 128). Tables trimmed with the smallest one stay wide enough for every layer; the
+        # paged ops only require ``seq_len <= cols * block_size``.
+        sizes = []
         for i, layer in enumerate(getattr(self.model[0], "layers", [])):
-            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            attn = getattr(layer, "self_attn", None)
+            cfg = getattr(attn, "config", None)
             if cfg is None or i >= len(kv_cache) or kv_cache[i] is None:
                 continue
             cache = kv_cache[i][0]
             cache_hd = int(cache.shape[-1])
             if cache_hd != int(cfg.head_dim) and cache_hd > 0:
-                # HMA-shared buffer: byte-invariant reinterpret for this layer's head_dim.
-                return int(cache.shape[2]) * cache_hd // int(cfg.head_dim)
-        return block_size
+                # HMA-shared buffer allocated at another layer's view: derive this layer's tokens per block
+                # from the per-block byte invariant, kv-head factor included.
+                tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
+                weights = getattr(attn, "weights", None)
+                kv_local = 1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
+                sizes.append(int(effective_block_size(cache, int(cfg.head_dim), kv_local)))
+            else:
+                sizes.append(int(cache.shape[2]))
+        return min(sizes) if sizes else block_size
 
     def _paged_prefill_block_size(self, kv_cache):
         # Base Generator hook: chunked-prefill page-table padding/slicing uses this so
@@ -669,6 +761,7 @@ class ChunkedPrefillPageTableGuardMixin:
         # ``return None`` and warmup crashes in process_logits_after_prefill_trace.
         for m in self.model:
             m._prefill_trace_mode = True
+            m._sequential_row_active = True  # the capture below re-enters the eager path for this user
         try:
             if force_chunk_pt:
                 return self._easy_trace_prefill_with_chunk_page_table(*args, **kwargs)
@@ -676,6 +769,7 @@ class ChunkedPrefillPageTableGuardMixin:
         finally:
             for m in self.model:
                 m._prefill_trace_mode = False
+                m._sequential_row_active = False
 
     def _easy_trace_prefill_with_chunk_page_table(
         self,
@@ -784,15 +878,36 @@ class ChunkedPrefillPageTableGuardMixin:
                 return True
         return False
 
-    def _release_all_sliding_prefill_tails(self, model_id=-1, *, clear_persistent: bool = False):
-        for layer in getattr(self.model[model_id], "layers", []):
-            attn = getattr(layer, "self_attn", None)
-            if attn is not None and hasattr(attn, "_release_sliding_prefill_tail"):
-                attn._release_sliding_prefill_tail(clear_persistent=clear_persistent)
+    def _release_all_sliding_prefill_tails(self, model_id=None, *, clear_persistent: bool = False, req_key=None):
+        models = self.model if model_id is None else [self.model[model_id]]
+        for model in models:
+            for layer in getattr(model, "layers", []):
+                attn = getattr(layer, "self_attn", None)
+                if attn is None or not hasattr(attn, "_release_sliding_prefill_tail"):
+                    continue
+                if req_key is not None:
+                    attn._release_sliding_prefill_tail(req_key=req_key)
+                else:
+                    attn._release_sliding_prefill_tail(clear_persistent=clear_persistent)
+
+    def _bind_sliding_tail_key(self, req_key):
+        for model in self.model:
+            for layer in getattr(model, "layers", []):
+                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+                if cfg is not None:
+                    cfg._g4_active_req_key = req_key
 
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
+        # Lane-sharded page tables are stacked on the request's owner lane (_page_table_host_layout);
+        # bind it from global_user_id before any per-layer staging in this forward.
+        _gid = kwargs.get("global_user_id", None)
+        for _m in self.model:
+            _mc = getattr(_m, "mesh_config", None)
+            if _mc is not None and getattr(_mc, "lane_sharded", False):
+                _slots = int(getattr(_m, "lane_slots", 0) or 32)
+                _m._g4_active_owner_lane = (int(_gid) // _slots) % _mc.lanes if _gid is not None else 0
         self._activate_sequential_per_layer_row(page_table)
         # Bind this request's stable identity (its first global block id — the
         # same keying _bounded_ring_slots uses) to every layer config so the
@@ -813,11 +928,28 @@ class ChunkedPrefillPageTableGuardMixin:
                 # slot 0 legitimately starts at block id 0, and a falsy key
                 # would silently bypass the pool for that request.
                 req_key = int(pt2d[0, 0]) + 1
-        for model in self.model:
-            for layer in getattr(model, "layers", []):
-                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
-                if cfg is not None:
-                    cfg._g4_active_req_key = req_key
+        # Slot source: global_user_id (lane-sharded paths) or the per-call user_id kwarg. Batched prefill
+        # passes a list and stays on the legacy key (it requires num_cached==0, so cold-start reset isolates it).
+        _slot_src = _gid if isinstance(_gid, int) else kwargs.get("user_id")
+        if req_key is not None and isinstance(_slot_src, int):
+            # Prefix caching lets first-block ids collide across requests, so key the stash on the slot plus a
+            # per-slot generation; a start offset other than the slot's expected continuation begins a new one.
+            _slot = int(_slot_src)
+            _start = int(num_cached_tokens or 0)
+            _gens = getattr(self, "_g4_slot_tail_gen", None)
+            if _gens is None:
+                _gens = {}
+                self._g4_slot_tail_gen = _gens
+            _gen, _expected = _gens.get(_slot, (0, None))
+            if _start == 0 or _expected is None or _start != _expected:
+                if _gen:
+                    # Release the previous generation's tail on every layer, or dead keys exhaust the pool
+                    # and grow the spill dict without bound.
+                    self._release_all_sliding_prefill_tails(req_key=((_slot + 1) << 24) + _gen)
+                _gen += 1
+            _gens[_slot] = (_gen, _start + int(tokens.shape[-1]))
+            req_key = ((_slot + 1) << 24) + _gen
+        self._bind_sliding_tail_key(req_key)
         if page_table is not None and kv_cache is not None:
             block_size = self._effective_paged_block_size(kv_cache)
             needed_blocks = num_blocks_in_seq(tokens.shape[-1] + num_cached_tokens, block_size)
@@ -865,6 +997,9 @@ class ChunkedPrefillPageTableGuardMixin:
             # after lm_head. A captured chunk has get_last_token=-1 and cannot
             # perform the host-side boundary merge safely after the trace.
             and not self._uses_bounded_sliding_kv(model_id)
+            # Lane-sharded KV stacks each chunk's page table on the owner column host-side; the traced replay's
+            # chunk-table refresh cannot, so chunked prompts stay eager under lanes.
+            and not bool(getattr(getattr(self.model[model_id], "mesh_config", None), "lane_sharded", False))
         )
         if not use_traced_chunks:
             # Eager path stays in gemma4 (do not patch models/tt_transformers):
@@ -950,6 +1085,143 @@ class ChunkedPrefillPageTableGuardMixin:
                 return self.model[model_id].process_logits_after_prefill_trace(tt_out, last_token_idx_for_trace)
             del tt_out
         raise RuntimeError("Traced multi-chunk prefill produced no last-chunk logits")
+
+    def prefill_forward_lanes(self, tokens, page_tables, kv_cache, prompt_lens, slot_ids=None):
+        """Lane-parallel prefill, one user per lane column; returns host logits [lanes, vocab].
+
+        ``tokens`` is [lanes, S], ``page_tables`` is [lanes, 1, blocks]; ``prompt_lens`` must be equal across
+        lanes because the KV fill and the last-token slice are shared by every column.
+        """
+        model = self.model[0]
+        mesh_cfg = model.mesh_config
+        assert mesh_cfg is not None and getattr(mesh_cfg, "lane_sharded", False), "lanes gate is off"
+        lanes = mesh_cfg.lanes
+        assert tokens.dim() == 2 and tokens.shape[0] == lanes, f"tokens must be [lanes={lanes}, seq]"
+        seq_len = int(tokens.shape[-1])
+        last_idx = [int(p) - 1 for p in prompt_lens]
+        assert len(last_idx) == lanes and all(0 <= i < seq_len for i in last_idx)
+        if len(set(last_idx)) != 1:
+            # Every lane's KV fill runs with one shared valid length; a shorter
+            # lane would have still-needed window history padded over.
+            raise ValueError(f"lane prefill needs equal prompt lengths, got {[i + 1 for i in last_idx]}")
+
+        # Callers pass the per-model kv_cache list (as prefill_forward_text
+        # takes); lanes always run the single model.
+        model_kv = kv_cache[0] if isinstance(kv_cache, (list, tuple)) else kv_cache
+
+        # Trim table width to this prefill's block grid (wider tables TT_FATAL
+        # the fill); vLLM null block 0 pads a narrower one.
+        block_size = self._effective_paged_block_size(model_kv)
+        needed_blocks = num_blocks_in_seq(seq_len, block_size)
+        if page_tables.shape[-1] > needed_blocks:
+            page_tables = page_tables[..., :needed_blocks]
+        elif page_tables.shape[-1] < needed_blocks:
+            pad = torch.zeros(
+                page_tables.shape[0],
+                page_tables.shape[1],
+                needed_blocks - page_tables.shape[-1],
+                dtype=page_tables.dtype,
+            )
+            page_tables = torch.cat([page_tables, pad], dim=-1)
+
+        # Bounded sliding pools are per-layer rings addressed by ring-local block ids (slot s owns rows
+        # [s*rb, (s+1)*rb)), so feed sliding layers ring-local tables and full-attention layers the global one.
+        if slot_ids is not None:
+            slots_l = [int(slot_ids)] * lanes if isinstance(slot_ids, int) else [int(x) for x in slot_ids]
+            g_host = page_tables.reshape(lanes, -1).to(torch.int32)
+            per_layer, ring_cache = [], {}
+            for layer in getattr(model, "layers", []):
+                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+                m = getattr(cfg, "cache_position_modulo", None) if cfg is not None else None
+                if not m:
+                    per_layer.append(g_host)
+                    continue
+                rb = int(m) // block_size
+                if rb not in ring_cache:
+                    ring_cache[rb] = torch.stack(
+                        [torch.arange(s * rb, (s + 1) * rb, dtype=torch.int32) for s in slots_l]
+                    )
+                per_layer.append(ring_cache[rb])
+            if any(t is not g_host for t in per_layer):
+                model._active_page_tables_per_layer = per_layer
+
+        max_chunk = int(self.model_args[0].max_prefill_chunk_size)
+        if seq_len <= max_chunk:
+            inputs = model.prepare_inputs_prefill(
+                tokens,
+                page_table=page_tables,
+                batch_size=1,
+                user_id=0,
+                lane_parallel=True,
+            )
+            prefill_input, rot_mats_global, rot_mats_local, page_table_tt, *_ = inputs
+            tt_logits = model.ttnn_prefill_forward(
+                prefill_input,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=0,
+                page_table=page_table_tt,
+                get_last_token=self._prefill_get_last_token(max(last_idx)),
+                kv_cache=model_kv,
+                batch_size=1,
+            )
+            last_in_chunk = last_idx
+        else:
+            # Lane-parallel eager chunk loop. Bind a call-unique request key so the bounded sliding cross-chunk
+            # tail stash engages (key None bypasses it) without colliding with other requests' block ids.
+            self._g4_lane_prefill_calls = int(getattr(self, "_g4_lane_prefill_calls", 0)) + 1
+            req_key = (self._g4_lane_prefill_calls << 20) + int(page_tables[0, 0, 0]) + 1
+            self._bind_sliding_tail_key(req_key)
+            chunk_size = get_max_prefill_chunk_size(seq_len, max_chunk)
+            last_abs = max(last_idx)
+            last_chunk_start = (last_abs // chunk_size) * chunk_size
+            assert all(
+                i >= last_chunk_start for i in last_idx
+            ), f"lane prefill needs all last tokens in the final chunk (starts {last_chunk_start})"
+            tt_logits = None
+            for chunk_start in range(0, last_chunk_start + 1, chunk_size):
+                is_last = chunk_start == last_chunk_start
+                chunk_tokens = tokens[:, chunk_start : chunk_start + chunk_size]
+                chunk_pt = page_tables[..., chunk_start // block_size : (chunk_start + chunk_size) // block_size]
+                inputs = model.prepare_inputs_prefill(
+                    chunk_tokens,
+                    start_pos=chunk_start,
+                    page_table=page_tables,
+                    chunk_page_table=chunk_pt,
+                    batch_size=1,
+                    user_id=0,
+                    lane_parallel=True,
+                )
+                prefill_input, rot_mats_global, rot_mats_local, page_table_tt, chunk_pt_tt, *_ = inputs
+                step_logits = model.ttnn_prefill_forward(
+                    prefill_input,
+                    rot_mats_global=rot_mats_global,
+                    rot_mats_local=rot_mats_local,
+                    user_id=0,
+                    page_table=page_table_tt,
+                    chunk_page_table=chunk_pt_tt,
+                    chunk_start_idx=chunk_start,
+                    get_last_token=self._prefill_get_last_token(
+                        (last_abs - last_chunk_start) if is_last else (chunk_size - 1)
+                    ),
+                    kv_cache=model_kv,
+                    batch_size=1,
+                )
+                if is_last:
+                    tt_logits = step_logits
+                elif step_logits is not None:
+                    step_logits.deallocate(True)
+            last_in_chunk = [i - last_chunk_start for i in last_idx]
+
+        # Logits are tp-gathered inside the forward, so each lane's first chip
+        # holds that lane's full-vocab logits.
+        shards = ttnn.get_device_tensors(tt_logits)
+        out = torch.zeros(lanes, model.vocab_size, dtype=torch.float32)
+        for lane, dev in enumerate(model.lane_device_indices()):
+            host = ttnn.to_torch(shards[dev]).float()
+            out[lane] = host[0, 0, last_in_chunk[lane] % 32, : model.vocab_size]
+        tt_logits.deallocate(True)
+        return out
 
     def _prefill_forward_single_user_text_eager(
         self,
@@ -1825,10 +2097,17 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             paged_attention_config=paged_attention_config,
             bounded_sliding_kv_cache=bounded_sliding_kv_cache,
         )
+        # Lane-sharded serving: the generator sees the global slot space (lanes x per-column batch) while the
+        # model/KV stay sized per column; lane_slots gives the owner lane as slot // lane_slots.
+        _lanes = getattr(getattr(model, "mesh_config", None), "lane_sharded", False) and model.mesh_config.lanes
+        generator_batch = max_batch_size * _lanes if _lanes else max_batch_size
+        if _lanes:
+            model.lane_slots = max_batch_size
+
         _patch_model_args(
             model_args,
             mesh_device=mesh_device,
-            max_batch_size=max_batch_size,
+            max_batch_size=generator_batch,
             max_seq_len=max_seq_len,
             model_path=model_path,
             tokenizer=tokenizer,
