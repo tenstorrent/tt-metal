@@ -128,6 +128,9 @@ inline void _llk_pack_rows_init_(const std::uint32_t num_rows)
 
     // Reset Z/W counters
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1111);
+
+    // The per-call address write leaves byte 3 of the destination register as it is: bit 31, as every full write sets it.
+    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
 }
 
 /**

@@ -687,7 +687,8 @@ inline void select_packer_dest_registers()
 }
 
 // Program packer destination addresses from GPRs
-// keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from.
+// keep_output_addr: leave OUTPUT_ADDR holding the plain address, which fast tilize advances from; without it the address is
+// written with byte writes and OUTPUT_ADDR is not touched.
 template <bool keep_output_addr = true>
 inline void program_packer_destination(std::uint32_t addr)
 {
@@ -697,6 +698,16 @@ inline void program_packer_destination(std::uint32_t addr)
     // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each
     // pack MOP drains the packer and forces the next pack to re-sample L1_Dest_addr. The STALLWAIT below is
     // only the GPR-producer fence: it ensures the SETDMAREG write to OUTPUT_ADDR retires before WRCFG reads it.
+    if constexpr (!keep_output_addr)
+    {
+        // Byte writes from immediates need no GPR and no THCON fence; byte 3 (bit 31) is set by the row pack init and kept by
+        // every other writer of the register (fast tilize, which writes plain addresses, restores it in its uninit).
+        TT_RMWCIB0(0xff, addr & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+        TT_RMWCIB1(0xff, (addr >> 8) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+        TT_RMWCIB2(0xff, (addr >> 16) & 0xff, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
+        TTI_DMANOP; // the instruction right after the write must not consume the value it writes
+        return;
+    }
     std::uint32_t new_l1_addr = (1 << 31) | addr;
     TT_SETDMAREG(0, LOWER_HALFWORD(addr), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
     TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
