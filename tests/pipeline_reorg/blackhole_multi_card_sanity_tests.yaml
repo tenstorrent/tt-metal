@@ -53,3 +53,14 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   budget_type: sanity
+
+- name: deepseek_prefill d_p multi-chip op unit tests (QB2 only)
+  cmd: |
+    pytest --timeout 300 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ttnn_dispatch_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_prefill_combine.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_reduce.py models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_rotary_embedding_indexed.py -k "(test_ttnn_dispatch_combine and tile and predictable and torus-y-4x1 and dsv3-640-avg) or (test_ttnn_combine and not test_ttnn_combine_fabric2d and bf16_out and tile and predictable and dsv3 and fabric2d-2x2 and pcc and not perf_no_pcc) or (test_ttnn_reduce and torus-y-4x1 and generic and weighted and not unweighted) or (test_rotary_embedding_indexed_multi_iteration_prefill and 2x2-small and padded_partial)" -v
+    pytest --timeout 300 models/demos/deepseek_v3_d_p/tests/test_d2d_socket_sync.py -k "fabric2d-2x2 and metadata and not no_metadata" -v
+  skus:
+    bh_quietbox_2:
+      timeout: 5
+  owner_id: U0976495SLU # Nikola Ostojic
+  team: ttnn
+  budget_type: sanity

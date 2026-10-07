@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat, MlaKvCacheGeometry
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
@@ -478,16 +478,9 @@ class ttMLA:
         # ring_joint_sdpa) runs on the SP axis (cluster_axis=sp_axis) and MUST use sp_ccl_topology.
         # Conflating them deadlocks the SDPA when the two axes differ: e.g. under FABRIC_2D_TORUS_X the
         # TP axis is Ring but the SP axis has no physical wrap, so a TP-Ring topology on the SP-axis
-        # SDPA waits forever on a missing wrap link. A scalar applies to both axes (preserves 1D-ring /
-        # non-torus behavior).
-        if isinstance(topology, tuple):
-            # The tuple is (dim0, dim1); unpacking as (sp, tp) is only correct when sp_axis=0/tp_axis=1.
-            # Guard it so a future sp_axis/tp_axis swap fails loudly here instead of silently cross-
-            # wiring Ring onto the wrong axis (a runtime deadlock). Mirrors the sparse-path assert below.
-            assert self.sp_axis == 0 and self.tp_axis == 1, "per-axis topology tuple assumes sp_axis=0, tp_axis=1"
-            self.sp_ccl_topology, self.tp_ccl_topology = topology  # (sp_axis_0, tp_axis_1)
-        else:
-            self.sp_ccl_topology = self.tp_ccl_topology = topology
+        # SDPA waits forever on a missing wrap link. See tt_ccl.resolve_per_axis_topology, which the V4
+        # attention blocks and compressors share with this.
+        self.sp_ccl_topology, self.tp_ccl_topology = resolve_per_axis_topology(topology, self.sp_axis, self.tp_axis)
 
         # Ring-attention persistent buffers. Chunked prefill (ring_mla) and the standard ring
         # joint SDPA use disjoint buffer sets, so allocate only the one the configured mode needs --
@@ -1205,8 +1198,11 @@ class ttMLA:
         for weights and KV cache. Sharing is sound because every input to the tensor (offset, sp_factor,
         seq_len_local, heads_local, width, beta, orig_max) comes from the chunk, the config or the mesh;
         none varies by layer. The traced path never had the x36 problem: RotarySetup.make_llama4_scale_buffer
-        allocates one buffer per runtime and rope.refresh_llama4_scale rewrites it per chunk, so all
-        layers read the single ChunkMetadata.llama4_scale.
+        allocates one buffer per runtime and all layers read that single ChunkMetadata.llama4_scale.
+        It cannot fill it with rope.refresh_llama4_scale, which builds a host tensor -- a capture
+        cannot -- so TtPrefillRuntime._prepare_llama4_scale_offsets pre-builds one buffer per
+        chunk-aligned offset at compile() and device-to-device copies the right one in per chunk
+        (#55126).
 
         A shared per-offset SET, not one buffer refreshed in place: an entry is never mutated, so "is
         another layer's enqueued multiply still reading this?" never arises. That is settled only for a
