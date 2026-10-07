@@ -232,11 +232,17 @@ class MiniMaxH3TransformerBlock(Module):
         """Select one table row per row of the local packed sequence -> [1, 1, S_local, hidden_local]."""
         return ttnn.matmul(onehot, table, compute_kernel_config=self.mm_compute_kernel_config)
 
-    def _onehot(self, adaln_indices: ttnn.Tensor, rows: int) -> ttnn.Tensor:
-        """[1, 1, S_local, rows] bf16 one-hot of the table row per token; exact when multiplied into a bf16 table."""
-        if rows not in self._eye_tables:
-            self._eye_tables[rows] = bf16_tensor(torch.eye(rows), device=self.mesh_device)
-        out = ttnn.embedding(adaln_indices, self._eye_tables[rows], layout=ttnn.TILE_LAYOUT)
+    def _onehot(self, adaln_indices: ttnn.Tensor, rows: int, eye: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """[1, 1, S_local, rows] bf16 one-hot of the table row per token; exact when multiplied into a bf16 table.
+
+        `eye` is the [rows, rows] identity table; the transformer passes one it refreshes every forward. Without
+        it (a block used on its own) the block keeps a lazily built copy.
+        """
+        if eye is None:
+            if rows not in self._eye_tables:
+                self._eye_tables[rows] = bf16_tensor(torch.eye(rows), device=self.mesh_device)
+            eye = self._eye_tables[rows]
+        out = ttnn.embedding(adaln_indices, eye, layout=ttnn.TILE_LAYOUT)
         return ttnn.unsqueeze(out, 0)
 
     @staticmethod
@@ -245,19 +251,25 @@ class MiniMaxH3TransformerBlock(Module):
         indices = ttnn.reshape(adaln_indices, (1, adaln_indices.shape[-1]))
         return indices if indices.dtype == ttnn.uint32 else ttnn.typecast(indices, ttnn.uint32)
 
-    def onehot_table(self, adaln_indices: ttnn.Tensor, num_timesteps: int) -> ttnn.Tensor:
+    def onehot_table(
+        self, adaln_indices: ttnn.Tensor, num_timesteps: int, eye: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
         """The one-hot gather matrix shared by every block of a forward."""
-        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM)
+        return self._onehot(self._gather_indices(adaln_indices), num_timesteps * MODALITY_NUM, eye)
 
     def tilerow_tables(
-        self, tile_map: ttnn.Tensor | None, expanded_indices: ttnn.Tensor | None, num_timesteps: int
+        self,
+        tile_map: ttnn.Tensor | None,
+        expanded_indices: ttnn.Tensor | None,
+        num_timesteps: int,
+        eye: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor] | None:
         """`(tile_map, selector)` shared by every block of a forward when the caller built a tile-row map, else None
         (the norms then take the per-token gather); `selector @ table` is the expanded table whose tile row
         `tile_map[r]` is tile row `r` of the gather."""
         if tile_map is None or expanded_indices is None:
             return None
-        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM)
+        return tile_map, self._onehot(self._gather_indices(expanded_indices), num_timesteps * MODALITY_NUM, eye)
 
     # ------------------------------------------------------------------ forward
 
