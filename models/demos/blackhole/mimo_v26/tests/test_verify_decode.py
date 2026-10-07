@@ -117,6 +117,34 @@ def main():
                     j = int(errs.argmin())
                     row.append((j - 8 - t, round(float(errs[j]), 3)))
                 disp.append(row)
+            if E("DEC_HOST_K", "1") == "1":
+                from models.demos.blackhole.mimo_v26.reference.loader import Ckpt, dequant_qkv
+                from models.demos.blackhole.mimo_v26.tests.attn_ref import apply_rope, rope_cos_sin
+
+                ck = Ckpt()
+                p0 = "model.layers.0."
+                qkv0 = dequant_qkv(
+                    0, ck.get(p0 + "self_attn.qkv_proj.weight"), ck.get(p0 + "self_attn.qkv_proj.weight_scale_inv")
+                )
+                k_w = qkv0[64 * 192 : 64 * 192 + 4 * 192]  # column 0 -> kv head 0
+                ln = ck.get(p0 + "input_layernorm.weight").float()
+                emb = ck.get("model.embed_tokens.weight")
+                errv, errs_ = [], []
+                for u in range(U):
+                    for t in range(blk):
+                        h = emb[int(toks[0, u, t])].float()
+                        h = h * torch.rsqrt(h.pow(2).mean() + 1e-6) * ln
+                        kk = (h.bfloat16().float() @ k_w[:192].T).reshape(1, 192)
+                        c, sn = rope_cos_sin(torch.tensor([int(pos[0, u]) + t]), 1e7)
+                        kk = apply_rope(kk, c, sn)[0]
+                        errv.append(round(float((kv_ver[0][0, u, t] - kk).norm() / kk.norm()), 3))
+                        errs_.append(round(float((kv_seq[0][0, u, t] - kk).norm() / kk.norm()), 3))
+                rec(
+                    "host_k_check_row0",
+                    note="rel err of device K row vs host-computed K (layer 0 kv head 0), u-major then t",
+                    verify_cache=errv,
+                    sequential_cache=errs_,
+                )
             rec(
                 "kv_displacement_row0",
                 note="(best matching sequential position - intended, rel err) per user, t",
