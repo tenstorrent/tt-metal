@@ -29,9 +29,32 @@ bh-glx-120-b0{2,3,4,5}u{02,08}, all in partition bh_sc5_B2B9_D12. Each one is a 
   submit.sh: re-checks qualify.sh, submits with -w <node> --exclusive --time 03:00:00, cancels the job
   if it is still PENDING after 60 s, and logs to t160/alloc.log.
 
+## Run 724 (2026-10-07 02:28Z)
+- No HF token on g15blx02 or exabox, and LTX-2.5 is gated: weights can only come over the Mac tunnel.
+  The run-648 rsync died at 21:41 with gemma at 5.8 GB (1.5 MB/s). pcopy.sh now sends 1 GiB chunks over 8 ssh
+  streams (~3.4 MB/s, ~5 h for 62 GB), resumable via pcopy.done, verifies sha256 against the HF blob names.
+  Detached: state/runs/724/t160-pcopy.{log,rc}; done when the log ends PCOPY_OK. If it dies, rerun the same
+  command (`ttp detach t160-pcopy -- ttp lock t160-copy -- bash tt-project/t160/pcopy.sh`); done chunks are skipped.
+- 600 s cap: job.sbatch split into MODE=build (no device, 45 min) and MODE=e2e (--exclusive, 10 min Slurm limit,
+  pytest --timeout 540). A cold box (no JIT/DiT cache) will time out the first e2e job(s); caches persist,
+  so rerun e2e jobs (one at a time) until one completes. Never raise the limit.
+- Slurm lists these nodes as CPUTot=1 RealMemory=1: -c/--mem requests never schedule; use --exclusive.
+- Our own job resets the node's LastBusyTime, so each next job lands on another qualifying node.
+- /data (shared 80 TB) has ~240 GB free. job.sbatch refuses e2e on a cold cache below 230 GB free
+  (caches ~80 GB, keep >= 150 GB for others). After the weights land (~62 GB) free will be ~175 GB: the first
+  cold e2e will refuse unless others free space. Then exabox stays unusable; report, do not lower the guard.
+- Bugs fixed: the EXIT trap's `pkill -P $$` returned 1 under set -e and aborted the trap (no .rc file);
+  `du` of the missing cache dir failed under pipefail and ended the job silently.
+
+## Allocation log (UTC)
+- 127512 b04u02 build, submitted 02:36:26, PENDING (asked -c 64 --mem), cancelled by us 02:37:26.
+- 127513 b04u02 build, 02:38:30 start, FAILED at 0 s (du/pipefail bug). Node reset to LastBusyTime 02:38:30.
+- 127515 b03u08 build, 02:42:01 submitted, RUNNING at 02:43; limit 45 min; rc in t160/job-127515.rc.
+
 ## Next step
-1. `ssh exabox-login bash /data/smarton/fasth3/qualify.sh` exits 0, and prep.log shows PREP_RC=0 PREP_OK.
-2. `ssh exabox-login 'TLIM=03:00:00 bash /data/smarton/fasth3/submit.sh'`, then `ttp note` the allocation.
-3. Hand off waiting on `ssh exabox-login test -e /data/smarton/fasth3/t160/job-<J>.rc`.
-4. On completion: copy the mp4 to tt-project/t160/, take PCC/PSNR against baselines/ltx25_1080p_6s/ref_dv145/seed0.mp4,
-   save a still, check `squeue -u smarton` is empty, and write state/ready/exabox.READY.
+1. Build: `ssh exabox-login cat /data/smarton/fasth3/t160/job-127515.rc` shows JOB_RC=0 (else read slurm-127515.out).
+2. Copy: state/runs/724/t160-pcopy.log ends PCOPY_OK.
+3. `ttp lock exabox -- ssh exabox-login 'MODE=e2e bash /data/smarton/fasth3/submit.sh'`; ttp note the job.
+   Hand off waiting on `ssh exabox-login test -e /data/smarton/fasth3/t160/job-<J>.rc`. Repeat while cold.
+4. On completion: copy the mp4 to tt-project/t160/, take PCC/PSNR against baselines/ltx25_1080p_6s/ref_dv145
+   (seed 0, _0.mp4 = DEFAULT prompt), save a still, check `squeue -u smarton` is empty, write state/ready/exabox.READY.
