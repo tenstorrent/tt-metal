@@ -818,13 +818,12 @@ def test_quasar_rms_norm_bf16_dest_only_rewrites_fp32_configs_on_quasar(monkeypa
     )
 
 
-def test_quasar_experimental_multiply_covers_both_aliases(monkeypatch):
+def test_quasar_experimental_mul_routes_to_experimental_multiply(monkeypatch):
     import ttnn
 
     from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
 
-    by_target = {w.target: w for w in O.WORKAROUNDS if w.name.startswith("quasar_experimental_mul")}
-    assert set(by_target) == {"ttnn.mul", "ttnn.multiply"}
+    routed = [w for w in O.WORKAROUNDS if w.name.startswith("quasar_experimental_mul")]
+    assert [w.target for w in routed] == ["ttnn.mul"]
     monkeypatch.setattr(ttnn.experimental.quasar, "multiply", lambda *a, **k: ("q-mul", a, k))
-    for wa in by_target.values():
-        assert wa.rewrite(None, ("a", "b"), {"dtype": "d"}) == ("q-mul", ("a", "b"), {"dtype": "d"})
+    assert routed[0].rewrite(None, ("a", "b"), {"dtype": "d"}) == ("q-mul", ("a", "b"), {"dtype": "d"})
