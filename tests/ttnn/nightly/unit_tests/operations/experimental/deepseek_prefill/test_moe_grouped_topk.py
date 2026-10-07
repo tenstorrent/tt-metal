@@ -22,7 +22,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     grouped_gate_golden_act,
     score_activation,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
@@ -43,9 +42,9 @@ ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv
 SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]
 
 
-# Input dtype for logits/bias. The op upcasts internally bf16 input to fp32.
-INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
-INPUT_DTYPE_IDS = ["in_fp32", "in_bf16"]
+# Input dtype for logits/bias. Production feeds bf16; the op upcasts it to fp32 internally.
+INPUT_DTYPES = [ttnn.bfloat16]
+INPUT_DTYPE_IDS = ["in_bf16"]
 
 
 # Selected-weight PCC thresholds
@@ -55,7 +54,6 @@ WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
 BIASED_PCC_THRESHOLD = 0.999
 
 
-@pytest.mark.uncollect_if(pred=ci_pruning.bh_fp32_input)
 @pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(
