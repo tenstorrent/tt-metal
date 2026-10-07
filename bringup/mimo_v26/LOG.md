@@ -978,3 +978,14 @@
 - claim: USER DECISIONS 2026-10-07: drafter confirmed = DFlash-style 5-layer drafter in the checkpoint dflash/ dir (7 draft tokens, block 8). GSM8K gate set to 85%: scorecard gsm8k min_n=128, min_correct=109 on gsm8k_128_nothink.json (sha256 858aa02c...2190b), non-thinking. Supersedes the provisional n=64/55 template value.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0559-bd9
+- date: 2026-10-07T05:59:42
+- commit: 34b6fa4ef62
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: MERGE CANDIDATE ssinghal/mimo-asm @ 34b6fa4ef62 (ssinghal/mimo merged in, incl. moe_decode.py): re-check after merge, s2048b1 CH=512 L0..L5 traced chunked prefill: hidden L5 PCC 0.99972, logits 0.99945 top1 1/1, replay bit-identical, hand-off decode min 0.99986 over L0-L5 (decode MoE uses spread_pad_routing for the padding rows). Contents: tt/prefill.py, tt/kv_pool.py, layer.chunk(), model layout kwarg, tests test_prefill_handoff.py / test_prefill_scale.py / test_capture_device.py, notes/kv_pool.md.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_merged_34b6fa4ef62.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt
