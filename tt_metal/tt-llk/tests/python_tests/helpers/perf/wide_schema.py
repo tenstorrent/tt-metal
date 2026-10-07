@@ -167,6 +167,7 @@ DB_SCHEMA = [
     Column("sfpu_bcast_dim", "string", True, "configuration"),
     Column("sin_base", "int64", True, "configuration"),
     Column("sinkhorn_iters", "int64", True, "configuration"),
+    Column("softmax_k", "int64", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
