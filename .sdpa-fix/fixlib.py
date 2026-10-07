@@ -26,7 +26,9 @@ LEDGER = os.path.join(HOME, "ledger.json")
 # in live mode so a dry-run proposal graduates to a real PR exactly once.
 ATTEMPTABLE = {"tracking"}
 # States that end when main goes green for the signature.
-OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "pr_open", "ci_passed", "ci_failed"}
+OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed"}
+# States the fix scan looks at: still failing, and no PR of ours on it.
+SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending"}
 # States a re-appearing failure re-opens (a fresh regression after a fix).
 REOPENABLE = {"resolved_on_main", "verified"}
 # A fix landed (our merged PR, or a commit already on main). The signature is
@@ -263,13 +265,83 @@ def cmd_mark(a):
             if a.attempt:
                 r.setdefault("attempts", []).append(dict(extra, at=now_iso(), state=a.state))
             for k, v in extra.items():
-                if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts"):
+                if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr"):
                     r[k] = v
+                elif k == "checked":
+                    r.setdefault("checked", {}).update(v)
         if a.count_daily:
             d["daily"][today()] = d["daily"].get(today(), 0) + 1
             # keep two weeks of counters
             for k in sorted(d["daily"])[:-14]:
                 del d["daily"][k]
+
+
+FILE_RE = re.compile(r"[\w./-]+\.(?:py|sh|cpp|hpp|h|cc|yaml|yml|json|txt)\b")
+GENERIC = {"conftest.py", "__init__.py", "utils.py", "common.py", "test.py", "run.sh"}
+
+
+def _scan_paths(r, repo):
+    """Repo files a fix for this failure would likely touch: the test file,
+    plus files named in the test label / summary (basenames resolved with
+    git ls-files)."""
+    import subprocess
+    paths, cands = [], []
+    t = r.get("test", "")
+    if "::" in t and "/" in t.split("::")[0]:
+        paths.append(t.split("::")[0].strip())
+    for txt in (t, r.get("summary") or "", r.get("error_key") or ""):
+        cands += FILE_RE.findall(txt)
+    files = None
+    for c in cands:
+        c = c.strip("./")
+        if "/" in c and os.path.exists(os.path.join(repo, c)):
+            paths.append(c)
+            continue
+        base = os.path.basename(c)
+        if base in GENERIC or len(base) < 6:
+            continue
+        if files is None:
+            try:
+                files = subprocess.check_output(["git", "-C", repo, "ls-files"], text=True).splitlines()
+            except Exception:
+                files = []
+        hits = [f for f in files if os.path.basename(f) == base]
+        if 0 < len(hits) <= 3:
+            paths += hits
+    out = []
+    for x in paths:
+        if x not in out:
+            out.append(x)
+    return out[:6]
+
+
+def cmd_scan_list(a):
+    """Failures to scan for human-made fixes: still failing, in a scan state."""
+    repo = os.environ.get("TT_METAL_DIR", ".")
+    with Ledger() as d:
+        out = []
+        for sig, r in d["sigs"].items():
+            if r["state"] not in SCAN_STATES:
+                continue
+            last = (r.get("last_seen") or {}).get("number")
+            jr = d.get("job_runs", {}).get(r["workflow"], {}).get(r["job"])
+            if jr is not None and (last is None or last < jr):
+                continue  # passed since; nothing to look for
+            fn = r["test"].split("::")[-1].split("[")[0]
+            terms = []
+            if re.match(r"^test_\w{6,}$", fn):
+                terms.append(fn)
+            paths = _scan_paths(r, repo)
+            for pth in paths:
+                b = os.path.basename(pth)
+                if b not in terms and len(b) > 8 and b not in GENERIC:
+                    terms.append(b)
+            out.append({"sig": sig, "workflow": r["workflow"], "job": r["job"], "test": r["test"],
+                        "state": r["state"], "summary": r.get("summary") or r.get("error_key") or "",
+                        "first_sha": (r.get("first_seen") or {}).get("sha", ""),
+                        "first_at": r.get("created", ""), "paths": paths, "terms": terms[:3],
+                        "fix_pr": r.get("fix_pr"), "checked": r.get("checked", {})})
+        json.dump(out, sys.stdout)
 
 
 def cmd_list(a):
@@ -520,6 +592,7 @@ def main():
     mk.add_argument("--count-daily", action="store_true")
     mk.add_argument("sigs", nargs="+")
     sp.add_parser("list")
+    sp.add_parser("scan-list")
     dp = sp.add_parser("dispatch")
     dp.add_argument("--workflow", required=True)
     dp.add_argument("--jobs", required=True, help="JSON list of full GH job names")
@@ -532,7 +605,7 @@ def main():
     a = p.parse_args()
     {"update": cmd_update, "triaged": cmd_triaged, "eligible": cmd_eligible, "get": cmd_get,
      "mark": cmd_mark, "list": cmd_list, "dispatch": cmd_dispatch, "guard": cmd_guard,
-     "render": cmd_render}[a.cmd](a)
+     "render": cmd_render, "scan-list": cmd_scan_list}[a.cmd](a)
 
 
 if __name__ == "__main__":

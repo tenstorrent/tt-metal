@@ -31,6 +31,23 @@ walkthrough of the whole flow.
      a PR or proposal open becomes `resolved_on_main`, and in live mode the
      draft PR is commented on and closed.
    - ⚠️/🚫/🟡 runs are recorded as seen, with no other effect.
+2b. **Look for fixes made by people**, every tick, for every still-failing
+   signature whatever its triage kind:
+   - **merged:** commits on main since the first failing run that touch the
+     failing test or the files named in the error (`git log first_sha..origin/main -- <paths>`),
+     mapped to their PR through `(#N)` in the title;
+   - **open:** open PRs whose title or body mentions the test function or the
+     failing file (the bot's own `skrstic/autofix/*` PRs excluded).
+
+   A judge call (`prompts/judge.txt`, `schemas/judge.json`) checks each new
+   candidate once against the failure; verdicts are cached in the record's
+   `checked`, and `SCAN_MAX_JUDGE_PER_TICK` (8) caps the calls per tick.
+   - Merged fix → `fixed_upstream` with its commit, shown as
+     ":git-merged: already fixed on main by #N", confirmed by the next run that
+     contains it.
+   - Open fix → `fix_pending` (":git-opened: fix in progress"). The bot drafts
+     no fix of its own, and each tick it checks whether that PR merged
+     (→ `fixed_upstream`) or closed (→ back to `tracking`).
 3. **Fix**. Eligible groups are fixed best-first, `MAX_FIX_PER_TICK` per tick
    and `MAX_NEW_PER_DAY` per day. A signature is eligible when:
    - kind is `code_regression` or `perf_threshold`, owner is `sdpa_op` or

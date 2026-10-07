@@ -32,6 +32,7 @@ MAX_NEW_PER_DAY="${MAX_NEW_PER_DAY:-3}"               # PRs (live) or proposals 
 MAX_FIX_PER_TICK="${MAX_FIX_PER_TICK:-1}"              # fix attempts per tick (each takes minutes)
 FIX_TIMEOUT_SEC=2400             # hard wall-clock cap on one fix agent run
 TRIAGE_TIMEOUT_SEC=900
+SCAN_MAX_JUDGE_PER_TICK="${SCAN_MAX_JUDGE_PER_TICK:-8}"  # human-fix candidates judged per tick
 
 # ---- Guards on the agent's diff -------------------------------------------
 MAX_DIFF_LINES=300

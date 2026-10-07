@@ -689,21 +689,34 @@ autofix_annotate() {
                      (commitlink(.fix_sha) | select(. != "")) ] | join(" "));
     [ .sigs[] | select(.workflow == $w)
       | {f: (.test | split("::") | last | split("[") | first),
+         short: (.test | split("::") | last), r: ((.last_seen.number // "") | tostring),
          n: (if .state == "pr_open" then "\($eo) draft PR \(.pr.url | prlink), targeted CI running"
              elif .state == "ci_passed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ✅, awaiting review"
              elif .state == "ci_failed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ❌"
              elif .state == "merged" then "\($em) fix \(.pr.url | prlink) merged, not in this run yet"
-             elif .state == "fixed_upstream" then "📌 already fixed on main by \(fixref), not in this run yet"
+             elif .state == "fixed_upstream" then "\($em) already fixed on main by \(fixref), not in this run yet"
+             elif .state == "fix_pending" then "\($eo) fix in progress: open PR \(.fix_pr.url | prlink)"
              elif .state == "proposed_dryrun" then "🛠 autofix proposal (dry run): \(.verdict_title // "see proposals/")"
              elif .state == "no_fix" then "🛠 no safe autofix"
              else null end)}
       | select(.n != null and (.f | length) > 3) ] as $notes
-    | $b | split("\n")
-    | map(if startswith("• ") then
-            (((capture("^• `(?<l>[^`]*)`") // {}) | .l) // "") as $l
-            | ([ $notes[] | . as $nt | select(($l | length) > 0 and ($l | contains($nt.f))) | .n ] | unique) as $m
-            | if ($m | length) > 0 then . + " — " + ($m | join(" · ")) else . end
-          else . end)
+    | (($b | capture("_run #(?<n>[0-9]+)_") // {}) | .n // "") as $rn
+    | ($b | split("\n")) as $lines
+    | [ $lines[] | select(startswith("• ")) | (((capture("^• `(?<l>[^`]*)`") // {}) | .l) // "") ] as $labels
+    # A failure of THIS run whose name matches no bullet (the watcher and the
+    # triage agent can label one failure differently) still gets its note,
+    # as its own line; failures not in the shown run get none.
+    | [ $notes[] | . as $nt
+        | select($rn != "" and $nt.r == $rn and ([ $labels[] | select(length > 0 and contains($nt.f)) ] | length) == 0)
+        | "↳ `\(.short)` — \(.n)" ] as $extra
+    | ($lines
+       | map(if startswith("• ") then
+               (((capture("^• `(?<l>[^`]*)`") // {}) | .l) // "") as $l
+               | ([ $notes[] | . as $nt | select(($l | length) > 0 and ($l | contains($nt.f))) | .n ] | unique) as $m
+               | if ($m | length) > 0 then . + " — " + ($m | join(" · ")) else . end
+             else . end)) as $out
+    | (if ($extra | length) > 0 and ($out | length) > 0 and ($out[-1] | startswith("http"))
+       then $out[:-1] + ($extra | unique) + [$out[-1]] else $out + ($extra | unique) end)
     | join("\n")' "$AUTOFIX_LEDGER" 2>/dev/null) && [[ -n "$out" ]] || out="$block"
   printf '%s' "$out"
 }
