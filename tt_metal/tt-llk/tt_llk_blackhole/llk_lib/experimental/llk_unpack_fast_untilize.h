@@ -17,6 +17,7 @@
 
 #include <cstdint>
 
+#include "experimental/llk_fast_untilize_common.h"
 #include "llk_unpack_A.h"
 
 namespace ckernel
@@ -25,7 +26,7 @@ namespace ckernel
 template <bool is_fp32_dest_acc_en>
 inline void _llk_unpack_fast_untilize_mop_config_(const std::uint32_t unit_dim)
 {
-    LLK_ASSERT(unit_dim >= 1 && unit_dim <= 4, "fast_untilize unpack supports unit_dim 1, 2, 3, or 4");
+    LLK_ASSERT(unit_dim >= 1 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize unpack supports unit_dim 1 to 8");
 
     static constexpr std::uint32_t unpack_srca            = TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     static constexpr std::uint32_t unpack_srcb_set_dvalid = TT_OP_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
@@ -69,7 +70,7 @@ inline void _llk_unpack_fast_untilize_reinit_unit_dim_(const std::uint32_t unit_
 inline void _llk_unpack_fast_untilize_block_(const std::uint32_t address, const std::uint32_t unit_dim)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
-    LLK_ASSERT(unit_dim >= 1 && unit_dim <= 4, "fast_untilize unpack supports unit_dim 1, 2, 3, or 4");
+    LLK_ASSERT(unit_dim >= 1 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize unpack supports unit_dim 1 to 8");
 
     // Reset both SrcA/SrcB Z/W counters before each block so the MOP is
     // stateless across calls. SrcB is included here because fp32 DEST mode uses
@@ -102,7 +103,7 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
     LLK_ASSERT(is_valid_L1_address(address + tile_stride_16B * (unit_dim - 1)), "L1 address must be in valid L1 memory region");
     LLK_ASSERT(tile_stride_16B > 0, "fast_untilize BFP tile stride must be greater than zero");
-    LLK_ASSERT(unit_dim >= 2 && unit_dim <= 4, "fast_untilize BFP unpack supports unit_dim 2, 3, or 4");
+    LLK_ASSERT(unit_dim >= 2 && unit_dim <= FAST_UNTILIZE_MAX_UNIT_DIM_16BIT_DEST, "fast_untilize BFP unpack supports unit_dim 2 to 8");
 
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
     wait_for_next_context(2);
