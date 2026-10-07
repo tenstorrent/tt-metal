@@ -18,6 +18,8 @@ inline void calculate_square_bw_bf16() {
         vFloat x = dst_reg[d];
         vFloat grad = dst_reg[32 + d];
         vFloat product0 = (grad * 2.0f) * x;
+        v_if(setsgn(grad, 0) >= 1.7014118346046923e+38f) { product0 = (grad * x) * 2.0f; }
+        v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);
         vFloat result = scaled0;
         // A NaN compares by its sign; select it by its BF16 encoding: exponent all ones, mantissa nonzero.

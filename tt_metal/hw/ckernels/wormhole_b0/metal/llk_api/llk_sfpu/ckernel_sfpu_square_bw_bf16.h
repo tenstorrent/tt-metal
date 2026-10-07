@@ -17,7 +17,11 @@ inline void calculate_square_bw_bf16() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat x = dst_reg[d];
         vFloat grad = dst_reg[32 + d];
+        v_if(sfpi::is_nan(grad)) { grad = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
         vFloat product0 = (grad * 2.0f) * x;
+        v_if(setsgn(grad, 0) >= 1.7014118346046923e+38f) { product0 = (grad * x) * 2.0f; }
+        v_endif;
         v_if(sfpi::is_nan(product0)) { product0 = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);
