@@ -43,6 +43,22 @@ def feat_host(mesh, t):
     return torch.cat([ttnn.to_torch(dts[r * cols]).float() for r in range(ROWS)], 0)[:, 0]  # [rows, B, F]
 
 
+def kv_rows(model, mesh, pos, U, blk, layer=0, col=0):
+    """K and V rows of positions pos..pos+blk-1 of every (row, user) for `layer`, device column `col`: [rows, U, blk, 192] each"""
+    a = model.layers[layer].attn
+    cols = mesh.shape[1]
+    kd, vd = ttnn.get_device_tensors(a.k_cache), ttnn.get_device_tensors(a.v_cache)
+    ks, vs = torch.zeros(ROWS, U, blk, 192), torch.zeros(ROWS, U, blk, 192)
+    for r in range(ROWS):
+        kc, vc = ttnn.to_torch(kd[r * cols + col]).float(), ttnn.to_torch(vd[r * cols + col]).float()
+        for u in range(U):
+            for t in range(blk):
+                p = int(pos[r, u]) + t
+                bl = int(a.page_table[u][(p // 64) % a.ring_blocks]) if a.ring_blocks else int(a.page_table[u][p // 64])
+                ks[r, u, t], vs[r, u, t] = kc[bl, 0, p % 64], vc[bl, 0, p % 64]
+    return ks, vs
+
+
 def main():
     NL = int(E("DEC_LAYERS", "4"))
     Us = [int(v) for v in E("DEC_US", "1,2,4").split(",")]
@@ -72,6 +88,7 @@ def main():
             gen.prefill(prompts, S)
             vd = Decoder(model, trace=trace, U=U, block=blk, capture=cap)
             av, bv = vd.verify(toks, pos, dead)
+            kv_ver = kv_rows(model, mesh, pos, U, blk)
             fv = feat_host(mesh, vd.feat)  # [rows, U*blk, NL*4096]
             av2, _ = vd.verify(toks, pos, dead)
             fv2 = feat_host(mesh, vd.feat)
@@ -88,6 +105,15 @@ def main():
                 aseq[:, :, t] = a
                 fseq[:, :, t] = feat_host(mesh, sd.feat)
             sd.close()
+            kv_seq = kv_rows(model, mesh, pos, U, blk)
+            kdiff = (kv_ver[0] != kv_seq[0]).any(-1)  # [rows,U,blk]
+            vdiff = (kv_ver[1] != kv_seq[1]).any(-1)
+            rec(
+                "kv_rows",
+                U=U,
+                k_rows_differ_per_t=kdiff.float().mean((0, 1)).tolist(),
+                v_rows_differ_per_t=vdiff.float().mean((0, 1)).tolist(),
+            )
             match = av == aseq
             fvr = fv.reshape(ROWS, U, blk, -1)
             ident = bool(torch.equal(fvr, fseq))
