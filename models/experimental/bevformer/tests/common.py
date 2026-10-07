@@ -20,7 +20,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.experimental.bevformer import model_config
 from models.experimental.bevformer.model_config import (
     BEV_H,
     BEV_W,
@@ -42,7 +41,10 @@ from models.experimental.bevformer.model_config import (
     IMAGE_WIDTH,
     NUM_CAMS,
     NUM_HEADS,
+    NUM_LEVELS,
+    NUM_POINTS_IN_PILLAR,
     NUM_QUERY,
+    PC_RANGE,
     RESNET_KWARGS,
     SPATIAL_SHAPES,
 )
@@ -59,6 +61,13 @@ from models.experimental.bevformer.reference.temporal_self_attention import Temp
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # --- Camera rigs ------------------------------------------------------------------------------
+
+# ``lidar2img`` decides which BEV queries project into which camera, so it decides ``bev_mask``, the
+# spatial cross-attention's rebatch length and with it every spatial-path tensor shape. Random
+# matrices would make those shapes an artifact of the RNG draw order, so the tests build fixed rigs.
+# Frames follow the reference: lidar x forward, y left, z up; camera x right, y down, z forward.
+# ``point_sampling_3d_2d`` treats row 2 of the composed matrix as depth and normalizes rows 0 and 1
+# by the image width and height, so the matrix is ``K @ [R | -R t]`` with ``K`` in pixels.
 
 NUSCENES_IMAGE_SIZE = (1600, 900)
 
@@ -118,35 +127,6 @@ NUSCENES_CAMERA_RIG: Tuple[CameraSpec, ...] = (
         principal_px=NUSCENES_WIDE_PRINCIPAL_PX,
         reference_size=NUSCENES_IMAGE_SIZE,
     ),
-)
-
-
-# KITTI-360 rectified perspective intrinsics (P_rect_00), shared by both cameras
-# of the stereo pair. The 0.6 m baseline is the image_00 to image_01 separation.
-KITTI_FOCAL_PX = 552.554261
-KITTI_PRINCIPAL_PX = (682.049453, 238.769549)
-KITTI_IMAGE_SIZE = (1408, 376)
-KITTI_BASELINE_M = 0.6
-
-
-def _kitti(name: str, lateral_offset_m: float) -> CameraSpec:
-    return CameraSpec(
-        name=name,
-        yaw_deg=0.0,
-        focal_px=(KITTI_FOCAL_PX, KITTI_FOCAL_PX),
-        principal_px=KITTI_PRINCIPAL_PX,
-        reference_size=KITTI_IMAGE_SIZE,
-        translation_m=(0.0, lateral_offset_m, 0.0),
-    )
-
-
-# A forward-facing stereo pair, not a ring: both cameras share a yaw and are
-# separated only laterally, so the rig covers one frustum rather than 360 degrees.
-# Roughly half the BEV grid projects into no camera at all, which is the real
-# geometry of a stereo dataset and what bev_mask should reflect.
-KITTI_CAMERA_RIG: Tuple[CameraSpec, ...] = (
-    _kitti("CAM_LEFT", KITTI_BASELINE_M / 2.0),
-    _kitti("CAM_RIGHT", -KITTI_BASELINE_M / 2.0),
 )
 
 
@@ -231,11 +211,9 @@ def build_lidar2img(
 
 
 def camera_rig_for_dataset(dataset_config) -> Tuple[CameraSpec, ...]:
-    """Pick the rig recorded for a dataset, falling back to a synthetic ring."""
+    """nuScenes' rig for a nuScenes dataset, else a synthetic ring."""
     if dataset_config.name.startswith("nuscenes") and dataset_config.num_cams == len(NUSCENES_CAMERA_RIG):
         return NUSCENES_CAMERA_RIG
-    if dataset_config.name.startswith("kitti") and dataset_config.num_cams == len(KITTI_CAMERA_RIG):
-        return KITTI_CAMERA_RIG
     return ring_camera_rig(dataset_config.num_cams, dataset_config.input_size)
 
 
@@ -267,12 +245,13 @@ def img_metas_for_dataset(dataset_config, batch_size: int, dtype: torch.dtype = 
 class DatasetPreset:
     """
     Attributes:
-        name: Dataset identifier; ``camera_rig`` picks nuScenes' rig for names starting "nuscenes".
+        name: Dataset identifier; :func:`camera_rig_for_dataset` picks nuScenes' rig for names
+            starting "nuscenes", a synthetic ring otherwise.
         pc_range: (x_min, y_min, z_min, x_max, y_max, z_max) in metres.
         num_cams: Cameras.
         input_size: Image size, (width, height).
-        embed_dims, num_heads, num_levels, num_points: The deformable attention's sizes.
-        num_points_in_pillar: Heights each BEV pillar samples.
+        embed_dims, num_heads, num_levels, num_points: The deformable attention's sizes. Every
+            BEV pillar samples ``NUM_POINTS_IN_PILLAR`` heights.
     """
 
     name: str
@@ -283,30 +262,28 @@ class DatasetPreset:
     num_heads: int
     num_levels: int
     num_points: int = 4
-    num_points_in_pillar: int = 4
 
     @property
     def spatial_shapes(self):
-        """The four feature levels at strides 8 to 64, rounded up, each as [width, height]."""
+        """The feature levels at strides 8 to 64, rounded up, each as (h, w), as ``SPATIAL_SHAPES``."""
         width, height = self.input_size
-        return [[-(-width // (8 << level)), -(-height // (8 << level))] for level in range(4)]
+        return [(-(-height // (8 << level)), -(-width // (8 << level))) for level in range(NUM_LEVELS)]
 
     @property
     def z_cfg(self):
-        """The pillars' height sampling: ``num_points`` heights from z_min to z_max."""
-        return {"num_points": self.num_points_in_pillar, "start": self.pc_range[2], "end": self.pc_range[5]}
+        """The pillars' height sampling: ``NUM_POINTS_IN_PILLAR`` heights from z_min to z_max."""
+        return {"num_points": NUM_POINTS_IN_PILLAR, "start": self.pc_range[2], "end": self.pc_range[5]}
 
 
-_NUSCENES_PC_RANGE = (-51.2, -51.2, -5.0, 51.2, 51.2, 3.0)
 _CARLA_PC_RANGE = (-50.0, -50.0, -5.0, 50.0, 50.0, 3.0)
 _TINY = dict(embed_dims=128, num_heads=4, num_levels=1)
-_BASE = dict(embed_dims=256, num_heads=8, num_levels=4)
+_BASE = dict(embed_dims=EMBED_DIMS, num_heads=NUM_HEADS, num_levels=NUM_LEVELS)
 
 PRESETS = {
-    "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", _NUSCENES_PC_RANGE, 6, (640, 360), **_TINY),
-    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", _NUSCENES_PC_RANGE, 6, (1600, 900), **_BASE),
-    "carla_tiny": DatasetPreset("carla_v0.9.10_640x480", _CARLA_PC_RANGE, 6, (640, 480), **_TINY),
-    "carla_base": DatasetPreset("carla_v0.9.10_1280x960", _CARLA_PC_RANGE, 6, (1280, 960), **_BASE),
+    "nuscenes_tiny": DatasetPreset("nuscenes_v1.0_full_640x360", PC_RANGE, NUM_CAMS, (640, 360), **_TINY),
+    "nuscenes_base": DatasetPreset("nuscenes_v1.0_full_1600x900", PC_RANGE, NUM_CAMS, (1600, 900), **_BASE),
+    "carla_tiny": DatasetPreset("carla_v0.9.10_640x480", _CARLA_PC_RANGE, NUM_CAMS, (640, 480), **_TINY),
+    "carla_base": DatasetPreset("carla_v0.9.10_1280x960", _CARLA_PC_RANGE, NUM_CAMS, (1280, 960), **_BASE),
 }
 
 
@@ -422,14 +399,6 @@ def build_reference_fpn():
     return init_dummy_fpn_weights(FPN(**FPN_KWARGS)).requires_grad_(False)
 
 
-def tt_resnet_kwargs():
-    """The TtResNet arguments matching RESNET_KWARGS."""
-    return dict(out_indices=RESNET_KWARGS["out_indices"], **model_config.tt_resnet_kwargs())
-
-
-tt_fpn_kwargs = model_config.tt_fpn_kwargs
-
-
 def to_conv_layout(nchw, device, dtype, layout=ttnn.TILE_LAYOUT):
     """NCHW torch tensor -> (1, 1, N*H*W, C) device tensor, the layout conv2d reads and writes."""
     n, c, h, w = nchw.shape
@@ -485,12 +454,14 @@ SCA_LOGIT_STD = 1.8
 
 # Correlation length of the random features, in cells. The FPN's and the encoder's features are
 # spatially smooth; white noise instead makes every sample position error an O(1) change in the
-# sampled value, which the queries carry from layer to layer and the previous BEV from frame to
-# frame.
+# sampled value, which the encoder's queries carry from layer to layer and frame to frame, and the
+# decoder's refinement feeds back into its next layer's positions: with white BEV features the
+# decoder's reference run on bfloat16-rounded inputs and weights (fp32 compute) falls to PCC 0.65
+# against itself by the last layer on the 200x200 grid.
 FEATURE_CELLS = 4
 
 # Ego translation between the two frames, in BEV fractions (x, y): a few cells on the base grid.
-EGO_SHIFT = (0.013, -0.021)
+EGO_SHIFT_BEV_FRACTION = (0.013, -0.021)
 
 
 def _spread(linear, std, generator):
@@ -562,7 +533,7 @@ def random_encoder_inputs(bev_shape, batch_size=1, seed=0, yaw_step_deg=0.0):
 
 
 def img_metas(batch_size, preset="nuscenes_base", yaw_step_deg=0.0):
-    """``lidar2img`` and ``img_shape`` of a preset's six-camera rig (``tests/camera_rig.py``).
+    """``lidar2img`` and ``img_shape`` of a preset's six-camera rig (:func:`img_metas_for_dataset`).
     ``yaw_step_deg`` turns sample ``b``'s rig by ``b * yaw_step_deg`` about the vertical axis, so
     the samples' cameras see different BEV cells."""
     metas = img_metas_for_dataset(PRESETS[preset], batch_size)
@@ -580,16 +551,16 @@ def pc_range(preset="nuscenes_base"):
 
 
 def ego_shift(batch_size):
-    """``(bs, 2)`` ego translations in BEV fractions: ``EGO_SHIFT`` times ``b + 1`` for sample ``b``,
-    so a shift taken from the wrong sample shows."""
-    return torch.tensor(EGO_SHIFT) * torch.arange(1, batch_size + 1, dtype=torch.float32)[:, None]
+    """``(bs, 2)`` ego translations in BEV fractions: ``EGO_SHIFT_BEV_FRACTION`` times ``b + 1`` for
+    sample ``b``, so a shift taken from the wrong sample shows."""
+    return torch.tensor(EGO_SHIFT_BEV_FRACTION) * torch.arange(1, batch_size + 1, dtype=torch.float32)[:, None]
 
 
 # --- Decoder ----------------------------------------------------------------------------------
 
 
 # Spread of the random weights on top of the upstream init, set to what the BEVFormer-base
-# checkpoint's decoder shows on random_bev_features (per layer: sampling offsets 1.0-1.7 px off
+# checkpoint's decoder shows on random_bev (per layer: sampling offsets 1.0-1.7 px off
 # the init pattern, cross-attention logits of std 0.45-0.9, self-attention logits of std
 # 2.2-5), so the test sees trained-like sampling and softmaxes.
 SAMPLING_OFFSET_STD_PX = 1.3
@@ -603,14 +574,6 @@ SELF_ATTENTION_LOGIT_STD = 3.0
 # box channels make their PCC measure noise.
 REG_REFINEMENT_SCALE = 0.125
 REG_BOX_SCALE = 7.5
-
-# Correlation length of the random BEV features, in cells. The encoder's BEV features are
-# spatially smooth; white noise instead makes every sample position error an O(1) change in
-# the sampled value, which the refinement feeds back into the next layer's positions. With
-# white noise the reference run on bfloat16-rounded inputs and weights (fp32 compute) falls
-# to PCC 0.65 against itself by the last layer on the 200x200 grid, so no bound on the TT
-# port would mean anything.
-BEV_FEATURE_CELLS = 4
 
 
 def _init_cross_attention(msda, generator):
@@ -709,27 +672,12 @@ def random_reference_points(batch_size, generator=None):
     return points
 
 
-def random_bev_features(bev_shape, batch_size, generator=None):
-    """Unit-variance ``(bev_h * bev_w, bs, C)`` features, smooth over ``BEV_FEATURE_CELLS`` cells."""
-    bev_h, bev_w = bev_shape
-    coarse = torch.randn(
-        batch_size,
-        EMBED_DIMS,
-        math.ceil(bev_h / BEV_FEATURE_CELLS),
-        math.ceil(bev_w / BEV_FEATURE_CELLS),
-        generator=generator,
-    )
-    features = F.interpolate(coarse, size=(bev_h, bev_w), mode="bilinear", align_corners=False)
-    features = features / features.std()
-    return features.flatten(2).permute(2, 0, 1).contiguous()
-
-
 def random_decoder_inputs(bev_shape, batch_size=1, seed=None):
     """Sequence-first query, query_pos and BEV value, and reference points in [0, 1]."""
     generator = None if seed is None else torch.Generator().manual_seed(seed)
     return dict(
         query=torch.randn(NUM_QUERY, batch_size, EMBED_DIMS, generator=generator),
-        value=random_bev_features(bev_shape, batch_size, generator),
+        value=random_bev(bev_shape, batch_size, generator),
         query_pos=torch.randn(NUM_QUERY, batch_size, EMBED_DIMS, generator=generator),
         reference_points=random_reference_points(batch_size, generator),
     )

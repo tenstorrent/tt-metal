@@ -1,31 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-ttnn implementations of BEVFormer modules.
-"""
+"""TTNN port of BEVFormer-base.
 
-from .tt_ms_deformable_attention import TTMSDeformableAttention
-from .tt_spatial_cross_attention import TTSpatialCrossAttention
-from .tt_temporal_self_attention import TTTemporalSelfAttention
-from .tt_encoder import TTBEVFormerLayer, TTBEVFormerEncoder
-from .model_preprocessing import (
-    create_ms_deformable_attention_parameters,
-    create_spatial_cross_attention_parameters,
-    create_temporal_self_attention_parameters,
-    create_bevformer_encoder_parameters,
-    create_bevformer_layer_parameters,
-)
-
-__all__ = [
-    "TTMSDeformableAttention",
-    "TTSpatialCrossAttention",
-    "TTTemporalSelfAttention",
-    "TTBEVFormerLayer",
-    "TTBEVFormerEncoder",
-    "create_ms_deformable_attention_parameters",
-    "create_spatial_cross_attention_parameters",
-    "create_temporal_self_attention_parameters",
-    "create_bevformer_encoder_parameters",
-    "create_bevformer_layer_parameters",
-]
+- ``tt_bevformer``: the detector, ``TtBEVFormer``
+- ``model_preprocessing``: every part's parameters, ``create_bevformer_parameters`` for the whole
+- ``tt_resnet``, ``tt_fpn``, ``tt_modulated_deform_conv``, ``tt_common``: the backbone and neck
+- ``tt_perception_transformer``, ``tt_encoder``, ``tt_temporal_self_attention``,
+  ``tt_spatial_cross_attention``, ``tt_ms_deformable_attention``, ``tt_point_sampling_3d_2d``
+- ``tt_head``, ``tt_decoder``, ``tt_nms_free_coder``
+"""
