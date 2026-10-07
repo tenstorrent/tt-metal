@@ -37,3 +37,7 @@ Driver patched: a traceback in run.log is our failure, not a drop. Run 2 started
 (brick fix), D only (U already passed); waits for blx01 health (fsm was down). Marker drv/driver.marker (run 1's kept as .run1).
 Next: when marker exists, read drv/cmp.json, out/stage_tree.txt, still; if correct and faster than C1 10.313 s, land
 feb44de2529 3d0729e48e1 c12f7f34eff 5772489e0a0 on t48 (-land branch, cherry-pick, ttp push --detach).
+2026-10-07 light wake: job 853 (blx01, brick fix 5772489e0a0, DIFFVAE_S5_2D=1) completed, no drops.
+Correct: PCC 0.99995-0.99996, PSNR 55.1-55.8 dB on all 5 seeds (floor 43.7). But SLOWER: mean 14.032 s
+(14.08/14.10/14.01/13.97/14.00) vs C1 10.313 s. Not landed. Stage tree: tt-project/t222/stage_tree_job853.txt.
+Next (standard): find where stage-5 2-D loses ~3.7 s (H neighbor_pad exchange? brick (2,4,4) vs (2,8,2)?), fix or drop.
