@@ -43,7 +43,7 @@ constexpr std::uint32_t GCD_LREG_KBIAS = p_sfpu::LREG3;  // k - 31, where 2^k = 
 constexpr std::uint32_t GCD_MAX_INPUT_BITS = 31;
 
 constexpr std::uint32_t GCD_REPLAY_DEPTH = 32;
-constexpr std::uint32_t GCD_STEP_INSTRS = 8;
+constexpr std::uint32_t GCD_STEP_INSTRS = 7;
 constexpr std::uint32_t GCD_REPLAY_START = 0;
 constexpr std::uint32_t GCD_REPLAY_LEN = 2 * GCD_STEP_INSTRS;
 static_assert(GCD_REPLAY_LEN < GCD_REPLAY_DEPTH, "replay length must fit the log2(depth) len field");
@@ -89,8 +89,8 @@ inline void _emit_gcd_step_() {
     TTI_SFPLZ(NEG_A, NEG_A, GCD_LZ_MOD_CC_NE0);
     TTI_SFPIADD(0 /* imm12 */, GCD_LREG_KBIAS, NEG_A, GCD_IADD_MOD_ADD_KEEP_CC);  // k - ctz(a)
     TTI_SFPSHFT(0 /* imm12 */, NEG_A, WORK, GCD_SHFT_MOD_INPLACE_VAR_LOGICAL);
+    // No NOP after: SFPSWAP always stalls the next SFPU op itself (TEN-4581).
     TTI_SFPSWAP(GCD_SWAP_IMM12_INT32, WORK, GCD_LREG_B, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);  // SFPSWAP is 2-cycle
     TTI_SFPIADD(0 /* imm12 */, GCD_LREG_B, WORK, GCD_IADD_MOD_SUB_KEEP_CC);
 }
 
@@ -135,7 +135,7 @@ inline void _calculate_gcd_sfp_rows_() {
 }
 
 /**
- * @brief Record the gcd replay bodies into math-thread replay slots 0-30.
+ * @brief Record the gcd replay bodies into math-thread replay slots 0-28.
  *
  * @note Re-run after any op that records into those slots.
  */
