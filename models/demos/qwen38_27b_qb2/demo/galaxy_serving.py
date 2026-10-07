@@ -5,6 +5,7 @@
 import hashlib
 import json
 import math
+import os
 import re
 from pathlib import Path
 
@@ -26,10 +27,26 @@ OPTIMIZATION_ENV = {
 }
 
 
+def qualified_runtime_environment():
+    """Preserve the precision artifact covered by the G0 source check."""
+    environment = dict(OPTIMIZATION_ENV)
+    override = os.environ.get("QWEN_PRECISION_CONFIG")
+    if override:
+        environment["QWEN_PRECISION_CONFIG"] = override if override == "baseline" else str(Path(override).resolve())
+    return environment
+
+
 def model_source_hashes(source):
     source = Path(source)
     files = sorted((source / "tt").glob("*.py")) + [source / "config/precision.json"]
-    return {str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
+    hashes = {str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
+    override = os.environ.get("QWEN_PRECISION_CONFIG")
+    if override:
+        # Bind the actual override too. Otherwise a passing default-policy G0
+        # receipt could silently authorize a different precision at serving.
+        content = b"baseline" if override == "baseline" else Path(override).read_bytes()
+        hashes["effective_precision_override"] = hashlib.sha256(content).hexdigest()
+    return hashes
 
 
 def verify_qualified_source(receipt, source):

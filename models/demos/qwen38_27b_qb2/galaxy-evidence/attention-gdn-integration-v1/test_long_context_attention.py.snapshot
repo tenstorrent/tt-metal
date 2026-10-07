@@ -89,7 +89,6 @@ def run_case(
         "hifi4_fp32_accurate_exp",
         "hifi4_fp32_full_tile",
         "hifi4_fp32_full_tile_accurate_exp",
-        "model_accurate",
     ):
         raise ValueError(f"Unsupported precision diagnostic {precision}")
     if max_cores_per_head_batch not in (16, 32):
@@ -148,17 +147,6 @@ def run_case(
     save(path, report)
 
     def operation(chunk):
-        if precision == "model_accurate":
-            from models.demos.qwen38_27b_qb2.tt.decode_attention import paged_decode
-
-            return paged_decode(
-                q,
-                key,
-                value,
-                positions=positions,
-                page_table=tt_table,
-                policy={"decode_attention": "accurate_full_tile", "sdpa_short_grid": [8, 2]},
-            )
         config = {}
         if precision != "native":
             # This pinned runtime exposes the shared BH/WH config under the

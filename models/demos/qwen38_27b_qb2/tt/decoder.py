@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.qwen38_27b_qb2.tt.decode_attention import paged_decode
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
@@ -778,31 +779,14 @@ class Qwen38Decoder(LightweightModule):
         ttnn.experimental.paged_fused_update_cache(
             state.key, k, state.value, v, update_idxs_tensor=current_pos, page_table=page_table
         )
-        decode_k = (
-            32
-            if self.policy.get("adaptive_sdpa", False) and page_table.shape[-1] < 16
-            else self.policy.get("sdpa_k", 32)
-        )
-        decode_k = decode_k or 32
-        while (page_table.shape[-1] * self.PAGE_SIZE) % decode_k:
-            decode_k //= 2
-        decode_grid = self.policy.get("sdpa_grid", [grid.x, grid.y])
-        if b == 1 and page_table.shape[-1] < 16:
-            # Short caches do not benefit from sequence parallelism across the
-            # full grid. Larger batches/contexts retain the measured wide grid.
-            decode_grid = self.policy.get("sdpa_short_grid", decode_grid)
-        result = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        result = paged_decode(
             q,
             state.key,
             state.value,
-            cur_pos_tensor=current_pos,
-            page_table_tensor=page_table,
-            scale=c.head_dim**-0.5,
-            program_config=ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=decode_grid,
-                q_chunk_size=self.policy.get("sdpa_q", 32),
-                k_chunk_size=decode_k,
-            ),
+            positions=current_pos,
+            page_table=page_table,
+            policy=self.policy,
+            page_size=self.PAGE_SIZE,
         )
         result = ttnn.reshape(
             result,

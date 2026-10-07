@@ -22,9 +22,9 @@ import httpx
 
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import (
     MODEL_NAME,
-    OPTIMIZATION_ENV,
     PLUGIN_REVISION,
     qualified_groups,
+    qualified_runtime_environment,
     server_command,
     verify_qualified_source,
     verify_worker_bindings,
@@ -86,6 +86,7 @@ def main(args):
             probe.bind(("127.0.0.1", args.port))
         checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"]).resolve()
         command = server_command(task, checkpoint, groups, port=args.port)
+        runtime_environment = qualified_runtime_environment()
         report.update(
             plugin_revision=plugin,
             versions={name: importlib.metadata.version(name) for name in ("vllm", "torch", "transformers", "numpy")},
@@ -94,7 +95,8 @@ def main(args):
             checkpoint=str(checkpoint),
             checkpoint_config_sha256=hashlib.sha256((checkpoint / "config.json").read_bytes()).hexdigest(),
             command=command,
-            environment=OPTIMIZATION_ENV,
+            environment=runtime_environment,
+            precision=qualification.get("precision"),
             data_parallel_size=8,
             per_replica_capacity=16,
             total_capacity=128,
@@ -105,7 +107,7 @@ def main(args):
             },
         )
         environment = {key: value for key, value in os.environ.items() if not key.startswith("QWEN_")}
-        environment.update(OPTIMIZATION_ENV)
+        environment.update(runtime_environment)
         environment.update(
             EXTRA_MODELS_DIR=str(task / "metal-galaxy/models/demos"),
             MESH_DEVICE="(8, 4)",

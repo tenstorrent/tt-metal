@@ -21,13 +21,20 @@ def test_attention_precision():
     path = Path(os.environ["QWEN_ATTENTION_PRECISION_RECEIPT"])
     assert not path.exists(), "Use a new result directory"
     torch.set_num_threads(8)
-    modes = ("native", "hifi4_fp32", "hifi4_fp32_accurate_exp")
+    full_tile = os.getenv("QWEN_ATTENTION_FULL_TILE") == "1"
+    modes = (
+        ("hifi4_fp32", "hifi4_fp32_full_tile", "hifi4_fp32_full_tile_accurate_exp")
+        if full_tile
+        else ("native", "hifi4_fp32", "hifi4_fp32_accurate_exp")
+    )
+    required_mode = modes[-1]
     cases = ((8192, 1), (8192, 16), (131072, 8), (262016, 4))
     report = dict(
         state="opening",
         passed=False,
         diagnostic_complete=False,
         promoted_to_model=False,
+        required_mode=required_mode,
         scope="Synthetic attention math diagnosis; no model accuracy or deployment qualification",
         reference="Full causal FP32 attention on quantized device KV, same input seed across math modes",
         acceptance="Every case at HiFi4/FP32/accurate-exp must pass the unchanged per-user PCC and relative-RMS limits",
@@ -58,7 +65,7 @@ def test_attention_precision():
             for mode in modes
             if all(case.get("passed") is True for case in report["cases"] if case["precision_mode"] == mode)
         ]
-        report["passed"] = "hifi4_fp32_accurate_exp" in report["passed_modes"]
+        report["passed"] = required_mode in report["passed_modes"]
         report["state"] = "completed"
         save(path, report)
         assert report["passed"], "Accurate attention configuration failed the unchanged numerical reference"

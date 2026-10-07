@@ -1,0 +1,62 @@
+{
+  "attention-accurate-chunks-v1/chunks.json": {
+    "original_bytes": 120904,
+    "sha256": "b4ba44fbcaa678c8db92d7fef7cae490b29f5ae430507ce4613575bcc4924260"
+  },
+  "attention-chunk-grid-v1/chunks.json": {
+    "original_bytes": 234002,
+    "sha256": "da8cdddeb5b495b122e8bc4a285e9296d98a90c0490a7f4b3d8f9d7522460435"
+  },
+  "attention-full-tile-v1/precision.json": {
+    "original_bytes": 91712,
+    "sha256": "141241d3ab6355af6a93d9d626d219376be585607f3d0fa83e8af474270251ed"
+  },
+  "gdn-model-adapter-v1/adapter.json": {
+    "original_bytes": 33675,
+    "sha256": "dfff673e8d5b1646b8b304172e93c4e5358459723ae4e634a2e6365aaf5bd800"
+  },
+  "test_long_context_attention.py.snapshot": {
+    "original_bytes": 10661,
+    "sha256": "dbb77f473a7a1339b13e5b72fa557c3961411c75189748fef73d254c6877f2d6"
+  },
+  "test_gdn_model_adapter.py.snapshot": {
+    "original_bytes": 6611,
+    "sha256": "47a9f25e44cd8a6008997b1e041f7568f21666fc7fbb800f4a3ada86efa2f6e8"
+  },
+  "model-attention-v2/attention.json": {
+    "original_bytes": 56588,
+    "sha256": "d7887c61cbe8eab790d59fbf2b81938223b2106fa7657f56fc1bfaeae8c5c641"
+  },
+  "gdn-native-control-v2/adapter.json": {
+    "original_bytes": 69168,
+    "sha256": "3ae8ae8777833e29a750a10d533a19c744c9798ebe52bac084047368feb15d8b"
+  },
+  "unit.xml.gz": {
+    "original_bytes": 55199,
+    "sha256": "99fd75c9d2f8bf89fee43cedc0756543071214f89195c7cfd443be1dd8aab46d"
+  },
+  "attention-chunk-grid-v1/hardware.xml.gz": {
+    "original_bytes": 3817,
+    "sha256": "5063c0979d034c435b6b78e020a281b12567f33d49f098fcb0515c86e6bb9bd4"
+  },
+  "attention-full-tile-v1/hardware.xml.gz": {
+    "original_bytes": 3718,
+    "sha256": "c5c4264aae4593bd6eb46c45503fb1de40a8741ae04c6dadac68721b354929ec"
+  },
+  "gdn-model-adapter-v1/hardware.xml.gz": {
+    "original_bytes": 537,
+    "sha256": "1e3f6be1ca6b7715a71bb6936ba00f2cec08ef709e0ccf5483dec641b3fce4aa"
+  },
+  "attention-accurate-chunks-v1/hardware.xml.gz": {
+    "original_bytes": 543,
+    "sha256": "da49d345be79294efb8abcb565af80b6ee9859c058176c1c7914f0fe3d027bad"
+  },
+  "model-attention-v2/hardware.xml.gz": {
+    "original_bytes": 547,
+    "sha256": "061f08d49899aad61146cd5209fabeaafc86045198f39002c2f964cc5a473724"
+  },
+  "gdn-native-control-v2/hardware.xml.gz": {
+    "original_bytes": 537,
+    "sha256": "4bdcbcdb79ecc6bf10430ff95e42071d3017204f5798fe01dbfa96506dc8ffe0"
+  }
+}

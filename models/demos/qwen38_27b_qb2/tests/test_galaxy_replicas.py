@@ -115,6 +115,9 @@ def test_concurrent_galaxy_replicas():
             gen = build_generator(Path(__file__).resolve().parents[1], mesh, topology=ttnn.Topology.Linear)
             generators.append(gen)
             assert len(gen.model.layers) == 64
+            if "precision" not in report:
+                report["precision"] = gen.model.precision
+            assert gen.model.precision == report["precision"], "Replica precision must be identical"
             report["loaded"].append(
                 dict(replica=i, setup_s=time.perf_counter() - started, device_ids=list(mesh.get_device_ids()))
             )

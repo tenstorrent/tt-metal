@@ -10,6 +10,7 @@ from models.demos.qwen38_27b_qb2.demo.galaxy_serving import (
     additional_config,
     model_source_hashes,
     qualified_groups,
+    qualified_runtime_environment,
     server_command,
     verify_qualified_source,
     verify_worker_bindings,
@@ -88,3 +89,37 @@ def test_changed_precision_or_model_source_requires_new_qualification(tmp_path, 
     config.write_text('{"state": "bfloat16"}\n')
     with expect_error(ValueError, "differs"):
         verify_qualified_source(receipt, tmp_path)
+
+
+def test_precision_environment_override_is_bound_to_qualification(tmp_path, monkeypatch, expect_error):
+    (tmp_path / "tt").mkdir()
+    (tmp_path / "config").mkdir()
+    (tmp_path / "tt/model.py").write_text("# synthetic source\n")
+    (tmp_path / "config/precision.json").write_text('{"policy": "native"}\n')
+    override = tmp_path / "candidate.json"
+    override.write_text('{"policy": "accurate"}\n')
+    monkeypatch.delenv("QWEN_PRECISION_CONFIG", raising=False)
+    default_receipt = dict(source_sha256=model_source_hashes(tmp_path))
+    monkeypatch.setenv("QWEN_PRECISION_CONFIG", str(override))
+    with expect_error(ValueError, "differs"):
+        verify_qualified_source(default_receipt, tmp_path)
+    receipt = dict(source_sha256=model_source_hashes(tmp_path))
+    assert verify_qualified_source(receipt, tmp_path)
+    override.write_text('{"policy": "changed"}\n')
+    with expect_error(ValueError, "differs"):
+        verify_qualified_source(receipt, tmp_path)
+    monkeypatch.setenv("QWEN_PRECISION_CONFIG", "baseline")
+    with expect_error(ValueError, "differs"):
+        verify_qualified_source(receipt, tmp_path)
+    baseline_receipt = dict(source_sha256=model_source_hashes(tmp_path))
+    assert verify_qualified_source(baseline_receipt, tmp_path)
+
+
+def test_qualified_override_reaches_server_workers(tmp_path, monkeypatch):
+    monkeypatch.delenv("QWEN_PRECISION_CONFIG", raising=False)
+    assert "QWEN_PRECISION_CONFIG" not in qualified_runtime_environment()
+    candidate = tmp_path / "candidate.json"
+    monkeypatch.setenv("QWEN_PRECISION_CONFIG", str(candidate))
+    assert qualified_runtime_environment()["QWEN_PRECISION_CONFIG"] == str(candidate.resolve())
+    monkeypatch.setenv("QWEN_PRECISION_CONFIG", "baseline")
+    assert qualified_runtime_environment()["QWEN_PRECISION_CONFIG"] == "baseline"
