@@ -34,10 +34,28 @@ try:
 except Exception:  # pragma: no cover - tracy missing on non-profiling builds
     _tracy_signpost = None
 
-# Master switch for the per-module signposts. Defaults on (a no-op unless the run is captured
-# under the Tracy profiler), but can be disabled to drop the host-side call overhead:
-# set ``DEEPSEEK_V4_SIGNPOSTS=0``.
-_SIGNPOSTS_ENABLED = os.environ.get("DEEPSEEK_V4_SIGNPOSTS", "1") not in ("0", "", "false", "False")
+
+def _traced_decode_enabled() -> bool:
+    """Whether :meth:`DeepSeekV4Model.decode_traced` captures and replays traces.
+
+    ``DEEPSEEK_V4_TRACED_DECODE=0`` runs every step eagerly instead: the same per-submesh
+    :meth:`DeepSeekV4Model._decode_submesh_static` program a trace capture records, with the
+    same variant selection, packet and output sockets, just dispatched op by op. Profiler
+    reads inside the layers then run, which a replayed trace cannot do.
+    """
+    return os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "1") not in ("0", "false", "False")
+
+
+# Master switch for the per-module signposts. Host markers cannot bracket the ops of a replayed
+# trace, so signposts are off whenever traced decode is enabled. Otherwise they default on (a
+# no-op unless the run is captured under the Tracy profiler), and ``DEEPSEEK_V4_SIGNPOSTS=0``
+# drops the host-side call overhead.
+_SIGNPOSTS_ENABLED = not _traced_decode_enabled() and os.environ.get("DEEPSEEK_V4_SIGNPOSTS", "1") not in (
+    "0",
+    "",
+    "false",
+    "False",
+)
 
 
 def _signpost(header: str) -> None:
