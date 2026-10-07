@@ -96,6 +96,7 @@ jobs:
     outputs:
       do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
+      api-headers-changed: ${{ steps.find-changes.outputs.tt-metalium-api-headers-changed }}
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -264,3 +265,80 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+
+  # Report-only IWYU on the tt_metal public headers touched by the PR. IWYU needs a
+  # translation unit; CMake's header-set verification already generates one per
+  # public header (with the real flags and an `IWYU pragma: associated` include),
+  # so this configures, builds only the generated API headers, and analyzes those.
+  # Not a gate: findings go to the step summary and an artifact. See
+  # .github/scripts/utils/run_api_header_iwyu.sh.
+  iwyu-api-headers:
+    name: "🔍 IWYU (tt_metal API headers)"
+    needs: [check-harbor, determine-scan-type]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'pull_request' &&
+          needs.determine-scan-type.outputs.api-headers-changed == 'true' }}
+    runs-on: tt-ubuntu-2204-large-stable
+    timeout-minutes: 30
+    continue-on-error: true
+    permissions:
+      contents: read
+    container:
+      # ci-test rather than ci-build: include-what-you-use is installed from the
+      # ci-test-light stage onward (dockerfile/Dockerfile), same as iwyu-host.yaml.
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-test-amd64:latest') }}
+      volumes:
+        - ${{ github.workspace }}:/work
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: 📦 Restore CPM source cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .cpmcache.tar.zst
+          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: Unpack CPM cache
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
+
+      - name: 🔧 CMake configure
+        run: cmake --preset iwyu
+
+      - name: 🛠️ Generate API headers
+        run: cmake --build .build/iwyu --target metalium_GeneratedHeaders
+
+      - name: 🔍 Analyze changed API headers with include-what-you-use
+        run: |
+          base=$(git merge-base origin/main HEAD)
+          mapfile -t headers < <(git diff --name-only --diff-filter=ACMR "${base}..HEAD" -- 'tt_metal/api/*.h' 'tt_metal/api/*.hpp')
+          if [ "${#headers[@]}" -eq 0 ]; then
+            # Triggered by a change to the check itself, not by a header.
+            headers=(--all)
+          fi
+          .github/scripts/utils/run_api_header_iwyu.sh .build/iwyu "${headers[@]}"
+
+      - name: Upload IWYU report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: iwyu-api-headers-report
+          path: |
+            /work/.build/iwyu/report-api/iwyu.txt
+            /work/.build/iwyu/report-api/iwyu-version.txt
+            /work/.build/iwyu/report-api/iwyu-exit-code.txt
+          retention-days: 30

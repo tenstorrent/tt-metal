@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Summarise a native include-what-you-use report as Markdown.
 
-Usage: summarize_host_iwyu.py <iwyu.txt> <analyzer exit code>
+Usage: summarize_host_iwyu.py <iwyu.txt> <analyzer exit code> [<title> <artifact name>]
 
 Reads the concatenated iwyu_tool.py output written by run_host_iwyu.sh and
 prints a step-summary table plus a histogram of the headers IWYU asked for most
@@ -56,9 +56,15 @@ def parse_report(text: str) -> Summary:
     return summary
 
 
-def render_markdown(summary: Summary, status: int, top: int = 20) -> str:
+def render_markdown(
+    summary: Summary,
+    status: int,
+    top: int = 20,
+    title: str = "Include What You Use (host, report-only)",
+    artifact: str = "iwyu-host-report",
+) -> str:
     lines = [
-        "### Include What You Use (host, report-only)",
+        f"### {title}",
         "",
         f"Analyzer exit code: {status} (0 means analysis completed, not that includes are clean).",
         "",
@@ -71,20 +77,20 @@ def render_markdown(summary: Summary, status: int, top: int = 20) -> str:
     if summary.additions:
         lines += ["", "Most-suggested additions:", "", "| Suggestion | Count |", "| --- | --- |"]
         lines += [f"| `{header}` | {count} |" for header, count in summary.additions.most_common(top)]
-    lines += ["", "Full recommendations and diagnostics: `iwyu.txt` in the `iwyu-host-report` artifact."]
+    lines += ["", f"Full recommendations and diagnostics: `iwyu.txt` in the `{artifact}` artifact."]
     return "\n".join(lines) + "\n"
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print(f"usage: {argv[0]} <iwyu.txt> <analyzer exit code>", file=sys.stderr)
+    if len(argv) not in (3, 5):
+        print(f"usage: {argv[0]} <iwyu.txt> <analyzer exit code> [<title> <artifact name>]", file=sys.stderr)
         return 2
     with open(argv[1], errors="replace") as report:
         text = report.read()
     summary = parse_report(text)
     if text.strip() and summary.recognised == 0:
         print(f"::warning::{argv[1]} is not empty but contains no recognisable IWYU output.", file=sys.stderr)
-    sys.stdout.write(render_markdown(summary, int(argv[2])))
+    sys.stdout.write(render_markdown(summary, int(argv[2]), *([] if len(argv) == 3 else [20, argv[3], argv[4]])))
     return 0
 
 

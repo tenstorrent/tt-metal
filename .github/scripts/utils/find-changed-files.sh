@@ -272,6 +272,23 @@ while IFS= read -r FILE; do
 done <<< "$CHANGED_FILES"
 # ----------------------------------------------------------------------------
 
+# tt-metalium-api-headers-changed: gates the IWYU check on tt_metal/api headers
+# (code-analysis.yaml). Public headers themselves, plus the files that define
+# that check, so a PR that edits the check also exercises it. Deliberately not
+# derived from tt-metalium-changed, which fires on any tt_metal source.
+TTMETALIUM_API_HEADERS_CHANGED=false
+while IFS= read -r FILE; do
+    case "$FILE" in
+        tt_metal/api/*(*/)*.@(h|hpp)|\
+        .github/iwyu-host.imp|\
+        .github/scripts/utils/run_api_header_iwyu.sh|\
+        .github/scripts/utils/summarize_host_iwyu.py|\
+        .github/workflows/code-analysis.yaml)
+            TTMETALIUM_API_HEADERS_CHANGED=true
+            ;;
+    esac
+done <<< "$CHANGED_FILES"
+
 SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp path | awk '{print $2}')
 SUBMODULE_CHANGED=false
 for submodule_path in $SUBMODULE_PATHS; do
@@ -332,6 +349,7 @@ declare -A changes=(
     [cmake-changed]=$CMAKE_CHANGED
     [clang-tidy-config-changed]=$CLANG_TIDY_CONFIG_CHANGED
     [tt-metalium-changed]=$TTMETALIUM_CHANGED
+    [tt-metalium-api-headers-changed]=$TTMETALIUM_API_HEADERS_CHANGED
     [tt-nn-changed]=$TTNN_CHANGED
     [tt-metalium-tests-changed]=$TTMETALIUM_TESTS_CHANGED
     [tt-nn-tests-changed]=$TTNN_TESTS_CHANGED

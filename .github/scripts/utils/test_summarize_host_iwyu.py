@@ -100,6 +100,12 @@ class RenderMarkdownTests(unittest.TestCase):
         self.assertIn("Analyzer exit code: 1", markdown)
         self.assertNotIn("Most-suggested additions", markdown)
 
+    def test_title_and_artifact_are_overridable(self):
+        markdown = render_markdown(parse_report(REPORT), status=0, title="API headers", artifact="api-report")
+        self.assertIn("### API headers", markdown)
+        self.assertIn("`api-report` artifact", markdown)
+        self.assertNotIn("iwyu-host-report", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()
