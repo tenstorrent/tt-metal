@@ -119,3 +119,14 @@
 - claim: bfp8 vs real MiMo fp4 experts (layers 1,20,46 x experts 0,137,255 x gate/up/down, device layout [K,N]; DSV4 nibble order low-first, e8m0=2^(s-127), sanity: 15/16 codes used, absmax 0.06-1.0, scales e8m0 118-125): bf16 holds the dequantised values exactly; bfp8 (host pack and device typecast identical) reproduces 24/27 tensors bit-exactly; 3 tensors differ in 1-27 of 8.4M values (L1 e0 gate: 27, max abs 1.95e-3; L46 down_proj: 6-17 values, max abs 7.8e-3, absmax 1.0); PCC >= 0.99999992. So bfp8 is essentially, not strictly, lossless (rare small values in a 16-block beside large ones)
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_bfp8_exact_479ee2847b3.log
 - paths: models/demos/blackhole/mimo_v26/tests/test_bfp8_checkpoint_exact.py
+
+## E261007-0210-e8c
+- date: 2026-10-07T02:10:10
+- commit: 42c08b7f5a0
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: Prefill path (dispatch/unified expert bfp8/combine/post_combine_reduce) on 4x8, synthetic data, N=256,512,1024,2048,4096 tokens per mesh row in ONE process: 5 runs bit-identical to run 0 at every N, per mesh row all True; PCC 0.99925 every row; 32-row corruption check (per-token PCC of all tokens, grouped in 32-row blocks, per mesh row): min per-token PCC 0.99909, zero blocks below 0.99; capacity ok. No corruption seen on this build/host 40. Also: masked_bincount requires tokens%64==0 (so decode at 32 users/row must be padded to 64 per row)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_det_corrupt_42c08b7f5a0.log
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_moe_prefill_4x8.py
