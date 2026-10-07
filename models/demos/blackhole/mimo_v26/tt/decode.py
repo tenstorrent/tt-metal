@@ -11,6 +11,7 @@ import os
 import torch
 
 import ttnn
+from models.demos.blackhole.mimo_v26.tt import verify_dev as vd
 from models.demos.blackhole.mimo_v26.tt.attention import decode_pos_io, decode_pos_set
 from models.demos.blackhole.mimo_v26.tt.layer import EPS, _k_norm, rms_decode_sharded
 
@@ -129,6 +130,7 @@ class Decoder:
         max_pos=None,
         eos=(),
         chunk=16,
+        vdev=False,
     ):
         """U = real decode users per mesh row. block = tokens per user per step: 1 = plain decode; 8 = spec-decode VERIFY with `block` virtual users per real user
         (row v = block*u + t feeds token t of user u at position pos_u + t; U*block <= 32). Every decode tensor has B = U*block rows.
@@ -162,6 +164,12 @@ class Decoder:
         self.vocab_local = model.lm_head.shape[-1]
         self.max_pos, self.eos, self.N = max_pos if max_pos is not None else 1 << 20, tuple(sorted(eos)), chunk
         self.c0 = 0  # host mirror of the device step counter (ring write index)
+        self.vdev = bool(vdev) and block > 1
+        if self.vdev:
+            assert (
+                self.upd_mode == "skip" and self.upd is not None
+            ), "device-resident verify needs MIMO_VERIFY_WRITE=skip"
+            vd.init_state(self)
         if self.feedback:
             self._init_fb_state()
         self._tr = None
@@ -197,6 +205,8 @@ class Decoder:
     # ------------------------------------------------------------------ one step (device)
     def _forward(self):
         m = self.m
+        if self.vdev:
+            vd.prologue(self)
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)  # [1,32,4096] per device
         h = ttnn.reshape(e, (1, 1, self.B, HIDDEN))
         caps = []
@@ -241,6 +251,12 @@ class Decoder:
             ),
         )
         ttnn.deallocate(x)
+        if self.vdev:
+            vd.epilogue(self, global_pick(lg, self.vocab_local))
+            if not self.keep_logits:
+                ttnn.deallocate(lg)
+                lg = None
+            return self.tok, None, lg, feat
         if self.feedback:
             self._device_update(global_pick(lg, self.vocab_local))
             if not self.keep_logits:
@@ -365,6 +381,8 @@ class Decoder:
             else:
                 os.environ["MIMO_CHECK_CAP"] = chk
             ttnn.synchronize_device(self.mesh)
+            if self.vdev and getattr(self, "_vlast", None) is not None:
+                vd.set_state(self, *self._vlast)  # the eager warm-up round advanced the state: restore it
             if self.feedback and self._last is not None:
                 self.set_inputs(
                     *self._last
@@ -435,6 +453,28 @@ class Decoder:
         rows = tokens.shape[0]
         return out[0].reshape(rows, self.U, self.block), out[1].reshape(rows, self.U, self.block)
 
+    def set_verify_state(self, anchor, pos, alive):
+        """device-resident verify: initial anchor token / position of token 0 / alive, long/bool [rows,U] (host write once per generation)"""
+        assert self.vdev
+        vd.set_state(self, anchor, pos, alive)
+        if self.use_trace:
+            self._ensure_trace()  # warm-up + capture now (restores this state afterwards) so that drafts written next are not wiped by the restore
+
+    def write_drafts(self, drafts):
+        """blk_in[...,1:8] = drafts (device tensor [..,U,7]); device ops only (usable inside the spec agent's own traces)"""
+        vd.write_drafts(self, drafts)
+
+    def verify_enqueue(self, n=1):
+        """enqueue n verify rounds (non-blocking trace replays; state, accept_prefix and the round ring are all on device); no host sync"""
+        assert self.vdev and self.use_trace
+        self._ensure_trace()
+        for _ in range(n):
+            ttnn.execute_trace(self.mesh, self._tr, cq_id=0, blocking=False)
+        self.steps += n
+
+    def read_rounds(self, n):
+        return vd.read_rounds(self, n)
+
     def _read_ring(self, n):
         """tokens sampled by the last n steps (ring rows c0..c0+n, wraps) -> long [n, rows, B]; one blocking read per mesh row (column-0 device)."""
         dts = ttnn.get_device_tensors(self.ring)
@@ -468,7 +508,7 @@ class Decoder:
     def close(self):
         """release the trace and every U-dependent device buffer (tokens, positions, live mask)"""
         self.release()
-        for n_ in ("alive", "posf", "cnt", "iota", "ring"):
+        for n_ in ("alive", "posf", "cnt", "iota", "ring") + (vd.STATE_NAMES if self.vdev else ()):
             if hasattr(self, n_):
                 ttnn.deallocate(getattr(self, n_))
         for t in (

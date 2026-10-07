@@ -38,3 +38,29 @@ one verify Decoder per (U, block) and plain Decoders as needed; Generator.reconf
 * Rollback needs nothing: positions beyond the accepted one are invisible to later steps (GA masks by cur_pos, SWA window/ring) and are overwritten next round.
 * MoE sees U*block rows per mesh row (<= 32, padded to 64 inside MiMoMoEDecode); dead slots follow MIMO_DEAD (default spread32).
 * Cost: attention re-reads K/V once per virtual user (GA at 64k ~ 8x the plain decode attention of one user; SWA free), MoE/dense weights are read once per step.
+
+# Device-resident verify round (perf agent, branch ssinghal/mimo-perf1; code `tt/verify_dev.py`, `Decoder(vdev=True)`, test `tests/test_verify_device.py`)
+
+Goal: a whole spec round with NO host copy and NO host compute between the drafter and the next round. The verify trace owns its input prologue and its accept_prefix epilogue, all on device.
+
+```
+dec = Decoder(model, trace=True, U=U, block=8, capture=(0,11,23,35,47), vdev=True, eos=eos_ids, max_pos=max_pos, chunk=N)   # needs MIMO_VERIFY_WRITE=skip (default)
+dec.set_verify_state(anchor, pos, alive)   # host write ONCE per generation: long [rows,U] anchor token, long [rows,U] position of the anchor (= tokens in the KV cache), bool [rows,U]
+                                           # also captures the trace (eager warm-up + capture) and restores this state, so call it before writing any drafts
+dec.write_drafts(d)        # device op(s): blk_in[..., 1:8] = d, d = device tensor [..,U,7] (any numeric dtype / layout; reshaped to [1,1,U,7]); usable inside your own trace
+dec.verify_enqueue(n)      # n non-blocking trace replays (one round each); state advances on device
+post, commit = dec.read_rounds(n)   # optional bulk host read of the last n rounds from a ring of N rounds (post long [n,rows,U,8], commit long [n,rows,U] = k+1, 0 for dead users)
+```
+Persistent device tensors (float32 TILE, row sharded = one copy per mesh row = that row's users, identical over the 8 columns; ids / positions < 2^24 are exact). Write them with ttnn.copy / ttnn ops, read them as inputs:
+* `dec.blk_in`  [1,1,U,8]  the NEXT verify block. col 0 = anchor: written by the epilogue of the previous round (= bonus token, 0 for dead users) - you do NOT write it. cols 1..7 = drafts: written by you (`write_drafts`).
+* `dec.vpos`    [1,1,U,1]  position of block row 0 of the next round (advanced by the epilogue: += k+1 for live users).
+* `dec.valive`  [1,1,U,1]  1 = user still generating. Epilogue clears it when an `eos` id is among the committed tokens (rows 0..k) or when pos + 9 >= max_pos (same rules as spec.py).
+Outputs of the LAST round (valid until the next replay; use them for the drafter append, in the same device stream):
+* `dec.vpost`   [1,1,U,8]  target argmax after every block row (0 for users that were dead at round start)
+* `dec.vk`      [1,1,U,1]  accepted drafts k (0..7), `dec.vcommit` [1,1,U,1] = k+1 (0 for dead users)
+* `dec.vvalid`  [1,1,U,8]  1 for the committed rows 0..k of live users (the drafter `valid` mask), `dec.vposrows` [1,1,U,8] = position of every block row (the drafter append positions)
+* `dec.feat`    captured hidden states (unchanged: [1,1,U*8,len(capture)*4096] bf16, row u*8+t)
+The round counter `dec.vcnt` and the rings `rpost`/`rcommit` ([1,N,U,8] / [1,N,U,1]) are internal; `read_rounds` reads them (N rounds, wraps; the host mirror `dec.c0` must stay in step: call read_rounds(n) for every n replays or call set_verify_state again).
+Semantics = Decoder.verify + Decoder.accept_prefix + spec.py bookkeeping: block row 0 = anchor, draft j accepted iff argmax[j-1] == block[j] for all earlier drafts too; committed tokens = argmax[:k+1]; next anchor = argmax[k] (bonus), position += k+1.
+Dead users feed token 0 / position 0 / update index 0 and are marked dead in the MoE live mask (same as set_inputs). The host-fed `verify(tokens, positions, dead)` path is unchanged.
+Verified by tests/test_verify_device.py (device rounds vs host verify+accept_prefix, 4 layers, U=1,2,4, ragged acceptance, eos pass): see LOG.
