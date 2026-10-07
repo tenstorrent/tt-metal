@@ -286,7 +286,7 @@ void check_chips(const json& manifest) {
             EXPECT_EQ(
                 keys_of(chip),
                 (std::set<std::string>{
-                    "mesh_coord", "physical_chip_id", "asic_id", "is_local", "z_port_role", "routers"}));
+                    "mesh_coord", "physical_chip_id", "asic_id", "is_local", "z_port_role", "local_sync", "routers"}));
             EXPECT_EQ(chip.at("physical_chip_id"), *physical_chip_id);
             EXPECT_EQ(
                 chip.at("asic_id"), fmt::format("0x{:016x}", *control_plane().get_asic_id_from_fabric_node_id(node)));
@@ -660,14 +660,6 @@ void check_router_regions_disjoint(const std::vector<RouterEntry>& routers) {
 // The last component of a router path, e.g. "E0" for "M0/C7/E0".
 std::string key_of_path(const std::string& path) { return path.substr(path.rfind('/') + 1); }
 
-std::set<std::string> noc_cmd_buf_names() {
-    std::set<std::string> names;
-    for (const auto cmd_buf : enchantum::values<manifest::NocCmdBuf>) {
-        names.insert(lower_enum_name(cmd_buf));
-    }
-    return names;
-}
-
 // ERISC names in ascending order, each one active. Returns whether any ERISC services the channel.
 bool expect_serviced_by(const json& serviced_by, uint32_t num_active_eriscs) {
     std::optional<uint32_t> previous_risc;
@@ -759,14 +751,24 @@ void expect_field(const json& entry, const manifest::RouterField& field) {
     EXPECT_EQ(keys_of(entry), keys);
 }
 
-// `fields` holds exactly `table`'s fields, each written as its entry says, with a category and kind the manifest's
-// vocabulary lists.
-void expect_fields(const json& fields, std::span<const manifest::RouterField> table, const json& vocabulary) {
+// Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D.
+bool is_emitted(const manifest::RouterField& field, bool is_2d) {
+    const auto* arg = std::get_if<manifest::NamedArg>(&field.source);
+    return is_2d || arg == nullptr || arg->emitted != manifest::Emitted::FABRIC_2D;
+}
+
+// `fields` holds exactly `table`'s fields emitted on this fabric, each written as its entry says, with a category and
+// kind the manifest's vocabulary lists.
+void expect_fields(
+    const json& fields, std::span<const manifest::RouterField> table, const json& vocabulary, bool is_2d) {
     const auto listed = [&](const char* list, const json& name) {
         return std::ranges::find(vocabulary.at(list), name) != vocabulary.at(list).end();
     };
     std::set<std::string> expected_keys;
     for (const auto& field : table) {
+        if (!is_emitted(field, is_2d)) {
+            continue;
+        }
         const std::string key(field.key.value);
         expected_keys.insert(key);
         if (fields.contains(key)) {
@@ -850,7 +852,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                 }
 
                 expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size, serviced);
-                expect_fields(sender.at("fields"), manifest::k_sender_channel_fields, manifest.at("vocabulary"));
+                expect_fields(sender.at("fields"), manifest::k_sender_channel_fields, manifest.at("vocabulary"), is_2d);
 
                 const auto& credits = sender.at("credits");
                 const bool acked = vc == 0 && vc0_bubble_flow_control;
@@ -879,15 +881,12 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
     }
 }
 
-// A router's receiver channels, over its shape. Only VC2's has a free-slots stream. A receiver forwards on its own
-// VC, except that VC0's may cross over to VC1, and VC2's forwards on none. Only a 2D VC0 or VC1 receiver whose peer
-// is on another mesh is an intermesh ingress. Serviced receivers poll distinct allocated packets-sent streams.
+// A router's receiver channels, over its shape. A receiver forwards on its own VC, except that VC0's may cross over
+// to VC1, and VC2's forwards on none.
 void check_router_receivers(const json& manifest, const std::vector<RouterEntry>& routers) {
     const auto& fabric_context = manifest.at("fabric_context");
     const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
     const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
-    const auto num_nocs = tt::tt_metal::MetalContext::instance().hal().get_num_nocs();
-    const auto cmd_bufs = noc_cmd_buf_names();
 
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
@@ -895,12 +894,8 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
         const auto& shape = router.at("shape");
         const auto& receivers = router.at("channels").at("receivers");
         const auto num_active_eriscs = shape.at("num_active_eriscs").get<uint32_t>();
-        const auto& peer = router.at("link").at("peer");
-        const bool peer_on_other_mesh =
-            !peer.is_null() && !peer.get<std::string>().starts_with(mesh_key(entry.node.mesh_id) + "/");
 
         std::set<std::string> expected_vc_keys;
-        std::set<uint32_t> serviced_pkts_sent;
         for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
             const auto count = shape.at("receivers_per_vc").at(vc).get<uint32_t>();
             if (count == 0) {
@@ -916,20 +911,9 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
                 SCOPED_TRACE(fmt::format("receivers/{}/{}", vc_key, ch_key));
                 ASSERT_TRUE(receivers.at(vc_key).contains(ch_key));
                 const auto& receiver = receivers.at(vc_key).at(ch_key);
-                std::set<std::string> expected_keys = {
-                    "status",
-                    "serviced_by",
-                    "forwards_on",
-                    "forwarding_disabled",
-                    "intermesh_ingress",
-                    "forward_noc",
-                    "local_write_noc",
-                    "ring_buffer",
-                    "pkts_sent"};
-                if (vc == 2) {
-                    expected_keys.insert("free_slots");
-                }
-                EXPECT_EQ(keys_of(receiver), expected_keys);
+                EXPECT_EQ(
+                    keys_of(receiver),
+                    (std::set<std::string>{"status", "serviced_by", "forwards_on", "ring_buffer", "fields"}));
 
                 const bool serviced = expect_channel_status(receiver, shape, false, vc, ch, num_active_eriscs);
 
@@ -945,34 +929,9 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
                     }
                 }
 
-                EXPECT_TRUE(receiver.at("forwarding_disabled").is_boolean());
-                const auto& ingress = receiver.at("intermesh_ingress");
-                ASSERT_TRUE(ingress.is_boolean());
-                if (ingress.get<bool>()) {
-                    EXPECT_TRUE(is_2d);
-                    EXPECT_LT(vc, 2u);
-                    EXPECT_TRUE(peer_on_other_mesh) << peer;
-                }
-
-                const auto& forward_noc = receiver.at("forward_noc");
-                EXPECT_EQ(keys_of(forward_noc), (std::set<std::string>{"noc", "data_cmd_buf", "sync_cmd_buf"}));
-                EXPECT_LT(forward_noc.at("noc").get<uint32_t>(), num_nocs);
-                EXPECT_TRUE(cmd_bufs.contains(forward_noc.at("data_cmd_buf").get<std::string>()));
-                EXPECT_TRUE(cmd_bufs.contains(forward_noc.at("sync_cmd_buf").get<std::string>()));
-                const auto& local_write_noc = receiver.at("local_write_noc");
-                EXPECT_EQ(keys_of(local_write_noc), (std::set<std::string>{"noc", "cmd_buf"}));
-                EXPECT_LT(local_write_noc.at("noc").get<uint32_t>(), num_nocs);
-                EXPECT_TRUE(cmd_bufs.contains(local_write_noc.at("cmd_buf").get<std::string>()));
-
                 expect_ring_buffer(receiver.at("ring_buffer"), channel_buffer_size, serviced);
-                expect_stream(receiver.at("pkts_sent"), serviced);
-                if (serviced) {
-                    const auto stream_id = receiver.at("pkts_sent").at("stream_id").get<uint32_t>();
-                    EXPECT_TRUE(serviced_pkts_sent.insert(stream_id).second) << "stream " << stream_id;
-                }
-                if (vc == 2) {
-                    expect_stream(receiver.at("free_slots"), serviced);
-                }
+                expect_fields(
+                    receiver.at("fields"), manifest::k_receiver_channel_fields, manifest.at("vocabulary"), is_2d);
             }
         }
         EXPECT_EQ(keys_of(receivers), expected_vc_keys);
@@ -982,8 +941,7 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
 // A router's edges, on VC0 and VC1 only, and only VC0 in 1D. In 2D, edge n goes to the sibling at compact index
 // n - 1 among the router's other directions; 1D has only edge 1. Each lands on a sender channel, on the edge's VC, of
 // a different router on the same chip and plane: one whose producer is this router, or, through the tensix mux, one
-// the mux carries. Its free-slots register is allocated when a serviced receiver forwards on its VC, and the
-// receivers that do forward on the same NoC.
+// the mux carries. Its free-slots register is allocated when a serviced receiver forwards on its VC.
 void check_router_edges(const json& manifest, const std::vector<RouterEntry>& routers) {
     const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
 
@@ -994,16 +952,13 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
         const auto plane = control_plane().get_routing_plane_id(entry.node, entry.eth_chan);
         const auto facing = control_plane().get_eth_chan_direction(entry.node, entry.eth_chan);
 
-        std::map<std::string, json> forward_noc_by_vc;
+        std::set<std::string> forwarded_vcs;
         for (const auto& [vc_key, vc_receivers] : router.at("channels").at("receivers").items()) {
             for (const auto& [ch_key, receiver] : vc_receivers.items()) {
                 const auto& forwards_on = receiver.at("forwards_on");
-                if (forwards_on.is_null()) {
-                    continue;
+                if (!forwards_on.is_null()) {
+                    forwarded_vcs.insert(forwards_on.get<std::string>());
                 }
-                const auto [it, inserted] =
-                    forward_noc_by_vc.emplace(forwards_on.get<std::string>(), receiver.at("forward_noc").at("noc"));
-                EXPECT_EQ(it->second, receiver.at("forward_noc").at("noc")) << vc_key << "/" << ch_key;
             }
         }
 
@@ -1048,7 +1003,7 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
                     EXPECT_EQ(channel.at("producer"), entry.path) << target;
                 }
 
-                expect_stream(edge.at("free_slots"), forward_noc_by_vc.contains(vc_key));
+                expect_stream(edge.at("free_slots"), forwarded_vcs.contains(vc_key));
                 expect_value_region(edge.at("teardown_sem"), schema_name_of<uint32_t>(), sizeof(uint32_t));
             }
         }
@@ -1058,21 +1013,76 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
 // Each router has exactly the table's fields it should, router-wide and on each ERISC, each written as its entry says.
 void check_router_fields(const json& manifest, const std::vector<RouterEntry>& routers) {
     const auto& vocabulary = manifest.at("vocabulary");
+    const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& router = *entry.router;
         const auto num_active_eriscs = router.at("shape").at("num_active_eriscs").get<uint32_t>();
 
-        expect_fields(router.at("fields"), manifest::k_router_fields, vocabulary);
+        expect_fields(router.at("fields"), manifest::k_router_fields, vocabulary, is_2d);
         std::set<std::string> expected_eriscs;
         for (uint32_t risc_id = 0; risc_id < num_active_eriscs; ++risc_id) {
             expected_eriscs.insert(fmt::format("erisc{}", risc_id));
         }
         EXPECT_EQ(keys_of(router.at("eriscs")), expected_eriscs);
+        const std::set<std::string> processors = {
+            lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0),
+            lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1)};
+        std::set<std::string> used_processors;
         for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
             SCOPED_TRACE(risc_key);
-            EXPECT_EQ(keys_of(erisc), (std::set<std::string>{"fields"}));
-            expect_fields(erisc.at("fields"), manifest::k_erisc_fields, vocabulary);
+            EXPECT_EQ(keys_of(erisc), (std::set<std::string>{"processor", "fields"}));
+            const auto processor = erisc.at("processor").get<std::string>();
+            EXPECT_TRUE(processors.contains(processor)) << processor;
+            EXPECT_TRUE(used_processors.insert(processor).second) << "two ERISCs run on " << processor;
+            expect_fields(erisc.at("fields"), manifest::k_erisc_fields, vocabulary, is_2d);
+        }
+    }
+}
+
+// Each local chip's local_sync names its routers, and the one ERISC that leads the sync is on its master router.
+void check_local_sync(const json& manifest) {
+    for (const auto& [m_key, mesh] : manifest.at("meshes").items()) {
+        for (const auto& [c_key, chip] : mesh.at("chips").items()) {
+            if (!chip.at("is_local").get<bool>()) {
+                continue;
+            }
+            SCOPED_TRACE(fmt::format("{}/{}", m_key, c_key));
+            const auto& routers = chip.at("routers");
+            const auto& local_sync = chip.at("local_sync");
+            if (routers.empty()) {
+                EXPECT_TRUE(local_sync.is_null());
+                continue;
+            }
+            ASSERT_EQ(
+                keys_of(local_sync), (std::set<std::string>{"master_eth_chan", "num_routers", "router_channels_mask"}));
+            const FabricNodeId node(
+                MeshId{static_cast<uint32_t>(std::stoul(m_key.substr(1)))},
+                static_cast<uint32_t>(std::stoul(c_key.substr(1))));
+            const auto master_eth_chan = local_sync.at("master_eth_chan").get<uint32_t>();
+            uint32_t mask = 0;
+            bool syncs = false;
+            uint32_t num_masters = 0;
+            for (const auto& [r_key, router] : routers.items()) {
+                const auto eth_chan = channel_for_key(node, r_key);
+                ASSERT_TRUE(eth_chan.has_value()) << r_key;
+                mask |= 1u << *eth_chan;
+                // The kernel reads the local sync arguments only with wait_for_host_signal.
+                if (!router.at("fields").at("wait_for_host_signal").at("value").get<bool>()) {
+                    continue;
+                }
+                syncs = true;
+                for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
+                    if (erisc.at("fields").at("local_handshake_master").at("value").get<bool>()) {
+                        EXPECT_EQ(*eth_chan, master_eth_chan) << r_key << "/" << risc_key;
+                        ++num_masters;
+                    }
+                }
+            }
+            EXPECT_EQ(local_sync.at("num_routers"), routers.size());
+            EXPECT_EQ(local_sync.at("router_channels_mask"), mask);
+            EXPECT_NE(mask & (1u << master_eth_chan), 0u) << "the master is not one of the chip's routers";
+            EXPECT_EQ(num_masters, syncs ? 1u : 0u);
         }
     }
 }
@@ -1128,6 +1138,9 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
+
+    EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0), "riscv_0");
+    EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1), "riscv_1");
 
     EXPECT_EQ(lower_enum_name(manifest::FieldCategory::LIFECYCLE), "lifecycle");
     EXPECT_EQ(lower_enum_name(manifest::FieldCategory::KERNEL_PARAMS), "kernel_params");
@@ -1195,6 +1208,9 @@ TEST_F(Fabric2DManifestFixture, RouterDownstreamEdges) { check_router_edges(mani
 
 TEST_F(Fabric1DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, LocalSync) { check_local_sync(manifest_); }
+TEST_F(Fabric2DManifestFixture, LocalSync) { check_local_sync(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }

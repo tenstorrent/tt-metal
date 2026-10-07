@@ -935,6 +935,7 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
 
     const auto num_enabled_risc_cores = get_configured_risc_count();
 
+    kernel_inputs_ = {.defines = defines, .processors = {}, .named_ct_args = {}};
     for (uint32_t risc_id = 0; risc_id < num_enabled_risc_cores; risc_id++) {
         // Get compile-time args (positional + named) and append cluster-wide coordination info
         auto [ct_args, named_ct_args] = erisc_builder_->get_compile_time_args(risc_id);
@@ -954,6 +955,9 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         }
 
         auto opt_level = erisc_builder_->get_kernel_opt_level();
+
+        kernel_inputs_.processors.push_back(proc);
+        kernel_inputs_.named_ct_args.push_back(named_ct_args);
 
         // Create the kernel
         auto kernel = tt::tt_metal::CreateKernel(
@@ -990,12 +994,8 @@ manifest::Router ComputeMeshRouterBuilder::collect_manifest_router(const ChipRou
         .control_plane = fabric_context_.get_control_plane(),
         .stream_assignment = builder_context.get_stream_assignment(local_node_.mesh_id),
         .addresses_to_clear = addresses_to_clear,
-        .kernel_defines = kernel_defines(fabric_context_.is_2D_routing_enabled()),
-        .named_ct_args_per_risc = {},
+        .kernel = kernel_inputs_,
     };
-    for (uint32_t risc_id = 0; risc_id < get_configured_risc_count(); ++risc_id) {
-        inputs.named_ct_args_per_risc.push_back(erisc_builder_->get_compile_time_args(risc_id).named);
-    }
     return tt::tt_fabric::collect_manifest_router(inputs);
 }
 
