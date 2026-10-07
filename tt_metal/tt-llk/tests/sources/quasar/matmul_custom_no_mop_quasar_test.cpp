@@ -48,20 +48,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // num_faces_A/num_faces_B are always 4.
     // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
     // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
+    const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
         ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_A), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
         ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_B), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
     _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
 
     // transpose in src_A is not supported for quasar
-    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        CT_DIM,
-        RT_DIM,
-        KT_DIM);
+    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM);
 
     for (std::uint32_t j = 0; j < KT_DIM; j++)
     {
@@ -88,23 +83,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
 
-    DataFormat math_format     = static_cast<DataFormat>(formats.math);
-    DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        if (pack_src_format == DataFormat::Int32)
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-        }
-    }
-    else
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-    }
+    // formats.math holds a 2x-packed register format's non-2x family member, since the 2x formats exist only in the
+    // Src registers; the ALU is configured with the register format itself, the one the unpacker implies
+    const DataFormat unpack_dst_format = static_cast<DataFormat>(formats.unpack_A_dst);
+    const bool is_2x_format            = (unpack_dst_format == DataFormat::MxFp4_2x_A) || (unpack_dst_format == DataFormat::MxFp4_2x_B);
+    DataFormat math_format             = is_2x_format ? unpack_dst_format : static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
     // ENABLE_2X_FORMAT enables the 2x-packed FP4 matmul path (8 MVMULs per tile vs 16, K-dim halved per
     // MVMUL via the SrcA 2x sub-datum expansion). Set when SrcA/SrcB are configured as MxFp4_2x_A/B.
@@ -139,10 +123,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
 
     // Full 32x32 tiles: 2x2 faces of 16x16 (no-mop matmul is full-tile only).
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
         ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_matmul_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
+    _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
 
     _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();

@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from fuser.blackhole.sfpu.ternary import TernarySfpu as BaseTernarySfpu
+
+
+class TernarySfpu(BaseTernarySfpu):
+    def get_headers(self):
+        return [
+            "llk_math_common.h",
+            "sfpu_operations_quasar.h",
+        ]
+
+    def init(self, operation, config, compute_unit, block):
+        op = f"SfpuType::{self.operation.cpp_enum_value}"
+        return (
+            f"test_utils::init_ternary_sfpu_operation_quasar<{op}, "
+            f"{config.dest_acc.cpp_enum_value} /*is_fp32_dest_acc_en*/, "
+            f"{self.approx_mode.cpp_enum_value} /*APPROX*/>();\n"
+        )
+
+    def calculate(self, operation, config, compute_unit, block):
+        op = f"SfpuType::{self.operation.cpp_enum_value}"
+        return (
+            f"test_utils::call_ternary_sfpu_operation_quasar<{op}, "
+            f"{operation.dest_sync.cpp_enum_value}, "
+            f"{config.dest_acc.cpp_enum_value} /*is_fp32_dest_acc_en*/, "
+            f"{self.approx_mode.cpp_enum_value} /*APPROX*/, "
+            f"{self.iterations} /*ITERATIONS*/>("
+            f"{block.dest_src0} /*src0_tile*/, "
+            f"{block.dest_src1} /*src1_tile*/, "
+            f"{block.dest_src2} /*src2_tile*/, "
+            f"{block.tile_id_dest} /*dst_tile*/);\n"
+        )

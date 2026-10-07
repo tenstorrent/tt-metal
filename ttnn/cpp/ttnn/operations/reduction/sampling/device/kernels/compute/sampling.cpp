@@ -700,7 +700,6 @@ void kernel_main() {
     const uint32_t logk = 5;  // log(32)
 
     // top-k
-    compute_kernel_hw_startup(dfb::input_values, dfb::index, dfb::input_transposed);
 #if SAMPLING_TOPK_FUSED_32B_DEST
     if constexpr (stable_sort && !DST_ACCUM_MODE) {
         top_k_fused_32b_dest<
@@ -749,4 +748,18 @@ void kernel_main() {
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_sum, dfb::cur_sum, Ht, Kt>();
     recip_block_inplace(dfb::cur_sum, Ht);
     mul_block_bcast_cols(dfb::values, dfb::cur_sum, dfb::local_vals, Ht, Kt);
+
+    // Buffers this kernel waited and left unpopped, popped here so they are left balanced.
+    // sub_exp_block_bcast_cols_inplace waits Ht tiles of dfb::cur_max, which is produced and
+    // consumed entirely within this kernel. add_block_inplace waits Ht * Kt tiles of
+    // dfb::topk_mask, and mul_block_bcast_scalar_inplace waits 1 tile of dfb::temp.
+    DataflowBuffer(dfb::cur_max).pop_front(Ht);
+    DataflowBuffer(dfb::topk_mask).pop_front(Ht * Kt);
+    DataflowBuffer(dfb::temp).pop_front(1);
+
+    // dfb::scaler_max and dfb::scaler_sum are pushed once by the writer and waited inside
+    // compute_kernel_lib::reduce, which leaves them unpopped so one pushed tile serves every reduce
+    // call. Pop both here so they are left balanced.
+    DataflowBuffer(dfb::scaler_max).pop_front(1);
+    DataflowBuffer(dfb::scaler_sum).pop_front(1);
 }

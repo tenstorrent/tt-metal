@@ -4,27 +4,68 @@
 
 // Metal 2.0 / DataflowBuffer (DFB) writer for binary_ng's no-broadcast binary op, Quasar-native.
 //
-// Diverges from kernels_dfb/dataflow/writer_no_bcast_dfb.cpp in two ways, both licensed by
+// Diverges from kernels_dfb/dataflow/writer_no_bcast_dfb.cpp in three ways, all licensed by
 // matches_quasar_native_slice:
 //   - the nD stride cascade is gone: page = start_tile_id + k.
 //   - the tile loop is per-thread. Thread t of N drains the STRIDED share {t, t+N, t+2N, ...}, which
 //     is the slot assignment the DFB gives consumer thread t.
-// The output is interleaved: the gate rejects a sharded output, so no borrowed-shard branch exists.
+//   - for a borrowed output it writes back only the tail rings' results.
+// The output is written over the NoC, or borrowed from this core's L1 (DST_SHARDED): its shard, or its
+// slice of an L1-interleaved tensor, which the compute packs in place. The factory borrows all or none.
 //
-// The writer's cascade is the milder case -- an output is never broadcast, so its strides are always
-// dense and only the sharded-row wrap (dst_shard_width) is lost, which the gate rejects. The reader's
-// is the load-bearing one; see the note in reader_no_bcast_dfb.cpp before widening the gate.
+// The writer's cascade is the milder case: an output is never broadcast, so its strides are dense. A
+// NoC-written sharded output needs no shard-row wrap: each core writes a linear page range, and the
+// sharding-aware TensorAccessor maps each page to its shard. The reader's cascade is the load-bearing
+// one; see the note in reader_no_bcast_dfb.cpp before widening the gate.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/kernel_thread_globals.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
+#if DST_SHARDED
+    // Borrowed output: the compute packs the borrowed part into the resident L1 shard or slice, so there is
+    // nothing to write for it, as on WH and BH. Its credits stay posted, which is safe: each launch resets the tile
+    // counters, and the firmware waits for the packs. Do not call finish() on it: nothing acks, so it hangs.
+#if TAIL_TILES
+    // Copy the real tail results into the shard just past the borrowed part, and drop the padding.
+    {
+        const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
+        constexpr uint32_t num_tcs = get_arg(args::num_tcs);
+        Noc noc;
+        DataflowBuffer tail_out(dfb::out_tail);
+        const LocalTensorAccessor<uint32_t> out_shard(tensor::out);
+        const uint32_t out_shard_base = out_shard.get_bank_base_address();
+        const uint32_t tile_bytes = tail_out.get_entry_size();
+        const uint32_t noc_x = my_x[noc.get_noc_id()];
+        const uint32_t noc_y = my_y[noc.get_noc_id()];
+        const uint32_t num_threads = get_num_threads();
+        uint32_t slot = get_my_thread_id();
+        for (uint32_t c = 0; c < num_tcs; ++c, slot += num_threads) {
+            tail_out.wait_front(1);
+            if (slot < TAIL_TILES) {
+                noc.async_write(
+                    tail_out,
+                    UnicastEndpoint{},
+                    tile_bytes,
+                    {.offset_bytes = 0},
+                    {.noc_x = noc_x, .noc_y = noc_y, .addr = out_shard_base + (dst_num_tiles + slot) * tile_bytes});
+                noc.async_write_barrier();
+            }
+            tail_out.pop_front(1);
+        }
+        // Every tail entry was popped, so this returns at once; it keeps the drain protocol of the NoC path.
+        tail_out.finish();
+    }
+#endif
+#else
     const uint32_t start_tile_id = get_arg(args::start_tile_id);
     const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
 
@@ -97,4 +138,5 @@ void kernel_main() {
     // which is benign there (posted == acked == 0). No deadlock because finish()'s thread barrier sits
     // inside handle_final_credits, reached only via the NocOptions::TXN_ID overloads this kernel avoids.
     dfb_out.finish();
+#endif
 }
