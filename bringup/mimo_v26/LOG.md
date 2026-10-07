@@ -44,3 +44,36 @@
 - claim: tt-model-reference lacks a 'check for local weights / ask before download' step; study sgl.py is a 404 stub; ONBOARDING implies a checkpoint exists. Recorded in SKILL_DEFECTS.md items 4-5.
 - evidence: bringup/mimo_v26/SKILL_DEFECTS.md
 - paths: bringup/mimo_v26/SKILL_DEFECTS.md, .claude/skills/tt-model-reference
+## E261007-0135-20d
+- date: 2026-10-07T01:35:54
+- commit: 9df3eedb884
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: DECISION (coordinator, from attn probe E261007-0114-2df, not yet merged here): bring-up uses V padded to 192 for SWA and global attention (non-MLA decode with ring cache, chunked SDPA with window+sink; sink input = sink/scale). Native V=128 decode is 13-17% faster on global 64k decode (paired, 1 chip, wall clock) and is a later perf item; the C++ route (chunked MLA prefill with explicit V) needs user approval for a private build.
+- evidence: -
+- paths: bringup/mimo_v26
+
+## E261007-0135-56e
+- date: 2026-10-07T01:35:54
+- commit: 9df3eedb884
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: DECISION (coordinator): checkpoint downloaded from HF XiaomiMiMo/MiMo-V2.6-Flash-RL into /mnt/tt-data/MiMo-V2.6-Flash-RL (user approved download and location 2026-10-07; whole repo, ~173 GB, log /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log). MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL. Hosts approved by user for use (health-check each first): 30 35 40 41 43 44 46 47 48.
+- evidence: -
+- paths: bringup/mimo_v26
+
+## E261007-0201-218
+- date: 2026-10-07T02:01:39
+- commit: 2d555515344
+- branch: ssinghal/mimo
+- host: coordinator
+- track: infra
+- status: verified
+- claim: Checkpoint XiaomiMiMo/MiMo-V2.6-Flash-RL downloaded to /mnt/tt-data/MiMo-V2.6-Flash-RL: 65 safetensors listed in model.safetensors.index.json all present, summed file bytes 172,932,505,264 vs index total_size 172,923,364,096 (+9.1 MB = headers). Not hashed against HF; sizes only.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log
+- paths: bringup/mimo_v26/scorecard.json
+- data: {"ckpt_files":65,"bytes":172932505264}
