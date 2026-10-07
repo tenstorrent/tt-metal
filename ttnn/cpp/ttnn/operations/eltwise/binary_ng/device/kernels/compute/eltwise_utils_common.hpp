@@ -29,6 +29,14 @@
 #define PROCESS_ACTIVATIONS_(op) PROCESS_##op##_ACTIVATIONS
 #define HAS_ACTIVATIONS(op) P_COMPL(IS_EMPTY(PROCESS_ACTIVATIONS(op, 0)))
 
+// FPU kernels rerun the binary init per chunk after an operand preprocess pass. Blackhole: a post activation (SFPU on DEST)
+// leaves the binary init in place, so it alone does not.
+#if defined(ARCH_BLACKHOLE)
+#define BINARY_POST_REINIT 0
+#else
+#define BINARY_POST_REINIT HAS_ACTIVATIONS(POST)
+#endif
+
 // Physical LHS means the tensor in c_0, not necessarily the mathematical LHS.
 // This is a FORMAT reference, not necessarily the buffer supplying the next tile:
 // binary_ng_program_factory gives the LHS broadcast temporary (c_5) the same
