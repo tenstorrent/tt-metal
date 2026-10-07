@@ -23,7 +23,7 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa_recipes import (
     precision_inputs,
     randn,
 )
-from tests.ttnn.unit_tests.operations.sdpa.test_sdpa_recipes import L2_PCT_BOUND, VARIANTS, l2_pct, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import L2_PCT_BOUND, VARIANTS, l2_pct, reference
 
 pytestmark = pytest.mark.skipif(
     not is_blackhole() or os.environ.get("TT_METAL_SIMULATOR") is not None,
