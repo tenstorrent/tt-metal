@@ -79,3 +79,4 @@ Broker power-cycles (start UTC): 327 (before 05:58), 347 (before 06:39), 367 07:
 - Broker state at start: #164's job 407 dropped chips 0-7 (left PCIe) 21:34 UTC; power-cycle 21:42:56;
   broker up 21:52:44; HOLD-DEADLINE-ESCALATE reset + health verified 21:55:00.
 - Next: on DONE read driver.log/summary.txt/quality.txt, median/min/max of E2E_WALL_S for gens 1-5, stills per seed.
+- 22:23 UTC: reboot killed run 689; relaunched as run 694 (state/runs/694/t142g15.{log,rc}). Broker in glx_reset after chips 0-7 left PCIe in health gates (not our job); #164 job 422 queued ahead.
