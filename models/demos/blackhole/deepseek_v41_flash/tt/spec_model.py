@@ -40,15 +40,38 @@ from models.demos.blackhole.deepseek_v41_flash.tt.spec_paged import (
 def _ucfg(T):
     return ttnn.create_sharded_memory_config(
         shape=(PAD_HEADS, HEAD_DIM),
-        core_grid=ttnn.num_cores_to_corerangeset(T, ttnn.CoreCoord(8, 8), row_wise=True),
+        core_grid=ttnn.num_cores_to_corerangeset(min(T, 64), ttnn.CoreCoord(8, 8), row_wise=True),
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
 
 
+class _MoEBig:
+    """DSV41_SPEC_ROWS=1, Tn > 32 rows per mesh row: the grouped moe_compute front-end of the prefill (G = Tn/32 chunks of 32 rows per call, router per 32-row slice)
+    over the SAME expert weights, with the DSV41MoEBlock.forward signature."""
+
+    def __init__(self, moe, Tn, buffers):
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_layer import DSV41PrefillMoE
+
+        assert Tn % 32 == 0
+        self.pm = DSV41PrefillMoE(moe, T=32, buffers=buffers, g=Tn // 32)
+        self.decode = self.pm.decode
+        self.mesh_device = moe.mesh_device
+
+    def warmup(self):
+        self.pm.warmup()
+
+    def forward(self, h, h_tok, forced_routing=None):
+        assert forced_routing is None
+        return self.pm.forward(h, h_tok)
+
+
 def _moe_view(moe, Tn, buffers):
     """DSV41MoEBlock over the SAME expert weights / gate with batch_per_device = Tn (own config + scratch buffers)."""
+    if Tn > 32 and os.environ.get("DSV41_SPEC_ROWS") == "1":
+        mb = _MoEBig(moe, Tn, buffers)
+        return mb, mb.decode.buffers
     from models.common.modules.moe.tt_moe_decode import _TTMoEDecodeBuffers
     from models.common.modules.moe.tt_moe_decode_config import TTMoEDecodeConfig
 
@@ -85,9 +108,11 @@ def _moe_view(moe, Tn, buffers):
 
 
 class SpecRunner:
-    def __init__(self, model, k, max_pos=None):
-        assert 1 <= k <= BLOCK
+    def __init__(self, model, k, max_pos=None, drafter=None, draft=True):
+        """``drafter``: an existing (root) drafter of a sibling runner (adaptive verification length): shared weights + rings, viewed for this block size."""
+        assert (0 if drafter is not None else 1) <= k <= BLOCK  # k = 0: plain-like round (adaptive scheduler's no-spec mode), only as a sibling of a real runner
         self.m, self.k, self.n = model, k, k + 1
+        self.draft = draft
         self.md, self.U, self.rows, self.cols, self.B = model.md, model.U, model.rows, model.cols, model.B
         n, U = self.n, self.U
         # tail-replay seeding: rows q in [S-128, S) read the window [q-127, q] => the prefill-written ring must hold 255 rows (+k slack) below S
@@ -137,21 +162,35 @@ class SpecRunner:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
         )
-        sh = _Shards()
-        stage_w = [load_mtp_stage(i, sh) for i in range(3)]
-        Uc = (
-            U if BLOCK * U <= 32 else 4
-        )  # the drafter's token rows (5 per user) must stay <= 32 per mesh row: chunks of 4 users share weights
-        assert U % Uc == 0, f"users per mesh row {U}: the chunked drafter needs a multiple of {Uc}"
-        base = DSparkDrafter(
-            self.md, model.mc, model.ccl, stage_w, emb.weight, model.head, users_per_row=Uc, n=n, max_pos=self.max_pos
-        )
-        self.drafter = base if Uc == U else ChunkedDrafter(base, U // Uc)
-        del stage_w
+        if drafter is not None:
+            self.drafter_root = drafter
+            self.drafter = drafter.view_n(n)
+        else:
+            sh = _Shards()
+            stage_w = [load_mtp_stage(i, sh) for i in range(3)]
+            Uc = (
+                U if BLOCK * U <= 32 else 4
+            )  # the drafter's token rows (5 per user) must stay <= 32 per mesh row: chunks of 4 users share weights
+            assert U % Uc == 0, f"users per mesh row {U}: the chunked drafter needs a multiple of {Uc}"
+            base = DSparkDrafter(
+                self.md,
+                model.mc,
+                model.ccl,
+                stage_w,
+                emb.weight,
+                model.head,
+                users_per_row=Uc,
+                n=n,
+                max_pos=self.max_pos,
+            )
+            self.drafter = self.drafter_root = base if Uc == U else ChunkedDrafter(base, U // Uc)
+            del stage_w
+        self.siblings, self.round_ms, self.conf = [], None, None
         self.dec = SpecDecoder(
             self.md, layers, emb, model.head, self.drafter, model.dec.engram, step_states=groups, n=n
         )
         self.dec.enable_sampling(model.mc, model.ccl)
+        self.dec.draft_on = draft
         self.tid = None
         self.log = model.log
         model.log_dram("spec: after runner build (views + drafter)")
@@ -176,7 +215,16 @@ class SpecRunner:
         T_loc = U * n
         a = v[:, :T_loc].reshape(self.B, n)
         mm = v[:, T_loc : T_loc + U].reshape(self.B)
-        d = v[:, T_loc + U :].reshape(rows, BLOCK, U).permute(0, 2, 1).reshape(self.B, BLOCK)
+        if not self.draft:  # no-draft round: stale drafts are the caller's business
+            self.conf = None
+            return a, mm, torch.zeros(self.B, BLOCK, dtype=torch.long)
+        d = v[:, T_loc + U : T_loc + U + BLOCK * U].reshape(rows, BLOCK, U).permute(0, 2, 1).reshape(self.B, BLOCK)
+        rest = v[:, T_loc + U + BLOCK * U :]
+        self.conf = (
+            rest.reshape(rows, BLOCK, U).permute(0, 2, 1).reshape(self.B, BLOCK).float() / 65535.0
+            if rest.shape[1] == BLOCK * U
+            else None
+        )  # confidence head: P(draft j accepted | drafts < j accepted), j = 1..5 (see tools/spec_conf)
         return a, mm, d
 
     def _round(self, X, base, force=None):
@@ -193,23 +241,48 @@ class SpecRunner:
         self.m.prefill_model.teardown_dyn()  # NOTE: frees only ~11 MiB/bank; at ISL > 512 the next spec round read garbage keys after it (off by default)
         self.m.log_dram("spec: after freeing decode + prefill traces")
 
-    def capture(self, X, base):
-        """Compile pass + trace capture (state restored). Call AFTER the prefill, before ``seed``; X [B,n] / base [B] any valid block."""
+    def prepare(self, X, base):
+        """Eager compile pass (creates every lazily built constant / output) + state snapshot. With several runners ALL of them must be prepared before the FIRST trace is captured:
+        a tensor allocated after a trace was captured can land on that trace's (freed) scratch memory and is then overwritten by every replay of that trace (hang).
+        """
         dec = self.dec
-        snaps = dec.snapshot_states()
+        self.snaps = dec.snapshot_states()
         self.m.pool.ensure(base + self.n, lookahead=self.n + 16)
         dec.set_force(self.n - 1)
         self._feed(X, base)
         dec.forward()
         ttnn.synchronize_device(self.md)
-        dec.restore_states(snaps)
+        dec.restore_states(self.snaps)
+
+    def capture_trace(self):
+        dec = self.dec
         self.tid = ttnn.begin_trace_capture(self.md, cq_id=0)
         dec.forward()
         ttnn.end_trace_capture(self.md, self.tid, cq_id=0)
         ttnn.synchronize_device(self.md)
-        dec.restore_states(snaps)
-        self.snaps = snaps
+        dec.restore_states(self.snaps)
         self.m.log_dram("spec: after trace capture")
+
+    def calibrate(self, X, base, reps):
+        """Round-time calibration: replay the captured block with all drafts forced accepted (state restored afterwards)."""
+        ws = []
+        for _ in range(reps + 1):
+            t = time.perf_counter()
+            self._round(X, base, torch.full((self.B,), self.n - 1))
+            ws.append((time.perf_counter() - t) * 1e3)
+        self.round_ms = sorted(ws[1:])[len(ws[1:]) // 2]
+        self.dec.restore_states(self.snaps)
+        self.log(
+            f"spec calibration: k={self.k} n={self.n} T={self.T} round {self.round_ms:.1f} ms (reps {[round(w, 1) for w in ws]})"
+        )
+
+    def capture(self, X, base):
+        """Compile pass + trace capture (state restored). Call AFTER the prefill, before ``seed``; X [B,n] / base [B] any valid block."""
+        self.prepare(X, base)
+        self.capture_trace()
+        reps = int(os.environ.get("DSV41_SPEC_CALIB", "0"))
+        if reps > 0:
+            self.calibrate(X, base, reps)
 
     def release(self):
         if self.tid is not None:
@@ -235,23 +308,45 @@ class SpecRunner:
             s[int(lens[b])] = int(first[b])
             seqs.append(s)
         d_final = torch.zeros(B, BLOCK, dtype=torch.long)
+        conf_final = torch.zeros(B, BLOCK)
         dev_first = torch.zeros(B, dtype=torch.long)
         for r in range(int(nbl.max())):
             if (
                 self.tid is None
             ):  # first use: compile pass + trace capture on the first replay block (writes the same state the replay writes)
                 b0 = p0.clone()
-                self.capture(torch.stack([seqs[b][int(b0[b]) : int(b0[b]) + n] for b in range(B)]), b0)
+                rs = [self] + list(
+                    self.siblings
+                )  # adaptive: every runner of the set captures its trace on the same first replay block
+                blocks = {id(r_): torch.stack([seqs[b][int(b0[b]) : int(b0[b]) + r_.n] for b in range(B)]) for r_ in rs}
+                for r_ in rs:  # phase 1: all compile passes, before ANY trace exists
+                    r_.prepare(blocks[id(r_)], b0)
+                for r_ in rs:  # phase 2: the traces
+                    r_.capture_trace()
+                reps = int(os.environ.get("DSV41_SPEC_CALIB", "0"))
+                if os.environ.get("DSV41_SPEC_SWITCHTEST") == "1":  # diagnostic: alternate the traces of the runners
+                    for it in range(3):
+                        for r_ in rs:
+                            self.log(f"switchtest it {it} -> k={r_.k}")
+                            r_._round(blocks[id(r_)], b0, torch.full((B,), r_.n - 1))
+                    self.log("switchtest done")
+                if reps > 0:
+                    for r_ in rs:
+                        r_.calibrate(blocks[id(r_)], b0, reps)
             rr = torch.minimum(torch.full((B,), r), nbl - 1)  # finished users repeat their last block (idempotent)
             base = p0 + rr * n
             X = torch.stack([seqs[b][int(base[b]) : int(base[b]) + n] for b in range(B)])
             force = torch.where(rr == nbl - 1, lens - 1 - base, torch.full((B,), n - 1))
             a, mm, d = self._round(X, base, force)
+            if r % 8 == 0:
+                self.log(f"spec seed: replay block {r}/{int(nbl.max())} (k={self.k})")
             for b in range(B):
                 if r == int(nbl[b]) - 1:
                     d_final[b] = d[b]
+                    if self.conf is not None:
+                        conf_final[b] = self.conf[b]
                     dev_first[b] = a[b, int(lens[b]) - 1 - int(base[b])]
-        self.dev_first = dev_first
+        self.dev_first, self.d_final, self.conf_final = dev_first, d_final, conf_final
         X0 = torch.zeros(B, n, dtype=torch.long)
         X0[:, 0] = torch.as_tensor(first).long()
         X0[:, 1:] = d_final[:, : self.k]
@@ -277,6 +372,11 @@ class SpecRunner:
             t = time.perf_counter()
             a, mm, d = self._round(X, base)
             walls.append((time.perf_counter() - t) * 1e3)
+            if len(walls) <= int(os.environ.get("DSV41_SPEC_DBG", "0")):
+                for b_ in range(min(B, 2)):
+                    self.log(
+                        f"SPEC_DBG round {len(walls)} user {b_} base {int(base[b_])} X {X[b_].tolist()} a {a[b_].tolist()} m {int(mm[b_])} newd {d[b_].tolist()} conf {None if self.conf is None else [round(float(c_), 2) for c_ in self.conf[b_]]}"
+                    )
             v2 = torch.cat(
                 [
                     ttnn.to_torch(ttnn.get_device_tensors(self.dec.top2)[r * self.cols]).reshape(self.U * n, -1)
@@ -314,3 +414,276 @@ class SpecRunner:
         }
         stats["tok_s_user"] = 1e3 * stats["tok_per_round"] / stats["round_ms"] if walls else float("nan")
         return gen, stats
+
+
+def parse_ks(spec, default):
+    """'1,3,5' -> [1, 3, 5]"""
+    return sorted({int(x) for x in str(spec or default).split(",") if x.strip()})
+
+
+class AdaptiveSpec:
+    """Adaptive speculative verification length (DSV41_SPEC_ADAPT=1). One resident, traced ``SpecRunner`` per candidate k (own verify views / MoE scratch / trace, ONE shared drafter + rings
+    + pool); the drafter always proposes 5 drafts per user, a round of runner k verifies the first k of them (``n = 1 + k`` rows per user). Per round the scheduler (``choose``) picks the
+    runner that maximises  E[tokens/round](k) / round_ms(k)  where  E = 1 + sum_{j<=k} S_j,  S_j = mean over active users of prod_{i<=j} p_i  (p = confidence-head acceptance probabilities of the
+    drafts about to be verified) and round_ms(k) = the profiled round time (startup calibration of every trace, then an EMA of the measured rounds; ``DSV41_SPEC_TIMES='1:70,3:83,5:104'`` overrides).
+    The accept rule is the plain greedy one, so the output stream equals plain greedy decoding for every policy (up to bf16 near-ties). Policies: 'adapt' | 'k<j>' (fixed j, same runner set).
+    Per-user masking is NOT used: rows are shared across the batch, a masked user would only lose accepted tokens without saving any compute.
+    """
+
+    def __init__(self, model, ks, max_pos=None, seed_k=None):
+        ks = sorted(set(ks))
+        self.plain_ok = 0 in ks  # k = 0 candidate: no-spec rounds (verify 1 row/user + write_main, no drafting) with a probe round (with drafting) every DSV41_SPEC_PROBE rounds
+        ks = [k for k in ks if k > 0]
+        os.environ.setdefault(
+            "DSV41_SPEC_CALIB", "3"
+        )  # every runner measures its round time when its trace is captured
+        self.m, self.ks, self.B = model, ks, model.B
+        seed_k = seed_k or (3 if 3 in ks else ks[-1])
+        self.runners = {}
+        first = SpecRunner(model, seed_k, max_pos=max_pos)
+        self.runners[seed_k] = first
+        for k in ks:
+            if k != seed_k:
+                self.runners[k] = SpecRunner(model, k, max_pos=max_pos, drafter=first.drafter_root)
+        self.seedr = first
+        first.siblings = [self.runners[k] for k in ks if k != seed_k]
+        self.probe_every = int(os.environ.get("DSV41_SPEC_PROBE", "16"))
+        self.runner0 = self.probe0 = None
+        if self.plain_ok:
+            self.runner0 = SpecRunner(model, 0, max_pos=max_pos, drafter=first.drafter_root, draft=False)  # the fast plain round
+            self.probe0 = SpecRunner(model, 0, max_pos=max_pos, drafter=first.drafter_root, draft=True)  # a round with drafting at the same n = 1: refreshes drafts + confidence
+            first.siblings += [self.runner0, self.probe0]
+        self.k, self.n = max(ks), max(ks) + 1
+        self.log = model.log
+        self.policy = os.environ.get("DSV41_SPEC_POLICY", "adapt")
+        self.times = {}
+        self.cal_a, self.cal_b = [float(x) for x in os.environ.get("DSV41_SPEC_CONF_AB", "1,0").split(",")]
+        self.hyst = float(os.environ.get("DSV41_SPEC_HYST", "0.0"))
+        self.cal_records = []
+
+    def release(self):
+        for r in list(self.runners.values()) + [r_ for r_ in (self.runner0, self.probe0) if r_ is not None]:
+            r.release()
+
+    def seed(self, tokens, lens, first):
+        X0, base = self.seedr.seed(tokens, lens, first)
+        for k, r in self.runners.items():
+            if k not in self.times and r.round_ms is not None:
+                self.times[k] = r.round_ms
+        if self.runner0 is not None and self.runner0.round_ms is not None:
+            self.times[0] = self.runner0.round_ms
+            self.times_probe = self.probe0.round_ms
+        for kv in os.environ.get("DSV41_SPEC_TIMES", "").split(","):
+            if kv:
+                k, v = kv.split(":")
+                self.times[int(k)] = float(v)
+        self.log(f"spec adapt: round-time table (ms) {dict(sorted(self.times.items()))}")
+        return X0, base
+
+    # ---- scheduler ----------------------------------------------------------------------------------------------------------------------
+    def _p(self, conf):
+        c = conf.clamp(1e-4, 1 - 1e-4)
+        if self.cal_a != 1.0 or self.cal_b != 0.0:
+            c = torch.sigmoid(self.cal_a * torch.logit(c) + self.cal_b)
+        return c
+
+    def expected_tokens(self, conf, active):
+        """E[tokens/round] for every candidate k from the confidence probabilities conf [B,5] (mean over the active users)."""
+        S = torch.cumprod(self._p(conf[active]), dim=1).mean(0)  # [5] survival P(first j drafts accepted)
+        return {k: 1.0 + float(S[:k].sum()) for k in self.ks}
+
+    def choose(self, conf, active):
+        if self.policy.startswith("k"):
+            return int(self.policy[1:])
+        if not bool(active.any()):
+            return self.ks[0]
+        E = self.expected_tokens(conf, active)
+        score = {k: E[k] / self.times[k] for k in self.ks}
+        if self.plain_ok and 0 in self.times:
+            score[0] = 1.0 / self.times[0]
+        best = max(score, key=score.get)
+        cur = getattr(self, "_cur", None)
+        if cur is not None and cur in score and score[best] < score[cur] * (1 + self.hyst):
+            best = cur
+        self._cur = best
+        return best
+
+    # ---- the loop -----------------------------------------------------------------------------------------------------------------------
+    def run(self, X, base, max_new, eos=None, active=None, policy=None):
+        B = self.B
+        if policy is not None:
+            self.policy = policy
+        base = base.clone()
+        X5 = torch.zeros(B, 1 + BLOCK, dtype=torch.long)
+        X5[:, 0] = X[:, 0]
+        X5[:, 1:] = self.seedr.d_final
+        conf = self.seedr.conf_final.clone()
+        gen = [[int(X5[b, 0])] for b in range(B)]
+        self.m_hist = [[] for _ in range(B)]
+        self.gaps = [[] for _ in range(B)]
+        done = torch.zeros(B, dtype=torch.bool) if active is None else ~torch.as_tensor(active)
+        walls, emitted, ms, ks_used, exp_tok = [], [], [], [], []
+        cyc = None  # 'cycle:adapt+k1+k3+k5:4' = interleave the policies in windows of 4 rounds on the SAME stream (no re-prefill: A/B within one pass)
+        if self.policy.startswith("cycle:"):
+            _, names, win = self.policy.split(":")
+            cyc = ([x for x in names.split("+")], int(win))
+        base_policy = self.policy
+        by = {}  # policy -> dict(rounds, wall, emitted, pairs, acc, ks)
+        cal = []  # (user, k, conf[5], m): drafts of this round's block vs outcome
+        top = self.m.max_ctx - self.n - 1
+        last_pol = self.policy
+        stale, since_probe, nprobe = False, 0, 0  # stale: the drafts / confidence in X5 / conf belong to an earlier position (after no-draft k = 0 rounds)
+        while not bool(done.all()):
+            if cyc is not None:
+                self.policy = cyc[0][(len(walls) // cyc[1]) % len(cyc[0])]
+            probing = False
+            probe_due = since_probe >= self.probe_every or self.policy not in ("adapt", "k0") or self.policy != last_pol
+            last_pol = self.policy
+            if stale and self.policy != "k0" and probe_due:
+                k, probing = 0, True  # refresh drafts + confidence with a drafting k = 0 round, then let the scheduler decide again
+            elif stale:
+                k = 0
+            else:
+                k = self.choose(conf, ~done)
+            r = (self.probe0 if probing else self.runner0) if k == 0 else self.runners[k]
+            n = k + 1
+            cur_pol = self.policy
+            exp_tok.append(1.0 if (k == 0 or stale) else self.expected_tokens(conf, ~done)[k])
+            if len(walls) < 3:
+                self.log(
+                    f"spec adapt: round {len(walls)} -> k={k} (policy {self.policy}, times {({q: round(v, 1) for q, v in self.times.items()})})"
+                )
+            t = time.perf_counter()
+            a, mm, d = r._round(X5[:, :n].contiguous(), base)
+            if len(walls) % 10 == 0:
+                self.log(f"spec adapt: round {len(walls)} k={k} done {int(done.sum())}/{B}")
+            w = (time.perf_counter() - t) * 1e3
+            walls.append(w)
+            ks_used.append(k)
+            e0 = len(emitted)
+            tk = "probe" if probing else k
+            self.times[tk] = 0.8 * self.times[tk] + 0.2 * w if tk in self.times else w
+            v2 = torch.cat(
+                [
+                    ttnn.to_torch(ttnn.get_device_tensors(r.dec.top2)[row * r.cols]).reshape(r.U * n, -1)
+                    for row in range(r.rows)
+                ]
+            ).float()
+            t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
+            gp = t2[..., 0] - t2[..., 1]
+            newconf = r.conf
+            for b in range(B):
+                if done[b]:
+                    continue
+                mb = int(mm[b])
+                if k > 0 and not stale:
+                    cal.append((b, k, [float(x) for x in conf[b]], mb))
+                toks = [int(x) for x in a[b, : mb + 1]]
+                if eos is not None and eos in toks:
+                    toks = toks[: toks.index(eos) + 1]
+                    done[b] = True
+                gen[b] += toks
+                self.gaps[b] += [float(x) for x in gp[b, : len(toks)]]
+                emitted.append(len(toks))
+                ms.append(mb)
+                self.m_hist[b].append(mb)
+                base[b] += mb + 1
+                X5[b, 0] = a[b, mb]
+                if r.draft:
+                    X5[b, 1:] = d[b]
+                if newconf is not None:
+                    conf[b] = newconf[b]
+                if len(gen[b]) >= max_new or int(base[b]) > top:
+                    done[b] = True
+            if k == 0 and not probing:
+                stale, since_probe = True, since_probe + 1
+            elif r.draft:
+                stale, since_probe = False, 0
+                nprobe += int(probing)
+            st_ = by.setdefault(cur_pol, {"rounds": 0, "wall": 0.0, "emitted": 0, "pairs": 0, "acc": 0, "ks": {}})
+            st_["rounds"] += 1
+            st_["wall"] += w
+            st_["emitted"] += sum(emitted[e0:])
+            st_["acc"] += sum(ms[e0:])
+            st_["pairs"] += len(emitted) - e0
+            st_["ks"][k] = st_["ks"].get(k, 0) + 1
+        self.policy = base_policy
+        self.cal_records = cal
+        mt = torch.tensor(ms)
+        tot_ms = sum(walls)
+        nk = {k: ks_used.count(k) for k in ([0] if self.plain_ok else []) + list(self.ks)}
+        nk["probes"] = nprobe
+        stats = {
+            "rounds": len(walls),
+            "round_ms": tot_ms / max(len(walls), 1),
+            "tok_per_round": sum(emitted) / max(len(emitted), 1),
+            "accepted_per_round": float(mt.float().mean()) if len(ms) else 0.0,
+            "p_ge": [float((mt >= j).float().mean()) for j in range(1, BLOCK + 1)] if len(ms) else [],
+            "k_hist": nk,
+            "policy": self.policy,
+            "times": dict(self.times),
+            "mean_expected_tokens": sum(exp_tok) / max(len(exp_tok), 1),
+        }
+        stats["tok_s_user"] = 1e3 * stats["tok_per_round"] / stats["round_ms"] if walls else float("nan")
+        stats["by_policy"] = {
+            q: {
+                "rounds": v["rounds"],
+                "round_ms": v["wall"] / max(v["rounds"], 1),
+                "tok_per_round": v["emitted"] / max(v["pairs"], 1),
+                "accepted_per_round": v["acc"] / max(v["pairs"], 1),
+                "k_hist": v["ks"],
+            }
+            for q, v in by.items()
+        }
+        for v in stats["by_policy"].values():
+            v["tok_s_user"] = 1e3 * v["tok_per_round"] / v["round_ms"]
+        return gen, stats
+
+    def conf_report(self):
+        """Reliability of the confidence head: per draft position j, conditional (given the prefix accepted) predicted vs observed acceptance in 5 probability bins,
+        plus the prefix survival (product) vs observed P(m >= j). Only positions inside the verified block (j <= k of the round) are observed.
+        """
+        rec = self.cal_records
+        out = {"n_records": len(rec), "cond": {}, "surv": {}}
+        for j in range(1, BLOCK + 1):
+            c_p, c_o, s_p, s_o = [], [], [], []
+            for _, k, cf, m in rec:
+                if j > k:
+                    continue
+                s_p.append(float(torch.tensor(cf[:j]).prod()))
+                s_o.append(float(m >= j))
+                if m >= j - 1:  # position j was actually tested
+                    c_p.append(cf[j - 1])
+                    c_o.append(float(m >= j))
+            for name, P, O in (("cond", c_p, c_o), ("surv", s_p, s_o)):
+                if not P:
+                    continue
+                P, O = torch.tensor(P), torch.tensor(O)
+                bins = []
+                for lo, hi in ((0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)):
+                    sel = (P >= lo) & (P < hi)
+                    if int(sel.sum()):
+                        bins.append(
+                            (
+                                f"{lo:.1f}-{min(hi, 1):.1f}",
+                                int(sel.sum()),
+                                round(float(P[sel].mean()), 3),
+                                round(float(O[sel].mean()), 3),
+                            )
+                        )
+                out[name][j] = {
+                    "n": len(P),
+                    "pred": round(float(P.mean()), 3),
+                    "obs": round(float(O.mean()), 3),
+                    "bins": bins,
+                }
+        return out
+
+
+def default_ks(U):
+    """Candidate verification lengths per users-per-mesh-row with fast / supported row counts T = U * (1 + k) (mHC fast paths 4 / 8 / 16 / 24 / 32; T <= 32; T = 5..7 pad to 8;
+    T = 2 / 3 are not supported). T > 32 needs the chunked verify (DSV41_SPEC_ROWS=1): B=64 (U=16) {1: T=32, 3: T=64}, B=128 (U=32) {1: T=64, 3: T=128}."""
+    table = {1: [3, 5], 2: [1, 3, 5], 4: [1, 3, 5], 8: [1, 3]}
+    if os.environ.get("DSV41_SPEC_ROWS") == "1" and U in (16, 32):
+        return [1, 3]
+    return table.get(U, [k for k in (1, 3) if U * (1 + k) <= 32] or [1])

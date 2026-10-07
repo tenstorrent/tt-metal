@@ -99,12 +99,13 @@ class SpecDecoder(SpecVerifier):
     Host inputs per round (``set_packed_inputs``): block tokens ``[t, d_1..d_k]`` per user (user-major rows), positions ``base + j``, Engram rows.
     Device: verify with hidden taps, ``a_j = argmax`` per row, m = #leading drafts with ``x_{j+1} == a_j``, ``prev_cs`` commit (m), write of ``main_kv`` of all
     n rows into the drafter rings, draft of 5 tokens from (``a_m``, frontier ``base + m``). ``self.pack`` = uint32 [1, T + U + 5U] per mesh row:
-    ``a`` (T), ``m`` (U), drafts d_1..d_5 block-index-major (5U); ``self.draft_out['conf']`` stays on the device (diagnostics).
+    ``a`` (T), ``m`` (U), drafts d_1..d_5 block-index-major (5U); the confidence probabilities (65535 * sigmoid, 5U, same order as the drafts) are appended.
     """
 
     def __init__(self, md, layers, embedding, head, drafter, engram=None, step_states=None, n=2):
         super().__init__(md, layers, embedding, head, engram, step_states=step_states)
         self.drafter, self.n = drafter, n
+        self.draft_on = True
         self.U = drafter.U
         rep = ttnn.ReplicateTensorToMesh(md)
         c = lambda t, dt, lay: ttnn.from_torch(
@@ -149,28 +150,63 @@ class SpecDecoder(SpecVerifier):
         m = ttnn.mean(x, dim=2, keepdim=True)  # [T,1,1,D] fp32 mean over the 4 streams
         return ttnn.reshape(m, [1, 1, x.shape[0], x.shape[3]])
 
+    def _chunk_sizes(self, T):
+        """Row chunks (<= 32 rows: the mHC kernels / router / shared expert limit); only with DSV41_SPEC_ROWS=1 and T > 32."""
+        if T <= 32 or os.environ.get("DSV41_SPEC_ROWS") != "1":
+            return None
+        assert T % 32 == 0, f"T={T} rows per mesh row: row-chunked verify needs a multiple of 32"
+        return [32] * (T // 32)
+
+    def _forward_chunked(self, T, tokens, sizes):
+        """Verify body for T > 32 rows: streams as a list of 32-row chunks (see DSV41Layer.forward_chunks)."""
+        offs = [32 * i for i in range(len(sizes))]
+        xs, pres, taps = [], [], []
+        for o in offs:
+            x, pre = self.embedding.forward(ttnn.slice(tokens, [o, 0], [o + 32, 1]))
+            xs.append(x)
+            pres.append(ttnn.slice(self.embedding.pre, [o, 0, 0, 0], [o + 32, 1, 1, 4]))
+        for lid, layer, st in self.layers:
+            if lid in self.engram:
+                xs = [
+                    self.engram[lid].forward_v2(
+                        xs[c], ttnn.slice(self.rows[lid], [0, 0, o, 0], [1, 1, o + 32, self.rows[lid].shape[3]])
+                    )
+                    for c, o in enumerate(offs)
+                ]
+            if lid in TAP_LAYERS:
+                taps.append(ttnn.concat([self._tap(x) for x in xs], dim=2))
+            xs, pres = layer.forward_chunks(xs, pres, self._states[st])
+        logits = ttnn.concat([self.head.forward(xs[c], pres[c]) for c in range(len(xs))], dim=2)
+        return logits, taps, xs
+
     def forward(self):
         U, n = self.U, self.n
         T = U * n
         tokens = ttnn.typecast(ttnn.slice(self.ctrl, [0, 0], [T, 1]), ttnn.uint32)
         self.pos = ttnn.reshape(ttnn.slice(self.ctrl, [0, 1], [T, 2]), [T])
         self._engram_rows(T)
-        x, pre = self.embedding.forward(tokens)
         states = {k: ss.build(self.pos) for k, ss in self.step_states.items()}
         taps = []
-        dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
-        for lid, layer, st in self.layers:
-            if lid in self.engram:
-                x = self._engram_fwd(lid, x)
+        sizes = self._chunk_sizes(T)
+        if sizes is not None:
+            self._states = states
+            logits, taps, xs = self._forward_chunked(T, tokens, sizes)
+            x = None
+        else:
+            x, pre = self.embedding.forward(tokens)
+            dbg = os.environ.get("DSV41_DEBUG_LAYERS") == "1" and not getattr(self, "_dbg_done", False)
+            for lid, layer, st in self.layers:
+                if lid in self.engram:
+                    x = self._engram_fwd(lid, x)
+                    if dbg:
+                        self._dbg(f"engram {lid}", x)
+                if lid in TAP_LAYERS:
+                    taps.append(self._tap(x))
+                x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
                 if dbg:
-                    self._dbg(f"engram {lid}", x)
-            if lid in TAP_LAYERS:
-                taps.append(self._tap(x))
-            x, pre = layer.forward(x, pre, states[st], profile=getattr(self, "profile", None))
-            if dbg:
-                self._dbg(f"layer {lid}", x)
-        self._dbg_done = True
-        logits = self.head.forward(x, pre)
+                    self._dbg(f"layer {lid}", x)
+            self._dbg_done = True
+            logits = self.head.forward(x, pre)
         a = self.head.sample_global(logits, self.mesh_config, self.ccl)  # [T,1] uint32 RM: argmax of every row
         # top-2 logits of every row (per column shard, all-gathered): near-tie evidence for exactness analysis, read only on request
         t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]  # [1,1,T,2] fp32 per column shard
@@ -210,18 +246,28 @@ class SpecDecoder(SpecVerifier):
         oh3 = ttnn.reshape(ttnn.to_layout(onehot, rm), [U, n, 1])
         self.commit(oh3)
         hidden = ttnn.typecast(
-            ttnn.concat(taps or [self._tap(x)] * 3, dim=3), ttnn.bfloat16
+            ttnn.concat(
+                taps or [(self._tap(x) if x is not None else ttnn.concat([self._tap(c) for c in xs], dim=2))] * 3, dim=3
+            ),
+            ttnn.bfloat16,
         )  # [1,1,T,15360]; partial-layer debug runs have no tap layers
         dr = self.drafter
         dr.write_main_full(hidden, self.pos)
+        if not self.draft_on:  # k = 0 'plain' round without drafting (adaptive scheduler's no-spec mode): rings stay current, pack = [a (T), m (U)]
+            m_u32 = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)
+            self.pack = ttnn.concat([ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U])], dim=1)
+            self.logits = logits
+            return self.pack
         t_u32 = ttnn.typecast(ttnn.to_layout(t_next, rm), ttnn.uint32)  # [U,1]
         f_i32 = ttnn.reshape(ttnn.typecast(ttnn.to_layout(f_next, rm), ttnn.int32), [U, 1])
         d, drafts = dr.draft_full(t_u32, f_i32)  # drafts [5U,1] uint32 block-index-major
         self.draft_out = d
         m_u32 = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)  # [U,1]
-        self.pack = ttnn.concat(
-            [ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U]), ttnn.reshape(drafts, [1, 5 * U])], dim=1
-        )
+        parts = [ttnn.reshape(a, [1, T]), ttnn.reshape(m_u32, [1, U]), ttnn.reshape(drafts, [1, 5 * U])]
+        cq = getattr(dr, "conf_q", None)
+        if cq is not None:  # + confidence head: 65535 * sigmoid(logit) of the 5 drafts per user (drafts' row order)
+            parts.append(cq)
+        self.pack = ttnn.concat(parts, dim=1)
         self.logits = logits
         return self.pack
 

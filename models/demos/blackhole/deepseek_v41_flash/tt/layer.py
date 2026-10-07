@@ -144,6 +144,38 @@ class DSV41Layer:
     def _to_row(self, t):
         return ttnn.reshape(t, [1, 1, self.T, t.shape[-1]])
 
+    def forward_chunks(self, xs, pres, st):
+        """Row-chunked layer for T > 32 token rows (spec verify at U*(1+k) > 32 rows per mesh row, DSV41_SPEC_ROWS=1): the mHC kernels / shared expert take <= 32 rows,
+        so the residual streams are kept as a LIST of <= 32-row chunks (xs[c] [Tc,1,4,D] fp32, pres[c] [Tc,1,1,4]); attention and the MoE see the concatenated
+        [1,1,T,D] rows (state is per user, rows are independent), the shared expert and every mHC op run per chunk. -> (xs, ffn_pres).
+        """
+        n = len(xs)
+        rows = [int(x.shape[0]) for x in xs]
+        offs = [sum(rows[:i]) for i in range(n)]
+        sl = lambda t, c: ttnn.slice(t, [0, 0, offs[c], 0], [1, 1, offs[c] + rows[c], t.shape[3]])
+        mix = [self.mhc_attn.mixes(x) for x in xs]
+        hs = [self.mhc_attn.collapse_norm(xs[c], pres[c], self.attn_norm_w, self.eps) for c in range(n)]
+        h = ttnn.concat(hs, dim=2)
+        a = self.attention.forward(h, st)  # [1,1,T,D] bf16
+        x2s, fmix = [], []
+        for c in range(n):
+            x2, fm = self.mhc_attn.expand_mixes(sl(a, c), xs[c], mix[c][1], mix[c][2], None, self.mhc_ffn)
+            x2s.append(x2)
+            fmix.append(fm)
+        hh = [
+            self.mhc_ffn.collapse_norm_rm(x2s[c], mix[c][0], self.ffn_norm_w, self.eps) for c in range(n)
+        ]  # (h [1,1,Tc,D], h_tok [Tc,1,1,D])
+        h = ttnn.concat([t[0] for t in hh], dim=2)
+        h_tok = ttnn.concat([t[1] for t in hh], dim=0)
+        m = self.moe.forward(h, h_tok, None)
+        m = self.mesh_config.allgather(m, self.ccl, axis=1, dim=3)
+        outs = []
+        for c in range(n):
+            sh = self.shared.forward(hh[c][0])
+            x3 = self.mhc_ffn.expand(sl(m, c), x2s[c], fmix[c][1], fmix[c][2], sh)
+            outs.append(ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG))
+        return outs, [ttnn.to_memory_config(f[0], ttnn.DRAM_MEMORY_CONFIG) for f in fmix]
+
     def forward(self, x, pre_in, st, profile=None, forced_routing=None):
         """x [T,1,4,D] fp32, pre_in [T,1,1,4] fp32, st: attention step inputs -> (x_new, ffn_pre).
 
