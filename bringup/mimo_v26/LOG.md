@@ -1429,3 +1429,39 @@
 - claim: HANG with the small-U MoE (merge 73c014eb46d, library integ_73c014eb46d, MiMoMoEDecode dead='sentinel' default) in the TRACED decode of >= 24 layers: 4 layers OK (attn_T1_reconf_sweep4_newmoe), 24 and 48 layers hang in ttnn.execute_trace of the first decode replay after an eager prefill (python stack: tt/decode.py run -> execute_trace; device triage /mnt/tt-data/ssinghal/dsv4-logs/triage/hang_*-30_3756525_1141.txt and *-43_1272888_0953.txt: reduce_scatter_minimal_direct (all_reduce) cores and reader_combine/writer_combine cores waiting on all 32 devices). Repro: launch.py ... --env DEC_LAYERS=24 --env DEC_N=128 --env DEC_STEPS=6 -- python models/demos/blackhole/mimo_v26/tests/test_decode_smoke.py (eager decode of the same model runs fine first; ATTN_TRACE_MB=2048 does not help: attn_U1_smoke24_n128_trace2g hangs; N=16 live users also hangs; MIMO_DISP_WORKERS=1 also hangs (attn_V2)). With MIMO_DEAD=spread (old dead-slot routing, same library and code) the traced 24-layer decode runs to completion (attn_V1_smoke24_spread: eager 515 ms/step incl logits readback, traced 391 ms/step incl logits readback). So the sentinel dead-slot path deadlocks in a deep trace (cross-device CCL: combine vs all_reduce reduce_scatter); owner moe agent. Decode agent switch: tt/layer.py moe_decode passes env MIMO_DEAD (default sentinel) and MIMO_ROUTER; U sweeps use MIMO_DEAD=spread until fixed. Note the earlier 48-layer gate runs used the old spread path and are unaffected.
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_V1_smoke24_spread.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1221-9f3
+- date: 2026-10-07T12:21:21
+- commit: aa9bf90a8df
+- branch: ssinghal/mimo-attn
+- host: 41
+- track: decode
+- status: verified
+- claim: STEP TIME vs USERS PER ROW, 48 layers, ONE session (one build, Generator.reconfigure through U = 32,1,2,4,8,16,32 then reverse 16,8,4,2,1,32; weights never reloaded), traced decode, unpaired, host-timed (replay + candidate readback), dead-slot MoE routing MIMO_DEAD=spread (the sentinel path hangs in deep traces, E261007-1202-527), library integ_73c014eb46d, GSM8K prompts (S=256, 48 generated tokens per user, context < 350), median steady step ms [p10-p90]: U=1 (B=4) 113.4 [113.0-113.6]; U=2 (B=8) 114.1; U=4 (B=16) 114.8; U=8 (B=32) 115.5; U=16 (B=64) 118.1; U=32 (B=128) 123.1-123.4 [122.7-123.7]; reverse order U=16 118.3, 8 115.7, 4 114.6, 2 113.8, 1 113.1, 32 123.3 (order independent within 0.3 ms); step 0 (trace capture + compile) 3.0-11.4 s (11.4 s only for the very first U). Breakdown from separately captured traces at each U (replay ms, 48 layers): attention incl. norms/residual/all-reduce 15.1 (U=1) 15.8 16.3 17.4 19.5 24.1 (U=32); FFN/MoE 95.0-96.7 at every U (FLAT: dead/pad slots spread over all experts, every expert streams its weights); embedding 0.18; final norm + lm_head + max 0.63. So the U dependence is attention only (KV/paged update/SDPA/qkv rows ~0.19 ms/layer per +31 users at ctx<350): 9 ms of 123; the MoE (78%) would have to skip dead tokens. DRAM allocated per bank follows the pool: 1515 MB (U=1) .. 1612 MB (U=32); returning to U=32 gives 1612.5 (same as the previous U=32 visit) and U=16 1564.8 both ways: no leak across 12 reconfigures at 48 layers (the 4-layer test showed +0.9 MB/bank drift between the first and the last U=32).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_W1_timing_u_spread.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/layer.py
+- data: {"U":[1,2,4,8,16,32],"step_ms":[113.4,114.1,114.8,115.5,118.1,123.1],"moe_ms_flat":95.5,"attn_ms":[15.1,15.8,16.3,17.4,19.5,24.1]}
+
+## E261007-1221-ffd
+- date: 2026-10-07T12:21:22
+- commit: aa9bf90a8df
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: GSM8K at each U in ONE process (48 layers, reconfigure U=32 -> 1 -> 2 -> 4 -> 8 -> 16 -> 32.. via n = 4U prompts = first rows of gsm8k_128_nothink.json, max_new 512, greedy, MIMO_DEAD=spread, library integ_73c014eb46d): n=128 (U=32) 112/128 = 87.5%; n=4 (U=1) 4/4; n=8 (U=2) 7/8; n=16 (U=4) 15/16; n=32 (U=8) 28/32 (87.5%); n=64 (U=16) 53/64 (82.8%; the earlier n=64 run got 56/64: the known MoE race and near-ties change single answers); all users finished with EOS (127/128 at n=128), steady decode step 123.0 / 113.9 / 114.4 / 115.0 / 115.8 / 118.2 ms for U=32/1/2/4/8/16. Small n: accuracy not resolvable (n=4..32), text sanity only: every user ends with an answer. Launch line: launch.py --worktree WT --commit C --host H --env MIMO_CKPT=/mnt/tt-data/ssinghal/mimo-logs/.. --env MIMO_DEAD=spread --env MIMO_EXPERT_OP=unified --env LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/mimo/artifacts/integ_73c014eb46d/lib --env GSM_SCEN=128:512,4:512,8:512,16:512,32:512,64:512 -- python models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_W2_gsm_per_u_spread.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/layer.py
+- data: {"n128_correct":112,"n64_correct":53}
+
+## E261007-1221-cf6
+- date: 2026-10-07T12:21:22
+- commit: aa9bf90a8df
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: Small-U MoE scaling estimate from 4-layer traces (L0 dense + 3 MoE, same table test, DEC_LAYERS=4, replay ms, unpaired): sentinel dead slots (merged small-U MoE) step 9.14 / 8.01 / 7.27 / 7.51 / 7.22 / 7.23 ms at U=32/16/8/4/2/1, FFN+MoE part 3.56 / 3.39 / 3.32 / 3.37 / 3.29 / 3.30 vs spread dead slots 12.18 / 11.39 / 10.47 / 10.78 / 10.56 / 10.38 step and FFN+MoE 6.5 at every U (attn_X2_timing4_spread.jsonl): the sentinel path halves the 4-layer FFN/MoE time (3.3 vs 6.5 ms) and removes most of its dependence on U, i.e. ~0.75x step time (inferred 48-layer step ~92 ms at U=32, ~79 ms at U=1 if linear; NOT measured because the 48-layer traced sentinel decode hangs, E261007-1202-527). Not a measured 48-layer number.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_X1_timing4_sentinel.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/layer.py
+- data: {"sentinel_ffn_ms_4layers":3.3,"spread_ffn_ms_4layers":6.5}
