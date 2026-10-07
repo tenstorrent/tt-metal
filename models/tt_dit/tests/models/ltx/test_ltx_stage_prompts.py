@@ -157,7 +157,7 @@ def test_host_copy_falls_back_on_shape_change_and_untraced(monkeypatch):
     assert uploads == ["v", "a"] and p.writes == []
 
 
-@pytest.mark.parametrize(("value", "logged"), [(None, True), ("1", True), ("0", False)])
+@pytest.mark.parametrize(("value", "logged"), [(None, False), ("1", True), ("0", False)])
 def test_latent_stats_opt_out(monkeypatch, value, logged):
     if value is None:
         monkeypatch.delenv("LTX_LATENT_STATS", raising=False)

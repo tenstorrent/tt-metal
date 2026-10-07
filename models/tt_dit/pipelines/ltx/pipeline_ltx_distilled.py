@@ -1402,6 +1402,9 @@ class LTXDistilledPipeline(LTXPipeline):
             ancestral_gen = torch.Generator().manual_seed(noise_seed)
             logger.info(f"  ancestral Euler on-device (eta={ANCESTRAL_ETA}) noise_seed={noise_seed}")
 
+        # Replays are CQ-ordered, so the host need not wait for one step before enqueuing the next;
+        # LTX_STEP_SYNC=1 blocks on each replay so STEP_MS reports device step time.
+        step_sync = _env_on("LTX_STEP_SYNC")
         for step_idx in range(num_steps):
             _t_step = time.perf_counter()
             sigma = sigmas[step_idx].item()
@@ -1472,6 +1475,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 gather_output=False,
                 traced=traced,
                 tracer_trace_key=trace_key,
+                tracer_blocking_execution=step_sync,
             )
             # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
             # baked latent address holds across replays.
@@ -1523,6 +1527,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     state.tt_video_pad_mask,
                     state.tt_audio_pad_mask,
                     dt,
+                    blocking=step_sync,
                 )
             else:
                 v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
@@ -1547,7 +1552,11 @@ class LTXDistilledPipeline(LTXPipeline):
             # STEP_MS covers the step body only. A delta between successive log lines would fold the
             # host-side profiler drain into the step wall and corrupt the measurement.
             _step_ms = (time.perf_counter() - _t_step) * 1000.0
-            logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f} STEP_MS={_step_ms:.1f}")
+            # Without the per-step sync the body only enqueues; a distinct key keeps STEP_MS parsers honest.
+            _step_key = "STEP_MS" if step_sync or not traced else "ENQUEUE_MS"
+            logger.info(
+                f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f} {_step_key}={_step_ms:.1f}"
+            )
             if os.environ.get("LTX_DEBUG_STATS", "0") == "1":
                 # Device-0 shard only: enough to see whether the DiT's velocity or the running latent
                 # first leaves the finite range, without a mesh-wide gather inside the step loop.
@@ -1750,6 +1759,7 @@ class LTXDistilledPipeline(LTXPipeline):
             sp_axis=sp_axis,
             traced=traced,
             tracer_trace_key="t12",
+            tracer_blocking_execution=_env_on("LTX_STEP_SYNC"),
         )
         if traced and io["weights"] is None:
             io["weights"] = self._upsampler_weight_addresses()
@@ -1801,9 +1811,9 @@ class LTXDistilledPipeline(LTXPipeline):
         Good and bad generations are otherwise indistinguishable in the log -- same steps,
         same sigmas, same timings -- so without this a noise report has nothing to correlate.
         """
-        if not _env_on("LTX_LATENT_STATS", "1"):
-            # Serving opt-out: the fingerprints are host reductions over the whole latent (~7 ms at
-            # S1, ~10 ms at S2 for 1080p/145f) on the critical path between stages.
+        if not _env_on("LTX_LATENT_STATS", "0"):
+            # Opt-in (LTX_LATENT_STATS=1): the fingerprints are host reductions over the whole latent
+            # (~7 ms at S1, ~10 ms at S2 for 1080p/145f) on the critical path between stages.
             return
         for name, tensor in (("video", video), ("audio", audio)):
             if tensor is None:
@@ -2130,7 +2140,9 @@ class LTXDistilledPipeline(LTXPipeline):
             _stats("s1_video", s1_video)
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
+        _h0 = time.perf_counter()
         self._log_latent_stats("s1", s1_video, s1_audio)
+        _h1 = time.perf_counter()
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -2138,6 +2150,7 @@ class LTXDistilledPipeline(LTXPipeline):
         t0 = time.time()
         self._ensure_upsampler_frames(num_frames)  # tail-pad upsamples one extra latent frame
         self._prepare_upsampler()
+        _h2 = time.perf_counter()
         if device_resident:
             upsampled_dev = self._run_stage_transition(
                 s1_video,
@@ -2170,6 +2183,14 @@ class LTXDistilledPipeline(LTXPipeline):
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")
+        _h3 = time.perf_counter()
+        # Host wall only: a device-resident transition is enqueued here and its device time lands in
+        # stage 2 unless LTX_TIME_STAGES syncs above.
+        logger.info(
+            f"S1->S2 hand-off: {(_h3 - _h0) * 1000:.1f} ms [stats {(_h1 - _h0) * 1000:.1f}, "
+            f"upsampler prep {(_h2 - _h1) * 1000:.1f}, upsample {(_h3 - _h2) * 1000:.1f}"
+            f"{' (device-resident)' if device_resident else ''}]"
+        )
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
         t0 = time.time()
