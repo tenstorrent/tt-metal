@@ -88,11 +88,11 @@ void kernel_main() {
             reconfig_data_format_srca(in);
         }
         reduce_init<PoolType::MAX, ReduceDim::REDUCE_SCALAR>(in, sc, acc);
-        if constexpr (per_call == 1) {
-            reduce_tile<PoolType::MAX, ReduceDim::REDUCE_SCALAR>(in, sc, 0, 0, 0);
-        } else {
-            reduce_block<PoolType::MAX, ReduceDim::REDUCE_SCALAR>(in, sc, 0, 0, 0, per_call, 0);
-        }
+#ifdef REDUCE_IN_BLOCKS
+        reduce_block<PoolType::MAX, ReduceDim::REDUCE_SCALAR>(in, sc, 0, 0, 0, per_call, 0);
+#else
+        reduce_tile<PoolType::MAX, ReduceDim::REDUCE_SCALAR>(in, sc, 0, 0, 0);
+#endif
         reduce_uninit();
         tile_regs_commit();
         d_in.pop_front(per_call);
@@ -162,6 +162,7 @@ def reduce_max_with_reload(device, data, fp32_dest, per_call, acc_dtype):
                 source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
                 core_ranges=cores,
                 compile_time_args=[data.shape[0], per_call],
+                defines=[("REDUCE_IN_BLOCKS", "1")] if per_call > 1 else [],
                 runtime_args=[],
                 config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=fp32_dest
