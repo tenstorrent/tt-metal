@@ -47,8 +47,16 @@ https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevf
 import torch
 import torch.nn as nn
 
-from models.experimental.bevformer.config import DeformableAttentionConfig
-from models.experimental.bevformer.config.decoder_config import CODE_XY, CODE_Z
+from models.experimental.bevformer.model_config import (
+    CODE_XY,
+    CODE_Z,
+    DECODER_NUM_LAYERS,
+    DECODER_NUM_POINTS,
+    EMBED_DIMS,
+    FEEDFORWARD_CHANNELS,
+    NUM_HEADS,
+    DeformableAttentionConfig,
+)
 from models.experimental.bevformer.reference.ms_deformable_attention import MSDeformableAttention
 
 
@@ -98,7 +106,7 @@ class FFN(nn.Module):
     """mmcv's ``FFN`` with two fully connected layers and no dropout: ``x + Linear(ReLU(Linear(x)))``.
     ``layers`` keeps mmcv's nesting, so checkpoint keys match."""
 
-    def __init__(self, embed_dims=256, feedforward_channels=512):
+    def __init__(self, embed_dims=EMBED_DIMS, feedforward_channels=FEEDFORWARD_CHANNELS):
         super().__init__()
         self.layers = nn.Sequential(
             nn.Sequential(nn.Linear(embed_dims, feedforward_channels), nn.ReLU(inplace=True)),
@@ -154,7 +162,14 @@ class DetectionTransformerDecoder(nn.Module):
     4 sampling points.
     """
 
-    def __init__(self, num_layers=6, embed_dims=256, num_heads=8, feedforward_channels=512, num_points=4):
+    def __init__(
+        self,
+        num_layers=DECODER_NUM_LAYERS,
+        embed_dims=EMBED_DIMS,
+        num_heads=NUM_HEADS,
+        feedforward_channels=FEEDFORWARD_CHANNELS,
+        num_points=DECODER_NUM_POINTS,
+    ):
         super().__init__()
         self.layers = nn.ModuleList(
             [

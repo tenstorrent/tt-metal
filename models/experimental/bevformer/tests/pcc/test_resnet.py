@@ -6,17 +6,15 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.tests.backbone_common import (
-    IMAGE_HEIGHT,
-    IMAGE_WIDTH,
-    NUM_CAMS,
+from models.experimental.bevformer.model_config import IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS
+from models.experimental.bevformer.tests.common import (
     assert_pcc,
     build_reference_backbone,
     from_conv_layout,
     to_conv_layout,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.model_preprocessing_backbone import create_resnet_parameters
+from models.experimental.bevformer.tt.model_preprocessing import create_resnet_parameters
 from models.experimental.bevformer.tt.tt_resnet import TtBottleneck, TtResLayer, TtResNet
 
 

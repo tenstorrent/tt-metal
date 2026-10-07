@@ -12,7 +12,7 @@ carries the previous BEV between frames, as upstream's ``forward_test`` does.
 
 import ttnn
 
-from models.experimental.bevformer.config import backbone_config
+from models.experimental.bevformer import model_config
 from models.experimental.bevformer.tt.tt_fpn import TtFPN
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
 from models.experimental.bevformer.tt.tt_perception_transformer import TtPerceptionTransformer
@@ -28,7 +28,7 @@ class TtBEVFormer:
     """
 
     def __init__(self, params, device):
-        """``params`` from ``model_preprocessing_bevformer.create_bevformer_parameters``."""
+        """``params`` from ``model_preprocessing.create_bevformer_parameters``."""
         config = params.config
         assert (
             config.num_cams == params.transformer.config.num_cams
@@ -43,14 +43,14 @@ class TtBEVFormer:
             params.backbone["res_model"],
             device,
             out_indices=config.out_indices,
-            **backbone_config.tt_resnet_kwargs(),
+            **model_config.tt_resnet_kwargs(),
         )
         self.neck = TtFPN(
             conv_args=params.neck.conv_args,
             conv_pth=params.neck,
             device=device,
             input_dtypes=self.backbone.output_dtypes,
-            **backbone_config.tt_fpn_kwargs(),
+            **model_config.tt_fpn_kwargs(),
         )
         self.transformer = TtPerceptionTransformer(
             params.transformer, device, bev_h=config.bev_h, bev_w=config.bev_w, spatial_shapes=config.spatial_shapes
