@@ -5,6 +5,7 @@
 import math
 import os
 import pathlib
+import uuid
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import ttnn.decorators
@@ -906,11 +907,15 @@ def as_tensor(
         )
         pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
         if cache_dump_mode == ttnn.DumpTensorMode.LOCAL:
-            # Every rank writes its own file here, so a per-process temp file plus rename keeps a concurrent reader
-            # from seeing a partial one.
-            tmp_file_name = f"{cache_file_name}.tmp{os.getpid()}"
-            ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, cache_dump_mode)
-            os.replace(tmp_file_name, cache_file_name)
+            # Every rank writes its own file here. Publish it with a rename from a temp file unique to this fill, so a
+            # concurrent reader or filler never sees a partial file, and a failed dump leaves nothing behind.
+            tmp_file_name = f"{cache_file_name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+            try:
+                ttnn._ttnn.tensor.dump_tensor_flatbuffer(tmp_file_name, tensor, cache_dump_mode)
+                os.replace(tmp_file_name, cache_file_name)
+            except BaseException:
+                pathlib.Path(tmp_file_name).unlink(missing_ok=True)
+                raise
         else:
             ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor, cache_dump_mode)
         if device is not None:
