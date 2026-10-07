@@ -19,21 +19,13 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
-    decay_projection_program_config,
+    decay_projection_config,
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-
-
-def _slice_width(tensor: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
-    stop = list(tensor.shape)
-    begin = [0] * len(stop)
-    begin[-1] = start
-    stop[-1] = end
-    return ttnn.slice(tensor, tuple(begin), tuple(stop), memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def _largest_divisor_at_most(value: int, limit: int) -> int:
@@ -54,7 +46,9 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
 class _ProjectedInputs:
     # The fused projection; its leading Q+K+V columns are the convolution channels.
     qkv: ttnn.Tensor
+    # The fused projection again; the decay's low-rank activations are its columns from decay_rank_offset.
     decay_rank: ttnn.Tensor
+    decay_rank_offset: int
     output_gate: ttnn.Tensor
     output_gate_offset: int
     # The fused projection again; beta's pre-sigmoid logits are its columns from beta_offset.
@@ -184,11 +178,8 @@ class ttKDA:
         self.decay_activation = (
             ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if config.gate_lower_bound is not None else None
         )
-        self.decay_projection_program_config = decay_projection_program_config(
-            mesh_device.compute_with_storage_grid_size(),
-            self.active_seq_len_local,
-            *tuple(self.weights.decay_output_projection.shape)[-2:],
-            self.decay_activation,
+        self.decay_projection_config = decay_projection_config(
+            mesh_device.compute_with_storage_grid_size(), self.active_seq_len_local
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -359,7 +350,9 @@ class ttKDA:
         return _ProjectedInputs(
             # The convolution reads its channels in place from the tiled projection.
             qkv=projected,
-            decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
+            # The decay projection reads its low-rank columns in place.
+            decay_rank=projected,
+            decay_rank_offset=auxiliary_start,
             # The gated norm reads its gate columns straight from the fused projection, which therefore
             # stays allocated until the norm instead of only its gate slice.
             output_gate=projected,
@@ -369,21 +362,21 @@ class ttKDA:
             beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
         )
 
-    def _compute_decay(self, decay_rank: ttnn.Tensor) -> ttnn.Tensor:
-        """Evaluate the decay gate consumed by the recurrence; chunk preparation activates beta itself."""
+    def _compute_decay(self, projected: ttnn.Tensor, decay_rank_offset: int) -> ttnn.Tensor:
+        """Evaluate the decay gate consumed by the recurrence; chunk preparation activates beta itself.
+
+        The low-rank activations are read in place from the fused projection's columns at ``decay_rank_offset``.
+        """
         weights = self.weights
-        gate = ttnn.linear(
-            decay_rank,
+        gate = ttnn.experimental.minimal_matmul(
+            projected,
             weights.decay_output_projection,
-            bias=weights.decay_bias_flat,
+            bias_tensor=weights.decay_bias_flat,
+            fused_activation=self.decay_activation,
+            config=self.decay_projection_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
-            program_config=self.decay_projection_program_config,
-            activation=(
-                "sigmoid"
-                if self.decay_activation is not None and self.decay_projection_program_config is None
-                else None
-            ),
+            in0_column_offset=decay_rank_offset,
         )
         return self._activate_decay(gate)
 
@@ -510,7 +503,7 @@ class ttKDA:
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(projected.qkv, convolution_state, actual_start, actual_end)
-        gate = self._compute_decay(projected.decay_rank)
+        gate = self._compute_decay(projected.decay_rank, projected.decay_rank_offset)
         result = self.recurrence(
             q=q,
             k=k,

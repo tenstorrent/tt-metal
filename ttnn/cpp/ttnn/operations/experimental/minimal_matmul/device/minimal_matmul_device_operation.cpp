@@ -124,6 +124,14 @@ void MinimalMatmulDeviceOperation::validate_on_program_cache_miss(
             prefix_padded_K,
             suffix_padded_K,
             weight_padded_K);
+    } else if (operation_attributes.in0_column_offset.has_value()) {
+        const uint32_t offset = *operation_attributes.in0_column_offset;
+        TT_FATAL(
+            offset % tt::constants::TILE_WIDTH == 0 && K_w % tt::constants::TILE_WIDTH == 0 && offset + K_w <= K,
+            "minimal_matmul in0_column_offset: the tile-aligned window [{}, {}) must fit the activation's {} columns",
+            offset,
+            offset + K_w,
+            K);
     } else {
         TT_FATAL(K == K_w, "minimal_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
     }
@@ -346,7 +354,8 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b,
     bool fuse_swiglu,
-    const std::optional<Tensor>& optional_input_tensor) {
+    const std::optional<Tensor>& optional_input_tensor,
+    std::optional<uint32_t> in0_column_offset) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
     const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -368,7 +377,8 @@ std::vector<Tensor> minimal_matmul(
             .compute_kernel_config = kernel_config_val,
             .chunks = chunks,
             .dim = dim,
-            .fuse_swiglu = fuse_swiglu},
+            .fuse_swiglu = fuse_swiglu,
+            .in0_column_offset = in0_column_offset},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weight_tensor = weight_tensor,

@@ -637,6 +637,40 @@ def _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, label):
     device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("offset", [0, 96, 352], ids=["offset0", "offset96", "offset352"])
+def test_linear_in0_column_offset(device, offset):
+    """A column window of a wider activation must match the matmul of the sliced window, bit for bit."""
+    M, K, N, width = 256, 128, 512, 512
+    torch.manual_seed(0)
+    wide = torch.randn(1, M, width).bfloat16()
+    weight = (torch.randn(K, N) * 0.1).bfloat16()
+    bias = torch.randn(1, N).bfloat16()
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_wide, tt_window, tt_weight, tt_bias = (
+        to_device(wide),
+        to_device(wide[..., offset : offset + K].contiguous()),
+        to_device(weight),
+        to_device(bias),
+    )
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=2,
+        K_block_size=2,
+        N_block_size=4,
+        subblock_h=1,
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(4, 4),
+    )
+    activation = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)
+    expected = ttnn.experimental.minimal_matmul(
+        tt_window, tt_weight, bias_tensor=tt_bias, fused_activation=activation, config=config
+    )
+    actual = ttnn.experimental.minimal_matmul(
+        tt_wide, tt_weight, bias_tensor=tt_bias, fused_activation=activation, config=config, in0_column_offset=offset
+    )
+    assert tuple(actual.shape) == (1, M, N)
+    assert torch.equal(ttnn.to_torch(expected), ttnn.to_torch(actual))
+
+
 def test_program_cache_hit_bias(device):
     """in0 / in1 / bias / output addresses must all be re-patched on a cache hit."""
     M, K, N = 256, 256, 256

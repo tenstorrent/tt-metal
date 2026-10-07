@@ -251,7 +251,9 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
     // half, so the matmul contraction K must instead span the full weight K (both concat halves).
     uint32_t K_in = in0_tensor_shape[-1];
     uint32_t M = input_tensor.physical_volume() / K_in;
-    uint32_t K = two_input_split ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
+    // A column window reads a weight-K-wide slice of a wider activation in place.
+    const auto& in0_column_offset = operation_attributes.in0_column_offset;
+    uint32_t K = two_input_split || in0_column_offset.has_value() ? static_cast<uint32_t>(in1_tensor_shape[-2]) : K_in;
     uint32_t N = in1_tensor_shape[-1];
 
     uint32_t M_tiles = M / tt::constants::TILE_HEIGHT;
@@ -669,6 +671,13 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         return kernel;
     };
 
+    auto in0_defines = defines;
+    if (in0_column_offset.has_value()) {
+        in0_defines["IN0_COLUMN_WINDOW"] = "1";
+        in0_defines["IN0_ROW_TILES"] = std::to_string(K_in / tt::constants::TILE_WIDTH);
+        in0_defines["IN0_COLUMN_OFFSET_TILES"] = std::to_string(*in0_column_offset / tt::constants::TILE_WIDTH);
+    }
+
     constexpr const char* kIn0Source =
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender_metal2.cpp";
     constexpr const char* kIn1Source =
@@ -684,7 +693,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         TP_IN0,
         /*bind_in3=*/two_input_split,
         "in0",
-        two_input_split ? in0_concat_defines : defines,
+        two_input_split ? in0_concat_defines : in0_defines,
         in0_risc,
         in0_noc,
         SEM_IN0_SENDER,
@@ -700,7 +709,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         TP_IN0,
         /*bind_in3=*/false,
         "in0",
-        defines,
+        in0_defines,
         in0_risc,
         in0_noc,
         SEM_IN0_SENDER,
