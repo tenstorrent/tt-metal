@@ -301,7 +301,7 @@ std::string sibling_router_path(
         plane);
 }
 
-// A worker producer is "worker" and a sibling router producer is that router's path.
+// A worker producer is "worker", the tensix mux is "tensix_mux", and a sibling router producer is that router's path.
 json sender_producer_json(
     const std::optional<manifest::SenderChannelProducer>& producer,
     const ControlPlane& control_plane,
@@ -312,6 +312,9 @@ json sender_producer_json(
     }
     if (std::holds_alternative<manifest::LocalWorker>(*producer)) {
         return "worker";
+    }
+    if (std::holds_alternative<manifest::LocalTensixMux>(*producer)) {
+        return "tensix_mux";
     }
     return sibling_router_path(control_plane, node, chan, std::get<manifest::SiblingRouterRef>(*producer).direction);
 }
@@ -330,6 +333,7 @@ json sender_channel_json(
     control_info["buffer_index_sem"] = l1_region_json(sender.control_info.buffer_index_sem);
 
     json out;
+    out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = serviced_by_json(sender.serviced_by);
     out["producer"] = sender_producer_json(sender.producer, control_plane, node, chan);
     out["is_injection_channel"] = sender.is_injection_channel;
@@ -351,6 +355,7 @@ json noc_forward_config_json(const manifest::NocForwardConfig& config) {
 
 json receiver_channel_json(const manifest::ReceiverChannel& receiver) {
     json out;
+    out["status"] = lower_enum_name(receiver.status);
     out["serviced_by"] = serviced_by_json(receiver.serviced_by);
     out["forwards_on"] =
         receiver.forwards_on.has_value() ? json(fmt::format("vc{}", *receiver.forwards_on)) : json(nullptr);
