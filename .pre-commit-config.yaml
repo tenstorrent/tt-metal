@@ -195,6 +195,8 @@ repos:
       # run, which a lexical check cannot see, so a finding must never block a commit. Output is
       # shown even when it passes, so the warnings are seen rather than swallowed.
       verbose: true
+      # Every run parses the whole tree for wait helpers; one run, not one per file batch.
+      require_serial: true
       # All three architectures: each one's STALLWAIT names SRCA_VLD / SRCB_VLD, whatever the
       # argument layout. The op-local LLK copies under ttnn kernel_includes/ too.
       files: |

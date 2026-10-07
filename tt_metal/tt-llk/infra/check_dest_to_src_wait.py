@@ -169,10 +169,19 @@ def wait_providers(paths):
             continue
         lines = _blank_noncode(src).split("\n")
         for brace_line, _end, body, _guard in functions(src):
+            # A wait that is only recorded is not issued by calling the function.
+            spans = _recorded_spans(body)
+
+            def issued(pat):
+                return any(
+                    not any(a <= m.start() < b for a, b in spans)
+                    for m in re.finditer(pat, body)
+                )
+
             for _move, vld in PAIRS:
-                if re.search(_stall_re(vld, full=True), body):
+                if issued(_stall_re(vld, full=True)):
                     kind = "full"
-                elif re.search(_stall_re(vld, full=False), body):
+                elif issued(_stall_re(vld, full=False)):
                     kind = "vld_only"
                 else:
                     continue

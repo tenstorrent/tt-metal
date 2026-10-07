@@ -431,10 +431,32 @@ def test_commented_out_move_is_ignored(tmp_path):
     assert "warning" not in run(f).stdout
 
 
+def test_recorded_wait_in_a_helper_does_not_cover_callers(tmp_path):
+    """Calling a helper that only records its wait does not issue the wait."""
+    f = hdr(
+        tmp_path,
+        "rec_helper.h",
+        """
+        inline void record_srcb_wait()
+        {
+            lltt::record(0, 1);
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+        }
+
+        inline void _llk_math_thing_()
+        {
+            record_srcb_wait();
+            TTI_MOVD2B(0, 0, ADDR_MOD_0, p_movd2b::MOV_4_ROWS, 0);
+        }
+        """,
+    )
+    assert "MOVD2B with no SRCB_VLD wait" in run(f).stdout
+
+
 def test_shipped_tree_never_fails():
-    """Whole-tree run (no files): the shipped tree has advisory findings, and still exits 0."""
-    r = run()
-    assert r.returncode == 0
-    assert (
-        "warning" in r.stdout
-    ), "the tree has known uncovered moves -- an empty run means the scan did not run"
+    """Whole-tree run (no files) exits 0 whether or not findings remain."""
+    g = runpy.run_path(SCRIPT)
+    tree = __import__("glob").glob(g["TREE_GLOB"], recursive=True)
+    # Guards against a glob that silently matches nothing: the tree does issue these moves.
+    assert any("MOVD2B" in open(p, errors="ignore").read() for p in tree)
+    assert run().returncode == 0
