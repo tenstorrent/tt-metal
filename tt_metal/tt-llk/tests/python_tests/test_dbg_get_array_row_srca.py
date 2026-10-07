@@ -9,34 +9,29 @@ half and the restore writes the surviving half over both.
 
 Every in-tree caller passes ``dbg_array_id::DEST``, which never enters that path, so without
 this test the save/restore can regress undetected. The kernel writes a known tile into DEST,
-calls the helper, and reads DEST back -- the tile must come back bit-exact.
+calls the helper, and reads DEST back -- the tile must come back bit-exact, for integer as well
+as float data and with either DEST width.
 """
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import format_dict
+from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 
 
-# Int32 is deliberately absent. It fails here even with the two-register save, deterministically
-# and on a single datum, because the save/restore moves the row through the SFPU without regard to
-# the dest format the caller is using -- a 32-bit integer datum is not round-tripped by the SFPU's
-# dest mode as configured. That is a separate defect in the same helper, not the one this test
-# guards; the L1 -> DEST -> L1 control in test_dest_copy.py passes for Int32, so it is the borrow
-# that loses the datum, not the debug window.
 @parametrize(
     formats=input_output_formats(
-        [DataFormat.Float32, DataFormat.Float16_b],
+        [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Int32],
         same=True,
     ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_srca_row_dump_restores_dest_row_0(formats):
-    formats = formats[0]
+def test_srca_row_dump_restores_dest_row_0(formats, dest_acc):
 
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
         pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
@@ -63,6 +58,7 @@ def test_srca_row_dump_restores_dest_row_0(formats):
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
         ),
+        dest_acc=dest_acc,
     )
 
     res_from_L1 = configuration.run().result
@@ -82,5 +78,5 @@ def test_srca_row_dump_restores_dest_row_0(formats):
         "dbg_get_array_row(SRCA) did not restore the dest row it borrowed. "
         f"{len(differing)} datum(s) differ, first at index {differing[0]}: "
         f"expected {expected[differing[0]]}, got {res_tensor[differing[0]]}. "
-        "A single save register cannot hold both halves of the row."
+        "The save must hold both halves of the row, without converting them."
     )
