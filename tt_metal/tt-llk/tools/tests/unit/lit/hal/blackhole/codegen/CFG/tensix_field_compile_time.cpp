@@ -6,7 +6,6 @@
 // RUN: %{blackhole_objdump} -d %t.o | FileCheck %s
 
 #include "hal/cfg.h"
-#include "hal/cfg/detail/thread_access.h"
 
 namespace cfg = hal::cfg;
 
@@ -95,6 +94,15 @@ extern "C" __attribute__((noinline, used)) void write_prepacked_thread_word()
 // The section selects thread word 12 + 2; the value is stored unshifted.
 // CHECK-LABEL: <write_prepacked_thread_word>:
 // CHECK-NEXT: ttsetc16 14,67
+// CHECK-NEXT: ret
+
+extern "C" __attribute__((noinline, used)) void write_prepacked_thread_word_max()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AddrMod[cfg::SrcA].Incr>(7, 0xffff);
+}
+
+// CHECK-LABEL: <write_prepacked_thread_word_max>:
+// CHECK-NEXT: ttsetc16 19,65535
 // CHECK-NEXT: ret
 
 extern "C" __attribute__((noinline, used)) void write_straddling_constant_group()

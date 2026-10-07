@@ -36,6 +36,15 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_byte_0(std::
 
 #ifdef ENABLE_LLK_ASSERT
 
+extern "C" void write_prepacked_thread_word_overflow()
+{
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::AddrMod[cfg::SrcA].Incr>(0, 0x10000);
+}
+
+// ASSERT-LABEL: <write_prepacked_thread_word_overflow>:
+// ASSERT: ebreak
+// ASSERT: ret
+
 // Runtime assignments must validate values before masking, even when a group
 // has only one member or the invalid assignment is not its first member.
 extern "C" void write_runtime_group_single_overflow()
