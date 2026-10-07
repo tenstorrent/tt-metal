@@ -959,6 +959,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     bool fpu_op_without_activations = false;
+    bool eb_fpu_no_operand_act = false;  // CI (ci4)
+    bool eb_post_ok = false;             // CI (ci4)
+    bool eb_bcast_post_ok = false;       // CI (ci4)
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1026,6 +1029,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
         fpu_op_without_activations = !is_sfpu_op && std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
                                      lhs_activations.empty() && rhs_activations.empty() && post_activations.empty();
+        (void)fpu_op_without_activations;
+        eb_fpu_no_operand_act = !is_sfpu_op && std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+                                lhs_activations.empty() && rhs_activations.empty();
+        const bool eb_zero_point = !post_activations.empty() && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
+        eb_post_ok = post_activations.empty() || (std::getenv("EB_R3_BLK_POST") != nullptr && !eb_zero_point);
+        eb_bcast_post_ok = post_activations.empty() || (std::getenv("EB_R3_BCAST_POST") != nullptr && !eb_zero_point);
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1393,37 +1402,45 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
-    // Blackhole, 16 or more tiles per core: a section of the sharded no-broadcast FPU op is unpacked with one call, and packed
-    // with one into bf16 or fp32.
-    const bool block_section = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
-                               !is_where_op && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
-                               num_tiles_per_cycle > 1 && c_num_tiles_per_shard.value_or(0) >= eb_r3_env_int("EB_R3_BU_MIN", 16) &&
-                               std::getenv("EB_R3_NO_BLOCK") == nullptr;  // CI toggles, not in the PR
-    const bool block_pack =
-        block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32) &&
-        c_num_tiles_per_shard.value_or(0) >= eb_r3_env_int("EB_R3_BP_MIN", 16) &&
-        std::getenv("EB_R3_NO_BLOCK_PACK") == nullptr;  // CI toggles, not in the PR
-    compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
-    compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = block_pack ? "1" : "0";
-
-    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
-    // acquire.
-    const bool bcast_sections = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
-                                !is_where_op &&
+    // CI (ci4): block unpack, block pack kinds and broadcast sections with environment toggles, not in the PR.
+    const bool eb_bh = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
+    const uint32_t eb_n = c_num_tiles_per_shard.value_or(0);
+    const bool eb_out_plain = c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32;
+    const bool eb_no_bcast_block = eb_bh && eb_fpu_no_operand_act && eb_post_ok && !is_where_op &&
+                                   compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+                                   num_tiles_per_cycle > 1 && eb_n >= static_cast<uint32_t>(eb_r3_env_int("EB_R3_BU_MIN", 16));
+    const bool eb_scalar_block = eb_bh && eb_fpu_no_operand_act && eb_post_ok && !is_where_op &&
+                                 compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar &&
+                                 num_tiles_per_cycle > 1 && eb_n >= static_cast<uint32_t>(eb_r3_env_int("EB_R3_BU_MIN", 16)) &&
+                                 std::getenv("EB_R3_BLK_SCALAR") != nullptr;
+    const bool bcast_sections = eb_bh && eb_fpu_no_operand_act && eb_bcast_post_ok && !is_where_op &&
                                 (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeColBcastNg ||
                                  compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg) &&
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) &&
-                                a_sharded && c_sharded &&
-                                std::getenv("EB_R3_NO_BCAST_CHUNK") == nullptr;  // CI toggle, not in the PR
-    compute_kernel_defines["EB_R3_MAIN_REINIT"] = std::getenv("EB_R3_MAIN_REINIT") != nullptr ? "1" : "0";  // CI only
-    compute_kernel_defines["EB_R3_PROBE_INIT"] = std::getenv("EB_R3_PROBE_INIT") != nullptr ? "1" : "0";    // CI only
-    compute_kernel_defines["EB_R3_PER_FACE"] = std::getenv("EB_R3_PER_FACE") != nullptr ? "1" : "0";        // CI only
-    if (std::getenv("EB_R3_LOG_RULE") != nullptr) {  // CI log, not in the PR
-        std::fprintf(stderr, "EB_R3_RULE block=%d block_pack=%d bcast_sections=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d n=%u\n",
-            static_cast<int>(block_section), static_cast<int>(block_pack), static_cast<int>(bcast_sections),
+                                a_sharded && c_sharded && std::getenv("EB_R3_NO_BCAST_CHUNK") == nullptr;
+    const bool eb_bcast_block = bcast_sections && std::getenv("EB_R3_BLK_BCAST") != nullptr;
+    const bool block_section =
+        (eb_no_bcast_block || eb_scalar_block || eb_bcast_block) && std::getenv("EB_R3_NO_BLOCK") == nullptr;
+    const bool eb_pack_eligible = (eb_no_bcast_block || eb_scalar_block || (bcast_sections && std::getenv("EB_R3_BCAST_BP") != nullptr)) &&
+                                  std::getenv("EB_R3_NO_BLOCK") == nullptr;
+    const bool block_pack = eb_pack_eligible && eb_out_plain &&
+                            eb_n >= static_cast<uint32_t>(eb_r3_env_int("EB_R3_BP_MIN", 16)) &&
+                            std::getenv("EB_R3_NO_BLOCK_PACK") == nullptr;
+    int eb_kind = eb_r3_env_int("EB_R3_BP_KIND", 1);
+    if (bcast_sections) {
+        eb_kind = 2;  // the broadcast kernels pack the broadcast tile with pack_tile between sections
+    }
+    compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
+    compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = block_pack ? std::to_string(eb_kind) : "0";
+    compute_kernel_defines["EB_R3_MAIN_REINIT"] = std::getenv("EB_R3_MAIN_REINIT") != nullptr ? "1" : "0";
+    compute_kernel_defines["EB_R3_PROBE_INIT"] = std::getenv("EB_R3_PROBE_INIT") != nullptr ? "1" : "0";
+    compute_kernel_defines["EB_R3_PER_FACE"] = std::getenv("EB_R3_PER_FACE") != nullptr ? "1" : "0";
+    if (std::getenv("EB_R3_LOG_RULE") != nullptr) {
+        std::fprintf(stderr, "EB_R3_RULE block=%d block_pack=%d kind=%d bcast_sections=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d n=%u\n",
+            static_cast<int>(block_section), static_cast<int>(block_pack), eb_kind, static_cast<int>(bcast_sections),
             static_cast<int>(is_sfpu_op), static_cast<int>(a_dtype), static_cast<int>(b_dtype),
-            static_cast<int>(c_data_format), static_cast<int>(fp32_dest_acc_en), c_num_tiles_per_shard.value_or(0));
+            static_cast<int>(c_data_format), static_cast<int>(fp32_dest_acc_en), eb_n);
     }
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";

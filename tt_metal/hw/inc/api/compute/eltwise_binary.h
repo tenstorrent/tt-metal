@@ -89,8 +89,10 @@ ALWI void binary_block(
     std::uint32_t start_itile0,
     std::uint32_t start_itile1,
     std::uint32_t start_idst,
-    std::uint32_t ntiles) {
-    UNPACK((llk_unpack_AB_block(icb0, icb1, start_itile0, start_itile1, ntiles)));
+    std::uint32_t ntiles,
+    std::uint32_t step0 = 1,
+    std::uint32_t step1 = 1) {
+    UNPACK((llk_unpack_AB_block(icb0, icb1, start_itile0, start_itile1, ntiles, step0, step1)));
     MATH(
         constexpr MathFidelity math_fidelity =
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL) ? MATH_FIDELITY : MathFidelity::LoFi);

@@ -5,11 +5,29 @@
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 // Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one.
+#ifndef BINARY_NG_BLOCK
+#define BINARY_NG_BLOCK 0
+#endif
+#ifndef BINARY_NG_BLOCK_PACK
+#define BINARY_NG_BLOCK_PACK 0
+#endif
 #ifndef EB_R3_PER_FACE
 #define EB_R3_PER_FACE 0
 #endif
-#define ELTWISE_BINARY_PER_TILE_HANDOFF ((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL) && !EB_R3_PER_FACE)
+#define ELTWISE_BINARY_PER_TILE_HANDOFF ((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK) && !EB_R3_PER_FACE)
+#define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/pack.h"
+#if BINARY_NG_BLOCK_PACK == 1
+#error "the broadcast kernels pack the broadcast tile with pack_tile between sections"
+#elif BINARY_NG_BLOCK_PACK == 2
+#define EB_PACK_SECTION(n, cb) pack_block_mop<DST_ACCUM_MODE>(0, cb, n)
+#else
+#define EB_PACK_SECTION(n, cb)              \
+    for (uint32_t i_ = 0; i_ < (n); ++i_) { \
+        pack_tile(i_, cb);                  \
+    }
+#endif
 #include "api/compute/bcast.h"
 
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
@@ -89,7 +107,14 @@ ALWI void process_tile(
         const uint32_t n = (freq - j) < BCAST_OTHER_CHUNK ? (freq - j) : BCAST_OTHER_CHUNK;
         EXP_CB_POST_OTHER.wait_front(n);
         exp_dfb_out.reserve_back(n);
+#if BINARY_POST_REINIT
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
+#endif
         tile_regs_acquire();
+#if BINARY_NG_BLOCK
+        ckernel::detail::binary_block<BINARY_OP_TYPE, DST_ACCUM_MODE>(
+            cb_post_lhs, cb_post_rhs, 0, 0, 0, n, BCAST_INPUT ? 1 : 0, BCAST_INPUT ? 0 : 1);
+#else
         for (uint32_t i = 0; i < n; ++i) {
 #if BCAST_INPUT
             BINARY_OP(cb_post_lhs, cb_post_rhs, i, 0, i);
@@ -97,12 +122,14 @@ ALWI void process_tile(
             BINARY_OP(cb_post_lhs, cb_post_rhs, 0, i, i);
 #endif
         }
+#endif
+        for (uint32_t i = 0; i < n; ++i) {
+            PROCESS_POST_ACTIVATIONS(i);
+        }
         tile_regs_commit();
 
         tile_regs_wait();
-        for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_out);
-        }
+        EB_PACK_SECTION(n, cb_out);
         tile_regs_release();
 
         exp_dfb_out.push_back(n);

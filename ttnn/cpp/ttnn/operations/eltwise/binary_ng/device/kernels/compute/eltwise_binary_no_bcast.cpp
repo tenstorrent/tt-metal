@@ -19,8 +19,17 @@
 #define ELTWISE_BINARY_PER_TILE_HANDOFF ((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK) && !EB_R3_PER_FACE)
 #define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_binary.h"
-#if BINARY_NG_BLOCK_PACK
+#include "api/compute/pack.h"
+#if BINARY_NG_BLOCK_PACK == 1
 #include "api/compute/experimental/pack_block.h"
+#define EB_PACK_SECTION(n, cb) pack_block_contiguous(0, cb, n)
+#elif BINARY_NG_BLOCK_PACK == 2
+#define EB_PACK_SECTION(n, cb) pack_block_mop<DST_ACCUM_MODE>(0, cb, n)
+#else
+#define EB_PACK_SECTION(n, cb)              \
+    for (uint32_t i_ = 0; i_ < (n); ++i_) { \
+        pack_tile(i_, cb);                  \
+    }
 #endif
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
@@ -45,7 +54,7 @@ void kernel_main() {
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
 #endif
-#if BINARY_NG_BLOCK_PACK
+#if BINARY_NG_BLOCK_PACK == 1
     pack_block_contiguous_init(cb_out.get_cb_id());
 #endif
 
@@ -76,6 +85,9 @@ void kernel_main() {
         } else {
             sub_block(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
         }
+        for (uint32_t i = 0; i < n; ++i) {
+            PROCESS_POST_ACTIVATIONS(i);
+        }
 #else
         for (uint32_t i = 0; i < n; ++i) {
             BINARY_OP(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), i, i, i);
@@ -85,13 +97,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-#if BINARY_NG_BLOCK_PACK
-        pack_block_contiguous(0, cb_out.get_cb_id(), n);
-#else
-        for (uint32_t i = 0; i < n; ++i) {
-            pack_tile(i, cb_out.get_cb_id());
-        }
-#endif
+        EB_PACK_SECTION(n, cb_out.get_cb_id());
         tile_regs_release();
 
         cb_out.push_back(n);
