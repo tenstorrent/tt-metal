@@ -676,3 +676,28 @@ def test_quasar_s2i_oversized_grid(device, memory_layout, layout, shape, shard_s
 
     assert_equal(torch_input, ttnn.to_torch(output))
     assert_equal(torch_guard, ttnn.to_torch(guard))
+
+
+def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device):
+    tile_dim, tile_bytes = 32, 2048  # bfloat16 in and out
+    info = ttnn._ttnn.reports.get_device_info(device)
+    free_l1, num_banks = info.cb_limit, info.l1_num_banks
+
+    Wt = (4 * free_l1 // 5) // (2 * tile_bytes)
+    dfb = 2 * Wt * tile_bytes
+    Ht = -(-(3 * free_l1 // 10) * num_banks // (Wt * tile_bytes))
+    output = -(-Ht * Wt // num_banks) * tile_bytes
+
+    if not (dfb < free_l1 < dfb + output):
+        pytest.skip(f"No shape separates the routes on this device (free_l1={free_l1}, banks={num_banks})")
+
+    H, W = Ht * tile_dim, Wt * tile_dim
+    shape = (1, 1, H, W)
+    torch.manual_seed(0)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    result = ttnn.experimental.quasar.untilize_with_unpadding(
+        ttnn_in, (0, 0, H - 1, W - 1), memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True
+    )
+    got = ttnn.to_torch(result.cpu())
+    assert_with_ulp(expected_result=x, actual_result=got, ulp_threshold=0)
