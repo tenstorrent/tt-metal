@@ -19,3 +19,14 @@
 - Next: read per-seed E2E_WALL_S gen#1..5 from run.log, summary.json, look at the 5 sbs stills;
   if visuals degrade, second job with LTX_S2_SIGMAS=0.909375,0.725,0.0 (label s2x2b).
 - DROP: blx01 job 715 killed by broker device recovery (exit -9, 72.6 s, ~04:46 UTC 2026-10-07; smarton's job; chips/tray: see /var/log/tt-device-broker/2026-10-07_044459_715.log). No outputs; fetch failed. Next: once blx01 health passes, resubmit s2x2 once (first drop of this config on blx01).
+
+## Rerun (attempt 2, 2026-10-07 ~04:55 UTC)
+- Drop detail (job 715): chips 16-23 (tray 3, broker calls it tray 4) left PCIe at 04:46:11 UTC; bridge-reset
+  failed (jobs 717/718), glx_reset health gate failed (719); by 04:52 blx01 was unreachable by ssh
+  (broker power cycle). Same tray as jobs 625/640.
+- Driver: tt-project/t185/driver.sh = t186's driver with S2 sigmas, -e t159/env.yaml, DROPS0=1 (715 counted),
+  so a second drop of s2x2 skips it on blx01. Waits for blx01 ready (2 passes), submits under
+  `ttp lock blx01-device` (t186's S1 arms wait for the same lock, so jobs stay one at a time), then post.sh s2x2.
+- Detached on g15blx02: run 750 t185drv.{log,rc}; driver log t185/driver.log; marker t185/DRIVER.done.
+- Next on wake: DRIVER.done rc 0 -> read data/g15/t185_s2x2 (run.log E2E_WALL_S gen#1..5,
+  eval_vs_ref_t48_f6b8/, sbs stills). rc 86 -> dropped twice on blx01: move to blx03 runner.
