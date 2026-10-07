@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fixes", "confidence", "reason"],
+  "properties": {
+    "fixes": {"type": "boolean"},
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    "reason": {"type": "string", "maxLength": 300}
+  }
+}

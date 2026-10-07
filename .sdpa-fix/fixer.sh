@@ -339,6 +339,136 @@ $(printf '%s' "$logs" | tail -c 80000)"
   handle_fix_events "$ng"
 done
 
+# ======================================================================
+# Phase B2 — find fixes made by people, for EVERY still-failing signature
+# (any triage kind): commits on main since the first failure that touch the
+# failing test / the files in the error, and open PRs that mention them. A
+# judge call confirms each candidate once (cached in the ledger). Merged fix →
+# fixed_upstream (verified by the next run that contains it); open fix →
+# fix_pending (the bot does not draft its own fix; merge/close is followed).
+# ======================================================================
+judge_candidate() {  # $1 failure json, $2 candidate text → verdict JSON (or nothing)
+  local prompt out
+  prompt="$(cat "$FIX_HOME/prompts/judge.txt")
+
+# Failure
+$(jq -r '"test: \(.test)\njob: \(.job) (\(.workflow))\nerror: \(.summary)"' <<<"$1")
+
+# Candidate
+$2"
+  out=$(cd "$TT_METAL_DIR" && timeout 300 claude --model "$TRIAGE_MODEL" -p --output-format json \
+          --json-schema "$(cat "$FIX_HOME/schemas/judge.json")" --allowedTools "Read" "Grep" \
+          <<<"$prompt" 2>>"$AGENT_ERR") || return 0
+  jq -c '.structured_output // empty' <<<"$out"
+}
+
+# Sets PR_TEXT (candidate text) PR_STATE PR_MERGE_SHA PR_TITLE PR_HEAD PR_URL.
+# Call it directly, never inside $( ): a subshell would drop the variables.
+PR_TEXT=""; PR_STATE=""; PR_MERGE_SHA=""; PR_TITLE=""; PR_HEAD=""; PR_URL=""
+pr_info() {
+  local j
+  PR_TEXT=""; PR_STATE=""; PR_MERGE_SHA=""; PR_TITLE=""; PR_HEAD=""; PR_URL=""
+  j=$(gh pr view "$1" -R "$REPO" --json number,title,state,body,files,mergeCommit,headRefName,url 2>/dev/null) || return 1
+  PR_STATE=$(jq -r .state <<<"$j"); PR_MERGE_SHA=$(jq -r '.mergeCommit.oid // ""' <<<"$j")
+  PR_TITLE=$(jq -r .title <<<"$j"); PR_HEAD=$(jq -r .headRefName <<<"$j"); PR_URL=$(jq -r .url <<<"$j")
+  PR_TEXT=$(printf 'PR #%s (%s): %s\nchanged files: %s\ndescription:\n%s\n\ndiff excerpt:\n%s\n' "$1" "$PR_STATE" "$PR_TITLE" \
+    "$(jq -r '[.files[].path] | join(", ")' <<<"$j" | cut -c1-1500)" "$(jq -r '.body // ""' <<<"$j" | cut -c1-1500)" \
+    "$(gh pr diff "$1" -R "$REPO" 2>/dev/null | head -c 6000)")
+}
+
+scan_human_fixes() {
+  local judged=0 f sig state short wf first n st msha
+  git -C "$TT_METAL_DIR" fetch -q origin main 2>/dev/null || true
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    sig=$(jq -r .sig <<<"$f"); state=$(jq -r .state <<<"$f")
+    short=$(jq -r '.test | sub(".*::"; "")' <<<"$f"); wf=$(jq -r .workflow <<<"$f")
+
+    # A known open fix PR by a person: follow it to merged / closed.
+    if [[ "$state" == "fix_pending" ]]; then
+      n=$(jq -r '.fix_pr.number' <<<"$f")
+      st=$(gh pr view "$n" -R "$REPO" --json state,mergeCommit --jq '.state + " " + (.mergeCommit.oid // "")' 2>/dev/null || echo "")
+      case "$st" in
+        MERGED*)
+          msha="${st#MERGED }"
+          $FIXLIB mark --state fixed_upstream \
+            --extra "$(jq -nc --arg f "$msha" --arg r "#$n $(jq -r '.fix_pr.title // ""' <<<"$f")" '{fix_sha:$f, reason:$r}')" "$sig"
+          log "  fix PR #$n merged for $short"
+          slack_sig "$EMOJI_PR_MERGED *fix merged*: \`$short\` ($wf)
+fixed by #$n · commit:$msha · waiting for the next run that contains it to confirm it is green" "$sig" ;;
+        CLOSED*)
+          $FIXLIB mark --state tracking "$sig"
+          log "  fix PR #$n closed unmerged for $short"
+          slack_sig "⚪ fix PR #$n for \`$short\` ($wf) was closed without merging; back in the autofix queue" "$sig" ;;
+      esac
+      continue
+    fi
+
+    # Candidates: "kind<TAB>id<TAB>sha", kind = merged | open.
+    local cands=() csha csubj head term id kind text v fixes conf reason seen_ids=" "
+    first=$(jq -r .first_sha <<<"$f")
+    mapfile -t paths < <(jq -r '.paths[]' <<<"$f")
+    if [[ -n "$first" && ${#paths[@]} -gt 0 ]] && git -C "$TT_METAL_DIR" cat-file -e "$first^{commit}" 2>/dev/null; then
+      while IFS=$'\t' read -r csha csubj; do
+        [[ -z "$csha" ]] && continue
+        n=$(grep -oE '\(#[0-9]+\)$' <<<"$csubj" | tr -dc 0-9 || true)
+        if [[ -n "$n" ]]; then cands+=("merged"$'\t'"pr:$n"$'\t'"$csha"); else cands+=("merged"$'\t'"commit:$csha"$'\t'"$csha"); fi
+      done < <(git -C "$TT_METAL_DIR" log --format='%H%x09%s' "$first..origin/main" -- "${paths[@]}" 2>/dev/null | head -6)
+    fi
+    while IFS= read -r term; do
+      [[ -z "$term" ]] && continue
+      while IFS=$'\t' read -r n head; do
+        [[ -z "$n" || "$head" == "$BRANCH_PREFIX"/* ]] && continue
+        cands+=("open"$'\t'"pr:$n"$'\t')
+      done < <(gh pr list -R "$REPO" --state open --search "$term in:title,body" -L 5 \
+                 --json number,headRefName --jq '.[] | "\(.number)\t\(.headRefName)"' 2>/dev/null || true)
+    done < <(jq -r '.terms[]' <<<"$f")
+
+    local c
+    for c in "${cands[@]+"${cands[@]}"}"; do
+      IFS=$'\t' read -r kind id csha <<<"$c"
+      [[ "$seen_ids" == *" $id "* ]] && continue; seen_ids+="$id "
+      [[ "$(jq -r --arg i "$id" '.checked[$i] // empty' <<<"$f")" != "" ]] && continue
+      (( judged >= SCAN_MAX_JUDGE_PER_TICK )) && { log "  scan: judge cap reached, rest next tick"; return 0; }
+      if [[ "$id" == pr:* ]]; then
+        pr_info "${id#pr:}" || continue
+        text="$PR_TEXT"
+        [[ "$PR_HEAD" == "$BRANCH_PREFIX"/* ]] && continue
+        [[ "$PR_STATE" == "MERGED" ]] && { kind=merged; csha="${csha:-$PR_MERGE_SHA}"; }
+        [[ "$PR_STATE" == "CLOSED" ]] && continue
+      else
+        PR_TITLE=$(git -C "$TT_METAL_DIR" log -1 --format=%s "$csha"); PR_URL=""
+        text="commit $csha on main: $PR_TITLE
+$(git -C "$TT_METAL_DIR" show --stat --format= "$csha" | tail -15)
+
+diff excerpt:
+$(git -C "$TT_METAL_DIR" show --format= "$csha" | head -c 6000)"
+      fi
+      judged=$((judged + 1))
+      v=$(judge_candidate "$f" "$text")
+      [[ -z "$v" ]] && continue
+      $FIXLIB mark --state keep --extra "$(jq -nc --arg i "$id" --argjson v "$v" '{checked: {($i): $v}}')" "$sig"
+      fixes=$(jq -r .fixes <<<"$v"); conf=$(jq -r .confidence <<<"$v"); reason=$(jq -r .reason <<<"$v")
+      log "  scan $short: $id ($kind) → fixes=$fixes ($conf) $reason"
+      [[ "$fixes" == "true" && "$conf" != "low" ]] || continue
+      n="${id#pr:}"; [[ "$id" == pr:* ]] || n=""
+      if [[ "$kind" == "merged" ]]; then
+        $FIXLIB mark --state fixed_upstream \
+          --extra "$(jq -nc --arg f "$csha" --arg r "${n:+#$n }$PR_TITLE" '{fix_sha:$f, reason:$r}')" "$sig"
+        slack_sig "$EMOJI_PR_MERGED *already fixed on main*: \`$short\` ($wf)
+fixed by ${n:+#$n }commit:$csha · waiting for the next run that contains it to confirm it is green" "$sig"
+      else
+        $FIXLIB mark --state fix_pending \
+          --extra "$(jq -nc --arg n "$n" --arg u "$PR_URL" --arg t "$PR_TITLE" '{fix_pr: {number: ($n|tonumber), url: $u, title: $t}}')" "$sig"
+        slack_sig "$EMOJI_PR_OPENED *fix in progress*: \`$short\` ($wf)
+open PR #$n: $PR_TITLE · the bot will not draft its own fix" "$sig"
+      fi
+      break
+    done
+  done < <($FIXLIB scan-list | jq -c '.[]')
+}
+scan_human_fixes
+
 [[ "${NO_FIX:-0}" == "1" ]] && { log "NO_FIX=1 — skipping fix stage"; exit 0; }
 
 # ======================================================================
@@ -468,7 +598,7 @@ $logs"
       fsha=$(grep -oE '\b[0-9a-f]{7,40}\b' <<<"$upstream" | head -1 || true)
       $FIXLIB mark --state fixed_upstream --attempt \
         --extra "$(jq -nc --arg p "$pdir" --arg r "$upstream" --arg f "$fsha" '{proposal:$p, reason:$r, fix_sha:$f}')" "${sigs[@]}"
-      slack_sig "📌 *already fixed on main*: \`$first_test\` ($workflow)
+      slack_sig "$EMOJI_PR_MERGED *already fixed on main*: \`$first_test\` ($workflow)
 fixed by $upstream · commit:$fsha · waiting for the next run that contains it to confirm it is green" "${sigs[@]}"
     else
       log "  no fix: $reason"
