@@ -519,6 +519,17 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         const auto asic_ranks = config.disable_rank_bindings ? decltype(asic_id_to_mesh_rank){} : asic_id_to_mesh_rank;
         const auto fabric_ranks =
             config.disable_rank_bindings ? decltype(fabric_node_id_to_mesh_rank){} : fabric_node_id_to_mesh_rank;
+        // Local mode maps one single-host mesh for this host alone, but the PSD is discovered across the
+        // whole MPI job. When it spans several hosts (run_cluster_validation under mpirun on a quad Galaxy:
+        // every rank maps the per-cluster-type single-host MGD), an unrestricted seating puts the mesh on
+        // the same arbitrary host for every rank and the other ranks find no local chips ("No local mesh
+        // ids found"). Keep the seating on this host's chips. A restriction, not a footprint, so a mesh
+        // smaller than the host still fits; single-host PSDs are left alone.
+        if (generate_mapping_locally_ && physical_system_descriptor_.get_all_hostnames().size() > 1) {
+            const auto local_asics =
+                physical_system_descriptor_.get_asics_connected_to_host(physical_system_descriptor_.my_host_name());
+            config.placement_asic_allowlist.insert(local_asics.begin(), local_asics.end());
+        }
         const auto mapping_result = pgd.has_value()
                                         ? ::tt::tt_metal::experimental::tt_fabric::map_multi_mesh_to_physical(
                                               physical_system_descriptor_,
