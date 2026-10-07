@@ -683,7 +683,8 @@ inline void select_packer_dest_registers()
     {
         TT_WRCFG(get_packer_dest_offset_index(), p_cfg::WRCFG_32b, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
-    TTI_DMANOP; // the instruction right after WRCFG must not consume the value it writes
+    TTI_DMANOP;
+    TTI_DMANOP;
 }
 
 // Program packer destination addresses from GPRs
