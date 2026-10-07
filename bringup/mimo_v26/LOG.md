@@ -2161,3 +2161,14 @@
 - claim: Ring DRAM headroom cells, 48 layers, free DRAM per chip after prefill (one copy) -> after ring copy (ring copy measured 9.90 GiB per chip for 47 layers): B4/4k 18.13 -> 8.23; B16/4k 17.80 -> 7.90; B4/64k 15.63 -> 5.73; B16/64k 14.11 -> 4.21 GiB; ring fits with >=4 GiB headroom in all four cells (the decision lines in these runs used the old 54 MB/bank constant and are wrong; fixed to 27 in f6d878c32fc, ring_enabled falls back to unified when headroom <1 GiB). B=128/64k not measured (extrapolated ~ -0.5 GiB headroom, would fall back)
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AA_dramcell_16_65536.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
+
+## E261007-2105-26c
+- date: 2026-10-07T21:05:58
+- commit: d5491a51f2f
+- branch: ssinghal/mimo
+- host: coordinator
+- track: handoff
+- status: inferred
+- claim: COORDINATOR HANDOFF 2026-10-07 21:05: all sub-agents stopped by an org spend-limit error (HTTP 429, 'monthly spend limit': needs the user/admin: /usage-credits); no work lost: all 9 worktrees clean. INTEGRATION ssinghal/mimo = d5491a51f2f (+ this entry): device-resident plain decode loop, device-resident verify, ring decode MoE class (MIMO_MOE_DECODE=ring, default unified, auto-fallback on DRAM headroom <1 GiB), device-resident MoE mask, device-resident spec round (tt/spec_dev.py), tracy tools, harness guard; library artifacts/integ_e4ff6c137d3/lib (all C++; pass LD_LIBRARY_PATH via launch.py --env; harness refuses the shared lib). UNMERGED commits: ssinghal/mimo-spec 22af333071a (long-context prompts in test_spec_exact.py), ssinghal/mimo-perf1 b19fcccb965 (MIMO_FUSE_KV=1 fused K+V cache update, off by default, no A/B yet). SCORECARD at d5491a51f2f: only evidence from tip-ancestors; most gates STALE by the paths rule (code changed after b1a54e1a53f re-gate 13/16): a final re-gate is required after the ring default flip. ORPHAN JOB: host .43 moe_AC_specplain_ring_u2_h43_d5491a51f2f.log (MoE agent's spec exactness with ring at U=2, not finished at stop; hangwatch attached; its result is unlogged). OPEN: (1) combined step-time table ring+device loop (not measured; coordinator arithmetic ~31/43/61 ms at U=1/8/32 is NOT a measurement), (2) spec + ring exactness and round time, (3) flip MIMO_MOE_DECODE default to ring after GSM8K>=109 on two hosts + determinism + 48-layer verify, (4) spec at 64k (global verify attention 8x), (5) device-resident prefill, (6) accurate-fidelity moe_compute kernel (ringk), (7) fused KV / rope / qkv-DRAM-sharded / lm_head configs, (8) first_token gate decision (user), (9) final re-gate. Resume: read the briefs in bringup/mimo_v26/briefs/, the notes in bringup/mimo_v26/notes/, and the fresh LOG entries; new agents per track in worktrees from ssinghal/mimo.
+- evidence: -
+- paths: bringup/mimo_v26
