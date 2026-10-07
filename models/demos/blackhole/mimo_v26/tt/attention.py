@@ -123,6 +123,9 @@ def decode_pos_io(mesh, slots=32):
 
 
 def decode_pos_set(mesh, io, positions):
+    """Write per-row/per-slot positions into the persistent device tensors. Returns the HOST tensors: the host->device copy is asynchronous, the caller must keep
+    them alive (and synchronize) until the copy has executed, otherwise the device may read freed host memory (row-wide glitches seen as run-to-run nondeterminism).
+    """
     rows = mesh.shape[0]
     pos = torch.as_tensor(positions, dtype=torch.int32)
     if pos.dim() == 1:
@@ -130,8 +133,10 @@ def decode_pos_set(mesh, io, positions):
     assert pos.shape[0] == rows
     m = _row_mapper(mesh)
     h = lambda t, dt: ttnn.from_torch(t.contiguous(), dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=m)
-    ttnn.copy_host_to_device_tensor(h(pos.reshape(-1), ttnn.int32), io["cur"])
-    ttnn.copy_host_to_device_tensor(h(pos, ttnn.uint32), io["idx"])
+    hosts = [h(pos.reshape(-1), ttnn.int32), h(pos, ttnn.uint32)]
+    ttnn.copy_host_to_device_tensor(hosts[0], io["cur"])
+    ttnn.copy_host_to_device_tensor(hosts[1], io["idx"])
+    return hosts
 
 
 class MiMoAttention:
@@ -304,7 +309,8 @@ class MiMoAttention:
         return decode_pos_io(self.mesh)
 
     def decode_set(self, io, positions):
-        decode_pos_set(self.mesh, io, positions)
+        self._keep = decode_pos_set(self.mesh, io, positions)
+        ttnn.synchronize_device(self.mesh)
 
     def decode_inputs(self, positions):
         io = self.decode_io()
