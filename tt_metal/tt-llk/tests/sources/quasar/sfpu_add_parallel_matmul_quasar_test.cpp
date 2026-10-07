@@ -28,23 +28,32 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t CT_DIM      = params.CT_DIM;
+    const std::uint32_t RT_DIM      = params.RT_DIM;
+    const std::uint32_t KT_DIM      = params.KT_DIM;
+    const std::uint32_t num_faces_A = params.num_faces_A;
+    const std::uint32_t num_faces_B = params.num_faces_B;
+    const Operand& buffer_A         = params.buffer_A;
+    const Operand& buffer_B         = params.buffer_B;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
     // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
     // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
     const auto bfd_a = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(
-        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_A), L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_A), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
     const auto bfd_b = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B), L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_B), L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
     _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
         static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
 
-    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, params.CT_DIM, params.RT_DIM, params.KT_DIM);
+    _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM);
 
-    for (std::uint32_t j = 0; j < params.KT_DIM; j++)
+    for (std::uint32_t j = 0; j < KT_DIM; j++)
     {
-        _llk_unpack_matmul_(params.CT_DIM, params.RT_DIM, params.KT_DIM, j, j * params.CT_DIM);
+        _llk_unpack_matmul_(CT_DIM, RT_DIM, KT_DIM, j, j * CT_DIM);
     }
 }
 
@@ -61,14 +70,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t CT_DIM = params.CT_DIM;
+    const std::uint32_t RT_DIM = params.RT_DIM;
+    const std::uint32_t KT_DIM = params.KT_DIM;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
-    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(params.CT_DIM, params.RT_DIM);
+    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
 
-    for (std::uint32_t i = 0; i < params.KT_DIM; i++)
+    for (std::uint32_t i = 0; i < KT_DIM; i++)
     {
-        _llk_math_matmul_block_(params.CT_DIM, params.RT_DIM);
+        _llk_math_matmul_block_(CT_DIM, RT_DIM);
     }
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
@@ -96,16 +110,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const volatile FormatConfig& formats = params.formats;
 #endif
 
-    const std::uint32_t num_tiles = params.TILE_CNT;
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const Operand& buffer_S      = params.buffer_S;
+    const Operand& buffer_T      = params.buffer_T;
+    const Operand& buffer_Res    = params.buffer_Res;
+#endif
+
+    const std::uint32_t num_tiles = TILE_CNT;
 
     // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
     // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
     llk_sfpu_srcs_binary_init(
-        L1_ADDRESS(params.buffer_S[0]),
-        L1_ADDRESS(params.buffer_T[0]),
+        L1_ADDRESS(buffer_S[0]),
+        L1_ADDRESS(buffer_T[0]),
         static_cast<DataFormat>(formats.unpack_S_src),
         static_cast<DataFormat>(formats.unpack_S_dst),
-        L1_ADDRESS(params.buffer_Res[0]),
+        L1_ADDRESS(buffer_Res[0]),
         static_cast<DataFormat>(formats.pack_S_src),
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
@@ -139,12 +160,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t CT_DIM    = params.CT_DIM;
+    const std::uint32_t RT_DIM    = params.RT_DIM;
+    const std::uint32_t num_faces = params.num_faces;
+    const Operand& buffer_C       = params.buffer_C;
+#endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
     const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
-        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces), L1_ADDRESS(params.buffer_C[0]), formats.pack_dst);
+        ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), L1_ADDRESS(buffer_C[0]), formats.pack_dst);
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_matmul_init_(bfd_pack, params.RT_DIM, params.CT_DIM, 1 /*num_subblocks_c_dim*/);
+    _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
 
     _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
