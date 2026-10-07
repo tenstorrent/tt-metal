@@ -139,6 +139,8 @@ def env_for(B, g, spec=True):
         k = 0  # spec at >= 32k asserts 'spec verify needs the matmul indexer backend' (B=8/16/32 G2 first pass); plain re-run
     if k:
         e += f" DSV41_SPEC={k} {SPEC_ENV}"
+    else:
+        e += " DSV41_SPEC=0"  # explicit plain: spec decode is the default decode mode of B <= 32 (tt/spec_policy.py)
     return e
 
 

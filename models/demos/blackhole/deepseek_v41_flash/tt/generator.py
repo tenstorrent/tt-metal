@@ -140,25 +140,21 @@ class Generator:
         return out, None
 
     # ---- speculative decoding (DSpark drafter, tt/spec_model.py) -------------------------------------------------------------------------------
-    def enable_spec(self, k):
-        """Build the speculative runner (k drafts verified per round, 1..5) on the model's weights / paged pool. The model must have been built with
-        DSV41_RING_ROWS=288 (``tt.common.create_tt_model`` sets it when DSV41_SPEC > 0)."""
-        import os
+    def enable_spec(self, k=None):
+        """Build the speculative runner(s) for the mode of ``self.spec_choice`` (set by the demo) or, without one, the default of this batch size (``tt.spec_policy.resolve``: adaptive per
+        batch size, DSV41_SPEC* variables override). ``k`` (legacy argument) is only used when the choice is a fixed k. The model must have been built with DSV41_RING_ROWS=288
+        (``tt.common.create_tt_model`` / ``reconfigure_tt_model`` apply it from the same resolution)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy
+        from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import AdaptiveSpec, SpecRunner
 
-        from models.demos.blackhole.deepseek_v41_flash.tt.spec_model import (
-            AdaptiveSpec,
-            SpecRunner,
-            default_ks,
-            parse_ks,
+        choice = getattr(self, "spec_choice", None) or spec_policy.resolve(
+            self.m.U * self.mesh_device.shape[0], self.mesh_device.shape[0], self.m.max_ctx
         )
-
-        if (
-            os.environ.get("DSV41_SPEC_ADAPT") == "1"
-        ):  # adaptive verification length: one resident traced runner per candidate k
-            ks = parse_ks(os.environ.get("DSV41_SPEC_SET"), ",".join(map(str, default_ks(self.m.U))))
-            self.spec = AdaptiveSpec(self.m, ks)
+        assert choice.on or k, "enable_spec: the spec mode of this batch size is plain"
+        if choice.mode == "adaptive":  # adaptive verification length: one resident traced runner per candidate k
+            self.spec = AdaptiveSpec(self.m, choice.ks)
         else:
-            self.spec = SpecRunner(self.m, k)
+            self.spec = SpecRunner(self.m, choice.k if choice.on else k)
         return self.spec
 
     def spec_decode(self, tokens, prompt_lens, first_tokens, max_new_tokens, eos=None, active=None):
