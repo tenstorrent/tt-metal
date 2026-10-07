@@ -12,3 +12,12 @@ gtest NeighborhoodPlanBuild.* not built (build_metal.sh without --build-tests).
 
 Next: on marker, read drv/driver.log, out/run.log, cmp_*.json. If kp1 faster and within floor (vs ref) and close to kp0:
 git switch -c ttp/t232-land origin/ttp/t48-ltx25-integrated; cherry-pick b95861393fe; ttp push --detach.
+
+## Result (2026-10-07/08, blx01 broker job 867; job 865 timed out at 432 s, exit 124, rerun)
+A/B DIFFVAE_S5_2D=1, 2 timed seeds: kp1 4.494 s vs kp0 4.931 s (-0.44 s). PSNR vs host-noise ref: kp1 55.1-55.8 dB,
+PCC 0.99995; kp0 about the same; kp1 vs kp0 55.3-55.9 dB (floor 43.7).
+test_choose_sharded_brick_regression 5/7: 1080p_decode (168 vs pinned 147) and det_stage4 (36 vs 27) fail identically
+on t212/b (planner .cpp blob a9a4ba4 = parent 5c1635d733d), so the pins are stale before t228; not caused by key phase.
+Cherry-pick onto origin/ttp/t48-ltx25-integrated (8b7e9a9a5b2): test-file conflict (both sides add tests), kept both
+-> ttp/t232-land 1a4d14830c9. Host-only guards on the merged tree (blx01 t232/b, no C++ change vs b95861393fe): 11 passed.
+Landing via ttp push --detach from ttp/t232-land.
