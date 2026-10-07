@@ -7,6 +7,7 @@
 For rmsnorm it computes E(x**2) and returns it as a one tile wide output
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include <cstdint>
 
 #include "api/compute/reduce.h"

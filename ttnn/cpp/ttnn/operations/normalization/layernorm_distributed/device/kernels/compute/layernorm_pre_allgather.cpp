@@ -9,6 +9,7 @@
  * tensor containing E(x**2) in the left most column.
  */
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include <cstdint>
 
 #include "api/compute/reduce.h"
