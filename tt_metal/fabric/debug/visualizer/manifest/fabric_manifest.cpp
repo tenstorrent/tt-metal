@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/overloaded.hpp>
 #include <llrt/tt_cluster.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -34,6 +35,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <type_traits>
 #include <variant>
 #include <unistd.h>
 
@@ -45,6 +47,7 @@ using json = nlohmann::ordered_json;
 
 using manifest::chip_key;
 using manifest::direction_letter;
+using manifest::kind_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
@@ -277,6 +280,45 @@ json noc_write_config_json(const manifest::NocWriteConfig& config) {
     return out;
 }
 
+// Keyed by field. Each carries its category and kind, then its region, its stream register or its value.
+json fields_json(const std::vector<manifest::Field>& fields) {
+    json out = json::object();
+    for (const auto& field : fields) {
+        json entry;
+        entry["category"] = lower_enum_name(field.category);
+        entry["kind"] = kind_name(field.kind);
+        const auto schema = [](const manifest::ElementType& element) {
+            return manifest::schema_name(element.type, element.size);
+        };
+        std::visit(
+            ttsl::overloaded{
+                [&](const manifest::kind::L1Value& kind) {
+                    entry.update(l1_region_json(manifest::L1Region{
+                        .address = field.arg,
+                        .size = kind.element.size,
+                        .schema = schema(kind.element),
+                        .cleared_by_host = field.cleared_by_host,
+                    }));
+                },
+                [&](const manifest::kind::Stream& kind) {
+                    entry.update(stream_ref_json(
+                        manifest::StreamRef{.stream_id = field.arg, .reg = kind.reg, .schema = schema(kind.element)}));
+                },
+                [&](const manifest::kind::Number&) { entry["value"] = field.arg; },
+                [&](const manifest::kind::Flag&) { entry["value"] = field.arg != 0; },
+                [&](const manifest::kind::Enum& kind) {
+                    entry["value"] = field.arg;
+                    entry["schema"] = schema(kind.element);
+                },
+            },
+            field.kind);
+        const std::string key(field.key);
+        TT_FATAL(!out.contains(key), "Fabric manifest: two fields are keyed {}", key);
+        out[key] = std::move(entry);
+    }
+    return out;
+}
+
 json serviced_by_json(const std::vector<uint32_t>& risc_ids) {
     json out = json::array();
     for (const auto risc_id : risc_ids) {
@@ -342,21 +384,13 @@ json sender_channel_json(
     }
     credits["completed"] = credit_ref_json(sender.credits.completed);
 
-    json control_info;
-    control_info["connection"] = l1_region_json(sender.control_info.connection);
-    control_info["conn_info"] = l1_region_json(sender.control_info.conn_info);
-    control_info["buffer_index_sem"] = l1_region_json(sender.control_info.buffer_index_sem);
-
     json out;
     out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = serviced_by_json(sender.serviced_by);
     out["producer"] = sender_producer_json(sender.producer, control_plane, node, chan);
-    out["is_injection_channel"] = sender.is_injection_channel;
-    out["producer_credit_return"] = noc_write_config_json(sender.producer_credit_return);
     out["ring_buffer"] = l1_region_json(sender.ring_buffer);
-    out["free_slots"] = stream_ref_json(sender.free_slots);
     out["credits"] = std::move(credits);
-    out["control_info"] = std::move(control_info);
+    out["fields"] = fields_json(sender.fields);
     return out;
 }
 
@@ -439,6 +473,39 @@ json downstream_edges_json(
     return out;
 }
 
+// ============ Fields ============
+
+// Keyed erisc<N>.
+json eriscs_json(const std::vector<std::vector<manifest::Field>>& erisc_fields) {
+    json out = json::object();
+    for (size_t risc_id = 0; risc_id < erisc_fields.size(); ++risc_id) {
+        out[fmt::format("erisc{}", risc_id)]["fields"] = fields_json(erisc_fields[risc_id]);
+    }
+    return out;
+}
+
+template <typename E>
+json enum_names_json() {
+    json out = json::array();
+    for (const auto value : enchantum::values<E>) {
+        out.push_back(lower_enum_name(value));
+    }
+    return out;
+}
+
+template <typename... Kinds>
+json kind_names_json(std::type_identity<std::variant<Kinds...>>) {
+    return json::array({kind_name<Kinds>()...});
+}
+
+// Every category and kind a field can have, so readers can group and read fields without a copy of the enums.
+json make_vocabulary_json() {
+    json out;
+    out["categories"] = enum_names_json<manifest::FieldCategory>();
+    out["kinds"] = kind_names_json(std::type_identity<manifest::Kind>{});
+    return out;
+}
+
 // A collected router with what ControlPlane and the cluster know about it: peer, cross-host, wrap and cores.
 json make_router_json(
     const manifest::Router& router,
@@ -475,6 +542,8 @@ json make_router_json(
         [&](const manifest::SenderChannel& sender) { return sender_channel_json(sender, control_plane, node, chan); });
     out["channels"]["receivers"] = channels_by_vc_json(router.channels.receivers, receiver_channel_json);
     out["intra_chip_downstream_edges"] = downstream_edges_json(router, control_plane, cluster, node, physical_chip_id);
+    out["fields"] = fields_json(router.fields);
+    out["eriscs"] = eriscs_json(router.erisc_fields);
     return out;
 }
 
@@ -734,6 +803,7 @@ void serialize_fabric_manifest_to_file(
     manifest["kind"] = "fabric_manifest";
     manifest["run"] = make_run_json(control_plane, cluster);
     manifest["fabric_context"] = make_fabric_context_json(fabric_context);
+    manifest["vocabulary"] = make_vocabulary_json();
 
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
