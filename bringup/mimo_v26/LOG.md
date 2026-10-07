@@ -1627,3 +1627,25 @@
 - claim: USER REQUIREMENT 2026-10-07: decode is too slow; DSV4.1 Flash decode is < 50 ms/token with a 2x bigger model (DSV4 priors: 41.9-53.0 ms at B=4..16 dedicated runs, E L-decms in the guide, unverified here). MiMo at 448d1005cde: 73.6 / 85.8 / 99.0 ms at U=1/8/32 paired (E261007-1506-59b), MoE ~1.7 ms/layer at U=32 (about 80 ms of the step), attention 15-24 ms. Perf campaign started: target <= 50 ms at B=16..32 (U=4..8) without lowering precision (bfp4/fp8 KV stay off unless the user asks). Tracks: (P1) decode agent: DEVICE-profiler op breakdown of the decode step + host/trace overhead + attention/non-MoE optimisation; (P2) MoE agent: decode MoE at DSV4 efficiency (moe_compute ring path with bfp8 weights, one copy, DSV4 reaches ~85% of DRAM peak: re-measure, the earlier 273 GB/s single-card control may not represent the multi-chip ring), router/combine/reduce fusion.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-1649-8a2
+- date: 2026-10-07T16:49:22
+- commit: 7279090f3c4
+- branch: ssinghal/mimo-moe
+- host: 30,40,47,48
+- track: moe
+- status: verified
+- claim: RING decode MoE (DSV4 decode block pattern: router_select -> all_to_all_dispatch_metadata -> moe_compute (ring matmul + fused combine) -> tilize + deepseek_moe_fast_reduce_nc_fused -> reduce_scatter) at MiMo dims on the REAL 4x8 mesh, real layer 5, dump hidden states (first U of the 32 sampled tokens per row), bfp8 ring weights via the ported DSV4 patch (MOE_COMPUTE_BFP8_WEIGHTS, FP32_ACC, FIDELITY env in moe_compute_program_factory.cpp + tt_moe_decode.py weight dtype), traced, host-timed 30 replays. TOTAL ms/layer (router route_v + dispatch + moe_compute + fast_reduce + reduce_scatter) at U=1/8/32: bfp8 HiFi3+fp32acc (ACCURATE: alpha 1.0030/1.0032/1.0002, rel L2 0.0051/0.0080/0.0066 vs dump ffn_out (floor 0.0051), PCC 0.99999/0.99997/0.99998) 0.265/1.015/1.134 [moe_compute stage 0.160/0.892/1.020]; HiFi4 same numerics 0.302/1.258/1.425; HiFi2+fp32acc (rel 0.027/0.021/0.016, alpha 1.027/1.008/1.000) 0.241/0.764/0.858; LoFi+fp32acc (identical numerics to HiFi2) 0.57/0.64 at U=8/32; LoFi bf16 DEST (DSV4 default: alpha 0.87-0.99, rel 0.14-0.23, NOT usable) 0.208/0.565/0.642; bfp4 LoFi 0.206/0.505/0.567. Current unified-op path (spread32, fast router, 3 real layers): 0.847/1.558/1.717. Fixed ring tail stages: router 0.035-0.048, dispatch 0.010-0.021, fast_reduce 0.033-0.057, reduce_scatter 0.014-0.025. 3 runs identical, trace==eager in every row. Single-card moe_compute (compute_only, T=32, 8 experts): bfp4 LoFi 0.396 ms, bfp8 LoFi 0.475 ms (214 MB -> 450 GB/s = near DRAM floor), bfp8 HiFi3+fp32acc 0.975, HiFi4 1.26 (PCC 0.999988). => ring path saves 0.58/0.54/0.58 ms per layer vs unified (27/25/27 ms per token at 47 layers) at accurate numerics, but moe_compute is math-bound at HiFi3 (LoFi 0.52 ms vs HiFi3 1.02 ms at U=32): targets 0.6 (U=8) / 0.8 (U=32) NOT reached with accurate numerics (1.015 / 1.134)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Q_ring_bfp8_hifi3_f32_r2_h30_7279090f3c4.log
+- paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute, models/demos/blackhole/mimo_v26/tests/test_moe_ring_decode.py, models/common/modules/moe/tt_moe_decode.py
+
+## E261007-1649-5c4
+- date: 2026-10-07T16:49:22
+- commit: 7279090f3c4
+- branch: ssinghal/mimo-moe
+- host: 30,40,47,48
+- track: moe
+- status: verified
+- claim: EXPERT PLACEMENT / load imbalance analysis (CPU, real routing histograms of 47 layers: L1-5 bf16 dump, L6-47 device capture, 2048 tokens each): mean active experts per chip for a decode batch of B tokens (B=4U): 3.3 (U=8), 4.3 (U=16), 5.3 (U=32). Default mapping (e -> col e//32, row (e%32)//8): expected max/mean chip load 1.65/1.50/1.38 at U=8/16/32; balanced assignment (LPT on the layer's own histogram) 1.006-1.012 in expectation. But on HELD-OUT prompts (histogram from 8 prompts, evaluated on the other 8, 100 random batches, realized max/mean of active experts per chip) default 1.92/1.66/1.47 vs balanced 1.72/1.51/1.37: only ~10% better. Most of the max/mean gap at decode batch sizes is Poisson noise of few active experts per chip, not systematic hot experts. Placement gain estimate: ~0.04 ms/layer on the expert stage (~2 ms/token): low priority
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Q_ring_bfp8_hifi3_f32_r2_h30_7279090f3c4.log
+- paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute, models/demos/blackhole/mimo_v26/tests/test_moe_ring_decode.py, models/common/modules/moe/tt_moe_decode.py
