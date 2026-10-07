@@ -137,8 +137,10 @@ or the sweep has nothing to feed it.
 
 ### 2. Give it a block in the table
 
-The emitter passes an op's key line through verbatim, so a *new* op needs one by hand
-first. Add the name and one placeholder row (a key with no rows fails to load):
+The emitter keeps an op's key line -- its name and any header comment -- and only adds
+or replaces the `measured by:` clause on it; it never writes a key line itself. So a
+*new* op needs one by hand first. Add the name and one placeholder row (a key with no
+rows fails to load):
 
 ```yaml
 MyOp:
@@ -159,22 +161,21 @@ writes nothing.
 ### 4. Read what it wrote
 
 ```yaml
-MyOp:
-  - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23
-  - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, past this output's usable ceiling, so tolerance, exhaustive ...
-  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive ...
+MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23, except where a row says otherwise
+  - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, budget would be 15771 > 6-step ceiling
+  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
 ```
 
 Four verdicts:
 
 - **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, rounded up
   (a measured 1 becomes 2), except that a measured 0 stays 0.
-- **`metric: tolerance`, "past this output's usable ceiling"** — past
+- **`metric: tolerance`, "budget would be N > C-step ceiling"** — past
   `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
   tolerance it replaces. The op keeps tolerance + PCC on that cell and the number is
   recorded so nobody re-derives it.
-- **`metric: tolerance`, "a sorted sweep flatters a block format"** — a block float
-  output. The sweep
+- **`metric: tolerance`, "block-quantized"** — a block float output. The sweep
   enumerates a format in value order, so sixteen adjacent values share a `Bfp8_b` block
   and the exponent fits all of them: the best case for quantization, not a
   representative one. `Abs` reads **15,616 steps** there from random mixed-magnitude
