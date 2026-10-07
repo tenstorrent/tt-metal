@@ -71,6 +71,7 @@ TEST_F(ControlPlaneFixture, NoFactoryDescriptorReportsNoDownedLinks) {
     const auto& control_plane = control_plane_without_factory_descriptor();
 
     EXPECT_TRUE(control_plane.get_downed_links().empty());
+    EXPECT_TRUE(control_plane.get_unused_downed_links().empty());
     EXPECT_TRUE(control_plane.get_locally_unhealthy_links().empty());
 }
 
@@ -80,6 +81,7 @@ TEST_F(ControlPlaneFixture, NoFactoryDescriptorEmptyResultsAreStable) {
     const auto& control_plane = control_plane_without_factory_descriptor();
 
     EXPECT_EQ(&control_plane.get_downed_links(), &control_plane.get_downed_links());
+    EXPECT_EQ(&control_plane.get_unused_downed_links(), &control_plane.get_unused_downed_links());
     EXPECT_EQ(&control_plane.get_locally_unhealthy_links(), &control_plane.get_locally_unhealthy_links());
 }
 
