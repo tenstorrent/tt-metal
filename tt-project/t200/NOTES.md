@@ -13,3 +13,8 @@
 - post.sh -> tt-project/data/g15/t200_s1x6b/: seed<N>.mp4, vis/ (seed0 t=2.6-3.4 s at 10 fps, ref and cand;
   1 fps ref|cand strips per seed), sbs/, eval_vs_ref_t48_s2x2/ (PCC/PSNR + VBench 5 dims), POST.done.
 - Marker: t200/DRIVER.done = "<rc> <reason>".
+
+## Attempt 1 (2026-10-07)
+- Driver detached 06:39 UTC as run 802 t200drv (state/runs/802/t200drv.{log,rc}); blx01 was busy with ltx-host job 765.
+- Next: when t200drv.rc exists, read driver.log (job id, drops), DRIVER.done, data/g15/t200_s1x6b/POST.done,
+  E2E_WALL_S gen#1..5 from run.log, eval summary, then look at vis/ (seed0 t=2.6-3.4 first), write verdict.
