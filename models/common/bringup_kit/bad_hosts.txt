@@ -2,3 +2,4 @@
 31  wrong outputs in mesh rows 0-1 (silent data corruption: results from this host are invalid)
 42  hangs on the first command (first device op never returns); use only as a last resort and with hangwatch
 46  two anomalies in the MiMo bring-up (2026-10-07): 'failed to initialize FW, try resetting the board' while host_health said OK (moe agent), and a 48-layer run stuck ~2500% CPU for 18 min after layer 0 where the same run progressed on .48 (asm agent); not proven faulty, skipped until checked
+35  three hangs in execute_trace of the prefill trace (steps 51/64, 0, and one without step trace) plus 'Timed out waiting for active ethernet core' after a board reset (asm agent 2026-10-07); the same configs ran on .30 and .48; not proven faulty, skipped until a clean canary
