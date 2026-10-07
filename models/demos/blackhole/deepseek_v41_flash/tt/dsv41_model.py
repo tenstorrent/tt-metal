@@ -1016,11 +1016,15 @@ class Model:
         items = [(int(b), torch.as_tensor(t).long(), int(st), int(e)) for b, t, st, e in items]
         ends = {b: e for b, _, _, e in items}
         assert len(ends) == len(items), "duplicate users in one prefill call"
-        for b, t, st, e in items:
+        for k, (b, t, st, e) in enumerate(items):
             assert 0 < e <= self.max_ctx - 1 and 0 <= st < e and t.numel() >= e, (b, st, e, t.numel())
-            assert (
-                st == 0 or resume.get(b) == st
-            ), f"user {b}: chunk start {st} is not its carried position {resume.get(b)}"
+            if st > 0 and (resume.get(b) != st or self.__dict__.get("pf_slot_of", {}).get(b) is None and general):
+                # the carried prefill state of this user is gone (its prefill slot was taken by another prompt of its mesh row, or the trace was re-captured): recompute from position 0
+                # (always correct, never fast; ``tokens`` hold the prompt from position 0)
+                self.log(
+                    f"prefill_interleaved: user {b} cannot resume at {st} (carried position {resume.get(b)}): recomputing from 0"
+                )
+                items[k] = (b, t, 0, e)
         max_end = max(ends.values())
         self.check_context_supported(max_end)
         S_pad = max(s_pad_max or 0, -(-max_end // C) * C)
@@ -1061,7 +1065,9 @@ class Model:
         res, self._res, self._want_logits = {}, {}, want_logits
         n_replays, t_rep, t_host, t_exp, t_hash = 0, 0.0, 0.0, 0.0, 0.0
         t_pre = time.perf_counter() - t_start
-        for st0 in sorted({st for _, _, st, _ in items}):
+        for st0 in sorted(
+            {st for _, _, st, _ in items}, reverse=True
+        ):  # continuations FIRST: a new prompt of the same call must not evict a slot a continuation still needs
             grp = [it for it in items if it[2] == st0]
             if general:  # waves: at most Up users of a mesh row per wave
                 by_row = {}
