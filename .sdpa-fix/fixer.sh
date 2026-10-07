@@ -208,19 +208,6 @@ apply_decisions() {
         $FIXLIB mark --state decided "$sig"
         log "  decision for $short: $key ($label) by $by — fix stage implements it now"
         slack_sig "🛠 decided by <@$by>: *$key · $label* for \`$short\` ($wf), preparing the draft PR…" "$sig" ;;
-      ask_owner)
-        cpr=$(jq -r '.r.decision.culprit_pr // empty' <<<"$row")
-        if [[ -n "$cpr" ]]; then
-          who=$(pr_author "$cpr")
-          gh pr comment "$cpr" -R "$REPO" --body "@$who: nightly CI started failing after this PR: \`$(jq -r .r.test <<<"$row")\` in \`$wf\` ($(jq -r .r.last_seen.url <<<"$row")).
-$(jq -r .r.decision.question <<<"$row")
-Could you take a look? (asked via the SDPA watcher on behalf of the team)" >/dev/null
-          log "  decision for $short: asked @$who on #$cpr"
-          slack_sig "🙋 decided by <@$by>: asked @$who on #$cpr to take \`$short\` ($wf)" "$sig"
-        else
-          slack_sig "🙋 decided by <@$by>: hand \`$short\` to its owner, but no culprit PR is known; please ping them directly" "$sig"
-        fi
-        $FIXLIB mark --state with_owner "$sig" ;;
       *) log "  WARN: unknown decision $key for $sig" ;;
     esac
   done < <(jq -c '.sigs | to_entries[] | select(.value.state == "awaiting_decision" and .value.decision_choice != null) | {sig: .key, r: .value}' "$FIX_HOME/ledger.json")

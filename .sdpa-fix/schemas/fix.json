@@ -144,8 +144,7 @@
               "kind": {
                 "type": "string",
                 "enum": [
-                  "patch",
-                  "ask_owner"
+                  "patch"
                 ]
               }
             }
