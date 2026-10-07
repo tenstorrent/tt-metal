@@ -999,16 +999,23 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         {kSize, std::to_string(t.logical_volume() * t.element_size())},
     };
 
-    // Add memory config if tensor is on device
-    if (t.is_allocated() && t.storage_type() == StorageType::DEVICE) {
+    switch (t.storage_type()) {
+        case StorageType::HOST: params[kStorageType] = "HOST"; break;
+        case StorageType::DEVICE: params[kStorageType] = "DEVICE"; break;
+    }
+
+    // A device tensor can lack a backing buffer (deallocated, or a non-owned MeshBuffer), but its spec still
+    // declares where it lives. Record that, so a missing buffer type only ever means a host tensor.
+    if (t.storage_type() == StorageType::DEVICE) {
         params[kMemoryConfig] = fmt::format("{}", t.memory_config());
+        const auto buffer_type = buffer != nullptr ? buffer->buffer_type() : t.memory_config().buffer_type();
+        params[kBufferType] = std::to_string(static_cast<int>(buffer_type));
     }
 
     // Add buffer-related info (primary device for single-device tensors)
     if (buffer != nullptr) {
         params[kDeviceId] = std::to_string(buffer->device()->id());
         params[kAddress] = std::to_string(buffer->address());
-        params[kBufferType] = std::to_string(static_cast<int>(buffer->buffer_type()));
     }
 
     if (!device_tensors_json.empty()) {
