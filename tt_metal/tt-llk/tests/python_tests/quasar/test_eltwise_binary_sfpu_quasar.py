@@ -129,9 +129,8 @@ def _run_sfpu_binary_llk_golden(
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
     broadcasts the ``src1_idx`` tile in the golden.
 
-    ``sign_magnitude`` builds the SIGN_MAGNITUDE_FORMAT kernel variant and stages
-    the int32 operands as SMAG32; the golden is still computed from the
-    2's-complement values, so only ops with a non-negative result (gcd) use it.
+    ``sign_magnitude`` stages int32 operands as SMAG32 after the golden is computed,
+    so it only suits ops with a non-negative result (gcd).
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -189,7 +188,6 @@ def _run_sfpu_binary_llk_golden(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
-            # SMAG32 Dest datapath; read only by the quant family and GCD.
             SIGN_MAGNITUDE_FORMAT(sign_magnitude),
             SFPU_DST_ROUNDING_MODE(dst_rounding_mode),
             # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
@@ -262,9 +260,7 @@ def _prepare_int_stimuli(
 ):
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
     clamps to keep the product representable). Both operands live in src_A.
-    For GCD, _plant_gcd_lanes then overwrites the first len(_GCD_EDGE_PAIRS) +
-    _GCD_COMMON_FACTOR_LANES lanes of both operand tiles with edge pairs and
-    shared-factor pairs."""
+    For GCD, the head of each operand tile is overwritten by _plant_gcd_lanes."""
     data_format = formats.input_format
     iinfo = torch.iinfo(format_dict[data_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
@@ -286,8 +282,7 @@ def _prepare_int_stimuli(
 
 _INT31_MAX = 2**31 - 1
 
-# Edge pairs for GCD. About 61% (6/pi^2) of uniform int32 pairs are coprime and the
-# rest almost always have a tiny gcd, so uniform stimuli alone rarely exercise a large one.
+# Uniform int32 pairs almost always have a tiny gcd, so plant edge pairs.
 _GCD_EDGE_PAIRS = [
     (0, 0),
     (0, 12),
@@ -317,7 +312,7 @@ _GCD_EDGE_PAIRS = [
     (1836311903, 1134903170),
     (1134903170, 1836311903),
     (-1836311903, 1134903170),
-    # Both operands above 0x7F800000 (FP32 NaN bit patterns) probe SFPSWAP's compare format.
+    # Operands above 0x7F800000 (fp32 NaN patterns) check SFPSWAP compares as int32.
     (2147483647, 2139095041),
     (2139095041, 2147483647),
     (2147483646, 2139095042),
@@ -326,11 +321,9 @@ _GCD_EDGE_PAIRS = [
     (2147483646, 2147483644),
     (2139095044, 2147483644),
     (2147483647, 2147483646),
-    # One NaN-pattern operand against a small one.
     (2139095041, 7),
     (2147483646, 1000),
-    # Pairs that need all 30 Stein steps the kernel budgets for 31-bit operands, so a
-    # 29-step budget or an off-by-one in the replay count fails deterministically.
+    # Need all 30 Stein steps: catches a short replay budget.
     (2147483645, 3),
     (3, 2147483645),
     (-2147483645, 3),
@@ -339,9 +332,7 @@ _GCD_EDGE_PAIRS = [
     (715827883, -1431655765),
 ]
 
-# Shared-factor lanes g * x, g * y with g < _GCD_MAX_COMMON_FACTOR and
-# x, y < _GCD_MAX_COFACTOR; the product must stay a valid 31-bit magnitude, or
-# the int32 cast below would wrap and the golden would see corrupted operands.
+# g * x must fit 31 bits, or the int32 cast wraps and corrupts the golden's operands.
 _GCD_MAX_COMMON_FACTOR = 1 << 15
 _GCD_MAX_COFACTOR = 1 << 16
 assert (_GCD_MAX_COMMON_FACTOR - 1) * (_GCD_MAX_COFACTOR - 1) <= _INT31_MAX
@@ -349,8 +340,7 @@ _GCD_COMMON_FACTOR_LANES = MAX_TILE_ELEMENTS // 2
 
 
 def _plant_gcd_lanes(src_A, src0_idx, src1_idx):
-    """Overwrite the head of each operand tile with GCD edge pairs, followed by
-    pairs sharing a random common factor so most lanes have a non-trivial gcd."""
+    """Overwrite each operand tile's head with edge pairs, then shared-factor pairs."""
     elems = MAX_TILE_ELEMENTS
     edge_a = torch.tensor([a for a, _ in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
     edge_b = torch.tensor([b for _, b in _GCD_EDGE_PAIRS], dtype=src_A.dtype)
@@ -410,8 +400,7 @@ def test_eltwise_binary_sfpu_int_quasar(
 ):
     """Binary SFPU integer ops (add, mul, gt, lt, le, ge, copy_dest, gcd), Int32."""
     binary_op = mathop.cpp_enum_value
-    # int MUL clamps to keep the product in range; GCD clamps to the 31-bit magnitude
-    # contract (SFPABS saturates INT_MIN).
+    # GCD excludes INT_MIN: SFPABS saturates it.
     clamp_inputs = _INT_CLAMP.get(mathop)
     _run_sfpu_binary_llk_golden(
         formats,
@@ -441,9 +430,7 @@ def test_eltwise_binary_sfpu_gcd_sign_magnitude_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """gcd on the SIGN_MAGNITUDE_FORMAT datapath (e.g. Int8 copy_tile through an
-    fp32-accumulating FPU): operands staged as SMAG32, converted on load by the
-    kernel. The result is non-negative, so the golden is the 2's-complement one."""
+    """gcd with SMAG32-staged operands (SIGN_MAGNITUDE_FORMAT); the result is non-negative."""
     formats = InputOutputFormat(
         input_format=DataFormat.Int32, output_format=DataFormat.Int32
     )
