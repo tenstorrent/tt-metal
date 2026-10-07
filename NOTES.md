@@ -24,3 +24,16 @@ Driver: blx01 /var/tmp/fasth3/t219/drv/driver.sh (pid 3677629, started 20:01 UTC
 Baseline C1 (job 824, same script + tree, 1-D): mean 10.313 s, PSNR 55.1-55.8 dB.
 Next: when the marker exists, read cmp.json + stage_tree.txt; if correct and faster, land the 3 code commits on t48.
 2026-10-07 light wake: job D dropped twice on blx01 (833: chip 14 dead at 20:05:50 UTC; 843: chip 11 dead at 20:20:58 UTC; both ~80 s in, whose=smarton t222 D). Driver skipped D on blx01 per the two-drop rule. No cmp.json/stage_tree. Next (standard): judge whether the 2-D path itself causes the drops (two different chips, same point in the run), then move D to blx03 runner or exabox.
+2026-10-07 20:30 standard wake: D's real failure was a code bug, not the drops. Both 833 and 843 died at stage 5 with
+`AssertionError: H shard 68 is not whole 8-site bricks` (neighborhood_attention.py): _choose_sharded_brick ignored the
+H split and picked (2,8,2). The chip drops (14, 11) came AFTER, in the broker's post-job fabric check. blx01 tray 2
+(chips 11-14) also dropped at 18:35, 18:46 (chips 13, 12) before our jobs, and 19:19 chip 25: box flakiness.
+Fix 5772489e0a0 (code): chooser takes height_local/h_shard_count, requires brick_h | H shard, plans all H x W shards.
+2-D now picks (2,4,4): 200 gathered bricks over 18615 query bricks per chip (1-D: (2,8,2), 168 over 74460, but 1-D also
+splits heads 4 ways, so NA work per chip is ~3.72M x 4 heads-equivalent vs 12.5M: 2-D NA may be ~20% slower; gains must
+come from dropping TP collectives). Host-only test test_choose_sharded_brick_divides_h_shard passed on blx01.
+Note: test_choose_sharded_brick_regression's pinned 1080p_decode (84,272,480)->(8,2,2) returns (2,8,2) on this base (stale pin).
+Driver patched: a traceback in run.log is our failure, not a drop. Run 2 started 20:28 UTC (pid 3768509), new config
+(brick fix), D only (U already passed); waits for blx01 health (fsm was down). Marker drv/driver.marker (run 1's kept as .run1).
+Next: when marker exists, read drv/cmp.json, out/stage_tree.txt, still; if correct and faster than C1 10.313 s, land
+feb44de2529 3d0729e48e1 c12f7f34eff 5772489e0a0 on t48 (-land branch, cherry-pick, ttp push --detach).

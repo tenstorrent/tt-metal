@@ -56,6 +56,10 @@ job() {
       broker-kill | power-cycle | reboot | interrupted | abandoned) drop=1 ;;
       *) [ -n "$new" ] && [ "$JRC" != 0 ] && drop=1 || drop=0 ;;
     esac
+    # A Python traceback is our own failure; a chip lost in the post-job gate after it is not a drop of this job.
+    if [ $drop = 1 ] && grep -q '^Traceback' $O/run.log 2> /dev/null; then
+      log "$tag: job $JOB failed with a traceback; incidents [$new] came after it, not counted as a drop"; drop=0
+    fi
     [ $drop = 0 ] && return 0
     for f in $new; do
       log "DROP-INCIDENT $f: $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("label"), d.get("evidence"), "job=", d.get("job"), "present=", d.get("chips_present_at_capture"))' $INC/$f/incident.json 2>&1 | head -c 600)"
