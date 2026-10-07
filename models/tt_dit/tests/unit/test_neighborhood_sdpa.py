@@ -565,10 +565,8 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
 @pytest.mark.parametrize(
     "volume, context_window, width_local, shard_count, expected_brick, expected_gather",
     [
-        # 1080p decode: (8,2,2) and (2,8,2) both gather 147 bricks with the same halo; the
-        # deeper time brick measured 11% faster per query brick, and the -brick_time tiebreak
-        # in the scoring tuple picks it.
-        ((84, 272, 480), (11, 11, 11), 60, 8, (8, 2, 2), 147),
+        # 1080p decode: the brick production stage 5 runs with (W over 8 chips).
+        ((84, 272, 480), (11, 11, 11), 60, 8, (2, 8, 2), 147),
         # Deterministic stages at 1080p, W over the size-8 axis. W_local 15 admits only brick
         # width 1 (shard origins must be brick-aligned and 15 has no even divisor), so these pin
         # that odd widths are searched at all; W_local 30 admits widths 1 and 2 and picks 2.
@@ -644,6 +642,14 @@ def test_choose_sharded_brick_delegates_at_stride_gt_one(mesh_device):
     )
     expected = tuple(ttnn.transformer.neighborhood_choose_brick((3, 5, 5)))
     assert brick == expected, f"stride > 1 should return {expected}, got {brick}"
+
+
+def test_choose_sharded_brick_refuses_stride_with_h_split(expect_error):
+    """A strided stage 5 under the 2-D split fails with a clear error, not the H-shard assert."""
+    from models.tt_dit.layers.neighborhood_attention_plan import _choose_sharded_brick
+
+    with expect_error(ValueError, "DIFFVAE_S5_2D"):
+        _choose_sharded_brick((145, 272, 480), (11, 11, 11), (2, 4, 4), 60, 8, height_local=68, h_shard_count=4)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])

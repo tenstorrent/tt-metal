@@ -908,6 +908,12 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
     then divide the H shard too, and every H x W shard must gather alike.
     """
     if stride != (1, 1, 1):
+        if height_local is not None:
+            # The strided brick ignores the H shard, so it need not divide it.
+            raise ValueError(
+                f"DIFFVAE_GNA_STRIDE={','.join(map(str, stride))} cannot be combined with the 2-D "
+                "stage-5 split (DIFFVAE_S5_2D=1): unset one of them"
+            )
         return tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
 
     key = (volume, context_window, stride, width_local, shard_count, height_local, h_shard_count)
