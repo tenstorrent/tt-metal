@@ -33,14 +33,14 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_field(std::u
     cfg::write<cfg::Access::MMIO, cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0>(format);
 }
 
-// Word 0 read-modify-write of bits 8:5 (mask 480): old ^ ((new ^ old) & mask).
+// Word 0 read-modify-write of bits 8:5 (mask 480): (old & ~mask) | (new & mask).
 // CHECK-LABEL: {{^}}write_runtime_state_field:
 // CHECK: %lo(_ZN7ckernel12cfg_state_idE)
 // CHECK: lw [[OLD:a[0-7]]],0([[BANK:a[0-7]]])
 // CHECK-NEXT: slli [[DATA:a[0-7]]],a0,5
-// CHECK-NEXT: xor [[DATA]],[[DATA]],[[OLD]]
 // CHECK-NEXT: andi [[DATA]],[[DATA]],480
-// CHECK-NEXT: xor [[DATA]],[[DATA]],[[OLD]]
+// CHECK-NEXT: andi [[OLD]],[[OLD]],-481
+// CHECK-NEXT: or [[DATA]],[[DATA]],[[OLD]]
 // CHECK-NEXT: sw [[DATA]],0([[BANK]])
 // CHECK-NEXT: ret
 
@@ -77,9 +77,9 @@ extern "C" __attribute__((noinline, used)) void write_runtime_state_field_sectio
 // CHECK-LABEL: {{^}}write_runtime_state_field_section:
 // CHECK: %lo(_ZN7ckernel12cfg_state_idE)
 // CHECK: lw [[OLD:a[0-7]]],448([[BANK:a[0-7]]])
-// CHECK-NEXT: xor a0,a0,[[OLD]]
 // CHECK-NEXT: andi a0,a0,15
-// CHECK-NEXT: xor a0,a0,[[OLD]]
+// CHECK-NEXT: andi [[OLD]],[[OLD]],-16
+// CHECK-NEXT: or a0,a0,[[OLD]]
 // CHECK-NEXT: sw a0,448([[BANK]])
 // CHECK-NEXT: ret
 
