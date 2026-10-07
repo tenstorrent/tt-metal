@@ -304,6 +304,13 @@ UnifiedMatmulPlan plan_unified_matmul(
         "K_chunk_tiles ({}) must divide K_tiles ({})",
         config.K_chunk_tiles,
         base.K_tiles);
+    // Each reader thread takes the same K chunks of every C slice. With an auto K chunk this needs K_tiles.
+    const uint32_t most_K_chunks = config.K_chunk_tiles != 0 ? base.K_tiles / config.K_chunk_tiles : base.K_tiles;
+    TT_FATAL(
+        requested_readers == 0 || most_K_chunks % requested_readers == 0,
+        "MatmulUnifiedProgramConfig.num_reader_threads ({}) must divide the number of K chunks ({})",
+        requested_readers,
+        most_K_chunks);
 
     // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
     // cores in assignment order (so shard i lives on the core that produces C slice i).
@@ -386,7 +393,8 @@ UnifiedMatmulPlan plan_unified_matmul(
             } else {
                 for (uint32_t readers = MAX_READER_THREADS; readers > 1; readers /= 2) {
                     if (is_quasar && operands_copied && readers + plan.num_writer_threads <= MAX_DM_THREADS &&
-                        K_chunks_per_core >= 2ull * readers && config.operand_buffer_depth % readers == 0) {
+                        K_chunks_per_core >= 2ull * readers && (plan.K_tiles / K_chunk_tiles) % readers == 0 &&
+                        config.operand_buffer_depth % readers == 0) {
                         reader_threads.push_back(readers);
                     }
                 }
@@ -535,7 +543,9 @@ UnifiedMatmulPlan plan_unified_matmul(
                                            ? std::min<uint32_t>(plan.K_tiles, MAX_AUTO_K_CHUNK_TILES)
                                            : plan.K_tiles;
         for (uint32_t K_chunk_tiles = K_chunk_start; K_chunk_tiles >= 1; --K_chunk_tiles) {
-            if (plan.K_tiles % K_chunk_tiles != 0) {
+            const bool readers_divide_K_chunks =
+                requested_readers == 0 || (plan.K_tiles / K_chunk_tiles) % requested_readers == 0;
+            if (plan.K_tiles % K_chunk_tiles != 0 || !readers_divide_K_chunks) {
                 continue;
             }
             UnifiedMatmulPlan candidate =

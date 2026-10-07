@@ -115,7 +115,7 @@ struct MatmulUnifiedProgramConfig {
     // Compute threads per core (Quasar NEOs running the compute kernel); 1, 2 or 4. 0 = auto: 4 on Quasar,
     // 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
     std::size_t num_compute_threads = 0;
-    // Reader threads per core (Quasar DM cores), 1 to 4, taking the K chunks round-robin. 0 = auto.
+    // Reader threads per core (Quasar DM cores), 1 to 4, dividing the K chunks. 0 = auto.
     std::size_t num_reader_threads = 0;
     // Writer threads per core (Quasar DM cores), 1, 2 or 4, dividing num_compute_threads. 0 = auto.
     std::size_t num_writer_threads = 0;
