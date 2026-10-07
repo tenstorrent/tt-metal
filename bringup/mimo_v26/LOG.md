@@ -822,3 +822,13 @@
 - claim: DEVICE per-layer dump EXISTS: /mnt/tt-data/ssinghal/mimo-dumps/mimo-device-s128b16/ (layer_0..47.pt + logits.pt, 4.85 GB). Free-running 48-layer device prefill (unified bf16-activation experts, bfp8 weights), same 16 GSM8K sequences/tokens as mimo-prefill-s128b16 (B=16, S=128, user b = mesh row b//4, slot b%4). layer_L.pt = {'prefill': {h_in, attn_in, attn_out, ffn_in, ffn_out, h_out [16,128,4096] bf16 (h_in = DEVICE h_out of layer L-1, i.e. chained), routing_idx [2048,8] int64 and routing_w [2048,8] float32 for L>=1 (device router, token order b*128+s), no route_gap/state/decode}, 'meta'}; logits.pt = {logits [16,152576] float32 of position 127, norm_in [16,4096] bf16 (last-token hidden before final norm), prefill_tokens}. Sanity: all fields finite at L47; h_out PCC vs CPU bf16 dump L0..L5 0.99998,0.99994,0.99989,0.99987,0.99988,0.99976 (whole-tensor). Last-token argmax decodes to plausible continuations of the dump texts ('The', ',', ' day', ' cheaper', ...). Capture run takes ~4 min incl. weight load. Repro: CAP_OUT=<dir> pytest tests/test_capture_device.py with the unified env (see handoff).
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_capture48_d699f503706.log
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_capture_device.py
+## E261007-0502-8d6
+- date: 2026-10-07T05:02:47
+- commit: 4169b64e156
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: DECISIONS (coordinator, 2026-10-07, at 4169b64e156): (1) GSM8K gate protocol uses chat template with enable_thinking=false ('<think></think>' after the assistant tag, chat_template.jinja line 93); thinking-mode accuracy not measured. (2) File ownership for the next stage: tt/attention.py decode + tt/decode.py + tt/generator.py = attn agent; tt/prefill.py = asm agent; tt/moe*.py router*.py = moe agent; tt/kv_pool.py shared, layout agreed via LOG/notes; tt/layer.py tt/model.py changes via coordinator. (3) Per-layer gate for layers 6..47: reference agent runs the CPU oracle teacher-forced on DEVICE-captured per-layer inputs (mimo-device-s128b16), not a full CPU model run. (4) Spec decode drafter choice (MTP-3 vs DFlash) pending user decision; MTP oracle hypotheses built on device-captured hidden states first.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
