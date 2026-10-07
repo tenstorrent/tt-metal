@@ -184,6 +184,18 @@ def test_moe_scale_alpha(mesh_device):
             f"RESULT L{LAYER} op={opname} C total: device final vs fp32 oracle: {stats(out, ref_fp32)} ; PCC {pcc(out, ref_fp32):.5f}; (fp32 sum of device expert outputs with fp32 weights vs oracle: {stats((S1 * wf.unsqueeze(-1)).sum(2), ref_fp32)})",
             flush=True,
         )
+        if os.environ.get("MIMO_SAVE"):
+            torch.save(
+                {
+                    "S1": S1.bfloat16(),
+                    "O": O.bfloat16(),
+                    "out": out,
+                    "ref": ref_fp32,
+                    "idx": idx_d[:, :NT],
+                    "w": w_d[:, :NT],
+                },
+                f"{os.environ['MIMO_SAVE']}_{opname}.pt",
+            )
         for lst in wts:
             for t in lst:
                 ttnn.deallocate(t)
