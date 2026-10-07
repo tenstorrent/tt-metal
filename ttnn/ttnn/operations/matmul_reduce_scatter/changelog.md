@@ -103,3 +103,53 @@
 - Issues encountered: None.
 - Tests added: `test_matmul_reduce_scatter_precision_baseline.py` gained an activation-dtype axis and 5
   bfloat8_b / bfloat4_b cases (11/11 pass).
+
+## Refinement 3 — Speed up the PERF FOCUS case: transport send rate
+- Date: 2026-10-07
+- What was done: lamp L5 transport placement, built per chip.
+  - `_plan_placement(mesh, L, groups, links)` puts each port (direction, link) on the transport-row core with the
+    fewest NoC1 hops (the sender's NoC) to that connection's Ethernet core. Finals take the remaining row cores.
+  - The Ethernet channel is the first word of `ttnn.setup_fabric_connection(...)`. The physical Ethernet and worker-column
+    maps come from the cluster descriptor and the SoC yaml (fabric_all_gather's host helpers, without its probe
+    dispatch). The op still makes one dispatch per call.
+  - `Placement` port/final lists are now keyed by mesh coord. Each sender addresses its peer chip's cores (ready
+    fence → peer's opposite port, relay arrivals → peer's same-direction port, own-block arrivals → peer's finals).
+    The compute cores' ack consumers come from their own chip's placement.
+  - Global semaphore sets are now keyed by `(mesh, cluster_axis, num_links, ring)`. A line-end chip's ports move
+    with the wrap hop, so Linear and Ring no longer share a set (still bounded: 8 per mesh).
+  - `XPORT_PLACEMENT` (env `MMRS_XPORT_PLACEMENT`) = "eth" (default) / "simple" (old fixed layout) is the A/B knob.
+    If the Ethernet layout is unknown (emulator, missing descriptor entry), placement falls back to "simple".
+  - noc_placement checked: port reader (NCRISC, NoC0 reads), sender and final writer (BRISC, NoC1 writes) already
+    hold, so no change.
+  - split_reader (L4) not built: profiler zones show the port senders are fabric-slot bound, not issue-bound.
+  - Perf harness: opens the mesh with the production router config (14 KiB + 64 B payload), per feature_spec's
+    operator note; `MMRS_PAYLOAD` overrides it. Added `smallk` / `r2` cases and an `MMRS_LINKS` override.
+  - Reused: every kernel, CB and descriptor path. Added: placement planner + peer-placement lookup, with no kernel
+    change.
+- Perf (device kernel ns, steady state, max over 8 chips, 2×4 LoudBox FABRIC_2D, 14 KiB packets, before → after):
+  - num_links=2:
+
+    | Case | Before | After |
+    |---|---|---|
+    | FOCUS | 208.5 us | 166.6 us |
+    | GLM | 278 us | 219 us |
+    | MiMo | 394 us | 357 us |
+    | small-K 640×512×7168 | 151 us | 133 us |
+    | R2 2048×4096×4096 | 444 us | ~440 us (compute-bound) |
+
+  - num_links=1: FOCUS 252 → 240 us; small-K 223 → 215 us.
+  - At the old 4352 B payload: FOCUS 210 → 208 us max, 200 → 191 us median; MiMo 444 → 432 us.
+  - Roofline: end-chip steady-state send ≈ 36 GB/s per link, which is the box's best-seen link rate (feature_spec:
+    36.4). The link floor for FOCUS at 14 KiB is 3.44 MB / 36.4 GB/s ≈ 95 us + ~17 us fill, i.e. ≈ 112 us. Achieved
+    167 us max / 143 us median.
+  - The remaining gap: first-block starvation (~36 us; the matmul is ~28–34 us per scatter block on ~70 cores),
+    relay-chain latency, and cross-chip launch skew at the ready fence. Next levers: Refinement 4 (pipeline fill)
+    and matmul core utilization.
+- Accuracy achieved: unchanged kernels, so numerics are unchanged. FOCUS loose case passes its rel-RMS 0.055 gate.
+  Probe 033: worst-chip PCC 0.999993 (FOCUS), 0.999991 (axis 0, 256×512×256, 1 link), 0.999976 (MiMo).
+- Golden test progress: test_fabric_configs + test_regression + test_ring_mock 102/102. test_golden slice
+  (3 loose cases + 640×512×7168 + 640×1536×32) 75/75. Unit acceptance 53 passed, 1 skipped.
+- Issues encountered: the unit perf harness measured at the router-default 4352 B payload, where FOCUS is
+  packet-overhead bound and placement shows only ~5% (median). Under the production payload the win is 20%.
+- Tests added: perf harness cases `smallk`, `r2`; env knobs `MMRS_PAYLOAD`, `MMRS_LINKS`. Probes 032 (Ethernet
+  channel ↔ core map) and 033 (placement dump + PCC).

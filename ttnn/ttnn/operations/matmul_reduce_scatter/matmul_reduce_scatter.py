@@ -26,7 +26,6 @@ from .matmul_reduce_scatter_program_descriptor import (
     create_mesh_program_descriptor,
 )
 
-
 # ---------------------------------------------------------------------------
 # 1. INPUT_TAGGERS
 # ---------------------------------------------------------------------------
@@ -189,15 +188,17 @@ def _l1_cb_capacity(mesh_device):
     return int(ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1).total_bytes_per_bank)
 
 
-def _get_sems(mesh_device, cluster_axis, num_links):
-    """Global semaphores, shared by every plan with the same (mesh, cluster_axis, num_links).
+def _get_sems(mesh_device, cluster_axis, num_links, ring=False):
+    """Global semaphores, shared by every plan with the same (mesh, cluster_axis, num_links, ring).
 
-    One set per transport identity, over the whole worker grid: the port / final cores (placement depends on
-    num_links only) then always receive ready-fence and arrival increments from the same neighbours (cluster_axis), so
-    sharing across plans keeps the fence semantics of reusing one plan; every kernel re-arms what it consumed, so the
-    counters are zero between calls. Per-plan semaphores would accumulate L1 allocations across the distinct shapes a
-    model runs (bounded here at 4 sets per mesh)."""
-    key = (id(mesh_device), cluster_axis, num_links)
+    One set per transport identity, over the whole worker grid: the port / final cores (placement depends on the
+    chip's fabric links for that identity only, never on the shape) then always receive ready-fence and arrival
+    increments from the same neighbours on the same cores, so sharing across plans keeps the fence semantics of
+    reusing one plan; every kernel re-arms what it consumed, so the counters are zero between calls. Ring is part of
+    the identity: a line-end chip's ports sit under different Ethernet cores with and without the wrap hop. Per-plan
+    semaphores would accumulate L1 allocations across the distinct shapes a model runs (bounded here at 8 sets per
+    mesh)."""
+    key = (id(mesh_device), cluster_axis, num_links, ring)
     if key not in _SEM_CACHE:
         grid = mesh_device.compute_with_storage_grid_size()
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
@@ -239,7 +240,7 @@ def _get_plan(
         _check_ring_fabric(cluster_axis)
     groups = _groups(mesh_shape, cluster_axis, ring)
     links, L = _links(mesh_device, groups, num_links)
-    pl = _plan_placement(mesh_device, L)
+    pl = _plan_placement(mesh_device, L, groups, links)
     num_banks = mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y
     if num_banks % (2 * L):
         raise ValueError(f"matmul_reduce_scatter: {num_banks} DRAM banks do not split into {2 * L} bank sets")
@@ -282,7 +283,7 @@ def _get_plan(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(compute_set, (shard_tiles * 32, 32), ttnn.ShardOrientation.ROW_MAJOR),
     )
-    sems = _get_sems(mesh_device, cluster_axis, L)
+    sems = _get_sems(mesh_device, cluster_axis, L, ring)
     plan = dict(
         G=G,
         groups=groups,

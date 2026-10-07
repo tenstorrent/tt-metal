@@ -123,7 +123,7 @@ tile-aligned); `numerical-precision` failures are not silenced.
 **Done when**: every `dtype=bfloat8_b` and `weight_dtype=bfloat4_b` cell of `test_golden.py` passes (no new
 `supported_fail`), both values are in `SUPPORTED`, and the golden suite is green with zero loud categories.
 
-### [ ] Refinement 3 — Speed up the PERF FOCUS case: transport send rate
+### [x] Refinement 3 — Speed up the PERF FOCUS case: transport send rate
 
 **Type**: perf
 
@@ -157,6 +157,26 @@ R1 `scatter_dim=-1` (FOCUS), R1 `scatter_dim=-2` (MiMo `2048×2048×4096`), the 
 small-K shape (`640×512×7168`), `num_links=1`, and the Ring path once Refinement 1 has landed). MiMo is itself
 link-bound and currently *slower* than its unfused baseline (439 vs 385 us); report its number too — the same
 transport levers should move it.
+
+**Outcome**: L5 placement landed. Each port is placed per chip on the transport-row core nearest (in NoC1 hops) its
+(direction, link) Ethernet core. Placement is host-only, from the `setup_fabric_connection` channel. Measured device
+kernel time (steady state, max over 8 chips, `--profile`, FABRIC_2D at the **production 14 KiB payload**, as
+feature_spec's operator note requires; the perf harness now opens the mesh that way):
+- FOCUS: 208.5 → 166.6 us (median chip 162 → 143); rel-RMS gate holds (golden loose case passes).
+- GLM: 278 → 219 us.
+- MiMo: 394 → 357 us (unfused baseline 385).
+- Small-K 640×512×7168: 151 → 133 us.
+- R2 2048×4096×4096: 444 → ~440 us (compute-bound, unchanged).
+- num_links=1: FOCUS 252 → 240 us, small-K 223 → 215 us.
+- Under the old 4352 B payload: FOCUS 210 → 208 us max, 200 → 191 us median.
+
+Bottleneck now: sender zones show end-chip steady-state blocks at ≈36 GB/s per link (~15 us/block in
+fabric-slot waits, ~3 us CB wait), which is the LoudBox TP-axis link ceiling, so the send *rate* is at roofline. The
+first block is ~36 us of pure data starvation, because the matmul runs ~28–34 us/block on the ~70 cores the 20×56-tile
+block factorizes onto. The interior chips' extra 15–30 us is relay-chain latency plus cross-chip launch skew absorbed at
+the ready fence. noc_placement already holds on the transport row (port reader NCRISC/NoC0 reads, sender and final
+writer BRISC/NoC1 writes). split_reader (L4) was not built because no port RISC is issue-bound. Next: pipeline fill
+(Refinement 4, sub-block sends) and matmul grid utilization of the scatter block.
 
 ### [ ] Refinement 4 — Speed up the PERF FOCUS case: pipeline fill (sub-block sends)
 

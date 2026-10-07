@@ -17,6 +17,7 @@ One generic_op dispatch per call. Per chip:
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +38,9 @@ CORE_BLOCK_MAX = 64  # per-core block tiles (core_m_tiles * core_n_tiles); beyon
 L1_RESERVE = 64 * 1024  # L1 kept free on compute cores beyond the CBs and the hand-off shard (semaphores, misc)
 XPORT_CB_BYTES = 112 * 1024  # transport CB sizing (reference)
 XPORT_GROUP_MAX = 8
+# transport placement (lamp L5): "eth" puts each port core next to its (direction, link) Ethernet core, per chip;
+# "simple" is the fixed chip-independent layout (first 4L cores of the transport row)
+XPORT_PLACEMENT = os.environ.get("MMRS_XPORT_PLACEMENT", "eth")
 INC_EVERY = 8  # arrival-counter increment cadence (blackhole-fabric rule 4)
 DEST_TILES_16B = 8  # DEST capacity in 16-bit tiles (half-sync); a 32-bit DEST (fp32_dest_acc_en) holds half
 XPORT_ADD_BLOCK_MAX = DEST_TILES_16B // 2  # transport add: tiles per CB handshake / DEST batch (always fp32 DEST)
@@ -257,29 +261,89 @@ def _incs(n):
 
 @dataclass
 class Placement:
+    """Transport-row placement, per chip (lamp L5: each port sits next to the Ethernet core of its (direction, link),
+    so it depends on the chip's fabric channels and harvesting). Port / final lists are keyed by mesh coord."""
+
     grid_x: int
     grid_y: int
     transport_rows: int
-    fwd_ports: list = field(default_factory=list)  # logical CoreCoord per link
-    bwd_ports: list = field(default_factory=list)
-    finals: list = field(default_factory=list)  # [link 0 half 0, link 0 half 1, link 1 half 0, ...]
+    mode: str = "simple"  # "eth" (ports under their Ethernet cores) or "simple" (first 4L cores of the row)
+    fwd_ports: dict = field(default_factory=dict)  # coord -> [logical CoreCoord per link]
+    bwd_ports: dict = field(default_factory=dict)
+    finals: dict = field(default_factory=dict)  # coord -> [link 0 half 0, link 0 half 1, link 1 half 0, ...]
     vx: list = field(default_factory=list)  # virtual NoC x per logical column
     vy: list = field(default_factory=list)  # virtual NoC y per logical row
 
 
-def _plan_placement(mesh_device, num_links):
+def _eth_channel(mesh_device, coord, peer, link):
+    """Ethernet channel of the fabric router a worker on `coord` uses toward `peer` on `link`: the first word of the
+    connection's runtime args (host-only -- the throwaway descriptor only collects the connection's semaphores)."""
+    node = lambda c: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*c))
+    return int(
+        ttnn.setup_fabric_connection(node(coord), node(peer), link, ttnn.ProgramDescriptor(), ttnn.CoreCoord(0, 0))[0]
+    )
+
+
+def _eth_placer(mesh_device):
+    """(coord, channel, taken, allowed) -> logical worker core with the fewest NoC1 hops (the sender's NoC) to that
+    channel's Ethernet core; None when the chip's Ethernet layout is unknown (no cluster descriptor entry, emulator).
+    Host-only: the physical Ethernet / worker-column maps come from the cluster descriptor + the arch SoC descriptor
+    (fabric_all_gather's placement helpers, without its probe dispatch -- the channel is known on the host)."""
+    if XPORT_PLACEMENT != "eth" or os.environ.get("TT_METAL_EMULE_MODE"):
+        return None
+    try:
+        from ttnn.operations.examples.fabric_all_gather import program_descriptor_with_inline_kernels as fag
+    except Exception:  # pragma: no cover - example module unavailable
+        return None
+
+    def place(coord, chan, taken, allowed):
+        eth_list = fag._chip_maps(mesh_device, coord)[0]
+        if not eth_list or chan >= len(eth_list):
+            return None
+        return fag._worker_nearest_noc1(mesh_device, coord, eth_list[chan], taken, allowed)
+
+    return place
+
+
+def _plan_placement(mesh_device, num_links, groups=None, links=None):
+    """Transport row(s) = the first ceil(4L / grid_x) grid rows (adjacent to the Ethernet row); per chip, each port
+    (direction, link) goes to the free transport-row core nearest (NoC1 hops) its Ethernet core, the finals to the
+    remaining cores (lowest columns first). A port without a neighbour (line end) still gets a core (it runs the
+    receive side). Falls back to the fixed layout [fwd l, bwd l, final (l,0), final (l,1)] per link."""
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
     n_xport = 4 * num_links
     t_rows = _cdiv(n_xport, gx)
     if t_rows >= gy:
         raise ValueError("matmul_reduce_scatter: the core grid has no rows left for compute")
-    xport = [ttnn.CoreCoord(i % gx, i // gx) for i in range(n_xport)]
+    row_cores = [(x, y) for y in range(t_rows) for x in range(gx)]
     pl = Placement(grid_x=gx, grid_y=gy, transport_rows=t_rows)
-    for l in range(num_links):
-        pl.fwd_ports.append(xport[4 * l])
-        pl.bwd_ports.append(xport[4 * l + 1])
-        pl.finals += [xport[4 * l + 2], xport[4 * l + 3]]
+    place = _eth_placer(mesh_device) if groups is not None else None
+    for coord, (_, prev, nxt) in (groups or {None: (0, None, None)}).items():
+        fwd, bwd, taken = [None] * num_links, [None] * num_links, set()
+        if place is not None:
+            for ports, peer in ((fwd, nxt), (bwd, prev)):
+                if peer is None:
+                    continue
+                for l in range(num_links):
+                    core = place(
+                        coord, _eth_channel(mesh_device, coord, peer, links[(coord, peer)][l]), taken, row_cores
+                    )
+                    if core is not None:
+                        ports[l] = core
+                        taken.add((core.x, core.y))
+        if any(c is not None for c in fwd + bwd):
+            pl.mode = "eth"
+            free = iter(ttnn.CoreCoord(x, y) for x, y in row_cores if (x, y) not in taken)
+            fwd = [c if c is not None else next(free) for c in fwd]
+            bwd = [c if c is not None else next(free) for c in bwd]
+            fin = [next(free) for _ in range(2 * num_links)]
+        else:  # fixed layout (identical on every chip)
+            xport = [ttnn.CoreCoord(i % gx, i // gx) for i in range(n_xport)]
+            fwd = [xport[4 * l] for l in range(num_links)]
+            bwd = [xport[4 * l + 1] for l in range(num_links)]
+            fin = [xport[4 * l + 2 + h] for l in range(num_links) for h in range(2)]
+        pl.fwd_ports[coord], pl.bwd_ports[coord], pl.finals[coord] = fwd, bwd, fin
     virt = lambda x, y: mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
     pl.vx = [int(virt(x, 0).x) for x in range(gx)]
     pl.vy = [int(virt(0, y).y) for y in range(gy)]
@@ -382,11 +446,14 @@ def create_mesh_program_descriptor(
     ncoords = [pl.vx[nl] if m_on_y else pl.vy[pl.transport_rows + nl] for nl in range(blk.n_lines)]
     a_line_shape = ttnn.Mcast1DShape.PerRow if blk.orientation == "A" else ttnn.Mcast1DShape.PerColumn
     w_line_shape = ttnn.Mcast1DShape.PerColumn if blk.orientation == "A" else ttnn.Mcast1DShape.PerRow
-    consumers = [packed(c) for c in pl.fwd_ports] + [packed(c) for c in pl.bwd_ports] + [packed(c) for c in pl.finals]
+    # per-chip placement (pl.mode "eth") or one shared layout (keyed None)
+    at = lambda ports, coord: ports[coord] if coord in ports else ports[None]
 
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, (p, prev, nxt) in groups.items():
         fwd, bwd, order, fwd_up, bwd_up = sched[p]
+        my_fwd, my_bwd, my_finals = at(pl.fwd_ports, coord), at(pl.bwd_ports, coord), at(pl.finals, coord)
+        consumers = [packed(c) for c in my_fwd + my_bwd + my_finals]
         cidx = {j: i for i, j in enumerate(order)}
         program = ttnn.ProgramDescriptor()
         kernels = []
@@ -604,7 +671,7 @@ def create_mesh_program_descriptor(
                 config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
             )
 
-        relay_ports, end_ports, finals = [], [], list(pl.finals)
+        relay_ports, end_ports, finals = [], [], list(my_finals)
         rd_relay, rd_end, add_relay, snd_rt = (
             ttnn.RuntimeArgs(),
             ttnn.RuntimeArgs(),
@@ -613,8 +680,8 @@ def create_mesh_program_descriptor(
         )
         senders = []
         for d, blocks, ups, peer, port_list in (
-            ("fwd", fwd, fwd_up, nxt, pl.fwd_ports),
-            ("bwd", bwd, bwd_up, prev, pl.bwd_ports),
+            ("fwd", fwd, fwd_up, nxt, my_fwd),
+            ("bwd", bwd, bwd_up, prev, my_bwd),
         ):
             if peer is None:
                 continue  # no neighbour in this direction: nothing to send, nobody sends a ready to it
@@ -623,7 +690,11 @@ def create_mesh_program_descriptor(
             n_up = sum(ups)
             relay = n_up > 0  # mixed (ring) or all-relay (line interior): the add kernel produces cb_xport_sum
             peer_p = groups[peer][0]
-            opp_ports = pl.bwd_ports if d == "fwd" else pl.fwd_ports
+            # the peer chip's cores (its own placement): opposite-direction port (ready fence), same-direction port
+            # (relay arrivals), finals (own-block arrivals)
+            peer_opp = at(pl.bwd_ports if d == "fwd" else pl.fwd_ports, peer)
+            peer_same = at(pl.fwd_ports if d == "fwd" else pl.bwd_ports, peer)
+            peer_finals = at(pl.finals, peer)
             for l in range(L):
                 core = port_list[l]
                 full = _count_segs(l, L, xp.segs_per_block)
@@ -637,9 +708,9 @@ def create_mesh_program_descriptor(
                     add_relay[core.x][core.y] = [(len(blocks) - n_up) * full, n_up * full]
                 # sender: landing slot j, except the receiver's own block arriving backward -> slot G
                 slots = [G if (d == "bwd" and j == peer_p) else j for j in blocks]
-                rc = virt(opp_ports[l])  # peer chip's opposite-direction port (same placement on every chip)
-                pc = virt(port_list[l])  # downstream port of the same (direction, link)
-                f0, f1 = virt(pl.finals[2 * l]), virt(pl.finals[2 * l + 1])
+                rc = virt(peer_opp[l])  # peer chip's opposite-direction port
+                pc = virt(peer_same[l])  # downstream port of the same (direction, link)
+                f0, f1 = virt(peer_finals[2 * l]), virt(peer_finals[2 * l + 1])
                 pn = node(peer)
                 args = [
                     scr_addr,
