@@ -66,11 +66,11 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
     const DataFormat tile_data_format = datatype_to_dataformat_converter(fused_w.dtype());
     const uint32_t tile_size_bytes = tile_size(tile_data_format);
 
-    // fused_w is [1,1,T,(2+H)*H]: token t lives in row t%32 of tile row t/32, which is
-    // fused_w_row_tiles = ceil((2+H)*H/32) tiles wide. A core stages one such tile row at a
-    // time and mines every token it owns out of it. pre_w / post_w / comb_w_mat are one tile
-    // per token; hidden_streams contributes d_tiles per token (H <= 32, so a token's [H,D]
-    // slab is a single tile row) and collapsed the same.
+    // fused_w is [1,1,T,>=(2+H)*H]. Tiled, token t lives in row t%32 of tile row t/32, which is
+    // fused_w_row_tiles tiles wide; a core stages one such tile row at a time and mines every
+    // token it owns out of it. ROW_MAJOR, token t is page t and is staged on its own. pre_w / post_w / comb_w_mat are
+    // one tile per token; hidden_streams contributes d_tiles per token (H <= 32, so a token's [H,D] slab is a single
+    // tile row) and collapsed the same.
     const uint32_t fused_w_row_tiles = fused_w.padded_shape()[-1] / constants::TILE_WIDTH;
     const uint32_t d_tiles = hidden_streams.padded_shape()[-1] / constants::TILE_WIDTH;
     const uint32_t num_tokens = static_cast<uint32_t>(fused_w.logical_shape()[2]);
@@ -115,6 +115,8 @@ FusedPrePostProgramFactory::cached_program_t FusedPrePostProgramFactory::create(
         kCbPostBias,
         kCbHidden,
         tile_buffering,
+        fused_w.layout() == Layout::ROW_MAJOR ? 1u : 0u,
+        fused_w.buffer()->page_size(),
     };
     TensorAccessorArgs(fused_w.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(pre_bias.buffer()).append_to(reader_compile_time_args);

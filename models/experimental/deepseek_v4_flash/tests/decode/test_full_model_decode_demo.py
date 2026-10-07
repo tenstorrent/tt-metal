@@ -229,8 +229,8 @@ def _assert_prefetch_rings(model: DeepSeekV4Model) -> None:
     """The GCB set the prefetched decode streams through, pinned per stage device.
 
     Each device holds at most the shared ring plus the q_a, kv and router-gate rings (four
-    of the DRISC senders' ~six state slots), and both hyper-connections' ``fn`` stream through
-    q_a's ring rather than one of their own.
+    of the DRISC senders' ~six state slots). Both hyper-connections' ``fn`` run
+    ``matmul_decode_large_k``, which reads its weight from L1, so they are on no ring.
     """
     if not model.use_prefetcher:
         return
@@ -242,14 +242,16 @@ def _assert_prefetch_rings(model: DeepSeekV4Model) -> None:
     for layer in model.layers:
         q_a_ring = layer.self_attn.q_a_proj.global_cb
         assert q_a_ring is not None, "q_a must stream through the prefetcher"
-        assert layer.attn_hc.fn.global_cb is q_a_ring, "attention hyper-connection fn must ride q_a's ring"
-        assert layer.ffn_hc.fn.global_cb is q_a_ring, "FFN hyper-connection fn must ride q_a's ring"
+        assert not hasattr(layer.attn_hc.fn, "global_cb"), "attention hyper-connection fn must not use a GCB"
+        assert not hasattr(layer.ffn_hc.fn, "global_cb"), "FFN hyper-connection fn must not use a GCB"
         if model.tp_size > 1:
             shared = layer.mlp.shared_experts
             assert (
                 not shared.gate_proj.use_prefetcher and not shared.up_proj.use_prefetcher
             ), "the per-rank shared-expert gate/up cut matches no ring and must copy DRAM -> L1"
-    logger.info(f"prefetch rings: {len(model._prefetch_buffers_by_device)} device(s), fn on q_a's ring")
+    logger.info(
+        f"prefetch rings: {len(model._prefetch_buffers_by_device)} device(s), hyper-connection fn off the rings"
+    )
 
 
 def _tokenize_chat(tokenizer, text: str, thinking_mode: str = "chat", reasoning_effort: str | None = None) -> list[int]:

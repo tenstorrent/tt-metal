@@ -20,16 +20,15 @@ from typing import Optional
 import torch
 import ttnn
 
-from ..common import FULL_TILE, SINGLE_USER_TILE, DeepSeekV4Module, _profile, width_sharded_l1_config, with_tile_height
-from .decode_prefetch import DECODE_LAYOUTS, check_decode_layout, ensure_q_a_gcb, q_a_page_bytes
-from ..layers import Linear, LinearDecode, _rms_norm_unweighted
+from ..common import DeepSeekV4Module, _profile, width_sharded_l1_config
+from .decode_prefetch import DECODE_LAYOUTS
+from ..layers import Linear, LinearDecodeLargeK, _prefetch_cache_file, _rms_norm_unweighted
 from ..weight_cache import WeightCache, _as_cache, _load_weight, _materialize, _memo
 
-# Partial-K cut for the fused ``fn`` matmul, read off the layout registry rather than
-# repeated here: the GCB is sized from that entry before any layer exists, so a second
-# copy of the number is a buffer sized for a cut the layer does not build. At the model's
-# K = hc*D = 16384 it is a [512, 32] slab on q_a's 32 B cores.
-_HC_FN_K_BLOCKS = DECODE_LAYOUTS["hc_fn"]["k_blocks"]
+# Cores the fused ``fn`` matmul cuts K over, read off the layout registry (which still sizes
+# q_a's ring page from this cut). At the model's K = hc*D = 16384 each core holds a [512, 32]
+# weight slab and a 512-wide slice of the activation.
+_HC_FN_CORES = DECODE_LAYOUTS["hc_fn"]["k_blocks"]
 # Cores the single-user fused program width-shards the collapse over (see
 # :meth:`DeepSeekV4HyperConnection.forward`).
 _HC_COLLAPSE_CORES = 8
@@ -67,13 +66,11 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
 
         ``weights`` holds the checkpoint's packed ``fn`` ``[(2+hc)*hc, hc*D]`` and ``base``
         ``[(2+hc)*hc]`` tensors plus ``scale``, three host scalars. ``fn`` becomes one
-        :class:`LinearDecode` (``K = hc*D``, ``N`` = the ``2*hc + hc*hc`` pre/post/comb
+        :class:`LinearDecodeLargeK` (``K = hc*D``, ``N`` = the ``2*hc + hc*hc`` pre/post/comb
         parameters padded to one tile) that returns the three slices concatenated; ``base`` is
         sliced into the ``[1,1,1,hc]`` ``pre_b`` / ``post_b`` rows and the ``[1,1,1,hc*hc]``
-        ``comb_b`` row. ``use_prefetcher`` streams ``fn`` through q_a's ring
-        (:data:`~.decode_prefetch.Q_A_GCB`) -- which has to come from the caller's device-wide
-        ``prefetch_buffers`` mapping, because one GCB per hyper-connection overflows the DRISC
-        senders' state zone at the third layer.
+        ``comb_b`` row. ``use_prefetcher`` and ``prefetch_buffers`` are unused: ``fn`` copies
+        its weight DRAM -> L1 per call.
         """
         self.device = device
         self.hc = config.hc_mult
@@ -97,16 +94,14 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         # so fuse them into one matmul and split the output back into the three parts inside the
         # fused op.
         #
-        # Large-K / small-N (K = hc*D, N = (2+hc)*hc padded to a tile): partial-K
-        # ``LinearDecode`` over ``_HC_FN_K_BLOCKS`` B cores, ``n_blocks=1`` reducing the
-        # K-partials onto one output core.
+        # Large-K / small-N (K = hc*D, N = (2+hc)*hc padded to a tile): K is cut over
+        # ``_HC_FN_CORES`` cores, each multiplying its own slice of the ROW_MAJOR activation by
+        # its [K/cores, N] weight slab, and the partials are tree-reduced onto core (0, 0) --
+        # the core the fused op reads ``fused_w`` from.
         #
-        # Under the prefetcher this weight streams through q_a's 32-receiver ring, queued
-        # around the attention / MoE weights on it in consume order (see
-        # ``DeepSeekV4DecoderLayer.prefetch_weights``). Taking it from the caller's
-        # ``prefetch_buffers`` is what makes every hyper-connection share that ring: a GCB
-        # costs ~176 B of the DRISC senders' 1 KB state zone, so one per hyper-connection
-        # overflows it at the third layer.
+        # The op reads its weight from L1 rather than a GlobalCircularBuffer, so ``fn`` stays off
+        # the prefetcher (``use_prefetcher`` / ``prefetch_buffers`` are accepted for the other
+        # projections' sake) and copies DRAM -> L1 per call instead.
         k = hc * self.hidden
         n = ((2 * hc + hc * hc + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
@@ -118,34 +113,14 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                 w = torch.nn.functional.pad(w, (0, 0, 0, n - w.shape[0]))
             return w
 
-        prefetch = {}
-        # The DRAM -> L1 path caches the weight folded by its K cut, so the cut is part of
-        # that cache name; the prefetcher path caches it unfolded.
-        cache_name = "fn.decode"
-        if use_prefetcher:
-            check_decode_layout("hc_fn", k, n)
-            if prefetch_buffers is None:
-                prefetch_buffers = {}
-            prefetch = {
-                "use_prefetcher": True,
-                "global_cb": ensure_q_a_gcb(prefetch_buffers, device, weight_dtype),
-                "global_cb_page_bytes": q_a_page_bytes(weight_dtype),
-            }
-        else:
-            cache_name = f"fn.k{_HC_FN_K_BLOCKS}.decode"
-        self.fn = LinearDecode(
+        self.fn = LinearDecodeLargeK(
             fn_weight,
             device,
-            cache.file(cache_name),
+            _prefetch_cache_file(cache.file("fn.decode")),
             dtype=weight_dtype,
             K=k,
             N=n,
-            partial_width_sharded=True,
-            k_blocks=_HC_FN_K_BLOCKS,
-            n_blocks=1,
-            tile_height=1,
-            **prefetch,
-            use_rm_hs=False,
+            num_cores=_HC_FN_CORES,
         )
         self.pre_b = _load_weight(
             _materialize(lambda: base()[:hc].reshape(1, 1, 1, hc), cache.file("pre_b"), ttnn.bfloat16),
@@ -168,54 +143,35 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
         )
         self.pre_scale, self.post_scale, self.comb_scale = (float(scale[0]), float(scale[1]), float(scale[2]))
 
-    def prefetch_weights(self):
-        """Stage the fused ``fn`` weight ``[K, N]`` = ``[hc*D, 32]`` ahead of the :meth:`forward`
-        that uses it.
-
-        With the prefetcher this queues on q_a's ring; without it, ``fetch_weights`` copies
-        the weight into L1 here instead.
-        """
-        self.fn.fetch_weights()
-
     def forward(self, hidden_streams: ttnn.Tensor):
         """``hidden_streams`` ``[B,S,hc,D]`` -> ``(post [B,S,hc,1], comb [B,S,hc,hc], collapsed [B,S,1,D])``.
 
         The streams are flattened to ``[1,1,T,hc*D]`` (``T = B*S``) and unweighted-RMSNormed
-        before ``fn``, whose ``[1,1,T,(2+hc)*hc]`` output still carries the three parts
-        concatenated. ``collapsed`` comes back in the input's layout -- the width-sharded L1 the
-        single-token branch below builds -- while ``post`` / ``comb`` are DRAM (and all three are
-        DRAM on the ``T > 1`` branch, which moves ``fused_w`` back to DRAM first).
+        before ``fn``, whose ``[1,1,T,(2+hc)*hc]`` output (padded to a tile's width) still carries
+        the three parts concatenated. ``collapsed`` comes back in the input's layout -- the
+        width-sharded L1 the single-token branch below builds -- while ``post`` / ``comb`` are
+        DRAM (and all three are DRAM on the ``T > 1`` branch).
         """
         b, s, hc, d = hidden_streams.shape
         t = b * s
 
         # Flatten streams to [1,1,T,hc*D] and unweighted-RMSNorm over hc*D.
         tile_height = hidden_streams.get_tile().tile_shape[0]
-        if isinstance(self.fn, LinearDecode):
-            flat_mem_config = self.fn.get_input_memory_config(t, hc * d, tile_height)
-        else:
-            flat_mem_config = width_sharded_l1_config(t, hc * d, self.device)
+        flat_mem_config = self.fn.get_input_memory_config(t, tile_height)
         flat = ttnn.reshape(hidden_streams, [1, 1, t, hc * d], memory_config=flat_mem_config)
         flat = _rms_norm_unweighted(flat, self.norm_eps)
-        # The fn matmul takes the single-user 1x32 tile, so A's shard height is exactly T
-        # (tile_height=1, nothing padded up to a tile row) ...
-        flat = ttnn.tilize(
-            flat,
-            tile=SINGLE_USER_TILE,
-            memory_config=with_tile_height(flat.memory_config(), t, tile_height=1),
-        )
-        fused_w = self.fn(flat)  # [1,1,T,(2+hc)*hc]
-        # ... while the op that consumes fused_w reads whole 32x32 tiles.
-        fused_w = ttnn.tilize(
-            fused_w,
-            tile=FULL_TILE,
-            memory_config=with_tile_height(fused_w.memory_config(), t, tile_height=ttnn.TILE_SIZE),
-        )
+        # fn wants ROW_MAJOR rows. A sharded ROW_MAJOR tensor cannot carry height padding, so the
+        # tile padding is dropped here: same cores and shard width, shard height T.
+        flat = ttnn.untilize_with_unpadding(flat, [0, 0, t - 1, hc * d - 1], memory_config=flat.memory_config())
+        # ROW_MAJOR [1,1,T,32], WIDTH_SHARDED on core (0, 0). The fused op reads it element-wise,
+        # so it is consumed as-is on both branches below.
+        fused_w = self.fn(flat)
+        flat.deallocate()
+        fused_kwargs = {}
         if t == 1:
             # The single-user fused device program assigns cores 0..7 to the width-sharded
             # collapse, core 8 to post and core 9 to comb, and it returns `collapsed` in the
-            # input's memory config -- hence the 8-core collapse layout built here. fused_w is
-            # one row on a single core, since that program reads it whole.
+            # input's memory config -- hence the 8-core collapse layout built here.
             hidden_streams = ttnn.to_memory_config(
                 hidden_streams,
                 width_sharded_l1_config(
@@ -226,24 +182,9 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
                     tile_height=ttnn.TILE_SIZE,
                 ),
             )
-            fused_width_padded = ((2 * hc + hc * hc + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-            fused_w = ttnn.to_memory_config(
-                fused_w,
-                width_sharded_l1_config(
-                    1,
-                    fused_width_padded,
-                    self.device,
-                    num_cores=1,
-                    tile_height=ttnn.TILE_SIZE,
-                ),
-            )
         else:
-            # Batched/prefill: drop the tile padding from the fused width and hand the op a
-            # DRAM-interleaved fused_w over all T tokens.
-            fused_w = ttnn.reshape(
-                fused_w, [1, 1, t, (2 + hc) * hc], fused_w.padded_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            fused_w = ttnn.to_memory_config(fused_w, ttnn.DRAM_MEMORY_CONFIG)
+            # Batched/prefill: the outputs would otherwise follow fused_w onto core (0, 0).
+            fused_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         _profile(self.device)
 
         # The pre_w / post_w / comb_w slices are split out of `fused_w` inside the op
@@ -262,6 +203,7 @@ class DeepSeekV4HyperConnection(DeepSeekV4Module):
             post_scale=self.post_scale,
             comb_scale=self.comb_scale,
             eps=self.eps,
+            **fused_kwargs,
         )
 
 

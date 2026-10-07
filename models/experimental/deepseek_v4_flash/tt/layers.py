@@ -1160,6 +1160,90 @@ class LinearDecode(DeepSeekV4Module):
         return result
 
 
+class LinearDecodeLargeK(DeepSeekV4Module):
+    """Bias-free ``x @ Wᵀ`` for a large-K / small-N projection, backed by
+    ``ttnn.experimental.matmul_decode_large_k``.
+
+    K is split over ``num_cores`` cores: core ``i`` (row-major) holds the ``i``-th K-slice of
+    both the ROW_MAJOR WIDTH_SHARDED ``[M, K]`` activation and the HEIGHT_SHARDED ``[K, N]``
+    weight, and the per-core partials are summed up a fan-in-``reduce_fan_in`` tree onto the
+    first core, which ends up holding the whole ROW_MAJOR ``[M, N]`` result.
+
+    The weight is stored ``[1, 1, K, N]`` TILE in DRAM and copied into its L1 slabs for each call,
+    then freed: the op reads B from its own L1 shard, so there is no prefetcher path. That is the
+    unfolded tensor :class:`LinearDecode` caches for its prefetcher path, so the two can share a
+    cache file.
+    """
+
+    def __init__(
+        self,
+        weight,
+        device: ttnn.MeshDevice,
+        cache_file_name: Optional[str] = None,
+        dtype: ttnn.DataType = ttnn.bfloat16,
+        *,
+        K: int,
+        N: int,
+        num_cores: int = 32,
+        reduce_fan_in: int = 2,
+    ):
+        """``weight`` is the torch ``[N, K]`` tensor or a thunk; ``K`` must split into
+        ``num_cores`` whole tiles and ``N`` must be tile-aligned."""
+        if K % (num_cores * ttnn.TILE_SIZE) or N % ttnn.TILE_SIZE:
+            raise ValueError(f"K={K} must split into {num_cores} tile-aligned slices and N={N} must be tile-aligned")
+        self.device = device
+        self.K = K
+        self.N = N
+        self.reduce_fan_in = reduce_fan_in
+        self.cache_file_name = cache_file_name
+        self.core_grid = ttnn.num_cores_to_corerangeset(
+            num_cores, device.compute_with_storage_grid_size(), row_wise=True
+        )
+        self.weights_memory_config = ttnn.create_sharded_memory_config(
+            (K // num_cores, N),
+            core_grid=self.core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        w = _materialize(weight, cache_file_name, dtype)
+        if w is not None:
+            w = w.t().contiguous().reshape(1, 1, K, N)
+        self.weight = _load_weight(w, device, cache_file_name=cache_file_name, dtype=dtype)
+        # A cache file written by the prefetcher path loads back DRAM ND-sharded.
+        if self.weight.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+            self.weight = ttnn.to_memory_config(self.weight, ttnn.DRAM_MEMORY_CONFIG)
+        self.l1_weights = None
+
+    def get_input_memory_config(self, m: int, tile_height: int = ttnn.TILE_SIZE) -> ttnn.MemoryConfig:
+        """WIDTH_SHARDED L1 config for a ``[m, K]`` activation on the weight's cores.
+
+        ``m`` is padded up to ``tile_height``, which is the tiled activation's config;
+        ``untilize_with_unpadding`` turns it into the ``[m, K / cores]`` ROW_MAJOR shard the op reads.
+        """
+        return ttnn.create_sharded_memory_config(
+            (((m + tile_height - 1) // tile_height) * tile_height, self.K // self.core_grid.num_cores()),
+            core_grid=self.core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    def fetch_weights(self):
+        """Copy the ``[K, N]`` DRAM weight into its L1 slabs, which ``forward`` then consumes and frees."""
+        self.l1_weights = ttnn.to_memory_config(self.weight, self.weights_memory_config)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """``x [1, 1, M, K]`` ROW_MAJOR on :meth:`get_input_memory_config` -> ``[1, 1, M, N]``
+        ROW_MAJOR, WIDTH_SHARDED on the first core of the grid."""
+        if self.l1_weights is None or not self.l1_weights.is_allocated():
+            self.fetch_weights()
+        result = ttnn.experimental.matmul_decode_large_k(x, self.l1_weights, reduce_fan_in=self.reduce_fan_in)
+        self.l1_weights.deallocate()
+        self.l1_weights = None
+        return result
+
+
 class BatchedLinearDecode(DeepSeekV4Module):
     """Batched (block-diagonal) ``x[b] @ W[b]`` via ``ttnn.experimental.matmul_decode``.
 
