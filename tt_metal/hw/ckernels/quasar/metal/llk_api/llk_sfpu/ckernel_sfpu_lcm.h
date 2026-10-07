@@ -48,9 +48,9 @@ constexpr std::uint32_t LCM_ENCC_MOD_RESET = sfpi::SFPENCC_MOD1_EU_R1;
 // SM32 cast is safe: every cast operand is non-negative.
 constexpr std::uint32_t LCM_CAST_MOD_INT_TO_FP32 = sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE;
 
-// Replay slots [0, 16): two GCD steps; [16, 30): the per-row quotient/product tail.
+// Replay slots [0, 14): two GCD steps; [14, 28): the per-row quotient/product tail.
 constexpr std::uint32_t LCM_GCD_REPLAY_SLOT = 0;
-constexpr std::uint32_t LCM_GCD_REPLAY_LEN = 16;
+constexpr std::uint32_t LCM_GCD_REPLAY_LEN = 14;
 
 constexpr std::uint32_t LCM_TAIL_REPLAY_SLOT = LCM_GCD_REPLAY_SLOT + LCM_GCD_REPLAY_LEN;
 constexpr std::uint32_t LCM_TAIL_REPLAY_LEN = 14;
@@ -75,7 +75,6 @@ inline void _calculate_lcm_gcd_step_() {
     TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG3, LREG_NEG_A, LCM_IADD_MOD_ADD);     // = k - tz(a), always <= 0
     TTI_SFPSHFT(0 /* imm12 */, LREG_NEG_A, LREG_OUT, LCM_SHFT_MOD_VAR_LOGICAL);  // out = a >> (tz(a) - k)
     TTI_SFPSWAP(LCM_SWAP_IMM12, LREG_OUT, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // lreg1 = min, out = max
-    TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);             // SFPSWAP is 2-cycle
     TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG1, LREG_OUT, LCM_IADD_MOD_SUB);
 }
 
@@ -96,7 +95,7 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
 
 /**
  * @brief Record the GCD and tail replay bodies that @ref calculate_lcm replays.
- * @note Re-run after any op that records into replay slots [0, 30).
+ * @note Re-run after any op that records into replay slots [0, 28).
  */
 inline void calculate_lcm_init() {
     lltt::record(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
@@ -180,8 +179,8 @@ inline void calculate_lcm(
         TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG0, LCM_MOV_MOD_COPY);
         TTI_SFPAND(p_sfpu::LREG3, p_sfpu::LREG0);                                          // lreg0 = b & 2^k
         TTI_SFPSETCC(LCM_SETCC_IMM12_INT32, p_sfpu::LREG0, sfpi::SFPSETCC_MOD1_LREG_EQ0);  // lanes where b is even
-        TTI_SFPSWAP(LCM_SWAP_IMM12, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_SWAP);  // 2-cycle
-        TTI_SFPENCC(0 /* imm12 */, LCM_ENCC_MOD_RESET);                                      // fills the SFPSWAP shadow
+        TTI_SFPSWAP(LCM_SWAP_IMM12, p_sfpu::LREG2, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_SWAP);  // swap(a, b) there
+        TTI_SFPENCC(0 /* imm12 */, LCM_ENCC_MOD_RESET);                                      // re-enable all lanes
         TTI_SFPABS(p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPABS_MOD1_INT);
         TTI_SFPABS(p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPABS_MOD1_INT);
         TTI_SFPLZ(p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPLZ_MOD1_CC_NONE);              // lreg3 = 31 - k
