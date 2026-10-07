@@ -605,6 +605,9 @@ void kernel_main() {
     static_assert(!ksplit_enabled || (!rotated_q_split_enabled && !has_sliding_window && use_streaming_compute));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
+    // Segmented accumulation (see the compute kernel): the output is normalized after the ring loop.
+    constexpr bool seg_accum_enabled = get_named_compile_time_arg_val("seg_accum") == 1;
+    const bool seg_active = seg_accum_enabled && global_q_end - global_q_start == 1;
     const uint32_t ksplit_band = ksplit_enabled ? get_arg_val<uint32_t>(argidx) : 0;
     const uint32_t ksplit_peer_args = argidx + 1;
     constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
@@ -1150,7 +1153,7 @@ void kernel_main() {
                     cb_sig.pop_front(1);
                 }
 
-                if (is_last_ring_iter && !ksplit_active) {
+                if (is_last_ring_iter && !ksplit_active && !seg_active) {
                     // Last-iter writes carry default trid (caller never set a non-zero trid here);
                     // pass 0 so the per-group flush waits exactly for these writes.
                     const auto& gen = [&]() -> const auto& {
@@ -1264,6 +1267,23 @@ void kernel_main() {
             noc.async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
     }
+    // K-split reducers and segmented cores normalize after the ring loop and write their one Q chunk here.
+    [[maybe_unused]] auto write_output_after_ring = [&]() {
+        const auto decoded_q = decompose_global_q_index(global_q_start, num_q_chunks, NH, use_zigzag_balancing);
+        const auto qi = get_q_chunk_info<has_joint_q>(
+            decoded_q.q_chunk,
+            decoded_q.nb,
+            decoded_q.nq,
+            num_local_q_chunks,
+            Sq_chunk_t,
+            vDHt,
+            Lt,
+            q_local_padded_Nt);
+        const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_size - 1, Lt, q_local_padded_Nt);
+        write_block_row_grouped_trid<output_has_no_padding>(
+            noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
+        noc.async_write_barrier();
+    };
     if constexpr (ksplit_enabled) {
         RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
         if (ksplit_active && ksplit_band + 1 < ksplit_count) {
@@ -1310,20 +1330,12 @@ void kernel_main() {
             }
             ready.reset_after_run();
 
-            const auto decoded_q = decompose_global_q_index(global_q_start, num_q_chunks, NH, use_zigzag_balancing);
-            const auto qi = get_q_chunk_info<has_joint_q>(
-                decoded_q.q_chunk,
-                decoded_q.nb,
-                decoded_q.nq,
-                num_local_q_chunks,
-                Sq_chunk_t,
-                vDHt,
-                Lt,
-                q_local_padded_Nt);
-            const uint32_t end_seq_tile = get_end_seq_tile<has_joint_q>(qi, ring_size - 1, Lt, q_local_padded_Nt);
-            write_block_row_grouped_trid<output_has_no_padding>(
-                noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
-            noc.async_write_barrier();
+            write_output_after_ring();
+        }
+    }
+    if constexpr (seg_accum_enabled) {
+        if (seg_active) {
+            write_output_after_ring();
         }
     }
     if constexpr (rotated_q_split_enabled) {

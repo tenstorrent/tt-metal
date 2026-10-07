@@ -276,8 +276,8 @@ private:
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
             noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
         }
-        // Write to the atomic increment stream register (write of -1 will subtract 1)
-        increment_local_update_ptr_val(worker_credits_stream_id, -1);
+        // Local free-slots consume: same stream page as the poll, update-reg folded at init.
+        *this->edm_buffer_local_free_slots_update_ptr = pack_value_for_inc_on_write_stream_reg_write(-1);
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_index() const { return this->buffer_slot_index.get(); }

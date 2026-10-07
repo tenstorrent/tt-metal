@@ -21,6 +21,7 @@
 #include <string>
 #include <tuple>  // for get
 #include <unordered_map>
+#include <filesystem>
 #include <unordered_set>
 #include <utility>
 
@@ -84,6 +85,14 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
 
 }  // namespace
 namespace tt {
+
+std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir) {
+    std::error_code error;  // An unreadable directory counts as no layout, rather than throwing.
+    if (std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
+        return {};
+    }
+    return {0};
+}
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
@@ -442,13 +451,15 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .target_devices = {0},
+                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path()),
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         }
     } else if (this->target_type_ == TargetDevice::Mock) {

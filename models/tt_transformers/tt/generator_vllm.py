@@ -38,6 +38,27 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
 
 
+def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
+    """Resolve one allocation shape per shared KV buffer (``tensor_idx``).
+
+    First sharing layer's view, sized by the largest ``num_blocks``; differing per-block element counts raise.
+    """
+    canonical: dict = {}
+    for kv_cache_shape, _dtype, tensor_idx in per_layer_specs:
+        nb, heads, bs, hd = kv_cache_shape
+        cur = canonical.get(tensor_idx)
+        if cur is None:
+            canonical[tensor_idx] = tuple(kv_cache_shape)
+            continue
+        if cur[1] * cur[2] * cur[3] != heads * bs * hd:
+            raise ValueError(
+                f"KV buffer {tensor_idx} shared by layers with different "
+                f"per-block element counts: {cur} vs {tuple(kv_cache_shape)}"
+            )
+        canonical[tensor_idx] = (max(cur[0], nb), *cur[1:])
+    return canonical
+
+
 def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer], tt_cache_path):
     """Allocate KV cache tensors with optional cross-layer DRAM sharing.
 
@@ -59,6 +80,7 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
         ``layer_idx`` entries may refer to the same underlying tensor
         objects when they share a ``tensor_idx``.
     """
+    canonical_shape = _canonical_shared_kv_shapes(per_layer_specs)
     submesh_devices = [model.mesh_device for model in dp_model]
     kv_cache = []
     for mesh_idx, submesh in enumerate(submesh_devices):
@@ -66,13 +88,14 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
         # share a buffer.
         unique_buffers: dict[int, list] = {}
         kv_tt = []
-        for layer_num, (kv_cache_shape, dtype, tensor_idx) in enumerate(
+        for layer_num, (_, dtype, tensor_idx) in enumerate(
             tqdm(per_layer_specs, desc=f"Allocating TT kv caches for each layer (submesh {mesh_idx+1})")
         ):
             existing = unique_buffers.get(tensor_idx)
             if existing is not None:
                 kv_tt.append(existing)
                 continue
+            kv_cache_shape = canonical_shape[tensor_idx]
             cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
             # Get the dtype for the kv cache based on the configured optimizations in the model
             if dp_model[mesh_idx].args.optimizations is not None:
@@ -96,8 +119,16 @@ def allocate_vllm_kv_cache_per_layer(per_layer_specs, dp_model: List[Transformer
                     dtype=kv_cache_dtype,
                     # Separate cache files for K and V to avoid collision.
                     # ``tensor_idx`` distinguishes shared buffers that have the
-                    # same shape but back different layer subsets.
-                    cache_file_name=tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}",
+                    # same shape but back different layer subsets. A ``None``
+                    # tt_cache_path disables disk caching of these zero-filled
+                    # tensors entirely (callers whose DP ranks share one cache
+                    # dir opt out: concurrent create/load of the same file is
+                    # a torn-read crash, and caching zeros buys little).
+                    cache_file_name=(
+                        tt_cache_path / f"empty_{kv}cache_paged_attention{kv_cache_shape}_t{tensor_idx}"
+                        if tt_cache_path is not None
+                        else None
+                    ),
                 )
                 for kv in ["k", "v"]
             ]
@@ -367,6 +398,9 @@ def initialize_vllm_text_transformer(
         ), f"The model specified in vLLM ({hf_config._name_or_path}) does not match the model name ({model_args_i.model_name}) with model weights ({model_args_i.CKPT_DIR})."
         if n_layers is not None:
             model_args_i.n_layers = n_layers
+        # vLLM path: same-seed requests must reproduce identically (n>1 children already
+        # arrive with distinct seeds), so keep SeedManager salting off, as llama3_70b_galaxy does.
+        model_args_i.salt_duplicate_seeds = False
 
         model_args.append(model_args_i)
 
@@ -1250,10 +1284,36 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         "supports_async_decode": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        "supports_compact_host_logits": True,
+        "supports_selective_host_readback": True,
     }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(
+        cls,
+        model_name: str = "",
+        num_devices: int = 1,
+        tt_data_parallel: int = 1,
+        **kwargs,
+    ) -> int:
+        if (
+            "gpt-oss-120b" in model_name.lower()
+            and num_devices == 32
+            and tt_data_parallel == 4
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        ):
+            # Allow two long contexts in each BH Galaxy lane. The plugin
+            # adds its per-user block padding to this per-lane token budget.
+            return 262_144
+        return super().get_max_tokens_all_users(
+            model_name=model_name,
+            num_devices=num_devices,
+            tt_data_parallel=tt_data_parallel,
+            **kwargs,
+        )
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
         # While hybrid KV cache groups are disabled (one full-attention group
