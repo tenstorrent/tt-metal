@@ -41,3 +41,12 @@ feb44de2529 3d0729e48e1 c12f7f34eff 5772489e0a0 on t48 (-land branch, cherry-pic
 Correct: PCC 0.99995-0.99996, PSNR 55.1-55.8 dB on all 5 seeds (floor 43.7). But SLOWER: mean 14.032 s
 (14.08/14.10/14.01/13.97/14.00) vs C1 10.313 s. Not landed. Stage tree: tt-project/t222/stage_tree_job853.txt.
 Next (standard): find where stage-5 2-D loses ~3.7 s (H neighbor_pad exchange? brick (2,4,4) vs (2,8,2)?), fix or drop.
+2026-10-07 standard wake (attempt after spend-limit stop): job E = blx01 broker 855 (driverE.sh/runE.sh/decodeE.py),
+production path (device stage-5 noise), 3 seeds per arm, no drops, rc 0:
+  1-D (C1 default): 5.295/5.278/5.279 s, mean 5.284 s; stage 5 4208 ms (blocks ~490 ms each).
+  2-D (DIFFVAE_S5_2D=1): 4.927/4.927/4.928 s, mean 4.927 s (-0.357 s, -6.8%); stage 5 3840 ms (blocks ~457 ms).
+So job 853's 14.0 s (vs 10.3) is the host-noise test path only (2-axis sharded_from_torch upload of host x_t), not production.
+Correctness: 853 host-noise 2-D vs unoptimized ref PCC 0.99995+, PSNR 55.1-55.8 dB, all 5 seeds (floor 43.7).
+Device noise in 2-D draws one full tensor per band (same seed on every chip) and mesh_partitions it, like 1-D: no repeated
+noise across chips. Decision: land feb44de2529 3d0729e48e1 c12f7f34eff 5772489e0a0 on t48 (opt-in, default off).
+Stage trees: tt-project/t222/stage_tree_jobE855_{1d,2d}.txt.
