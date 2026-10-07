@@ -185,18 +185,23 @@ jobs:
   # combined result would be `skipped` — which suppresses infra synthesis entirely and
   # reports a broken run as if nothing was due.
   #
+  # bake-env-dev-full is in `needs:` for the run-result rollup only: a failed bake reddens the
+  # run while the legs pass via the artifact fallback. No `matrix` output, so it adds no legs.
+  #
   # No scope: this workflow has no workflow_call trigger, so exactly one instance of
   # this job exists per run. A scoped run stage over unscoped job summaries matches
   # nothing and stubs every leg INFRA_FAILURE, which is strictly worse than the
   # collision scope guards against.
   ai-run-summary:
     name: "AI Run Summary"
-    needs: [build-artifact, resolve-skus, runtime-sanity-tests]
+    needs: [build-artifact, resolve-skus, bake-env-dev-full, runtime-sanity-tests]
     # Reports on a run that failed — the case the summary exists for — but not
     # on one that was cancelled: an aborted run has no outcome to summarize, and
     # asking for one spends an LLM call to say it stopped early.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # Best-effort: checkout is not continue-on-error, so without this it could redden a green run.
+    continue-on-error: true
     permissions:
       actions: read # download the per-leg ai_job_summary artifacts
       contents: read # a job-level block zeroes every scope it omits, incl. checkout's

@@ -144,6 +144,8 @@ jobs:
     # asking for one spends an LLM call to say it stopped early.
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # Best-effort: checkout is not continue-on-error, so without this it could redden a green run.
+    continue-on-error: true
     permissions:
       actions: read # download the per-leg ai_job_summary artifacts
       contents: read # a job-level block zeroes every scope it omits, incl. checkout's
