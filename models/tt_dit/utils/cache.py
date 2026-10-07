@@ -112,7 +112,9 @@ def load_model(
         ttnn.distributed_context_barrier()
         return
 
-    if get_torch_state_dict is None:
+    if get_torch_state_dict is None or _read_only_enabled():
+        # A deployment on a near-full shared filesystem cannot afford an unplanned cache write: one
+        # missed key is tens of GB. Failing here names the key that did not match what is on disk.
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
@@ -182,6 +184,10 @@ def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: st
 
 def _verify_env_enabled() -> bool:
     return os.environ.get("TT_DIT_CACHE_VERIFY", "0") in ("1", "true", "True")
+
+
+def _read_only_enabled() -> bool:
+    return os.environ.get("TT_DIT_CACHE_READ_ONLY", "0") in ("1", "true", "True")
 
 
 def model_cache_dir(
