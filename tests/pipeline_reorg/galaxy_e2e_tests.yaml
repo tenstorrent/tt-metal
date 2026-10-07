@@ -113,7 +113,7 @@
 - id: bh-galaxy-socket-pipeline
   name: BH Galaxy Socket Pipeline Single Galaxy Cross-Tray
   cmd: |
-    tt-run --bare --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4stage_4x2_torus_pipeline.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+    tt-run --bare --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/fabric_cpu_only_blitz_single_galaxy_4x2_ring_4stage_ring_mesh_graph_descriptor.textproto --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
   skus:
     bh_galaxy:
       timeout: 10
