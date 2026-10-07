@@ -1245,9 +1245,16 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
         "Cannot add a legacy circular buffer to a Metal 2.0 Program; "
         "Metal 2.0 Programs use DataflowBuffers, and cannot be modified after construction.");
 
-    for (uint32_t buffer_index : circular_buffer->config().buffer_indices()) {
-        if (buffer_index >= max_dfbs_) {
-            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs_);
+    // The deserialization constructor sets these sets independently, so local and remote are not
+    // guaranteed to be subsets of buffer_indices; all three index the per-core bitsets below.
+    const CircularBufferConfig& config = circular_buffer->config();
+    for (const auto* indices :
+         {&config.buffer_indices(), &config.local_buffer_indices(), &config.remote_buffer_indices()}) {
+        for (uint32_t buffer_index : *indices) {
+            if (buffer_index >= max_dfbs_) {
+                TT_THROW(
+                    "Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_dfbs_);
+            }
         }
     }
 
