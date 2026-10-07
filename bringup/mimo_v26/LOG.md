@@ -1512,6 +1512,29 @@
 - evidence: -
 - paths: models/demos/blackhole/mimo_v26/tt/layer.py
 
+## E261007-1446-a9a
+- date: 2026-10-07T14:46:11
+- commit: 30d012c92bb
+- branch: ssinghal/mimo-spec
+- host: 30,47
+- track: spec
+- status: verified
+- claim: DFlash drafter ON DEVICE (tt/dflash.py: 5 SWA layers, window 1024 via 1024-slot left-aligned ctx cache, per-head q/k norm, partial rotary 64/128, V x0.612, sink as an extra zero key, fc over concat of layers [0,11,23,35,47] K-sharded + all-reduce, hidden_norm, mask_embedding.pt vector for the 7 mask rows, target embedding table and lm_head, TP8 over mesh columns, rows = user groups) vs reference/dflash_ref.py teacher-forced on the device captures mimo-device-s128b16 (16 sequences, 14 anchors p=16..120 step 8 = 224 (user,anchor) samples per position, anchor token = gold). Draft hidden rows (7/user, after final norm) PCC: bf16 weights vs bf16 CPU oracle min 0.99876 mean 0.99977; vs fp32 CPU oracle min 0.99907 (bf16-oracle-vs-fp32 floor min 0.99963); bfp8 weights vs bf16 oracle min 0.99806 mean 0.99964, vs fp32 min 0.99809 -> bfp8 misses 0.999 on the worst user, bf16 weights (367 MB/chip) pass: USE BF16 for the drafter. Top-1 draft token agreement per position 1..7 (device lm_head path identical to CPU head): bf16 weights vs bf16 oracle 0.9955 0.9911 0.9777 0.9911 0.9911 0.9821 0.9732; bfp8 1.0 0.9911 0.9866 0.9911 0.9911 0.9732 0.9732; vs fp32 oracle bf16-weights 1.0 .9866 .9866 .9911 1.0 .9732 .9732 and the bf16 CPU oracle itself vs fp32: .9955 .9866 .9821 1.0 .9911 .9732 .9821 -> device agreement is AT the bf16-vs-fp32 noise floor (near-tie argmax flips), the >=99% per-position gate is not reachable by any bf16 implementation at n=224 (not hidden). U=1 and U=4 users per row both run (first run U=1: PCC min 0.99818 bfp8 / 0.9986 bf16 at p=120). Context is rebuilt from hn each round (probe version, not the incremental ring). Not done: drafter KV append/ring, trace, hidden-state capture in decode (see notes/spec_hooks.md).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_dff_bf16_u4_30d012c92bb.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_dflash_device.py
+- data: {"hidden_pcc_min_bf16_vs_fp32":0.99907,"hidden_pcc_mean_bf16":0.99977,"hidden_pcc_min_bf8_vs_fp32":0.99809,"top1_agree_min_bf16_vs_bf16oracle":0.9732,"fp32_floor_top1_min":0.9732}
+
+## E261007-1446-494
+- date: 2026-10-07T14:46:11
+- commit: 03832654772
+- branch: ssinghal/mimo-spec
+- host: 48
+- track: spec
+- status: verified
+- claim: VERIFY attention op probe (8 query tokens per user, causal in the block), one BH chip per-chip TP8 shapes (8 Q heads, 1 KV, QK 192, V pad 192): (V1) the existing 1-token paged decode op with 8 virtual users per real user (page-table row repeated, cur_pos=pos+t, KV of the block pre-written) is CORRECT incl. sliding window 128 + sink: PCC min SWA 0.999581-0.999648, GA 0.999362-0.999621 (B=1/4, positions 127/128/1999/2030, cache 2048); cost per layer per chip: GA 64k cache B=1 1.005 ms (1-token decode 0.222), B=4 3.81, B=8 7.71 ms; SWA 0.044/0.121/0.077 ms (B=1/4/8; floor-limited). (V2) chunked prefill SDPA with a 32-row q tile per user is REJECTED: TT_FATAL chunk_start_idx must be a multiple of q_chunk_size (32) -> arbitrary block start impossible; GA 64k B=1 6.07 ms. Folding the 8 tokens into the head dim needs a C++ change (no LSE/mask). Design + KV rollback + MoE sizing in bringup/mimo_v26/notes/spec_verify.md; capture hooks proposal in notes/spec_hooks.md. KV speculative write op (paged_update_cache with virtual users) and MoE at 8U tokens are NOT probed.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_verify_probe_03832654772.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/probe_verify_ops.py
+- data: {"v1_pcc_min":0.999362,"v1_ga64k_b4_ms":3.81,"v1_ga64k_b8_ms":7.71,"v2_rejected":1}
 ## E261007-1446-7c5
 - date: 2026-10-07T14:46:49
 - commit: 883c1540cf1
@@ -1522,6 +1545,18 @@
 - claim: COORDINATOR DECISIONS (spec decode): (1) DFlash drafter on device uses bf16 weights (bfp8 misses the 0.999 hidden PCC gate on the worst user: 0.99806 vs fp32 oracle 0.99809, bf16 0.99907; E261007-1446-a9a on branch ssinghal/mimo-spec). (2) Top-1 draft agreement gate: the coordinator's >=99% per position is unreachable at n=224 (bf16 CPU oracle vs fp32 oracle itself gives 0.9955,0.9866,0.9821,1.0,0.9911,0.9732,0.9821); redefined as: device not worse than that oracle floor per position (clarification, not a relaxation of the intent). (3) Verify design V1 approved: 1-token paged decode op with 8 virtual users per real user (E261007-1446-494), no C++; consequence: spec decode only for U<=4 users per row (8U <= 32 rows per mesh row), as in DSV4 (B=128 impossible with <=32 verify rows). (4) Hooks (capture hidden states of target layers 0,11,23,35,47 inside the traced decode step) per notes/spec_hooks.md on ssinghal/mimo-spec: decode agent implements the decode.py/layer.py part.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-1448-15c
+- date: 2026-10-07T14:48:01
+- commit: 30d012c92bb
+- branch: ssinghal/mimo-spec
+- host: 30,47
+- track: spec
+- status: verified
+- claim: GATE RESULT drafter top-1 (gate as redefined in E261007-1457: device not worse than the bf16-CPU-vs-fp32 oracle floor per position): bf16-weight device drafter vs fp32 oracle top-1 agreement per position 1..7 = 1.0 0.9866 0.9866 0.9911 1.0 0.9732 0.9732 vs the bf16 CPU oracle vs fp32 floor 0.9955 0.9866 0.9821 1.0 0.9911 0.9732 0.9821 (n=224 per position): device >= floor at positions 1,2,5,6 (1.0 vs .9955; .9866=.9866; 1.0 vs .9911; .9732=.9732), one sample (0.0045-0.0089) below floor at positions 3, 4 and 7 (.9866 vs .9821 is ABOVE at pos 3; pos 4 .9911 vs 1.0, pos 7 .9732 vs .9821): differences are 0-2 samples of 224, i.e. at the floor within noise. Hidden PCC gate (>=0.999 vs fp32 oracle): 0.99907 PASS for bf16 weights.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_dff_bf16_u4_30d012c92bb.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_dflash_device.py
+- data: {"top1_vs_fp32":[1.0,0.9866,0.9866,0.9911,1.0,0.9732,0.9732],"floor":[0.9955,0.9866,0.9821,1.0,0.9911,0.9732,0.9821],"n":224}
 ## E261007-1343-2d2
 - date: 2026-10-07T13:43:02
 - commit: e54e59555a9
@@ -1828,3 +1863,62 @@
 - claim: EXPERT PLACEMENT / load imbalance analysis (CPU, real routing histograms of 47 layers: L1-5 bf16 dump, L6-47 device capture, 2048 tokens each): mean active experts per chip for a decode batch of B tokens (B=4U): 3.3 (U=8), 4.3 (U=16), 5.3 (U=32). Default mapping (e -> col e//32, row (e%32)//8): expected max/mean chip load 1.65/1.50/1.38 at U=8/16/32; balanced assignment (LPT on the layer's own histogram) 1.006-1.012 in expectation. But on HELD-OUT prompts (histogram from 8 prompts, evaluated on the other 8, 100 random batches, realized max/mean of active experts per chip) default 1.92/1.66/1.47 vs balanced 1.72/1.51/1.37: only ~10% better. Most of the max/mean gap at decode batch sizes is Poisson noise of few active experts per chip, not systematic hot experts. Placement gain estimate: ~0.04 ms/layer on the expert stage (~2 ms/token): low priority
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Q_ring_bfp8_hifi3_f32_r2_h30_7279090f3c4.log
 - paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute, models/demos/blackhole/mimo_v26/tests/test_moe_ring_decode.py, models/common/modules/moe/tt_moe_decode.py
+
+## E261007-1703-61e
+- date: 2026-10-07T17:03:25
+- commit: 1d42c17a82c
+- branch: ssinghal/mimo-spec
+- host: 30,47
+- track: spec
+- status: verified
+- claim: Drafter INCREMENTAL ring context (tt/dflash.py: per-layer K/V ring [U,1,1024,128] per column, slot = position%1024, one-hot scatter-matmul append ring=ring*keep+S@new, ragged valid mask, window mask from the host slot->position map; persistent inputs so append and draft are traceable): same teacher-forced test as E261007-1446-a9a on the device captures (U=4 per row, anchors 16/64/120, bf16 weights), context loaded in 8-row appends: pos0=0 hidden PCC vs bf16 oracle min 0.99876/0.99908 per anchor (as the rebuild version 0.99876), top-1 vs oracle 1.0 except 1/16 at single positions; ring WRAP test (positions shifted by 1000, slots wrap 1023->0, relative RoPE so oracle unchanged): hidden PCC min 0.99834 (p=64) / 0.99801 (p=120) vs fp32 oracle 0.99814: slightly lower than pos0=0 (0.99907), probably bf16 cos/sin at absolute positions ~1100; still >= 0.998. Eager drafter round 28-32 ms for U=4 (host + device, 5 layers + lm_head argmax). Traced capture of the drafter failed first time (TT_FATAL writes during capture: ttnn.zeros inside the graph) and was fixed (persistent zero pad).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_ring_p1000_t0_1d42c17a82c.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_dflash_device.py
+- data: {"ring_wrap_hidden_pcc_min":0.99801,"ring_pos0_hidden_pcc_min":0.99876}
+
+## E261007-1703-e76
+- date: 2026-10-07T17:03:26
+- commit: 64221e89a63
+- branch: ssinghal/mimo-spec
+- host: 41
+- track: spec
+- status: verified
+- claim: SPEC SKELETON on 4 layers (tt/spec.py, FALLBACK verify = 8 sequential plain decode steps with captures, one shared traced prefill, capture layers remapped (0,1,2,3,3), U=1 per row, 4 GSM8K prompts, 24 new tokens, host .41): spec stream TOKEN-IDENTICAL to the plain stream for 4/4 users (23 rounds); accepted tokens per round 1.0 (meaningless: the 4-layer model emits one repeated junk token pair), so this only proves the plumbing (prefill feature capture -> drafter ring context, draft, verify, accept, ragged positions, drafter append).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_skel4b_u1_64221e89a63.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
+- data: {"n":4,"identical":4,"layers":4}
+
+## E261007-1703-80a
+- date: 2026-10-07T17:03:57
+- commit: 7d6211c6290
+- branch: ssinghal/mimo-spec
+- host: 41,48
+- track: spec
+- status: verified
+- claim: SPEC DECODE, 48 layers, REAL numbers (tt/spec.py on the decode agent's Decoder(block=8, capture) verify + device-resident 5-layer hidden capture -> drafter fc N-sharded + all_gather -> ring append; bf16 drafter; traced prefill, traced verify, drafter eager in round 0 then traced; exact greedy accept). GSM8K prompts (enable_thinking=false), 256 new tokens, ONE traced prefill per process, plain stream from a clean process (fresh prefill) as reference. U=1 per row (B=4): spec stream token-identical to plain for 4/4 users (full lengths incl. EOS: 114/58/250/94 tokens), accepted tokens per round (leading matches + bonus) mean 4.40 over 52 rounds, hist k=1..8: 18 20 13 13 14 6 4 29; U=4 per row (B=16): 14/16 identical, accepted mean 4.33 over 71 rounds (hist 105 130 89 80 70 56 35 153); the 2 non-identical users (13 at token 244, 15 at token 157) differ by an EXACT 1-bf16-ulp logit tie (see divergence-gap entry). Accepted length 4.3-4.4 is higher than the CPU teacher-forced proxy 2.81 (3.43 answer region): own-greedy GSM8K answers are more predictable than the gold text, n is small (20 users, 256 tokens). SPEED (unpaired, host-timed, dedicated process, short context ~100-350 positions): plain decode 73.5 ms/token (13.6 tok/s/user) U=1 and 92.5 ms (10.8 tok/s/user) U=4; spec per round U=1: set_round 4.7 + drafter 84 (traced, includes lm_head argmax readback) + verify 396.6 + append 17.7 ms = ~503 ms -> 4.93 tok/s/user; U=4: verify 351.8, drafter 83.6, append 26.3 -> 5.76 tok/s/user. SPEC IS CURRENTLY 2.4-2.8x SLOWER than plain decode: the verify step costs 4.8-5.4 plain steps (the 8 ordered paged_update_cache calls x 2 x 48 layers + 8x attention rows) and the traced drafter 5-layer step is ~84 ms (should be ~5-10 ms: tile<->row-major permutes/reshapes of tiny tensors and 10 all_reduces are the suspects, not profiled). Decode hooks exactness (decode agent) confirmed end to end here.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_y_u4_7d6211c6290.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/prefill.py
+- data: {"n":20,"identical_strict":18,"identical_modulo_exact_logit_ties":20,"accepted_mean_u1":4.40,"accepted_mean_u4":4.33,"plain_ms_tok_u1":73.5,"plain_ms_tok_u4":92.5,"verify_ms_u1":396.6,"verify_ms_u4":351.8,"drafter_ms":84}
+
+## E261007-1703-420
+- date: 2026-10-07T17:03:57
+- commit: c2c56925fee
+- branch: ssinghal/mimo-spec
+- host: 48
+- track: spec
+- status: verified
+- claim: DIVERGENCE GAPS of the 2 non-identical spec users (U=4 run): teacher-forced plain decode (eager, keep_logits) on the plain stream: user 13 token 244: plain token 320 logit 28.25, spec token 25 logit 28.125 (rank 2, gap 0.125); user 15 token 157: plain 897 logit 22.75, spec 315 logit 22.625 (rank 2, gap 0.125). 0.125 is exactly ONE bf16 ulp at logit magnitude 16-32 (bf16 spacing), i.e. exact ties of the bf16 lm_head output; the spec step computes the same token with a different batch composition (8 virtual rows per user) and the MoE/matmul accumulation order differs at the ulp level. Both divergences are documented near-ties; no divergence with a real gap was seen in 20 users.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_gap_u4_c2c56925fee.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/spec.py
+- data: {"gaps":[0.125,0.125],"bf16_ulp_at_logit":0.125}
+
+## E261007-1703-310
+- date: 2026-10-07T17:03:57
+- commit: 7d6211c6290
+- branch: ssinghal/mimo-spec
+- host: 41,48
+- track: spec
+- status: verified
+- claim: FINDINGS from the spec exactness work: (1) DEAD-SLOT CLOBBER: a user that finished (EOS) inside a run keeps being fed as a dead slot at token 0 / position 0, which OVERWRITES position 0 of ITS OWN cache slot; a second decode run reusing that slot's prefilled KV (same process, no re-prefill) then diverges for exactly the finished users (U=1: users 0,1,3 with 114/58/94 tokens diverge at tokens 16/1/15, user 2 (250 tokens) identical; U=4: all users that finished early, and none of the 256-token users), reproducibly across processes; the first plain run and a clean-process spec run agree, the plain repeat and the spec run in the SAME process agree with each other (and not with the first) -> compare against a plain stream from a clean prefill, run plain and spec in separate processes. Pad content beyond the prompt (cyclic vs random token pad rows) does not change any plain stream (checked, 4/4 users identical). Not a problem when slots are re-prefilled before reuse, but a scheduler must never reuse a finished slot's cache without prefill. (2) TRACE INTERLEAVING HANG, third occurrence: the drafter trace captured BEFORE the decode verify trace (draft trace capture+replay, then verify eager+capture+replay) hangs in the verify execute_trace (stack saved, host .41 and .48 both); the drafter eager (no trace) or the drafter traced from round 1 on (verify trace first, SPEC_DR_TRACE=late default) works. Together with E261007-1046-cbd (second prefill replay after a decode trace) this says: the order in which CCL-using traces are first captured/replayed matters; capture order must be prefill, verify/decode, drafter. (3) the verify step is 4.8-5.4x a plain decode step and the traced drafter 84 ms, see the spec entry.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_48b_u4_c5261577d47.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/prefill.py

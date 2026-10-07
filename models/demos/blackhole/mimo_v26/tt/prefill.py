@@ -20,7 +20,7 @@ ROWS, COLS = 4, 8
 
 
 class ChunkedPrefill:
-    def __init__(self, model, trace=True, trace_dram_log=None):
+    def __init__(self, model, trace=True, trace_dram_log=None, cap_layers=None):
         self.m, self.mesh = model, model.mesh
         lay = model.layout
         assert lay is not None, "build MiMoModel(layout=KVLayout(...))"
@@ -41,6 +41,10 @@ class ChunkedPrefill:
         self.tid = None
         self.out = None
         self.times = []
+        self.cap = (
+            tuple(cap_layers) if cap_layers else ()
+        )  # layers whose OUTPUT is captured per chunk (drafter context)
+        self.caps = []
 
     # ---------------------------------------------------------------- inputs
     def _host(self, t, dtype):
@@ -73,10 +77,14 @@ class ChunkedPrefill:
         m = self.m
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)
         h = ttnn.reshape(e, (1, 1, self.CH, HIDDEN))
-        for lyr in m.layers:
+        capd = {}
+        for li, lyr in enumerate(m.layers):
             h2 = lyr.chunk(h, self.io["swa" if lyr.swa else "ga"])
             ttnn.deallocate(h)
             h = h2
+            if li in self.cap:
+                capd[li] = ttnn.clone(h)
+        self.caps = [capd[c] if i == self.cap.index(c) else ttnn.clone(capd[c]) for i, c in enumerate(self.cap)]
         return h
 
     def run_step(self):
@@ -112,7 +120,7 @@ class ChunkedPrefill:
             self.tid = None
 
     # ---------------------------------------------------------------- scheduling
-    def prefill(self, prompts, collect_full=False, on_step=None):
+    def prefill(self, prompts, collect_full=False, on_step=None, capture_feats=False, keep_last=1024):
         """prompts[r] = list of token lists (users of mesh row r, user u -> slot u, <= lay.users). Returns dict:
         last[(r,u)] = hidden [4096] bf16 of the last prompt token (after all layers, before the final norm); full[(r,u)] = [len,4096] if collect_full.
         """
@@ -128,7 +136,7 @@ class ChunkedPrefill:
                 q += [(u, c * CH, n, c == nch - 1) for c in range(nch)]
             queues.append(q)
         nsteps = max(len(q) for q in queues)
-        last, full = {}, {}
+        last, full, feats = {}, {}, {}
         for step in range(nsteps):
             toks = torch.zeros(ROWS, CH, dtype=torch.int64)
             slots, starts, info = [], [], []
@@ -139,7 +147,13 @@ class ChunkedPrefill:
                     real = src[st : st + CH]
                     pad = CH - real.numel()
                     if pad:
-                        real = torch.cat([real, src.repeat(-(-pad // src.numel()))[:pad]])
+                        if (
+                            os.environ.get("PF_PAD") == "random"
+                        ):  # diagnostic: pad rows (KV beyond the prompt) from random vocab ids instead of the cyclic prompt
+                            g = torch.Generator().manual_seed(1234 + step * 7 + r)
+                            real = torch.cat([real, torch.randint(1000, 100000, (pad,), generator=g)])
+                        else:
+                            real = torch.cat([real, src.repeat(-(-pad // src.numel()))[:pad]])
                     toks[r] = real
                     slots.append(u)
                     starts.append(st)
@@ -166,11 +180,26 @@ class ChunkedPrefill:
                         full.setdefault((r, u), []).append(h[r, :nv].clone())
                     if lastc:
                         last[(r, u)] = h[r, nv - 1].clone()
+            if capture_feats and self.cap and any(i is not None and i[1] + CH > i[2] - keep_last for i in info):
+                hs = [self.m.rows_to_host(c).bfloat16() for c in self.caps]  # each [ROWS, CH, 4096]
+                for r, i in enumerate(info):
+                    if i is None or i[1] + CH <= i[2] - keep_last:
+                        continue
+                    u, st, n, _ = i
+                    nv = min(CH, n - st)
+                    feats.setdefault((r, u), []).append((st, torch.cat([h_[r, :nv] for h_ in hs], -1)))
             if on_step:
                 on_step(step, info)
+        if capture_feats:
+            for k, v in list(feats.items()):
+                st0 = v[0][0]
+                f = torch.cat([x[1] for x in v], 0)
+                n_total = st0 + f.shape[0]
+                cut = max(0, f.shape[0] - keep_last)
+                feats[k] = (st0 + cut, f[cut:])
         if collect_full:
             full = {k: torch.cat(v, 0) for k, v in full.items()}
-        return dict(last=last, full=full, steps=nsteps)
+        return dict(last=last, full=full, steps=nsteps, feats=feats)
 
     def first_tokens(self, last):
         """last[(r,u)] -> {(r,u): (token id, logits row)} through the final norm + lm_head (<=32 users per row per call)."""
