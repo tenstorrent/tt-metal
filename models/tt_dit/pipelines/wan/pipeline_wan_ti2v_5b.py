@@ -170,6 +170,11 @@ class WanTI2V5BPipeline(WanPipeline):
             "model_type": "ti2v",
             "checkpoint_name": _5B_CHECKPOINT,
             "boundary_ratio": None,
+            # Use the checkpoint's scheduler_config flow_shift (5.0). The base pipeline pins the
+            # 14B experts' 12.0, which on this checkpoint pushes the mid-run timestep from 833 to
+            # 923 (40 steps) and visibly softens the output (notes section 8). Host-side only:
+            # the sigma schedule changes, no captured program does.
+            "flow_shift": None,
             # 4x8 BH preset defaults vae_t_chunk_size=None (full-T), which OOMs DRAM
             # for long clips (e.g. 121f needs a ~14GB VAE activation). Chunk the temporal
             # VAE decode (feat_cache carries causal-conv state across chunks).
