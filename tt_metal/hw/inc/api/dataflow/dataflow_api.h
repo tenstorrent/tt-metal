@@ -1401,7 +1401,7 @@ FORCE_INLINE void noc_async_read_page(
     if constexpr (enable_noc_tracing) {
         RECORD_NOC_EVENT_WITH_ID(NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, page_size, -1, false, noc);
     }
-    tt_buf_rw::note_if_bound<tt_buf_rw::READ, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+    tt_buf_rw::note_if_bound<tt_buf_rw::kRead, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
@@ -1586,7 +1586,7 @@ FORCE_INLINE void noc_async_write_page(
             posted,
             noc);
     }
-    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
+    tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, AddrGen>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         tensor_accessor::detail::transfer_noc_addr(addrgen, id, offset, noc),
@@ -1769,7 +1769,7 @@ FORCE_INLINE void noc_async_read_shard(
         -1,
         false,
         noc);
-    tt_buf_rw::note_if_bound<tt_buf_rw::READ, TensorAccessor<DSpec>>();  // op-to-op R/W inference
+    tt_buf_rw::note_if_bound<tt_buf_rw::kRead, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),
         dst_local_l1_addr,
@@ -1807,7 +1807,7 @@ FORCE_INLINE void noc_async_write_shard(
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
-    tt_buf_rw::note_if_bound<tt_buf_rw::WRITE, TensorAccessor<DSpec>>();  // op-to-op R/W inference
+    tt_buf_rw::note_if_bound<tt_buf_rw::kWrite, TensorAccessor<DSpec>>();  // op-to-op R/W inference
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
         src_local_l1_addr,
         tensor_accessor::detail::transfer_shard_noc_addr(s, shard_id, /*offset=*/0, noc),

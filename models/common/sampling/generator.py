@@ -344,6 +344,13 @@ class SamplingGenerator:
             and is_default_value(sampling_params.frequency_penalty, self._DEFAULT_PENALTIES["frequency"])
             and is_default_value(sampling_params.repetition_penalty, self._DEFAULT_PENALTIES["repetition"])
         )
+        if self._penalties_active and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
+            # Meshes that opt out of the penalties program cannot run it; fail loudly
+            # rather than silently dropping the caller's penalties.
+            raise ValueError(
+                "sampling penalties (presence/frequency/repetition) are not supported on this "
+                "mesh (_allow_penalties_sampling=False); send default penalty values"
+            )
         if (
             not self.tt_sampling.force_argmax_sampling
             or self._penalties_active
@@ -463,6 +470,14 @@ class SamplingGenerator:
                 # Models that disable force-argmax never reach that program, and it is not runnable
                 # under their sub-device config (untilize with sub_core_grids=None).
                 if force_argmax and not self.tt_sampling._allow_force_argmax_sampling:
+                    continue
+                # A model whose mesh layout the penalty program does not support
+                # sets _allow_penalties_sampling=False (default True elsewhere).
+                if penalties_on and not getattr(self.tt_sampling, "_allow_penalties_sampling", True):
+                    continue
+                # Same opt-out for the top-k/top-p program, whose global-index
+                # reconstruction assumes a (1,N) mesh.
+                if (not force_argmax) and not getattr(self.tt_sampling, "_allow_topk_sampling", True):
                     continue
                 self._penalties_active = penalties_on
                 # Set the flag directly: reset_params() would re-derive it from k/p/temp and overwrite
