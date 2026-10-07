@@ -13,7 +13,7 @@ def variants(root):
     out = {}
     for d in glob.glob(f"{root}/*/*/kernels/*/*/") + glob.glob(f"{root}/*/kernels/*/*/") + glob.glob(f"{root}/kernels/*/*/"):
         try:
-            defs = open(d + "defines_generated.h").read()
+            defs = "".join(open(d + f).read() for f in ("defines_generated.h", "kernel_args_generated.h", "named_args_generated.h", "chlkc_descriptors.h") if os.path.exists(d + f))
         except OSError:
             continue
         name = d.rstrip("/").split("/")[-2]

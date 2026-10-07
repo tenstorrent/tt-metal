@@ -15,6 +15,10 @@
 // still used for the shared preprocess_*_impl helper call sites (see PREPROCESS below).
 #include "api/dataflow/dataflow_buffer.h"
 
+#ifndef BCAST_OTHER_CHUNK
+#define BCAST_OTHER_CHUNK 1
+#endif
+
 ALWI void process_tile(
     tt::CBIndex cb_bcast,
     tt::CBIndex cb_llk_post,
@@ -76,6 +80,33 @@ ALWI void process_tile(
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
+#if BCAST_OTHER_CHUNK > 1
+    // Sharded operand and output: up to a DEST section of tiles against the one broadcast tile per acquire.
+    for (uint32_t j = tile_start; j < freq;) {
+        const uint32_t n = (freq - j) < BCAST_OTHER_CHUNK ? (freq - j) : BCAST_OTHER_CHUNK;
+        EXP_CB_POST_OTHER.wait_front(n);
+        exp_dfb_out.reserve_back(n);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < n; ++i) {
+#if BCAST_INPUT
+            BINARY_OP(cb_post_lhs, cb_post_rhs, i, 0, i);
+#else
+            BINARY_OP(cb_post_lhs, cb_post_rhs, 0, i, i);
+#endif
+        }
+        tile_regs_commit();
+
+        tile_regs_wait();
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile(i, cb_out);
+        }
+        tile_regs_release();
+
+        exp_dfb_out.push_back(n);
+        EXP_CB_POST_OTHER.pop_front(n);
+        j += n;
+    }
+#else
     for (uint32_t j = tile_start; j < freq; ++j) {
         PREPROCESS(
             OTHER_OP,
@@ -103,6 +134,7 @@ ALWI void process_tile(
         exp_dfb_out.push_back(num_tiles_per_cycle);
         EXP_CB_POST_OTHER.pop_front(num_tiles_per_cycle);
     }
+#endif
     exp_dfb_bcast.pop_front(num_tiles_per_cycle);
     EXP_CB_POST_BCAST.pop_front(num_tiles_per_cycle);
 }

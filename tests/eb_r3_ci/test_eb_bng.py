@@ -195,8 +195,10 @@ SB = {
     "bs64_colb_dram": ((1, 1, 4096, 1280), (1, 1, 4096, 1), "bs64", "dram"),
     "hs8_nob_dram": ((1, 1, 1024, 1024), (1, 1, 1024, 1024), "hs8", "dram"),
     "hs8_nob_hs8": ((1, 1, 1024, 1024), (1, 1, 1024, 1024), "hs8", "hs8"),
+    "hs32_colb_dram": ((1, 1, 4096, 1024), (1, 1, 4096, 1), "hs32", "dram"),
+    "hs32_scalarb_dram": ((1, 1, 4096, 1024), (1, 1, 1, 1), "hs32", "dram"),
 }
-SBM = {"hs8": (ttnn.ShardStrategy.HEIGHT, ttnn.CoreGrid(y=2, x=4)), "bs64": (ttnn.ShardStrategy.BLOCK, ttnn.CoreGrid(y=8, x=8))}
+SBM = {"hs8": (ttnn.ShardStrategy.HEIGHT, ttnn.CoreGrid(y=2, x=4)), "hs32": (ttnn.ShardStrategy.HEIGHT, ttnn.CoreGrid(y=4, x=8)), "bs64": (ttnn.ShardStrategy.BLOCK, ttnn.CoreGrid(y=8, x=8))}
 
 
 @pytest.mark.parametrize("case", list(SB))
@@ -212,3 +214,42 @@ def test_bng_sharded_bcast(device, case, op):
     tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mcb)
     f, g = OPS[op]
     _check(f(ta, tb, memory_config=mca), g(a.float(), b.float()), 0.03)
+
+
+# #58725 review: the re-init skip after a post activation alone in the column and scalar broadcast kernels and the scalar
+# kernel (a Python scalar b), interleaved and with a sharded operand.
+@pytest.mark.parametrize(
+    "case, op, act, mem",
+    [
+        ("col_b", "add", "gelu", "l1"),
+        ("col_b", "mul", "softplus", "dram"),
+        ("scalar_b", "add", "silu", "dram"),
+        ("scalar_b", "mul", "gelu", "l1"),
+        ("col_b", "add", "silu", "hs8"),
+        ("scalar_b", "mul", "gelu", "hs8"),
+        ("py_scalar", "add", "gelu", "dram"),
+        ("py_scalar", "mul", "silu", "l1"),
+        ("py_scalar", "add", "softplus", "hs8"),
+    ],
+    ids=lambda v: str(v),
+)
+def test_bng_bcast_post_activation(device, case, op, act, mem):
+    sa = (1, 1, 1024, 1024)
+    torch.manual_seed(0)
+    a = torch.rand(sa, dtype=torch.bfloat16) - 0.5
+    if mem == "hs8":
+        mca = _sharded(sa, *SBM["hs8"])
+        mcb = ttnn.DRAM_MEMORY_CONFIG
+    else:
+        mca = mcb = ttnn.DRAM_MEMORY_CONFIG if mem == "dram" else ttnn.L1_MEMORY_CONFIG
+    ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mca)
+    f, g = OPS[op]
+    if case == "py_scalar":
+        b = torch.tensor(0.375, dtype=torch.bfloat16)
+        out = f(ta, 0.375, memory_config=mca, activations=ACT[act][0]())
+    else:
+        sb = BCAST[case][1]
+        b = torch.rand(sb, dtype=torch.bfloat16) - 0.5
+        tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mcb)
+        out = f(ta, tb, memory_config=mca, activations=ACT[act][0]())
+    _check(out, ACT[act][1](g(a.float(), b.float())), 0.03)

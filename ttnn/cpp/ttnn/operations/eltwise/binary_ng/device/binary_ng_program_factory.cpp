@@ -1406,6 +1406,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool block_pack =
         block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32) &&
         std::getenv("EB_R3_NO_BLOCK_PACK") == nullptr;  // CI measurement toggle, not in the PR
+    // Blackhole: a column or scalar broadcast against a sharded operand into a sharded output computes a DEST section of
+    // tiles per acquire.
+    const bool other_sharded =
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)
+            ? a_sharded
+            : b_sharded;
+    const bool bcast_sections = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
+                                !is_where_op &&
+                                (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeColBcastNg ||
+                                 compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg) &&
+                                other_sharded && c_sharded &&
+                                 std::getenv("EB_R3_NO_BCAST_CHUNK") == nullptr;  // CI measurement toggle, not in the PR
+    compute_kernel_defines["BCAST_OTHER_CHUNK"] = bcast_sections ? (fp32_dest_acc_en ? "4" : "8") : "1";
     compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
     compute_kernel_defines["EB_R3_P58725"] = std::getenv("EB_R3_P58725") != nullptr ? "1" : "0";  // CI only
     compute_kernel_defines["EB_R3_PROBE_INIT"] = std::getenv("EB_R3_PROBE_INIT") != nullptr ? "1" : "0";  // CI only

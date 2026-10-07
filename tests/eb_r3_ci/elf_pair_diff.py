@@ -13,7 +13,7 @@ def variants(root, name):
     out = {}
     for d in glob.glob(f"{root}/**/kernels/{name}/*/", recursive=True):
         try:
-            defs = open(d + "defines_generated.h").read()
+            defs = "".join(open(d + f).read() for f in ("defines_generated.h", "kernel_args_generated.h", "named_args_generated.h", "chlkc_descriptors.h") if os.path.exists(d + f))
         except OSError:
             continue
         out[re.sub(r"(?m)^.*EB_R3_.*\n", "", defs)] = d

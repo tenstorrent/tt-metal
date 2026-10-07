@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Round 3 eltwise binary: whole test modules with an environment toggle set ("main") and unset ("optin"), every output hashed
-# (eb_bits_plugin), outcomes and bits compared per test. usage: bits_env.sh <VAR> <pytest args...>
+# (eb_bits_plugin), outcomes and bits compared per test. usage: bits_env.sh <VAR> <pytest args...>; EB_VAR_ON_OPTIN=1 sets VAR
+# on the optin side instead.
 set -uo pipefail
 cd /work
 VAR=$1; shift
 O=/tmp/ebbenv; mkdir -p $O
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-}
 for v in main optin; do
-  if [[ $v == main ]]; then export $VAR=1; else unset $VAR; fi
+  if [[ ( $v == main && -z "${EB_VAR_ON_OPTIN:-}" ) || ( $v == optin && -n "${EB_VAR_ON_OPTIN:-}" ) ]]; then export $VAR=1; else unset $VAR; fi
   export TT_METAL_CACHE=$O/cache_$v EB_HASH_OUT=$O/hash_$v.json; mkdir -p $TT_METAL_CACHE
   timeout -s INT -k 60 ${EB_RUN_LIMIT:-3000} python3 -m pytest -p eb_bits_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE "$@" > $O/log_$v.txt 2>&1
   echo "--- $v rc=$?: $(grep -E 'passed|failed|error' $O/log_$v.txt | tail -1)"
