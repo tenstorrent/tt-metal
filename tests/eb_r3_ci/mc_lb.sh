@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723, #58724 review): the multi-chip callers a Blackhole LoudBox (8 x P150, 2x4) runs: the all-gather
 # minimal matmul with its fused addcmul, attn_res_gather_softmax, zero_padded_kv_cache and deepseek_v3_b1's reduce_to_one
 # (dest-reuse add); device time A/B with their opt-in, then bits.

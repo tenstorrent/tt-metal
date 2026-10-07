@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58722 review): ELF identity of the block unpack's LLK and compute API additions when no kernel uses
 # them: the same tests (block section off) built with the three headers before and after the change, every ELF compared.
 cd /work

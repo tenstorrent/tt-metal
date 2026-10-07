@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): three A/B passes of moreh's small layer norm backward input-gradient kernel (BH skips lifted).
 cd /work
 L=tests/ttnn/nightly/unit_tests/operations/moreh/test_moreh_layer_norm.py

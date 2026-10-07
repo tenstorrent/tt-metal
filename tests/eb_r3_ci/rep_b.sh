@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): three more A/B passes of indexer_score and the fused recurrent gated delta rule.
 cd /work
 I=tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py

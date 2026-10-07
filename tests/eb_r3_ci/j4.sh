@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723, #58724 review): softmax's dest-reuse add on the padded last tile, three more A/B passes of the
 # fused scale-mask cases on a width that is not a multiple of 32; indexer_score bits with its direct init passing the hand-off.
 cd /work

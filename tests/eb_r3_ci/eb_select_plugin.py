@@ -1,5 +1,8 @@
 # Round 3 eltwise binary: keep only the test items whose node ids are listed in $EB_NODES_FILE (one per line), so that ids
 # with spaces or parentheses need not go through the profiler's shell command line.
+import os as _os_guard, sys as _sys_guard
+if not (_os_guard.environ.get("HWLOCK_HELD") or _os_guard.environ.get("GITHUB_ACTIONS")):
+    _sys_guard.exit("not under hwlock")
 import os
 
 

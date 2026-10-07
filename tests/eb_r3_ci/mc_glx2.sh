@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): Blackhole Galaxy again: the all-gather minimal matmul's fused addcmul (tt_dit's
 # bh4x8links2 gate test) and the strided matmul reduce-scatter with tt_dit's fused addcmul (the Wan Galaxy case); device time
 # A/B with the opt-in, then bits.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): exhaustive HiFi2-rule bit dump, HiFi4 reference first, then HiFi2, then detail.
 cd /work
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-}

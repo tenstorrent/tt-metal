@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): three more A/B passes of the left-out distributed layernorm, KDA chunk scan and
 # rgb_to_yuv kernels, to pool with the first pass.
 cd /work

@@ -1,6 +1,9 @@
 # Round 3 eltwise binary: run each selected test function EB_REPS times in a row under the device profiler, a tracy signpost
 # "<nodeid>#<k>" before each call, and read the device profiler after the last call, so the ops report splits the launches
 # of every repetition. The first repetition is the warm-up (program cache, first-use effects); the reduce drops it.
+import os as _os_guard, sys as _sys_guard
+if not (_os_guard.environ.get("HWLOCK_HELD") or _os_guard.environ.get("GITHUB_ACTIONS")):
+    _sys_guard.exit("not under hwlock")
 import gc
 import os
 

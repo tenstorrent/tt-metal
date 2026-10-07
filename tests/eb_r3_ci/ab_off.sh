@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: a test selection with listed kernel defines removed ("main": main's program) against the tree as is
 # ("optin"), runs main optin optin main under the device profiler. usage: ab_off.sh <file: "path|exact define line"> <pytest args...>
 set -uo pipefail

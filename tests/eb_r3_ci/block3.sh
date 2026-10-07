@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58722 review): the next program after a block-pack program; identical bfp8 programs on both sides
 # (block pack off, on), two passes.
 cd /work

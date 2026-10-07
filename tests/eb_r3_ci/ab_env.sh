@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: a test selection with an environment toggle set ("main") and unset ("optin"), runs main optin
 # optin main under the device profiler, plus one run of each side with the bits plugin. usage: ab_env.sh <VAR> <pytest args...>
 set -uo pipefail

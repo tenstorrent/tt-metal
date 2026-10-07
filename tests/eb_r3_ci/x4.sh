@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: the DiT fused distributed norms on one chip, device time A/B and bits (optin_x4.txt).
 cd /work
 O=tests/eb_r3_ci/optin_x4.txt

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: llama rotary decode (sharded kernel) with sharded and interleaved cos/sin and trans_mat, twice.
 cd /work
 for i in 1 2; do

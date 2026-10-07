@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58725 review): the re-init skip after a post activation alone (EB_R3_P58725) on the column, scalar
 # and Python-scalar kernels, three passes; the compute ELF diff of every binary_ng kernel against main's program (matched by
 # defines and compile-time arguments); the binary modules with fused activations bit for bit.

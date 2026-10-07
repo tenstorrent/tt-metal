@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58724 review): softmax's padded-tile dest-reuse add, three more passes of the attention softmax on
 # widths that are not a multiple of 32 (fused scale mask) and, as the control whose program is the same on both sides, the
 # plain softmax on those widths.

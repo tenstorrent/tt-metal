@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): QuietBox 2, the ring joint SDPA perf cases and reduce_to_root fail to build their
 # kernels; print the build error with the PR's device sources, then with main's (main_dev.tar.gz: main's versions of every
 # device-side file the PR changes), each with an empty kernel cache.

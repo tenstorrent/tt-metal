@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: the x3 selections whose bits differed, main's kernels against main's kernels.
 cd /work
 O=tests/eb_r3_ci/optin_none.txt

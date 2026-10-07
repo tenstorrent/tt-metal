@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58722 review): the KDA kernels that call add_block / sub_block / mul_block, with the per-tile hand-off
 # against the per-tile hand-off plus the block unpack (ELTWISE_BINARY_BLOCK_UNPACK), three passes; then bits.
 cd /work

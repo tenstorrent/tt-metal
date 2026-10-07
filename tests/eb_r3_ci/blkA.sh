@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary, third pass (#58722): binary_ng's sharded no-broadcast ops over tiles per core and formats; the branch
 # without the block section against the block unpack alone, with main's contiguous block pack, and with #58816's block pack.
 cd /work

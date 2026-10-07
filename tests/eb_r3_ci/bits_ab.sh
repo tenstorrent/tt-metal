@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: run whole test modules on main's kernels and with opt-in defines, hash every output (eb_bits_plugin),
 # then compare outcomes and bits per test. usage: bits_ab.sh <optin file: "path|define line" per line> <pytest args...>
 set -uo pipefail

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary, third pass (#58722, #58726, #58727): block unpack and block pack with post activations, in the
 # Python-scalar kernel and in the column and scalar broadcast sections; the broadcast sections with post activations.
 cd /work

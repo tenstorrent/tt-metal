@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723, #58724 review): on a Blackhole Galaxy: deepseek_v3_b1's moe and moe_routed_expert fused ops
 # (single device, 13x10 worker grid under slow dispatch; their dest-reuse multiply) and the strided all-gather minimal matmul
 # with its fused addcmul (8x4); device time A/B with the opt-in, then bits.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: whole test modules with an environment toggle set ("main") and unset ("optin"), every output hashed
 # (eb_bits_plugin), outcomes and bits compared per test. usage: bits_env.sh <VAR> <pytest args...>; EB_VAR_ON_OPTIN=1 sets VAR
 # on the optin side instead.

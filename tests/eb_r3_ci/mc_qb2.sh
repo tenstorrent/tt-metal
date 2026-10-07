@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): the multi-chip callers a Blackhole QuietBox 2 (2 x P300, 4 chips) runs: ring and
 # exp-ring joint SDPA and reduce_to_root; device time A/B with their opt-in, then bits.
 cd /work

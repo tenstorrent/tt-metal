@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58726 review): sharded ops with a column or scalar broadcast against a sharded operand compute a DEST
 # section of tiles per acquire (BCAST_OTHER_CHUNK); the branch without it (EB_R3_NO_BCAST_CHUNK) against with it, three passes,
 # over the sharded broadcast cases and the interleaved broadcast controls; then the binary modules bit for bit.

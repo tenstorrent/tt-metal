@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58725, #58726 review): the post-activation re-init skip (p58725), passes 2 and 3 (2 runs per side
 # each; pass 1 is run 37563834806), then the compute ELF diff of main against p58725; then the compute-sensitivity probe (one
 # more binary init per tile) on the sharded ops that run one tile per DEST section and the interleaved controls, two passes.

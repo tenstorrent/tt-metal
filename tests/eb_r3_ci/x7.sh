@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: fused recurrent GDN on the device fixture (device time A/B, seeded bits), and the llama rotary decode
 # selection again (its run 4 aborted in batch x3).
 cd /work

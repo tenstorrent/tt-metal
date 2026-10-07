@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): QuietBox 2, reduce_to_root: bits of both tests first (no profiler), then the device
 # time A/B of the test without trace (the traced one timed out under the profiler and left the board unusable, run 37575323709).
 cd /work

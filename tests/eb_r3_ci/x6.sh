@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: topk_router_gpt and bge_m3's balanced layernorm with the broadcast opt-in (device time A/B, bits),
 # and the balanced layernorm with its row-broadcast dest-reuse ops at LoFi (device time A/B: the bound on that multiply's hold).
 cd /work

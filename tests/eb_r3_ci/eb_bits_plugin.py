@@ -1,5 +1,8 @@
 # Round 3 eltwise binary: record a hash of every tensor ttnn.to_torch returns, per test, so that two runs (main and an
 # opt-in) can be compared bit for bit. The hashes go to $EB_HASH_OUT (JSON) at the end of the session.
+import os as _os_guard, sys as _sys_guard
+if not (_os_guard.environ.get("HWLOCK_HELD") or _os_guard.environ.get("GITHUB_ACTIONS")):
+    _sys_guard.exit("not under hwlock")
 import hashlib
 import json
 import os

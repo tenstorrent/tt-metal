@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: bge_m3's balanced layernorm, main's kernel against the final one (standard, broadcast and row-broadcast
 # dest-reuse multiplies per tile): device time A/B and bits.
 cd /work

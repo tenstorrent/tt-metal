@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723, #58724 review): LoudBox (8 x P150, 2x4) again. attn_res_gather_softmax's direct math init now
 # passes the hand-off its broadcast multiply executes with (the first pass hung with the opt-in); every fabric test in its own
 # process; zero_padded_kv_cache and reduce_to_one first, the all-gather minimal matmul's fused addcmul last.

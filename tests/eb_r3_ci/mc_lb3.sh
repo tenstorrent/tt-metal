@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723, #58724 review): LoudBox, third pass: attn_res_gather_softmax (its direct init passing the
 # hand-off) A/B and bits first; then reduce_to_one's bits without the profiler (under it the 1D test passes and then outlives
 # a 1500 s limit, run 37573070751).

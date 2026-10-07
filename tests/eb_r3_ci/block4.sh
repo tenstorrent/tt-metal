@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58722 review): the block section as the PR gates it (16 or more tiles per core) against none, three
 # passes; then the binary modules bit for bit.
 cd /work

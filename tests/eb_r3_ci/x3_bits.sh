@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary: whole modules of the extra callers bit for bit (optin_x3.txt); the llama rotary module's decode cases.
 cd /work
 O=tests/eb_r3_ci/optin_x3.txt

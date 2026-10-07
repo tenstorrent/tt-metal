@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58722 review): binary_ng's block section (block unpack plus block pack) against the branch without
 # it, then the block unpack alone; device time A/B and bits, and the binary modules whole bit for bit.
 cd /work

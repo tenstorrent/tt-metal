@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723, #58724 review): moreh_sgd's bf16 cases, dit_minimal_matmul_addcmul_fused at production shapes,
 # and softmax's dest-reuse add on the padded last tile (its broadcast switch in the tree on both sides): device time A/B, bits.
 cd /work

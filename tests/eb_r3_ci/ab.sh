@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58724), CI on one Blackhole card: device time of a kernel as main has it ("main") against the
 # same kernel with an opt-in define ("optin"), runs interleaved main optin optin main, each under the device profiler
 # (tracy) with its own kernel cache and profiler directory. The kernel file is restored after every run.

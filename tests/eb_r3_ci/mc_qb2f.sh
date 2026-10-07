@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): QuietBox 2, reduce_to_root device time A/B with the pytest timeout raised (under the
 # profiler both tests pass and then exceed the 300 s ini timeout in teardown, run 37577737354). Bits: run 37577737354.
 cd /work

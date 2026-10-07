@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): QuietBox 2, reduce_to_root (it builds and passes without the device profiler):
 # device time A/B with its opt-in under the profiler, the build error printed if there is one; then bits.
 cd /work

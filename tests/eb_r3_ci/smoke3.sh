@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary, third pass: the ci3 tree builds; its toggles reach the factory (rule log) and change programs.
 cd /work
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-} EB_R3_LOG_RULE=1

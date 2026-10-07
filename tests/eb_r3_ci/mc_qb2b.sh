@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary (#58723 review): QuietBox 2 again: exp-ring joint SDPA bits (no seed plugin) first, then the ring joint
 # SDPA perf-check cases A/B and bits, and the exp-ring A/B a second time.
 cd /work

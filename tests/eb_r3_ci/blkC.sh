@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+[[ -n ${HWLOCK_HELD:-} || -n ${GITHUB_ACTIONS:-} ]] || { echo "not under hwlock" >&2; exit 2; }
 # Round 3 eltwise binary, third pass (#58725, #58726): sharded column and scalar broadcasts with an activation on the per-tile
 # operand, one tile per section against a DEST section per acquire (EB_R3_BCAST_OPACT), three passes.
 cd /work
