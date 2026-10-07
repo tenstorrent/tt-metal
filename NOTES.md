@@ -29,3 +29,16 @@ Skipped: e72eef929d0 (superseded by 55f146f4891), 7452faf3b38 (already in t48), 
 ## Result (2026-10-07 19:14 UTC, blx01 jobs 810/812)
 A unported 12009 ms, B ported 5635 ms. B vs A: PCC 0.999919, PSNR 53.7 dB (worst frame 57: 52.6 dB).
 Code landed via ttp/t212-land (cherry-picks onto 5e4e0cd643a, head a40d78b8bae) with ttp push --detach.
+
+## Pushes (2026-10-07 19:2x UTC)
+- Land: a40d78b8bae on origin/ttp/t48-ltx25-integrated (ttp push).
+- Own branch: 84fde47f16c pushed (rerun; first try saw HEAD move during the land switch).
+
+## Score vs #214 reference (coordinator update)
+- blx01 /var/tmp/fasth3/t212/score: driverS.sh (setsid, pgid 3443355, started 19:22 UTC) waits for health
+  (broker was recovering chip 25 then, bridge-reset job 818, not ours), then one broker job -t 600:
+  runS.sh = #214's decode_ref.py (production options, host noise, yuv) on b/ (port), seeds 0-4.
+  Then cmpS.py: port yuv vs diffvae/ref/ref_dvx_seed*.yuv -> score/cmp.json (PCC, PSNR, worst frame, decode_s).
+- Marker: score/driver.marker "T212S_DRIVER_DONE stage=.. rc=..". Log: score/driver.log, score/out/run.log.
+- Next step on wake: read cmp.json; report PCC/PSNR per seed and mean decode time (unported: 16.47 s, #214).
+  Then delete score/out/*.yuv (~450 MB each) on blx01, keep cmp.json/run.log, copy them into tt-project/t212/score.
