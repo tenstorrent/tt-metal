@@ -13,6 +13,8 @@ All device-side, no host reads: valid inside ttnn.begin_trace_capture / execute_
 bias top-8) and overflow a chip's dispatch buffer, so their routing is replaced by a round-robin spread (spread_pad_routing) with weight 1/8.
 Requires MOE_UNI_BF16_X/INTERMED/OUT=1 in the environment of the process that builds the op (and the patched _ttnncpp.so) for bf16 activations.
 """
+import os
+
 import torch
 
 import ttnn
@@ -100,6 +102,20 @@ class MiMoMoEDecode:
         w2 = ttnn.reshape(ttnn.to_layout(w2, ttnn.ROW_MAJOR_LAYOUT), [T, 1, 1, TOPK])
         return w2, i2
 
+    def _column_reduce(self, part, B):
+        """Sum the 8 per-column partials of the live rows. NOT ttnn.all_reduce: its reduce_scatter + all_gather (cluster_axis=1) leaves one 32-column tile of the
+        output of one device stale/zero in ~1e-3 of the calls when chained behind the dispatch/combine ops (LOG race localisation; ag_sum: 0 events in 36000 calls
+        vs 87-132 for reduce_scatter+all_gather / num_links=1). all_gather over the column axis + local sum does not show it. MIMO_MOE_AR=rs restores the old path.
+        """
+        x = ttnn.slice(part, [0, 0, 0, 0], [1, 1, B, HIDDEN])
+        if os.environ.get("MIMO_MOE_AR", "ag_sum") == "rs":
+            return ttnn.all_reduce(x, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        g = ttnn.all_gather(x, dim=0, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+        o = ttnn.sum(g, dim=0, keepdim=True)
+        ttnn.deallocate(g)
+        return o
+
     def forward(self, x, mask, upto=99):
         """upto (stage-timing hook): 0 = pad+router+spread, 1..4 = moe stages (counts, dispatch, experts, combine), 5 = full moe without all-reduce."""
         B = x.shape[2]
@@ -138,9 +154,11 @@ class MiMoMoEDecode:
         part = self.moe.forward(x_rm, wts2, idx2, upto=min(upto, 99) if upto <= 4 else 99)
         if upto <= 5:
             return part
-        out = ttnn.all_reduce(part, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if self.do_ar else part
         if self.do_ar:
+            o = self._column_reduce(part, B)
             ttnn.deallocate(part)
+            return o
+        out = part
         o = ttnn.slice(out, [0, 0, 0, 0], [1, 1, B, HIDDEN])
         ttnn.deallocate(out)
         return o

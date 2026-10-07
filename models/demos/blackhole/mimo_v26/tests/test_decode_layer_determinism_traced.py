@@ -81,19 +81,17 @@ def main():
         ttnn.end_trace_capture(mesh, tid, cq_id=0)
         ttnn.synchronize_device(mesh)
         taps_dev = list(taps_all)
-        runs = []
         R = int(E("DEC_REPS", "30"))
-        for rep in range(R):
-            ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
-            runs.append([{k: host(mesh, v) for k, v in t.items() if k in TAPS} for t in taps_dev])
         live = alive
-        # per layer/tap: in how many of the R-1 replays do LIVE slots of each mesh row differ from replay 0?
         stats = {}
         first = None
-        for L in range(NL):
-            for k in runs[0][L]:
-                for rep in range(1, R):
-                    d = (runs[0][L][k] - runs[rep][L][k]).abs().amax(dim=-1)  # [rows, cols, 32]
+        ref = None
+
+        def compare(run, rep):
+            nonlocal first
+            for L in range(NL):
+                for k in ref[L]:
+                    d = (ref[L][k] - run[L][k]).abs().amax(dim=-1)  # [rows, cols, 32]
                     dl = d[live.unsqueeze(1).expand_as(d)]
                     if dl.numel() and float(dl.max()) > 0:
                         rows_bad = sorted(
@@ -105,6 +103,22 @@ def main():
                         e["maxdiff"] = max(e["maxdiff"], float(dl.max()))
                         if first is None or (L, k) < first:
                             first = (L, k)
+                        print("DEC_GLITCH", rep, L, k, rows_bad, float(dl.max()), flush=True)
+
+        # streaming comparison against replay 0 (no storage of all replays)
+        for rep in range(R):
+            ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+            run = [{k: host(mesh, v) for k, v in t.items() if k in TAPS} for t in taps_dev]
+            if ref is None:
+                ref = run
+            else:
+                compare(run, rep)
+        RE = int(E("DEC_EAGER", "0"))
+        for rep in range(RE):  # eager steps: taps of the eager step vs the trace reference
+            fwd()
+            run = [{k: host(mesh, v) for k, v in t.items() if k in TAPS} for t in taps_all]
+            compare(run, 100000 + rep)
+        R = R + RE
         out = {
             f"L{L}.{k}": dict(n_reps_bad=v["n_reps_bad"], rows=sorted(v["rows"]), maxdiff=v["maxdiff"])
             for (L, k), v in sorted(stats.items())
