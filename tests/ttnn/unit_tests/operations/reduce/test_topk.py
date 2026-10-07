@@ -607,6 +607,40 @@ def test_topk_w65536_uint16_indices_are_exact(placement, with_indices_tensor, de
     assert_equal(planted.to(torch.bfloat16).repeat(1, 1, 32, 1), ttnn.to_torch(ttnn_values))
 
 
+@pytest.mark.parametrize("largest", (True, False))
+@pytest.mark.parametrize("k", (32, 64))
+@pytest.mark.parametrize("pattern", ("tie_saturation", "cascade_displacement"))
+def test_topk_stable_w65536_uint16_ties(pattern, k, largest, device):
+    """stable=True at W=65536: the indices fit 16 bits (largest 65535), so this width runs the
+    comparator-stable UINT16 path rather than the rank-stamped 32-bit engine (W_NEEDS_UINT32 and
+    above). Tie-heavy rows -- bulk +-0.5 with the k cut inside the dominant tie group, plus extreme
+    spikes that include the last column, index 65535 -- must break ties by ascending original index
+    exactly as torch-stable does, all the way to the maximum 16-bit index."""
+    torch.manual_seed(11)
+    W = UINT16_MAX + 1
+    shape = [1, 1, 32, W]
+    levels = torch.tensor([-0.5, 0.5], dtype=torch.bfloat16)
+    input = levels[torch.randint(0, 2, shape)]
+    if pattern == "tie_saturation":
+        # 48 strided columns across the row, the first at index 0 and the last at index 65535.
+        extreme_cols = torch.cat([torch.arange(47) * 1291, torch.tensor([W - 1])])
+    else:
+        # 48 strided columns clustered at the top of the row, starting at index 65535.
+        extreme_cols = W - 1 - torch.arange(48) * 157
+    input[..., extreme_cols[0::4]] = 2.0
+    input[..., extreme_cols[1::4]] = 1.0
+    input[..., extreme_cols[2::4]] = -2.0
+    input[..., extreme_cols[3::4]] = -1.0
+    golden_values, order = _stable_topk_golden(input, k, largest)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True, stable=True)
+
+    assert ttnn_indices.dtype == ttnn.uint16
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices, dtype=torch.int32).to(torch.int64) & 0xFFFF)
+
+
 def test_topk_indices_tensor_too_narrow_raises(device, expect_error):
     # W is past 65536, so the op resolves the index dtype to UINT32 and sizes the index CB 32-bit,
     # but the payload here is UINT16. Reject rather than read a 16-bit tensor at a 32-bit stride.
