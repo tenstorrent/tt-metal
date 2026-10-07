@@ -126,15 +126,22 @@ constexpr unsigned write(unsigned x) {
         default: return 0;
     }
 }
+// Raw instructions execute under externally managed lane predicates. The
+// instruction word alone cannot prove that every destination lane is written.
+// Preserve the old destination as an input, including for nominally write-only
+// operations. This is deliberately conservative when all lanes are enabled.
+constexpr unsigned inputs(unsigned x) { return read(x) | write(x); }
 } // namespace ckernel::raw_lreg_effect
 
 #define TT_LLK_SFPU_EFFECT(word)                                                                \
     do {                                                                                        \
         static_assert(!__builtin_constant_p(word) || ckernel::raw_lreg_effect::supported(word), \
                       "unsupported raw SFPU effect; use an explicit typed annotation");         \
-        TT_LLK_SFPRAWLREG_EFFECT(                                                               \
-            __builtin_constant_p(word) ? ckernel::raw_lreg_effect::read(word) : 0xffu,          \
-            __builtin_constant_p(word) ? ckernel::raw_lreg_effect::write(word) : 0xffu);        \
+        [[maybe_unused]] constexpr unsigned tt_llk_reads = __builtin_constant_p(word)           \
+            ? ckernel::raw_lreg_effect::inputs(word) : 0xffu;                                    \
+        [[maybe_unused]] constexpr unsigned tt_llk_writes = __builtin_constant_p(word)          \
+            ? ckernel::raw_lreg_effect::write(word) : 0xffu;                                     \
+        TT_LLK_SFPRAWLREG_EFFECT(tt_llk_reads, tt_llk_writes);                                    \
     } while (0)
 #define TT_LLK_SFPU_ISSUE_TT(word)  do { TT_INSN(word); TT_LLK_SFPU_EFFECT(word); } while (0)
 #define TT_LLK_SFPU_ISSUE_TTI(word) do { TTI_INSN(word); TT_LLK_SFPU_EFFECT(word); } while (0)

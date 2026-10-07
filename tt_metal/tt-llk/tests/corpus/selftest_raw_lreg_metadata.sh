@@ -20,11 +20,16 @@ if [[ ${1:-} == --target-cxx ]]; then
             BH) cpu=tt-bh-tensix ;;
             QSR) cpu=tt-qsr32-tensix ;;
         esac
-        "$target_cxx" -std=c++17 -O2 -mcpu="$cpu" -DTEST_TARGET_EFFECT \
-            -DTEST_DEFAULT_FALLBACK "-DTEST_$arch" -S "$source_file" -o "$scratch/$arch.s"
-        count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
-        [[ $count == 13 ]] || { echo "FAIL: $arch emitted $count effects, expected 13" >&2; exit 1; }
-        echo "PASS: $cpu compiled with 13 real effect markers (not a hardware test)"
+        for opt in -O0 -O2; do
+            "$target_cxx" -std=c++17 "$opt" -mcpu="$cpu" -DTEST_TARGET_EFFECT \
+                -DTEST_DEFAULT_FALLBACK "-DTEST_$arch" -S "$source_file" -o "$scratch/$arch.s"
+            count=$(grep -c '# RAWLREG_EFFECT' "$scratch/$arch.s" || true)
+            [[ $count == 13 ]] || { echo "FAIL: $arch $opt emitted $count effects, expected 13" >&2; exit 1; }
+            if grep -Eq '[[:space:]]call[[:space:]]' "$scratch/$arch.s"; then
+                echo "FAIL: metadata fixture emitted a runtime helper call at $opt" >&2; exit 1
+            fi
+            echo "PASS: $cpu $opt compiled with 13 real effect markers (not a hardware test)"
+        done
     done
     "$target_cxx" -O2 -mcpu=tt-bh-tensix -DUSE_EFFECT -S \
         "$here/raw_lreg_annotation_gap.cpp" -o "$scratch/gap.s"
@@ -32,6 +37,13 @@ if [[ ${1:-} == --target-cxx ]]; then
         echo "FAIL: temporary load must not overwrite raw L0" >&2; exit 1;
     }
     echo "PASS: raw input survives intervening typed load/store (assembly check)"
+    "$target_cxx" -O2 -mcpu=tt-bh-tensix -DUSE_MACRO -S \
+        "$here/raw_lreg_annotation_gap.cpp" -o "$scratch/gap.s"
+    grep -Eq 'SFPLOAD[[:space:]]+L[1-7], 1, 0, 0' "$scratch/gap.s" &&
+        grep -q '# RAWLREG_EFFECT 1, 1' "$scratch/gap.s" || {
+        echo "FAIL: raw write must preserve its old destination for inactive lanes" >&2; exit 1;
+    }
+    echo "PASS: raw destination preserved across typed load/store (assembly check)"
     if [[ $# == 4 ]]; then
         root=$(cd "$here/../../../.." && pwd)
         llk="$root/tt_metal/tt-llk/tt_llk_blackhole"
