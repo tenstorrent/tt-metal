@@ -1208,3 +1208,39 @@
 - claim: FIX (C++ private relink, commit 9a8fd8582e5, defaults ON, =0 restores originals; artifact /mnt/tt-data/ssinghal/mimo/artifacts/moe_B_9a8fd8582e5/lib/_ttnncpp.so): unified_routed_expert_moe now: bf16 x/intermediates/output, fp32 K-loop partials, fp32 DEST accumulation, HiFi3 (HiFi3 == HiFi4 accuracy; HiFi2 not enough); mm path forced to HiFi4+fp32 acc (MIMO_MM_FID=hifi2 for A/B). Gates vs fp32 oracle (alpha, rel(floor), PCC): L1 unified 1.0007/0.0042(0.0027)/0.99999, mm 1.0005/0.0044; L5 unified 1.0014/0.0044(0.0051)/0.99999, mm 1.0006/0.0058; L16 (device capture) unified 1.0038/0.0047/1.0 (alpha excluding the massive token 1.0009; per-slot expert alpha 0.9999), mm 1.0049/0.0055. Layer PCC vs bf16 dump 0.99984-0.99999 (L1, L5, both ops), 5 runs bit-identical. Cost: decode MoE per layer (traced, fast router, host-timed) 1.34 ms original (LoFi) -> 1.56 ms (HiFi3 fp32 DEST/partials) vs 1.78 ms (HiFi4); prefill 512 tok/row unified 2.3 -> 2.8 ms. 47 layers decode: 63 -> 73 ms/token MoE-only
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_H_g_L5_h48_9a8fd8582e5.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+
+## E261007-0749-e14
+- date: 2026-10-07T07:49:43
+- commit: d72e22e2fbf
+- branch: ssinghal/mimo
+- host: 35
+- track: moe
+- status: verified
+- claim: MERGED-COMMIT re-check d72e22e2fbf, test_moe_scale_alpha.py L5 (dump ffn_in + dump routing, real weights bfp8, 4x8, private lib integ_d72e22e2fbf): unified op (fp32 DEST+partials, HiFi3, bf16 act) total vs fp32 CPU oracle alpha 1.0014 rel L2 0.0044 PCC 0.99999 (experts+dispatch+combine alpha 0.9994 rel 0.0020; reduce stage alpha 1.0011); mm path total alpha 1.0006 rel 0.0058; floor (bf16 dump vs oracle) alpha 0.9998 rel 0.0051.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_alpha_L5_h35_d72e22e2fbf.log
+- paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
+- data: {"layer":5,"alpha":1.0014,"rel_l2":0.0044,"pcc":0.99999}
+
+## E261007-0749-bac
+- date: 2026-10-07T07:49:43
+- commit: d72e22e2fbf
+- branch: ssinghal/mimo
+- host: 40
+- track: moe
+- status: verified
+- claim: MERGED-COMMIT re-check d72e22e2fbf, same test, L1: unified total alpha 1.0007 rel L2 0.0042 PCC 0.99999 (experts+dispatch+combine alpha 0.9999); mm total alpha 1.0005 rel 0.0044; floor alpha 0.9998 rel 0.0027.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_alpha_L1_h40_d72e22e2fbf.log
+- paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
+- data: {"layer":1,"alpha":1.0007,"rel_l2":0.0042,"pcc":0.99999}
+
+## E261007-0749-df5
+- date: 2026-10-07T07:49:43
+- commit: d72e22e2fbf
+- branch: ssinghal/mimo
+- host: 47
+- track: moe
+- status: verified
+- claim: MERGED-COMMIT re-check d72e22e2fbf, same test, L16 on the device capture (mimo-device-s128b16; oracle = CPU fp32 on the captured ffn_in and its recorded routing): unified total alpha 1.0038 rel L2 0.0047 PCC 1.00000; experts+dispatch+combine alpha 0.9999 rel 0.0027; the +0.39% is the reduce stage (post_combine_reduce, driven by the massive-activation token); mm total alpha 1.0049. The 'floor' line (alpha 0.9873) is the OLD biased device capture vs the oracle, not an oracle floor at this layer.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_alpha_L16_h47_d72e22e2fbf.log
+- paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
+- data: {"layer":16,"alpha":1.0038,"rel_l2":0.0047,"pcc":1.0}
