@@ -82,13 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // _llk_unpack_A_rmsnorm_mop_config_; SCALAR is what routes the base address to upk0
     // (SrcA) while SrcB is fed a dummy dvalid for the MOVD2B on the math thread.
     _llk_unpack_A_rmsnorm_init_<RMSNORM_NUM_TILES, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-        RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */,
-        RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */,
-        FACE_R_DIM,
-        RMSNORM_NUM_FACES,
-        0,
-        0,
-        RMSNORM_WHOLE_TILE);
+        RMSNORM_UNPACK_FULL_TRANSPOSE /* transpose_of_faces */, RMSNORM_UNPACK_FULL_TRANSPOSE /* within_face_16x16_transpose */, FACE_R_DIM, RMSNORM_NUM_FACES);
 
     // ONE call: the MOP itself walks all RMSNORM_NUM_TILES tiles from this base address.
     _llk_unpack_A_<BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
@@ -130,8 +124,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
         0 /* dst_index */, formats.math, formats.math);
 
-    _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(
-        RMSNORM_NUM_FACES, 0 /* acc_to_dest */, RMSNORM_WHOLE_TILE);
+    _llk_math_rmsnorm_bcast_scalar_dest_reuse_init_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, MATH_FIDELITY>(RMSNORM_NUM_FACES, 0 /* acc_to_dest */);
 
     _llk_math_rmsnorm_bcast_scalar_dest_reuse_<ELTWISE_BINARY_OP, RMSNORM_NUM_TILES, DST_SYNC, is_fp32_dest_acc_en, MATH_FIDELITY, RMSNORM_CLEAR_DEST>(
         0 /* src_index */, 0 /* dst_index */);

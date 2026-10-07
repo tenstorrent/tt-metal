@@ -28,15 +28,12 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 BF16 = DataFormat.Float16_b
 
-# (op, fidelity, tiles per row, clear_dest, whole_tile)
+# (op, fidelity, tiles per row, clear_dest)
 VARIANTS = []
 for num_tiles in (1, 2, 4, 8):
     for fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4):
-        VARIANTS.append((MathOperation.Elwmul, fidelity, num_tiles, True, False))
-    VARIANTS.append((MathOperation.Elwadd, MathFidelity.LoFi, num_tiles, False, False))
-    for fidelity in (MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4):
-        VARIANTS.append((MathOperation.Elwmul, fidelity, num_tiles, True, True))
-VARIANTS.append((MathOperation.Elwmul, MathFidelity.HiFi3, 1, True, False))
+        VARIANTS.append((MathOperation.Elwmul, fidelity, num_tiles, True))
+    VARIANTS.append((MathOperation.Elwadd, MathFidelity.LoFi, num_tiles, False))
 
 
 @pytest.mark.perf
@@ -44,7 +41,7 @@ VARIANTS.append((MathOperation.Elwmul, MathFidelity.HiFi3, 1, True, False))
 def test_perf_rmsnorm_bcast_scalar_dest_reuse(perf_report, variant):
     if len(variant) == 1:  # parametrize hands a single axis as a one-element tuple
         (variant,) = variant
-    mathop, fidelity, num_tiles, clear_dest, whole_tile = variant
+    mathop, fidelity, num_tiles, clear_dest = variant
     configuration = PerfConfig(
         "sources/rmsnorm_bcast_scalar_dest_reuse_perf.cpp",
         InputOutputFormat(BF16, BF16),
@@ -61,7 +58,6 @@ def test_perf_rmsnorm_bcast_scalar_dest_reuse(perf_report, variant):
                 rmsnorm_num_faces=4,
                 clear_dest=clear_dest,
                 unpack_full_transpose=False,
-                rmsnorm_whole_tile=whole_tile,
             ),
         ],
         runtimes=[TILE_COUNT(num_tiles), LOOP_FACTOR(128)],

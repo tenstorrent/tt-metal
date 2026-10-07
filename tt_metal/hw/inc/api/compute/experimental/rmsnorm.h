@@ -55,19 +55,9 @@ template <
     MathFidelity math_fidelity,
     bool unpack_full_transpose = false>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles_init_fidelity(uint32_t icb0) {
-    // Above LoFi the multiply sweeps whole tiles per fidelity phase. A one-tile HiFi2 call keeps the per-face hand-off,
-    // whose overlap with the unpack outweighs the shorter sweep.
-    constexpr bool whole_tile = eltwise_binary_type == EltwiseBinaryType::ELWMUL && !unpack_full_transpose &&
-                                (math_fidelity == MathFidelity::HiFi3 || math_fidelity == MathFidelity::HiFi4 ||
-                                 (math_fidelity == MathFidelity::HiFi2 && num_tiles > 1));
-    UNPACK((llk_unpack_A_rmsnorm_init<
-            num_tiles,
-            BroadcastType::SCALAR,
-            true,
-            EltwiseBinaryReuseDestType::DEST_TO_SRCB,
-            false,
-            whole_tile>(unpack_full_transpose /*transpose_of_faces*/, unpack_full_transpose /*within_face_16x16_transpose*/, icb0)));
-    MATH((llk_math_rmsnorm_bcast_scalar_dest_reuse_init_with_operands<eltwise_binary_type, num_tiles, math_fidelity, whole_tile>(
+    UNPACK((llk_unpack_A_rmsnorm_init<num_tiles, BroadcastType::SCALAR, true, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+        unpack_full_transpose /*transpose_of_faces*/, unpack_full_transpose /*within_face_16x16_transpose*/, icb0)));
+    MATH((llk_math_rmsnorm_bcast_scalar_dest_reuse_init_with_operands<eltwise_binary_type, num_tiles, math_fidelity>(
         icb0, icb0, false /*acc_to_dest*/)));
 }
 

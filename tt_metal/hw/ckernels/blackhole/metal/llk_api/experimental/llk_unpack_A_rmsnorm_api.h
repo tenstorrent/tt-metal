@@ -17,8 +17,7 @@ template <
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false,
-    bool whole_tile = false>
+    bool unpack_to_dest = false>
 inline void llk_unpack_A_rmsnorm_init(
     const std::uint32_t transpose_of_faces,
     const std::uint32_t within_face_16x16_transpose,
@@ -37,6 +36,5 @@ inline void llk_unpack_A_rmsnorm_init(
         face_r_dim,
         num_faces,
         operand_unpack_src_format,
-        operand_unpack_dst_format,
-        whole_tile && face_r_dim == FACE_R_DIM && num_faces > 1);
+        operand_unpack_dst_format);
 }
