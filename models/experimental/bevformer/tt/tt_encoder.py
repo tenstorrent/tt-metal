@@ -28,7 +28,7 @@ from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     build_rebatch_plan,
     update_rebatch_plan,
 )
-from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention, tsa_grid_bias
+from models.experimental.bevformer.tt.tt_temporal_self_attention import TTTemporalSelfAttention
 
 
 class TTBEVFormerLayer:
@@ -77,7 +77,7 @@ class TTBEVFormerLayer:
         )
 
     def __call__(self, query, value, bev_pos, prev_bev, grid_bias, sca_frame):
-        """``grid_bias`` from :func:`tsa_grid_bias`, ``sca_frame`` from
+        """``grid_bias`` as ``tt_temporal_self_attention.tsa_grid_bias`` lays it out, ``sca_frame`` from
         ``TTSpatialCrossAttention.frame_inputs``; both shared by every layer of a frame."""
         query = self.temporal_self_attention(query, prev_bev, bev_pos, grid_bias)
         query = layer_norm(query, self.params.norms[0])
@@ -119,8 +119,16 @@ class TTBEVFormerEncoder:
         self.num_points_in_pillar = config.num_points_in_pillar
         self.pc_range = list(config.pc_range)
         self.num_keys = sum(h * w for h, w in spatial_shapes)
-        self._ref_2d = ttnn.from_torch(
-            bev_reference_points(bev_h, bev_w, 1), device=device, dtype=GRID_DTYPE, layout=ttnn.ROW_MAJOR_LAYOUT
+        # The self-attention's grid bias, ``2 * ref - 1`` in its offset Linear's queue-major channels
+        # (tsa_grid_bias), depends on the BEV grid only; a frame adds its ego shift to the previous
+        # BEV's half.
+        channels_per_map = self.num_heads * self.tsa_num_points
+        base = (2 * bev_reference_points(bev_h, bev_w, 1) - 1).expand(-1, -1, 2 * channels_per_map, -1)
+        self._tsa_grid_base = ttnn.from_torch(
+            base.reshape(1, bev_h * bev_w, 2 * channels_per_map * 2),
+            device=device,
+            dtype=GRID_DTYPE,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         grid_sample_compute_config = fp32_grid_sample_config(device)
         self.layers = [
@@ -166,22 +174,22 @@ class TTBEVFormerEncoder:
         assert num_query == self.bev_h * self.bev_w, f"{num_query} queries for a {self.bev_h}x{self.bev_w} BEV"
         assert value.shape[1] == self.num_keys, f"{value.shape[1]} keys, expected {self.num_keys}"
 
-        ref_2d = self._ref_2d if bs == 1 else ttnn.repeat(self._ref_2d, ttnn.Shape((bs, 1, 1, 1)))
+        grid_bias = self._tsa_grid_base if bs == 1 else ttnn.repeat(self._tsa_grid_base, ttnn.Shape((bs, 1, 1)))
         if prev_bev is not None:
             if shift is not None:
                 assert (
                     tuple(shift.shape) == (bs, 1, 1, 2) and shift.dtype == GRID_DTYPE
                 ), f"shift must be {GRID_DTYPE} (bs, 1, 1, 2), got {shift.dtype} {tuple(shift.shape)}"
-            previous_ref = ref_2d if shift is None else ttnn.add(ref_2d, shift)
-            # Per sample, the previous BEV's points (ego-shifted) then the current queries' points.
-            hybrid_ref = ttnn.concat([ttnn.unsqueeze(previous_ref, 1), ttnn.unsqueeze(ref_2d, 1)], dim=1)
+                # The previous BEV's points are ego-shifted: 2 * shift on its (head, point) channels,
+                # the first half of each row; the current queries' half stays.
+                channels_per_map = self.num_heads * self.tsa_num_points
+                shift_bias = ttnn.repeat(ttnn.mul(shift, 2.0), ttnn.Shape((1, 1, channels_per_map, 1)))
+                shift_bias = ttnn.reshape(shift_bias, (bs, 1, channels_per_map * 2))
+                shift_bias = ttnn.pad(shift_bias, [(0, 0), (0, 0), (0, channels_per_map * 2)], 0.0)
+                grid_bias = ttnn.add(grid_bias, shift_bias)
             # The previous BEV is paired with the encoder's input query, not each layer's input.
             prev_bev = ttnn.concat([ttnn.unsqueeze(prev_bev, 1), ttnn.unsqueeze(bev_query, 1)], dim=1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, num_query, embed_dims))
-        else:
-            hybrid_ref = ttnn.concat([ttnn.unsqueeze(ref_2d, 1), ttnn.unsqueeze(ref_2d, 1)], dim=1)
-        hybrid_ref = ttnn.reshape(hybrid_ref, (bs * 2, num_query, 1, 2))
-        grid_bias = tsa_grid_bias(hybrid_ref, self.num_heads, self.tsa_num_points, GRID_DTYPE)
         # Every layer's cross-attention has the same heads, levels and points, so the first layer's
         # frame inputs serve them all. Built here, inside the (traced) forward, from the plan.
         sca_frame = self.layers[0].spatial_cross_attention.frame_inputs(plan)
