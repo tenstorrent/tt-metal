@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from loguru import logger
 
@@ -382,7 +384,7 @@ class Transformer(TTTransformer):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
             attention_class=Attention,
-            rope_setup_class=RotarySetup,
+            rope_setup_class=None if os.environ.get("TT_QWEN_UPSTREAM_ROPE") == "1" else RotarySetup,  # EXPERIMENT
         )
 
     def _prepare_cos_sin(self, rot_mats):
@@ -397,7 +399,7 @@ class Transformer(TTTransformer):
                     mat.expand(cos_matrix.shape[0], -1, -1, -1),
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
-                    dtype=self.rope_setup.datatype,
+                    dtype=getattr(self.rope_setup, "datatype", ttnn.bfloat16),
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 ),
             )
@@ -434,14 +436,14 @@ class Transformer(TTTransformer):
             cos_matrix.expand(cos_matrix.shape[0], -1, -1, -1),
             device=None,
             layout=ttnn.TILE_LAYOUT,
-            dtype=self.rope_setup.datatype,
+            dtype=getattr(self.rope_setup, "datatype", ttnn.bfloat16),
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         host_sin = ttnn.from_torch(
             sin_matrix.expand(sin_matrix.shape[0], -1, -1, -1),
             device=None,
             layout=ttnn.TILE_LAYOUT,
-            dtype=self.rope_setup.datatype,
+            dtype=getattr(self.rope_setup, "datatype", ttnn.bfloat16),
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
