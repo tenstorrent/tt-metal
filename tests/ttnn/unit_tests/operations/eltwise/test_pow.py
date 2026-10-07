@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import struct
 import torch
 import pytest
@@ -629,3 +630,180 @@ def test_pow_arange_masking_fp32(exponent, device):
     golden = flush_subnormal_values_to_zero(golden)
 
     assert_allclose(golden, result, atol=5e-4, rtol=8e-7)
+
+
+# fp32 accuracy of pow(tensor, tensor), pow(tensor, scalar) and rpow when |y * log2(x)| is large.
+# The kernels compute 2**(y * log2|x|); an error in log2|x| reaches the result multiplied by |y|,
+# so these sweeps go up to |y * log2 x| = 126 with |y| up to 2**15. The golden is torch pow in
+# float64 on the exact fp32 inputs, rounded once to fp32. The distance is counted in representable
+# fp32 values, so a wrong sign fails it. Only finite normal results with a normal base are
+# compared: subnormal results flush to zero on store. (assert_with_ulp has no lane mask or percentile.)
+def _pow_fp32_ulp_distance(base, exponent, actual):
+    def ordinal(t):
+        bits = t.to(torch.float32).contiguous().view(torch.int32).to(torch.int64)
+        return torch.where(bits < 0, -(2**31) - bits, bits)
+
+    base = base.to(torch.float32).reshape(-1)
+    exponent = exponent.to(torch.float32).reshape(-1).expand_as(base)
+    golden = torch.pow(base.to(torch.float64), exponent.to(torch.float64)).to(torch.float32)
+    tiny = torch.finfo(torch.float32).tiny
+    mask = torch.isfinite(golden) & (golden.abs() >= tiny) & (base.abs() >= tiny)
+    actual = actual.to(torch.float32).reshape(-1)
+    return (ordinal(actual[mask]) - ordinal(golden[mask])).abs()
+
+
+def _assert_ulp_stats(ulp, max_ulp, p99_ulp=None):
+    assert ulp.numel() > 0
+    worst = int(ulp.max())
+    assert worst <= max_ulp, f"max {worst} ULP > {max_ulp}"
+    if p99_ulp is not None:
+        p99 = float(torch.quantile(ulp.to(torch.float64), 0.99))
+        assert p99 <= p99_ulp, f"p99 {p99} ULP > {p99_ulp}"
+
+
+@pytest.mark.parametrize(
+    "abs_exponent_range, max_ulp, p99_ulp",
+    [((2.5, 32.0), 3, None), ((2.5, 32768.0), 8, 2)],
+    ids=["abs_y_le_32", "abs_y_le_2pow15"],
+)
+def test_binary_pow_fp32_ulp_large_exponent(abs_exponent_range, max_ulp, p99_ulp, device):
+    gen = torch.Generator().manual_seed(1)
+    n = 1 << 20
+    lo, hi = abs_exponent_range
+    # |y| log-uniform in [lo, hi] with a random sign, y * log2(x) uniform in [-126, 126]
+    log2_abs_y = torch.empty(n, dtype=torch.float64).uniform_(math.log2(lo), math.log2(hi), generator=gen)
+    sign = torch.where(torch.rand(n, generator=gen) < 0.5, -1.0, 1.0).to(torch.float64)
+    exponent = (sign * torch.exp2(log2_abs_y)).to(torch.float32)
+    z = torch.empty(n, dtype=torch.float64).uniform_(-126.0, 126.0, generator=gen)
+    base = torch.exp2(z / exponent.to(torch.float64)).to(torch.float32)
+
+    shape = (1, 1, 1024, 1024)
+    tt_base = ttnn.from_torch(base.reshape(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_exp = ttnn.from_torch(exponent.reshape(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+
+    _assert_ulp_stats(_pow_fp32_ulp_distance(base, exponent, result), max_ulp, p99_ulp)
+
+
+@pytest.mark.parametrize("exponent", [4.0, 5.0, 10.0, 16.0, 31.0, 33.3, 100.0, 127.0, -10.0])
+def test_unary_pow_fp32_ulp_large_exponent(exponent, device):
+    gen = torch.Generator().manual_seed(2)
+    lim = 126.0 / abs(exponent)
+    base = torch.exp2(torch.empty(1 << 16, dtype=torch.float64).uniform_(-lim, lim, generator=gen)).to(torch.float32)
+
+    tt_base = ttnn.from_torch(base.reshape(1, 1, 256, 256), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+
+    exponent_fp32 = torch.tensor([exponent], dtype=torch.float32)
+    _assert_ulp_stats(_pow_fp32_ulp_distance(base, exponent_fp32, result), 4)
+
+
+@pytest.mark.parametrize("base", [0.9, 1.1, 2.5, 10.0])
+def test_rpow_fp32_ulp_large_exponent(base, device):
+    gen = torch.Generator().manual_seed(3)
+    base_fp32 = torch.tensor([base], dtype=torch.float32)
+    lim = 125.0 / abs(math.log2(base_fp32.item()))
+    exponent = torch.empty(1 << 16, dtype=torch.float64).uniform_(-lim, lim, generator=gen).to(torch.float32)
+
+    tt_exp = ttnn.from_torch(
+        exponent.reshape(1, 1, 256, 256), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    result = ttnn.to_torch(ttnn.rpow(tt_exp, base))
+
+    _assert_ulp_stats(_pow_fp32_ulp_distance(base_fp32.expand(exponent.shape), exponent, result), 2)
+
+
+# Integer exponents other than 0..3 (those take POWER_ITERATIVE) go through the same log2/exp2
+# kernel, and the sign of a negative base's result follows the exponent's parity.
+@pytest.mark.parametrize("binary", [True, False], ids=["binary", "unary"])
+def test_pow_fp32_ulp_integer_exponent(binary, device):
+    gen = torch.Generator().manual_seed(4)
+    n = 1 << 14
+    shape = (1, 1, 128, 128)
+    for k in list(range(4, 17)) + list(range(-16, 0)):
+        lim = 126.0 / abs(k)
+        sign = torch.where(torch.rand(n, generator=gen) < 0.5, -1.0, 1.0).to(torch.float64)
+        magnitude = torch.exp2(torch.empty(n, dtype=torch.float64).uniform_(-lim, lim, generator=gen))
+        base = (sign * magnitude).to(torch.float32)
+        exponent = torch.full((n,), float(k), dtype=torch.float32)
+
+        tt_base = ttnn.from_torch(base.reshape(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        if binary:
+            tt_exp = ttnn.from_torch(
+                exponent.reshape(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+            )
+            result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+        else:
+            result = ttnn.to_torch(ttnn.pow(tt_base, float(k)))
+
+        worst = int(_pow_fp32_ulp_distance(base, exponent, result).max())
+        assert worst <= 2, f"exponent {k}: max {worst} ULP > 2"
+
+
+FLT_MAX = torch.finfo(torch.float32).max
+
+
+# |y| so large that y * log2|x| is far outside the fp32 exponent range (#55129): x = 1 gives 1 and
+# every other base saturates to 0 or inf, as IEEE 754 pow does. FLT_MAX is past 0x7F7F8000, where an
+# 8-bit rounding of y itself would reach inf.
+# The unary cases rely on pow(Tensor, float) in binary_composite_op.cpp casting floor(y) to int32, which is
+# undefined for |y| > INT_MAX (x86 gives INT_MIN, so they reach the float kernel; UBSan would stop there).
+@pytest.mark.parametrize("binary", [True, False], ids=["binary", "unary"])
+@pytest.mark.parametrize(
+    "base, exponent, expected",
+    [
+        (1.0, 1e35, 1.0),
+        (1.0, -1e35, 1.0),
+        (0.5, 1e35, 0.0),
+        (2.0, -1e35, 0.0),
+        (2.0, 1e35, float("inf")),
+        (0.5, -1e35, float("inf")),
+        (0.9, 2e35, 0.0),
+        (10.0, -1e36, 0.0),
+        (1.0, FLT_MAX, 1.0),
+        (1.0, -FLT_MAX, 1.0),
+        (0.5, FLT_MAX, 0.0),
+        (2.0, -FLT_MAX, 0.0),
+        (10.0, FLT_MAX, float("inf")),
+    ],
+)
+def test_pow_fp32_huge_exponent(base, exponent, expected, binary, device):
+    torch_base = torch.full((32, 32), base, dtype=torch.float32)
+    tt_base = ttnn.from_torch(torch_base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if binary:
+        torch_exp = torch.full((32, 32), exponent, dtype=torch.float32)
+        tt_exp = ttnn.from_torch(torch_exp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+    else:
+        result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+    assert (result == expected).all(), f"pow({base}, {exponent}) = {result.flatten()[0].item()}, expected {expected}"
+
+
+# A result below the smallest normal fp32 must flush to 0, not wrap to NaN through the exponent
+# field (#57446).
+@pytest.mark.parametrize("binary", [True, False], ids=["binary", "unary"])
+@pytest.mark.parametrize(
+    "base, exponent",
+    [
+        (0.1, 1000.0),
+        (0.003813433460891247, 291.2920227050781),
+        (5.8008667314091156e-11, 115.76145935058594),
+        (0.16287973523139954, 48.50807189941406),
+        (3.4e38, -3.0),
+        (-0.1, 1000.0),
+    ],
+)
+def test_pow_fp32_underflow_to_zero(base, exponent, binary, device):
+    torch_base = torch.full((32, 32), base, dtype=torch.float32)
+    golden = torch.pow(torch_base.to(torch.float64), exponent)
+    assert (golden.abs() < torch.finfo(torch.float32).tiny).all()  # sanity: below the smallest normal fp32
+
+    tt_base = ttnn.from_torch(torch_base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    if binary:
+        torch_exp = torch.full((32, 32), exponent, dtype=torch.float32)
+        tt_exp = ttnn.from_torch(torch_exp, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        result = ttnn.to_torch(ttnn.pow(tt_base, tt_exp))
+    else:
+        result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
+    assert not torch.isnan(result).any(), "underflow produced NaN instead of flushing to 0"
+    assert (result == 0.0).all()
