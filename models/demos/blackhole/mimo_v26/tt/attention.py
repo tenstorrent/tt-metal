@@ -83,6 +83,12 @@ def convert_weights(cfg: LayerCfg, q_w, k_w, v_w, o_w, sink=None):
     return out
 
 
+def _pad8(t):
+    """pad the last dim to a multiple of 8 int32 entries (page table stick size must be a multiple of 32 bytes)"""
+    n = t.shape[-1]
+    return torch.nn.functional.pad(t, (0, (-n) % 8))
+
+
 def _k_hifi4():
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
@@ -142,7 +148,7 @@ class MiMoAttention:
         zeros = torch.zeros(nblocks, 1, BLOCK, DQK)
         self.k_cache = up(zeros, ttnn.bfloat16, rep)
         self.v_cache = up(zeros, ttnn.bfloat16, rep)
-        self.pt_dec = up(self.page_table, ttnn.int32, rep, ttnn.ROW_MAJOR_LAYOUT)
+        self.pt_dec = up(_pad8(self.page_table), ttnn.int32, rep, ttnn.ROW_MAJOR_LAYOUT)
         grid = mesh.compute_with_storage_grid_size()
         self.dec_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid, q_chunk_size=0, k_chunk_size=128, exp_approx_mode=False
@@ -201,7 +207,9 @@ class MiMoAttention:
             S=S,
             rope_idx=self._persist(torch.zeros(1, S, dtype=torch.int32), ttnn.uint32),
             fill_pt=self._persist(torch.zeros(1, S // BLOCK, dtype=torch.int32), ttnn.int32),
-            sdpa_pt=self._persist(torch.zeros(1, self.nlog, dtype=torch.int32), ttnn.int32),
+            sdpa_pt=self._persist(
+                torch.zeros(1, _pad8(torch.zeros(1, self.nlog)).shape[-1], dtype=torch.int32), ttnn.int32
+            ),
             start=self._persist(torch.zeros(1, dtype=torch.int32), ttnn.int32),
         )
 
@@ -215,7 +223,7 @@ class MiMoAttention:
                 torch.arange(chunk_start, chunk_start + S, dtype=torch.int32).reshape(1, S), ttnn.uint32
             ),
             fill_pt=self._host(full[nb0 : nb0 + S // BLOCK].reshape(1, -1).to(torch.int32), ttnn.int32),
-            sdpa_pt=self._host(full.reshape(1, -1).to(torch.int32), ttnn.int32),
+            sdpa_pt=self._host(_pad8(full.reshape(1, -1).to(torch.int32)), ttnn.int32),
             start=self._host(torch.tensor([chunk_start], dtype=torch.int32), ttnn.int32),
         )
         for k, h in host.items():
