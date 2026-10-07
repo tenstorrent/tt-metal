@@ -35,6 +35,15 @@ void OptimizerBase::restore_initial_lr(const serialization::StateDict& dict) {
     m_initial_lr = serialization::get_value_type<float>(dict, "initial_lr");
 }
 
+void restore_topology(
+    std::initializer_list<autograd::TensorPtr> written, const tt::tt_metal::TensorTopology& topology) {
+    for (const auto& tensor_ptr : written) {
+        auto value = tensor_ptr->get_value(autograd::PreferredPrecision::NATIVE);  // the tensor the step stored
+        value.update_tensor_topology(topology);
+        tensor_ptr->set_value(value);
+    }
+}
+
 void OptimizerBase::print_stats() const {
     fmt::print("\n\nOptimization parameters values and gradients:\n");
     for (const auto& [name, tensor] : m_parameters) {

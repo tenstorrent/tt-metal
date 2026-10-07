@@ -50,7 +50,7 @@ void SGDComposite::step() {
         auto gradients = tensor_ptr->get_grad();
 
         // By value: the ttnn::add/subtract below relabel their outputs with the union of their inputs, gradient
-        // included (see core::with_tensor_topology). The momentum buffer follows the parameter's distribution.
+        // included (see optimizers::restore_topology). The momentum buffer follows the parameter's distribution.
         const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         if (m_config.weight_decay != 0.0F) {
@@ -96,15 +96,14 @@ void SGDComposite::step() {
                 gradients = theta;
             }
         }
-        theta_ptr->set_value(core::with_tensor_topology(theta, topology));
-        tensor_ptr->set_value(core::with_tensor_topology(
-            ttnn::subtract(
-                tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
-                ttnn::multiply(
-                    gradients,
-                    m_config.lr,
-                    /* fast_and_approximate_mode*/ true)),
-            topology));
+        theta_ptr->set_value(theta);
+        tensor_ptr->set_value(ttnn::subtract(
+            tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
+            ttnn::multiply(
+                gradients,
+                m_config.lr,
+                /* fast_and_approximate_mode*/ true)));
+        restore_topology({tensor_ptr, theta_ptr}, topology);
     }
     m_steps++;
 }

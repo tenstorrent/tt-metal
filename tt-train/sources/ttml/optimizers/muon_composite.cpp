@@ -76,15 +76,15 @@ void MuonComposite::step() {
         const auto gradients = tensor_ptr->get_grad();
 
         // By value: ttnn::add/subtract relabel their outputs with the union of their inputs, gradient included
-        // (see core::with_tensor_topology). The momentum buffer follows the parameter's distribution.
+        // (see optimizers::restore_topology). The momentum buffer follows the parameter's distribution.
         const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         if (m_steps > 0 && m_config.momentum != 0.0F) {
             buffer = ttnn::multiply(buffer, m_config.momentum);
             buffer = ttnn::add(buffer, gradients);
         } else {
-            // A copy rather than the gradient itself: Tensor copies share their attributes, so pinning an alias of
-            // the gradient below would relabel the caller's gradient as well.
+            // A copy rather than the gradient itself: Tensor copies share their attributes, so restoring the
+            // buffer's label below would otherwise relabel the caller's gradient as well.
             buffer = ttnn::clone(
                 gradients,
                 /* dtype */ std::nullopt,
@@ -92,15 +92,13 @@ void MuonComposite::step() {
                 /* compute_kernel_config */ std::nullopt);
         }
 
-        buffer_ptr->set_value(core::with_tensor_topology(buffer, topology));
+        buffer_ptr->set_value(buffer);
 
         const auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
 
-        tensor_ptr->set_value(core::with_tensor_topology(
-            ttnn::subtract(
-                tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
-                ttnn::multiply(update_direction, m_config.lr)),
-            topology));
+        tensor_ptr->set_value(ttnn::subtract(
+            tensor_ptr->get_value(autograd::PreferredPrecision::HALF), ttnn::multiply(update_direction, m_config.lr)));
+        restore_topology({tensor_ptr, buffer_ptr}, topology);
     }
     m_steps++;
 }

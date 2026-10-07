@@ -18,17 +18,6 @@ void print_tensor_stats(const ttnn::Tensor& tensor, const std::string& name);
 ttnn::Tensor zeros_like(const ttnn::Tensor& tensor);
 ttnn::Tensor ones_like(const ttnn::Tensor& tensor);
 
-// Returns `value` relabelled with `topology`.
-//
-// Every ttnn device op relabels its outputs with the UNION of its inputs' mesh topologies (see
-// ttnn::device_operation::detail::compute_output_placements_and_shape), including outputs that alias a
-// caller-owned tensor. An optimizer step therefore lets the gradient's label leak into the parameter and its
-// state: a gradient carrying a stale Shard from a CCL, or a collapsed 1-D label from a default mapper, relabels
-// the parameter that the checkpointer later gathers by that label. Capture the parameter's topology BY VALUE
-// before the update -- Tensor::tensor_topology() returns a reference into the shared tensor attributes that the
-// op overwrites -- and restore it on every tensor handed back to set_value with this helper.
-ttnn::Tensor with_tensor_topology(ttnn::Tensor value, const tt::tt_metal::TensorTopology& topology);
-
 ttnn::Tensor empty(
     const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const ttnn::MemoryConfig& memory_config);
 ttnn::Tensor full(
