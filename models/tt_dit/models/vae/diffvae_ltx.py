@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from dataclasses import dataclass
 
 import torch
@@ -126,8 +127,14 @@ class DiffVAEOptions:
     @classmethod
     def production(cls, *, slab_frames: int | None = 78, tp_heads: bool = True) -> DiffVAEOptions:
         """The 4x8 1080p configuration the runner scripts ship: both halves W-sharded on the bricked
-        executor over the columns axis, TP-over-heads on the rows axis, every fusion on."""
+        executor over the columns axis, TP-over-heads on the rows axis, every fusion on.
+
+        ``DIFFVAE_GNA_STRIDE=t,h,w`` opts into a strided stage 5; it changes the output, so the
+        shipped architecture's (1, 1, 1) stays the default."""
         tp_axis = 0 if tp_heads else None
+        stride = tuple(int(v) for v in os.environ.get("DIFFVAE_GNA_STRIDE", "1,1,1").split(","))
+        if len(stride) != 3:
+            raise ValueError(f"DIFFVAE_GNA_STRIDE needs three comma-separated ints, got {stride}")
         return cls(
             stage5_backend="bricked_sp_w_sharded",
             stage5_sp_axis=1,
@@ -137,6 +144,7 @@ class DiffVAEOptions:
             stages_tp_axis=tp_axis,
             det=DetBlockOptions(fused_qkv=True, colpar_qkv=True, fused_rope=True, fused_swiglu=True),
             stage5_fused_qkv=True,
+            gna_stride=stride,
             slab_frames=slab_frames,
             device_boundaries=True,
         )
