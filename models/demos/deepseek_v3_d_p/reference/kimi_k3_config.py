@@ -70,6 +70,11 @@ class KimiK3Config:
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
+    # Routed experts on flat_routed_expert (tt/moe/tt_flat_routed_expert.py): one spatially pipelined program
+    # per chip that streams each local expert's weights once. At 3584x3072 SiTU it measured 1.47x / 1.19x /
+    # 1.30x the faster existing op at 32 / 512 / 2048 tokens per expert (one Blackhole, balanced experts).
+    # $TT_DS_PREFILL_ROUTED_EXPERT_IMPL=unified runs the unified path instead.
+    ROUTED_EXPERT_IMPL = "flat"
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by

@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENAB
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_flat_routed_expert import TtFlatRoutedExpert, flat_routed_expert_supported
 from models.demos.deepseek_v3_d_p.tt.moe.tt_latent_proj import TtLatentMoeProjections
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
@@ -210,6 +211,7 @@ class TtMoe(LightweightModule):
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
         routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
+        routed_expert_impl: str = "unified",
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -313,6 +315,13 @@ class TtMoe(LightweightModule):
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
                 K-row; interleaved elsewhere. Passed straight through; the cache is placement-
                 agnostic, so this never invalidates one.
+            routed_expert_impl: which op runs the routed experts. "unified" (default) is TtRoutedExpert
+                (unified_routed_expert_moe, plus moe_fused_swiglu under a hybrid threshold). "flat" is
+                TtFlatRoutedExpert (flat_routed_expert: one spatially pipelined program streaming every local
+                expert's weights once). Same inputs and output, so dispatch and combine are unchanged; the
+                hybrid threshold and the weight DRAM placement do not apply to it. Where the flat op cannot run
+                (not Blackhole, < 256 tokens per expert of capacity, > 64 local experts, an unsupported
+                activation / dtype) it logs why and falls back to "unified".
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -520,22 +529,55 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
         # Initialize routed expert
-        self.routed_expert = TtRoutedExpert(
-            mesh_device=mesh_device,
-            experts_per_chip=experts_per_chip,
-            global_expert_idx_table=global_expert_idx_tt,
-            emb_dim=self.routed_emb_dim,
-            hidden_dim=hidden_dim,
-            max_tokens=max_dispatched_tokens_per_expert,
-            torch_weights=routed_expert_weights,
-            activations_dtype=routed_expert_activations_dtype,
-            weights_dtype=routed_expert_weights_dtype,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.routed_expert",
-            activation=routed_expert_activation,
-            hybrid_token_threshold=routed_expert_hybrid_token_threshold,
-            weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
-        )
+        if routed_expert_impl not in ("unified", "flat"):
+            raise ValueError(f"routed_expert_impl must be 'unified' or 'flat', got {routed_expert_impl!r}")
+        if routed_expert_impl == "flat":
+            reason = flat_routed_expert_supported(
+                mesh_device,
+                routed_expert_activation,
+                routed_expert_weights_dtype,
+                self.routed_emb_dim,
+                max_dispatched_tokens_per_expert,
+                has_biases=False,
+                experts_per_chip=experts_per_chip,
+            )
+            if reason is not None:
+                logger.warning(f"TtMoe layer {layer_idx}: flat routed expert unavailable ({reason}); using unified")
+                routed_expert_impl = "unified"
+        self.routed_expert_impl = routed_expert_impl
+        if routed_expert_impl == "flat":
+            self.routed_expert = TtFlatRoutedExpert(
+                mesh_device=mesh_device,
+                experts_per_chip=experts_per_chip,
+                num_routed_experts=num_routed_experts,
+                dispatch_group_size=dispatch_group_size,
+                num_dispatch_groups=num_dispatch_groups,
+                emb_dim=self.routed_emb_dim,
+                hidden_dim=hidden_dim,
+                max_tokens=max_dispatched_tokens_per_expert,
+                torch_weights=routed_expert_weights,
+                weights_dtype=routed_expert_weights_dtype,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+                activation=routed_expert_activation,
+            )
+        else:
+            self.routed_expert = TtRoutedExpert(
+                mesh_device=mesh_device,
+                experts_per_chip=experts_per_chip,
+                global_expert_idx_table=global_expert_idx_tt,
+                emb_dim=self.routed_emb_dim,
+                hidden_dim=hidden_dim,
+                max_tokens=max_dispatched_tokens_per_expert,
+                torch_weights=routed_expert_weights,
+                activations_dtype=routed_expert_activations_dtype,
+                weights_dtype=routed_expert_weights_dtype,
+                weight_cache_path=weight_cache_path,
+                cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+                activation=routed_expert_activation,
+                hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+                weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
+            )
 
         # Initialize shared expert (col axis: axis 1)
         self.shared_expert = TtSharedExpert(

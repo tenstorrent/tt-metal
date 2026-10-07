@@ -9,6 +9,7 @@ add_subdirectory(csa_compressor)
 add_subdirectory(dispatch)
 add_subdirectory(dispatch_fabric2d)
 add_subdirectory(extract)
+add_subdirectory(flat_routed_expert)
 add_subdirectory(hybrid_routed_expert_ffn)
 add_subdirectory(inbound_socket_service_sync)
 add_subdirectory(insert)
@@ -46,6 +47,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
+        TTNN::Ops::Experimental::DeepSeekPrefill::FlatRoutedExpert
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
         TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
@@ -90,6 +92,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::DispatchFabric2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::FlatRoutedExpert>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::HybridRoutedExpertFfn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>

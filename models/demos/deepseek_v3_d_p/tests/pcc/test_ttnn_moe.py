@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.tt_flat_routed_expert import resolve_routed_expert_impl
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
@@ -139,6 +140,7 @@ def run_model(
     gate_up_scale=1.0,
     score_func=None,
     skip_upstream_reference=False,
+    routed_expert_impl=None,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -539,6 +541,9 @@ def run_model(
         routed_expert_hybrid_token_threshold=getattr(
             variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
         ),
+        # Same source as TtPrefillBlock (flat on the models whose config names it, unless overridden by env).
+        # A test that borrows another variant's gate config passes its own model's choice.
+        routed_expert_impl=routed_expert_impl or resolve_routed_expert_impl(variant.model_config),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
@@ -1059,6 +1064,8 @@ def test_glm_moe(
         request,
         is_balanced=is_balanced,
         padded_percent=padded_percent,
+        # The variant is DSv3's for its gate config only; the routed experts are GLM-5.3's.
+        routed_expert_impl=resolve_routed_expert_impl(GLM53Config),
     )
 
 

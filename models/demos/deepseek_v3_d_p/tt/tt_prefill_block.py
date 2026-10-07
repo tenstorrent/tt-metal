@@ -16,6 +16,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_flat_routed_expert import resolve_routed_expert_impl
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
@@ -492,6 +493,8 @@ class TtPrefillBlock(LightweightModule):
             # Absent on the models whose routed-expert shape never favours the composite, so
             # they keep the single-op path rather than paying a second dispatch for nothing.
             routed_expert_hybrid_token_threshold=getattr(model_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
+            # The model config's ROUTED_EXPERT_IMPL ("flat" on Kimi-K2.7 / K3 and GLM-5.3), overridable per run.
+            routed_expert_impl=resolve_routed_expert_impl(model_cfg),
             shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
             latent_weights=state_dict.get("latent_weights"),  # None if cache exists
             latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),

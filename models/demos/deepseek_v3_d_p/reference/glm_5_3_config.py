@@ -30,6 +30,11 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Routed experts on flat_routed_expert (tt/moe/tt_flat_routed_expert.py): one spatially pipelined program
+    # per chip that streams each local expert's weights once. At 6144x2048 it measured 1.48x / 1.12x / 1.29x
+    # the faster existing op at 32 / 512 / 2048 tokens per expert (one Blackhole, x pre-tiled). The hybrid
+    # threshold above does not apply to it; $TT_DS_PREFILL_ROUTED_EXPERT_IMPL=unified runs the hybrid path.
+    ROUTED_EXPERT_IMPL = "flat"
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration

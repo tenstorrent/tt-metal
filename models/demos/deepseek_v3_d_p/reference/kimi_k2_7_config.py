@@ -28,6 +28,11 @@ class KimiK27Config:
     # chunk while the fused op's rises with the count. 320 is a 2.9% tie, 384 goes to the composite
     # by 8.0%, and the composite holds the band outright from there -- 11% at 640, 22% at 768.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Routed experts on flat_routed_expert (tt/moe/tt_flat_routed_expert.py): one spatially pipelined program
+    # per chip that streams each local expert's weights once. At 7168x2048 it measured 1.34x / 1.22x / 1.26x
+    # the faster existing op at 32 / 512 / 2048 tokens per expert (one Blackhole, balanced experts). The hybrid
+    # threshold above does not apply to it; $TT_DS_PREFILL_ROUTED_EXPERT_IMPL=unified runs the hybrid path.
+    ROUTED_EXPERT_IMPL = "flat"
     INTERMEDIATE_SIZE = 18432  # Dense FFN hidden dimension
 
     # MoE configuration
