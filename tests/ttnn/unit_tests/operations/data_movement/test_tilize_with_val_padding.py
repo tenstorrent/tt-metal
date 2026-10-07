@@ -976,7 +976,7 @@ def test_tilize_with_val_padding_width_sharded_to_width_sharded(device, pad_valu
     """WIDTH_SHARDED (legacy) input -> WIDTH_SHARDED (legacy) output, with height padding.
 
     This shape selects TilizeWithValPaddingMultiCoreShardedFactory (see
-    can_use_sharded_optimized_factory: WIDTH_SHARDED in and out, same layout, non-ND, no
+    can_use_tilize_with_val_padding_sharded_factory: L1 WIDTH_SHARDED in and out, non-ND, no
     sub_core_grids, shapes equal except the padded height dim). That factory's reader
     (reader_unary_pad_height_width_sharded) carries the borrowed input shard (via LocalTensorAccessor),
     the STAGE dataflow buffer, and the PAD Scratchpad; the other
@@ -1014,4 +1014,51 @@ def test_tilize_with_val_padding_width_sharded_to_width_sharded(device, pad_valu
     )
     assert tt_output.layout == ttnn.TILE_LAYOUT
     torch_golden = pytorch_tilize_with_val_padding(torch_input, output_padded_shape, pad_value)
+    assert_equal(torch_golden, tt_output.cpu().to_torch_with_padded_shape())
+
+
+L1 = ttnn.BufferType.L1
+DRAM = ttnn.BufferType.DRAM
+
+
+@pytest.mark.parametrize(
+    "in_buffer, out_buffer, width, num_cores",
+    [
+        (DRAM, DRAM, 512, 4),  # zero-copy factory needs L1
+        (DRAM, L1, 512, 4),
+        (L1, DRAM, 512, 4),
+        (DRAM, DRAM, 16384, 8),  # wide row overflows L1 (#47735)
+        (L1, None, 16384, 8),  # wide L1 sharded to DRAM interleaved
+    ],
+)
+def test_tilize_with_val_padding_width_sharded_dram_and_wide(device, in_buffer, out_buffer, width, num_cores):
+    torch.manual_seed(0)
+    height_in, height_out = 50, 64
+    input_shape = [1, height_in, width]
+    output_padded_shape = [1, height_out, width]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+
+    def width_sharded(buffer_type, height):
+        spec = ttnn.ShardSpec(shard_grid, (height, width // num_cores), ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
+
+    output_memory_config = (
+        width_sharded(out_buffer, height_out)
+        if out_buffer is not None
+        else ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, DRAM)
+    )
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=width_sharded(in_buffer, height_in),
+    )
+
+    tt_output = ttnn.tilize_with_val_padding(tt_input, output_padded_shape, 0.0, memory_config=output_memory_config)
+    assert tt_output.layout == ttnn.TILE_LAYOUT
+    assert tt_output.memory_config() == output_memory_config
+    torch_golden = pytorch_tilize_with_val_padding(torch_input, output_padded_shape, 0.0)
     assert_equal(torch_golden, tt_output.cpu().to_torch_with_padded_shape())
