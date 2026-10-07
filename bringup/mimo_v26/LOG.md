@@ -1603,3 +1603,27 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_AA4_verify_gate4_final.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py
 - data: {"layers":4,"U":[1,2,4],"argmax_equal":1.0,"feat_bit_identical":1,"verify_repeat_bit_identical":1}
+
+## E261007-1703-61e
+- date: 2026-10-07T17:03:25
+- commit: 1d42c17a82c
+- branch: ssinghal/mimo-spec
+- host: 30,47
+- track: spec
+- status: verified
+- claim: Drafter INCREMENTAL ring context (tt/dflash.py: per-layer K/V ring [U,1,1024,128] per column, slot = position%1024, one-hot scatter-matmul append ring=ring*keep+S@new, ragged valid mask, window mask from the host slot->position map; persistent inputs so append and draft are traceable): same teacher-forced test as E261007-1446-a9a on the device captures (U=4 per row, anchors 16/64/120, bf16 weights), context loaded in 8-row appends: pos0=0 hidden PCC vs bf16 oracle min 0.99876/0.99908 per anchor (as the rebuild version 0.99876), top-1 vs oracle 1.0 except 1/16 at single positions; ring WRAP test (positions shifted by 1000, slots wrap 1023->0, relative RoPE so oracle unchanged): hidden PCC min 0.99834 (p=64) / 0.99801 (p=120) vs fp32 oracle 0.99814: slightly lower than pos0=0 (0.99907), probably bf16 cos/sin at absolute positions ~1100; still >= 0.998. Eager drafter round 28-32 ms for U=4 (host + device, 5 layers + lm_head argmax). Traced capture of the drafter failed first time (TT_FATAL writes during capture: ttnn.zeros inside the graph) and was fixed (persistent zero pad).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_ring_p1000_t0_1d42c17a82c.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_dflash_device.py
+- data: {"ring_wrap_hidden_pcc_min":0.99801,"ring_pos0_hidden_pcc_min":0.99876}
+
+## E261007-1703-e76
+- date: 2026-10-07T17:03:26
+- commit: 64221e89a63
+- branch: ssinghal/mimo-spec
+- host: 41
+- track: spec
+- status: verified
+- claim: SPEC SKELETON on 4 layers (tt/spec.py, FALLBACK verify = 8 sequential plain decode steps with captures, one shared traced prefill, capture layers remapped (0,1,2,3,3), U=1 per row, 4 GSM8K prompts, 24 new tokens, host .41): spec stream TOKEN-IDENTICAL to the plain stream for 4/4 users (23 rounds); accepted tokens per round 1.0 (meaningless: the 4-layer model emits one repeated junk token pair), so this only proves the plumbing (prefill feature capture -> drafter ring context, draft, verify, accept, ragged positions, drafter append).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_skel4b_u1_64221e89a63.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
+- data: {"n":4,"identical":4,"layers":4}
