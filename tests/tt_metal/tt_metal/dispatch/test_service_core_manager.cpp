@@ -355,29 +355,19 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
     ASSERT_FALSE(device->allocator_impl()->has_bank(BufferType::L1, core))
         << "a claimable dispatch-column core is not expected to own an L1 bank";
 
-    // Qualified: in this namespace an unqualified ShardedBufferConfig is the mesh-level one.
     constexpr uint32_t kPageSize = 1024;
-    const tt::tt_metal::ShardedBufferConfig config{
-        .device = device,
-        .size = kPageSize,
-        .page_size = kPageSize,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = ShardSpecBuffer(
+    const BufferShardingArgs sharding_args(
+        ShardSpecBuffer(
             CoreRangeSet(CoreRange(core, core)),
             {1, kPageSize / sizeof(uint32_t)},
             ShardOrientation::ROW_MAJOR,
             {1, 1},
-            {1, kPageSize / sizeof(uint32_t)})};
+            {1, kPageSize / sizeof(uint32_t)}),
+        TensorMemoryLayout::WIDTH_SHARDED);
 
     // Unclaimed, it is just a core the allocator knows nothing about.
     auto create_buffer = [&] {
-        return BufferImpl::create(
-            config.device,
-            config.size,
-            config.page_size,
-            config.buffer_type,
-            BufferShardingArgs(config.shard_parameters, config.buffer_layout));
+        return BufferImpl::create(device, kPageSize, kPageSize, BufferType::L1, sharding_args);
     };
     EXPECT_ANY_THROW(create_buffer());
 
