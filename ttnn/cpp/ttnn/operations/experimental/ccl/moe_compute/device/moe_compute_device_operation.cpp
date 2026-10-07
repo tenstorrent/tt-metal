@@ -15,6 +15,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <umd/device/types/arch.hpp>
 
