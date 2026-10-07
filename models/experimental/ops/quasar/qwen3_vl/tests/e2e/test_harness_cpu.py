@@ -845,3 +845,37 @@ def test_quasar_experimental_sdpa_decode_routes_paged_decode(monkeypatch):
         ("q", "k", "v"),
         {"page_table_tensor": "pt"},
     )
+
+
+def test_host_embedding_looks_up_rows_and_replaces_device_table(monkeypatch):
+    import types
+
+    import ttnn
+
+    import models.tt_transformers.tt.model as tt_model
+    from models.experimental.ops.quasar.qwen3_vl.tt import model as M
+
+    table = torch.randn(10, 4)
+    args = types.SimpleNamespace(get_state_dict_prefix=lambda *_: "")
+    uploads = []
+    monkeypatch.setattr(ttnn, "from_torch", lambda t, **k: uploads.append((t, k)) or "dev")
+    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda d: "rep")
+    emb = M.HostEmbedding("mesh", args, None, {"tok_embeddings.weight": table}, None)
+    assert emb(torch.tensor([[[[3, 7, 3]]]])) == "dev"
+    rows, kw = uploads[0]
+    assert rows.shape == (1, 1, 3, 4) and torch.equal(rows[0, 0], table[[3, 7, 3]].to(torch.bfloat16))
+    assert kw["layout"] == ttnn.TILE_LAYOUT and kw["dtype"] == ttnn.bfloat16
+    orig = tt_model.Embedding
+    with M._embedding_class(True):
+        assert tt_model.Embedding is M.HostEmbedding and tt_model.ScaledEmbedding is M.HostEmbedding
+    assert tt_model.Embedding is orig
+    with M._embedding_class(False):
+        assert tt_model.Embedding is orig
+
+
+def test_quasar_text_args_keep_embedding_on_host():
+    import inspect
+
+    from models.experimental.ops.quasar.qwen3_vl.tt import quasar_config as Q
+
+    assert "self.host_embedding = True" in inspect.getsource(Q.QuasarModelArgs.__init__)
