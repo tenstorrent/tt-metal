@@ -44,6 +44,27 @@ for rd in runs:
     for node, ops in per.items():
         for op, reps in ops.items():
             data[node][op][v].append(statistics.median(reps.values()))
+PAIRS = os.environ.get("PROF_PAIRS")  # "a,b": compare each test whose id holds a with its twin holding b, per variant
+if PAIRS:
+    pa, pb = PAIRS.split(",")
+    out = ["| test | op | variant | runs a/b | a ns (per-run medians) | b ns (per-run medians) | change ns | change % | spread ns | verdict |",
+           "|---|---|---|---|---|---|---|---|---|---|"]
+    for node in order:
+        if pa not in node or node.replace(pa, pb) not in data:
+            continue
+        twin = node.replace(pa, pb)
+        for op, vv in data[node].items():
+            for v, m_runs in vv.items():
+                c_runs = data[twin].get(op, {}).get(v)
+                if not c_runs:
+                    continue
+                m, c = statistics.median(m_runs), statistics.median(c_runs)
+                spread = max(max(m_runs) - min(m_runs), max(c_runs) - min(c_runs))
+                verdict = "slower" if c - m > spread else ("faster" if m - c > spread else "equal")
+                out.append(f"| {node} | {op} | {v} | {len(m_runs)}/{len(c_runs)} | {m:.0f} ({', '.join(f'{x:.0f}' for x in m_runs)}) | "
+                           f"{c:.0f} ({', '.join(f'{x:.0f}' for x in c_runs)}) | {c - m:+.0f} | {100 * (c - m) / m:+.2f} | {spread:.0f} | {verdict} |")
+    print("\n".join(out))
+    sys.exit(0)
 BASE = os.environ.get("PROF_BASE", "main")
 variants = sorted({v for n in data.values() for o in n.values() for v in o if v != BASE})
 out = ["| test | op | variant | runs main/variant | main ns (per-run medians) | variant ns (per-run medians) | change ns | change % | spread ns | verdict |",
