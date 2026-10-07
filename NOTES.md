@@ -25,3 +25,7 @@ Skipped: e72eef929d0 (superseded by 55f146f4891), 7452faf3b38 (already in t48), 
 3. ttp checks; land code commits via a -land branch from origin t48 + ttp push --detach;
    ttp push --own --detach.
 4. Delete out_*/px.pt (~900 MB each) on blx01. Keep b/ (follow-up DiffVAE tasks use it).
+
+## Result (2026-10-07 19:14 UTC, blx01 jobs 810/812)
+A unported 12009 ms, B ported 5635 ms. B vs A: PCC 0.999919, PSNR 53.7 dB (worst frame 57: 52.6 dB).
+Code landed via ttp/t212-land (cherry-picks onto 5e4e0cd643a, head a40d78b8bae) with ttp push --detach.
