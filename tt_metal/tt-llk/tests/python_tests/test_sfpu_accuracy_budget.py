@@ -1875,6 +1875,26 @@ def test_an_emitted_row_is_held_to_the_run_on_its_key_line(tmp_path):
     assert _measured_budget_rows(path)[0][4] is True, "the emitted row read as sampled"
 
 
+def test_only_a_note_the_emitter_writes_is_credited_to_the_key_lines_run(tmp_path):
+    """The other half of that rule, and the one ``_stamp_kept`` applies before a re-emit
+    replaces the clause: an undated *hand-written* note under an exhaustive key line was
+    not measured by that run. Credited to it, a sampled bit-exact gate would read as
+    exhaustive, escape the sampled-zero floor, and pass the exact-budget audit 0 for 0.
+    """
+    path = tmp_path / "budget.yaml"
+    path.write_text(
+        "Acosh:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, "
+        "2026-09-30, except where a row says otherwise\n"
+        '  - {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}  # max 0 ULP over 2048 pts\n'
+        '  - {in: Float16, out: Float16, dest: "No", max_ulp: 0}  # max 0 ULP\n',
+        encoding="utf-8",
+    )
+    assert [row[4] for row in _measured_budget_rows(path)] == [False, True]
+    assert _sampled_zero_budgets(path) == [
+        ("Acosh", '- {in: Float32, out: Float32, dest: "Yes", max_ulp: 0}')
+    ]
+
+
 # ── A gated cell is not quietly parked ────────────────────────────────────────
 #
 # The emitter writes `not measurable` for a cell in which one lane disagrees with the

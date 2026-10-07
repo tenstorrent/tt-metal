@@ -587,18 +587,6 @@ def _declared_tolerance(
     return fallback if found is None else found[1]
 
 
-#: Subnormal *outputs* flushed when a step budget ranks a result, on every format, fp16
-#: included. The metric keeps fp16's subnormal band by default, but the golden keeps IEEE
-#: subnormals the pack path does not reproduce: a near-cancelling ``a - b`` lands there
-#: 140 steps from a correct kernel, and an exact unary op read 512 steps on
-#: Float16_b->Float16 from that band alone. One policy, named once: every step-budget gate
-#: hands it to ``passed_test_kwargs`` -- the binary and ternary gate
-#: (:func:`assert_against_contract`), the scalar binop driver, the unary step-budget
-#: drivers, and the exhaustive unary sweep's emit and gate -- and their rows were measured
-#: that way.
-FLUSH_SUBNORMAL_OUTPUTS = True
-
-
 def assert_against_contract(
     op: MathOperation,
     formats: InputOutputFormat,

@@ -1305,23 +1305,6 @@ Expm1Cw:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Fl
   - {in: Float32, out: Float32, dest: "Yes", metric: tolerance}  # not measurable: 8699 lane(s) disagreeing with the golden about being finite (golden -> result: x=88.3793: 2.41341e+38 -> nan; x=89.3793: inf -> -1; x=89.8793: inf -> -1; x=90.3793: inf -> -1); max 9 ULP over the 56266 measurable lanes
 
 
-# ── Exact and predicate unary ops ───────────────────────────────────────────
-#
-# Measured on Wormhole 2026-09-18 over the standard unary sweep with --ulp-report.
-# These ops are exactly rounded by construction -- a predicate writing 1.0/0.0, a
-# constant fill, a clamp, or a subtraction the hardware does in one step -- so the budget
-# is 0 and any drift at all is a regression. The exception is a 16-bit output from a
-# wider input, where a selection or clamp that passes x through can measure 1 step: the
-# op is still exact, and the step is the output rounding on the way out of Dest, as the
-# rows there record. A sampled row carries that 1; a row the sweep emitted carries 2, the
-# measured step plus the emitter's 1.1x headroom rounded up to a whole step.
-#
-# Every row names an output format that was actually measured. Nothing is enrolled on
-# Bfp8_b: its shared block exponent quantises a small element in a wide block to zero,
-# which costs thousands of steps for reasons that have nothing to do with the kernel
-# (ReluMax reports 15488 there on the stimuli where ReluMin reports 3). An unlisted
-# format falls through to the tolerance metric, which is what Bfp8_b and Bfp4_b want.
-
 Fill:  # 0 ULP, 115 variants / 2.09M lanes, 2026-09-18; measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, metric: tolerance}  # max 0 ULP, block-quantized
   - {in: Bfp4_b, out: Float16, max_ulp: 0}  # max 0 ULP
@@ -1674,22 +1657,6 @@ GeluDerivative:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + str
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", metric: tolerance}  # max 1507328 ULP, budget 1658061 > ceiling 419430
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", metric: tolerance}  # max 1479362 ULP, budget 1627299 > ceiling 419430
 
-
-# ── Binary and ternary SFPU, and the remaining unary approximations ─────────
-#
-# Measured on Wormhole 2026-09-18 with --ulp-report over each driver's own sweep.
-# For these sampled rows, budget = 1.25x the sweep's p99.9, rounded up and floored at 1
-# -- not 1.25x the worst lane, which would widen every row by the one unluckiest sample.
-# (Exhaustive --ulp-emit rows elsewhere are ceil(1.1x the worst lane), with a measured 0
-# kept at 0.) The p99.9 came from that run and is not recorded per row. The `max` each row records is the worst lane, so a budget sitting at or a little
-# under 1.25x that number is the rule working, not a row that lost its margin. A budget is
-# only written where it is *tighter* than the tolerance it replaces: the usable ceiling
-# is 419430 steps on Float32, 51 on Float16 and 6 on Float16_b, and an op past it is
-# recorded as tolerance with its measurement so nobody re-derives it.
-#
-# Bfp8_b is never enrolled here. Its shared block exponent quantises a small element in
-# a wide block to zero, which costs ~15k steps on ops that cannot be wrong; that is the
-# block, not the kernel. Unlisted formats fall through to the tolerance metric.
 
 # -- Unary approximations mostly on tolerance --------------------------------
 # GeluTanh and Tanhshrink are past the ceiling on most Float16_b and Float32 columns, by
@@ -2801,7 +2768,7 @@ Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
   - {in: Float16_b, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 0}  # max 0 ULP
   - {in: Float16_b, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float16_b, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float16_b, out: Float32, approx: "No", dest: "No", max_ulp: 0}  # max 0 ULP
   - {in: Float16_b, out: Float32, approx: "No", dest: "Yes", max_ulp: 35903}  # max 32639 ULP
   - {in: Float16_b, out: Float32, approx: "Yes", dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Float16_b, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 36606}  # max 33278 ULP
@@ -2813,18 +2780,18 @@ Reciprocal:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided
   - {in: Float32, out: Float16, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float16, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float16, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 2}  # max 1 ULP
+  - {in: Float32, out: Float16_b, approx: "No", dest: "No", max_ulp: 1}  # max 0 ULP
   - {in: Float32, out: Float16_b, approx: "No", dest: "Yes", max_ulp: 1}  # max 0 ULP
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "No", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float16_b, approx: "Yes", dest: "Yes", max_ulp: 2}  # max 1 ULP
-  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 72090}  # max 65536 ULP
+  - {in: Float32, out: Float32, approx: "No", dest: "No", max_ulp: 1}  # max 0 ULP
   - {in: Float32, out: Float32, approx: "No", dest: "Yes", max_ulp: 2}  # max 1 ULP
   - {in: Float32, out: Float32, approx: "Yes", dest: "No", max_ulp: 72090}  # max 65536 ULP
   - {in: Float32, out: Float32, approx: "Yes", dest: "Yes", max_ulp: 1669}  # max 1517 ULP
 
 
-# Relu/Frac follow the Abs/Neg shape: exact on Float32, one step of output rounding on
-# the 16-bit formats.
+# ReluMax/ReluMin follow the Abs/Neg shape: exact on Float32, one step of output
+# rounding on the 16-bit formats.
 ReluMax:  # measured by: exhaustive Float16_b/Float16/Bfp8_b/Bfp4_b + strided Float32 sweep, wormhole, 2026-10-05, except where a row says otherwise
   - {in: Bfp4_b, out: Bfp8_b, dest: "No", metric: tolerance}  # max 385 ULP, block-quantized
   - {in: Bfp4_b, out: Bfp8_b, dest: "Yes", metric: tolerance}  # max 385 ULP, block-quantized
