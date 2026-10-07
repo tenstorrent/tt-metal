@@ -1456,7 +1456,7 @@ static void sdpa_inner_loop_step(
     // pack thread, the busier thread in the Q@KT / sub_exp loop. Normalize's row groups are qktv_h tall, in order.
     constexpr uint32_t norm_row_h =
         ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
-#if defined(SDPA_SUM_ON_PACK) || !defined(ARCH_BLACKHOLE)
+#ifndef ARCH_BLACKHOLE
     constexpr bool sum_from_scores_ok = false;
 #else
     constexpr bool sum_from_scores_ok =
