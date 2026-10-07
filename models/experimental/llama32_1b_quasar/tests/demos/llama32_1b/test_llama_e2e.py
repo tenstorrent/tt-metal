@@ -313,8 +313,10 @@ def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
     # (in0_block_w=4). Detect via the L1 allocator capacity (get_memory_view is Python-bound;
     # MeshDevice.l1_size_per_core() is NOT). 3 MB variant totals ~2.8-3.1 MB, 4 MB ~3.9-4.2 MB.
     try:
+        # total_bytes_per_bank is the PER-CORE allocatable L1 (Quasar "banks" are separate cores -> do NOT
+        # multiply by num_banks). 3 MB variant ~2.8 MB/core, 4 MB ~3.9 MB/core.
         _v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
-        _small_l1 = 0 < int(_v.total_bytes_per_bank) * int(_v.num_banks) < 3_500_000
+        _small_l1 = 0 < int(_v.total_bytes_per_bank) < 3_500_000
     except Exception:
         _small_l1 = False
 

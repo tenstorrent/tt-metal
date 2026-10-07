@@ -616,8 +616,10 @@ def _build_lm_head(
     _total_l1 = -1
     try:
         _v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
-        _total_l1 = int(_v.total_bytes_per_bank) * int(_v.num_banks)
-        if 0 < _total_l1 < 3_500_000:  # 3 MB variant (~2.8-3.1 MB) vs 4 MB (~3.9-4.2 MB)
+        # total_bytes_per_bank is the PER-CORE allocatable L1 (on Quasar the "banks" are separate cores, so
+        # do NOT multiply by num_banks -- that gives the mesh-wide total and misdetects the variant).
+        _total_l1 = int(_v.total_bytes_per_bank)
+        if 0 < _total_l1 < 3_500_000:  # 3 MB variant (~2.8 MB/core) vs 4 MB (~3.9 MB/core)
             lm_max_cols = 2048
     except Exception as _e:
         logger.warning(f"[llama-e2e][quasar] L1-size probe failed ({_e}); lm_head chunks stay 8192")
