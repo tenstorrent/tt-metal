@@ -1,7 +1,7 @@
 #!/bin/bash
 # t155 (#155) driver on blx01: CPU setup + fresh build of the t152 fix (setup155.sh), then two broker jobs in order,
 # j1 = 64,128,5,4,4 then j2 = 64,128,7,4,4 (only if j1 passed), each after the broker health check and with no other
-# smarton job running/queued (so it never overlaps #127). j1 -t 420; j2 -t = j1 measured +50% (240..600).
+# smarton job running/queued (so it never overlaps #127). j1 -t 60 (job 777 took 34 s); j2 -t = j1 measured +50% (60..600).
 # On a drop: wait for two clean health passes and rerun that job once; a second drop on it skips that config.
 # Never resets, never touches other jobs. At the end removes B (worktree + build dir) and the JIT cache, keeps logs.
 # Final marker: $T/driver.marker "T155_DRIVER_DONE stage=.. rc=.. jobs=.. results=.."
@@ -43,7 +43,7 @@ STAGE=setup
 log "start; t48 HEAD=$(git -C $A rev-parse --short=11 HEAD)"
 bash $T/setup155.sh > $T/setup.log 2>&1 || { log "setup/build failed: $(tail -3 $T/setup.log | tr '\n' ' ')"; exit 6; }
 log "$(grep BUILD155_DONE $T/setup.log)"
-TLIM=420
+TLIM=60
 for spec in "j1 64,128,5,4,4" "j2 64,128,7,4,4"; do
   set -- $spec; J=$1; BLK=$2
   if [ $J = j2 ] && ! grep -q '^T155_PASS' $T/j1.log 2> /dev/null; then log "j2 not run: j1 did not pass"; RES="$RES j2:not_run"; break; fi
@@ -54,7 +54,7 @@ for spec in "j1 64,128,5,4,4" "j2 64,128,7,4,4"; do
     STAGE=${J}_$a
     inc0=$(ls $INC 2> /dev/null | sort | tail -1)
     t0=$(date -u '+%F %T')
-    out=$(timeout 120 tt-device-mcp run-bg "bash $T/run155.sh $J $BLK $((TLIM - 30))" -w $F/t48 -e $F/t159/env.yaml -t $TLIM 2>&1)
+    out=$(timeout 120 tt-device-mcp run-bg "bash $T/run155.sh $J $BLK $((TLIM - 8))" -w $F/t48 -e $F/t159/env.yaml -t $TLIM 2>&1)
     JOB=$(echo "$out" | sed -n 's/^Job \([0-9]*\) queued.*/\1/p' | head -1)
     log "$J attempt $a submit -t $TLIM: $(echo "$out" | tr '\n' ' ' | cut -c1-300) JOB=$JOB"
     [ -n "$JOB" ] || exit 7
@@ -82,7 +82,7 @@ for spec in "j1 64,128,5,4,4" "j2 64,128,7,4,4"; do
       for f in $new; do log "POST-JOB-INCIDENT $f"; done
       if [ $J = j1 ]; then
         s0=$(sed -n 's/.* epoch=\([0-9]*\)$/\1/p' $T/j1.log | head -1); s1=$(sed -n 's/.*end_epoch=\([0-9]*\).*/\1/p' $T/j1.log)
-        TLIM=$(( (s1 - s0) * 3 / 2 )); [ $TLIM -gt 600 ] && TLIM=600; [ $TLIM -lt 240 ] && TLIM=240
+        TLIM=$(( (s1 - s0) * 3 / 2 )); [ $TLIM -gt 600 ] && TLIM=600; [ $TLIM -lt 60 ] && TLIM=60
         log "j1 took $((s1 - s0)) s; j2 -t $TLIM"
       fi
       break

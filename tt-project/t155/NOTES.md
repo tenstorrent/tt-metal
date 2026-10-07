@@ -57,3 +57,17 @@ Wake when `ssh g15blx01 test -e /var/tmp/fasth3/t155/driver.marker`. Read driver
 ## 2026-10-07 standard wake (budget exhausted, $1 left)
 - No new device work. A rebuild on blx01 is needed for j2 (build dir was removed), which does not fit this run.
 - Hand-off: j1 hang fix confirmed (completed, no hang); PCC not checked; j2 not run. Follow-up filed.
+
+## 2026-10-07 10:49 UTC (#204): rerun with the PCC check
+- Cause of pcc=none: blx01 src was `git archive c0c02788344`, which predates 73347dfaec8 (SWEEP_CHECK_ALL). Without it
+  run_sweep compares outputs only when the tested blocking beats the table one; j1 (14620 us) was slower than the
+  table (12355 us), so no "Output check" line. SWEEP_CHECK_ALL=1 checks the last timed blocking vs the table and
+  disables the speed gates.
+- Fix: src.tar = git archive 73347dfaec8 (REV file), setup and run155 gate on SWEEP_CHECK_ALL being in the source.
+  Timeouts resized to job 777's 34 s: j1 -t 60 (inner 52, pytest 47), j2 -t = j1 +50% (min 60).
+- Attempt-1 logs moved to /var/tmp/fasth3/t155/attempt1/. Driver restarted 10:49:00 UTC (pid 1552794): rebuild B,
+  then j1, then j2 (only if j1 passes), then cleanup of B + JIT.
+
+## Next
+Wake when `ssh g15blx01 test -e /var/tmp/fasth3/t155/driver.marker`. Read driver.marker, driver.log, j1.log, j2.log
+(T155_PASS/FAIL pcc=, T155_TIMES). Confirm B and jit are gone and t48 HEAD is bf7db12a149.
