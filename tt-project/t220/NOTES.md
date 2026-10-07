@@ -36,3 +36,9 @@ Tray-2 incident 2026-10-07 19:49 UTC (bridge-reset chips 8-15, broker job 417/41
 - Wait: `ssh g14blx03 'bash ~/fasth3/runner/probe.sh t220-time-r1'`. Fill may hit 600 s: if fill status=failed
   with a pytest timeout, the time job continues filling; if time also times out, enqueue t220-time-r2.
 - Results: blx03 /var/tmp/fasth3/t220/out_time/run.log (E2E_WALL_S lines + LTX timing tables), videos there.
+- 21:48-21:50 UTC: fill-r1 (broker 455) and time-r1 (457) failed in 16 s, not drops: b9f8587ce6c's test passes
+  image_conditioning= that LTXPipeline.__init__ no longer takes. Fixed on blx03 ~/fasth3/t220 as commit d791f4e949
+  (drop the kwarg; production leaves RUN_I2V unset = default 1, same as us). patch.py updated to match.
+- Requeued: t220-fill-r2 = broker 459 (started 21:52 UTC, building VAE/upsampler/bf8 DiT caches), t220-time-r2 queued.
+- Next wake: read done/t220-time-r2.done. If time-r2 timed out while still filling, enqueue t220-time-r3.
+  Then parse out_time/run.log: E2E_WALL_S gen=2..6 (seeds 0-4 warm; gen1 = capture), timing tables, warmup.

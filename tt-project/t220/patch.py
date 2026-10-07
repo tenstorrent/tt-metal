@@ -30,5 +30,9 @@ s = s.replace(a, b)
 if "\nimport time\n" not in s:
     s = s.replace("\nimport os\n", "\nimport os\nimport time\n", 1)
     assert "\nimport time\n" in s
+# b9f8587ce6c's test still passes image_conditioning=, which LTXPipeline no longer takes (RUN_I2V gates I2V).
+a = "        image_conditioning=bool(image_path),\n"
+assert s.count(a) == 1
+s = s.replace(a, "")
 open(p, "w").write(s)
 print("patched")
