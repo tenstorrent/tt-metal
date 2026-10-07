@@ -1,0 +1,193 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Opt-in full-model native sweep; all hardware access must be serialized."""
+
+import gc
+import hashlib
+import json
+import os
+import time
+from pathlib import Path
+
+import pytest
+import torch
+
+import ttnn
+from models.demos.qwen38_27b_qb2.tests.sweep_report import render, save_report, summarize
+from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
+
+
+def drop_request_buffers(gen):
+    """Release previous geometry before allocating a larger KV pool."""
+    ttnn.synchronize_device(gen.mesh)
+    gen._release_traces()
+    for name in (
+        "cache",
+        "positions",
+        "page_table",
+        "page_host",
+        "rope_indices",
+        "logits",
+        "prefill_sample_input",
+        "token_history",
+        "history_cursor",
+        "_prefill_sampling_cache",
+        "_recurrent_reset_warmed",
+    ):
+        setattr(gen, name, None)
+    gen.history_capacity = gen.history_count = 0
+    gen.prefill_signatures.clear()
+    gen.remaining_steps = gen.active_slots = None
+    gc.collect()
+
+
+def run_batch(generators, prompts, output_tokens):
+    batch, length = prompts.shape
+    slots = tuple(range(batch))
+    before = [gen.counters.copy() for gen in generators]
+    first_tokens, ttfts = [], []
+    started = time.perf_counter()
+    for gen in generators:
+        gen.set_sampling_params(top_k=1, seed=0)
+        gen.reset_recurrent_slots(list(slots))
+        gen._reset_history()
+        logits = gen.prefill_forward(
+            prompts,
+            page_table=gen.page_table,
+            kv_cache=gen.cache,
+            prompt_lens=[length] * batch,
+        )
+        gen.sample_prefill(logits)
+        del logits
+        first = gen._read_tokens()[:batch]
+        first_tokens.append(first)
+        ttfts.extend([time.perf_counter() - started] * batch)
+    decode_started = time.perf_counter()
+    for step in range(output_tokens - 1):
+        for gen, first in zip(generators, first_tokens):
+            initial = (
+                dict(tokens=first, start_pos=torch.full((batch,), length), active_slots=slots) if step == 0 else {}
+            )
+            gen.decode_forward(
+                page_table=gen.page_table,
+                kv_cache=gen.cache,
+                read_from_device=False,
+                record_history=True,
+                **initial,
+            )
+    histories = [gen._read_history()[:, :batch] for gen in generators]
+    finished = time.perf_counter()
+    token_hashes, counters = [], []
+    for gen, first, history, initial_counters in zip(generators, first_tokens, histories, before):
+        tokens = torch.cat([first[None], history], dim=0).T
+        assert tuple(tokens.shape) == (batch, output_tokens)
+        assert ((tokens >= 0) & (tokens < gen.model.config.vocab_size)).all()
+        token_hashes.append(hashlib.sha256(tokens.contiguous().numpy().tobytes()).hexdigest())
+        counters.append(dict(gen.counters - initial_counters))
+    return dict(
+        ttft_s=ttfts,
+        decode_s=finished - decode_started,
+        elapsed_s=finished - started,
+        output_sha256_per_replica=token_hashes,
+        counters_per_replica=counters,
+        trace_captures=sum(row.get("trace_captures", 0) for row in counters),
+    )
+
+
+@pytest.mark.skipif(os.getenv("QWEN_GALAXY_SWEEP") != "1", reason="explicit allocated-Galaxy performance sweep")
+def test_galaxy_perf_sweep():
+    directory = Path(os.environ["QWEN_SWEEP_RESULTS"])
+    report = json.loads((directory / "sweep.json").read_text())
+    assert report["state"] == "queued", "Use a new receipt directory; do not overwrite partial runs"
+    assert report["replicas"] in (1, 8) and report["output_tokens"] == 128
+    torch.set_num_threads(8)
+    configure_fabric(topology=ttnn.Topology.Linear)
+    parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
+    generators = []
+    active_cell = None
+    try:
+        report["state"] = "loading"
+        report["configuration"] = {
+            "topology": "linear",
+            "num_links": 2,
+            "native_layers": 64,
+            "environment": {key: value for key, value in os.environ.items() if key.startswith("QWEN_")},
+        }
+        source = Path(__file__).resolve().parents[1]
+        report["source_sha256"] = {
+            str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted((source / "tt").glob("*.py"))
+        }
+        save_report(report, directory)
+        render(report, directory)
+        for replica in range(report["replicas"]):
+            mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(replica, 0))
+            tick = time.perf_counter()
+            gen = build_generator(source, mesh, topology=ttnn.Topology.Linear)
+            generators.append(gen)
+            assert len(gen.model.layers) == 64
+            report.setdefault("setup_s_per_replica", []).append(time.perf_counter() - tick)
+        report["precision"] = generators[0].model.precision
+        report["state"] = "running"
+        passage = (
+            "The scientific method tests explanations against observations. "
+            "Describe an experiment, its controls, and the evidence needed to evaluate the result. "
+        )
+        base = generators[0].tokenizer.encode(passage, add_special_tokens=False)
+        for cell in report["cells"]:
+            if cell["status"] == "capacity_guard":
+                continue
+            active_cell = cell
+            cell["status"] = "running"
+            save_report(report, directory)
+            length, batch = cell["input_tokens"], cell["batch_per_replica"]
+            ids = (base * (length // len(base) + 1))[:length]
+            cell["prompt_sha256"] = hashlib.sha256(json.dumps(ids).encode()).hexdigest()
+            prompts = torch.tensor([ids] * batch, dtype=torch.int64)
+            print(f"SWEEP_CELL_BEGIN isl={length} batch={batch} replicas={len(generators)}", flush=True)
+            for gen in generators:
+                drop_request_buffers(gen)
+                gen._ensure_cache(batch, length + report["output_tokens"] - 1)
+                gen._ensure_history(report["output_tokens"] - 1)
+                ttnn.synchronize_device(gen.mesh)
+            cell["warmup"] = run_batch(generators, prompts, report["output_tokens"])
+            reference = cell["warmup"]["output_sha256_per_replica"]
+            assert len(set(reference)) == 1, "Independent replicas produced different greedy outputs"
+            cell["samples"] = []
+            for repeat in range(report["measured_runs"]):
+                sample = run_batch(generators, prompts, report["output_tokens"])
+                cell["samples"].append(sample)
+                save_report(report, directory)
+                assert sample["output_sha256_per_replica"] == reference, "Greedy outputs changed between repeats"
+                assert sample["trace_captures"] == 0, "Warm measurement recaptured a trace"
+                print(f"SWEEP_REPEAT_COMPLETE isl={length} batch={batch} repeat={repeat}", flush=True)
+            cell["summary"] = summarize(
+                cell["samples"],
+                concurrency=cell["concurrency"],
+                output_tokens=report["output_tokens"],
+            )
+            cell["status"] = "completed"
+            save_report(report, directory)
+            render(report, directory)
+            print(f"SWEEP_CELL_COMPLETE {json.dumps(cell['summary'])}", flush=True)
+        report["state"] = "completed"
+    except BaseException as error:
+        report["state"] = "failed"
+        report["error"] = dict(type=type(error).__name__, message=str(error)[:1000])
+        if active_cell is not None and active_cell["status"] == "running":
+            active_cell["status"] = "failed"
+            active_cell["reason"] = report["error"]["message"]
+        for cell in report["cells"]:
+            if cell["status"] == "queued":
+                cell["status"] = "not_run"
+        raise
+    finally:
+        try:
+            save_report(report, directory)
+            render(report, directory)
+        finally:
+            try:
+                for gen in generators:
+                    gen.close()
+            finally:
+                ttnn.close_mesh_device(parent)

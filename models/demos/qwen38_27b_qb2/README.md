@@ -65,6 +65,41 @@ sender and a 15-minute execution limit. The allocated-host job is
 `qwen38-fabric-torus-neighbors-20261006.service`; it is queued behind the replica
 test, so the wraparound links are not yet qualified.
 
+## Measured input-length and concurrency sweep
+
+The requested artifact runs one TP4 replica first, then the full Galaxy. The
+initial grid is ISL 128 / 8,192 / 32,768 / 55,000 / 131,072 / 262,016 and
+concurrency 1 / 2 / 4 / 8 / 16 per replica. A 128-token output budget leaves the
+largest cell inside the 262,144-token context limit. The existing 1,179,648-token
+per-replica KV allocation guard excludes three cells, leaving 27 to measure;
+excluded cells are not reported as measured out-of-memory failures.
+
+`tests/sweep_report.py --init --replicas 1 --output RESULTS` creates the plan and
+the standalone HTML, PNG, SVG, PDF, CSV and JSON artifact. Run
+`demo/run_galaxy_perf_sweep.sh TASK_ROOT RESULTS` in a persistent job with
+`MODEL_WEIGHTS_DIR` set. The test is serialized against other device jobs and
+allows three hours of execution. An optional `QWEN_WAIT_FOR_UNIT` waits for a
+specified user service to finish before entering the hardware queue; include
+that wait in the enclosing service deadline.
+
+Each cell uses the full model and a deterministic repeated-text input, one
+unscored warmup and three measured repetitions. It requires exact repeatability
+and no trace capture in measured windows. Graphs show tokens/s/user, aggregate
+decode tokens/s and p50 TTFT. Raw JSON/CSV also preserve p90 TTFT, end-to-end
+throughput, counters and cold timing. Prefill is fresh, without prefix-cache
+reuse; output delivery after the first token is deferred to a final history
+readback. These are native generator timings, excluding HTTP/router overhead.
+Default model knobs match the initial Galaxy baseline. This sweep does not
+qualify model accuracy or the future optimized configuration.
+
+Current job: `qwen38-perf-sweep-tp4-v1-20261006.service`, queued after replica and
+fabric checks. Results are under `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
+the artifact entrypoint and updates after each completed cell. Five host tests
+validate the metric accounting and reject cold captures as warm measurements.
+No sweep cells have been measured at publication. Initialize with `--replicas 8`
+for the follow-up: throughput is measured on all eight replicas rather than
+inferred by multiplying the TP4 result.
+
 ## Capacity
 
 - Maximum supported context: 262,144 tokens.
