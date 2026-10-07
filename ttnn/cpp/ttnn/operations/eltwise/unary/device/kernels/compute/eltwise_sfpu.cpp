@@ -13,8 +13,8 @@
 #include "api/compute/eltwise_unary/rdiv.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
-
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
+
 // The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: a later tile's init re-programs only the op's
 // state another op wrote, square stores through ADDR_MOD_4 (free here) and keeps its rounding constants out of Prgm0-2
 // when another op writes them, the reciprocal leaves Prgm0.
