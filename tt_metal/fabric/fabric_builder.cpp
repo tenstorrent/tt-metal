@@ -339,8 +339,15 @@ std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& f
 }
 
 void FabricBuilder::build_and_publish_manifest_chip() const {
+    const KernelCreationContext ctx = kernel_creation_context();
     manifest::Chip chip{
         .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
+        .local_sync =
+            manifest::LocalSync{
+                .master_eth_chan = ctx.master_router_chan,
+                .num_routers = static_cast<uint32_t>(ctx.num_local_fabric_routers),
+                .router_channels_mask = ctx.router_channels_mask,
+            },
         .routers = {},
     };
     chip.routers.reserve(routers_.size());
