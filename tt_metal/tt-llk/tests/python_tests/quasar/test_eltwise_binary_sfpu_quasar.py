@@ -129,9 +129,8 @@ def _run_sfpu_binary_llk_golden(
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
     broadcasts the ``src1_idx`` tile in the golden.
 
-    ``sign_magnitude`` builds the SIGN_MAGNITUDE_FORMAT kernel variant and stages
-    the int32 operands as SMAG32; the golden is still computed from the
-    2's-complement values, so only ops with a non-negative result (lcm) use it.
+    ``sign_magnitude`` stages int32 operands as SMAG32; the golden stays 2's-complement,
+    so only non-negative-result ops (lcm) can use it.
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -257,15 +256,13 @@ def _run_sfpu_binary_llk_golden(
 # Family 1 — integer ops (add, mul, gt, lt, le, ge, copy_dest, lcm), Int32 only.
 # Ported from test_sfpu_binary_quasar.py.
 # ===========================================================================
-# lcm contract (Compute API lcm.h): |a|, |b| <= 2^15 - 1, so the result stays below 2^30.
+# lcm contract: |a|, |b| <= 2^15 - 1.
 _LCM_MAX_OPERAND = 32767
 
 _LCM_M = _LCM_MAX_OPERAND
 
-# (a, b) pairs planted in both operand tiles: zeros, units, sign mixes, powers of two,
-# shared-factor pairs, the largest coprime pair (lcm = 32767 * 32766), and the pairs
-# that need the full 14 binary-GCD steps (exhaustive search over |a|, |b| <= 32767), so
-# a too-short GCD replay count fails deterministically instead of on a random lane.
+# Planted (a, b) pairs. The (32765, 3) / (10923, 21845) family needs all 14 GCD steps, so a
+# too-short replay count fails deterministically.
 _LCM_EDGE_PAIRS = [
     (0, 0),
     (0, 12345),
@@ -291,14 +288,12 @@ _LCM_EDGE_PAIRS = [
     (21845, -10923),
 ]
 
-# Coprime with the 1024-lane tile, so consecutive planted pairs land in different
-# rows, columns and faces rather than clustering in one SFPU row.
+# Coprime with 1024, so planted pairs spread across rows and faces.
 _LCM_EDGE_LANE_STRIDE = 67
 
 
 def _prepare_lcm_stimuli(input_dimensions, src0_idx, src1_idx):
-    """lcm stimuli: uniform over the in-contract range plus planted edge pairs
-    spread across rows and faces of the src0/src1 operand tiles."""
+    """Uniform in-contract lcm operands plus the planted edge pairs."""
     spec = StimuliSpec.uniform(
         low=float(-_LCM_MAX_OPERAND), high=float(_LCM_MAX_OPERAND)
     )
@@ -322,8 +317,7 @@ def _prepare_int_stimuli(
     formats, input_dimensions, src0_idx, src1_idx, mathop, clamp_inputs
 ):
     """Integer stimuli: uniform over the dtype range, optionally clamped (int MUL
-    clamps to keep the product representable). Both operands live in src_A.
-    LCM draws from its in-contract range instead (_prepare_lcm_stimuli)."""
+    clamps to keep the product representable). Both operands live in src_A."""
     if mathop == MathOperation.SfpuLcm:
         return _prepare_lcm_stimuli(input_dimensions, src0_idx, src1_idx)
     data_format = formats.input_format
@@ -355,7 +349,6 @@ INT_SWEEP = dict(
         MathOperation.SfpuElwLe,
         MathOperation.SfpuElwGe,
         MathOperation.SfpuCopyDest,
-        # LCM draws its in-contract operands in _prepare_lcm_stimuli (no clamp).
         MathOperation.SfpuLcm,
     ],
 )
@@ -409,9 +402,7 @@ def test_eltwise_binary_sfpu_lcm_sign_magnitude_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """lcm on the SIGN_MAGNITUDE_FORMAT datapath (e.g. Int8 copy_tile through an
-    fp32-accumulating FPU): operands staged as SMAG32, converted on load by the
-    kernel. The result is non-negative, so the golden is the 2's-complement one."""
+    """lcm on the SIGN_MAGNITUDE_FORMAT datapath (SMAG32-staged operands)."""
     formats = InputOutputFormat(
         input_format=DataFormat.Int32, output_format=DataFormat.Int32
     )
