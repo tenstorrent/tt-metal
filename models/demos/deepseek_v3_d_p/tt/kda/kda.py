@@ -14,7 +14,6 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
-    KDA_BETA_DTYPE,
     KDA_CHUNK_SIZE,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
@@ -57,7 +56,9 @@ class _ProjectedInputs:
     decay_rank: ttnn.Tensor
     output_gate: ttnn.Tensor
     output_gate_offset: int
+    # The fused projection again; beta's pre-sigmoid logits are its columns from beta_offset.
     beta: ttnn.Tensor
+    beta_offset: int
 
 
 @dataclass(frozen=True)
@@ -365,30 +366,14 @@ class ttKDA:
             # stays allocated until the norm instead of only its gate slice.
             output_gate=projected,
             output_gate_offset=auxiliary_start + config.head_k_dim,
-            beta=_slice_width(
-                projected,
-                auxiliary_start + config.head_k_dim + config.v_dim,
-                auxiliary_start + config.head_k_dim + config.v_dim + config.num_heads,
-            ),
+            # Chunk preparation reads beta's logits in place and applies the sigmoid.
+            beta=projected,
+            beta_offset=auxiliary_start + config.head_k_dim + config.v_dim,
         )
 
-    def _compute_gates(
-        self,
-        *,
-        beta: ttnn.Tensor,
-        decay_rank: ttnn.Tensor,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Evaluate the decay and write gates consumed by the recurrence."""
+    def _compute_decay(self, decay_rank: ttnn.Tensor) -> ttnn.Tensor:
+        """Evaluate the decay gate consumed by the recurrence; chunk preparation activates beta itself."""
         weights = self.weights
-        # Preserve the sigmoid result at the FP32 precision required by chunk preparation.
-        beta_for_recurrence = ttnn.sigmoid(
-            ttnn.typecast(
-                beta,
-                KDA_BETA_DTYPE,
-                memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-            ),
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-        )
         gate = ttnn.linear(
             decay_rank,
             weights.decay_output_projection,
@@ -402,7 +387,7 @@ class ttKDA:
                 else None
             ),
         )
-        return self._activate_decay(gate), beta_for_recurrence
+        return self._activate_decay(gate)
 
     def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.multiply(
@@ -529,16 +514,14 @@ class ttKDA:
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         q, k, v, new_convolution = self._convolve_qkv(projected.qkv, convolution_state, selections, actual_start)
-        gate, beta = self._compute_gates(
-            beta=projected.beta,
-            decay_rank=projected.decay_rank,
-        )
+        gate = self._compute_decay(projected.decay_rank)
         result = self.recurrence(
             q=q,
             k=k,
             v=v,
             gate=gate,
-            beta=beta,
+            beta=projected.beta,
+            beta_logits_column_offset=projected.beta_offset,
             initial_state=state.recurrent,
             selections=selections if self._is_sequence_parallel else None,
             actual_start=actual_start,

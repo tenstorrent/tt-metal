@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -403,6 +404,28 @@ inline void normalize_l2_rows(
     input.pop_front(matrix_tiles);
 }
 
+// beta = sigmoid(logits) in FP32, from the BF16 logits the reader moved into column 0. The SFPU sigmoid is the
+// accurate one ttnn.sigmoid runs; BF16 widens exactly into the FP32 destination.
+template <uint32_t Ct>
+inline void activate_beta(DataflowBuffer& logits, DataflowBuffer& beta) {
+    beta.reserve_back(Ct);
+    reconfig_data_format_srca(logits.get_id());
+    pack_reconfig_data_format(beta.get_id());
+    copy_init(logits.get_id());
+    sigmoid_tile_init<false>();
+    for (uint32_t tile = 0; tile < Ct; ++tile) {
+        tile_regs_acquire();
+        copy_tile(logits.get_id(), tile, 0);
+        sigmoid_tile<VectorMode::RC, false>(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, beta.get_id(), tile);
+        tile_regs_release();
+    }
+    beta.push_back(Ct);
+    logits.pop_front(Ct);
+}
+
 template <uint32_t Ct, uint32_t Vt>
 inline void prepare_v_beta(DataflowBuffer& v, DataflowBuffer& beta, DataflowBuffer& v_beta) {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
@@ -613,7 +636,7 @@ inline void prepare_decay_outputs(
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t SCALE_BITS, uint32_t EPS_BITS, uint32_t beta_logits>
 TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint32_t num_chunks) {
     DataflowBuffer control(dfb::chronology_compute);
     const uint32_t valid_chunks = kda_chronology::receive(control).valid_rows / tt::constants::TILE_HEIGHT;
@@ -628,7 +651,10 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer k(dfb::k);
     DataflowBuffer v(dfb::v);
     DataflowBuffer g(dfb::g);
-    DataflowBuffer beta(dfb::beta);
+    DataflowBuffer beta_input(dfb::beta);
+    DataflowBuffer beta_activated(dfb::beta_activated);
+    // Beta logits are activated into beta_activated once per work item; activated beta is used as read.
+    DataflowBuffer& beta = beta_logits ? beta_activated : beta_input;
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer block_masks(dfb::block_masks);
@@ -679,7 +705,11 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         k.wait_front(chunk_key_tiles);
         v.wait_front(chunk_value_tiles);
         g.wait_front(chunk_key_tiles);
-        beta.wait_front(Ct);
+        beta_input.wait_front(Ct);
+        if constexpr (beta_logits) {
+            activate_beta<Ct>(beta_input, beta_activated);
+            beta_activated.wait_front(Ct);
+        }
 
         normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
             q,

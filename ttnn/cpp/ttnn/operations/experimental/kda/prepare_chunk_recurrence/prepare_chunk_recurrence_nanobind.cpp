@@ -48,6 +48,9 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 Defaults to 0.
             gate_scale (float): Multiplies ``g`` before its within-chunk cumulative sum, so a
                 caller can fold a constant gate scale into preparation. Defaults to 1.0.
+            beta_logits_column_offset (int, optional): When given, ``beta`` is a token-major BF16 tensor
+                ``[1, T, columns]`` holding pre-sigmoid logits at these tile-aligned columns, such as the fused
+                input projection; preparation reads them in place and applies the sigmoid in FP32.
 
         Returns:
             list[ttnn.Tensor]: Seven new TILE-layout tensors, in order:
@@ -79,7 +82,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("actual_start") = nb::none(),
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("gate_scale") = 1.0F);
+        nb::arg("gate_scale") = 1.0F,
+        nb::arg("beta_logits_column_offset") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::prepare_chunk_recurrence::detail

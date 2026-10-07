@@ -111,6 +111,7 @@ def _prepare_chunk_terms(
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     gate_scale: float,
+    beta_logits_column_offset: int | None,
 ) -> _PreparedChunks:
     # Chunk preparation reads each head's column straight from token-major [1, rows, heads] beta.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
@@ -127,6 +128,7 @@ def _prepare_chunk_terms(
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
         gate_scale=gate_scale,
+        beta_logits_column_offset=beta_logits_column_offset,
     )
     return _PreparedChunks(*outputs)
 
@@ -621,9 +623,17 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
+        beta_logits_column_offset: int | None,
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
-        if tuple(beta.shape) != (geometry.batch, geometry.local_rows, geometry.heads):
+        beta_columns = (
+            geometry.heads if beta_logits_column_offset is None else beta_logits_column_offset + geometry.heads
+        )
+        if (
+            tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows)
+            or (beta_logits_column_offset is None and beta.shape[-1] != beta_columns)
+            or beta.shape[-1] < beta_columns
+        ):
             raise ValueError("recurrence beta shape does not match constructed geometry")
         for name, tensor, width in (
             ("q", q, geometry.heads * geometry.key_dim),
@@ -650,6 +660,7 @@ class KDARecurrence:
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
             gate_scale=self._gate_scale,
+            beta_logits_column_offset=beta_logits_column_offset,
         )
         return prepared, state, geometry
 
@@ -673,8 +684,13 @@ class KDARecurrence:
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
         selections: ChronologicalSelections | None = None,
+        beta_logits_column_offset: int | None = None,
     ) -> RecurrenceResult:
-        """Execute the constructed graph using caller-owned state and chronology."""
+        """Execute the constructed graph using caller-owned state and chronology.
+
+        ``beta`` is the activated token-major beta, or with ``beta_logits_column_offset`` a wider BF16 tensor whose
+        columns from that offset hold beta's pre-sigmoid logits; chunk preparation then applies the sigmoid.
+        """
         if self._sequence_parallel != (selections is not None):
             raise ValueError("chronological selections must be provided exactly for sequence-parallel recurrence")
         prepared, state, geometry = self._prepare(
@@ -686,6 +702,7 @@ class KDARecurrence:
             initial_state=initial_state,
             actual_start=actual_start,
             actual_end=actual_end,
+            beta_logits_column_offset=beta_logits_column_offset,
         )
         result = self._execute(prepared, state, actual_start, actual_end, selections)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
