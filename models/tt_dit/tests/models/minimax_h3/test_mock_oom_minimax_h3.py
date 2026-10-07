@@ -114,6 +114,20 @@ def test_ref2va_warmup_fits_on_mock(mesh_device):
     )
     logger.info(_dram_line(mesh_device, "after construction"))
 
+    # DEMO (do not merge): hold 1.5 GiB of DRAM per device across the walk, as if the DiT's resident
+    # buffers had grown by that much, so the largest rungs no longer fit and the gate names them.
+    import torch
+
+    filler = ttnn.from_torch(  # noqa: F841  (kept alive for the whole walk)
+        torch.zeros((24576, 32768), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    logger.info(_dram_line(mesh_device, "after the 1.5 GiB demo filler"))
+
     # Serving's warmup entry point, with the production warmup requests for every rung of this preset:
     # the ladder walk first, then the VAE, audio and prompt-encoder warms (compile-only, so they catch
     # static circular-buffer overflows), then trace capture (a no-op on the untraced Wormhole preset).
