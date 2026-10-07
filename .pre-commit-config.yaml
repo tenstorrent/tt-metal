@@ -173,6 +173,24 @@ repos:
       language: system
       # All three architectures: the check is lexical and needs no per-arch tables.
       files: ^tt_metal/tt-llk/tt_llk_.*\.(h|hpp)$
+    - id: llk-sticky-cfg-restore
+      name: "llk: sticky config fields restored after a fixed write"
+      entry: python3 tt_metal/tt-llk/infra/check_sticky_cfg_restore.py
+      language: system
+      # Fails only on findings in the touched headers; a commit touching a verdict input (the
+      # checker, the field table, the baseline) is checked against the whole tree. Output is shown
+      # even when it passes, so writes whose value cannot be judged are seen.
+      verbose: true
+      require_serial: true
+      args: ["--baseline", "tt_metal/tt-llk/infra/sticky_cfg_baseline.txt"]
+      files: |
+        (?x)^(
+          tt_metal/tt-llk/tt_llk_(wormhole_b0|blackhole)/.*\.(h|hpp)|
+          tt_metal/hw/ckernels/(wormhole_b0|blackhole)/metal/.*\.(h|hpp)|
+          tt_metal/tt-llk/infra/check_sticky_cfg_restore\.py|
+          tt_metal/tt-llk/infra/sticky_cfg_fields\.yaml|
+          tt_metal/tt-llk/infra/sticky_cfg_baseline\.txt
+        )$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"
       entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
