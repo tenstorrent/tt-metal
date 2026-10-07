@@ -33,7 +33,10 @@ MODE = E(
 REF = E("SPEC_REF", "")
 CHUNK = int(E("SPEC_CHUNK", "4"))
 OUT = E("SPEC_OUT", "/tmp/spec.jsonl")
-CH = 256
+CH = int(E("SPEC_CH", "256"))
+ISL = int(
+    E("SPEC_ISL", "0")
+)  # >0: Frankenstein book windows of this many tokens (long-context runs) instead of GSM8K prompts
 
 
 def rec(case, **kw):
@@ -72,8 +75,18 @@ def dram(mesh):
 def test_spec_exact(mesh_device):
     md = mesh_device
     tok = tokenizer()
-    items = gsm_prompts(4 * U, tok, START)
-    prompts = [it["prompt_ids"] for it in items]
+    if ISL:
+        from models.demos.blackhole.mimo_v26.reference.prompts import BOOK_QUESTION
+        from models.demos.blackhole.mimo_v26.tests.test_ctx64k import book_body, chat_frame
+
+        body = book_body(tok)
+        pre, post = chat_frame(tok, BOOK_QUESTION)
+        n_ = ISL - len(pre) - len(post)
+        stride = int(E("SPEC_STRIDE", "2400"))
+        prompts = [pre + body[b * stride : b * stride + n_] + post for b in range(4 * U)]
+    else:
+        items = gsm_prompts(4 * U, tok, START)
+        prompts = [it["prompt_ids"] for it in items]
     maxlen = max(len(p) for p in prompts)
     max_pos = -(-(maxlen + NEW + 64) // CH) * CH
     lay = KVLayout(users=U, max_pos=max_pos, chunk=CH)
