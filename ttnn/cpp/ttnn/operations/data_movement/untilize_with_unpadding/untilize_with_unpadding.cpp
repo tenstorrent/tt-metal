@@ -44,7 +44,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(
     return MassagedUntilizeVal(MassagedUntilizeValParams{
         .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.logical_shape().rank() > 4; },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedUntilizeValArgs {
-            ttnn::SmallVector<uint32_t> output_shape_vector;
+            ttsl::SmallVector<uint32_t> output_shape_vector;
             output_shape_vector.reserve(output_tensor_end.rank());
             for (auto index = 0; index < output_tensor_end.rank(); ++index) {
                 output_shape_vector.push_back(output_tensor_end[index] + 1);

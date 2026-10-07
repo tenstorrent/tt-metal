@@ -37,7 +37,7 @@ from helpers.param_config import (
     runtime,
 )
 from helpers.perf.core import create_test_or_perf_config
-from helpers.sfpu_accuracy_budget import assert_within_contract_tolerance
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
@@ -75,10 +75,20 @@ from helpers.tilize_untilize import tilize
 # =============================================================================
 
 
-def _skip_fp32_no_dest_acc(formats, dest_acc):
-    """32-bit (Float32) inputs need a 32-bit dest, i.e. dest_acc=Yes."""
+def fp32_no_dest_acc_skip_reason(formats, dest_acc):
+    """Why a driver calling :func:`_skip_fp32_no_dest_acc` skips this variant, or
+    ``None``. The exact-op guard in test_sfpu_accuracy_budget.py asks it too, so its
+    exclusions cannot drift from the skip."""
     if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+        return "32-bit inputs need a 32-bit Dest (dest_acc=Yes)"
+    return None
+
+
+def _skip_fp32_no_dest_acc(formats, dest_acc):
+    """32-bit inputs need a 32-bit Dest (dest_acc=Yes)."""
+    reason = fp32_no_dest_acc_skip_reason(formats, dest_acc)
+    if reason:
+        pytest.skip(reason)
 
 
 def _skip_bh_float16_no_dest_acc(formats, dest_acc):
@@ -647,7 +657,7 @@ def sfpu_binary(
         golden_tensor = torch.where(unspecified, golden_tensor.abs(), golden_tensor)
         res_tensor = torch.where(unspecified, res_tensor.abs(), res_tensor)
 
-    assert_within_contract_tolerance(
+    assert_against_contract(
         mathop,
         formats,
         dest_acc,
@@ -882,7 +892,8 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
 @parametrize(**ATAN2_SWEEP)
 def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
-    # (and the |y|>=|x| / x<0 branches) are exercised; minimax approximation matched under PCC.
+    # (and the |y|>=|x| / x<0 branches) are exercised. A minimax approximation: gated by
+    # its step budget on Wormhole, and by tolerance + PCC elsewhere.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
@@ -930,8 +941,9 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop, **run_kwargs):
 
 @parametrize(**LOGSIGMOID_SWEEP)
 def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
-    # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
+    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation, gated by its
+    # step budget on Wormhole and by tolerance + PCC elsewhere; x swept over [-8, 3.9].
+    # The x > 4 (-exp(-x)) branch needs a device-computed
     # exp(-x) operand the shared harness can't provide, left to a future driver.
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
@@ -1446,8 +1458,9 @@ assert _BINARY_EDGE_OPS, (
 
 # Driving the poles found nothing left to tolerate on Wormhole. The negative-zero class used
 # to carry a non-strict xfail for div, xlogy, fmod and remainder on the grounds that SFPMAD
-# flushes a zero result to positive zero; all 16 cells XPASS, and passed_test compares with
-# torch.isclose, which cannot see a zero's sign in the first place. The indeterminate forms
+# flushes a zero result to positive zero; all 16 cells XPASS, and neither arm of
+# passed_test can see the sign of a zero: torch.isclose compares them equal, and the ULP
+# arm's value-order index ranks both zeros the same. The indeterminate forms
 # are asserted too, now that the golden models the packer substituting an infinity for a NaN
 # the pipeline was too narrow to hold; what remains of them on Wormhole is that infinity's
 # sign, handled per lane by generated_nan_sign_is_asserted() rather than by an xfail.
@@ -1715,7 +1728,7 @@ def _run_sfpu_add_top_row(
     ), "Result tensor and golden tensor are not of the same length"
 
     # Without this a row for SfpuAddTopRow would be inert.
-    assert_within_contract_tolerance(
+    assert_against_contract(
         mathop,
         formats,
         dest_acc,
@@ -1727,10 +1740,7 @@ def _run_sfpu_add_top_row(
 
 @parametrize(**ADD_TOP_ROW_SWEEP)
 def test_eltwise_binary_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs):
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "32-bit integer formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
+    _skip_fp32_no_dest_acc(formats, dest_acc)
 
     _run_sfpu_add_top_row(formats, dest_acc, mathop, **run_kwargs)
 
@@ -1893,9 +1903,7 @@ def _run_sfpu_binary_bcast(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
     # approx_mode unset: this kernel compiles no APPROX_MODE.
-    assert_within_contract_tolerance(
-        mathop, formats, dest_acc, golden_tensor, res_tensor
-    )
+    assert_against_contract(mathop, formats, dest_acc, golden_tensor, res_tensor)
 
 
 @skip_for_quasar
