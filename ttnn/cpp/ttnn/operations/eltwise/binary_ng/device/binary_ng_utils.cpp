@@ -808,26 +808,26 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
-// the check is based on user facing information, input tensors and output memory config
-// more info may be checked in other places, such as actual output is uneven or not
-// this function is called in both earlier and later stages of the program execution
 NativeBlockBroadcast native_block_broadcast(
     const BinaryNgDeviceOperation::operation_attributes_t& attributes,
-    tt::tt_metal::DataType a,
+    const tt::tt_metal::TensorSpec& a,
     std::optional<tt::tt_metal::DataType> b,
     tt::tt_metal::DataType c) {
     using tt::tt_metal::DataType;
-    const auto narrow = [](DataType t) {
-        return t == DataType::BFLOAT16 || t == DataType::BFLOAT8_B || t == DataType::BFLOAT4_B;
-    };
     const auto op = attributes.binary_op_type;
-    const bool plain = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && std::getenv("EB_R3_NO_NATIVE") == nullptr &&
-                       (op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL) &&
-                       attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&
-                       attributes.post_activations.empty() && narrow(a) && b.has_value() && narrow(*b);
-    return {.column = plain && narrow(c), .scalar = plain && (narrow(c) || c == DataType::FLOAT32)};
+    const auto& shard_spec = a.memory_config().shard_spec();
+    const bool take = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && std::getenv("EB_R3_NO_NATIVE") == nullptr &&
+                      (op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL) &&
+                      attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&
+                      attributes.post_activations.empty() && a.data_type() == DataType::BFLOAT16 &&
+                      b == DataType::BFLOAT16 && c == DataType::BFLOAT16 && shard_spec.has_value() &&
+                      shard_spec->grid.num_cores() >= 4;
+    return {.column = take, .scalar = take};
 }
 
+// the check is based on user facing information, input tensors and output memory config
+// more info may be checked in other places, such as actual output is uneven or not
+// this function is called in both earlier and later stages of the program execution
 bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a,
     const std::optional<tt::tt_metal::TensorSpec>& b,

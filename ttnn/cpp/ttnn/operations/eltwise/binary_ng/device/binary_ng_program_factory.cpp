@@ -457,7 +457,7 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
         c.tensor_spec(),
         native_block_broadcast(
             operation_attributes,
-            a.dtype(),
+            a.tensor_spec(),
             b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
             c.dtype()));
     const bool rt_has_sharding = shard_specs.has_value();
@@ -888,7 +888,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         c.tensor_spec(),
         native_block_broadcast(
             operation_attributes,
-            a.dtype(),
+            a.tensor_spec(),
             b.has_value() ? std::optional<tt::tt_metal::DataType>{b->dtype()} : std::nullopt,
             c.dtype()));
     const auto has_sharding = shard_volumes.has_value();
