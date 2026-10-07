@@ -965,3 +965,26 @@ def test_scatter_1d_tile_layout_negative_dim(device, shape, index_shape, dtype):
 
     assert result.shape == torch_result.shape
     assert_allclose(result, torch_result)
+
+
+# The empty path returns before the device operation runs, so it calls that operation's validation
+# itself. Without these, a refactor could drop the call and nothing would notice: invalid operands
+# would be accepted whenever a shape happened to contain a zero.
+@pytest.mark.parametrize(
+    "input_dtype, index_dtype, source_dtype, expected_message",
+    [
+        (ttnn.bfloat16, ttnn.int32, ttnn.float32, "input_dtype differs from src_dtype"),
+        (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, "index_dtype"),
+    ],
+)
+def test_scatter_zero_volume_rejects_invalid_operands(
+    input_dtype, index_dtype, source_dtype, expected_message, device, expect_error
+):
+    def make(dtype):
+        torch_dtype = select_torch_dtype(dtype)
+        return ttnn.from_torch(
+            torch.zeros([2, 0, 4], dtype=torch_dtype), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+
+    with expect_error(RuntimeError, expected_message):
+        ttnn.scatter(make(input_dtype), -1, make(index_dtype), make(source_dtype))
