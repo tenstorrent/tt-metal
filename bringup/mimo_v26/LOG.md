@@ -672,3 +672,15 @@
 - claim: mm path timing hint (paired alternating one process, host-timed, N=512/row incl dispatch+combine): mm 30 ms vs unified 2.3-2.8 ms per layer (13x slower: extract/FFN run on max_per_expert=2048 padded rows for each of 8 experts; real counts are ~64 avg). N=64/row decode-sized (32 slots padded to 64, ragged live 32/20/7/1): mm 7.8 ms vs unified 2.1 ms, mm PCC 0.99989-0.99998 vs unified 0.9917-0.9997 at L5. Decode-sized finding: dead pad tokens routed to a fixed expert set overflowed max_buf (worst chip load 1280 of 1248 at N=64 cf=4) -> pad tokens must be spread/masked (padding_config) or cf raised. Weights: one DRAM-interleaved bfp8 per-expert copy (analytic 214 MB/chip/layer, ~10 GB at 47 layers) works for mm, loop, unified and fused ops, so prefill and decode via these ops can share it; moe_compute ring layout still needs the C++ patch
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_C_L5_decode_a9f8e9910cd.log
 - paths: models/demos/blackhole/mimo_v26
+
+## E261007-0401-3fc
+- date: 2026-10-07T04:01:16
+- commit: 28b183e4d8b
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: L0..L5 chain on 4x8 vs dump mimo-prefill-s128b16 (B=16,S=128), real bfp8 weights, mm experts (bf16 act), exact router, device embedding (PCC 1.0). FREE-RUNNING h_out PCC (min over 16 users) vs bf16 dump / fp32 dump / bf16-vs-fp32 floor: L0 0.99998/0.99998/1.0; L1 0.99989/0.9999/0.99995; L2 0.99986/0.99987/0.99994; L3 0.99986/0.99987/0.99994; L4 0.99989/0.99989/0.99995; L5 0.99977/0.99978/0.99994 (L5 vs fp32 mean 0.9998). TEACHER-FORCED per layer h_out min PCC vs bf16 dump: 0.99998,0.99993,0.99992,0.99995,0.99995,0.9999 (floor 1.0..0.99994); attn_out min 0.99997,0.99968,0.9991,0.99956,0.99967,0.99997; ffn_out min 0.99995,0.99512,0.99771,0.9978,0.99112,0.92992 (floor 1.0,0.99739,0.99826,0.99627,0.96141,0.99497): L5 ffn_out min user 0.92992 is BELOW floor, and router expert-SET match vs dump routing (device router on device ffn_in) 0.960,0.723,0.763,0.782,0.823 for L1..L5 (flips 82,568,485,447,363 of 2048, ~all with gap<0.01), ffn_out PCC on set-matched tokens 0.99996,0.99974,0.99984,0.99929,0.99943. Decode teacher-forced 3 steps min PCC L0 0.99997, L1 0.99981, L2 0.99893, L3 0.99992, L4 0.99996, L5 0.9874 (step 2). Cache hit path: 123 tensors loaded in 144 s for 6 layers (cache built by 3 hosts in parallel, ~80-110 s per MoE layer). Note the set-match is lower than the track-0 floor (90.6-98.6%) because the device router here sees device-computed ffn_in; a follow-up run feeds the dump ffn_in to separate router from upstream noise.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain6_28b183e4d8b.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py
+- data: {"free_chain_l5_vs_bf16":0.99977,"tf_l5_ffn_out_min":0.92992,"tf_l5_dec_min":0.9874}
