@@ -72,6 +72,9 @@ void kernel_main() {
         } else {
             sub_block(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
         }
+        for (uint32_t i = 0; i < n; ++i) {
+            PROCESS_POST_ACTIVATIONS(i);
+        }
 #else
         for (uint32_t i = 0; i < n; ++i) {
             BINARY_OP(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), i, i, i);

@@ -311,7 +311,7 @@ def _run_eltwise_binary_test(
     run_types=None,
     loop_factor=1,
     per_face_handoff=None,
-    unpack_ab_block=False,
+    unpack_ab_block=0,
 ):
     if per_face_handoff is None:
         # Blackhole: functional variants take the per-tile hand-off; perf variants take it where the opted-in kernels do,
@@ -425,6 +425,13 @@ def _run_eltwise_binary_test(
 
     # Prepare golden src_B: apply broadcast if enabled
     golden_src_B = src_B_tilized_flat
+    if unpack_ab_block == 2:
+        # Every tile of a block reads the block's first B tile (B stride 0)
+        tiles_B = golden_src_B.reshape(tile_cnt_B, -1)
+        first = (
+            torch.arange(tile_cnt_B) // input_num_tiles_in_block
+        ) * input_num_tiles_in_block
+        golden_src_B = tiles_B[first].flatten()
     if broadcast_type != BroadcastType.None_:
         broadcast_golden = get_golden_generator(BroadcastGolden)
         golden_src_B = broadcast_golden(
@@ -1305,5 +1312,46 @@ def test_eltwise_binary_unpack_ab_block(
         tile_dimensions,
         False,
         per_face_handoff=per_face_handoff,
-        unpack_ab_block=True,
+        unpack_ab_block=1,
+    )
+
+
+# The block unpack with a B stride of 0 (one B tile for every tile of a block, as a broadcast operand), both hand-offs.
+@blackhole_only
+@parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=lambda dest_acc: _get_valid_formats(dest_acc),
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=[[256, 32]],
+    per_face_handoff=[False, True],
+)
+def test_eltwise_binary_unpack_ab_block_fixed_b(
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    math_op,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    per_face_handoff,
+):
+    _run_eltwise_binary_test(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        BroadcastType.None_,
+        math_op,
+        math_fidelity,
+        Transpose.No,
+        input_dimensions,
+        tile_dimensions,
+        False,
+        per_face_handoff=per_face_handoff,
+        unpack_ab_block=2,
     )

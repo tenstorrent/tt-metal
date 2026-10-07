@@ -805,19 +805,20 @@ class PER_FACE_HANDOFF(TemplateParameter):
 
 @dataclass(repr=False)
 class UNPACK_AB_BLOCK(TemplateParameter):
-    """Blackhole eltwise binary: each block of tile pairs is unpacked with one _llk_unpack_AB_block_ call. Not a report
-    column; repr carries it into the variant hash."""
+    """Blackhole eltwise binary: each block of tile pairs is unpacked with one _llk_unpack_AB_block_ call (1), or with B's
+    first tile of the block for every tile, a B stride of 0 (2); 0 is the per-tile call. Not a report column; repr carries
+    it into the variant hash."""
 
-    _unpack_ab_block: InitVar[bool] = False
+    _unpack_ab_block: InitVar[int] = 0
 
-    def __post_init__(self, _unpack_ab_block: bool):
-        self.value = _unpack_ab_block
+    def __post_init__(self, _unpack_ab_block: int):
+        self.value = int(_unpack_ab_block)
 
     def __repr__(self) -> str:
         return f"UNPACK_AB_BLOCK({self.value})"
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool unpack_ab_block = {str(self.value).lower()};"
+        return f"constexpr std::uint32_t unpack_ab_block = {self.value};"
 
 
 @dataclass
