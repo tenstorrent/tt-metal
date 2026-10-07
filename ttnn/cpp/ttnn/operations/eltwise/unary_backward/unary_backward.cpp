@@ -150,6 +150,9 @@ std::vector<Tensor> threshold_bw(
 }
 
 // Softplus
+// d/dx of (1/beta) * log1p(exp(beta * x)) is exp(beta * x) / (1 + exp(beta * x)), which is
+// sigmoid(beta * x). Evaluating it as sigmoid keeps the tail finite, where the explicit
+// exp form overflows for beta * x above about 88 and loses the gradient entirely.
 std::vector<Tensor> softplus_bw(
     const Tensor& grad,
     const Tensor& input,
@@ -157,20 +160,19 @@ std::vector<Tensor> softplus_bw(
     float threshold,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
+    grad_tensor.reserve(1);
     Tensor mul_input_beta = ttnn::multiply(input, beta, std::nullopt, output_mem_config);
-    Tensor exp_beta_self = ttnn::exp(mul_input_beta, false, output_mem_config);
-    Tensor sub_result = ttnn::add(mul_input_beta, -threshold, std::nullopt, output_mem_config);
-    Tensor temp = ttnn::multiply(
-        ttnn::multiply(grad, exp_beta_self, std::nullopt, output_mem_config),
-        ttnn::reciprocal(ttnn::add(exp_beta_self, 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
+    Tensor sigmoid_beta_self = ttnn::sigmoid(
+        mul_input_beta,
+        (int)ttnn::operations::unary::VecMode::RC,
+        ttnn::operations::unary::SigmoidMode::ACCURATE,
         output_mem_config);
-    Tensor grad_result = ttnn::where(ttnn::gtz(sub_result, output_mem_config), grad, temp, output_mem_config);
+    Tensor temp = ttnn::multiply(grad, sigmoid_beta_self, std::nullopt, output_mem_config);
+    sigmoid_beta_self.deallocate();
+    grad_tensor.emplace_back(ttnn::where(
+        ttnn::gt(mul_input_beta, threshold, std::nullopt, output_mem_config), grad, temp, output_mem_config));
     mul_input_beta.deallocate();
-    exp_beta_self.deallocate();
-    sub_result.deallocate();
     temp.deallocate();
-    grad_tensor.emplace_back(grad_result);
     return grad_tensor;
 }
 
@@ -187,16 +189,34 @@ std::vector<Tensor> rdiv_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
     if (rounding_mode == std::nullopt) {
+        // -grad * scalar / input^2, evaluated as -grad * ((scalar / input) / input).
+        //
+        // Forming input^2 first loses the answer at both ends of the range. Below
+        // |input| = 1.0842e-19 the square falls under the smallest normal and flushes to zero,
+        // so the reciprocal returns infinity. Above |input| = 2^63 it is the reciprocal of the
+        // square that falls under the smallest normal, so the gradient comes back as zero --
+        // and that starts a full octave before the square itself overflows at 2^64, because in
+        // between the square is still perfectly representable. The exact gradient is an
+        // ordinary float32 throughout.
+        //
+        // Taking the reciprocal first, with the scalar folded in between the two multiplies,
+        // keeps every intermediate in range for the same op count -- one reciprocal and two
+        // multiplies either way.
+        Tensor recip_input = ttnn::reciprocal(input, output_mem_config);
         Tensor result = ttnn::where(
             ttnn::nez(input),
             ttnn::multiply(
                 ttnn::neg(grad, output_mem_config),
                 (ttnn::multiply(
-                    ttnn::reciprocal(ttnn::square(input, output_mem_config)), scalar, std::nullopt, output_mem_config)),
+                    ttnn::multiply(recip_input, scalar, std::nullopt, output_mem_config),
+                    recip_input,
+                    std::nullopt,
+                    output_mem_config)),
                 std::nullopt,
                 output_mem_config),
             t_nan,
             output_mem_config);
+        recip_input.deallocate();
         if (scalar > 0) {
             result = ttnn::where(
                 ttnn::logical_and(
@@ -290,7 +310,8 @@ std::vector<std::optional<Tensor>> exp_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> grad_tensor;
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor exp_result = ttnn::exp(input, false, output_mem_config);
     Tensor result = ttnn::multiply(grad, exp_result, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
@@ -327,7 +348,8 @@ std::vector<std::optional<Tensor>> sqrt_bw(
     float t_nan = std::nanf("");
     float t_inf = std::numeric_limits<float>::infinity();
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     ttnn::sqrt(input, false, output_mem_config, input_grad);
     ttnn::multiply(
         grad,
@@ -498,7 +520,7 @@ std::vector<std::optional<ttnn::Tensor>> rsqrt_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad);
+        input_grad = ttnn::empty_like(grad, std::nullopt, std::nullopt, std::nullopt, output_mem_config);
     }
     float t_nan = std::nanf("");
 
@@ -533,7 +555,8 @@ std::vector<std::optional<Tensor>> neg_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     result[0] = ttnn::neg(grad, output_mem_config, input_grad);
     return result;
 }
@@ -899,7 +922,8 @@ std::vector<std::optional<Tensor>> silu_bw(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt};
 
-    input_grad = input_grad.value_or(ttnn::empty_like(input));
+    input_grad =
+        input_grad.value_or(ttnn::empty_like(input, std::nullopt, std::nullopt, std::nullopt, output_mem_config));
     Tensor sigmoid_res = ttnn::sigmoid(
         input,
         (int)ttnn::operations::unary::VecMode::RC,
@@ -1676,13 +1700,20 @@ std::vector<Tensor> prod_bw(
     }
 
     if (all_dimensions) {
-        Tensor temp = ttnn::multiply(
-            prod_result, grad, std::nullopt, output_memory_config);  // result is stored in the first position
-        Tensor fill_tensor = ttnn::fill_first_val_into_tensor<::bfloat16>(
-            temp, temp.dtype(), temp.layout(), temp.device(), output_memory_config);
-        Tensor all_dimension_result = ttnn::multiply(
-            ttnn::reciprocal(input, output_memory_config), fill_tensor, std::nullopt, output_memory_config);
-        grad_tensor.emplace_back(all_dimension_result);
+        // Reducing over every dimension yields a scalar, so the gradient is prod(x) * grad[0] / x_i.
+        // Both prod(x) and grad[0] are single values the device already holds. Forming the full-volume
+        // product first and then broadcasting its first element sent the whole tensor to the host and
+        // back to move one number, which is what made this scale with host work rather than data.
+        const auto rank = grad.logical_shape().rank();
+        ttsl::SmallVector<uint32_t> first_start(rank, 0);
+        ttsl::SmallVector<uint32_t> first_end(rank, 1);
+        ttsl::SmallVector<uint32_t> first_step(rank, 1);
+        Tensor grad_first = ttnn::slice(grad, first_start, first_end, first_step, std::nullopt);
+        Tensor scale = ttnn::multiply(prod_result, grad_first, std::nullopt, output_memory_config);
+        grad_first.deallocate();
+        Tensor all_dimension_result =
+            ttnn::multiply(ttnn::reciprocal(input, output_memory_config), scale, std::nullopt, output_memory_config);
+        grad_tensor.emplace_back(std::move(all_dimension_result));
         return grad_tensor;
     }
 

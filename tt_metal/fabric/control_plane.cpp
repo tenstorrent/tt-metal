@@ -480,7 +480,9 @@ void ControlPlane::init_control_plane(
 
         // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
-            const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            auto mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
+                mgd_pinnings, *this->physical_system_descriptor_);
             for (const auto& [_, groups] : mgd_pinnings) {
                 pinning_groups.insert(pinning_groups.end(), groups.begin(), groups.end());
             }
@@ -1725,7 +1727,7 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     return forwarding_channels;
 }
 
-stl::Span<const ChipId> ControlPlane::get_intra_chip_neighbors(
+ttsl::Span<const ChipId> ControlPlane::get_intra_chip_neighbors(
     FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const {
     for (const auto& [_, routing_edge] :
          this->mesh_graph_->get_intra_mesh_connectivity()[*src_fabric_node_id.mesh_id][src_fabric_node_id.chip_id]) {
