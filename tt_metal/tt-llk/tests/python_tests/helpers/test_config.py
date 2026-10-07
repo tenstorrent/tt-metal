@@ -1658,8 +1658,10 @@ class TestConfig:
         """One name for kernels: a constexpr global, or a local copied from RuntimeParams.
 
         Functional tests and speed-of-light leave PERF_RUN_TYPE in templates.
-        Perf builds put it in runtimes, except speed-of-light which folds runtimes
-        back into templates before this header is generated.
+        No-sol perf builds put it in runtimes, unless LLK_PERF_RUN_TYPE_CONSTEXPR
+        moves only that parameter back onto templates.
+        Speed-of-light folds every runtime into templates before this header
+        is generated.
         """
         in_templates = any(isinstance(param, PERF_RUN_TYPE) for param in self.templates)
         in_runtimes = any(isinstance(param, PERF_RUN_TYPE) for param in self.runtimes)

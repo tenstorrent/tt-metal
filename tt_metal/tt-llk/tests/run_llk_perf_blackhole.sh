@@ -8,7 +8,10 @@
 # pytest-split sharding: compile this shard's items (producer), then measure
 # them (consumer) -- one invocation each over the whole perf suite.
 #
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# Usage: SPEED_OF_LIGHT=<true|false> LLK_PERF_RUN_TYPE_CONSTEXPR=<true|false> \
+#        run_llk_perf_blackhole.sh <group> <n_groups>
+# LLK_PERF_RUN_TYPE_CONSTEXPR applies only when SPEED_OF_LIGHT=false. It compiles
+# PERF_RUN_TYPE as a template and leaves every other runtime in L1.
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"

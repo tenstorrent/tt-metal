@@ -378,7 +378,7 @@ def _assert_combined_schema(dfs: list[pd.DataFrame], label: str):
 
 # Run mode, not a test parameter: identical for every test, and carried by the CSV
 # and DB_SCHEMA but deliberately not by the per-test catalog.
-NON_CATALOG_KEY_COLUMNS = frozenset({"speed_of_light"})
+NON_CATALOG_KEY_COLUMNS = frozenset({"speed_of_light", "perf_run_type_constexpr"})
 
 
 def _assert_matches_catalog(frame: pd.DataFrame, base_name: str, label: str):
@@ -898,6 +898,10 @@ class PerfConfig(TestConfig):
         # the report so SoL and non-SoL measurements are never compared together.
         names.append("speed_of_light")
         values.append(TestConfig.SPEED_OF_LIGHT)
+        # No-sol only: PERF_RUN_TYPE compiled as a template instead of an L1 field.
+        # Speed-of-light already folds every runtime, so this stays false there.
+        names.append("perf_run_type_constexpr")
+        values.append(_perf_run_type_is_template() and not TestConfig.SPEED_OF_LIGHT)
 
         for param in passed_templates + passed_runtimes:
             for name, value in PerfConfig._dataclass_name_and_values(param):
@@ -982,6 +986,26 @@ class PerfConfig(TestConfig):
                 f"zone handshakes."
             )
 
+    def _assign_run_config(self, templates, runtimes):
+        """Place this run type's parameters before hashing and building the ELF."""
+        if TestConfig.SPEED_OF_LIGHT:
+            self.templates = templates + runtimes
+            self.runtimes = []
+            self.compile_time_formats = True
+            return
+        if _perf_run_type_is_template():
+            # One ELF per run type. Other runtimes stay in L1.
+            self.templates = templates + [
+                p for p in runtimes if isinstance(p, PERF_RUN_TYPE)
+            ]
+            self.runtimes = [p for p in runtimes if not isinstance(p, PERF_RUN_TYPE)]
+        else:
+            self.templates = templates
+            self.runtimes = runtimes
+        # PERF_RUN_TYPE is per run type and was not in the constructor's
+        # runtime list. Rebuild the struct so the header and L1 pack match.
+        self.generate_runtime_args_struct()
+
     def run(self, perf_report: PerfReport, run_count=1):
         if not self.run_configs:
             pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
@@ -995,16 +1019,7 @@ class PerfConfig(TestConfig):
                 self.current_run_type = run_type
                 # We need to manually assign different modified templates here if the speed of light is set,
                 # because we run TestConfig constructor only once
-                if TestConfig.SPEED_OF_LIGHT:
-                    self.templates = templates + runtimes
-                    self.runtimes = []
-                    self.compile_time_formats = True
-                else:
-                    self.templates = templates
-                    self.runtimes = runtimes
-                    # PERF_RUN_TYPE is per run type and was not in the constructor's
-                    # runtime list. Rebuild the struct so the header and L1 pack match.
-                    self.generate_runtime_args_struct()
+                self._assign_run_config(templates, runtimes)
                 self.generate_variant_hash()
                 self.build_elfs()
 
@@ -1017,14 +1032,7 @@ class PerfConfig(TestConfig):
             self.current_run_type = run_type
             # We need to manually assign different modified templates here if the speed of light is set,
             # because we run TestConfig constructor only once
-            if TestConfig.SPEED_OF_LIGHT:
-                self.templates = templates + runtimes
-                self.runtimes = []
-                self.compile_time_formats = True
-            else:
-                self.templates = templates
-                self.runtimes = runtimes
-                self.generate_runtime_args_struct()
+            self._assign_run_config(templates, runtimes)
             self.generate_variant_hash()
 
             elf_dir = (
@@ -1147,6 +1155,23 @@ class PerfConfig(TestConfig):
             )
             counter_combined = sweep.merge(counter_run_results, how="cross")
             PerfConfig.COUNTER_REPORT.append(counter_combined, label=self.test_name)
+
+
+def _perf_run_type_is_template() -> bool:
+    """No-sol switch: compile PERF_RUN_TYPE as a template instead of an L1 field.
+
+    LLK_PERF_RUN_TYPE_CONSTEXPR=true leaves every other runtime (loop factor,
+    formats, tile counts) as a runtime. Speed-of-light ignores this and folds
+    all of them. Unset or false keeps today's no-sol behavior.
+    """
+    raw = os.environ.get("LLK_PERF_RUN_TYPE_CONSTEXPR", "").strip().lower()
+    if raw in ("", "0", "false", "no"):
+        return False
+    if raw in ("1", "true", "yes"):
+        return True
+    raise ValueError(
+        "LLK_PERF_RUN_TYPE_CONSTEXPR must be true or false, " f"got {raw!r}"
+    )
 
 
 def create_test_or_perf_config(

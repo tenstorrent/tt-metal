@@ -49,6 +49,11 @@ on:
         required: false
         default: false
         type: boolean
+      perf-run-type-constexpr:
+        description: "No-sol only: compile PerfRunType as a template instead of an L1 field"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   checks: write
@@ -167,6 +172,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          LLK_PERF_RUN_TYPE_CONSTEXPR: ${{ inputs.perf-run-type-constexpr }}
           TT_LLK_DISABLE_ASSERTS: "1"
           PIPELINE: ${{ inputs.pipeline }}
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
