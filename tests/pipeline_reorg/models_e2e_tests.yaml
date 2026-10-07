@@ -1598,7 +1598,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py"
@@ -1641,7 +1641,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     PERF_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_performance_wan.py"
     PIPE_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_pipeline_wan_i2v.py"
@@ -1687,7 +1687,7 @@
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1715,7 +1715,7 @@
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
-    export VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1747,7 +1747,7 @@
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1770,7 +1770,7 @@
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     # Keep five seeds and every frame. Appearance metrics use the original clips;
     # temporal metrics use lossless 960x544 copies, scored concurrently after pytest.
     export RUN_VBENCH=1 VBENCH_SEEDS=5 VBENCH_TEMPORAL_WIDTH=960
@@ -1805,7 +1805,7 @@
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1829,7 +1829,7 @@
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
-    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/models/vbench TORCH_HOME=/mnt/models/vbench/torch_hub
+    export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit" VBENCH_CACHE_DIR=/mnt/weka/model-cache/scratch/vbench TORCH_HOME=/mnt/weka/model-cache/scratch/vbench/torch_hub
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -1927,7 +1927,7 @@
         --max-new-tokens 4096 \
         --no-stop-at-eos \
         --weights real \
-        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
       > "${PIPELINE_DIR}/launch.log" 2>&1
@@ -1964,7 +1964,7 @@
 #         --repeat-generations 2 \
 #         --no-stop-at-eos \
 #         --weights real \
-#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
 #         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
 #         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
 #       > "${PIPELINE_DIR}/launch.log" 2>&1
@@ -1997,7 +1997,7 @@
 #       -- \
 #       python3 -m models.demos.deepseek_v3_b1.demo.teacher_forced \
 #         --weights real \
-#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
 #         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
 #         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
 #         --reference-file /mnt/models/ref_data/output1_reference.txt \
@@ -2034,9 +2034,9 @@
         --max-new-tokens 4096 \
         --no-stop-at-eos \
         --weights real \
-        --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+        --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-        --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+        --model-path /mnt/weka/model-weights/llm/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
       > "${PIPELINE_DIR}/launch.log" 2>&1
   model: deepseek-v3-b1
   model_family: DeepSeek
@@ -2070,9 +2070,9 @@
 #         --repeat-generations 2 \
 #         --no-stop-at-eos \
 #         --weights real \
-#         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+#         --cache-path /mnt/weka/model-cache/scratch/deepseek-ai/cache-2026-03-22 \
 #         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
-#         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
+#         --model-path /mnt/weka/model-weights/llm/deepseek-ai/DeepSeek-R1-0528-dequantized/DeepSeek-R1-dequantized \
 #       > "${PIPELINE_DIR}/launch.log" 2>&1
 #   model: deepseek-v3-b1
 #   model_family: DeepSeek
