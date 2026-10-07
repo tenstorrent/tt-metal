@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/compute/attn_res_gather_softmax.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/compute/attn_res_gather_softmax.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

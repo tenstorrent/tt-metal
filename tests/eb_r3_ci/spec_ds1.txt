@@ -1,0 +1,3 @@
+models/demos/deepseek_v3_b1/fused_ops/moe_routed_expert/moe_routed_expert_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|models/demos/deepseek_v3_b1/tests/unit_tests/test_moe_routed_expert.py::test_moe_routed_expert
+models/demos/deepseek_v3_b1/fused_ops/shared_expert/kernels/shared_expert_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|models/demos/deepseek_v3_b1/tests/unit_tests/test_shared_expert.py::test_shared_expert
+models/demos/deepseek_v3_b1/fused_ops/gated_local_reduce_down_proj/kernels/gated_local_reduce_down_proj_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|models/demos/deepseek_v3_b1/tests/unit_tests/test_gated_local_reduce_down_proj.py

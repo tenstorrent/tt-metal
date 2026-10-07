@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
+#include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -838,6 +840,10 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 }  // namespace
 
 // Implements c = a op b
+namespace {
+bool eb_r3_env(const char* name) { return std::getenv(name) != nullptr; }  // CI only (ci5)
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
@@ -1027,7 +1033,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                        std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
                        std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
                        lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
-                       (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16);
+                       (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16) && !eb_r3_env("EB_R3_NO_HIFI3");
         has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
         has_post_activations = !post_activations.empty();
         post_zero_point = has_post_activations && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
@@ -1114,6 +1120,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         (!(has_operand_activations && has_post_activations) &&
          a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
     const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded &&
+                                !eb_r3_env("EB_R3_NO_BCAST_CHUNK") &&
+                                !(eb_r3_env("EB_R3_NO_BCAST_ACT") && (has_operand_activations || has_post_activations)) &&
                                 c_sharded &&
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
@@ -1434,10 +1442,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool block_unpack_alone = block_kernel &&
                                     compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
                                     !has_post_activations && unpack_alone_formats;
-    if (block_pack || block_unpack_alone) {
+    if ((block_pack || block_unpack_alone) && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
-    if (block_pack) {
+    if (block_pack && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
 
@@ -1446,11 +1454,29 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
         if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
-            c_data_format == tt::DataFormat::Float16_b) {
+            c_data_format == tt::DataFormat::Float16_b && !eb_r3_env("EB_R3_NO_BLOCK")) {
             compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
         }
     }
 
+    if (eb_r3_env("EB_R3_MAIN_REINIT")) {
+        compute_kernel_defines["EB_R3_MAIN_REINIT"] = "1";
+    }
+    if (eb_r3_env("EB_R3_PER_FACE")) {
+        compute_kernel_defines["EB_R3_PER_FACE"] = "1";
+    }
+    if (eb_r3_env("EB_R3_LOG_RULE")) {
+        auto eb_def = [&](const char* k) {
+            const auto it = compute_kernel_defines.find(k);
+            return it == compute_kernel_defines.end() ? std::string("-") : it->second;
+        };
+        std::fprintf(stderr, "EB_R3_RULE kernel=%d block=%s block_pack=%s chunk=%s opact=%d post=%d a=%d b=%d c=%d n=%u\n",
+            static_cast<int>(compute_kernel), eb_def("BINARY_NG_BLOCK").c_str(),
+            eb_def("BINARY_NG_BLOCK_PACK").c_str(), eb_def("BCAST_OTHER_CHUNK").c_str(),
+            static_cast<int>(has_operand_activations), static_cast<int>(has_post_activations),
+            static_cast<int>(a_data_format), static_cast<int>(b_data_format), static_cast<int>(c_data_format),
+            c_tiles_per_core);
+    }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;

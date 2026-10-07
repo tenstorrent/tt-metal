@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/attention/compute/softmax.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true

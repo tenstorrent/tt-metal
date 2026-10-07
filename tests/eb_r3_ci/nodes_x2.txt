@@ -1,0 +1,5 @@
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_weighted_reduce_nc.py::test_attn_res_weighted_reduce_nc[attnres_short]
+tests/ttnn/unit_tests/operations/experimental/test_attn_res_weighted_reduce_nc.py::test_attn_res_weighted_reduce_nc[attnres_full]
+tests/ttnn/unit_tests/operations/experimental/deepseek/test_deepseek_moe_fast_reduce_nc_fused_row_tiles.py::test_deepseek_moe_fast_reduce_nc_fused_row_tiles[silicon_arch_name=blackhole-mesh_shape=(1, 1)-mesh_device=(1, 1)-hidden_size=2048-select_experts_k=8-tokens=128]
+models/demos/deepseek_v3_b1/tests/unit_tests/test_gated_local_reduce.py::test_gated_local_reduce[tile_h=32-tile_w=32-group1_num_tiles=4-group2_num_tiles=4]
+models/demos/deepseek_v3_b1/tests/unit_tests/test_gated_local_reduce.py::test_gated_local_reduce_moe_pattern[group1_num_tiles=8-group2_num_tiles=8]

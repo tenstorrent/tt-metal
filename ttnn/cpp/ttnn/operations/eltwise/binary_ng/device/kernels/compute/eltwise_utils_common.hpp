@@ -31,7 +31,7 @@
 
 // FPU kernels rerun the binary init per chunk after an operand preprocess pass. Blackhole: a post activation (SFPU on DEST)
 // leaves the binary init in place, so it alone does not.
-#if defined(ARCH_BLACKHOLE)
+#if defined(ARCH_BLACKHOLE) && !(defined(EB_R3_MAIN_REINIT) && EB_R3_MAIN_REINIT)
 #define BINARY_POST_REINIT 0
 #else
 #define BINARY_POST_REINIT HAS_ACTIVATIONS(POST)
