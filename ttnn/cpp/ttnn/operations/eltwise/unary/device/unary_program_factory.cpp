@@ -87,13 +87,20 @@ enum SfpuState : uint32_t {
     kMacroMisc = 1u << 8,
     kReplay = 1u << 9,
     kAddrMod6 = 1u << 10,
-    kLregs = 1u << 11,  // LREG0-7
+    kAddrMod4 = 1u << 11,
+    kLregs = 1u << 12,  // LREG0-7
 };
 constexpr uint32_t kPrgm = kPrgm0 | kPrgm1 | kPrgm2;
 
 struct ChainOpState {
-    uint32_t init;  // programmed by the op's init and read by its call
-    uint32_t call;  // overwritten by the op's call
+    uint32_t reads;  // programmed by the op's init and read by its call
+    uint32_t init;   // written by the op's init
+    uint32_t call;   // overwritten by the op's call
+    // eltwise_sfpu.cpp's chain forms: the first tile's init, a later tile's init (only the op's own state), the call;
+    // empty: the op's own string
+    std::string first_init;
+    std::string later_init;
+    std::string func;
 };
 
 // The ops of the chains ttnn and the models build (sigmoid's fast-exp mode, the unary and binary backward chains,
@@ -113,34 +120,47 @@ std::optional<ChainOpState> chain_op_state(const EltwiseUnaryWithParam& op, Data
         case UnaryOpType::ADD_UNARY_SFPU:
         case UnaryOpType::SUB_UNARY_SFPU:
         case UnaryOpType::MUL_UNARY_SFPU:
-        case UnaryOpType::DIV_UNARY_SFPU: return ChainOpState{0, body};
-        case UnaryOpType::SQUARE: return ChainOpState{kPrgm | kAddrMod6, body};
-        case UnaryOpType::RSQRT: return ChainOpState{kPrgm, body};
+        case UnaryOpType::DIV_UNARY_SFPU: return ChainOpState{0, 0, body};
+        case UnaryOpType::SQUARE:
+            // The chain form stores through ADDR_MOD_4, which no other op of this kernel programs; the bf16 rounding
+            // reads Prgm0-2.
+            return ChainOpState{
+                (fp32_dest_acc_en ? 0u : kPrgm) | kAddrMod4,
+                kPrgm | kAddrMod4,
+                body,
+                "square_tile_chain_init();",
+                "square_tile_chain_reinit();",
+                "square_tile_chain(0);"};
+        case UnaryOpType::RSQRT: return ChainOpState{kPrgm, kPrgm, body, "", "rsqrt_tile_chain_reinit();"};
         case UnaryOpType::TANH:
             if (param0.value_or(0.0f) != 0.0f) {
                 return std::nullopt;  // the LUT form keeps its table in LREG0-6
             }
-            return ChainOpState{kPrgm, body};
-        case UnaryOpType::EXP:
+            return ChainOpState{kPrgm, kPrgm, body};
+        case UnaryOpType::EXP: {
             if (param0.value_or(0.0f) != 1.0f) {
                 return std::nullopt;
             }
-            return ChainOpState{
-                kPrgm | kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 | kMacroMisc, body};
-        case UnaryOpType::RECIP:
-            if (fp32_dest_acc_en) {
-                return ChainOpState{
-                    kPrgm0 | kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 |
-                        kMacroSequences23 | kMacroMisc | kReplay | kAddrMod6,
-                    body};
-            }
-            return ChainOpState{kPrgm0 | kMacroTemplates01 | kMacroSequence0 | kMacroMisc | kAddrMod6, body};
+            constexpr uint32_t state =
+                kPrgm | kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 | kMacroMisc;
+            return ChainOpState{state, state, body, "", "exp_tile_chain_reinit<1u>();"};
+        }
+        case UnaryOpType::RECIP: {
+            // The chain form leaves Prgm0, which only sfpu_reciprocal_iter reads, not the full-tile programs.
+            const uint32_t state = fp32_dest_acc_en
+                                       ? kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 |
+                                             kMacroSequences23 | kMacroMisc | kReplay | kAddrMod6
+                                       : kMacroTemplates01 | kMacroSequence0 | kMacroMisc | kAddrMod6;
+            return ChainOpState{state, state, body, "recip_tile_chain_init();", "recip_tile_chain_reinit();"};
+        }
         default: return std::nullopt;
     }
 }
 
-// Blackhole: in a chain of two or more ops, an init whose state no other op of the chain writes runs with the first
-// tile only. SFPU_OP_CHAIN_0_TILE is the per-tile chain with those inits wrapped for eltwise_sfpu.cpp.
+// Blackhole: in a chain of two or more ops, an init runs with the first tile only when nothing that runs after it on
+// a later tile writes the state its call reads: no call, no per-tile init, no init that follows it on the first tile.
+// The other inits re-program only their op's state on later tiles. SFPU_OP_CHAIN_0_TILE is the per-tile chain for
+// eltwise_sfpu.cpp.
 std::map<std::string, std::string> get_chain_init_once_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain, DataType dtype, bool fp32_dest_acc_en) {
     if (op_chain.size() < 2) {
@@ -149,31 +169,60 @@ std::map<std::string, std::string> get_chain_init_once_defines(
     std::vector<ChainOpState> states;
     uint32_t call_writes = 0;
     for (const auto& op : op_chain) {
-        const auto state = chain_op_state(op, dtype, fp32_dest_acc_en);
+        auto state = chain_op_state(op, dtype, fp32_dest_acc_en);
         if (!state) {
             return {};
         }
-        states.push_back(*state);
         call_writes |= state->call;
+        states.push_back(std::move(*state));
     }
-    std::string tile;
-    bool any_once = false;
-    for (size_t k = 0; k < op_chain.size(); k++) {
-        bool once = (states[k].init & call_writes) == 0;
-        for (size_t j = 0; j < op_chain.size() && once; j++) {
-            // The same op's init writes the same values.
-            const bool same_init = op_chain[j].type() == op_chain[k].type() && states[j].init == states[k].init;
-            once = j == k || same_init || (states[j].init & states[k].init) == 0;
+    const size_t n = op_chain.size();
+    std::vector<bool> once(n, true);
+    for (bool changed = true; changed;) {
+        changed = false;
+        for (size_t k = 0; k < n; k++) {
+            if (!once[k]) {
+                continue;
+            }
+            bool ok = (states[k].reads & call_writes) == 0;
+            for (size_t j = 0; j < n && ok; j++) {
+                // The same op's init writes the same values; an init that runs once before k's leaves k's state alone.
+                const bool same_init = op_chain[j].type() == op_chain[k].type() && states[j].init == states[k].init;
+                ok = j == k || same_init || (j < k && once[j]) || (states[k].reads & states[j].init) == 0;
+            }
+            if (!ok) {
+                once[k] = false;
+                changed = true;
+            }
         }
-        any_once |= once;
-        tile += once ? fmt::format("SFPU_OP_CHAIN_FIRST_TILE_ONLY(SFPU_OP_CHAIN_0_INIT_{}) ", k)
-                     : fmt::format("SFPU_OP_CHAIN_0_INIT_{} ", k);
-        tile += fmt::format("SFPU_OP_CHAIN_0_FUNC_{} ", k);
     }
-    if (!any_once) {
-        return {};
+    std::map<std::string, std::string> defines;
+    std::string tile;
+    for (size_t k = 0; k < n; k++) {
+        std::string first = fmt::format("SFPU_OP_CHAIN_0_INIT_{}", k);
+        if (!states[k].first_init.empty()) {
+            first = fmt::format("SFPU_OP_CHAIN_0_FIRST_INIT_{}", k);
+            defines[first] = states[k].first_init;
+        }
+        if (once[k]) {
+            tile += fmt::format("SFPU_OP_CHAIN_FIRST_TILE_ONLY({}) ", first);
+        } else if (!states[k].later_init.empty()) {
+            const std::string later = fmt::format("SFPU_OP_CHAIN_0_LATER_INIT_{}", k);
+            defines[later] = states[k].later_init;
+            tile += fmt::format("SFPU_OP_CHAIN_FIRST_OR_LATER_TILE({}, {}) ", first, later);
+        } else {
+            tile += first + " ";
+        }
+        if (!states[k].func.empty()) {
+            const std::string func = fmt::format("SFPU_OP_CHAIN_0_CHAIN_FUNC_{}", k);
+            defines[func] = states[k].func;
+            tile += func + " ";
+        } else {
+            tile += fmt::format("SFPU_OP_CHAIN_0_FUNC_{} ", k);
+        }
     }
-    return {{"SFPU_OP_CHAIN_0_TILE", tile}};
+    defines["SFPU_OP_CHAIN_0_TILE"] = tile;
+    return defines;
 }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {

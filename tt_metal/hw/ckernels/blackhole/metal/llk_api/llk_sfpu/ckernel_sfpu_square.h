@@ -11,17 +11,24 @@
 
 namespace ckernel::sfpu {
 
-inline void square_init() {
+// The ttnn unary chain passes an address mode no other op of the chain programs, and skips the counter reset on a
+// later tile.
+template <uint32_t addr_mod, bool reset_counters>
+inline void _square_init_() {
     // The paired store walks dest through ADDR_MOD_6, which advances by the two rows
     // the loop just wrote (one sfpi row is two dest counter steps), so the loop body
     // needs no separate increment.
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(addr_mod);
+    if constexpr (reset_counters) {
+        math::reset_counters(p_setrwc::SET_ABD_F);
+    }
 
     sfpi::vConstIntPrgm0 = 1;
     sfpi::vConstIntPrgm1 = 0x7fff;
     sfpi::vConstIntPrgm2 = 0xffff0000;
 }
+
+inline void square_init() { _square_init_<ADDR_MOD_6, true>(); }
 
 sfpi_inline sfpi::vFloat float32_to_bf16_rne_prgm(sfpi::vFloat in) {
     sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
@@ -31,7 +38,7 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne_prgm(sfpi::vFloat in) {
     return sfpi::as<sfpi::vFloat>(bits);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8, uint32_t addr_mod = ADDR_MOD_6>
 inline void calculate_square() {
     static_assert(ITERATIONS % 2 == 0, "calculate_square() processes dest rows in pairs.");
 
@@ -46,7 +53,7 @@ inline void calculate_square() {
             r1 = float32_to_bf16_rne_prgm(r1);
         }
         sfpi::dst_reg[0] = r0;
-        sfpi::dst_reg[1].mode(ADDR_MOD_6) = r1;
+        sfpi::dst_reg[1].mode(addr_mod) = r1;
     }
 }
 

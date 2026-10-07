@@ -380,7 +380,8 @@ inline void calculate_reciprocal() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+// common_init false: a later tile of the ttnn unary chain; iter_constant false: without sfpu_reciprocal_iter's Prgm0.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool common_init = true, bool iter_constant = true>
 void recip_init() {
     // Full-tile reciprocal owns the shared LOADMACRO/Misc configuration and, for precise FP32,
     // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
@@ -390,11 +391,17 @@ void recip_init() {
     // reset), then the op-specific reciprocal setup below -- one self-contained init, matching exp_init.
     // SDPA runs reciprocal in its softmax after matmul/exp, so the general SFPU state is re-established
     // here, not just reset. Reciprocal uses ADDR_MOD_6 (dest incr 2) on Blackhole.
-    sfpu::_init_sfpu_config_reg();
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    if constexpr (common_init) {
+        sfpu::_init_sfpu_config_reg();
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    }
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-    math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
+    if constexpr (common_init) {
+        math::reset_counters(p_setrwc::SET_ABD_F);
+    }
+    if constexpr (iter_constant) {
+        sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
+    }
     if constexpr (APPROXIMATION_MODE) {
         _init_reciprocal_fast_7b_();
     } else if constexpr (is_fp32_dest_acc_en) {
