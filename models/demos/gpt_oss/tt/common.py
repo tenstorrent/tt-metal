@@ -31,6 +31,7 @@ def create_tt_model(
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
     from models.demos.gpt_oss.config import MeshConfig
+    from models.demos.gpt_oss.tt.fused_decode import fused_decode_supported
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
 
@@ -61,9 +62,36 @@ def create_tt_model(
     # state_dict is None  -> decide here (warm cache => {} skip, else cold load).
     # state_dict == {}     -> explicit skip (--skip-model-load) or a prior DP model already skipped.
     # state_dict populated -> reuse across DP models (avoid reloading for every submesh).
+    # The fused decode layers (tt/fused_decode.py) cache extra decode-only weights; a cache is only complete for
+    # them if a fused build wrote it.
+    fused_decode = fused_decode_supported(
+        mesh_device,
+        mesh_config,
+        gpt_oss_model_args.hf_config,
+        use_throughput_experts,
+        gpt_oss_model_args.max_local_batch_size,
+    )
+    if (
+        state_dict is not None
+        and not state_dict
+        and fused_decode
+        and not gpt_oss_model_args.dummy_weights
+        and num_layers is None
+        and not gpt_oss_model_args.weight_cache_is_complete(dtype, fused_decode=True)
+    ):
+        # Explicit skip of the HF load (--skip-model-load): every weight must come from the cache, and a cache that
+        # was not written by a fused build lacks the fused decode weights (o_proj_decode*, router *_decode256,
+        # experts *_decode_i768), which would otherwise fail later in ttnn.as_tensor(None, ...).
+        raise RuntimeError(
+            f"The weight cache {gpt_oss_model_args.weight_cache_path(dtype)} has no marker for the fused decode "
+            f"weights (format {gpt_oss_model_args.WEIGHT_CACHE_FORMAT_VERSION}, fused_decode_weights); rebuild it "
+            "once with the HF weights loaded (no --skip-model-load, or GPT_OSS_FORCE_MODEL_LOAD=1)."
+        )
     loaded_real_weights = False
     if state_dict is None:
-        if not gpt_oss_model_args.dummy_weights and gpt_oss_model_args.weight_cache_is_complete(dtype):
+        if not gpt_oss_model_args.dummy_weights and gpt_oss_model_args.weight_cache_is_complete(
+            dtype, fused_decode=fused_decode
+        ):
             logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
             state_dict = {}
         else:
@@ -91,8 +119,9 @@ def create_tt_model(
     # If this run populated the cache from a cold host load, record completion so future runs
     # can skip the load. Only for full-model builds (a num_layers override produces a partial
     # cache that must not satisfy the completeness check).
+    assert all(layer.fused_decode == fused_decode for layer in model.layers), "fused decode predicate mismatch"
     if loaded_real_weights and num_layers is None:
-        gpt_oss_model_args.mark_weight_cache_complete(dtype)
+        gpt_oss_model_args.mark_weight_cache_complete(dtype, fused_decode=fused_decode)
 
     # Extract tt_kv_cache like tt_transformers does
     tt_kv_cache = []

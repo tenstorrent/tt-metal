@@ -36,6 +36,7 @@ class Attention:
         weight_dtype=ttnn.bfloat8_b,
         tensor_cache_path=None,
         create_kv_cache=True,
+        fused_decode=False,
     ):
         """
         Initialize attention layer.
@@ -53,6 +54,8 @@ class Attention:
             weight_dtype: Data type for weights (default: bfloat8_b)
             tensor_cache_path: Optional path for weight caching
             create_kv_cache: Whether to create KV cache (default: True)
+            fused_decode: Fused decode path (fused_decode.py): QKV + fused QK RoPE + fused K/V cache update, and
+                o_proj written into the fused all-reduce that returns the width-sharded residual layout
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -62,6 +65,7 @@ class Attention:
         self.layer_idx = layer_idx
         self.transformation_mats = transformation_mats
         self.paged_attention_config = paged_attention_config
+        self.fused_decode = fused_decode
 
         # Determine sliding window based on layer index
         self.use_sliding_window = self.layer_idx % 2 == 0
@@ -76,6 +80,7 @@ class Attention:
             mesh_config=mesh_config,
             weight_dtype=weight_dtype,
             tensor_cache_path=tensor_cache_path,
+            decode_o_proj=fused_decode,
         )
 
         # Initialize KV cache
@@ -161,6 +166,7 @@ class Attention:
                 position_idx=position_idx,
                 page_table=page_table,
                 ccl_manager=self.ccl_manager,
+                fused=self.fused_decode,
             )
         else:
             return prefill_forward(

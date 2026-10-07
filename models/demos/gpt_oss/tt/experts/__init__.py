@@ -31,9 +31,9 @@ import ttnn
 from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
-from .decode import decode_forward
+from .decode import decode_forward, decode_forward_indexed
 from .prefill import prefill_forward
-from .weights import load_expert_weights
+from .weights import load_decode_expert_weights, load_expert_weights
 
 __all__ = ["Experts", "ExpertConfig", "ProgramConfig"]
 
@@ -56,6 +56,7 @@ class Experts:
         program_config: ProgramConfig,
         weight_dtype=ttnn.bfloat4_b,
         tensor_cache_path=None,
+        indexed_decode=False,
     ):
         """
         Initialize expert layers.
@@ -69,6 +70,8 @@ class Experts:
             program_config: Model-specific program configurations
             weight_dtype: Data type for weights (default: bfloat4_b)
             tensor_cache_path: Optional path for weight caching
+            indexed_decode: Decode computes only the routed experts (indexed sparse_matmul, one token per device,
+                TP without expert parallelism); requires the router's decode_indexed outputs.
         """
         self.config = config
         self.mesh_config = mesh_config
@@ -88,6 +91,40 @@ class Experts:
 
         # Cache prefill sparsity (created once, reused for all prefill calls)
         self.prefill_sparsity = self._create_prefill_sparsity()
+
+        # Indexed decode (TP over mesh columns, no expert parallelism): only the routed experts are computed.
+        self.decode_weights = None
+        if indexed_decode:
+            assert mesh_config.decode.tp > 1 and mesh_config.decode.ep == 1, "indexed decode needs TP > 1, EP == 1"
+            self.decode_weights = load_decode_expert_weights(
+                mesh_device=mesh_device,
+                config=config,
+                state_dict=state_dict,
+                mesh_config=mesh_config,
+                weight_dtype=weight_dtype,
+                tensor_cache_path=tensor_cache_path,
+            )
+            # sparse_matmul still takes a sparsity operand; the indexed mode never reads it.
+            import torch
+
+            self.decode_sparsity_placeholder = ttnn.from_torch(
+                torch.zeros(1, 1, 1, config.num_experts),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            # Expert -> device table for the fused score-weighted reduce: under TP every device holds (a shard of)
+            # every expert, so row d maps all experts to device d and each device keeps every routed contribution.
+            num_devices = mesh_device.get_num_devices()
+            self.decode_expert_mapping = ttnn.from_torch(
+                torch.arange(num_devices, dtype=torch.int32).reshape(num_devices, 1).expand(-1, config.num_experts),
+                dtype=ttnn.uint16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
 
         # For backward compatibility
         self.intermediate_size = config.intermediate_size
@@ -138,6 +175,18 @@ class Experts:
         Returns:
             Expert output tensor [1, batch, seq_len, hidden_size]
         """
+        if is_decode and self.decode_weights is not None:
+            return decode_forward_indexed(
+                hidden_states,
+                topk_expert_indices,
+                topk_expert_weights,
+                weights=self.decode_weights,
+                config=self.config,
+                mesh_config=self.mesh_config,
+                ccl_manager=self.ccl_manager,
+                sparsity_placeholder=self.decode_sparsity_placeholder,
+                expert_mapping=self.decode_expert_mapping,
+            )
         # Determine mode based on sequence length
         if is_decode:
             return decode_forward(

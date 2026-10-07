@@ -194,3 +194,117 @@ def decode_forward(
     )
 
     return next_states
+
+
+def _indexed_program_config(grid, n, k, in0_block_w):
+    """1D mcast-in0 config for the indexed sparse_matmul: every core of `grid` owns per_core_N output tiles."""
+    cores = grid[0] * grid[1]
+    n_tiles, k_tiles = -(-n // ttnn.TILE_SIZE), -(-k // ttnn.TILE_SIZE)
+    per_core_N = -(-n_tiles // cores)
+    assert -(-n_tiles // per_core_N) == cores, f"{n_tiles} output tiles do not cover the {grid} grid"
+    in0_block_w = max(d for d in range(1, in0_block_w + 1) if k_tiles % d == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=1,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def swiglu_fused(gate, up, config: ExpertConfig, memory_config=ttnn.L1_MEMORY_CONFIG):
+    """GPT-OSS SwiGLU (clamp(up, -l, l) + 1) * g * sigmoid(alpha * g), g = clamp(gate, max=l), as one binary op:
+    g * sigmoid(alpha * g) == silu(alpha * g) / alpha, applied as input activations of the multiply."""
+    UWP, U = ttnn.UnaryWithParam, ttnn.UnaryOpType
+    limit, alpha = config.swiglu_limit, config.alpha
+    return ttnn.multiply(
+        up,
+        gate,
+        input_tensor_a_activations=[UWP(U.CLAMP_TSS, -limit, limit), UWP(U.ADD_UNARY_SFPU, 1.0)],
+        input_tensor_b_activations=[
+            UWP(U.CLAMP_TSS, -3.0e38, limit),
+            UWP(U.MUL_UNARY_SFPU, alpha),
+            UWP(U.SILU),
+            UWP(U.MUL_UNARY_SFPU, 1.0 / alpha),
+        ],
+        memory_config=memory_config,
+    )
+
+
+def decode_forward_indexed(
+    hidden_states,
+    expert_indices,
+    expert_weights,
+    weights,
+    config: ExpertConfig,
+    mesh_config,
+    ccl_manager,
+    sparsity_placeholder,
+    expert_mapping,
+):
+    """Decode MoE for one token over its top-k experts only (indexed sparse_matmul, per-expert bias fused).
+
+    hidden_states: [1, 1, 1 (32), hidden] BF16, L1 interleaved, replicated over TP.
+    expert_indices: [1, k] UINT16 row-major (the routed expert ids).
+    expert_weights: [1, 1, 1, k] row-major routing weights (softmax over the top-k logits).
+    Returns the all-reduced BF16 MoE output in the decode residual layout.
+    """
+    if hidden_states.shape[-2] != 1:
+        raise ValueError(f"Indexed decode routes one token per device, got {hidden_states.shape[-2]}")
+    k = config.num_experts_per_tok
+    inter = weights.intermediate_padded
+    hidden = config.hidden_size
+    gate_up_cfg = _indexed_program_config((8, 6), 2 * inter, hidden, 30)
+    down_cfg = _indexed_program_config((10, 9), hidden, inter, 12)
+
+    def project(x, w, b, cfg, a_sparse=False, dtype=ttnn.bfloat16):
+        return ttnn.sparse_matmul(
+            x,
+            w,
+            sparsity=sparsity_placeholder,
+            indices=expert_indices,
+            bias=b,
+            is_input_a_sparse=a_sparse,
+            program_config=cfg,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=dtype,
+        )
+
+    # [1, 1, 1, k, 32, 2 * inter]: one tile row block per routed expert, [gate | up] along the width.
+    rows = hidden_states.shape[-2]
+    gate_up = project(hidden_states, weights.gate_up_proj, weights.gate_up_proj_bias, gate_up_cfg)
+    gate_up = ttnn.reshape(gate_up, (1, k, rows, 2 * inter), (1, k, 32, 2 * inter))
+    gate = ttnn.slice(gate_up, [0, 0, 0, 0], [1, k, rows, inter])
+    up = ttnn.slice(gate_up, [0, 0, 0, inter], [1, k, rows, 2 * inter])
+    gate_up.deallocate(True)
+    act = swiglu_fused(gate, up, config)
+    gate.deallocate(True)
+    up.deallocate(True)
+    # [1, k, 32, hidden] BF8: the all-reduce payload precision, so the combine below emits it directly.
+    down = project(act, weights.down_proj, weights.down_proj_bias, down_cfg, a_sparse=True, dtype=ttnn.bfloat8_b)
+    act.deallocate(True)
+
+    # Routing-weighted sum over the k expert rows in one op (score multiply-accumulate inside the reduce), written
+    # straight into the all-reduce layout. Scores are one row-major [tokens, 1, 1, k] row per token.
+    all_reduce = ccl_manager.get_decode_all_reduce(hidden, mesh_config.tp_axis)
+    scores = expert_weights
+    down = ttnn.reshape(down, (k, 1, rows, hidden), (k, 1, 32, hidden))
+    out = ttnn.experimental.deepseek_moe_fast_reduce_nc_fused(
+        down,
+        expert_indices,
+        expert_mapping,
+        0,
+        split_size=hidden,
+        cluster_axis=mesh_config.tp_axis,
+        output_memory_config=all_reduce.memory_config,
+        scores_tensor=scores,
+    )[0]
+    down.deallocate(True)
+    scores.deallocate(True)
+    return all_reduce(out, "moe")

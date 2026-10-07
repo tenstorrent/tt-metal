@@ -14,6 +14,7 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from .fused_decode import fused_decode_supported
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 
@@ -38,6 +39,7 @@ def create_rope_setup(
     users_row_sharded=False,
     datatype=ttnn.bfloat16,
     shard_batch_to_mesh_dim=0,
+    use_qk_fused=False,
 ):
     """
     Create and return a RotarySetup instance for the GPT-OSS model.
@@ -69,6 +71,7 @@ def create_rope_setup(
         rope_scaling=rope_scaling,
         datatype=datatype,
         shard_batch_to_mesh_dim=shard_batch_to_mesh_dim,
+        use_qk_fused=use_qk_fused,
     )
 
     return rope_setup
@@ -145,6 +148,12 @@ class Model:
             mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
         )
 
+        # Fused decode layers (tt/fused_decode.py): decode keeps a width-sharded BF16 residual stream through the
+        # layers, rotates Q and K in one op, and hands the final norm a sharded activation.
+        self.fused_decode = fused_decode_supported(
+            mesh_device, self.mesh_config, hf_config, use_throughput_experts, max_local_batch_size
+        )
+
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
         self.rope_setup = create_rope_setup(
@@ -154,6 +163,9 @@ class Model:
             users_row_sharded=users_row_sharded,
             datatype=ttnn.bfloat16,
             shard_batch_to_mesh_dim=0,
+            # Fused decode layers rotate Q and K in one op (rotary_embedding_llama_fused_qk): cos/sin and the
+            # decode transformation matrix are laid out for 2 x batch cores (Q users, then K users).
+            use_qk_fused=self.fused_decode,
         )
 
         # Keep references for compatibility
@@ -426,7 +438,14 @@ class Model:
             return hidden_states
 
         # Final norm and lm_head
-        hidden_states = self.norm(hidden_states)
+        if self.fused_decode and mode == Mode.DECODE:
+            # Fused decode layers return the width-sharded BF16 residual stream; lm_head reads interleaved BF8, the
+            # activation dtype (and LoFi BFP8 x BFP8 matmul) of the unfused decode path.
+            normed = self.norm.forward_sharded(hidden_states)
+            hidden_states = ttnn.to_memory_config(normed, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+            normed.deallocate(True)
+        else:
+            hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
@@ -532,8 +551,12 @@ class Model:
             tokens_for_embed = tokens[:, :, :, :actual_batch]
         else:
             tokens_for_embed = tokens
+        # The fused decode layers carry a BF16 residual stream, so the decode embedding stays BF16 (no BF8 cast).
         input_embeds = ttnn.embedding(
-            tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+            tokens_for_embed,
+            self.embedding_weight,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16 if self.fused_decode else ttnn.bfloat8_b,
         )
         input_embeds = ttnn.unsqueeze(input_embeds, 0)
         # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
@@ -1010,9 +1033,13 @@ class Model:
             rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
             rot_current_pos = rot_current_pos.reshape(1, B)  # [1, batch]
             assert rot_current_pos.shape == (1, B), "rot_current_pos must be a [1, batch] tensor"
+            if self.rope_setup.use_qk_fused:
+                # One cos/sin row per Q user followed by one per K user (fused QK RoPE).
+                rot_current_pos = rot_current_pos.repeat(1, 2)
             assert torch.min(rot_current_pos) >= 0, "rot_current_pos must be non-negative"
             # Add padding if needed
-            pad_size = nearest_32(B) - B
+            n = rot_current_pos.shape[-1]
+            pad_size = nearest_32(n) - n
             rot_current_pos = torch.nn.functional.pad(rot_current_pos, (0, pad_size), "constant", 0)
             mesh_mapper = (
                 ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.mesh_device.shape)

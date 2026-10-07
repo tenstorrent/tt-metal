@@ -161,3 +161,84 @@ def load_expert_weights(
         down_proj_bias=down_proj_bias_tt,
         intermediate_size_per_device=intermediate_size_per_device,
     )
+
+
+# Decode-only expert weights for the indexed sparse_matmul path (experts/decode.py: decode_forward_indexed).
+# Each TP shard of the intermediate dimension is zero-padded up to a multiple of DECODE_INTERMEDIATE_ALIGN so the
+# gate/up projections split into whole-tile columns over a rectangular core grid (720 -> 768 = 24 tiles = 8x3 cores
+# for gpt-oss-20b at TP=4; the natural 23-tile padding only fits 12 cores). Padded gate/up columns are zero (weight
+# and bias), so their SwiGLU output is exactly zero and the padded down rows contribute nothing.
+DECODE_INTERMEDIATE_ALIGN = 256
+
+
+@dataclass(frozen=True)
+class DecodeExpertWeights:
+    # gate and up share their input: packed as [gate | up] along N so one indexed matmul computes both.
+    gate_up_proj: ttnn.Tensor  # [1, E, hidden, 2 * I_pad] per device
+    down_proj: ttnn.Tensor  # [1, E, I_pad, hidden]
+    gate_up_proj_bias: ttnn.Tensor  # [E, 1 (32), 2 * I_pad]: tile row e holds expert e's bias (indexed fused bias)
+    down_proj_bias: ttnn.Tensor  # [E, 1 (32), hidden]; real values on the first TP device only (row-parallel)
+    intermediate_padded: int
+
+
+def load_decode_expert_weights(
+    mesh_device,
+    config: ExpertConfig,
+    state_dict,
+    mesh_config: MeshConfig,
+    weight_dtype=ttnn.bfloat4_b,
+    tensor_cache_path=None,
+) -> DecodeExpertWeights:
+    tp = mesh_config.decode.tp
+    inter_local = config.intermediate_size // tp
+    inter_pad = -(-inter_local // DECODE_INTERMEDIATE_ALIGN) * DECODE_INTERMEDIATE_ALIGN
+    E, H = config.num_experts, config.hidden_size
+
+    def pad_shards(t, dim):
+        """Split t along dim into tp shards, zero-pad each shard to inter_pad, concatenate."""
+        chunks = torch.chunk(t, tp, dim=dim)
+        pad = [0, 0] * (t.dim() - 1 - (dim % t.dim())) + [0, inter_pad - inter_local]
+        return torch.cat([torch.nn.functional.pad(c, pad) for c in chunks], dim=dim)
+
+    if state_dict:
+        gate_up = state_dict["gate_up_proj"]
+        gate_up_bias = state_dict["gate_up_proj_bias"]
+        gate = pad_shards(gate_up[..., ::2].reshape(1, E, H, config.intermediate_size), -1)
+        up = pad_shards(gate_up[..., 1::2].reshape(1, E, H, config.intermediate_size), -1)
+        gate_bias = pad_shards(gate_up_bias[..., ::2].reshape(E, 1, config.intermediate_size), -1)
+        up_bias = pad_shards(gate_up_bias[..., 1::2].reshape(E, 1, config.intermediate_size), -1)
+
+        def pack(g, u):
+            """Per TP shard: [gate shard | up shard] so each device holds its packed [.., 2 * I_pad] block."""
+            return torch.cat([t for pair in zip(torch.chunk(g, tp, -1), torch.chunk(u, tp, -1)) for t in pair], -1)
+
+        gate_up = pack(gate, up)
+        gate_up_bias = pack(gate_bias, up_bias)
+        down = pad_shards(state_dict["down_proj"].reshape(1, E, config.intermediate_size, H), -2)
+        down_bias = state_dict["down_proj_bias"].reshape(E, 1, H)
+        down_bias = torch.cat([down_bias] + [torch.zeros_like(down_bias)] * (tp - 1), dim=-1)
+    else:
+        gate_up = gate_up_bias = down = down_bias = None
+
+    col = mesh_config.column_parallel(mesh_device)
+    row = mesh_config.row_parallel(mesh_device)
+    suffix = f"decode_i{inter_pad}"
+
+    def load(t, name, dtype, mapper):
+        return ttnn.as_tensor(
+            t,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=dtype,
+            mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, f"{name}_{suffix}"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    return DecodeExpertWeights(
+        gate_up_proj=load(gate_up, "gate_up_proj", weight_dtype, col),
+        down_proj=load(down, "down_proj", weight_dtype, row),
+        gate_up_proj_bias=load(gate_up_bias, "gate_up_proj_bias", ttnn.bfloat16, col),
+        down_proj_bias=load(down_bias, "down_proj_bias", ttnn.bfloat16, col),
+        intermediate_padded=inter_pad,
+    )

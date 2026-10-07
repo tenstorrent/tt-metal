@@ -23,6 +23,10 @@ class AttentionWeights:
     o_proj_bias: ttnn.Tensor
     decode_sinks: ttnn.Tensor
     sinks: ttnn.Tensor
+    # Decode o_proj without the CCL tile padding: the decode all-reduce is a fused all_reduce_async over the full
+    # hidden width, so the padded columns (and the slice that removes them) are not needed.
+    o_proj_decode: ttnn.Tensor = None
+    o_proj_bias_decode: ttnn.Tensor = None
 
 
 def load_attention_weights(
@@ -33,6 +37,7 @@ def load_attention_weights(
     weight_dtype=ttnn.bfloat8_b,
     bias_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
+    decode_o_proj=False,
 ) -> AttentionWeights:
     """
     Load and shard attention weights.
@@ -45,6 +50,7 @@ def load_attention_weights(
         weight_dtype: Data type for weights (default: bfloat8_b)
         bias_dtype: Data type for biases (default: bfloat16)
         tensor_cache_path: Optional path for weight caching
+        decode_o_proj: Also load the unpadded o_proj used by the fused decode path
 
     Returns:
         AttentionWeights container with all loaded weights
@@ -115,6 +121,14 @@ def load_attention_weights(
         )
         decode_sinks /= config.scaling
 
+        o_proj_decode = o_proj
+        o_proj_bias_decode = o_proj_bias
+        if mesh_config.tp > 1:
+            # Row-parallel: the bias is added once, on the first TP device.
+            o_proj_bias_decode = torch.cat(
+                [o_proj_bias] + [torch.zeros_like(o_proj_bias)] * (mesh_config.tp - 1), dim=-1
+            )
+
         # Pad o_proj output dimension for tile alignment in CCL operations.
         # Without padding, local_hidden = hidden_size / TP may not be tile-aligned (e.g., 2880/8 = 360),
         # causing CCL to do expensive Untilize->Pad->Tilize cycles internally.
@@ -139,6 +153,8 @@ def load_attention_weights(
         o_proj_bias = None
         decode_sinks = None
         sinks_for_sdpa = None
+        o_proj_decode = None
+        o_proj_bias_decode = None
 
     # Clean mesh mapping using MeshConfig
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
@@ -185,6 +201,27 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    o_proj_decode_tt = o_proj_bias_decode_tt = None
+    if decode_o_proj:
+        o_proj_decode_tt = ttnn.as_tensor(
+            o_proj_decode,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=weight_dtype,
+            mesh_mapper=row_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_decode"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        o_proj_bias_decode_tt = ttnn.as_tensor(
+            o_proj_bias_decode,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=bias_dtype,
+            mesh_mapper=col_mesh_mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, "o_proj_bias_decode"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     decode_sinks_tt = ttnn.as_tensor(
         decode_sinks,
         device=mesh_device,
@@ -213,4 +250,6 @@ def load_attention_weights(
         o_proj_bias=o_proj_bias_tt,
         decode_sinks=decode_sinks_tt,
         sinks=sinks_tt,
+        o_proj_decode=o_proj_decode_tt,
+        o_proj_bias_decode=o_proj_bias_decode_tt,
     )

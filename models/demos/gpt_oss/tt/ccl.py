@@ -13,6 +13,8 @@ class CCLManager:
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
         self._ping_pong_buffer_indices = {}
+        self._decode_all_reduce = {}
+        self._decode_gate_buffers = {}
 
         # Setup semaphores
         self._init_subdevice()
@@ -86,6 +88,24 @@ class CCLManager:
         cur_idx = self.barrier_idx
         self.barrier_idx = (cur_idx + 1) % 2
         return self.barrier_semaphore[cur_idx]
+
+    def get_decode_all_reduce(self, hidden_size, cluster_axis):
+        """Persistent fused all-reduce shared by every decoder layer's decode path (see fused_decode.py)."""
+        from .fused_decode import DecodeAllReduce
+
+        key = (hidden_size, cluster_axis)
+        if key not in self._decode_all_reduce:
+            self._decode_all_reduce[key] = DecodeAllReduce(self.mesh_device, hidden_size, cluster_axis, self.topology)
+        return self._decode_all_reduce[key]
+
+    def get_decode_gate_buffers(self, num_experts, width, tokens):
+        """Router-gate constants and output buffers shared by every decoder layer's decode path."""
+        from .fused_decode import create_decode_gate_buffers
+
+        key = (num_experts, width, tokens)
+        if key not in self._decode_gate_buffers:
+            self._decode_gate_buffers[key] = create_decode_gate_buffers(self.mesh_device, num_experts, width, tokens)
+        return self._decode_gate_buffers[key]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

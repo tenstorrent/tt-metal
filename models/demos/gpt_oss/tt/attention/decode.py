@@ -3,6 +3,7 @@
 
 import ttnn
 
+from ..fused_decode import auto_matmul_compute_config, matmul_1d_program_config, width_sharded_memory_config
 from .config import AttentionConfig, ProgramConfig
 from .operations import apply_rope
 from .weights import AttentionWeights
@@ -22,6 +23,7 @@ def decode_forward(
     position_idx,
     page_table,
     ccl_manager,
+    fused=False,
 ):
     """
     Decode forward pass - optimized for single token (seq_len=1).
@@ -40,6 +42,7 @@ def decode_forward(
         position_idx: Current position index
         page_table: Page table for paged attention (optional)
         ccl_manager: Communication manager
+        fused: Fused decode path (fused_decode.py); returns the all-reduced BF16 output in the residual layout
 
     Returns:
         Attention output [batch, 1, hidden_size]
@@ -61,51 +64,92 @@ def decode_forward(
     # produced silent corruption (every odd Q/K/V head returned the previous
     # user's row).
     qkv_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mesh_config.tp > 1 else ttnn.DRAM_MEMORY_CONFIG
-    xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
-    ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
 
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
     head_dim = config.head_dim
-
-    tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
-        xqkv_fused,
-        num_heads=num_local_heads,
-        num_kv_heads=num_local_kv_heads,
-        memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-    )
-
-    xqkv_fused.deallocate(True)
-
-    # Apply RoPE
-    tt_q_orig = tt_q
-    tt_k_orig = tt_k
-    tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
-    tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
-    tt_q_orig.deallocate(True)
-    tt_k_orig.deallocate(True)
-
-    # DEBUG: Check for NaN/Inf in Q/K after rope (enable with DEBUG_ATTENTION=1)
-    # Disabled by default to avoid performance impact
-
-    # Update KV cache
     k_cache, v_cache = kv_cache
-    tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
-    tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
 
-    ttnn.experimental.paged_update_cache(
-        k_cache,
-        tt_k,
-        update_idxs_tensor=position_idx,
-        page_table=page_table,
-    )
-    ttnn.experimental.paged_update_cache(
-        v_cache,
-        tt_v,
-        update_idxs_tensor=position_idx,
-        page_table=page_table,
-    )
+    if fused:
+        # rope_mats / transformation_mat are laid out for rotary_embedding_llama_fused_qk: cos/sin rows for the Q
+        # users then the K users (Model use_qk_fused).
+        assert rope_mats[0].shape[1] == 2 * batch_size, "fused decode needs the fused-QK RoPE layout (use_qk_fused)"
+        # QKV projection with the bias fused into the matmul, written width-sharded (one tile per core) for the
+        # head split. The 1D multicast matmul reads its activation interleaved.
+        qkv_input = hidden_states
+        if hidden_states.is_sharded():
+            qkv_input = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
+        qkv_width = weights.wqkv.shape[-1]
+        qkv_sharded = width_sharded_memory_config(mesh_device, qkv_width, qkv_width // ttnn.TILE_SIZE)
+        xqkv_fused = ttnn.linear(
+            qkv_input,
+            weights.wqkv,
+            bias=weights.wqkv_bias,
+            program_config=matmul_1d_program_config(qkv_sharded, hidden_size, in0_block_w=15),
+            # LoFi as in the unfused graph, whose BFP8 x BFP8 QKV matmul took the low-precision default.
+            compute_kernel_config=auto_matmul_compute_config(mesh_device, operands_low_precision=True),
+            dtype=ttnn.bfloat16,
+            memory_config=qkv_sharded,
+        )
+        if qkv_input is not hidden_states:
+            qkv_input.deallocate(True)
+        # Q and K on disjoint cores (K right after Q; V shares Q's cores): the layout the fused QK RoPE and the
+        # fused K/V cache update require.
+        tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv_fused,
+            num_heads=num_local_heads,
+            num_kv_heads=num_local_kv_heads,
+            overlap_qk_coregrid=False,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        xqkv_fused.deallocate(True)
+        tt_q_orig, tt_k_orig = tt_q, tt_k
+        tt_q, tt_k = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            tt_q, tt_k, rope_mats[0], rope_mats[1], transformation_mat
+        )
+        tt_q_orig.deallocate(True)
+        tt_k_orig.deallocate(True)
+        ttnn.experimental.paged_fused_update_cache(
+            k_cache, tt_k, v_cache, tt_v, update_idxs_tensor=position_idx, page_table=page_table
+        )
+    else:
+        xqkv_fused = ttnn.matmul(hidden_states, weights.wqkv, dtype=ttnn.bfloat16, memory_config=qkv_memory_config)
+        ttnn.add(xqkv_fused, weights.wqkv_bias, output_tensor=xqkv_fused)
+
+        tt_q, tt_k, tt_v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv_fused,
+            num_heads=num_local_heads,
+            num_kv_heads=num_local_kv_heads,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+
+        xqkv_fused.deallocate(True)
+
+        # Apply RoPE
+        tt_q_orig = tt_q
+        tt_k_orig = tt_k
+        tt_q = apply_rope(tt_q, rope_mats, transformation_mat, is_decode_mode=True)
+        tt_k = apply_rope(tt_k, rope_mats, transformation_mat, is_decode_mode=True)
+        tt_q_orig.deallocate(True)
+        tt_k_orig.deallocate(True)
+
+        # Update KV cache
+        tt_k = ttnn.to_memory_config(tt_k, kv_mem_cfg)
+        tt_v = ttnn.to_memory_config(tt_v, kv_mem_cfg)
+
+        ttnn.experimental.paged_update_cache(
+            k_cache,
+            tt_k,
+            update_idxs_tensor=position_idx,
+            page_table=page_table,
+        )
+        ttnn.experimental.paged_update_cache(
+            v_cache,
+            tt_v,
+            update_idxs_tensor=position_idx,
+            page_table=page_table,
+        )
 
     tt_k.deallocate(True)
     tt_v.deallocate(True)
@@ -139,7 +183,6 @@ def decode_forward(
             # memory_config=height_sharded_mem_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     else:
         # GQA (num_kv_heads > 1) rejects sharded output in the SDPA decode
         # device op — match the paged path: write to DRAM, then to_memory_config
@@ -156,9 +199,32 @@ def decode_forward(
             compute_kernel_config=program_config.get_compute_kernel_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     tt_q.deallocate(True)
 
+    if fused:
+        # Concat heads as one reshape: [1, B, heads, head_dim] -> [1, 1, B, heads * head_dim] (row-major order is
+        # exactly the head concatenation), landing interleaved in L1 for the o_proj matmul.
+        tt_sdpa_in = ttnn.reshape(
+            tt_sdpa_tensor, (1, 1, batch_size, num_local_heads * head_dim), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        tt_sdpa_tensor.deallocate(True)
+        # Row-parallel o_proj with the bias fused (device 0 only), written straight into the fused all-reduce's
+        # width-sharded layout; the all-reduce returns the BF16 sum in the residual layout.
+        all_reduce = ccl_manager.get_decode_all_reduce(hidden_size, mesh_config.tp_axis)
+        tt_out = ttnn.linear(
+            tt_sdpa_in,
+            weights.o_proj_decode,
+            bias=weights.o_proj_bias_decode,
+            program_config=matmul_1d_program_config(all_reduce.memory_config, tt_sdpa_in.shape[-1], in0_block_w=8),
+            compute_kernel_config=auto_matmul_compute_config(mesh_device, operands_low_precision=False),
+            dtype=ttnn.bfloat8_b,
+            memory_config=all_reduce.memory_config,
+        )
+        tt_sdpa_in.deallocate(True)
+        tt_out = ttnn.reshape(tt_out, (1, 1, batch_size, hidden_size), (1, 1, 32, hidden_size))
+        return all_reduce(tt_out, "attn")
+
+    tt_sdpa_tensor = ttnn.to_memory_config(tt_sdpa_tensor, height_sharded_mem_config)
     # Concat heads and apply output projection
     tt_sdpa_out = ttnn.experimental.nlp_concat_heads_decode(tt_sdpa_tensor, num_heads=num_local_heads)
     tt_sdpa_tensor.deallocate(True)

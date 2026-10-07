@@ -7,6 +7,7 @@ from models.demos.gpt_oss.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
 from .attention_configs import GPTOSSAttentionProgramConfig
+from .fused_decode import residual_memory_config
 from .mlp import MLP
 from .rms_norm import RMSNorm
 
@@ -86,8 +87,47 @@ class DecoderLayer:
             transformation_mats=transformation_mats,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
             create_kv_cache=create_kv_cache,
+            fused_decode=self.mlp.indexed_decode,
         )
         self.mesh_device = mesh_device
+        # Fused decode (one token per device, TP over mesh columns): the residual stream stays width-sharded in L1
+        # between the fused all-reduces (fused_decode.py) and the MoE computes only the routed experts.
+        self.fused_decode = self.mlp.indexed_decode
+        if self.fused_decode:
+            self.residual_memory_config = residual_memory_config(mesh_device, hf_config.hidden_size)
+            ccl_manager.get_decode_all_reduce(hf_config.hidden_size, mesh_config.tp_axis)
+
+    def _decode_forward(self, hidden_states, position_embeddings, position_idx, page_table, kv_cache):
+        """One decode token: sharded norm -> attention (+ fused all-reduce) -> residual add -> sharded norm -> MoE
+        (+ fused all-reduce) -> residual add. Returns the BF16 residual stream in the width-sharded decode layout."""
+        if hidden_states.memory_config() != self.residual_memory_config:
+            # First layer: the embedding output enters the decode residual layout.
+            embeddings = hidden_states
+            hidden_states = ttnn.to_memory_config(embeddings, self.residual_memory_config)
+            embeddings.deallocate(True)
+        residual = hidden_states
+        attn_in = self.input_layernorm.forward_sharded(hidden_states)
+        attn_out = self.self_attn(
+            attn_in,
+            rope_mats=position_embeddings,
+            position_idx=position_idx,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            is_decode=True,
+        )
+        attn_in.deallocate(True)
+        hidden_states = ttnn.add(residual, attn_out, memory_config=self.residual_memory_config, dtype=ttnn.bfloat16)
+        attn_out.deallocate(True)
+        residual.deallocate(True)
+
+        residual = hidden_states
+        mlp_in = self.post_attention_layernorm.forward_sharded(hidden_states)
+        mlp_out = self.mlp(mlp_in, is_decode=True)
+        mlp_in.deallocate(True)
+        hidden_states = ttnn.add(residual, mlp_out, memory_config=self.residual_memory_config, dtype=ttnn.bfloat16)
+        mlp_out.deallocate(True)
+        residual.deallocate(True)
+        return hidden_states
 
     def __call__(
         self,
@@ -100,6 +140,9 @@ class DecoderLayer:
         user_id=0,
         batch_size=1,
     ):
+        if is_decode and self.fused_decode:
+            return self._decode_forward(hidden_states, position_embeddings, position_idx, page_table, kv_cache)
+
         seqlen = hidden_states.shape[-2]
         if seqlen > 32 * 1024:
             # Reallocate hidden states to prevent memory fragmentation.
