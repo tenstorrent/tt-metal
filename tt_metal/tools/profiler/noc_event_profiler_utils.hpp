@@ -34,10 +34,8 @@ public:
     // both of these are keyed by physical chip id!
     using EthCoreToChannelMap = std::map<std::tuple<ChipId, CoreCoord>, tt::tt_fabric::chan_id_t>;
 
-    FabricRoutingLookup() {
+    explicit FabricRoutingLookup(const Cluster& cluster) {
         using namespace tt::tt_fabric;
-
-        Cluster& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // get sorted list of all physical chip ids
         auto physical_chip_id_set = cluster.user_exposed_chip_ids();

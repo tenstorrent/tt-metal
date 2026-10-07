@@ -119,7 +119,7 @@ void setControlBuffer(
                 ? 1
                 : 0;
 
-        writeToCoreControlBuffer(mesh_device, device, curr_core, control_buffer, force_slow_dispatch, context_id);
+        writeToCoreControlBuffer(metal_ctx, mesh_device, device, curr_core, control_buffer, force_slow_dispatch);
     }
 #endif
 }
@@ -1108,7 +1108,7 @@ void ReadDeviceProfilerResults(
     } catch (const std::exception&) {
         log_info(tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
     }
-    if (useFastDispatch(mesh_device, device, context_id)) {
+    if (useFastDispatch(MetalContext::instance(context_id), mesh_device, device)) {
         if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
             ZoneScopedN("Skipping! Last FD dispatch is done");
             return;
@@ -1195,7 +1195,7 @@ void ReadMeshDeviceProfilerResults(
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance(context_id).profiler_state_manager();
 
-    if (useFastDispatch(&mesh_device, &mesh_device, context_id)) {
+    if (useFastDispatch(MetalContext::instance(context_id), &mesh_device, &mesh_device)) {
         for (auto device_id : mesh_device.get_device_ids()) {
             auto profiler_it = profiler_state_manager->device_profiler_map.find(device_id);
             TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
