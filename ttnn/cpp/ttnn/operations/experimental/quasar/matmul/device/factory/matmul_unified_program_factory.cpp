@@ -96,14 +96,14 @@ UnifiedMatmulPlan size_dfbs(
     bool C_borrowable,
     const Buffering& buffering) {
     plan.K_chunk_tiles = K_chunk_tiles;
-    plan.num_K_chunks = plan.K_tiles / K_chunk_tiles;
+    plan.K_chunks_per_C_slice = plan.K_tiles / K_chunk_tiles;
     plan.num_reader_threads = buffering.num_reader_threads;
     plan.operand_buffer_depth = buffering.operand_buffer_depth;
     plan.C_buffer_depth = buffering.C_buffer_depth;
 
     // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
     // to pay off (the last K chunk spills and reloads either way, so more than two).
-    plan.packer_l1_acc_en = packer_l1_acc && plan.num_K_chunks > 2;
+    plan.packer_l1_acc_en = packer_l1_acc && plan.K_chunks_per_C_slice > 2;
     plan.C_partials_format = plan.packer_l1_acc_en
                                  ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                  : (fp32_dest_acc_en ? tt::DataFormat::Float32 : plan.C_format);
@@ -121,7 +121,7 @@ UnifiedMatmulPlan size_dfbs(
 
     // A copied operand's DFB holds operand_buffer_depth slices; a borrowed DFB is the resident shard itself.
     // A is borrowable only when one K chunk covers K.
-    plan.borrow_A = A_borrowable && plan.num_K_chunks == 1;
+    plan.borrow_A = A_borrowable && plan.K_chunks_per_C_slice == 1;
     plan.borrow_B = B_borrowable;
     plan.borrow_C = C_borrowable;
     plan.A_entry_bytes = tt::tile_size(plan.A_format);
@@ -133,7 +133,7 @@ UnifiedMatmulPlan size_dfbs(
 
     // Alias C_partials onto C_slice only when partials are never live while C_slice holds unread data
     // (else compute packs slice i+1's partials over slice i before the writer drains it).
-    const bool partials_ever_written = plan.num_K_chunks > 1;
+    const bool partials_ever_written = plan.K_chunks_per_C_slice > 1;
     const bool one_C_slice_per_core = plan.batch_size == 1 && plan.max_C_slices_per_core == 1;
     plan.alias_C_partials_onto_C_slice = (plan.C_partials_format == plan.C_format) && plan.C_buffer_depth == 1 &&
                                          (!partials_ever_written || one_C_slice_per_core);
@@ -305,12 +305,13 @@ UnifiedMatmulPlan plan_unified_matmul(
         config.K_chunk_tiles,
         base.K_tiles);
     // Each reader thread takes the same K chunks of every C slice. With an auto K chunk this needs K_tiles.
-    const uint32_t most_K_chunks = config.K_chunk_tiles != 0 ? base.K_tiles / config.K_chunk_tiles : base.K_tiles;
+    const uint32_t max_K_chunks_per_C_slice =
+        config.K_chunk_tiles != 0 ? base.K_tiles / config.K_chunk_tiles : base.K_tiles;
     TT_FATAL(
-        requested_readers == 0 || most_K_chunks % requested_readers == 0,
+        requested_readers == 0 || max_K_chunks_per_C_slice % requested_readers == 0,
         "MatmulUnifiedProgramConfig.num_reader_threads ({}) must divide the number of K chunks ({})",
         requested_readers,
-        most_K_chunks);
+        max_K_chunks_per_C_slice);
 
     // A shard matches when the tensor is L1-sharded with that shard shape and its grid lists the active
     // cores in assignment order (so shard i lives on the core that produces C slice i).
@@ -804,7 +805,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
                 {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
                 {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
                 {"K_chunk_tiles", plan.K_chunk_tiles},
-                {"num_K_chunks", plan.num_K_chunks},
+                {"K_chunks_per_C_slice", plan.K_chunks_per_C_slice},
                 {"A_last_K_tile_valid_columns", plan.A_last_K_tile_valid_columns},
                 {"A_borrowed", plan.borrow_A ? 1u : 0u},
                 {"B_borrowed", plan.borrow_B ? 1u : 0u},
@@ -897,7 +898,7 @@ ttnn::device_operation::ProgramArtifacts MatmulUnifiedProgramFactory::create_pro
             {
                 {"batch_size", plan.batch_size},
                 {"K_chunk_tiles", plan.K_chunk_tiles},
-                {"num_K_chunks", plan.num_K_chunks},
+                {"K_chunks_per_C_slice", plan.K_chunks_per_C_slice},
                 {"C_slice_M_padded_tiles", plan.C_slice_M_padded_tiles},
                 {"C_slice_N_padded_tiles", plan.C_slice_N_padded_tiles},
                 {"subblock_M_tiles", plan.subblock_M_tiles},

@@ -33,11 +33,11 @@ template <
     uint32_t C_slice_M_padded_tiles,  // C slice dims rounded up to subblock multiples
     uint32_t C_slice_N_padded_tiles,
     uint32_t K_chunk_tiles,
-    uint32_t num_K_chunks,
+    uint32_t K_chunks_per_C_slice,
     uint32_t A_last_K_tile_valid_columns,  // valid element columns in A's last K tile; 0 when K is a tile multiple
     uint32_t A_borrowed,                   // a borrowed operand is a resident L1 shard bound as the DFB: never read
     uint32_t B_borrowed,
-    uint32_t num_reader_threads>  // divides num_K_chunks; more than one only with copied A and B
+    uint32_t num_reader_threads>  // divides K_chunks_per_C_slice; more than one only with copied A and B
 TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
     // first_C_slice: this core's first C slice in the row-major walk over C (across N, then down M);
     // num_C_slices: how many consecutive ones it produces, per batch.
@@ -79,7 +79,7 @@ TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
             // Origin of this C slice, in tiles, from its position in the walk.
             const uint32_t C_slice_first_M_tile = ((first_C_slice + MN_chunk) / C_slices_across_N) * C_slice_M_tiles;
             const uint32_t C_slice_first_N_tile = ((first_C_slice + MN_chunk) % C_slices_across_N) * C_slice_N_tiles;
-            for (uint32_t K_chunk = thread; K_chunk < num_K_chunks; K_chunk += num_reader_threads) {
+            for (uint32_t K_chunk = thread; K_chunk < K_chunks_per_C_slice; K_chunk += num_reader_threads) {
                 const uint32_t K_chunk_first_K_tile = K_chunk * K_chunk_tiles;
 
                 if constexpr (!A_borrowed) {
@@ -102,7 +102,7 @@ TT_KERNEL void reader(uint32_t first_C_slice, uint32_t num_C_slices) {
                         if constexpr (A_last_K_tile_valid_columns > 0) {
                             // K is not a tile multiple, and this row's last tile is A's last K tile: once it has
                             // landed, zero its padding columns so they add nothing to C.
-                            if (K_chunk == num_K_chunks - 1) {
+                            if (K_chunk == K_chunks_per_C_slice - 1) {
                                 noc.async_read_barrier();
                                 pad_last_ktile<A_format, A_last_K_tile_valid_columns>(
                                     A_slice.get_write_ptr() + A_row_offset_bytes + (K_chunk_tiles - 1) * A_tile_bytes);
