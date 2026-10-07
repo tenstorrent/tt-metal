@@ -39,6 +39,7 @@ from fuser.validator import (
     OperationSchemaBase,
     PackSchema,
     TernarySfpuMathSchema,
+    TopKSfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
@@ -66,6 +67,7 @@ from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
 from .sfpu.ternary import TernarySfpu
+from .sfpu.topk import TopKSfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -138,7 +140,12 @@ UNPACKER_MAP = {
             IN0_REQUIRED,
             IN1_REQUIRED,
             NO_TRANSPOSE,
-            require_src_a_tiles((32, 32), (16, 16)),
+            require_src_a_tiles((32, 32), (16, 16), (32, 16), (16, 32), (1, 32)),
+            reject(
+                lambda s, a, b: a.tile_shape.tile_dims not in ((32, 32), (16, 16))
+                and s.broadcast_type != BroadcastType.None_,
+                "Quasar binary broadcast requires 32x32 or 16x16 tiles",
+            ),
             reject(
                 lambda s, a, b: a.tile_shape.tile_dims != (32, 32)
                 and s.broadcast_type in (BroadcastType.Row, BroadcastType.Column),
@@ -285,6 +292,8 @@ OUTPUT_DIMS = {
 
 UNARY_SFPU_OPS = {
     MathOperation.Abs,
+    MathOperation.AbsInt32,
+    MathOperation.Fill,
     MathOperation.Exp,
     MathOperation.Gelu,
     MathOperation.Reciprocal,
@@ -301,6 +310,7 @@ UNARY_SFPU_OPS = {
     MathOperation.GreaterThanZero,
     MathOperation.LessThanEqualZero,
     MathOperation.GreaterThanEqualZero,
+    MathOperation.Signbit,
     MathOperation.Hardsigmoid,
     MathOperation.Celu,
     MathOperation.Elu,
@@ -366,6 +376,17 @@ UNARY_SFPU_OPS = {
     MathOperation.AltComplexRotate90,
     MathOperation.Softcap,
     MathOperation.TanhDerivative,
+    MathOperation.Sin,
+    MathOperation.Cos,
+    MathOperation.Tan,
+    MathOperation.Atan,
+    MathOperation.Asin,
+    MathOperation.Acos,
+    MathOperation.Sinh,
+    MathOperation.Cosh,
+    MathOperation.Asinh,
+    MathOperation.Acosh,
+    MathOperation.Atanh,
 }
 
 BINARY_SFPU_OPS = {
@@ -397,6 +418,11 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuIntSumAdd,
     MathOperation.SfpuClampedSiluGlu,
     MathOperation.SfpuSituGlu,
+    MathOperation.SfpuLogaddexp,
+    MathOperation.SfpuLogaddexp2,
+    MathOperation.SfpuElwRightShift,
+    MathOperation.SfpuElwLeftShift,
+    MathOperation.SfpuElwLogicalRightShift,
 }
 
 
@@ -426,12 +452,17 @@ class QuasarTernarySfpuMathSchema(TernarySfpuMathSchema):
     _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
 
 
+class QuasarTopKSfpuMathSchema(TopKSfpuMathSchema):
+    _sfpu_cls: ClassVar = TopKSfpu
+
+
 MathSchema = Annotated[
     Union[
         FpuMathSchema,
         QuasarUnarySfpuMathSchema,
         QuasarBinarySfpuMathSchema,
         QuasarTernarySfpuMathSchema,
+        QuasarTopKSfpuMathSchema,
     ],
     Field(discriminator="type"),
 ]
@@ -445,6 +476,7 @@ PackEntrySchema = Union[
     QuasarUnarySfpuMathSchema,
     QuasarBinarySfpuMathSchema,
     QuasarTernarySfpuMathSchema,
+    QuasarTopKSfpuMathSchema,
     QuasarPackSchema,
 ]
 

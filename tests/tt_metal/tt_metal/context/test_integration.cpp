@@ -308,9 +308,9 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
         << "getDeviceProfilerState() must be false for a mock context even when profiling is requested";
     const auto& profiler_state_manager = MetalContext::instance(mock_context_id).profiler_state_manager();
     ASSERT_NE(profiler_state_manager, nullptr);
-    for (auto* dev : mock_mesh_device.get_devices()) {
-        EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(dev->id()))
-            << "Device profiler was started on mock device " << dev->id()
+    for (auto device_id : mock_mesh_device.get_device_ids()) {
+        EXPECT_FALSE(profiler_state_manager->device_profiler_map.contains(device_id))
+            << "Device profiler was started on mock device " << device_id
             << " -- it must be skipped for mock/emulated clusters";
     }
 }

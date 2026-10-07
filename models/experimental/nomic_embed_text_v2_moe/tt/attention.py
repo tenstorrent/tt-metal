@@ -11,8 +11,8 @@
       nlp_concat_heads        -> (B, 1, S, H)
       out_proj                -> (B, 1, S, H)
 
-The rotary tables and the additive mask are built once per forward pass by the caller, not here:
-both depend only on S, and building them per block would repeat the same host work 12 times.
+The rotary tables and the additive mask come from the caller, not from here: both depend only on
+S, and building them per block would repeat the same host work 12 times.
 """
 
 from __future__ import annotations
@@ -226,23 +226,25 @@ class TtNomicBertAttention(LightweightModule):
         """Apply rotary position embedding to one of q or k.
 
         rotary_embedding_hf's prefill mode wants a leading batch of 1, so the batch is folded
-        into the head axis; cos/sin are (1, 1, S, D) and broadcast over it, applying the same
-        table to every row.
+        into the head axis; cos/sin broadcast over it, applying the same table to every row.
 
         Args:
             x: (B, A, S, D) queries or keys.
-            cos: (1, 1, S, D) cosine table from tt.common.rotary_tables.
-            sin: (1, 1, S, D) sine table.
+            cos: (1, 1, S, D) cosine table from tt.common.RotaryTables, or longer when S is on the
+                tile grid.
+            sin: the sine table, the same shape.
 
         Returns:
             ttnn.Tensor: (B, A, S, D), rotated.
         """
-        batch, heads, seqlen, head_dim = x.shape
-        folded = ttnn.reshape(x, (1, batch * heads, seqlen, head_dim))
+        shape = x.shape
+        batch, heads, seqlen, head_dim = shape[0], shape[1], shape[2], shape[3]
+        # At B = 1 the fold is the identity; the two reshapes are skipped, about 1 us of host time each.
+        folded = x if batch == 1 else ttnn.reshape(x, (1, batch * heads, seqlen, head_dim))
         rotated = ttnn.experimental.rotary_embedding_hf(
             folded, cos, sin, is_decode_mode=False, memory_config=memory_config
         )
-        return ttnn.reshape(rotated, (batch, heads, seqlen, head_dim))
+        return rotated if batch == 1 else ttnn.reshape(rotated, (batch, heads, seqlen, head_dim))
 
     def forward(
         self,
@@ -254,7 +256,7 @@ class TtNomicBertAttention(LightweightModule):
 
         Args:
             x: (B, 1, S, H) block input.
-            rot_mats: (cos, sin), each (1, 1, S, D), from tt.common.rotary_tables.
+            rot_mats: (cos, sin), each (1, 1, S, D) or longer, from tt.common.RotaryTables.
             attn_mask: (B, 1, S, S) additive mask from tt.common.additive_attention_mask, or
                 None for no masking.
 
@@ -264,7 +266,7 @@ class TtNomicBertAttention(LightweightModule):
         qkv = dense_linear(x, self.qkv_weight, self.qkv_bias, OpGroup.QKV, self.tt_config)
 
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.SDPA)
-        batch, _, seqlen, _ = x.shape
+        batch, seqlen = x.shape[0], x.shape[-2]
         program_config = sdpa_program_config(
             batch,
             seqlen,
