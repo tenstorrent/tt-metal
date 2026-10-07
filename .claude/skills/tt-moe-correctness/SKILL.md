@@ -5,7 +5,7 @@ description: Correctness checklist for MoE modules and chains on Blackhole Galax
 
 # MoE correctness
 
-Last validated against commit: <none yet>
+Last validated against commit: <none yet> (section J only: 0d3b876e60f, MiMo attention probe on .30; other sections not exercised)
 Evidence and commits for every item: `bringup/GUIDE_dsv4_lessons.md` (ids L-xx in brackets). Log every result (`tt-bringup-log`).
 
 ## A. Router (most divergence starts here)
@@ -71,3 +71,13 @@ Evidence and commits for every item: `bringup/GUIDE_dsv4_lessons.md` (ids L-xx i
 First call in a process compiles (82 ms readback step 0, TTFT first call > warm): discard it. Paired in-process A/B only for perf claims. Never compare numbers across hosts/commits.
 
 Escalate to the human: any proposal to lower precision, relax a PCC gate, drop tokens, or ship with an unexplained divergence. Stop and report if a gate fails twice with the same cause.
+
+## J. Attention op conventions on Blackhole (measured by the MiMo attention probe, `models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py`, LOG track `attn-probe`)
+* Sink input: every SDPA op (decode, paged decode, MLA decode, prefill, chunked prefill) multiplies the sink by `scale` inside the kernel. Pass `sink/scale` (HF adds the RAW sink logit after scaling).
+  Real MiMo sinks are 0.56..1.14 and a wrong convention still shows PCC 0.998: validate with sink magnitude x5 (raw convention then gives 0.82 decode / 0.96 prefill) or a needle test.
+* Sliding window W: the ops attend to exactly W keys including the current one (keys p-W+1..p), same as HF. Check with a needle test (one attractive key with a huge V, queries/users on both sides of the boundary), not with PCC on random data.
+* `chunked_scaled_dot_product_attention(scale=<python float>)` is rejected by the binding (noconvert); omit `scale`, the default is Q_dim**-0.5. K and V must have equal width there; `flash_mla_prefill` with an explicit V tensor accepts V narrower than K but has no window/sink/paged arguments.
+* Decode: `paged_flash_multi_latent_attention_decode(q, k, v, head_dim_v=...)` accepts an independent V tensor (V width == head_dim_v) with sink and window; it has no `cache_position_modulo` (ring cache); the non-MLA paged op has it.
+* Always run 5 repeats and compare bitwise (determinism), and one case per mesh-relevant shape.
+* Page tables: the row-major int32 page table passed to `chunked_scaled_dot_product_attention` / paged decode must have a width that is a multiple of 8 entries (stick size 32 B): pad (`TT_FATAL page table stick size must be a multiple of 32` at 1028 blocks).
+* Trace: `chunked_scaled_dot_product_attention(chunk_start_idx_tensor=...)` plus `paged_fill_cache` with a device page-table slice, `ttnn.embedding` position lookup for RoPE and `ttnn.copy_host_to_device_tensor` for per-replay inputs capture and replay correctly on the 4x8 mesh (bit-identical replays). `launch.py` scrubs the environment: pass `MIMO_CKPT` with `--env`.
