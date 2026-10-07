@@ -112,7 +112,9 @@ class LiveMask:
 
 
 class Decoder:
-    def __init__(self, model, trace=True, keep_logits=False, spread=True, U=SLOTS, block=1, capture=None):
+    def __init__(
+        self, model, trace=True, keep_logits=False, spread=True, U=SLOTS, block=1, capture=None, feedback=False
+    ):
         """U = real decode users per mesh row. block = tokens per user per step: 1 = plain decode; 8 = spec-decode VERIFY with `block` virtual users per real user
         (row v = block*u + t feeds token t of user u at position pos_u + t; U*block <= 32). Every decode tensor has B = U*block rows.
         capture: layer indices whose outputs are kept as an extra trace output `feat` [1,1,B,len(capture)*4096] (bf16, on device; layer 47 = before the final norm).
@@ -122,6 +124,10 @@ class Decoder:
         assert self.B <= SLOTS, "U*block must be <= 32 rows per mesh row"
         self.feat = None
         self.upd = None
+        # feedback: the step samples the next tokens on device (global_argmax), writes them into the token input in place and advances cur/idx by one, so consecutive steps need no
+        # host input copies and only the [rows,U] token tensor is read back; the host refreshes the inputs (set_inputs) only when a user finishes.
+        self.feedback = bool(feedback) and block == 1
+        self._last = None
         self.rows = self.mesh.shape[0]
         self.rowmap = ttnn.ShardTensor2dMesh(self.mesh, self.mesh.shape, dims=(0, None))
         self.pos = decode_pos_io(self.mesh, self.B)
@@ -195,6 +201,14 @@ class Decoder:
             ),
         )
         ttnn.deallocate(x)
+        if self.feedback:
+            global_argmax(lg, self.tok, self.vocab_local)
+            ttnn.plus_one(self.pos["cur"])
+            ttnn.plus_one(self.pos["idx"])
+            if not self.keep_logits:
+                ttnn.deallocate(lg)
+                lg = None
+            return self.tok, None, lg, feat
         vals = ttnn.max(lg, dim=3, keepdim=True)
         idx = ttnn.argmax(ttnn.to_layout(lg, ttnn.ROW_MAJOR_LAYOUT), dim=3, keepdim=True)
         if not self.keep_logits:
@@ -205,6 +219,7 @@ class Decoder:
     # ------------------------------------------------------------------ host interface
     def set_inputs(self, tokens, positions, dead):
         """tokens int [rows,32]; positions int [rows,32] (position of the token being fed); dead bool [rows,32]. Dead slots are forced to token 0 / position 0."""
+        self._last = (tokens, positions, dead)
         if (
             self.block > 1
         ):  # tokens [rows,U,block], positions [rows,U] = position of token 0 of each block, dead [rows,U]
@@ -258,6 +273,10 @@ class Decoder:
                 else:
                     os.environ["MIMO_CHECK_CAP"] = chk
                 ttnn.synchronize_device(self.mesh)
+                if self.feedback and self._last is not None:
+                    self.set_inputs(
+                        *self._last
+                    )  # the eager warm-up step advanced tokens/positions in place: restore the inputs of this step
             ttnn.execute_trace(self.mesh, self._tr, cq_id=0, blocking=True)
             vals, idx, lg, self.feat = self.out
         else:
@@ -266,6 +285,21 @@ class Decoder:
                 ttnn.deallocate(self.feat)
             self.feat = feat
         self.steps += 1
+        if self.feedback:  # only the sampled tokens, read from the column-0 device of every row (4 small reads)
+            dts = ttnn.get_device_tensors(self.tok)
+            cols = self.mesh.shape[1]
+            tok = torch.stack([ttnn.to_torch(dts[r * cols]).long().reshape(-1) for r in range(self.rows)])
+            out = (tok, None)
+            if self.keep_logits:
+                out += (
+                    ttnn.to_torch(
+                        lg,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            self.mesh, dims=(0, 3), mesh_shape=tuple(self.mesh.shape)
+                        ),
+                    ).float()[:, 0],
+                )
+            return out
         comp = ttnn.ConcatMesh2dToTensor(self.mesh, dims=(0, 3), mesh_shape=tuple(self.mesh.shape))
         v = ttnn.to_torch(vals, mesh_composer=comp).float()[:, 0, :, :]  # [rows,32,cols]
         ix = ttnn.to_torch(idx, mesh_composer=comp)[:, 0, :, :].long()  # local ids [rows,32,cols]
