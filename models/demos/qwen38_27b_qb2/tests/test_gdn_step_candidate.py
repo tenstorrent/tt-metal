@@ -86,11 +86,11 @@ def check(tensor, expected):
     return results
 
 
-def capture(mesh, calls):
+def capture(mesh, calls, *, value_splits=1):
     trace = ttnn.begin_trace_capture(mesh, cq_id=0)
     try:
         for arguments in calls:
-            op.step(*arguments)
+            op.step(*arguments, value_splits=value_splits)
     except BaseException:
         ttnn.end_trace_capture(mesh, trace, cq_id=0)
         ttnn.release_trace(mesh, trace)
@@ -99,7 +99,7 @@ def capture(mesh, calls):
     return trace
 
 
-def short_case(mesh, batch):
+def short_case(mesh, batch, *, value_splits=1):
     heads = batch * 12
     # Two simultaneously live sets of identically shaped allocations exercise
     # cache-hit address replacement, including the in-place state destination.
@@ -112,7 +112,7 @@ def short_case(mesh, batch):
     for index in [0, 1, 0, 1]:
         q, k, v, gates, _ = hosts[index]
         expected[index], output = reference(expected[index], q, k, v, gates)
-        op.step(*devices[index])
+        op.step(*devices[index], value_splits=value_splits)
         ttnn.synchronize_device(mesh)
         cache_entries.append(mesh.num_program_cache_entries())
         checks.append(
@@ -131,7 +131,7 @@ def short_case(mesh, batch):
         for tensor, expected_input in zip(device_set[:4], host_set[:4]):
             for rank in ttnn.get_device_tensors(tensor):
                 assert torch.equal(ttnn.to_torch(rank), expected_input), "Kernel modified a read-only input"
-    trace = capture(mesh, [devices[0]])
+    trace = capture(mesh, [devices[0]], value_splits=value_splits)
     try:
         ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
         samples = []
@@ -145,9 +145,12 @@ def short_case(mesh, batch):
     finally:
         ttnn.release_trace(mesh, trace)
     target_us = heads * 128 * 128 * 4 * 2 / (512 * 1e3) + 10
+    grid = mesh.compute_with_storage_grid_size()
     return dict(
         batch=batch,
+        value_splits=value_splits,
         heads_per_chip=heads,
+        active_cores=len(op.work_items(heads, grid.x, grid.y, value_splits)),
         checks=checks,
         traced_call_us=samples,
         median_traced_call_us=statistics.median(samples),
@@ -159,7 +162,7 @@ def short_case(mesh, batch):
     )
 
 
-def long_horizon(mesh, report, path):
+def long_horizon(mesh, report, path, *, value_splits=1):
     heads = 12
     # All steps change inputs; a 64-step cycle avoids timing thousands of H2D
     # uploads. The reference executes every recurrence, including all cycles.
@@ -169,8 +172,8 @@ def long_horizon(mesh, report, path):
     state = upload(mesh, initial, tiled=True)
     output = upload(mesh, torch.zeros(heads, 128))
     calls = [values + [state, output] for values in inputs]
-    op.step(*calls[0])  # compile outside capture
-    trace = capture(mesh, calls)
+    op.step(*calls[0], value_splits=value_splits)  # compile outside capture
+    trace = capture(mesh, calls, value_splits=value_splits)
     expected = initial.clone()
     reset = upload(mesh, initial, tiled=True)
     ttnn.copy(reset, state)
@@ -182,6 +185,7 @@ def long_horizon(mesh, report, path):
                 expected, expected_output = reference(expected, *values)
             if cycle % 4 == 3:
                 checkpoint = dict(
+                    value_splits=value_splits,
                     steps=(cycle + 1) * 64,
                     state=check(state, expected),
                     output=check(output, expected_output),
@@ -198,9 +202,11 @@ def long_horizon(mesh, report, path):
     gates[:, 1] = 0
     decay_inputs = [upload(mesh, value) for value in [q, k, v, gates]]
     for _ in range(64):
-        op.step(*decay_inputs, state, output)
+        op.step(*decay_inputs, state, output, value_splits=value_splits)
         expected, expected_output = reference(expected, q, k, v, gates)
-    report["decay_only"] = dict(steps=64, state=check(state, expected), output=check(output, expected_output))
+    report["decay_only"].append(
+        dict(value_splits=value_splits, steps=64, state=check(state, expected), output=check(output, expected_output))
+    )
     save(path, report)
 
 
@@ -208,6 +214,9 @@ def long_horizon(mesh, report, path):
 def test_gdn_step_candidate():
     path = Path(os.environ["QWEN_GDN_STEP_RECEIPT"])
     assert not path.exists(), "Use a new result directory"
+    value_splits = [int(part) for part in os.getenv("QWEN_GDN_VALUE_SPLITS", "1,2,4").split(",")]
+    assert value_splits and len(set(value_splits)) == len(value_splits)
+    assert all(part in (1, 2, 4) for part in value_splits)
     torch.set_num_threads(8)
     report = dict(
         state="opening",
@@ -223,24 +232,29 @@ def test_gdn_step_candidate():
         },
         cases=[],
         long_horizon=[],
+        decay_only=[],
+        value_splits=value_splits,
     )
     save(path, report)
     configure_fabric(topology=ttnn.Topology.Linear)
     parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
+    mesh = None
     try:
         mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
         mesh.enable_program_cache()
         report["device_ids"] = list(mesh.get_device_ids())
-        for batch in [1, 8, 16, 64]:
-            report.update(state="short_case", active_batch=batch)
-            save(path, report)
-            result = short_case(mesh, batch)
-            report["cases"].append(result)
-            print("GDN_SHORT_CASE", json.dumps(result), flush=True)
-            save(path, report)
+        for partitions in value_splits:
+            for batch in [1, 8, 16, 32, 64]:
+                report.update(state="short_case", active_batch=batch, active_value_splits=partitions)
+                save(path, report)
+                result = short_case(mesh, batch, value_splits=partitions)
+                report["cases"].append(result)
+                print("GDN_SHORT_CASE", json.dumps(result), flush=True)
+                save(path, report)
+                gc.collect()
+            report.update(state="long_horizon")
+            long_horizon(mesh, report, path, value_splits=partitions)
             gc.collect()
-        report.update(state="long_horizon")
-        long_horizon(mesh, report, path)
         report.update(
             state="completed",
             passed=True,
@@ -251,6 +265,17 @@ def test_gdn_step_candidate():
         raise
     finally:
         try:
-            save(path, report)
+            try:
+                if mesh is not None:
+                    ttnn.close_mesh_device(mesh)
+            finally:
+                ttnn.close_mesh_device(parent)
+        except BaseException as error:
+            report.update(
+                state="failed",
+                passed=False,
+                cleanup_error=dict(type=type(error).__name__, message=str(error)[:2000]),
+            )
+            raise
         finally:
-            ttnn.close_mesh_device(parent)
+            save(path, report)

@@ -13,15 +13,18 @@ from pathlib import Path
 HERE = Path(__file__).parent
 
 
-def work_items(heads, grid_x, grid_y):
-    """Disjoint head assignments, including uneven final waves."""
+def work_items(heads, grid_x, grid_y, value_splits=1):
+    """Disjoint (head, value-column partition) assignments, including waves."""
     if min(heads, grid_x, grid_y) <= 0:
         raise ValueError("Head count and grid dimensions must be positive")
-    cores = min(heads, grid_x * grid_y)
-    return [(i % grid_x, i // grid_x, i, cores, (heads - 1 - i) // cores + 1) for i in range(cores)]
+    if type(value_splits) is not int or value_splits not in (1, 2, 4):
+        raise ValueError("Value splits must be 1, 2, or 4")
+    items = heads * value_splits
+    cores = min(items, grid_x * grid_y)
+    return [(i % grid_x, i // grid_x, i, cores, (items - 1 - i) // cores + 1) for i in range(cores)]
 
 
-def step(q, k, v, gates, state, output):
+def step(q, k, v, gates, state, output, *, value_splits=1):
     """Mutate state[heads,128,128]; write output[heads,128], all FP32 DRAM.
 
     The caller preallocates output and retains all tensors through trace
@@ -51,7 +54,8 @@ def step(q, k, v, gates, state, output):
     if "BLACKHOLE" not in str(mesh.arch()).upper():
         raise ValueError("The experimental FP32 kernel currently targets Blackhole only")
     grid = mesh.compute_with_storage_grid_size()
-    assignments = work_items(heads, grid.x, grid.y)
+    assignments = work_items(heads, grid.x, grid.y, value_splits)
+    value_columns = 4 // value_splits
     cores = ttnn.num_cores_to_corerangeset(len(assignments), grid, row_wise=True)
     read_args, write_args, compute_args = (ttnn.RuntimeArgs() for _ in range(3))
     for x, y, first, stride, count in assignments:
@@ -69,9 +73,9 @@ def step(q, k, v, gates, state, output):
     config.unpack_to_dest_mode = modes
     kernels = []
     for filename, args, ctargs, cfg in [
-        ("reader.cpp", read_args, accessors(tensors[:5]), ttnn.ReaderConfigDescriptor()),
-        ("writer.cpp", write_args, accessors([state, output]), ttnn.WriterConfigDescriptor()),
-        ("compute.cpp", compute_args, [], config),
+        ("reader.cpp", read_args, [value_columns, *accessors(tensors[:5])], ttnn.ReaderConfigDescriptor()),
+        ("writer.cpp", write_args, [value_columns, *accessors([state, output])], ttnn.WriterConfigDescriptor()),
+        ("compute.cpp", compute_args, [value_columns], config),
     ]:
         kernels.append(
             ttnn.KernelDescriptor(
@@ -91,7 +95,9 @@ def step(q, k, v, gates, state, output):
             core_ranges=cores,
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=cb, data_format=ttnn.float32, page_size=4096)],
         )
-        for cb, pages in enumerate([4, 4, 4, 1, 1, 16, 4, 16, 4, 1, 1])
+        for cb, pages in enumerate(
+            [4, 4, value_columns, 1, 1, 4 * value_columns, value_columns, 4 * value_columns, value_columns, 1, 1]
+        )
     ]
     descriptor = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=[])
     return ttnn.generic_op(tensors, descriptor)

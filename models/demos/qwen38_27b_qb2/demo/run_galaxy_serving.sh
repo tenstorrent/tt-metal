@@ -49,7 +49,8 @@ if [[ -n "${QWEN_GDN_STEP_EXPERIMENT_DIR:-}" ]]; then
     # under the lock before serving, including after a candidate timeout.
     echo "Running isolated GDN candidate; baseline model source is unchanged"
     QWEN_CANDIDATE_STATUS=0
-    /bin/bash "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/demo/run_gdn_step_candidate.sh" \
+    timeout --signal=TERM --kill-after=300 900 \
+        /bin/bash "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/demo/run_gdn_step_candidate.sh" \
         "$QWEN_TASK_ROOT" "$QWEN_GDN_STEP_EXPERIMENT_DIR" \
         > "$QWEN_GDN_STEP_EXPERIMENT_DIR.log" 2>&1 || QWEN_CANDIDATE_STATUS=$?
     echo "GDN candidate exit status: $QWEN_CANDIDATE_STATUS; continuing qualified baseline without promotion"

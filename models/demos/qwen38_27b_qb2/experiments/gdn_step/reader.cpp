@@ -2,12 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
 
-// One work item is a (user, local value head). Q/K are already L2-normalized;
+// One work item is a (user, local value head, value-column partition).
+// Q/K are already L2-normalized;
 // Q includes the attention scale. Gates contain exp(g) and sigmoid(beta).
 // Small vectors are compact row-major DRAM pages. Only the recurrent state
 // uses tiled DRAM storage. The reader constructs the broadcast views in L1.
 void kernel_main() {
-    constexpr auto qa = TensorAccessorArgs<0>();
+    constexpr uint32_t value_columns = get_compile_time_arg_val(0);
+    static_assert(value_columns == 1 || value_columns == 2 || value_columns == 4);
+    constexpr uint32_t splits = 4 / value_columns;
+    constexpr auto qa = TensorAccessorArgs<1>();
     constexpr auto ka = TensorAccessorArgs<qa.next_compile_time_args_offset()>();
     constexpr auto va = TensorAccessorArgs<ka.next_compile_time_args_offset()>();
     constexpr auto ga = TensorAccessorArgs<va.next_compile_time_args_offset()>();
@@ -23,20 +27,25 @@ void kernel_main() {
     // CB9 is reader-private scratch: no compute/writer access or CB tokens.
     const uint32_t scratch = get_write_ptr(9);
     for (uint32_t item = 0; item < count; ++item) {
-        const uint32_t head = first + item * stride;
-        for (uint32_t cb = 0; cb < 3; ++cb) {
-            cb_reserve_back(cb, 4);
-        }
+        const uint32_t work = first + item * stride;
+        const uint32_t head = work / splits;
+        const uint32_t first_column = (work % splits) * value_columns;
+        cb_reserve_back(0, 4);
+        cb_reserve_back(1, 4);
+        cb_reserve_back(2, value_columns);
         cb_reserve_back(3, 1);
         cb_reserve_back(4, 1);
-        cb_reserve_back(5, 16);
+        cb_reserve_back(5, 4 * value_columns);
         noc_async_read_page(head, q, scratch);
         noc_async_read_page(head, k, scratch + 512);
         noc_async_read_page(head, v, scratch + 1024);
         noc_async_read_page(head, gates, scratch + 1536);
         const uint32_t state_l1 = get_write_ptr(5);
-        for (uint32_t tile = 0; tile < 16; ++tile) {
-            noc_async_read_tile(head * 16 + tile, state, state_l1 + tile * 4096);
+        for (uint32_t kr = 0; kr < 4; ++kr) {
+            for (uint32_t vc = 0; vc < value_columns; ++vc) {
+                noc_async_read_tile(
+                    head * 16 + kr * 4 + first_column + vc, state, state_l1 + (kr * value_columns + vc) * 4096);
+            }
         }
         noc_async_read_barrier();
         const auto* values = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
@@ -45,25 +54,29 @@ void kernel_main() {
         auto* vr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(2));
         // V's unused rows must be zero for the SFPU residual. Q/K column
         // broadcasts and scalar broadcasts never consume the other lanes.
-        for (uint32_t i = 0; i < 4096; ++i) {
+        for (uint32_t i = 0; i < value_columns * 1024; ++i) {
             vr[i] = 0;
         }
         for (uint32_t i = 0; i < 128; ++i) {
             const uint32_t tile = i / 32;
             const uint32_t lane = i % 32;
             const uint32_t col = tile * 1024 + (lane / 16) * 512 + (lane % 16) * 16;
-            const uint32_t row = tile * 1024 + (lane / 16) * 256 + lane % 16;
             qc[col] = values[i];
             kc[col] = values[128 + i];
-            vr[row] = values[256 + i];
+        }
+        for (uint32_t i = 0; i < value_columns * 32; ++i) {
+            const uint32_t tile = i / 32;
+            const uint32_t lane = i % 32;
+            const uint32_t row = tile * 1024 + (lane / 16) * 256 + lane % 16;
+            vr[row] = values[256 + first_column * 32 + i];
         }
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(3))[0] = values[384];
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(4))[0] = values[385];
-        for (uint32_t cb = 0; cb < 3; ++cb) {
-            cb_push_back(cb, 4);
-        }
+        cb_push_back(0, 4);
+        cb_push_back(1, 4);
+        cb_push_back(2, value_columns);
         cb_push_back(3, 1);
         cb_push_back(4, 1);
-        cb_push_back(5, 16);
+        cb_push_back(5, 4 * value_columns);
     }
 }

@@ -22,7 +22,18 @@ kernel hashes are in `../../galaxy-evidence/gdn-step-candidate-v1/`. This is
 accuracy evidence for the standalone recurrence, not a model speedup or
 reference-evaluation result. Integration and further latency work remain.
 
-Each work item owns one user/value-head state matrix. Q and K arrive normalized,
+The next isolated candidate supports `value_splits=1/2/4`, with the one-partition
+baseline retained. Each work item owns a disjoint 128-by-128, 128-by-64, or
+128-by-32 section of one user/value-head state matrix. At batch 1 this exposes
+12/24/48 independent workers per chip; higher batches use multiple waves.
+Every output section is a disjoint 128-byte-aligned part of its compact row.
+There is no cross-core reduction: each worker owns the entire key dimension.
+Q/K/gate vectors are replicated across partitions; state traffic remains one
+read/write per element. Hardware speed and accuracy for split variants are
+pending. Thirty-two CPU tests pass for complete/disjoint coverage, uneven waves,
+invalid partitions, and the per-head accuracy gate.
+
+Q and K arrive normalized,
 Q scaled by `128**-0.5`, and gates already transformed to decay and beta. V is
 unscaled. Compact FP32 row-major vectors are expanded into broadcast tiles in
 L1. The FP32 tiled state is read from DRAM once and written once to the same
@@ -31,9 +42,11 @@ including the output reduction. There is no padded time dimension or temporary
 DRAM state output. Convolution, normalization, and output gating are outside this
 experiment's timing.
 
-The reader and writer assign head `first + item * stride`; each core can process
-multiple independent heads. This covers batches beyond one head per core and
-uneven final waves without separate host dispatches.
+The reader and writer assign work item `first + item * stride`, with
+`head = work_item / value_splits`. Each core can process multiple independent items.
+This covers batches beyond one item per core and uneven final waves without
+separate host dispatches. CB capacities and tile counts shrink with the value
+partition and participate in the program cache key.
 
 | CB | Content | Producer | Consumer/release |
 | --- | --- | --- | --- |
@@ -46,8 +59,10 @@ uneven final waves without separate host dispatches.
 | 9 | Compact input scratch | Reader only | Reader only |
 | 10 | Compact output scratch | Writer only | Writer only |
 
-Compute reads CB7 before producing CB8. The writer waits for CB8 **before**
-reclaiming CB7, so it cannot free state while the output reduction still reads it.
+Compute reads CB7 before producing CB8. The writer starts the state DRAM write
+as soon as CB7 is ready, overlapping it with the output reduction; both only
+read these L1 pages. The writer waits for CB8 **and** the NoC write barrier
+before reclaiming CB7, so it cannot free state while either reader still uses it.
 Only the writer pops CB7/8. Scratch CB9/10 are private storage and carry no tokens.
 Every work item waits for its complete old state before its writeback can begin.
 Separate work items own disjoint state, and consecutive invocations are ordered
@@ -66,13 +81,16 @@ bash models/demos/qwen38_27b_qb2/demo/run_gdn_step_candidate.sh \
   "$QWEN_TASK_ROOT" "$QWEN_TASK_ROOT/gdn-step-candidate-v1"
 ```
 
-The test covers TP4 batches 1/8/16/64, all four ranks, cancellation-sensitive
+The test now covers TP4 batches 1/8/16/32/64 at every selected partition count,
+all four ranks, cancellation-sensitive
 inputs, input immutability, buffer rebinding, 4,096 changing-input steps, and 64
 near-identity decay-only steps. Every head must meet PCC ≥ 0.999 and relative RMS
 error ≤ 0.005. Timing uses five warm samples of 100 trace replays and includes
 dispatch. The separate P1 latency target is state read/write bytes divided by
 512 GB/s plus 10 microseconds; the report does not treat accuracy as a latency
-pass. Full-model integration and unchanged reference evals remain required.
+pass. `QWEN_GDN_VALUE_SPLITS=1,2,4` selects the partition sweep (the default);
+each variant gets its own 4,096-step accuracy run. Full-model integration,
+the fused gated-RMSNorm epilogue, and unchanged reference evals remain required.
 
 `run_galaxy_serving.sh` optionally accepts `QWEN_GDN_STEP_EXPERIMENT_DIR` to run
 this experiment before the baseline server occupies the device lock. A failed
