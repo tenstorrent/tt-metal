@@ -283,7 +283,9 @@ class GateMode(unittest.TestCase):
 
     def run_script(self, export: str, returncode: int, *flags: str) -> subprocess.CompletedProcess:
         """The real script against a fake clang-tidy that writes a canned --export-fixes file."""
-        with tempfile.TemporaryDirectory() as build:
+        # Not under /tmp: CI containers mount it as tmpfs, which Docker makes noexec,
+        # so the fake clang-tidy could not run there.
+        with tempfile.TemporaryDirectory(dir=ROOT, prefix=".test-include-cleaner-") as build:
             stub_dir = os.path.join(build, "tt_metal", "tt_metal_verify_interface_header_sets", "tt-metalium")
             os.makedirs(stub_dir)
             stub = os.path.join(stub_dir, "core_coord.hpp.cxx")
@@ -320,13 +322,14 @@ class GateMode(unittest.TestCase):
             )
 
     def test_fail_on_findings(self):
-        self.assertEqual(self.run_script(EXPORT_FINDINGS, 0).returncode, 0)
+        report_only = self.run_script(EXPORT_FINDINGS, 0)
+        self.assertEqual(report_only.returncode, 0, report_only.stderr)
         gated = self.run_script(EXPORT_FINDINGS, 0, "--fail-on-findings")
         self.assertEqual(gated.returncode, 1, gated.stderr)
         self.assertIn("| with findings | 1 |", gated.stdout)
         self.assertEqual(self.run_script("", 0, "--fail-on-findings").returncode, 0)
         crashed = self.run_script("", 139, "--fail-on-findings")
-        self.assertEqual(crashed.returncode, 1)
+        self.assertEqual(crashed.returncode, 1, crashed.stderr)
         self.assertIn("| failed to analyze | 1 |", crashed.stdout)
 
 
