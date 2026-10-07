@@ -208,6 +208,8 @@ jobs:
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
   cmake-version:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -215,8 +217,8 @@ jobs:
           submodules: recursive
       - name: Look for changed CMake files
         id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
-      - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
+        uses: ./.github/actions/find-changed-files
+      - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60 # v3.30.5
         if: steps.find-changes.outputs.cmake-changed == 'true'
         with:
           cmakeVersion: "~3.24.0"
