@@ -115,7 +115,15 @@ after the first replica/fabric attempts. Results are under
 `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
 the artifact entrypoint and updates after each completed cell. Five host tests
 validate the metric accounting and reject cold captures as warm measurements.
-No sweep cells have been measured at publication. Initialize with `--replicas 8`
+The first six cells are measured and preserved in
+[`galaxy-evidence/perf-sweep-tp4-v1/index.html`](galaxy-evidence/perf-sweep-tp4-v1/index.html)
+(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; 21 cells remain and
+the host job continues. At ISL 128, C=1/2/4/8/16 measured
+38.79/31.08/24.85/20.48/12.15 tokens/s/user, with aggregate decode throughput
+38.79/62.16/99.39/163.84/194.40 tokens/s. This baseline has substantial batch
+overhead and does not meet the optimized high-batch targets.
+
+Initialize with `--replicas 8`
 for the follow-up: throughput is measured on all eight replicas rather than
 inferred by multiplying the TP4 result.
 
