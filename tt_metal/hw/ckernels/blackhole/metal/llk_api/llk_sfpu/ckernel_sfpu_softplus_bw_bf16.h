@@ -30,6 +30,8 @@ inline void calculate_softplus_bw_bf16() {
             core = core * core_r + 0.24260404706001282f;
             core = core * core_r + 0.6932762265205383f;
             core = core * core_r + 0.9999289512634277f;
+            v_if(setsgn(core_t, 0) < 1.4901161193847656e-08f) { core = 1.0f; }
+            v_endif;
             vInt core_e = exexp(core, ExponentMode::Biased) + core_k + 64;
             v_if(core_e <= 0) { core = 0.0f; }
             v_else { core = setexp(core, core_e); }
@@ -41,6 +43,8 @@ inline void calculate_softplus_bw_bf16() {
         vFloat P = denominator * -0.5f + 1.4571068286895752f;
         P = P * (-denominator * P + 2.0f);
         P = P * (-denominator * P + 2.0f);
+        v_if(e < 2.9802322387695312e-08f) { P = 1.0f; }
+        v_endif;
         vFloat N = e * P;
         vFloat x = dst_reg[d];
         vFloat S = P;
@@ -54,6 +58,8 @@ inline void calculate_softplus_bw_bf16() {
         v_if(setsgn(x, 0) >= 69.31472778320312f && x < 0.0f) {
             vFloat Ss = es * P;
             product = convert<vFloat16b>(dst_reg[32 + d] * Ss, RoundMode::Nearest) * 5.421010862427522e-20f;
+            v_if(es == 0.0f) { product = 0.0f; }
+            v_endif;
         }
         v_endif;
         vFloat result = convert<vFloat16b>(product, RoundMode::Nearest);

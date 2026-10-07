@@ -99,9 +99,31 @@ def test_bw_softplus_saturating_tail(beta, threshold, device):
 # the operands with subnormals flushed, and an output may match either. The BF16 compute and pack
 # path stores NaN as +inf and -0 as +0, so classes are compared as stored. Each output must have
 # the reference's class and a pure ULP error, |reference - output| / ulp(rounded reference),
-# below 1. Each case logs one ULP line: the largest pure ULP error against torch and the lanes of
-# another class, for the output and for the composite's on the same operands.
-SOFTPLUS_BW_GRADS = ["1", "-1", "0.5", "3", "random0", "random1"]
+# below 1. A +0 where torch's own float64 result is below the smallest normal is torch's result as
+# stored, since the BF16 output cannot hold a subnormal. Each case logs one ULP line: the largest
+# pure ULP error against torch and the lanes of another class, for the output and for the
+# composite's on the same operands.
+# The output is 0 for any grad wherever x < -131.7, where even exp(x) * 2^64 is below the smallest
+# normal, as the composite this program replaces computes it with its own flushed f'(x); torch's
+# product is grad's infinity or NaN for an infinite or NaN grad, and normal for the largest finite
+# ones.
+SOFTPLUS_BW_GRADS = [
+    "1",
+    "-1",
+    "0.5",
+    "3",
+    "random0",
+    "random1",
+    "0",
+    "-0",
+    "inf",
+    "-inf",
+    "nan",
+    "1.1754943508222875e-38",
+    "-1.1754943508222875e-38",
+    "3.3895313892515355e+38",
+    "-3.3895313892515355e+38",
+]
 SOFTPLUS_BW_SMALLEST_NORMAL = 2.0**-126
 SOFTPLUS_BW_BETA = 1.0
 SOFTPLUS_BW_THRESHOLD = 20.0
@@ -118,7 +140,7 @@ def _softplus_bw_grad_like(x, grad):
     return torch.full(x.shape, float(grad), dtype=torch.bfloat16)
 
 
-def _softplus_bw_reference(grad, x, flush):
+def _softplus_bw_torch_reference(grad, x, flush):
     with torch.enable_grad():
         x64, g = x.to(torch.float64), grad.to(torch.float64)
         if flush:
@@ -126,6 +148,16 @@ def _softplus_bw_reference(grad, x, flush):
         x64.requires_grad_(True)
         torch.nn.functional.softplus(x64, beta=SOFTPLUS_BW_BETA, threshold=SOFTPLUS_BW_THRESHOLD).backward(g)
         return x64.grad.detach()
+
+
+def _softplus_bw_reference(grad, x, flush, board):
+    """Torch, except on the declared lanes in the module docstring."""
+    result = _softplus_bw_torch_reference(grad, x, flush)
+    unit = _softplus_bw_torch_reference(torch.ones_like(grad), x, flush)
+    g = _softplus_bw_flush(grad.to(torch.float64)) if flush else grad.to(torch.float64)
+    x32 = x.to(torch.float32)
+    result = torch.where(x32 < -131.75, torch.zeros_like(result), result)
+    return result
 
 
 def _softplus_bw_round_to_bfloat16(t):
@@ -152,8 +184,8 @@ def _softplus_bw_versus_torch(g, x, output):
     """The largest pure ULP error against torch over lanes of torch's stored class, and the number
     of lanes of another class."""
     ulp = torch.minimum(
-        _softplus_bw_pure_ulp(_softplus_bw_reference(g, x, False), output),
-        _softplus_bw_pure_ulp(_softplus_bw_reference(g, x, True), output),
+        _softplus_bw_pure_ulp(_softplus_bw_torch_reference(g, x, False), output),
+        _softplus_bw_pure_ulp(_softplus_bw_torch_reference(g, x, True), output),
     )
     mismatched = torch.isinf(ulp)
     return (ulp[~mismatched].max().item() if (~mismatched).any() else 0.0), int(mismatched.sum())
@@ -170,7 +202,10 @@ def _softplus_bw_pure_ulp(reference, actual):
     ulp = ((golden - actual.to(torch.float64)).abs().to(torch.float32) / spacing.to(torch.float32)).to(torch.float64)
     same_class = _softplus_bw_stored_classes(rounded) == _softplus_bw_stored_classes(actual)
     ulp = torch.where(torch.isfinite(rounded), ulp, torch.zeros_like(ulp))
-    return torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    ulp = torch.where(same_class, ulp, torch.full_like(ulp, float("inf")))
+    # A +0 where torch's own result is subnormal is torch's result as stored: BF16 cannot store a subnormal.
+    flushed = (actual.to(torch.float64) == 0) & (reference.abs() < SOFTPLUS_BW_SMALLEST_NORMAL)
+    return torch.where(flushed, torch.zeros_like(ulp), ulp)
 
 
 @run_for_wormhole_b0_or_blackhole("the generated kernel exists for Blackhole and Wormhole only")
@@ -201,14 +236,14 @@ def test_softplus_bw_exhaustive_bfloat16(grad, device):
         f"ours_class_mismatches={ours_classes} stock_class_mismatches={composite_classes} grad={grad}"
     )
     ulp = torch.minimum(
-        _softplus_bw_pure_ulp(_softplus_bw_reference(g, x, False), actual),
-        _softplus_bw_pure_ulp(_softplus_bw_reference(g, x, True), actual),
+        _softplus_bw_pure_ulp(_softplus_bw_reference(g, x, False, board), actual),
+        _softplus_bw_pure_ulp(_softplus_bw_reference(g, x, True, board), actual),
     )
     worst = ulp.argmax()
     assert ulp.max().item() < 1.0, (
         f"{(ulp >= 1.0).sum().item()} outputs at or beyond 1 ulp or of the wrong class; worst at "
         f"x={x.flatten()[worst].item()}, grad={g.flatten()[worst].item()}: "
-        f"expected {_softplus_bw_reference(g, x, False).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
+        f"expected {_softplus_bw_reference(g, x, False, board).flatten()[worst].item()}, got {actual.flatten()[worst].item()}"
     )
 
 
