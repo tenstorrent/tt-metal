@@ -70,10 +70,9 @@ DIMENSION_PROFILES = (
 
 
 # ttsim has no SFPLOADMACRO, so under --disable-sfploadmacro only the SFPI implementation is built.
-SFPU_SRCS_IMPLS = (
-    (SfpuSrcsImpl.Sfpi,)
-    if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1"
-    else tuple(SfpuSrcsImpl)
+LOADMACRO_AVAILABLE = os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") != "1"
+ALL_SFPU_SRCS_IMPLS = (
+    tuple(SfpuSrcsImpl) if LOADMACRO_AVAILABLE else (SfpuSrcsImpl.Sfpi,)
 )
 
 
@@ -90,7 +89,10 @@ def _matmul_output_fits_dest(
 
 
 def generate_parallel_matmul_exp_combinations(
-    formats_list: list[FormatConfig], *, is_perf: bool = False
+    formats_list: list[FormatConfig],
+    *,
+    is_perf: bool = False,
+    impls: tuple[SfpuSrcsImpl, ...] = (SfpuSrcsImpl.Sfpi,),
 ):
     combinations = []
     for fmt, dest_acc in generate_quasar_srcs_format_dest_acc_combinations(
@@ -117,7 +119,7 @@ def generate_parallel_matmul_exp_combinations(
                         dest_sync,
                     ):
                         continue
-                    for sfpu_srcs_impl in SFPU_SRCS_IMPLS:
+                    for sfpu_srcs_impl in impls:
                         combinations.append(
                             (
                                 fmt,
@@ -133,8 +135,13 @@ def generate_parallel_matmul_exp_combinations(
     return combinations
 
 
+# Regular run: SFPI implementation only. The SFPLOADMACRO implementation runs in the nightly
+# function below, so a nightly session covers both.
 PARALLEL_MATMUL_EXP_COMBINATIONS = generate_parallel_matmul_exp_combinations(
-    SFPU_UNARY_FORMATS
+    SFPU_UNARY_FORMATS, impls=(SfpuSrcsImpl.Sfpi,)
+)
+PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS = generate_parallel_matmul_exp_combinations(
+    SFPU_UNARY_FORMATS, impls=(SfpuSrcsImpl.LoadMacro,)
 )
 
 
@@ -302,3 +309,16 @@ def test_sfpu_exp_parallel_matmul_quasar(
     assert len(res_matmul) == len(golden_matmul), "matmul"
     assert passed_test(golden_exp, res_exp, formats.output_format), "exp"
     assert passed_test(golden_matmul, res_matmul, formats.output_format), "matmul"
+
+
+@pytest.mark.nightly
+@pytest.mark.quasar
+@pytest.mark.skipif(
+    not LOADMACRO_AVAILABLE,
+    reason="ttsim has no SFPLOADMACRO; only the SFPI implementation is built",
+)
+@parametrize(
+    format_dest_acc_sync_implied_math=PARALLEL_MATMUL_EXP_LOADMACRO_COMBINATIONS,
+)
+def test_sfpu_exp_parallel_matmul_loadmacro_quasar(format_dest_acc_sync_implied_math):
+    test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math)
