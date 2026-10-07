@@ -130,14 +130,13 @@
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 
-// rand output interval [from, from + scale] as fp32 bits; the RAND_RANGE template parameter overrides it.
+// rand defaults; the RAND_RANGE / RAND_SEED template parameters override them.
 #ifndef RAND_FROM_BITS
 #define RAND_FROM_BITS 0x3F800000u // 1.0f
 #endif
 #ifndef RAND_SCALE_BITS
 #define RAND_SCALE_BITS 0x40000000u // 2.0f
 #endif
-// rand PRNG seed; the RAND_SEED template parameter overrides it.
 #ifndef RAND_SEED
 #define RAND_SEED 0x12345678u
 #endif
@@ -1207,7 +1206,6 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::rand)
     {
-        // Output range [from, from + scale] as fp32 bit patterns; RAND_RANGE overrides the default [1.0, 3.0].
         SFPU_UNARY_CALL(
             DST_SYNC,
             is_fp32_dest_acc_en,

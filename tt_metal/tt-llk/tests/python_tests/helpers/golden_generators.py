@@ -3320,10 +3320,8 @@ class UnarySFPUGolden:
         return cdf + x * phi
 
     def _rand(self, x):
-        # rand ignores x and draws from the hardware PRNG, so no element-wise golden exists. This
-        # stands in a fixed in-range value, the interval's midpoint: only a downstream op whose
-        # result is the same for every draw (sign, isfinite, x > 0, ...) can be checked against it.
-        # test_rand_quasar checks rand's own output statistically.
+        # No element-wise golden exists: the midpoint is only valid ahead of a downstream op whose
+        # result is the same for every draw. test_rand_quasar checks rand statistically.
         return RAND_FROM + RAND_SCALE / 2
 
     def _fill(self, x, const_value=5):

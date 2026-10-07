@@ -75,7 +75,6 @@ CLAMPED_SILU_GLU_LIMIT = 10.0
 SITU_GLU_BETA_GATE = 4.0
 SITU_GLU_BETA_UP = 25.0
 
-# rand draws from [RAND_FROM, RAND_FROM + RAND_SCALE] unless the RAND_RANGE template parameter
-# overrides it (sfpu_operations_quasar.h RAND_FROM_BITS / RAND_SCALE_BITS).
+# rand's default interval [RAND_FROM, RAND_FROM + RAND_SCALE] (RAND_FROM_BITS / RAND_SCALE_BITS).
 RAND_FROM = 1.0
 RAND_SCALE = 2.0

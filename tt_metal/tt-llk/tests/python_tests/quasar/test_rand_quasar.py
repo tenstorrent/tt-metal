@@ -52,17 +52,8 @@ from helpers.tile_constants import (
 )
 
 
-# ---------------------------------------------------------------------------
-# Rand: a property-based check.
-#
-# rand overwrites Dest with draws from the per-lane hardware PRNG, so no element-wise golden
-# exists. The oracle checks the properties the op promises instead: every value lies in
-# [from, from + scale], the sample is uniform (mean, spread, histogram), every lane and every
-# row gets its own draw, and scale == 0 yields a constant tile. The input tile is filled with
-# a value outside every tested interval, so an element the kernel failed to write fails the
-# range check. test_rand_seed_quasar checks the seed itself: same seed, same tile; another
-# seed, another tile; and the all-ones lock-up seed is repaired.
-# ---------------------------------------------------------------------------
+# rand has no element-wise golden, so these check its properties: range, uniformity, per-lane and
+# per-row independence, and seed determinism.
 @dataclass(frozen=True, repr=False)
 class RandCase:
     name: str
@@ -76,14 +67,13 @@ class RandCase:
 
 _RAND_FLOAT_FORMATS = (DataFormat.Float16, DataFormat.Float32, DataFormat.Float16_b)
 
-# A scale whose fp32 exponent is <= 31 cannot absorb the 2^-31 normalization, so the kernel
-# replays its body with a per-row SFPMULI instead of the folded one.
+# Exponent <= 31 cannot absorb the 2^-31 normalization, forcing the per-row SFPMULI body.
 _RAND_PER_ROW_NORMALIZE_SCALE = 2.0**-96
 
 RAND_CASES = (
     RandCase("unit", 1.0, 2.0, _RAND_FLOAT_FORMATS),
     RandCase("signed", -4.0, 8.0, _RAND_FLOAT_FORMATS),
-    # Float16 cannot represent 2^-96, so the per-row-normalize case runs on the 8-bit-exponent formats.
+    # Float16 cannot represent 2^-96.
     RandCase(
         "per_row_normalize",
         0.0,
@@ -93,35 +83,26 @@ RAND_CASES = (
     RandCase("zero_scale", 1.5, 0.0, _RAND_FLOAT_FORMATS),
 )
 
-# rand does not depend on Dest sync, and 4 tiles fit one Dest section in every mode, so every
-# case runs one shape and one sync mode.
+# rand does not depend on Dest sync, and 4 tiles fit one Dest section in every mode.
 _RAND_DEST_SYNC = DestSync.Half
 _RAND_DIMS = [64, 64]
 
-# Written to Dest before rand runs; outside every RandCase interval.
+# Outside every RandCase interval, so an unwritten element fails the range check.
 _RAND_UNWRITTEN_SENTINEL = -100.0
 
 _RAND_DEFAULT_SEED = 0x12345678
 
-# Uniformity thresholds.
-_RAND_MEAN_SIGMAS = 6.0  # mean within this many standard errors of the midpoint
-_RAND_STD_REL_TOL = (
-    0.15  # sample standard deviation within this fraction of the uniform one
-)
+_RAND_MEAN_SIGMAS = 6.0
+_RAND_STD_REL_TOL = 0.15
 _RAND_HISTOGRAM_BINS = 8
-_RAND_HISTOGRAM_MIN_FRACTION = 0.5  # every bin holds [0.5, 1.5] x its expected count
+_RAND_HISTOGRAM_MIN_FRACTION = 0.5
 _RAND_HISTOGRAM_MAX_FRACTION = 1.5
-_RAND_FP32_MIN_DISTINCT_FRACTION = 0.95  # Float32 output: nearly every draw distinct
-_RAND_NARROW_MIN_DISTINCT = 64  # 16-bit output: at least this many distinct values
-_RAND_ROW_MIN_DISTINCT_DIVISOR = 2  # a face row holds >= FACE_C_DIM / 2 distinct values
-_RAND_COL_MIN_DISTINCT_DIVISOR = (
-    4  # a face column holds >= face rows / 4 distinct values
-)
-# Correlation scan over face-row / face-column offsets. One PRNG step feeds a row pair, so a weak or
-# missing finalizer shows up as a lane echoing a nearby lane some rows later: with the finalizer
-# replaced by a plain copy, the worst offset reaches |r| = 0.128 on every unit / signed variant on the
-# emulator, while every other check here still passes. The real kernel sits at the noise floor
-# (|r| ~0.04; about 0.06 is the expected maximum over the 80 offsets for ~3K pairs each).
+_RAND_FP32_MIN_DISTINCT_FRACTION = 0.95
+_RAND_NARROW_MIN_DISTINCT = 64  # 16-bit outputs
+_RAND_ROW_MIN_DISTINCT_DIVISOR = 2
+_RAND_COL_MIN_DISTINCT_DIVISOR = 4
+# A missing finalizer makes a lane echo a nearby lane a few rows later: |r| = 0.128 on the emulator
+# with it replaced by a plain copy, vs ~0.04 for the real kernel.
 _RAND_CORR_MAX_ROW_OFFSET = 8
 _RAND_CORR_MAX_COL_OFFSET = 4
 _RAND_MAX_OFFSET_CORRELATION = 0.08
@@ -132,7 +113,6 @@ def _fp32_bits(value: float) -> int:
 
 
 def generate_rand_combinations():
-    """Every RandCase over its formats, at one Dest sync mode and shape."""
     combinations = []
     for case in RAND_CASES:
         for variant in generate_quasar_sfpu_format_variants(
@@ -162,11 +142,7 @@ def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _max_offset_correlation(face_rows: torch.Tensor):
-    """Largest |pearson r| between each element and the one (dr, dc) away, over small offsets.
-
-    Covers dr in [0, _RAND_CORR_MAX_ROW_OFFSET] and dc in [-_RAND_CORR_MAX_COL_OFFSET,
-    _RAND_CORR_MAX_COL_OFFSET], except (0, 0); returns (|r|, (dr, dc)).
-    """
+    """Return (max |pearson r|, (dr, dc)) over the small row / column offsets."""
     rows, cols = face_rows.shape
     worst = (0.0, (0, 0))
     for dr in range(_RAND_CORR_MAX_ROW_OFFSET + 1):
@@ -183,7 +159,6 @@ def _max_offset_correlation(face_rows: torch.Tensor):
 
 
 def _check_rand_properties(values: torch.Tensor, case: RandCase, output_format):
-    """Assert the uniform-distribution properties of a flat, tile-ordered rand result."""
     n = values.numel()
     lo = case.from_value
     hi = case.from_value + case.scale
@@ -203,8 +178,7 @@ def _check_rand_properties(values: torch.Tensor, case: RandCase, output_format):
         )
         return
 
-    # Mean within _RAND_MEAN_SIGMAS standard errors of the midpoint, plus one output ulp for the
-    # truncating 16-bit store.
+    # Plus one output ulp for the truncating 16-bit store.
     sigma = case.scale / math.sqrt(12.0)
     mean = float(values.mean())
     mean_tol = _RAND_MEAN_SIGMAS * sigma / math.sqrt(n) + _rand_output_ulp(
@@ -236,9 +210,7 @@ def _check_rand_properties(values: torch.Tensor, case: RandCase, output_format):
         distinct >= min_distinct
     ), f"only {distinct} distinct values in {n} draws (need >= {min_distinct})"
 
-    # One PRNG step covers a row pair: the 32 SFPU lanes span 2 face rows x FACE_C_DIM columns,
-    # and the kernel steps Dest by 2 rows. So a face row's 16 values are 16 different lanes, and
-    # a face column's values come from 2 lanes over successive PRNG steps.
+    # One PRNG step covers a row pair (32 lanes = 2 face rows x FACE_C_DIM).
     face_rows = values.reshape(-1, FACE_C_DIM)
     row_distinct = torch.tensor([torch.unique(r).numel() for r in face_rows])
     row_min = FACE_C_DIM // _RAND_ROW_MIN_DISTINCT_DIVISOR
@@ -271,7 +243,6 @@ def _rand_config(
     input_dimensions,
     seed: int = _RAND_DEFAULT_SEED,
 ):
-    """Build (without running) the eltwise-unary rand configuration for one case and seed."""
     formats = format_variant.formats
     input_torch_format = format_dict[formats.input_format]
     element_count = input_dimensions[0] * input_dimensions[1]
@@ -346,7 +317,6 @@ def _run_rand(configuration, format_variant: QuasarSfpuVariant, element_count: i
 @pytest.mark.quasar
 @parametrize(rand_case_formats_sync_dims=generate_rand_combinations())
 def test_rand_quasar(rand_case_formats_sync_dims):
-    """Property-based check of the Quasar rand SFPU op over both replayed bodies and scale == 0."""
     case, format_variant, dest_sync, input_dimensions = rand_case_formats_sync_dims[0]
     configuration = _rand_config(case, format_variant, dest_sync, input_dimensions)
     values = _run_rand(
@@ -356,13 +326,13 @@ def test_rand_quasar(rand_case_formats_sync_dims):
 
 
 _RAND_OTHER_SEED = 0x9E3779B9
-_RAND_LOCKUP_SEED = 0xFFFFFFFF  # the XNOR LFSR lock-up state init_rand repairs
-_RAND_LOCKUP_REPAIR_SEED = 0xFFFFFFFE  # what init_rand replaces it with
-_RAND_MIN_DIFFERENT_FRACTION = 0.9  # two seeds must disagree on nearly every element
+_RAND_LOCKUP_SEED = 0xFFFFFFFF  # XNOR LFSR lock-up state, repaired by init_rand
+_RAND_LOCKUP_REPAIR_SEED = 0xFFFFFFFE
+_RAND_MIN_DIFFERENT_FRACTION = 0.9
 
 
 def _rand_seed_variant() -> QuasarSfpuVariant:
-    """Float32 in, Float32 Dest, Float32 out: every PRNG bit the kernel keeps reaches L1."""
+    """Float32 end to end, so every PRNG bit the kernel keeps reaches L1."""
     return next(
         v
         for v in generate_quasar_sfpu_format_variants(
@@ -374,7 +344,6 @@ def _rand_seed_variant() -> QuasarSfpuVariant:
 
 @pytest.mark.quasar
 def test_rand_seed_quasar():
-    """The seed takes effect: same seed repeats bit-for-bit, another seed differs, lock-up is repaired."""
     case = RAND_CASES[0]
     format_variant = _rand_seed_variant()
     element_count = _RAND_DIMS[0] * _RAND_DIMS[1]
@@ -392,8 +361,7 @@ def test_rand_seed_quasar():
     for configuration in configs.values():
         configuration.prepare()
 
-    # Run the default seed, then another seed, then the default seed again: an unseeded PRNG
-    # would carry on from where the other seed's run left it rather than repeat run one.
+    # Another seed runs in between, so an unseeded PRNG would not repeat run one.
     first = _run_rand(configs[_RAND_DEFAULT_SEED], format_variant, element_count)
     other = _run_rand(configs[_RAND_OTHER_SEED], format_variant, element_count)
     again = _run_rand(configs[_RAND_DEFAULT_SEED], format_variant, element_count)

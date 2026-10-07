@@ -326,11 +326,7 @@ class SFPU_UNARY_THRESHOLD(TemplateParameter):
 
 @dataclass
 class RAND_RANGE(TemplateParameter):
-    """Output interval ``[from, from + scale]`` of the rand SFPU op, as raw fp32 bits.
-
-    Emitted as macros so the shared SFPU dispatcher can fall back to its defaults
-    (1.0, 2.0) in every build that does not pass this parameter.
-    """
+    """rand output interval ``[from, from + scale]`` as fp32 bits; emitted as macros over the dispatcher defaults."""
 
     rand_from_bits: int = 0x3F800000  # 1.0f
     rand_scale_bits: int = 0x40000000  # 2.0f
@@ -344,11 +340,7 @@ class RAND_RANGE(TemplateParameter):
 
 @dataclass
 class RAND_SEED(TemplateParameter):
-    """PRNG seed the rand SFPU op's init writes, as a uint32.
-
-    Emitted as a macro so the shared SFPU dispatcher keeps its default seed in every
-    build that does not pass this parameter.
-    """
+    """rand PRNG seed; emitted as a macro over the dispatcher default."""
 
     rand_seed: int = 0x12345678
 
