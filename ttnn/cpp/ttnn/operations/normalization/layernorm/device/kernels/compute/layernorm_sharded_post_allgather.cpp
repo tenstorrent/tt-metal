@@ -278,9 +278,13 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, dfb_xmm, subblock_w);
+#else
             for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
                 pack_tile(dst_i, dfb_xmm);
             }
+#endif
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
@@ -319,9 +323,13 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, dfb_im, subblock_w);
+#else
             for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
                 pack_tile(dst_i, dfb_im);
             }
+#endif
             tile_regs_release();
 
             index_subblock_w_offset += subblock_w;
@@ -363,9 +371,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_outgamma, subblock_w);
+#else
                 for (uint32_t dst_i = 0; dst_i < subblock_w; dst_i++) {
                     pack_tile(dst_i, dfb_outgamma);
                 }
+#endif
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
                 dfb_outgamma_obj.push_back(subblock_w);
@@ -398,9 +410,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_out, subblock_w);
+#else
                 for (uint32_t i = 0; i < subblock_w; i++) {
                     pack_tile(i, dfb_out);
                 }
+#endif
                 tile_regs_release();
                 index_subblock_w_offset += subblock_w;
             }

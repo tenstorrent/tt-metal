@@ -165,10 +165,17 @@ void kernel_main() {
                 tile_regs_acquire();
                 tile_regs_wait();
 
+#ifdef ARCH_BLACKHOLE
+                for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
+                    matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i);
+                }
+                pack_block_mop(0, rotated_input_cb, std::min(block_size, num_tile_cols - col_tile));
+#else
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     matmul_tiles(intermediate_cb, transformation_mat_cb, i, 0, i);
                     pack_tile(i, rotated_input_cb);
                 }
+#endif
 
                 tile_regs_commit();
                 tile_regs_release();
@@ -196,9 +203,13 @@ void kernel_main() {
                 cb_intermediate.pop_front(block_size);
                 cb_intermediate.reserve_back(block_size);
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, intermediate_cb, std::min(block_size, num_tile_cols - col_tile));
+#else
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     pack_tile(i, intermediate_cb);
                 }
+#endif
                 tile_regs_release();
                 cb_intermediate.push_back(block_size);
 
@@ -225,9 +236,13 @@ void kernel_main() {
                 cb_rotated_input.pop_front(block_size);
                 cb_rotated_input.reserve_back(block_size);
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, rotated_input_cb, std::min(block_size, num_tile_cols - col_tile));
+#else
                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                     pack_tile(i, rotated_input_cb);
                 }
+#endif
                 tile_regs_release();
                 cb_rotated_input.push_back(block_size);
 

@@ -524,9 +524,13 @@ void kernel_main() {
                                     }
                                     tile_regs_commit();
                                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                    pack_block_mop(0, mul_rms_result_cb, block_size);
+#else
                                     for (uint32_t i = 0; i < block_size; i++) {
                                         pack_tile(i, mul_rms_result_cb);
                                     }
+#endif
                                     tile_regs_release();
                                     cb_mul_rms_result.push_back(block_size);
                                     cb_input.pop_front(block_size);
@@ -551,9 +555,13 @@ void kernel_main() {
                                     }
                                     tile_regs_commit();
                                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                    pack_block_mop(0, mul_rms_result_cb, std::min(block_size, post_group_width - col_tile));
+#else
                                     for (uint32_t i = 0; i < block_size && col_tile + i < post_group_width; i++) {
                                         pack_tile(i, mul_rms_result_cb);
                                     }
+#endif
                                     tile_regs_release();
                                     cb_mul_rms_result.push_back(tiles_in_block);
                                 }
@@ -587,9 +595,13 @@ void kernel_main() {
                                 }
                                 tile_regs_commit();
                                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                pack_block_mop(0, mul_rms_result_cb, tiles_in_block);
+#else
                                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                                     pack_tile(i, mul_rms_result_cb);
                                 }
+#endif
                                 tile_regs_release();
                                 cb_mul_rms_result.push_back(block_size);
 
@@ -618,9 +630,13 @@ void kernel_main() {
                                     tile_regs_commit();
                                     cb_mul_rms_result.pop_front(block_size);
                                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                    pack_block_mop(0, mul_weight_result_cb, tiles_in_block);
+#else
                                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                                         pack_tile(i, mul_weight_result_cb);
                                     }
+#endif
                                     tile_regs_release();
                                     cb_mul_weight_result.push_back(block_size);
                                 }
@@ -649,9 +665,13 @@ void kernel_main() {
                                     tile_regs_commit();
                                     cb_mul_weight_result.pop_front(block_size);
                                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                    pack_block_mop(0, add_bias_result_cb, tiles_in_block);
+#else
                                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                                         pack_tile(i, add_bias_result_cb);
                                     }
+#endif
                                     tile_regs_release();
                                     cb_add_bias_result.push_back(block_size);
                                 }
@@ -666,9 +686,13 @@ void kernel_main() {
                                     matmul_block(intermediate_cb, transformation_mat_cb, 0, 0, 0, 0, 1, block_size, 1);
                                     tile_regs_commit();
                                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                    pack_block_mop(0, rotated_input_cb, block_size);
+#else
                                     for (uint32_t i = 0; i < block_size; i++) {
                                         pack_tile(i, rotated_input_cb);
                                     }
+#endif
                                     tile_regs_release();
                                     cb_rotated_input.push_back(block_size);
                                     // cos/sin: per-head RoPE uses this head's absolute cols (popped
@@ -703,9 +727,13 @@ void kernel_main() {
                                     }
                                     tile_regs_commit();
                                     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                    pack_block_mop(0, output_cb, tiles_in_block);
+#else
                                     for (uint32_t i = 0; i < tiles_in_block; i++) {
                                         pack_tile(i, output_cb);
                                     }
+#endif
                                     tile_regs_release();
                                     cb_output.push_back(block_size);
                                     cb_intermediate.pop_front(block_size);
@@ -752,9 +780,13 @@ void kernel_main() {
                         }
                         tile_regs_commit();
                         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                        pack_block_mop(0, mul_rms_result_cb, block_size);
+#else
                         for (uint32_t i = 0; i < block_size; i++) {
                             pack_tile(i, mul_rms_result_cb);
                         }
+#endif
                         tile_regs_release();
                         cb_mul_rms_result.push_back(block_size);
                         cb_input.pop_front(block_size);
@@ -782,9 +814,13 @@ void kernel_main() {
                             tile_regs_commit();
                             cb_mul_rms_result.pop_front(block_size);
                             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                            pack_block_mop(0, mul_weight_result_cb, block_size);
+#else
                             for (uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, mul_weight_result_cb);
                             }
+#endif
                             tile_regs_release();
                             cb_mul_weight_result.push_back(block_size);
                         }
@@ -812,9 +848,13 @@ void kernel_main() {
                             tile_regs_commit();
                             cb_mul_weight_result.pop_front(block_size);
                             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                            pack_block_mop(0, add_bias_result_cb, block_size);
+#else
                             for (uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, add_bias_result_cb);
                             }
+#endif
                             tile_regs_release();
                             cb_add_bias_result.push_back(block_size);
                         }
@@ -847,9 +887,13 @@ void kernel_main() {
                                 /*kt_dim=*/1);
                             tile_regs_commit();
                             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                            pack_block_mop(0, rotated_input_cb, block_size);
+#else
                             for (uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, rotated_input_cb);
                             }
+#endif
                             tile_regs_release();
                             cb_rotated_input.push_back(block_size);
 
@@ -889,9 +933,13 @@ void kernel_main() {
                             }
                             tile_regs_commit();
                             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                            pack_block_mop(0, output_cb, block_size);
+#else
                             for (uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, output_cb);
                             }
+#endif
                             tile_regs_release();
                             cb_output.push_back(block_size);
                             cb_intermediate.pop_front(block_size);
@@ -945,9 +993,13 @@ void kernel_main() {
                         cb_mul_rms_result.pop_front(block_size);
                         cb_mul_weight_result.reserve_back(block_size);
                         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                        pack_block_mop(0, mul_weight_result_cb, tiles_in_block);
+#else
                         for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                             pack_tile(i, mul_weight_result_cb);
                         }
+#endif
                         tile_regs_release();
                         cb_mul_weight_result.push_back(block_size);
                     }
@@ -982,9 +1034,13 @@ void kernel_main() {
                         cb_mul_weight_result.pop_front(block_size);
                         cb_add_bias_result.reserve_back(block_size);
                         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                        pack_block_mop(0, add_bias_result_cb, tiles_in_block);
+#else
                         for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                             pack_tile(i, add_bias_result_cb);
                         }
+#endif
                         tile_regs_release();
                         cb_add_bias_result.push_back(block_size);
                     }
@@ -1027,9 +1083,13 @@ void kernel_main() {
                                 /*kt_dim=*/1);
                             tile_regs_commit();
                             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                            pack_block_mop(0, rotated_input_cb, block_size);
+#else
                             for (uint32_t i = 0; i < block_size; i++) {
                                 pack_tile(i, rotated_input_cb);
                             }
+#endif
                             tile_regs_release();
                             cb_rotated_input.push_back(block_size);
                             // --- RoPE finalize: x*cos + rotate(x)*sin -> output (FPU dst-accumulate) ---
@@ -1050,9 +1110,13 @@ void kernel_main() {
                             }
                             tile_regs_commit();
                             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                            pack_block_mop(0, output_cb, tiles_in_block);
+#else
                             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                 pack_tile(i, output_cb);
                             }
+#endif
                             tile_regs_release();
                             cb_output.push_back(block_size);
                             cb_intermediate.pop_front(block_size);
@@ -1097,9 +1161,13 @@ void kernel_main() {
                                     /*kt_dim=*/1);
                                 tile_regs_commit();
                                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                pack_block_mop(0, rotated_input_cb, block_size);
+#else
                                 for (uint32_t i = 0; i < block_size; i++) {
                                     pack_tile(i, rotated_input_cb);
                                 }
+#endif
                                 tile_regs_release();
                                 cb_rotated_input.push_back(block_size);
                             }
@@ -1168,9 +1236,13 @@ void kernel_main() {
                                 }
                                 tile_regs_commit();
                                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                                pack_block_mop(0, output_cb, std::min(block_size, num_tile_cols - col_tile));
+#else
                                 for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
                                     pack_tile(i, output_cb);
                                 }
+#endif
                                 tile_regs_release();
                                 cb_output.push_back(block_size);
                                 cb_intermediate.pop_front(block_size);

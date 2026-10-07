@@ -95,9 +95,13 @@ void kernel_main() {
 
         cb_out.reserve_back(tile_granularity);
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, cb_out_id, n);
+#else
         for (uint32_t t = 0; t < n; ++t) {
             pack_tile(t, cb_out_id, t);
         }
+#endif
         tile_regs_release();
         cb_out.push_back(tile_granularity);
 
