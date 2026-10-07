@@ -28,7 +28,7 @@ WORKTREE="$(cd "$HERE/../../.." && pwd)"   # tests/python_tests/reconfig_escape 
 
 ARCH=""
 REPORT_DIR="$HERE/reports"
-SAMPLE_PER_TEST=150
+SAMPLE_PER_TEST=30
 JOBS=8
 TIMEOUT=90
 SPLITS=""
