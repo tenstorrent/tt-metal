@@ -58,3 +58,7 @@ B=64:        DSV41_SPEC_ROWS=1 DSV41_SPEC=3 [DSV41_SPEC_ADAPT=1 DSV41_SPEC_SET=0
 B=128 (spec forced): DSV41_SPEC_B128=1 DSV41_SPEC_ROWS=1 DSV41_SPEC=3 -k gsm8k_b128
 ```
 Logs: /mnt/tt-data/ssinghal/dsv4-logs/pf_spec_int_<name>.log
+
+## Plain-decode regression check (spec off, gsm8k_b16, 40 layers)
+main c29a56370c8 (worktree wt/spec_base, host .35): decode 48.0 ms/token (20.82 tok/s/user); this branch (host .47): 48.1 ms/token (20.79). All 16 users' output texts identical between the two logs (pf_spec_base_reg_base_b16 vs pf_spec_int_reg_new_b16e).
+Two other attempts on host .35 hung (first decode step, then a prefill chunk; triage saved in dsv4-logs/triage/hang_35_regnew_2330.* and hang_35_regnew_d_0010.*) while the same build passed on .47: treated as a host .35 problem, not a branch regression (not isolated further).
