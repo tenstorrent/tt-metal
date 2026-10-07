@@ -39,3 +39,19 @@
   First look: same subject/setting, layout drifts from ref (more for s1x5). s1x6 seed0 face smeared at t=3 s.
   Check more frames (eval_vs_ref_t48_f6b8/seed*_cmp_f*.png) before a verdict.
 - Next: read eval summary for both arms, compare VBench to ref, decide gate, write result.
+
+## Verdict (attempt 3, 2026-10-07)
+- Scores vs ref_t48_f6b8 (S2 still 3 steps in both arms and ref):
+  - s1x6: PCC 0.447, PSNR 15.6 dB; VBench subj 0.894 (ref 0.888), bg 0.921 (0.921), imaging 0.562 (0.559),
+    aesthetic 0.576 (0.587), motion 0.983 (0.984).
+  - s1x5: PCC 0.350, PSNR 15.1 dB; aesthetic 0.558 (-0.029), others within noise.
+  - Low PCC/PSNR = different trajectory (layout/pose drift), not noise or blur by itself.
+- Visual: seeds 1-4 of s1x6 look as clean as ref over the whole clip (strip at 1.5 fps:
+  data/g15/t186_s1x6/seeds1-4_ref_vs_s1x6_strip.png). Seed 0 has a visible face smear/ghost for about
+  0.2 s around t=3.0 s in BOTH s1x6 and s1x5; ref is clean there
+  (data/g15/t186_s1x6/seed0_ref_s1x6_s1x5_t2.6-3.4.png). s1x5 drifts further from ref and loses aesthetic.
+- Call: s1x5 rejected. s1x6 is NOT made default: 1 of 5 seeds shows a visible transient artifact that the
+  8-step run lacks, and the charter forbids visible degradation. It stays opt-in via LTX_S1_SIGMAS (env only,
+  no code change). Worth one more try with a different 6-step schedule and stacked on S2x2 (current t48 default).
+- Push: notes commits stay local. `ttp push` check runs models/tt_dit/tests/unit/test_ltx_*.py, which does not
+  exist on fasth3-opt, so every push of this branch fails the check (harness config, not ours to edit).
