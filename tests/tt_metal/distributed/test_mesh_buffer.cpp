@@ -318,6 +318,31 @@ TEST_F(MeshBufferTest2x4, MeshWideBufferPropertiesMatchEveryDeviceBuffer) {
     }
 }
 
+TEST_F(MeshBufferTest2x4, CircularBufferBackedByMeshBuffer) {
+    const DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {1, 1}, .num_cores = {4, 1}, .page_shape = {32, 16}, .element_size = 2};
+    const DeviceLocalBufferConfig sharded_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config)};
+    auto l1_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = test_config.num_pages() * test_config.page_size()},
+        sharded_config,
+        mesh_device_.get());
+
+    CircularBufferConfig cb_config(test_config.page_size(), {{tt::CBIndex::c_0, tt::DataFormat::Float16_b}});
+    cb_config.set_page_size(tt::CBIndex::c_0, test_config.page_size()).set_globally_allocated_address(*l1_buffer);
+    EXPECT_EQ(cb_config.globally_allocated_address(), l1_buffer->address());
+    EXPECT_EQ(cb_config.max_size(), l1_buffer->aligned_size_per_bank());
+
+    // A DRAM MeshBuffer cannot back a circular buffer, exactly as a DRAM Buffer cannot.
+    auto dram_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = 4096},
+        DeviceLocalBufferConfig{.page_size = 1024, .buffer_type = BufferType::DRAM},
+        mesh_device_.get());
+    EXPECT_ANY_THROW(cb_config.set_globally_allocated_address(*dram_buffer));
+}
+
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};

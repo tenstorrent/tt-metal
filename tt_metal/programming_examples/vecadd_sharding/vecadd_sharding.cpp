@@ -66,7 +66,7 @@ CBHandle MakeCircularBufferBFP16(
                                          .set_page_size(cb, tile_size)
                                          // IMPORTANT: assign L1 buffer address to circular buffer directly so that
                                          // no extra allocation and data copy
-                                         .set_globally_allocated_address(*(l1_buf->get_backing_buffer()));
+                                         .set_globally_allocated_address(*l1_buf);
     return CreateCircularBuffer(program, core, cb_config);
 }
 
