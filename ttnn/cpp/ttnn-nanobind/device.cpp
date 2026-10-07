@@ -59,11 +59,11 @@ namespace {
 
 // Prevent Python callback GC while registered.  Keyed by handle returned from C++
 // RegisterProgramRealtimeProfilerCallback. Access only from the Python thread (always under GIL), so no mutex needed.
-std::unordered_map<std::uint64_t, PyObject*> python_realtime_callback_refs;
+std::unordered_map<uint64_t, PyObject*> python_realtime_callback_refs;
 
 struct PythonProgramRealtimeRecordBatch {
     std::vector<tt::tt_metal::experimental::ProgramRealtimeRecord> records;
-    std::uint64_t dropped = 0;
+    uint64_t dropped = 0;
 };
 
 void ttnn_device(nb::module_& mod) {
@@ -221,7 +221,7 @@ void device_module(nb::module_& m_device) {
     auto pySubDeviceId = static_cast<nb::class_<SubDeviceId>>(m_device.attr("SubDeviceId"));
     pySubDeviceId
         .def(
-            nb::init<std::uint8_t>(),
+            nb::init<uint8_t>(),
             nb::arg("id"),
             R"doc(
             Creates a SubDeviceId object with the given ID.
@@ -249,7 +249,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "CreateDevice",
         [](int device_id,
-           std::uint8_t num_command_queues,
+           uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
            const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
@@ -282,7 +282,7 @@ void device_module(nb::module_& m_device) {
     m_device.def(
         "CreateDevices",
         [](const std::vector<int>& device_ids,
-           std::uint8_t num_command_queues,
+           uint8_t num_command_queues,
            size_t l1_small_size,
            size_t trace_region_size,
            const std::optional<tt::tt_metal::DispatchCoreConfig>& dispatch_core_config,
@@ -405,7 +405,7 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "pad_to_tile_shape",
-        [](const std::array<std::uint32_t, 4>& unpadded_shape) -> nb::list {
+        [](const std::array<uint32_t, 4>& unpadded_shape) -> nb::list {
             auto result = ttnn::operations::data_movement::pad_to_tile_shape(ttnn::Shape(unpadded_shape));
             nb::list py_list;
             for (auto val : result) {
@@ -633,7 +633,7 @@ void device_module(nb::module_& m_device) {
             if (!device->is_initialized()) {
                 return false;
             }
-            for (std::uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
                 if (device->mesh_command_queue(cq_id).trace_id().has_value()) {
                     return true;
                 }
@@ -756,11 +756,11 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "RegisterProgramRealtimeProfilerCallback",
-        [](const nb::callable& callback) -> std::uint64_t {
+        [](const nb::callable& callback) -> uint64_t {
             PyObject* raw_cb = callback.ptr();
             Py_INCREF(raw_cb);
 
-            std::uint64_t handle = 0;
+            uint64_t handle = 0;
             {
                 nb::gil_scoped_release release;
                 handle = tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback(
@@ -802,7 +802,7 @@ void device_module(nb::module_& m_device) {
 
     m_device.def(
         "UnregisterProgramRealtimeProfilerCallback",
-        [](std::uint64_t handle) {
+        [](uint64_t handle) {
             {
                 nb::gil_scoped_release release;
                 tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback(handle);

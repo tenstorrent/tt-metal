@@ -150,36 +150,50 @@ def test_async_sd_state_preserved_across_fd(mesh_device):
 _BLOCK_TABLE_KEYS = ("blockID", "address", "size", "prevID", "nextID", "allocated")
 
 
-def _assert_memory_block_table(view):
+def _assert_memory_block_table(view, buffer_type):
     """block_table is a list of dicts, one allocator block, matching memory_reporter.hpp."""
     table = view.block_table
-    assert isinstance(table, list) and table, "allocator should report at least one block"
+    assert isinstance(table, list) and table, f"{buffer_type} block_table should be a non-empty list, got {table!r}"
     allocated_bytes = 0
     spanned_bytes = 0
-    for block in table:
-        assert isinstance(block, dict)
-        assert set(block) == set(_BLOCK_TABLE_KEYS)
+    for index, block in enumerate(table):
+        assert isinstance(block, dict), f"{buffer_type} block {index} should be a dict, got {block!r}"
+        assert set(block) == set(
+            _BLOCK_TABLE_KEYS
+        ), f"{buffer_type} block {index} keys {sorted(block)} != {list(_BLOCK_TABLE_KEYS)}"
         for key in ("blockID", "address", "size", "prevID", "nextID"):
-            int(block[key])
-        assert block["allocated"] in ("yes", "no")
+            value = block[key]
+            assert (
+                isinstance(value, str) and value.isdigit()
+            ), f"{buffer_type} block {index} field {key}={value!r} is not an integer string"
+        allocated = block["allocated"]
+        assert allocated in (
+            "yes",
+            "no",
+        ), f"{buffer_type} block {index} allocated={allocated!r}, expected 'yes' or 'no'"
         size = int(block["size"])
-        assert size >= 0
         spanned_bytes += size
-        if block["allocated"] == "yes":
+        if allocated == "yes":
             allocated_bytes += size
-    assert spanned_bytes == view.total_bytes_per_bank
-    assert allocated_bytes == view.total_bytes_allocated_per_bank
+    assert (
+        spanned_bytes == view.total_bytes_per_bank
+    ), f"{buffer_type} block sizes sum to {spanned_bytes}, total_bytes_per_bank is {view.total_bytes_per_bank}"
+    assert allocated_bytes == view.total_bytes_allocated_per_bank, (
+        f"{buffer_type} allocated block sizes sum to {allocated_bytes}, "
+        f"total_bytes_allocated_per_bank is {view.total_bytes_allocated_per_bank}"
+    )
 
 
 def test_memory_view_block_table(device):
     """Reading MemoryView.block_table must not raise, and must match the allocator totals."""
     for buffer_type in (ttnn.BufferType.DRAM, ttnn.BufferType.L1):
         view = ttnn.get_memory_view(device, buffer_type)
-        assert view.num_banks > 0
-        assert view.total_bytes_per_bank > 0
-        _assert_memory_block_table(view)
+        assert view.num_banks > 0, f"{buffer_type} num_banks is {view.num_banks}"
+        assert view.total_bytes_per_bank > 0, f"{buffer_type} total_bytes_per_bank is {view.total_bytes_per_bank}"
+        _assert_memory_block_table(view, buffer_type)
     # L1 small can be a single unallocated zero-size block when that region is unused.
-    _assert_memory_block_table(ttnn.get_memory_view(device, ttnn.BufferType.L1_SMALL))
+    l1_small = ttnn.BufferType.L1_SMALL
+    _assert_memory_block_table(ttnn.get_memory_view(device, l1_small), l1_small)
 
     before = ttnn.get_memory_view(device, ttnn.BufferType.DRAM)
     tensor = ttnn.from_torch(
@@ -190,9 +204,14 @@ def test_memory_view_block_table(device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     after = ttnn.get_memory_view(device, ttnn.BufferType.DRAM)
-    _assert_memory_block_table(after)
-    assert after.total_bytes_allocated_per_bank > before.total_bytes_allocated_per_bank
-    assert any(block["allocated"] == "yes" for block in after.block_table)
+    _assert_memory_block_table(after, ttnn.BufferType.DRAM)
+    assert after.total_bytes_allocated_per_bank > before.total_bytes_allocated_per_bank, (
+        f"DRAM allocated bytes did not grow after allocation: "
+        f"before={before.total_bytes_allocated_per_bank} after={after.total_bytes_allocated_per_bank}"
+    )
+    assert any(
+        block["allocated"] == "yes" for block in after.block_table
+    ), f"DRAM block_table has no allocated block after allocation: {after.block_table!r}"
     ttnn.deallocate(tensor)
 
 
