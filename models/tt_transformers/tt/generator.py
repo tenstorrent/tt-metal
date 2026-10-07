@@ -2023,6 +2023,47 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             return tt_logits
 
     # Note: This function is called by vLLM
+    def _legacy_decode_commands(
+        self,
+        *,
+        reset_batch: bool,
+        enable_trace: bool,
+        on_device_sampling: bool,
+        mode_switched: bool,
+        force_reload_inputs: bool = False,
+    ) -> dict:
+        """The version-0 (``reset_batch``) call shape mapped onto the four decode commands.
+
+        Mirrors the reload heuristic the base class used before the explicit contract: inputs are
+        reloaded whenever the trace cannot be replayed as is (no trace yet, untraced decode, host
+        sampling, a reset, a mode or sampling-mode switch, or a model that always refreshes); the
+        page table rides with the inputs; sampling parameters are re-uploaded on every device-
+        sampled step, since the legacy caller never says whether they changed; the penalty and
+        seed state is rebuilt only on ``reset_batch``.
+        """
+        prev_on_device_sampling = getattr(self, "_prev_on_device_sampling", None)
+        self._prev_on_device_sampling = on_device_sampling
+        sampling_mode_changed = prev_on_device_sampling is not None and prev_on_device_sampling != on_device_sampling
+        reload_inputs = bool(
+            not enable_trace
+            or not self.trace_ids_decode[on_device_sampling]
+            or not on_device_sampling
+            or reset_batch
+            or mode_switched
+            or sampling_mode_changed
+            or force_reload_inputs
+            or any(
+                getattr(self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False)
+                for i in range(self.data_parallel)
+            )
+        )
+        return {
+            "reload_inputs": reload_inputs,
+            "reload_page_table": reload_inputs,
+            "reload_sampling_params": on_device_sampling,
+            "reset_sampling_state": bool(reset_batch),
+        }
+
     def decode_forward(
         self,
         tokens,
@@ -2037,14 +2078,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         slot_remap=None,
         defer_device_sampling: bool = False,
         *,
-        reload_inputs: bool,
-        reload_page_table: bool,
-        reload_sampling_params: bool,
-        reset_sampling_state: bool,
+        reload_inputs: bool | None = None,
+        reload_page_table: bool | None = None,
+        reload_sampling_params: bool | None = None,
+        reset_sampling_state: bool | None = None,
         skip_trace_precompile: bool = False,
         prepare_trace: bool = False,
         **kwargs,
     ):
+        mode_switched = self.mode != Mode.DECODE
         if self.mode != Mode.DECODE:
             self.mode = Mode.DECODE
 
@@ -2053,6 +2095,28 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             self.model[i].switch_mode(Mode.DECODE)
 
         on_device_sampling = (sampling_params is not None) or defer_device_sampling
+        # Stable branch only: adapters that do not declare ``decode_input_update_contract`` (the
+        # stable Qwen3.6, Qwen-VL, Gemma-3 and LFM2.5-VL wrappers) still receive the legacy
+        # ``reset_batch`` call shape from the plugin and the demos. Derive the four explicit
+        # commands for them the way the pre-contract base did; callers that pass all four are
+        # untouched.
+        reset_batch = kwargs.pop("reset_batch", None)
+        if None in (reload_inputs, reload_page_table, reload_sampling_params, reset_sampling_state):
+            legacy = self._legacy_decode_commands(
+                reset_batch=bool(reset_batch),
+                enable_trace=enable_trace,
+                on_device_sampling=on_device_sampling,
+                mode_switched=mode_switched,
+                force_reload_inputs=bool(kwargs.pop("reload_inputs", False)),
+            )
+            if reload_inputs is None:
+                reload_inputs = legacy["reload_inputs"]
+            if reload_page_table is None:
+                reload_page_table = legacy["reload_page_table"]
+            if reload_sampling_params is None:
+                reload_sampling_params = legacy["reload_sampling_params"]
+            if reset_sampling_state is None:
+                reset_sampling_state = legacy["reset_sampling_state"]
         if not enable_trace and not reload_inputs:
             raise ValueError("Non-traced decode rebuilds all forward inputs and requires reload_inputs=True")
 
