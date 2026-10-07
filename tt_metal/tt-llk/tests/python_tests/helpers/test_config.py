@@ -1401,6 +1401,7 @@ class TestConfig:
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
         if TestConfig.TEST_TARGET.run_simulator:
             OPTIONS_COMPILE += "-DLLK_SIMULATOR "
+        OPTIONS_COMPILE += "-DLLK_BRISC_OLD_POLL " if os.environ.get("LLK_BRISC_OLD_POLL") == "1" else ""  # experiment
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 

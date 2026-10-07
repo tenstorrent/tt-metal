@@ -299,10 +299,15 @@ int main()
 #endif
         // Poll about every 100 us and spin on NOPs in between: each poll is an L1 read, and the old wall clock wait kept
         // the debug register bus busy. Both changed the timing of the kernel under test.
+#if defined(LLK_BRISC_OLD_POLL) // experiment: the poll before e02b20f56ee, every 1 us on the wall clock
+        (void)poll_period_us;
+        ckernel::wait(ARCH_CYCLE_MICRO_SECOND);
+#else
         for (std::uint32_t i = 0; i < poll_period_us * ARCH_CYCLE_MICRO_SECOND; ++i)
         {
             asm volatile("nop");
         }
+#endif
     }
 }
 

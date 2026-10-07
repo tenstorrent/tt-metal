@@ -339,6 +339,8 @@ def host_signal_address(slot: int) -> int | None:
             return None
         return _QUASAR_HOST_SIGNAL_BASE + slot * 4
     index = _HOST_SIGNAL_SCRATCH_INDEX.get(arch)
+    if os.environ.get("LLK_HOST_POLL_L1") == "1":  # experiment: poll the L1 mailboxes as before b58fbfbd6d2
+        return None
     if index is None or (target is not None and target.run_simulator):
         return None
     return 0xFFB40000 + slot * 0x1000 + index * 4
