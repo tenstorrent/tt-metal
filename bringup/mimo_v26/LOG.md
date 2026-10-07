@@ -1616,3 +1616,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_R_sites_dec6_h47_b5e70f78d96.log
 - paths: models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py, models/demos/blackhole/mimo_v26/tests/test_prefill_determinism_traced.py
 - data: {"attn_decode_calls":18600,"dense_calls":3100,"prefill_calls":36000,"events":0}
+
+## E261007-1558-eae
+- date: 2026-10-07T15:58:54
+- commit: de9dcbe263e
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER REQUIREMENT 2026-10-07: decode is too slow; DSV4.1 Flash decode is < 50 ms/token with a 2x bigger model (DSV4 priors: 41.9-53.0 ms at B=4..16 dedicated runs, E L-decms in the guide, unverified here). MiMo at 448d1005cde: 73.6 / 85.8 / 99.0 ms at U=1/8/32 paired (E261007-1506-59b), MoE ~1.7 ms/layer at U=32 (about 80 ms of the step), attention 15-24 ms. Perf campaign started: target <= 50 ms at B=16..32 (U=4..8) without lowering precision (bfp4/fp8 KV stay off unless the user asks). Tracks: (P1) decode agent: DEVICE-profiler op breakdown of the decode step + host/trace overhead + attention/non-MoE optimisation; (P2) MoE agent: decode MoE at DSV4 efficiency (moe_compute ring path with bfp8 weights, one copy, DSV4 reaches ~85% of DRAM peak: re-measure, the earlier 273 GB/s single-card control may not represent the multi-chip ring), router/combine/reduce fusion.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
