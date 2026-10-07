@@ -270,6 +270,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
                                              : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
 
+    // When accumulating in fp32 with the K reduction split across blocks, the partials buffer holds
+    // Float32 and is reloaded into DEST between blocks. Unless the reload's view is marked UnpackToDest,
+    // that reload goes through SrcA and is rounded to TF32 on every block boundary (same fix as the
+    // mcast_1d/2d factories). The fused bias add reads the partials buffer as an FPU operand (SrcA), so
+    // with bias the reload instead goes through intermed0_reload_alias, a second view of the same SRAM
+    // carrying UnpackToDest, selected in the compute kernel by MM_PARTIALS_RELOAD_ALIAS.
+    const bool reload_partials_to_dest = fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32;
+    const bool bias_reload_alias = reload_partials_to_dest && bias.has_value();
+
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     uint32_t bias_single_tile_size = bias_tile.get_tile_size(bias_data_format);
@@ -398,6 +407,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     const DFBSpecName BIAS_DFB{"bias"};
     const DFBSpecName OUT_DFB{"out"};
     const DFBSpecName INTERMED0_DFB{"intermed0"};
+    const DFBSpecName INTERMED0_RELOAD_ALIAS_DFB{"intermed0_reload_alias"};
 
     const SemaphoreSpecName IN0_MCAST_SENDER_SEM{"in0_mcast_sender"};
     const SemaphoreSpecName IN0_MCAST_RECEIVER_SEM{"in0_mcast_receiver"};
@@ -447,6 +457,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         mm_kernel_in1_sender_writer_defines["SKIP_WRITE_BACK"] = "1";
     }
     mm_kernel_defines["MATMUL_DRAM_SHARDED"] = "1";
+    if (bias_reload_alias) {
+        mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
+    }
     if (in1_transpose_tile) {
         mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
@@ -498,9 +511,28 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         .data_format_metadata = interm0_data_format,
         .tile_format_metadata = output_tile,
     };
-    if (share_out_interm_buffer) {
-        out_dfb_spec.advanced_options.alias_with = {INTERMED0_DFB};
-        intermed0_dfb_spec.advanced_options.alias_with = {OUT_DFB};
+    DataflowBufferSpec intermed0_reload_alias_dfb_spec = intermed0_dfb_spec;
+    intermed0_reload_alias_dfb_spec.unique_id = INTERMED0_RELOAD_ALIAS_DFB;
+    {
+        Group<DFBSpecName> out_aliases;
+        Group<DFBSpecName> intermed0_aliases;
+        Group<DFBSpecName> alias_aliases;
+        if (share_out_interm_buffer) {
+            out_aliases.push_back(INTERMED0_DFB);
+            intermed0_aliases.push_back(OUT_DFB);
+            if (bias_reload_alias) {
+                out_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+                alias_aliases.push_back(OUT_DFB);
+                alias_aliases.push_back(INTERMED0_DFB);
+            }
+        } else if (bias_reload_alias) {
+            intermed0_aliases.push_back(INTERMED0_RELOAD_ALIAS_DFB);
+            alias_aliases.push_back(INTERMED0_DFB);
+        }
+        out_dfb_spec.advanced_options.alias_with = std::move(out_aliases);
+        intermed0_dfb_spec.advanced_options.alias_with = std::move(intermed0_aliases);
+        intermed0_reload_alias_dfb_spec.advanced_options.alias_with = std::move(alias_aliases);
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
@@ -520,6 +552,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     }
     dataflow_buffers.push_back(std::move(out_dfb_spec));
     dataflow_buffers.push_back(std::move(intermed0_dfb_spec));
+    if (bias_reload_alias) {
+        dataflow_buffers.push_back(std::move(intermed0_reload_alias_dfb_spec));
+    }
     if (bias.has_value()) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = BIAS_DFB,
@@ -1048,8 +1083,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
     compute_hw.unpack_modes = {
         {IN0_DFB, UnpackMode::UnpackToSrc},
         {IN1_DFB, UnpackMode::UnpackToSrc},
-        {INTERMED0_DFB, UnpackMode::UnpackToSrc},
+        {INTERMED0_DFB,
+         (reload_partials_to_dest && !bias_reload_alias) ? UnpackMode::UnpackToDest : UnpackMode::UnpackToSrc},
     };
+    if (bias_reload_alias) {
+        compute_hw.unpack_modes.insert({INTERMED0_RELOAD_ALIAS_DFB, UnpackMode::UnpackToDest});
+    }
     if (bias.has_value()) {
         compute_hw.unpack_modes.insert({BIAS_DFB, UnpackMode::UnpackToSrc});
     }
@@ -1127,6 +1166,20 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
             },
         .hw_config = std::move(compute_hw),
     };
+    if (bias_reload_alias) {
+        // The reload view of the partials buffer: compute drives its read cursor and nothing else
+        // touches it, so it holds both endpoints.
+        compute.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+            .accessor_name = "intermed0_reload_alias",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        compute.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = INTERMED0_RELOAD_ALIAS_DFB,
+            .accessor_name = "intermed0_reload_alias",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    }
     if (bias.has_value()) {
         compute.dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = BIAS_DFB,
