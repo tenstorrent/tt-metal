@@ -265,7 +265,7 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # 3.3 - rank on local/global_tensor_comparison_records (#45448)
 # 3.4 - sub-device topology and operation/program execution placement: sub_device_managers,
 #       sub_devices, operation_executions, execution_sub_devices
-DATABASE_SCHEMA_VERSION = "3.4"
+DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
