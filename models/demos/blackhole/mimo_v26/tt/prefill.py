@@ -147,7 +147,13 @@ class ChunkedPrefill:
                     real = src[st : st + CH]
                     pad = CH - real.numel()
                     if pad:
-                        real = torch.cat([real, src.repeat(-(-pad // src.numel()))[:pad]])
+                        if (
+                            os.environ.get("PF_PAD") == "random"
+                        ):  # diagnostic: pad rows (KV beyond the prompt) from random vocab ids instead of the cyclic prompt
+                            g = torch.Generator().manual_seed(1234 + step * 7 + r)
+                            real = torch.cat([real, torch.randint(1000, 100000, (pad,), generator=g)])
+                        else:
+                            real = torch.cat([real, src.repeat(-(-pad // src.numel()))[:pad]])
                     toks[r] = real
                     slots.append(u)
                     starts.append(st)
