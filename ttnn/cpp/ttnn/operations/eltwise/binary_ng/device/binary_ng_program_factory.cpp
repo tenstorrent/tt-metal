@@ -1442,8 +1442,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
     // Blackhole, sharded FPU ops: a DEST section is unpacked with one call (BINARY_NG_BLOCK) and packed with one
-    // (BINARY_NG_BLOCK_PACK) into bf16 from 16 tiles per core, into fp32 (4-tile sections) from 32. Without the block pack,
-    // the unpack call alone is faster only for add and sub with equal input formats into bf16 or a block-float format.
+    // (BINARY_NG_BLOCK_PACK) into bf16 or fp32; into a block-float format the unpack call alone, for add and sub with equal
+    // input formats.
     const uint32_t c_tiles_per_core = c_num_tiles_per_shard.value_or(0);
     const auto fpu_binary_op =
         bh_fpu_op ? std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) : OpConfig::FpuBinaryOp::MUL;
@@ -1456,8 +1456,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool block_kernel = bh_fpu_op && !has_operand_activations && num_tiles_per_cycle > 1 &&
                               (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast ||
                                compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar);
-    const bool block_pack = block_kernel && ((c_data_format == tt::DataFormat::Float16_b && c_tiles_per_core >= 16) ||
-                                             (c_data_format == tt::DataFormat::Float32 && c_tiles_per_core >= 32));
+    const bool block_pack = block_kernel && (c_data_format == tt::DataFormat::Float16_b ||
+                                             (c_data_format == tt::DataFormat::Float32 &&
+                                              (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast ||
+                                               c_tiles_per_core >= 32)));
     const bool block_unpack_alone = block_kernel &&
                                     compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
                                     !has_post_activations && unpack_alone_formats;
@@ -1469,12 +1471,28 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
-    // acquire; without activations an add or sub into bf16 unpacks it with one call.
+    // acquire; without activations an op into bf16 unpacks and packs it with one call each.
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
-        if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
+        if (!has_operand_activations && !has_post_activations && a_data_format == b_data_format &&
             c_data_format == tt::DataFormat::Float16_b && !eb_r3_env("EB_R3_NO_BLOCK")) {
             compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
+            compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
+        }
+    }
+
+    // Blackhole: an operand activation pass over a section packs it with one call into a bf16 or fp32 intermediate.
+    const bool pre_lhs = !compute_kernel_defines["PROCESS_LHS_ACTIVATIONS(i)"].empty();
+    const bool pre_rhs = !compute_kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"].empty();
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && (pre_lhs || pre_rhs) &&
+        (num_tiles_per_cycle > 1 || bcast_sections)) {
+        const auto plain_intermediate = [&](tt::DataFormat f) {
+            const auto i = !is_sfpu_op && op_has_exp ? tt::DataFormat::Float16_b : f;
+            return i == tt::DataFormat::Float16_b || i == tt::DataFormat::Float32;
+        };
+        if ((!pre_lhs || plain_intermediate(a_data_format)) && (!pre_rhs || plain_intermediate(b_data_format)) &&
+            !eb_r3_env("EB_R3_NO_PRE_BLOCK")) {
+            compute_kernel_defines["BINARY_NG_PRE_BLOCK_PACK"] = "1";
         }
     }
 
