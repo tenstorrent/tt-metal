@@ -1418,3 +1418,14 @@
 - claim: COORDINATOR: (1) host .35 added to bad_hosts.txt as SUSPECT after 3 prefill-trace hangs and an ethernet-core timeout seen by the prefill agent (E261007-1046-*); same configs fine on .30/.48; no reset by me. (2) After merge 408f8a19033 (decode path changed layer.py/model.py/prefill.py) the scorecard shows 1/16 PASS because earlier evidence is STALE by the paths rule: a full re-gate at the final integration tip is planned after the small-U and race work merge. (3) Open bug: with a decode trace captured, a second ISL's prefill replay followed by decode replay hangs in the first decode replay (reproduced on .48 and .30, stack saved by the prefill agent): relevant to reconfigure(U); workaround one ISL per process.
 - evidence: -
 - paths: models/common/bringup_kit/bad_hosts.txt
+
+## E261007-1202-527
+- date: 2026-10-07T12:02:45
+- commit: 559bf611658
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: HANG with the small-U MoE (merge 73c014eb46d, library integ_73c014eb46d, MiMoMoEDecode dead='sentinel' default) in the TRACED decode of >= 24 layers: 4 layers OK (attn_T1_reconf_sweep4_newmoe), 24 and 48 layers hang in ttnn.execute_trace of the first decode replay after an eager prefill (python stack: tt/decode.py run -> execute_trace; device triage /mnt/tt-data/ssinghal/dsv4-logs/triage/hang_*-30_3756525_1141.txt and *-43_1272888_0953.txt: reduce_scatter_minimal_direct (all_reduce) cores and reader_combine/writer_combine cores waiting on all 32 devices). Repro: launch.py ... --env DEC_LAYERS=24 --env DEC_N=128 --env DEC_STEPS=6 -- python models/demos/blackhole/mimo_v26/tests/test_decode_smoke.py (eager decode of the same model runs fine first; ATTN_TRACE_MB=2048 does not help: attn_U1_smoke24_n128_trace2g hangs; N=16 live users also hangs; MIMO_DISP_WORKERS=1 also hangs (attn_V2)). With MIMO_DEAD=spread (old dead-slot routing, same library and code) the traced 24-layer decode runs to completion (attn_V1_smoke24_spread: eager 515 ms/step incl logits readback, traced 391 ms/step incl logits readback). So the sentinel dead-slot path deadlocks in a deep trace (cross-device CCL: combine vs all_reduce reduce_scatter); owner moe agent. Decode agent switch: tt/layer.py moe_decode passes env MIMO_DEAD (default sentinel) and MIMO_ROUTER; U sweeps use MIMO_DEAD=spread until fixed. Note the earlier 48-layer gate runs used the old spread path and are unaffected.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_V1_smoke24_spread.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/layer.py
