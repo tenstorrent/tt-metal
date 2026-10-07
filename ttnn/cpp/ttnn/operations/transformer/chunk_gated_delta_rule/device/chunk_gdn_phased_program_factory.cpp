@@ -73,6 +73,7 @@ constexpr uint32_t s3 = tt::CBIndex::c_31;
 // the phased path is numerically identical (CB indices never affect the math).
 constexpr uint32_t dl = vnew;             // 22: scan reads dl into prep's dl slot
 constexpr uint32_t scan_vnew = decayfac;  // 11: scan's v_new scratch
+constexpr uint32_t kdec = out;            // 16: prep's k_dec scratch on the scan's o slot
 }  // namespace pcb
 
 namespace {
@@ -199,13 +200,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     constexpr uint32_t kPrepMaskTiles = 3;
     constexpr uint32_t kPrepOutBuf =
         2;  // two items of output capacity: the writer's DRAM drain of item i does not gate item i+1
-    // Scratch, sized to what prep_chunk holds (qwen36-gdn-cb-inventory.md): scr1 carries decay_row (Ct), the
-    // WY inverse's tmpN (1) and k_dec (ck); scr2 the inverse's tmpT (1); scr3 negN (cc) and the qk-norm's
-    // diagonal tile (Ct <= cc). supd/stmp hold the normalized q/k (ck) or, at Ct == 2, one diagonal inverse
-    // each; S/final_s/s2/s3 are invert_block's single-tile private scratch A..D; ointer is the Ct == 2
+    // Scratch, sized to what prep_chunk holds. The compute kernel pushes blocks of one size per CB and the packer
+    // and unpacker address a block without wrapping inside it, so each capacity is that block size: scr1 carries
+    // decay_row (Ct); kdec k_dec (ck); scr2 the WY inverse's tmpT (1); scr3 negN (cc) and the qk-norm's diagonal
+    // tile (Ct <= cc). supd/stmp hold the normalized q/k (ck) or, at Ct == 2, one diagonal inverse each;
+    // S/final_s/s2/s3 are invert_block's single-tile private scratch A..D; ointer its tmpN and the Ct == 2
     // off-diagonal block; the vnew slot carries the one dl*I tile. Prep holds no [K,V] state, so nothing
     // here is kv-sized (the mono op's plan was, and prep inherited it: ~750 KB of idle L1 at K = V = 128).
-    const uint32_t scr1_tiles = ck, scr2_tiles = 1, scr3_tiles = cc, qk_tiles = ck, one_tile = 1;
+    const uint32_t scr1_tiles = Ct, scr2_tiles = 1, scr3_tiles = cc, kdec_tiles = ck, qk_tiles = ck, one_tile = 1;
 
     const tt::DataFormat df_io = tt::DataFormat::Float16_b;  // bf16 q/k/v
 
@@ -231,7 +233,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
 
     // The mono op's CB indices (the prep and scan kernels share its math header), in its declaration
     // order; sizes are prep's own (measured layout-neutral: the fused producers already run this plan
-    // behind the hand-off ring). cb_out is the scan's and is not declared here.
+    // behind the hand-off ring). The scan's cb_out slot carries prep's k_dec scratch.
     add_cb(pcb::q, ck, 1, df_io);
     add_cb(pcb::k, ck, 1, df_io);
     add_cb(pcb::v, cv, 1, df_io);
@@ -248,13 +250,14 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     add_cb(pcb::Tinv, cc, kPrepOutBuf);
     add_cb(pcb::vbeta, cv, kPrepOutBuf);
     add_cb(pcb::kbeta, ck);
+    add_cb(pcb::kdec, kdec_tiles);
     add_cb(pcb::u, kPrepMaskTiles);  // the three WY quadrant masks (cb_mask in the kernel)
     add_cb(pcb::w, ck, kPrepOutBuf);
     add_cb(pcb::qdecay, ck, kPrepOutBuf);
     add_cb(pcb::intra, cc, kPrepOutBuf);
     add_cb(pcb::s2, one_tile);                 // invert_block scratch C
     add_cb(pcb::vnew, one_tile, kPrepOutBuf);  // cb_dl in the prep kernel: the dl*I tile
-    add_cb(pcb::ointer, one_tile);             // Ct == 2: the off-diagonal inverse block
+    add_cb(pcb::ointer, one_tile);             // invert_block's tmpN; Ct == 2: the off-diagonal inverse block
     add_cb(pcb::kdec_t, kc, kPrepOutBuf);
     add_cb(pcb::supd, qk_tiles);
     add_cb(pcb::stmp, qk_tiles);
@@ -353,7 +356,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
         const uint32_t wi_start = dist.wi_start[i];
         const uint32_t wi_count = dist.wi_count[i];
         // Trailing runtime args NC, HV, Hk are consumed by the reader's flat branches (V_FLAT/QK_FLAT);
-        // the final 1 is the work-item stride (contiguous here; the fused NP>1 split strides by NP).
+        // then the work-item stride (1: contiguous here; the fused NP>1 split strides by NP) and the kickoff
+        // wait (0: no staggering on the phased prep).
         reader.emplace_runtime_args(
             core,
             {wi_start,
@@ -370,7 +374,8 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
              NC,
              attrs.HV,
              attrs.Hk,
-             1u});
+             1u,
+             0u});
         writer.emplace_runtime_args(
             core, {wi_start, wi_count, vb_buf, nkd_buf, qd_buf, it_buf, kdec_buf, dl_buf, ti_buf});
         compute.emplace_runtime_args(core, {wi_count});
