@@ -108,8 +108,7 @@ void kernel_main() {
     // cu_window_seqlens, streams only that range, and feeds it to compute over a ctrl CB.
     constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(33));
     constexpr bool use_windowed_narrowing = is_windowed_mode(windowed_mode);
-    // 2 and 3 = causal prefix chains: heavy zigzag chunks of a head take a prefix of K/V from the previous core.
-    // In mode 3 the writer RISC does the forwarding (see post_kv_forward), in mode 2 this reader does.
+    // 2 and 3: causal prefix chains (K/V prefix from the previous core), forwarded by this reader (2) or writer (3).
     constexpr uint32_t kv_chain_mode = get_compile_time_arg_val(34);
     constexpr bool causal_chain = kv_chain_mode >= 2;
     constexpr bool writer_forwards = kv_chain_mode == 3;
@@ -221,8 +220,7 @@ void kernel_main() {
     } else if constexpr (use_mask_block_map || causal_chain) {
         argidx += 4;
     }
-    // Feature tails after the windowed slots, sent only when the feature is on (never both: chains need a plain
-    // K/V stream).
+    // Feature tails, sent only when the feature is on (never both: chains need a plain K/V stream).
     uint32_t block_map_addr = 0;
     uint32_t block_map_stick_bytes = 0;
     if constexpr (use_mask_block_map) {
@@ -301,11 +299,8 @@ void kernel_main() {
     CircularBuffer cb_attn_sink(cb_attention_sink);
     CircularBuffer cb_page_table(cb_id_page_table);
 
-    // A chain lets the cores of a head share one DRAM read of each K/V chunk, and skipping masked blocks breaks it,
-    // since each core skips different ones. Below about 40 percent masked the chains are worth more and every head
-    // ignores the map. The choice is the same for all heads: a chain left among heads that skip waits behind their
-    // DRAM reads. Every core counts the same four map rows, spread over the planes and the q chunks (in the still
-    // empty K CB).
+    // Skipping masked blocks breaks the K/V chains, which win below about 40 percent masked; then the map is ignored.
+    // Every core samples the same map rows (in the still empty K CB) so all heads make the same choice.
     bool chain_ignores_map = false;
     if constexpr (use_mask_block_map && !is_causal) {
         if (is_chain_participant) {
@@ -340,8 +335,7 @@ void kernel_main() {
         }
     }
 
-    // Causal chains: the writer forwards the slots queued on cb_kv_fwd and counts finished forwards on fwd_done;
-    // a slot is reserved again only once its last queued forward is counted (per slot sequence number, 0 = none).
+    // A K/V slot is reused only after the writer counts its last queued forward on fwd_done (sequence 0 = none).
     CircularBuffer cb_kv_fwd(cb_id_kv_fwd_ctrl);
     uint32_t fwd_seq = 0;
     uint32_t k_slot = 0;
@@ -481,13 +475,11 @@ void kernel_main() {
             const uint32_t q_iter = per_head_q_iter;
             ++per_head_q_iter;
 
-            // Mask block map: fetch this Q chunk's row of block flags and count the blocks to process.
-            // Compute needs at least one chunk per Q chunk, so a fully masked row group runs chunk 0.
+            // Compute needs at least one K chunk per Q chunk, so a fully masked row still runs chunk 0.
             uint32_t block_map_active = k_num_chunks;
             uint32_t block_map_first = 0;
             bool block_map_all_masked = false;
             volatile tt_l1_ptr uint32_t* block_map = nullptr;
-            // A head whose chain ignores the map streams every block, as without one.
             const bool use_row_map =
                 use_mask_block_map && !(chain_ignores_map && nb == chain_batch && nq == chain_head);
             if constexpr (use_mask_block_map) {
@@ -618,12 +610,10 @@ void kernel_main() {
                                 (q_iter < next_core_q_chunks);
                 chain_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
             } else if constexpr (causal_chain) {
-                // Causal chains are built from each core's first segment only; a later segment of the same KV
-                // group has no partner and must not take part.
+                // Chains are built from each core's first segment only; a later segment has no partner.
                 const bool in_chain_head = is_chain_participant && (nb == chain_batch) &&
                                            (nq / chain_heads_per_group == chain_head) && segment_index == 0;
-                // Heavy zigzag chunks of one head need prefixes of the same K/V that shrink along the chain, so
-                // a core forwards what its successor needs and receives what it needs itself.
+                // Heavy zigzag chunks need K/V prefixes that shrink along the chain; a hop carries what both need.
                 const auto needed = [&](uint32_t qc) {
                     return (std::min((qc + 1) * Sq_chunk_t, Skt) + Sk_chunk_t - 1) / Sk_chunk_t;
                 };

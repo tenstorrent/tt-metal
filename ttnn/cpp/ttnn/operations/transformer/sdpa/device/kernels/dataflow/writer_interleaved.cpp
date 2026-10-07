@@ -47,7 +47,7 @@ void kernel_main() {
     // DH].
     constexpr bool out_concat_heads = get_compile_time_arg_val(22) == 1;
 
-    // Causal K/V chains (kv chain mode 2): this writer forwards the K/V slots the reader queues on the ctrl CB.
+    // Causal K/V chains (kv chain mode 3): this writer forwards the K/V slots the reader queues on the ctrl CB.
     constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(23);
     constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(24);
     constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(25);
@@ -91,7 +91,7 @@ void kernel_main() {
         q_tok_offset_addr = get_arg_val<uint32_t>(12);
     }
 
-    // Causal chain tail, pushed by the host only when kv chain mode is 2.
+    // Causal chain tail: the host pushes it from kv chain mode 2 on, only mode 3 reads it.
     uint32_t is_chain_participant = 0;
     uint32_t next_physical_x = 0;
     uint32_t next_physical_y = 0;
@@ -246,9 +246,7 @@ void kernel_main() {
                 cu_window_seqlens_eles,
                 q_tok_offset);
 
-            // Causal chains: serve this Q chunk's forwards before draining its output. Compute pushes cb_out only after
-            // every K/V chunk of the Q chunk landed, by which point the reader has queued all forward entries, so this
-            // never blocks on the ctrl CB while compute waits for a drain; the reader waits only on slots freed here.
+            // Forwards before the drain: the reader queues all of them before compute can push this Q chunk's output.
             if constexpr (causal_chain) {
                 if (is_chain_participant) {
                     CircularBuffer cb_kv_fwd(cb_id_kv_fwd_ctrl);

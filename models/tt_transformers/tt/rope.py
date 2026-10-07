@@ -625,9 +625,7 @@ class HfRotarySetup(LightweightModule):
             )
         else:
             self.batch_size_per_device_group = self.original_batch_size
-        # The sharded decode rope reads cos and sin from the shard on the same core as its Q shard, and Q is
-        # placed by an 8 wide row major walk on every arch (Blackhole pins it to the 8x4 block), so the
-        # cos/sin walk has to be 8 wide too. The 11 wide compute grid put batch b on (b % 11, b // 11).
+        # Decode rope reads cos/sin from the core holding its Q shard, and Q is placed 8 wide on every arch.
         self.core_grid = ttnn.CoreCoord(8, 8)
 
         # Decode: ROW_MAJOR cache for embedding lookup (same numerics as prefill via get_rot_mats_hf).

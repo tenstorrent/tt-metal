@@ -147,8 +147,7 @@ void kernel_main() {
 
         // Global Q scheduling: sdpa_standard_v2 walks the per-core flat range over
         // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head q_chunk
-        // from each flat index. Ring distributed runs two phases with their own chunked offsets, the
-        // single chip build calls it once, without the loop.
+        // from each flat index. Ring distributed runs two phases, each with its own chunked offset.
 #if defined(SDPA_STREAMING_PHASES) && SDPA_STREAMING_PHASES > 1
         for (uint32_t phase = 0; phase < SDPA_STREAMING_PHASES; ++phase) {
             const uint32_t phase_chunked_q_chunk_offset =

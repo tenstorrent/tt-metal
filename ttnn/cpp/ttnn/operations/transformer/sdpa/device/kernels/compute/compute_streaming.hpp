@@ -257,8 +257,7 @@ constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
 #endif
 ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
 
-// A CB index past the format tables is an inactive CB (the ring joint factory passes UINT32_MAX for an unused
-// mask CB); it never needs a reconfig, and indexing the tables with it does not compile.
+// An inactive CB (UINT32_MAX, e.g. the ring joint factory's unused mask CB) must not index the format tables.
 template <uint32_t old_cb, uint32_t new_cb>
 ALWI void sdpa_maybe_pack_reconfig_data_format() {
 #ifdef TRISC_PACK
@@ -310,8 +309,7 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
 #endif
 }
 
-// True when the SDPA factory streams with fp32 DEST (Blackhole only, SDPA_FP32_NORMALIZE): the output accumulator
-// and row sums are then fp32 while the other intermediates stay bf16.
+// fp32 DEST streaming: the output accumulator and row sums are fp32, the other intermediates stay bf16.
 constexpr bool sdpa_fp32_accumulator() {
 #if defined(ARCH_BLACKHOLE) && defined(SDPA_FP32_NORMALIZE)
     return DST_ACCUM_MODE;
@@ -320,9 +318,7 @@ constexpr bool sdpa_fp32_accumulator() {
 #endif
 }
 
-// DEST tile odst *= DEST tile idst, issued from the pack thread. The pack thread already owns the SFPU for the
-// softmax exp, so its rescale multiply cannot interleave with those instructions the way a math thread SFPU op
-// would.
+// odst *= idst on the pack thread, which already owns the SFPU for the softmax exp, so the two cannot interleave.
 ALWI void sdpa_mul_tiles_packthread(uint32_t idst, uint32_t odst) {
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -352,8 +348,7 @@ inline void calculate_sdpa_mul_by_dst0() {
     }
 }
 
-// The row sum's column 0 vectors are the even column vectors of faces 0 and 2, rows 4g..4g+3 at dst_reg[2g] of each.
-// Adds column 0 of DEST tile 1 (the sink term) into column 0 of DEST tile 0 (the partial row sums).
+// DEST 0 column 0 += DEST 1 column 0 (the sink term); column 0 is the even column vectors of faces 0 and 2.
 inline void calculate_sdpa_fold_col0() {
     const sfpi::vUInt col = sfpi::vConstTileId & sfpi::vUInt(0xE);
 #pragma GCC unroll 0
@@ -371,8 +366,7 @@ inline void calculate_sdpa_fold_col0() {
     }
 }
 
-// The SFPU row reduce leaves each row's sum in every lane of those vectors. Writes 1/sum over all four column vectors
-// of both faces of each row, the broadcast tile the multiply reads.
+// The SFPU row reduce leaves each row's sum in every lane; 1/sum goes to all four column vectors of both faces.
 inline void calculate_sdpa_recip_row_bcast() {
 #pragma GCC unroll 0
     for (int h = 0; h < 2; h++) {
@@ -390,8 +384,7 @@ inline void calculate_sdpa_recip_row_bcast() {
     }
 }
 
-// The eight 1/sum row vectors stay in LREG0-7 between the DEST sections of a row. Vector v covers rows
-// 4 (v % 4) .. 4 (v % 4) + 3 of faces 2 (v / 4) and 2 (v / 4) + 1.
+// The eight 1/sum row vectors stay in LREG0-7 between the DEST sections of a row.
 template <std::uint32_t v>
 inline void sdpa_load_recip_vector() {
     TTI_SFPLOAD(v, 0, ADDR_MOD_7, 32 * (v / 4) + 4 * (v % 4));
@@ -416,7 +409,6 @@ inline void sdpa_store_recip_vectors(std::integer_sequence<std::uint32_t, v...>)
     (sdpa_store_recip_vector<v>(), ...);
 }
 
-// Scales DEST tiles 1..num_tiles over the four faces, then optionally keeps the 1/sum vectors in LREG0-7.
 template <std::uint32_t num_tiles, bool hold>
 inline void sdpa_scale_faces() {
     ckernel::math::clear_dst_reg_addr();
@@ -446,13 +438,12 @@ inline void calculate_sdpa_later_batch() {
 }  // namespace ckernel::sfpu
 #endif
 
-// Math thread SFPU: each normalize step starts from a tile the pack thread pushed after its own SFPU work, so the two
-// threads never share the SFPU. The first batch runs after the row reduce's init, the fold after the exp's.
+// Math thread SFPU is safe: each step starts from a tile the pack thread pushed after its own SFPU work.
+// The fold runs after the exp's SFPU init, the first batch after the row reduce's.
 ALWI void sdpa_fold_col0() {
     MATH((_llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_sdpa_fold_col0, 0, VectorMode::RC_custom)));
 }
 
-// 1/sum from the row sums in DEST 0, broadcast there, and the section's output tiles scaled by it.
 template <uint32_t num_tiles, bool hold>
 ALWI void sdpa_first_batch_sfpu() {
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
@@ -460,7 +451,7 @@ ALWI void sdpa_first_batch_sfpu() {
         ckernel::sfpu::calculate_sdpa_first_batch<num_tiles, hold>, 0, VectorMode::RC_custom)));
 }
 
-// 1/sum placed in DEST 0 from LREG0-7 (nothing else uses the SFPU between a row's sections), then the output tiles.
+// LREG0-7 still hold 1/sum: nothing else uses the SFPU between a row's sections.
 template <uint32_t num_tiles, bool hold>
 ALWI void sdpa_later_batch_sfpu() {
     MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
@@ -468,8 +459,7 @@ ALWI void sdpa_later_batch_sfpu() {
         ckernel::sfpu::calculate_sdpa_later_batch<num_tiles, hold>, 0, VectorMode::RC_custom)));
 }
 
-// The approximate softmax exp builds 2^(x/ln2) with a linear mantissa. The row max puts the largest scores at x = 0,
-// where that error is below its octave mean, which flattens the weights; this constant moves x = 0 to the mean.
+// Moves the approx exp's mantissa error at x = 0 (the row max) up to its octave mean, so the weights do not flatten.
 ALWI void sdpa_center_softmax_exp() {
     constexpr uint32_t bits = __builtin_bit_cast(uint32_t, 32555.818359375f);  // Schraudolph's 32500.818... + 55 / 256
     PACK((TTI_SFPLOADI(0, 0xA, bits & 0xFFFF)));
@@ -493,8 +483,7 @@ static __attribute__((noinline, noclone)) void configure_pack_width(uint32_t cb,
 
 ALWI void configure_single_tile_pack(uint32_t cb) { configure_pack_width(cb, 1); }
 
-// Out of line so the fp32 normalize's copies and packs share one body each (code size with LLK asserts). The
-// copies need copy_init for their CB's format; the sum and output CBs share it.
+// Out of line for code size with LLK asserts; the sum and output CBs share one copy_init format.
 static __attribute__((noinline, noclone)) void sdpa_copy_tiles_to_dest(
     uint32_t cb, uint32_t first_tile, uint32_t count, uint32_t first_dst) {
     for (uint32_t j = 0; j < count; j++) {
@@ -724,7 +713,7 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
-        // The fp32 streaming kernel keeps the scores in fp32 and the max in bf16; elsewhere both share a format
+        // The fp32 streaming kernel keeps the scores in fp32 and the max in bf16.
         if constexpr (sdpa_fp32_accumulator()) {
             reconfig_data_format_srca(in0_cb, prev_cb);
         }
@@ -1019,12 +1008,7 @@ void salad_correct_fp32(
     CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
     CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
 
-    // An fp32 operand is truncated on its way into the FPU source registers, which turns the per chunk
-    // rounding of the accumulator into a one sided drift. So the fp32 accumulator and sum never go through
-    // the FPU: alpha is broadcast across the row by a one tile matmul of the alpha column against the scaler
-    // tile (ones in row 0), the tiles are unpacked straight into DEST and scaled on the pack thread's SFPU.
-    // The sum tile rides in the free slot of the row's last accumulator batch, so a d128 row takes two DEST
-    // acquires and a d64 row one; every acquire repeats the alpha broadcast for its half of DEST.
+    // The FPU source registers truncate fp32 (a one sided drift), so the accumulator and sum are scaled on the SFPU.
     constexpr uint32_t alpha_dst = 0;
     constexpr uint32_t tiles_per_acquire = dst_size - 1;
     constexpr uint32_t slots_per_row = tiles_per_column + 1;
@@ -1072,7 +1056,6 @@ void salad_correct_fp32(
     reconfig_data_format(bcast_cb, bcast_cb);
 }
 
-// Output tiles [base, base + n) times 1/sum, placed in DEST 0 from the vectors held in LREG0-7.
 template <uint32_t n, uint32_t normalized_out_cb, bool hold>
 ALWI void sdpa_scale_rows_fp32(uint32_t cur_out_cb, uint32_t base) {
     tile_regs_acquire();
@@ -1084,8 +1067,7 @@ ALWI void sdpa_scale_rows_fp32(uint32_t cur_out_cb, uint32_t base) {
     tile_regs_release();
 }
 
-// normalize_row_streaming with the fp32 accumulator, all in DEST so nothing passes the Tf32 source registers: SFPU
-// row sums, 1/sum broadcast in DEST 0 and held in LREG0-7 for the row's later sections, SFPU scaling.
+// normalize_row_streaming with the fp32 accumulator, all in DEST so nothing passes the Tf32 source registers.
 template <
     bool profiling_enabled,
     uint32_t head_dim_t_,
@@ -1812,8 +1794,7 @@ static void sdpa_inner_loop_step(
         sdpa_center_softmax_exp();
     }
 
-    // With the fp32 accumulator the scores are fp32 while the max and the reduce scaler stay bf16, so srcB is
-    // tracked through those CBs; the bf16 kernel keeps every intermediate in one format.
+    // With the fp32 accumulator the scores are fp32 but the max and the reduce scaler stay bf16; srcB tracks those.
     constexpr uint32_t cb_srcb_after_sub_exp = sdpa_fp32_accumulator() ? cb_exp_max_diff : cb_qkt_im;
     constexpr uint32_t cb_srcb_after_qkt = sdpa_fp32_accumulator() ? cb_identity_scale_in : cb_qkt_im;
 
@@ -2075,8 +2056,7 @@ static void sdpa_inner_loop_step(
         // Writer drains save_out_cb row-by-row to DRAM during SALAD. cur.out stays empty.
         const uint32_t out_cb = (save_out_cb != INVALID_CB) ? save_out_cb : cur.out;
         constexpr bool fp32_acc = sdpa_fp32_accumulator();
-        // The V matmul's unpack formats: fp32 needs the CBs named at compile time, and with bf16 the causal SDPA
-        // kernels measured faster that way on Blackhole (the factories set the define there); the others keep main's.
+        // Compile time V matmul reconfig: required for fp32, and measured faster for bf16 causal SDPA on Blackhole.
 #ifdef SDPA_CAUSAL_V_RECONFIG
         constexpr bool compile_time_v_reconfig = fp32_acc || is_causal_sdpa;
 #else

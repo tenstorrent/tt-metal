@@ -325,8 +325,7 @@ def run_flash_mla_decode_impl(
             q_num_cores, device.compute_with_storage_grid_size(), row_wise=True
         )
         if q_column_groups:
-            # One 32 row shard per virtual batch on the output core of its group: the head groups of a
-            # batch go down a column of core groups on an 8x8 grid (column major group indexing).
+            # One 32 row Q shard per virtual batch on its group's output core (column major groups on an 8x8 grid).
             num_shards = batch * nh // ttnn.TILE_SIZE
             max_cores_per_head_batch = 64 // num_shards
             groups_per_row = 8 // max_cores_per_head_batch

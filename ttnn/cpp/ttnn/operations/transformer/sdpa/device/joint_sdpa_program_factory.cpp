@@ -137,9 +137,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), args.compute_kernel_config);
 
-    // The streaming kernel and the K/V chain below were measured on Blackhole; other archs keep main's program.
-    // fp32 DEST accumulation keeps the legacy compute kernel. The streaming kernel narrows the padded tiles of
-    // the chunk where the spatial segment ends and of the last chunk, and stamps their partial tiles.
+    // The streaming kernel and the K/V chain were measured only on Blackhole.
     const bool blackhole = device->arch() == tt::ARCH::BLACKHOLE;
     const bool use_streaming_compute = !fp32_dest_acc_en && blackhole;
     const uint32_t streaming_valid_Skt = padded_Nkt + valid_Lt;
@@ -373,8 +371,7 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
 
     ProgramDescriptor desc;
 
-    // The cores of one (batch, head) group read identical K and V, so they form a unicast chain: the first
-    // core streams from DRAM and every core hands each chunk to the next while the next still has q chunks.
+    // Cores of one (batch, head) group read the same K/V, so the first reads DRAM and the rest relay it along a chain.
     if (blackhole) {
         for (const auto& [id, initial] : std::initializer_list<std::pair<uint32_t, uint32_t>>{
                  {sender_semaphore_id, INVALID}, {receiver_semaphore_id, INVALID}, {valid_semaphore_id, VALID}}) {
@@ -668,7 +665,6 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
             const uint32_t start = std::min((c % q_parallel_factor) * q_per_core, q_num_chunks);
             return std::min(start + q_per_core, q_num_chunks) - start;
         };
-        // a core is in a chain when its group is a real (batch, head) and it has q chunks
         auto active = [&](uint32_t c) {
             return c < num_cores && (c / q_parallel_factor) / nh_parallel_factor < B && q_count_of(c) > 0;
         };

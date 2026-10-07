@@ -76,9 +76,7 @@ void kernel_main() {
     CircularBuffer cb_k(cb_k_in);
     CircularBuffer cb_v(cb_v_in);
 
-    // Chained K or V chunk: receive it from the previous core, or read it and hand it on to the next core
-    // at the same CB address. The receiver signals readiness on the sender's semaphore first, so the write
-    // lands in a slot the receiver has reserved.
+    // The forward goes to the same CB address on the next core, which signals the sender once that slot is reserved.
     auto chained_read = [&](CircularBuffer& cb,
                             uint32_t cb_id,
                             const auto& generator,
