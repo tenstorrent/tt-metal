@@ -253,12 +253,12 @@ inline void calculate_sfpu_binary_div(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat result;
-        if constexpr (is_fp32_dest_acc_en) {
+    if constexpr (is_fp32_dest_acc_en) {
+        for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
             sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+
+            sfpi::vFloat result;
 
             // Refine signed mantissas with magnitudes in [1, 2), so neither the
             // reciprocal nor the residual underflows, then restore the exponent.
@@ -296,7 +296,13 @@ inline void calculate_sfpu_binary_div(
                 result = nan_divisor - in0 * scale;
             }
             v_endif;
-        } else {
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+            sfpi::dst_reg++;
+        }
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat result;
             sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
             // sfpu_reciprocal_iter<2> written out, so that in0's load fills the bubble after the first multiply-add.
@@ -317,10 +323,9 @@ inline void calculate_sfpu_binary_div(
 
             // software RNE approach:
             result = float32_to_bf16_rne(result);
+            sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+            sfpi::dst_reg++;
         }
-
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
     }
 }
 
