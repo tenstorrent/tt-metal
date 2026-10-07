@@ -58,3 +58,20 @@ bh-glx-120-b0{2,3,4,5}u{02,08}, all in partition bh_sc5_B2B9_D12. Each one is a 
    Hand off waiting on `ssh exabox-login test -e /data/smarton/fasth3/t160/job-<J>.rc`. Repeat while cold.
 4. On completion: copy the mp4 to tt-project/t160/, take PCC/PSNR against baselines/ltx25_1080p_6s/ref_dv145
    (seed 0, _0.mp4 = DEFAULT prompt), save a still, check `squeue -u smarton` is empty, write state/ready/exabox.READY.
+
+## 08:47 UTC check (light wake)
+- Tunnel up. Build 127515: JOB_RC=0 at 02:55:49Z (13 min). squeue -u smarton empty.
+- Copy alive (5 procs): gemma 25/25 chunks, transformer 39/40 chunks done; last chunk + sha256 check left, ETA <30 min.
+- /data now 105 GB free (was ~240): others filled it. Below job.sbatch's 230 GB cold-cache guard, so the first
+  e2e will refuse until space frees. Do not lower the guard. Next wake: if PCOPY_OK, check df; if <230 GB, hand off blocked/waiting on disk.
+
+## Run 817 (2026-10-07 ~08:56 UTC)
+- pcopy ended rc=1: gemma sha256 OK; transformer sha256 MISMATCH. Cause: chunk() runs in a child `bash -c`
+  without pipefail, so chunks whose ssh hit "Timeout, server 127.0.0.1 not responding" (8 times) were marked
+  done anyway. Fixed: per-try pipefail check, 5 retries, ssh timeout 1800 s + keepalive.
+- pverify.sh (detached, state/runs/817/t160-pverify.{log,rc}): per-1GiB-chunk sha256 on both sides,
+  drops mismatched chunks from pcopy.done, reruns pcopy.sh (recopies only those, checks full sha256, PCOPY_OK).
+  Local hashing over NFS + 40 GB remote hash read: ~10-20 min, plus ~10 min per bad chunk at tunnel speed.
+- /data at 08:55: 102 GB free (100%). Below the 230 GB cold-cache guard: no e2e until others free space.
+- Next wake: log ends PCOPY_OK -> check `df -h /data`; >= 230 GB free -> step 3 (submit e2e); else hand off
+  waiting on disk (probe: df avail >= 230 GB). Not PCOPY_OK -> read the log, rerun pverify.sh the same way.

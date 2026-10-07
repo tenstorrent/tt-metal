@@ -9,10 +9,15 @@ M=${M:-/home/smarton/fasth3/tt-metal/tt-project/t160/pcopy.done}; P=${P:-8}; CH=
 touch $M
 chunk() {  # $1=file $2=index
   grep -qx "$1 $2" $M && return 0
-  local t=$(date +%s)
-  dd if=$S/$1 bs=4M skip=$(( $2*256 )) count=256 status=none |
-    ssh -o BatchMode=yes -o ControlMaster=no -o ControlPath=none exabox-login \
-      "dd of=$R/$1 bs=4M seek=$(( $2*256 )) conv=notrunc status=none"
+  local t=$(date +%s) try
+  # Child bash: no inherited pipefail, so check each try; a failed ssh must not mark the chunk done.
+  for try in 1 2 3 4 5; do
+    set -o pipefail
+    dd if=$S/$1 bs=4M skip=$(( $2*256 )) count=256 status=none |
+      timeout 1800 ssh -o BatchMode=yes -o ControlMaster=no -o ControlPath=none -o ServerAliveInterval=30 exabox-login \
+        "dd of=$R/$1 bs=4M seek=$(( $2*256 )) conv=notrunc status=none" && break
+    echo "$(date -u +%T) $1 chunk $2 try $try failed"; [ $try = 5 ] && return 1; sleep 30
+  done
   echo "$1 $2" >> $M
   echo "$(date -u +%T) $1 chunk $2 $(( $(date +%s)-t ))s"
 }
