@@ -616,6 +616,20 @@ class Model:
         assert active is None, "partial prefill (active mask) needs the traced-chunk path (DSV41_PREFILL_DYN != 0)"
         return self.prefill_forward_legacy(tokens, prompt_lens, chunk, max_new_tokens, want_logits, hook)
 
+    def admit_idle_users(self):
+        """Serving / vLLM interface only: ``decode_forward`` steps ALL B users (``pool.ensure`` grows every user), so a user that was never prefilled or whose request finished
+        (``pool.release``) needs an allocator entry: it gets ONE page (it decodes a pad token at position 0). -> True when the page table changed (uploaded).
+        """
+        changed = False
+        for b in range(self.B):
+            r, k = self.pool.user_key(b)
+            if k not in self.pool.allocs[r].pages:
+                self.pool.admit(b, 1)
+                changed = True
+        if changed:
+            self.pool.sync_page_table()
+        return changed
+
     def prepare_for_traces(self, lens):
         """Allocate EVERY persistent device tensor and run every compile pass BEFORE the first trace capture: a persistent tensor created after a capture can
         land on the (freed) intermediate buffers of a captured trace and is then clobbered by the next replay (or corrupts it). Creates the head's column-id

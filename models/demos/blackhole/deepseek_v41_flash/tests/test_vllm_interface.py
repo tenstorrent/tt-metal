@@ -146,6 +146,9 @@ class FakeModel:
     def release_trace(self):
         self.log.append("release_trace")
 
+    def admit_idle_users(self):
+        self.log.append("admit_idle")
+
     def prefill_forward(
         self,
         tokens,

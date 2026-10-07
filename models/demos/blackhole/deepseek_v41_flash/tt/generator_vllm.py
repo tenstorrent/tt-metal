@@ -297,6 +297,7 @@ class DeepseekV41ForCausalLM:
             ):  # a request decoded without a prefill in this process (plugin restarted its slots): nothing to read
                 raise RuntimeError(f"decode of logical slot {i} (user {p}) that was never prefilled")
         t0 = time.perf_counter()
+        self.m.admit_idle_users()  # idle / released users own no pages: pool.ensure would fail (KeyError) stepping all B users
         out = self.m.decode_forward(tok_B, pos_B, enable_trace=bool(enable_trace), reload_inputs=True)
         for i, p, pos in rows:
             self.book.note_fed(p, pos, int(tok_B[p]))
