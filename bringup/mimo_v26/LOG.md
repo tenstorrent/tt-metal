@@ -2062,3 +2062,36 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_F9_dev_ab.log
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tests/test_decode_fb.py
 - data: {"ab_U1_ms":[66.1,58.8],"ab_U8_ms":[84.5,79.6],"ab_U32_ms":[100.3,95.1],"enqueue_ms":0.02,"gsm_correct":112}
+## E261007-1927-316
+- date: 2026-10-07T19:27:00
+- commit: 76738735c91
+- branch: ssinghal/mimo-tracy
+- host: 47,43
+- track: perf
+- status: verified
+- claim: TRACY capture of the REAL full 48-layer traced decode (one trace, real GSM8K prefill state, MIMO_EXPERT_OP=unified MIMO_DEAD=spread32 MIMO_MOE_AR=ag_sum, exact router; replay of the 4144 (U=1, host 47) / 4240 (U=8, host 43) ops/device trace, 32 devices, ops_perf CSV with real op names; 2 replays each, replay-to-replay kernel sums differ <0.1 ms). KERNEL SUM mean over devices | sum of per-op max: U=1 70.07 | 94.65 ms, U=8 78.67 | 111.02 ms; op-to-op gaps inside trace 3.46 / 3.07 ms; profiled blocking replay wall 74.05 / 82.3 ms (= kernel mean + gaps: no extra inter-device wait beyond what is inside the collective kernels). Validates E261007-1632-433 at U=1 (69.4|92.6 -> 70.07|94.65; attention 11.4->11.52, head 0.55->0.56, FFN 51.2->51.46) and mostly at U=8 (attention 13.9 same; mean 72.4-74.8 -> 78.67 (+4-6 ms, other host), sum-of-max 96-104 -> 111.0). U=8 real-name MoE stages (ms/48 layers mean [max-sum]): router+spread 14.43 [14.69], experts 11.56 [23.50] (E433 by-difference 10.3 [20.1]), MoE all-reduce+residual 10.27 [16.89] (8.0 [16.4]), post_combine_reduce 8.70, combine 7.23 [18.94] (6.5 [15.6]), counts 4.10, dispatch 1.30; U=1: router 14.39, AR 9.09 [14.38], PCR 8.73, experts 8.69 [18.19], combine 5.24 [13.27], counts 4.05, dispatch 1.26. Attention 11.52 / 13.93 ms (38 / 40 ops per layer), norms 6.29 / 6.28 (96 x 65.5 us), op-to-op gaps are 3.1-3.5 ms (E433 said 7.3-8.3: it summed differently), E433's ~17 ms inter-device wait at U>=8 is NOT visible in a profiled replay wall (82.3 vs 78.7+3.1); E433's unprofiled walls 78.0/97.6 vs 74.05/82.3 here: unreconciled (state: same position replayed here, different host for U=8). DRAM BW (weights/kernel time): qkv 116 GB/s (23% of 512), o_proj 216 (42%), dense FFN up/gate 119 (23%), down 225 (44%), router fp32-ish matmul 23 GB/s (5%), lm_head 392 GB/s (77%); experts: kernel time = 3.4 (U=1) / 4.9 (U=8) experts' w1+w2+w3 at peak BW (per-chip max-over-devices 565 us, mean 177/255 us: the experts op is imbalance-bound). Files: tracy_u1, tracy_u8 under mimo-logs; tools tests/test_decode_tracy.py, bringup/mimo_v26/tools/tracy_report.py, tracy_join.py. Single unpaired capture per U, different hosts for U=1/U=8, 2 replays each.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/tracy_u1/tables_U1.md
+- paths: models/demos/blackhole/mimo_v26/tt
+- data: {"kernel_mean_ms":[70.07,78.67],"kernel_sumofmax_ms":[94.65,111.02],"op2op_ms":[3.46,3.07],"profiled_wall_ms":[74.05,82.3],"attention_ms":[11.52,13.93],"moe_ffn_ms":[51.46,57.60],"norm_ms":[6.29,6.28],"head_ms":[0.56,0.63]}
+
+## E261007-1927-c89
+- date: 2026-10-07T19:27:12
+- commit: 22fed743abd
+- branch: ssinghal/mimo-tracy
+- host: 47,43
+- track: skill-defect
+- status: verified
+- claim: TRACY capture recipe and defects (measured on hosts 47/43): (1) python -m tracy fails 'No available port found' on these hosts (hostname resolves to 10.81.14.x, not bindable): pass -t 8086. (2) Full 48-layer trace is ~4200 ops/device: needs --op-support-count >= 10000 (default 1000 = DRAM profiler buffer overflow, markers dropped) AND a ttnn.ReadDeviceProfiler flush after each phase (eager warmup, capture, every replay), otherwise eager+capture+replay overflow the buffer; each read of a 32-chip full-trace window takes ~120-130 s. (3) --disable-device-data-dump-to-files avoids a 4 GB-per-4-layer profile_log_device.csv; --disable-device-data-push-to-tracy does not stop the zone flood: a full run writes a 2-3.5 GB .tracy and tracy-csvexport turns it into a 60-100 GB tracy_ops_times.csv (hours of disk-bound work, python post-processing RSS up to 290-450 GB of 566 GB on the host): delete it after the report (done), do ONE U per process (also: one process with U=1 then U=8 was killed after ~35 min). (4) post-processing asserts 'Device data missing: Op N not present in cpp_device_perf_report.csv' when the EAGER warm window overflowed the buffer (U=8 run, prefill+eager in one window): bringup/mimo_v26/tools/tracy_join.py builds the trace-replay ops_perf CSV from cpp_device_perf_report.csv (has OP NAME) + tracy_ops_data.csv (shapes/attributes; cached ops carry only a hash header, resolved via the first record of that hash), asserting op-name equality position by position; on U=1 it reproduces the official ops_perf numbers exactly (70.057/70.067 ms per replay). (5) kernel JIT with profiler-enabled flags recompiles every kernel once (first run ~8-10 min compile; warm cache after). Not done: U=32 (zone volume would push post-processing memory past the host).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/tracy_u8.log
+- paths: bringup/mimo_v26/tools, models/demos/blackhole/mimo_v26/tests/test_decode_tracy.py
+
+## E261007-1927-405
+- date: 2026-10-07T19:27:42
+- commit: 22fed743abd
+- branch: ssinghal/mimo-tracy
+- host: DC16-2-BG-0204-u20-44
+- track: handoff
+- status: verified
+- claim: tracy track handoff: branch ssinghal/mimo-tracy (worktree wt/tracy), measured commit 76738735c91 (+22fed743abd tools). Done: U=1 and U=8 full-trace captures, tables, validation (see E261007-1927-316, defects E261007-1927-c89). Not done: U=32; unprofiled paired wall at same state; per-expert actual bytes (needs per-chip expert counts). Repro: launch.py --host H --commit <sha> --env MIMO_CKPT=... --env LD_LIBRARY_PATH=... --env MIMO_EXPERT_OP=unified --env MIMO_DEAD=spread32 --env MIMO_MOE_AR=ag_sum --env TR_US=<U> --env TR_WARM=0 --env TR_REPS=2 --env TR_OUT=<dir> -- python -m tracy -r -p -v --no-web-server -t 8086 --disable-device-data-push-to-tracy --disable-device-data-dump-to-files --tracy-tools-folder <wt>/build_Release/tools/profiler/bin --op-support-count 10000 -o <dir> -m models.demos.blackhole.mimo_v26.tests.test_decode_tracy ; then python bringup/mimo_v26/tools/tracy_report.py <dir>/reports/*/ops_perf_results_*.csv --plan <U>:2 --out <dir> (or tracy_join.py <dir> <dir>/trace_ops_joined.csv first if post-processing asserts); rm the 60-100 GB .logs/tracy_ops_times.csv afterwards.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/tracy_u8/tables_U8.md
+- paths: bringup/mimo_v26/tools
