@@ -48,7 +48,7 @@ while read -r tag v tests conf kexp; do
   echo "== $tag $v ($i) $tests $(date -u +%T)"
   if [[ $tag == bits* ]]; then  # outputs as raw bits, no profiler
     B=$OUTD/bits_$v; mkdir -p $B
-    JSDPA_OUT=$B V12_OUT=$B SYNC_OUT=$B TT_METAL_LLK_ASSERTS=${BITS_ASSERTS:-1} timeout -s INT -k 60 ${CI_LIMIT:-900} python -m pytest "${C[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
+    JSDPA_OUT=$B V12_OUT=$B SYNC_OUT=$B BITID_OUT=$B TT_METAL_LLK_ASSERTS=${BITS_ASSERTS:-1} timeout -s INT -k 60 ${CI_LIMIT:-900} python -m pytest "${C[@]}" -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
     rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
     if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then tail -40 $OUTD/log_${tag}_${i}_$v.txt; fi
     continue

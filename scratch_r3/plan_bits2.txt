@@ -1,0 +1,4 @@
+bits2 head test_bitid2.py
+bits2 rXh test_bitid2.py
+bits2 head test_bitid.py
+bits2 rXh test_bitid.py
