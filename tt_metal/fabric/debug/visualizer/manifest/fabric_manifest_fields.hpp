@@ -22,8 +22,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 
 // The router facts the manifest reads straight from what the router kernel is fed, one entry each, in one table per
-// place a field sits: the router, each ERISC, each sender channel. Adding a fact the kernel is fed is one entry here;
-// the collector, the writer and the test read these tables.
+// place a field sits.
 namespace tt::tt_fabric::manifest {
 
 // The channel index a per-channel argument's name takes in its {}.
@@ -35,12 +34,21 @@ enum class ArgIndex : uint8_t {
     FABRIC_POSITION,
 };
 
+// When the builder emits a named argument.
+enum class Emitted : uint8_t {
+    ALWAYS,
+    // Only when 2D routing is on. On 1D the field is left out.
+    FABRIC_2D,
+};
+
 // A named compile-time argument, e.g. "EDM_STATUS_PTR_ADDR", or "SENDER_CH_{}_IS_INJECTION" for each channel.
 struct NamedArg {
     template <std::size_t N>
-    constexpr NamedArg(const char (&name)[N], ArgIndex index = ArgIndex::NONE) : name(name, N - 1), index(index) {}
+    constexpr NamedArg(const char (&name)[N], ArgIndex index = ArgIndex::NONE, Emitted emitted = Emitted::ALWAYS) :
+        name(name, N - 1), index(index), emitted(emitted) {}
     std::string_view name;
     ArgIndex index;
+    Emitted emitted;
 };
 
 // A per-channel builder member the router or the producer gets as a runtime argument. Runtime arguments are
@@ -157,6 +165,16 @@ inline constexpr auto k_router_fields = [] {
                            "context switches.",
         },
 
+        // Flow control
+        RouterField{
+            .key = "vc2_receiver_free_slots",
+            .source = "VC2_RECEIVER_FREE_SLOTS_STREAM_ID",
+            .category = FLOW_CONTROL,
+            .kind = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .description = "The register reserved for the VC2 receiver's free slots, or the unused id when the router "
+                           "has no VC2. The router kernel declares it but does not read it.",
+        },
+
         // Kernel parameters. Under DEBUG_PRINT_ENABLED the kernel ignores the context switch interval and the
         // handshake context switch timeout, and uses its own.
         RouterField{
@@ -251,6 +269,14 @@ inline constexpr auto k_router_fields = [] {
 inline constexpr auto k_erisc_fields = [] {
     using enum FieldCategory;
     return std::array{
+        RouterField{
+            .key = "local_handshake_master",
+            .source = "IS_LOCAL_HANDSHAKE_MASTER",
+            .category = LIFECYCLE,
+            .kind = kind::Flag{},
+            .description = "Whether this ERISC leads the chip's startup sync (the chip's local_sync). The kernel reads "
+                           "it only with wait_for_host_signal.",
+        },
         RouterField{
             .key = "handshake_enabled",
             .source = "ENABLE_ETHERNET_HANDSHAKE",
@@ -353,6 +379,74 @@ inline constexpr auto k_sender_channel_fields = [] {
     };
 }();
 
+inline constexpr auto k_receiver_channel_fields = [] {
+    using enum FieldCategory;
+    return std::array{
+        RouterField{
+            .key = "forwarding_disabled",
+            .source = NamedArg{"DISABLE_RX_CH{}_FORWARDING", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .kind = kind::Flag{},
+            .description = "Whether the receiver's step skips handing its packets on, to siblings or the local chip. "
+                           "Set for the speedy VC0 and VC2 steps, which hand packets on themselves, and when a channel "
+                           "trimming capture saw the channel do neither.",
+        },
+        RouterField{
+            .key = "intermesh_ingress",
+            .source = NamedArg{"IS_RECEIVER_CHANNEL_{}_INTERMESH_INGRESS", ArgIndex::COMPACT, Emitted::FABRIC_2D},
+            .category = KERNEL_PARAMS,
+            .kind = kind::Flag{},
+            .description = "Whether the receiver's packets arrive from another mesh: the kernel re-encodes their "
+                           "route from this mesh's route table before deciding where they go.",
+        },
+        // A NoC is a number, not an enum: NOC's RISCV_*_default aliases share its values, so they have no unique name.
+        RouterField{
+            .key = "forward_noc",
+            .source = NamedArg{"RX_CH_{}_FWD_NOC_ID", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .kind = kind::Number{},
+            .description = "The NoC the receiver forwards packets to sibling routers on.",
+        },
+        RouterField{
+            .key = "forward_data_cmd_buf",
+            .source = NamedArg{"RX_CH_{}_FWD_DATA_CMD_BUF_ID", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .kind = enum_kind<NocCmdBuf>(),
+            .description = "The NoC command buffer it writes each forwarded packet through.",
+        },
+        RouterField{
+            .key = "forward_sync_cmd_buf",
+            .source = NamedArg{"RX_CH_{}_FWD_SYNC_CMD_BUF_ID", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .kind = enum_kind<NocCmdBuf>(),
+            .description = "The NoC command buffer it sends the credit increment that announces a forwarded packet "
+                           "through.",
+        },
+        RouterField{
+            .key = "local_write_noc",
+            .source = NamedArg{"RX_CH_{}_LOCAL_WRITE_NOC_ID", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .kind = kind::Number{},
+            .description = "The NoC the receiver delivers packets to the local chip on.",
+        },
+        RouterField{
+            .key = "local_write_cmd_buf",
+            .source = NamedArg{"RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", ArgIndex::COMPACT},
+            .category = KERNEL_PARAMS,
+            .kind = enum_kind<NocCmdBuf>(),
+            .description = "The NoC command buffer it delivers them through.",
+        },
+        RouterField{
+            .key = "pkts_sent",
+            .source = NamedArg{"TO_RECEIVER_{}_PKTS_SENT_ID", ArgIndex::COMPACT},
+            .category = FLOW_CONTROL,
+            .kind = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .description = "The packets the peer's sender has sent the channel that the receiver has not taken yet: "
+                           "the peer adds one per packet it sends over Ethernet.",
+        },
+    };
+}();
+
 // Validate fields from a particular table.
 constexpr bool sources_name_channels(const auto& fields, bool per_channel) {
     for (const auto& field : fields) {
@@ -374,5 +468,6 @@ constexpr bool sources_name_channels(const auto& fields, bool per_channel) {
 static_assert(sources_name_channels(k_router_fields, false));
 static_assert(sources_name_channels(k_erisc_fields, false));
 static_assert(sources_name_channels(k_sender_channel_fields, true));
+static_assert(sources_name_channels(k_receiver_channel_fields, true));
 
 }  // namespace tt::tt_fabric::manifest

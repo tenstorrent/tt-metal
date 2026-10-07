@@ -22,6 +22,15 @@ struct ChipRoutingFacts;
 struct RouterLocation;
 struct RouterVcShape;
 
+// Information used in building router kernels.
+struct RouterKernelInputs {
+    // RISC-wide
+    std::map<std::string, std::string> defines;
+    // Per-RISC
+    std::vector<tt::tt_metal::DataMovementProcessor> processors;
+    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args;
+};
+
 // Everything the collector reads about one router.
 struct ManifestRouterInputs {
     const FabricEriscDatamoverBuilder& erisc_builder;
@@ -33,14 +42,10 @@ struct ManifestRouterInputs {
     const StreamAssignment& stream_assignment;
     // get_fabric_router_addresses_to_clear()
     const std::vector<size_t>& addresses_to_clear;
-    // The router kernel's defines, the same on every RISC.
-    std::map<std::string, std::string> kernel_defines;
-    // Indexed by RISC id, one per RISC the router runs.
-    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args_per_risc;
+    const RouterKernelInputs& kernel;
 };
 
-// Collects a built router's manifest facts from its builders, checked against the compile-time arguments each of
-// its RISCs receives.
+// Collects a built router's manifest facts from what its kernels were fed and from its builders.
 manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs);
 
 }  // namespace tt::tt_fabric
