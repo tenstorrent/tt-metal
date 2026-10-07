@@ -30,12 +30,14 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 )
 def test_wrapped_vision_model_inference(
     mesh_device,
+    qwen25_vl_mesh_device,
     reset_seeds,
     ensure_gc,
     num_layers,
     is_ci_env,
     request,
 ):
+    mesh_device = qwen25_vl_mesh_device
     test_id = request.node.callspec.id
     if is_ci_env and "two_layers" not in test_id:
         pytest.skip("CI only runs the two_layers test")

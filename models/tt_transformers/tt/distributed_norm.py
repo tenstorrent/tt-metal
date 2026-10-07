@@ -14,8 +14,9 @@ def galaxy_distributed_norm_core_grid(dim: int) -> tuple[int, int]:
     """Choose the Galaxy decode RMSNorm grid as (y, x).
 
     Returns the legacy ``(min(4, dim // 4 // 32 // 8), 8)`` grid for every dim it
-    already handled. Only dims that grid cannot tile-align get an override, and a
-    dim with no tile-aligned override keeps the legacy grid with a warning rather
+    already handled. Only dims that grid cannot tile-align get an override (the
+    largest tile-aligned grid up to 4x8), and a dim with no tile-aligned grid at
+    all keeps the legacy grid with a warning rather
     than raising -- ``gather_in_mem_cfg`` / ``ln_prg_cfg`` are consumed only on the
     sharded decode path, so raising here would break prefill-only Galaxy runs that
     never read them (e.g. every Gemma variant).
@@ -32,6 +33,11 @@ def galaxy_distributed_norm_core_grid(dim: int) -> tuple[int, int]:
 
     num_cores = core_grid[0] * core_grid[1]
     if num_cores == 0 or hidden_size_per_device % (num_cores * 32) != 0:
+        # Largest grid (up to 4x8) that tile-aligns the per-device width, e.g. 3584 // 4 = 896 -> (4, 7).
+        for rows in range(4, 0, -1):
+            for cols in range(8, 0, -1):
+                if hidden_size_per_device % (rows * cols * 32) == 0:
+                    return (rows, cols)
         logger.warning(
             f"Galaxy distributed norm hidden size {hidden_size_per_device} is not tile-shardable "
             f"across grid {core_grid}; keeping the legacy grid {legacy_core_grid}. The sharded "
