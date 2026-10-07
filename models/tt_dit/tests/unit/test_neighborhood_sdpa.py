@@ -446,7 +446,6 @@ def test_interior_table_per_brick_persistence(mesh_device, owned_width, brick, v
     it passes no table, so the persistent path never runs there.
     """
     monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
-    monkeypatch.setenv("DIFFVAE_NA_UNSAFE_CHUNK", "1")
     _run_interior_table_case(mesh_device, owned_width, brick, volume)
 
 
