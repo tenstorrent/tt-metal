@@ -22,3 +22,7 @@ LTX_FRESH_PROMPTS=0, compare byte-for-byte with #170 fast5, store as new ltx_eva
   seed0_t3s.png; ltx_eval PCC/PSNR vs fast5 and ref_dv145 only if any seed differs.
 - Next: read identity.txt, per-seed E2E_WALL_S (gen#1..5) + stage tables from run.log, register the reference
   (baselines/ltx25_1080p_6s/ref_t48_f6b8 symlink + meta.json), hand off.
+
+## Result (2026-10-07)
+Job 710 exit 0, 161.8 s, no drops. Warm seeds 0-4: 5.719 5.666 5.669 5.619 5.683 s (mean 5.671, worst 5.719).
+All 5 mp4s byte-identical to #170 fast5. Registered baselines/ltx25_1080p_6s/ref_t48_f6b8 -> data/g15/ref_t48_f6b8 (meta.json).
