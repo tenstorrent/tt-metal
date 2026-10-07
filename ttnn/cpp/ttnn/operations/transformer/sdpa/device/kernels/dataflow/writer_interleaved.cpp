@@ -100,9 +100,18 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
+#ifdef GQA_PACK
+    // pack_gqa_heads with out_concat_heads: NQH counts packed heads of GQA_PACK query heads x GQA_PACK_SQT row tiles
+    // each; the output is [B, 1, GQA_PACK_SQT, NQH*GQA_PACK*vDH]. Q chunks never span two query heads
+    // (host-validated).
+    static_assert(out_concat_heads, "GQA_PACK is only defined with out_concat_heads");
+    const auto out_tile_shape = TensorTileShape(B, 1, GQA_PACK_SQT, NQH * GQA_PACK * vDHt);
+    constexpr uint32_t out_row_stride = NQH * GQA_PACK * vDHt;
+#else
     const auto out_tile_shape =
         out_concat_heads ? TensorTileShape(B, 1, valid_Sqt, NQH * vDHt) : TensorTileShape(B, NQH, valid_Sqt, vDHt);
     constexpr uint32_t out_row_stride = out_concat_heads ? NQH * vDHt : vDHt;
+#endif
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -232,11 +241,17 @@ void kernel_main() {
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
             uint32_t out_tile_id;
+#ifdef GQA_PACK
+            const uint32_t packed_row = write_offset + out_row_start_tile;
+            out_tile_id = out_tile_shape.id_of(
+                nb, 0, packed_row % GQA_PACK_SQT, (nq * GQA_PACK + packed_row / GQA_PACK_SQT) * vDHt);
+#else
             if constexpr (out_concat_heads) {
                 out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
             } else {
                 out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
             }
+#endif
             if constexpr (use_streaming_compute) {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count

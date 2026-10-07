@@ -34,6 +34,10 @@ struct SDPAParams {
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
     bool output_concat_heads = false;
+    // Fold each GQA group's NQH / NKH query heads into the query sequence: Q [B, NQH, Sq, d] is scheduled as
+    // [B, NKH, (NQH / NKH) * Sq, d] (the same memory), so the K/V of a KV head is streamed once down one chain of
+    // cores instead of once per query head. Non-causal, unmasked, unchunked calls only; output layout unchanged.
+    bool pack_gqa_heads = false;
 };
 
 struct SDPAInputs {
