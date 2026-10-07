@@ -35,7 +35,9 @@ class MistralSmall4Config:
 
     # Core dimensions
     EMB_SIZE = 4096  # hidden_size
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE * 2 + 64  # max fabric packet payload: one bf16 hidden row + 64 B
+    # Max fabric packet payload: one bf16 hidden row + the fabric-2D routing header. The 64 must equal
+    # CMB_FABRIC2D_ROUTING_INFO_BYTES (tt/moe/init_helpers.py); keep them in sync if the format changes.
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE * 2 + 64
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension (also the shared expert's)
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 

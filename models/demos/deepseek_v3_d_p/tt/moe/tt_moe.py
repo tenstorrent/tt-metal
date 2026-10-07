@@ -720,7 +720,7 @@ class TtMoe(LightweightModule):
                 (build_padding_config_device) instead of on host — the host builder's from_torch is
                 illegal inside a trace capture, and a config baked in at capture time would be wrong
                 for every later chunk. Ignored unless padding awareness is active (actual_isl set and
-                a DEVICE_FP32 gate).
+                a DEVICE_FP32 or GPT_DEVICE gate).
             input_ids: host token ids for the whole sequence, flat, one per row of x. Required by
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
