@@ -52,16 +52,34 @@ def zeros(md, shape, dtype=ttnn.bfloat16):
     return _ZEROS[key]
 
 
+def gate_user_state(ctx, new, old):
+    """Interleaved prefill (``DynCtx.umask``, DSV41_PF_UMASK=1): the carried per-user state after this chunk = ``new`` for the users that are part of the replay and ``old`` (unchanged) for
+    the others. ``new`` / ``old`` [U,1,...] with the same shape, tile or row-major; the mask [U,1,1,1] is a persistent per-mesh-row device tensor. Without a mask: ``new`` (unchanged path).
+    """
+    m = getattr(ctx, "umask", None) if ctx is not None else None
+    if m is None:
+        return new
+    rm = new.layout == ttnn.ROW_MAJOR_LAYOUT
+    n_, o_ = (ttnn.to_layout(new, ttnn.TILE_LAYOUT), ttnn.to_layout(old, ttnn.TILE_LAYOUT)) if rm else (new, old)
+    out = ttnn.where(m, n_, o_)
+    if rm:
+        ttnn.deallocate(n_)
+        ttnn.deallocate(o_)
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+    return out
+
+
 def pad_len(S, mult=64):
     return -(-S // mult) * mult
 
 
 class DSV41PrefillAttention:
-    def __init__(self, attn, attn_sink: torch.Tensor, q_chunk=None, k_chunk=None):
-        """attn: built DSV41Attention / DSV41CompressedAttention (decode); attn_sink: [64] host tensor of the layer."""
+    def __init__(self, attn, attn_sink: torch.Tensor, q_chunk=None, k_chunk=None, users=None):
+        """attn: built DSV41Attention / DSV41CompressedAttention (decode); attn_sink: [64] host tensor of the layer. ``users``: users per mesh row of the prefill
+        (default: the decode's; fewer = interleaved prefill of a few users per row, ``DSV41_PREFILL_UP``)."""
         self.a = attn
         self.md = attn.mesh_device
-        self.U = attn.T
+        self.U = users or attn.T
         self.compressed = isinstance(attn, DSV41CompressedAttention)
         self.ratio = attn.ratio if self.compressed else 0
         pf_tune.p64(attn.mesh_device)  # constant created outside any trace capture
@@ -415,9 +433,13 @@ class DSV41PrefillAttention:
                 if (
                     buf.shape[2] == Cc
                 ):  # single-chunk prompt (S_pad == C): the FIFO is just this chunk (a zero-length slice breaks the concat)
-                    ttnn.copy(lat, buf)
+                    ttnn.copy(gate_user_state(ctx, lat, buf), buf)
                 else:
                     new = ttnn.concat([ttnn.slice(buf, [0, 0, Cc, 0], [U, 1, buf.shape[2], HEAD_DIM]), lat], dim=2)
+                    if getattr(ctx, "umask", None) is not None:
+                        gated = gate_user_state(ctx, new, buf)
+                        ttnn.deallocate(new)
+                        new = gated
                     ttnn.copy(new, buf)
                     ttnn.deallocate(new)
                 lat_buf = buf
@@ -436,6 +458,10 @@ class DSV41PrefillAttention:
         if self.state_sink is not None:
             self.state_sink(self, kv, lat, cs, 0, C, h)
         new_halo = ttnn.slice(ttnn.concat([self.halo, kv], dim=2), [0, 0, C, 0], [U, 1, WINDOW + C, HEAD_DIM])
+        if getattr(self.dyn, "umask", None) is not None:
+            gated = gate_user_state(self.dyn, new_halo, self.halo)
+            ttnn.deallocate(new_halo)
+            new_halo = gated
         ttnn.copy(new_halo, self.halo)
         ttnn.deallocate(new_halo)
         ttnn.deallocate(kv)

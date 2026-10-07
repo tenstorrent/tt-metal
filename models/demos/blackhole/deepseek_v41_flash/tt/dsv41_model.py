@@ -89,6 +89,9 @@ class Model:
             mesh_device, self.U, log
         )  # unified prefill MoE (+ ring weights) on, or the logged fallback
         self.B = self.rows * self.U
+        # users per mesh row of the PREFILL trace (= the decode's by default; fewer: interleaved prefill of a few users per row at a time, see INTERLEAVE_NOTES.md)
+        self.Up = int(os.environ.get("DSV41_PREFILL_UP", str(self.U)))
+        assert 1 <= self.Up <= self.U, f"DSV41_PREFILL_UP={self.Up} must be in 1..{self.U}"
         self.max_ctx = max_ctx
         self.layer_ids = list(args.layer_ids)
         self.timing = {}
@@ -118,7 +121,7 @@ class Model:
             ),  # 160 = window + speculative-decoding slack (tt/spec_paged.py RING_SPEC)
             dtype=kv_dtype,
         )
-        self.sink = PagedStateSink(mesh_device, self.pool, self.U)
+        self.sink = PagedStateSink(mesh_device, self.pool, self.Up, decode_users=self.U)
         self.sources, self.attns, self.built, self.step_groups, pls = {}, {}, [], {}, []
         sh = _Shards()
         pool = ThreadPoolExecutor(max_workers=2)
@@ -152,7 +155,7 @@ class Model:
             )
             if chain.moe_buffers is None:
                 chain.moe_buffers = layer.moe.decode.buffers
-            pa = DSV41PrefillAttention(attn, w["attn"]["attn_sink"].float())
+            pa = DSV41PrefillAttention(attn, w["attn"]["attn_sink"].float(), users=self.Up)
             pa.state_sink = functools.partial(self.sink.write, attn)
             attn.prefill = pa
             pmoe = DSV41PrefillMoE(layer.moe, T=T, buffers=None if first_pmoe is None else first_pmoe.decode.buffers)
@@ -225,7 +228,9 @@ class Model:
             self.head = keep["head"]
         self.dec = DSV41Decoder(mesh_device, self.built, embedding, self.head, dev_engram, step_states=self.step_groups)
         self.dec.mesh_config, self.dec.ccl = self.mc, self.ccl
-        self.prefill_model = GenPrefillModel(mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.U)
+        self.prefill_model = GenPrefillModel(
+            mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.Up
+        )
         self.prefill_model.set_head_sampling(self.mc, self.ccl)
         self.prefill_model.sink = self.sink
         self.engram_kin = {l: e.kin for l, e in dev_engram.items()}
@@ -537,7 +542,7 @@ class Model:
                 idx_w[L] = load_layer(L, with_moe=False, max_seq_len=8, with_indexer=True)["indexer"]
         sinks = {L: sh.get(f"layers.{L}.attn.attn_sink").float() for L in self.layer_ids}
         self.prefill_sparse = attach_prefill_sparse(
-            pas, idx_w, self.U, max_tokens or self.max_ctx, c_max, sinks, decode_indexers=self.dec_idx, enable=True
+            pas, idx_w, self.Up, max_tokens or self.max_ctx, c_max, sinks, decode_indexers=self.dec_idx, enable=True
         )
         return self.prefill_sparse
 
@@ -607,6 +612,25 @@ class Model:
         (tt/prefill_dyn.py of the prefill model + ``PagedStateSink.update``). ``enable_trace=False``: the same dynamic chunk driven eagerly (compile / reference).
         Traced-chunk prefill is the default (verified at 40 layers, ISL 128); DSV41_PREFILL_DYN=0 selects the eager per-chunk reference path.
         """
+        if (
+            self.Up != self.U
+        ):  # fewer prefill slots than decode users: the batch is prefilled slot group by slot group (prefill_interleaved)
+            B = self.B
+            lens = torch.as_tensor(prompt_lens).long()
+            users = [b for b in range(B) if int(lens[b]) > 0 and (active is None or bool(active[b]))]
+            res = self.prefill_interleaved(
+                [(b, tokens[b], 0, int(lens[b])) for b in users],
+                chunk or 1024,
+                s_pad_max=s_pad_max,
+                want_logits=want_logits,
+            )
+            first = torch.full((B,), -1, dtype=torch.long)
+            logits = torch.zeros(B, self.args.vocab_size) if want_logits else None
+            for b, (tk, lg) in res.items():
+                first[b] = int(tk)
+                if want_logits:
+                    logits[b] = lg
+            return first, logits
         if (
             hasattr(self.prefill_model, "run_traced_chunks") and os.environ.get("DSV41_PREFILL_DYN", "1") != "0"
         ):  # UNVALIDATED until h44p validates the traced-chunk path
@@ -712,28 +736,40 @@ class Model:
 
     def _post_chunk(self, s0, C):
         """Host-only (no device allocation): read the ragged-head trace outputs of this chunk for the users whose last prompt token is inside it."""
-        pm, U, rows, cols = self.prefill_model, self.U, self.rows, self.cols
+        pm, U, rows, cols = self.prefill_model, self.Up, self.rows, self.cols
         K = C // 32
+        sb = getattr(self, "_slot_b", None)  # prefill slot (r * Up + u) -> global decode user (None: identity)
         for u in range(U):
             lg, tk = pm.head_out[u]
             todo = [
-                (r, (int(self._last_pos[r * U + u]) - s0) % 32, r * U + u)
+                (r, (int(self._last_pos[r * U + u]) - s0) % 32, r * U + u if sb is None else sb[r * U + u])
                 for r in range(rows)
                 if s0 <= int(self._last_pos[r * U + u]) < s0 + C
             ]
             if not todo:
                 continue
             devs = ttnn.get_device_tensors(ttnn.from_device(tk))
-            full = pm.head.gather_logits(lg).reshape(rows, 32, -1) if self._want_logits else None
+            lgd = ttnn.get_device_tensors(lg) if self._want_logits else None
             for r, off, b in todo:
                 tok = int(ttnn.to_torch(devs[r * cols]).reshape(-1)[off])
-                self._res[b] = (tok, None if full is None else full[r, off].clone())
+                row = None
+                if (
+                    lgd is not None
+                ):  # only the vocab shards of the mesh row of this user (8 devices x [32, vocab / 8]), not the logits of every row / token
+                    row = torch.cat(
+                        [ttnn.to_torch(lgd[r * cols + c]).reshape(32, -1)[off].float() for c in range(cols)]
+                    )
+                self._res[b] = (tok, row)
 
     def prefill_forward_dyn(
         self, tokens, prompt_lens, chunk, max_new_tokens, want_logits, enable_trace, s_pad_max, active=None
     ):
         B = self.B
         assert tokens.shape[0] == B
+        assert (
+            self.Up == self.U
+        ), "the whole-batch prefill needs DSV41_PREFILL_UP == users per row (use prefill_interleaved)"
+        self._slot_b = None
         lens = torch.as_tensor(prompt_lens).long()
         if active is not None:
             active = torch.as_tensor(active).bool()
@@ -847,6 +883,259 @@ class Model:
             else None
         )
         return first, logits
+
+    # ---- interleaved (chunked, per-user) prefill for continuous batching (tt/generator_vllm.py; INTERLEAVE_NOTES.md) ----------------------------------
+    def _admit_idle(self):
+        """Every user owns at least one page: the decode loop grows the pages of ALL users (``pool.ensure``), including the idle ones."""
+        for b in range(self.B):
+            r, k = self.pool.user_key(b)
+            if k not in self.pool.allocs[r].pages:
+                self.pool.admit(b, 1)
+
+    def release_user(self, b):
+        """A finished / preempted request: free its pages, keep the user admitted with one page (see ``_admit_idle``)."""
+        self.pool.release(b)
+        self.pool.admit(b, 1)
+        self.pool.sync_page_table()
+        getattr(self, "pf_resume", {}).pop(b, None)
+
+    def _export_user_keys(self, ix, k_cache, i_src, u_dst, rows_sel, off, n):
+        """Hand-off of the index keys of the users held by prefill slot ``i_src`` of the mesh rows ``rows_sel`` (decode user ``u_dst`` of each of those rows) only: slab
+        slots [off, off + n) of the prefill key FIFO -> decode key slab entries [0, n). The other mesh rows keep their decode keys (they hold a decoding user at in-row
+        index u_dst): selected on the device with a per-row mask (bfp8 -> bf16 -> bfp8 is exact).
+        The decode key slab ``k_cache`` is referenced by the CAPTURED decode trace, so it must be updated IN PLACE: ``ttnn.experimental.slice_write`` re-allocates the
+        tensor (its buffer address changes: the decode trace would keep reading / writing the freed old buffer, and the new one is clobbered by the next replay of
+        another trace), so the whole slab is rebuilt from its parts (a few MB per device) and copied into the existing buffer with ``ttnn.copy``.
+        """
+        IDIM, NA, UD = ix.keys.shape[3], k_cache.shape[2], k_cache.shape[0]
+        new = ttnn.slice(ix.keys, [i_src, 0, off, 0], [i_src + 1, 1, off + n, IDIM])
+        old_all = k_cache if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(k_cache, ttnn.bfloat16)
+        old_u = ttnn.slice(old_all, [u_dst, 0, 0, 0], [u_dst + 1, 1, NA, IDIM])
+        if len(rows_sel) < self.rows:
+            m = torch.zeros(self.rows, 1, 1, 1)
+            m[list(rows_sel)] = 1.0
+            mask = ttnn.from_torch(
+                m, device=self.md, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mp()
+            )
+            new = ttnn.where(mask, new, ttnn.slice(old_u, [0, 0, 0, 0], [1, 1, n, IDIM]))
+            ttnn.deallocate(mask)
+        blk = ttnn.concat([new, ttnn.slice(old_u, [0, 0, n, 0], [1, 1, NA, IDIM])], dim=2) if n < NA else new
+        parts = []
+        if u_dst > 0:
+            parts.append(ttnn.slice(old_all, [0, 0, 0, 0], [u_dst, 1, NA, IDIM]))
+        parts.append(blk)
+        if u_dst < UD - 1:
+            parts.append(ttnn.slice(old_all, [u_dst + 1, 0, 0, 0], [UD, 1, NA, IDIM]))
+        full = ttnn.concat(parts, dim=0) if len(parts) > 1 else blk
+        out = full if k_cache.dtype == ttnn.bfloat16 else ttnn.typecast(full, k_cache.dtype)
+        ttnn.copy(out, k_cache)
+        if out is not full:  # (typecast output)
+            ttnn.deallocate(out)
+        if len(parts) > 1:  # (concat output; with a single part ``full`` IS ``blk``)
+            ttnn.deallocate(full)
+        if n < NA:  # (concat output; else ``blk`` is the slice ``new`` of the prefill key FIFO, which may alias it)
+            ttnn.deallocate(blk)
+        if old_all is not k_cache:
+            ttnn.deallocate(old_all)
+
+    def _export_keys_users(self, users, ends, s_end, slot_of):
+        """Index-key hand-off (prefill key FIFOs -> decode key slabs) of the users whose prompt ended inside the window that ended at ``s_end``;
+        ``slot_of(b)`` = prefill slot (index within its mesh row) of user b."""
+        if not self.use_indexer or not getattr(self, "prefill_sparse", None):
+            return
+        from models.demos.blackhole.deepseek_v41_flash.tt.prefill_sparse import ceil32
+
+        by_u = {}
+        for b in users:
+            by_u.setdefault((slot_of(b), b % self.U), []).append(b // self.U)
+        mx = max(ends[b] for b in users)
+        for L, dec in self.dec_idx.items():
+            if L not in self.index_owner:
+                continue  # layers 24..36 alias layer 20's slab
+            sp = self.attns[L].prefill.sparse
+            ix = None if sp is None else sp.indexer
+            if ix is None or ix.key_owner is not None or not getattr(sp, "dyn_on", False):
+                continue
+            r = self.attns[L].ratio
+            off = ix.KL - s_end // r
+            n = min(ceil32(mx // r), s_end // r, dec.k_cache.shape[2])
+            for (i_src, u_dst), rws in by_u.items():
+                self._export_user_keys(ix, dec.k_cache, i_src, u_dst, sorted(rws), off, n)
+        ttnn.synchronize_device(self.md)
+
+    # prefill slots (DSV41_PREFILL_UP < users per row): the traced chunk holds Up users per mesh row; a user that is being prefilled owns one slot of its row (its carried state
+    # lives there) until it is finished or evicted by another user
+    def _slot_alloc(self, wave, resume):
+        """assign a prefill slot (global index r * Up + i) to every user of ``wave`` [(b, tokens, start, end)]; users that continue keep theirs. Returns {b: slot}."""
+        Up, U = self.Up, self.U
+        owner = self.__dict__.setdefault("pf_slot_owner", [None] * (self.rows * Up))
+        of = self.__dict__.setdefault("pf_slot_of", {})
+        out, taken = {}, set()
+        for b, _, st, _ in wave:
+            if st > 0:
+                assert of.get(b) is not None and owner[of[b]] == b, f"user {b} has no prefill slot to continue"
+                out[b] = of[b]
+                taken.add(of[b])
+        for b, _, st, _ in wave:
+            if st > 0:
+                continue
+            r = b // U
+            cand = [r * Up + i for i in range(Up) if r * Up + i not in taken]
+            assert cand, "more users of one mesh row than prefill slots in one wave"
+            if of.get(b) in cand:
+                sl = of[b]
+            else:  # a slot whose owner is finished / not resumable first, else evict (its owner has to recompute from position 0)
+                free = [c for c in cand if owner[c] is None or owner[c] not in resume]
+                sl = free[0] if free else cand[0]
+            o = owner[sl]
+            if o is not None and o != b:
+                resume.pop(o, None)
+                of.pop(o, None)
+            if b in of and of[b] != sl:
+                owner[of[b]] = None
+            owner[sl], of[b], out[b] = b, sl, sl
+            taken.add(sl)
+        return out
+
+    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False):
+        """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
+
+        ``items``: [(user b, tokens 1-D [>= end], start, end)]: positions [start, end) of user b are computed. ``start`` must be 0 or the position the previous call for
+        that user ended at (``self.pf_resume[b]``: only valid while the user's carried state is intact, i.e. the previous end was a multiple of ``chunk``).
+        The users are processed in windows of ``chunk`` positions (one trace replay per window; the traced chunk holds ``Up`` = ``DSV41_PREFILL_UP`` prefill slots per mesh row
+        (default: all U users, slot = user); the slots that are not part of the window are masked: no write of the pool / ring / compressor state / carried prefill state
+        (``DSV41_PF_UMASK=1``) / Engram history). With Up < U a user takes a free slot of its mesh row (users of the same row beyond Up are processed in further waves).
+        A user whose ``end`` is not a multiple of the chunk has its last window padded (its carried state is then no longer resumable: it is the end of its prompt).
+        Returns {user: (greedy token of position end - 1, logits [vocab] fp32 or None)}.
+        """
+        C = int(chunk)
+        assert C % 128 == 0, "chunk must be a multiple of 128"
+        B, pm, Up, U, rows = self.B, self.prefill_model, self.Up, self.U, self.rows
+        general = Up != U
+        resume = self.__dict__.setdefault("pf_resume", {})
+        items = [(int(b), torch.as_tensor(t).long(), int(st), int(e)) for b, t, st, e in items]
+        ends = {b: e for b, _, _, e in items}
+        assert len(ends) == len(items), "duplicate users in one prefill call"
+        for b, t, st, e in items:
+            assert 0 < e <= self.max_ctx - 1 and 0 <= st < e and t.numel() >= e, (b, st, e, t.numel())
+            assert (
+                st == 0 or resume.get(b) == st
+            ), f"user {b}: chunk start {st} is not its carried position {resume.get(b)}"
+        max_end = max(ends.values())
+        self.check_context_supported(max_end)
+        S_pad = max(s_pad_max or 0, -(-max_end // C) * C)
+        assert S_pad <= self.max_ctx + 128, (
+            f"padded prompt length {S_pad} (chunk {C}) exceeds the RoPE tables of the model (max_ctx {self.max_ctx} + 128): build the model with "
+            f"max_ctx >= {S_pad - 128} (a multiple of the chunk is the simplest)"
+        )
+        t_start = time.perf_counter()
+        self._admit_idle()
+        self.sink.set_lengths(torch.zeros(B, dtype=torch.long))  # (capture / compile pass: every user masked)
+        self.sink.set_map([None] * (rows * Up) if general else None)
+        self.sink.bind(C)
+        self.prepare_for_traces(torch.zeros(B, dtype=torch.long))
+        if getattr(self, "_hooks_set", None) is not pm:
+            pm.pre_replay_hooks.append(lambda s0, C_: self.sink.update(s0, C_))
+            pm.post_replay_hooks.append(self._post_chunk)
+            self._hooks_set = pm
+        pm.timing = {}
+        if pm.capture_dyn(
+            C, S_pad
+        ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM
+            resume.clear()
+            self.__dict__.pop("pf_slot_of", None)
+            self.__dict__.pop("pf_slot_owner", None)
+            self.release_trace()
+            self.log_dram("after capture_dyn")
+        masked = getattr(pm.dyn, "umask", None) is not None
+        for b, t, st, e in items:
+            if st == 0:
+                self.pool.release(b)
+                self.pool.admit(b, e + 1)
+            else:
+                self.pool.grow(b, e + 1)
+        self.pool.sync_page_table()
+        if self.host_rows is not None:
+            cap = self.hasher.st.cache.shape[1]
+            assert -(-max_end // C) * C <= cap, f"Engram history capacity {cap} < padded prompt {-(-max_end // C) * C}"
+        res, self._res, self._want_logits = {}, {}, want_logits
+        n_replays, t_rep, t_host, t_exp, t_hash = 0, 0.0, 0.0, 0.0, 0.0
+        t_pre = time.perf_counter() - t_start
+        for st0 in sorted({st for _, _, st, _ in items}):
+            grp = [it for it in items if it[2] == st0]
+            if general:  # waves: at most Up users of a mesh row per wave
+                by_row = {}
+                for it in grp:
+                    by_row.setdefault(it[0] // U, []).append(it)
+                waves = [
+                    [it for r in sorted(by_row) for it in by_row[r][k * Up : (k + 1) * Up]]
+                    for k in range(-(-max(len(v) for v in by_row.values()) // Up))
+                ]
+            else:
+                waves = [grp]
+            for wave in waves:
+                slot_of = self._slot_alloc(wave, resume) if general else {b: b for b, _, _, _ in wave}
+                for s0 in range(st0, max(e for _, _, _, e in wave), C):
+                    part = [it for it in wave if it[3] > s0]
+                    active, lens = torch.zeros(rows * Up, dtype=torch.bool), torch.zeros(B, dtype=torch.long)
+                    tok = self._filler_tokens(
+                        rows * Up, C
+                    ).clone()  # diverse filler (a constant token routes every filler row to the same experts: see _filler_tokens)
+                    slot_b = [None] * (rows * Up)
+                    for b, t, st, e in part:
+                        sl = slot_of[b]
+                        n = min(e - s0, C)
+                        tok[sl, :n] = t[s0 : s0 + n]
+                        tok[sl, n:] = t[e - 1]
+                        active[sl], lens[b], slot_b[sl] = True, e, b
+                    idx = active.nonzero().reshape(-1)
+                    hs = None
+                    th0 = time.perf_counter()
+                    if self.host_rows is not None:
+                        hs = self.hasher(
+                            tok[idx],
+                            torch.full((len(idx),), s0, dtype=torch.long),
+                            rows=torch.tensor([slot_b[i] for i in idx.tolist()]),
+                        )
+                    t_hash += time.perf_counter() - th0
+                    self.sink.set_lengths(lens)
+                    self.sink.set_map(slot_b if general else None)
+                    self._slot_b = slot_b if general else None
+                    self._last_pos = (
+                        torch.tensor([-1 if b is None else int(lens[b]) - 1 for b in slot_b]) if general else lens - 1
+                    )
+                    th, td = pm.replay_window(tok, hs, s0, C, active)
+                    n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
+                    done = [b for b, _, _, e in part if e <= s0 + C]
+                    te0 = time.perf_counter()
+                    if done:
+                        self._export_keys_users(
+                            done, ends, s0 + C, (lambda b: slot_of[b] % Up) if general else (lambda b: b % U)
+                        )
+                    t_exp += time.perf_counter() - te0
+                    for b, _, _, e in part:
+                        if e <= s0 + C:
+                            resume.pop(b, None)
+                            if e % C == 0:
+                                resume[b] = e
+                        else:
+                            resume[b] = s0 + C
+                    if not masked:  # unmasked trace: every user outside this replay had its carried state overwritten
+                        for b in [b for b in resume if b not in {p[0] for p in part}]:
+                            resume.pop(b)
+        for b, _, _, _ in items:
+            res[b] = self._res[b]
+        self.timing = dict(
+            pm.timing,
+            total=time.perf_counter() - t_start,
+            replays=n_replays,
+            replay_s=t_rep,
+            host_s=t_host,
+            pre_s=t_pre,
+            hash_s=t_hash,
+            export_s=t_exp,
+        )
+        return res
 
     def prefill_forward_legacy(self, tokens, prompt_lens, chunk=None, max_new_tokens=0, want_logits=False, hook=None):
         """tokens [B, L] right-padded prompts, prompt_lens [B] -> (first generated token [B] (greedy), logits [B, vocab] fp32 or None). Leaves, for every

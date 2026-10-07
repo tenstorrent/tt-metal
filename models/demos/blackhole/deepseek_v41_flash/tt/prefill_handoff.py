@@ -30,8 +30,13 @@ class PagedStateSink:
     """Hand-off writer. All per-chunk index data lives in PERSISTENT device tensors (one set per chunk length C) that ``update(s0, C)`` refreshes from the host
     before every chunk (eager or trace replay); ``write`` itself is static-shape and trace-safe."""
 
-    def __init__(self, md, pool, users_per_row):
+    def __init__(self, md, pool, users_per_row, decode_users=None):
+        """``users_per_row``: users per mesh row of the PREFILL (``self.U``, the batch shape of the traced chunk); ``decode_users``: users per row of the decode / pool
+        (``self.Ud``; default = the same). With fewer prefill slots than decode users (interleaved prefill, ``DSV41_PREFILL_UP``) ``set_map`` says which decode user
+        every prefill slot of a mesh row currently holds."""
         self.md, self.pool, self.U = md, pool, users_per_row
+        self.Ud = decode_users or users_per_row
+        self.slot_b = None  # [rows * U] global decode user of every prefill slot (None = identity: slot i of row r is user r * U + i; needs U == Ud)
         self.rows, self.cols = tuple(md.shape)
         self.shard = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(self.rows, self.cols))
         self.lens = None  # [B] real prompt lengths (global user order: row-major over mesh rows)
@@ -39,6 +44,15 @@ class PagedStateSink:
 
     def set_lengths(self, lens):
         self.lens = torch.as_tensor(lens).long()
+
+    def set_map(self, slot_b):
+        """slot_b: list [rows * U] of the global decode user held by each prefill slot (row-major over rows, then slots), None for an empty slot."""
+        self.slot_b = None if slot_b is None else list(slot_b)
+        assert self.slot_b is None or len(self.slot_b) == self.rows * self.U
+
+    def _user_of(self, r, u):
+        """global decode user of prefill slot u of mesh row r (None: empty slot)."""
+        return r * self.U + u if self.slot_b is None else self.slot_b[r * self.U + u]
 
     def _host(self, t, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
         return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, mesh_mapper=self.shard)
@@ -50,17 +64,22 @@ class PagedStateSink:
         ring = torch.full((R, U * C), SKIP, dtype=torch.int64)
         lat = {s: torch.full((R, U * (C // P.SRC_RATIO[s])), SKIP, dtype=torch.int64) for s in P.SOURCES}
         idx = torch.zeros(R * U, 1, dtype=torch.int32)
+        general = self.U != self.Ud or self.slot_b is not None
         m = torch.zeros(R, 1, U, 1)
+        ms = (
+            [torch.zeros(R, 1, self.Ud, 1) for _ in range(U)] if general else None
+        )  # general mode: one-hot (decode user) mask per prefill slot
         K = C // 32
         hm = torch.zeros(
             R * U * K, 1, 1, 1
         )  # ragged-head selector: 1 at (user u, 32-token sub-chunk c) holding the user's last prompt token
         for r in range(R):
             for u in range(U):
-                b = r * U + u
-                S = int(self.lens[b])
+                b = self._user_of(r, u)
+                S = 0 if b is None else int(self.lens[b])
+                ud = u if b is None else b % self.Ud  # in-row index of the decode user (its ring rows / prev_cs row)
                 ok = (pos < S) & (pos >= S - RING)
-                ring[r, u * C : (u + 1) * C] = torch.where(ok, u * RING + pos % RING, torch.full_like(pos, SKIP))
+                ring[r, u * C : (u + 1) * C] = torch.where(ok, ud * RING + pos % RING, torch.full_like(pos, SKIP))
                 for s in P.SOURCES:
                     rt = P.SRC_RATIO[s]
                     Cc = C // rt
@@ -72,9 +91,13 @@ class PagedStateSink:
                         lat[s][r, u * Cc : (u + 1) * Cc] = seg
                 p = S - 1
                 if s0 <= p < s0 + C:
-                    idx[b, 0] = u * C + (p - s0)
+                    idx[r * U + u, 0] = u * C + (p - s0)
                     m[r, 0, u, 0] = 1.0
+                    if general:
+                        ms[u][r, 0, ud, 0] = 1.0
                     hm[(r * U + u) * K + (p - s0) // 32] = 1.0
+        if general:
+            return ring, lat, idx, ms, hm
         return ring, lat, idx, m, hm
 
     def _cs_mask(self, hm, C):
@@ -117,9 +140,14 @@ class PagedStateSink:
             "ring": up(ring.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32),
             "lat": {s: up(v.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32) for s, v in lat.items()},
             "idx": up(idx, ttnn.uint32),
-            "mask": up(m, ttnn.float32, ttnn.TILE_LAYOUT),
             "hmask": up(hm, ttnn.float32, ttnn.TILE_LAYOUT),
         }
+        if isinstance(
+            m, list
+        ):  # general mode (fewer prefill slots than decode users): one-hot mask [rows,1,Ud,1] per prefill slot
+            self.bufs[C]["masks"] = [up(x, ttnn.float32, ttnn.TILE_LAYOUT) for x in m]
+        else:
+            self.bufs[C]["mask"] = up(m, ttnn.float32, ttnn.TILE_LAYOUT)
         if colsplit_active(self.U, C):
             self.bufs[C]["hmask_cs"] = ttnn.to_device(
                 self._host_cs(hm, C), self.md, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -134,7 +162,11 @@ class PagedStateSink:
         for s, v in lat.items():
             h2d(self._host(v.reshape(self.rows, 1, -1).to(torch.int32), ttnn.uint32), bufs["lat"][s])
         h2d(self._host(idx, ttnn.uint32), bufs["idx"])
-        h2d(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
+        if isinstance(m, list):
+            for x, dev in zip(m, bufs["masks"]):
+                h2d(self._host(x, ttnn.float32, ttnn.TILE_LAYOUT), dev)
+        else:
+            h2d(self._host(m, ttnn.float32, ttnn.TILE_LAYOUT), bufs["mask"])
         h2d(self._host(hm, ttnn.float32, ttnn.TILE_LAYOUT), bufs["hmask"])
         if colsplit_active(self.U, C):
             h2d(self._host_cs(hm, C), bufs["hmask_cs"])
@@ -175,8 +207,23 @@ class PagedStateSink:
             ttnn.deallocate(table)
             emb = ttnn.reshape(emb, [1, 1, U, h.shape[3]])
             new = ttnn.linear(emb, attn.c_wcat, compute_kernel_config=attn.ckc, dtype=ttnn.float32)  # [1,1,U,1024]
-            keep = ttnn.add(ttnn.neg(bufs["mask"]), 1.0)
-            upd = ttnn.add(ttnn.multiply(attn.prev_cs, keep), ttnn.multiply(new, bufs["mask"]))
+            if "masks" in bufs:
+                # fewer prefill slots than decode users: slot i's row goes to the decode user its one-hot mask [1,1,Ud,1] selects (exact: 0 / 1 elementwise products)
+                masks = bufs["masks"]
+                tot = masks[0]
+                for mk in masks[1:]:
+                    tot = ttnn.add(tot, mk)
+                keep = ttnn.add(ttnn.neg(tot), 1.0)
+                upd = ttnn.multiply(attn.prev_cs, keep)
+                for i, mk in enumerate(masks):
+                    row = ttnn.slice(new, [0, 0, i, 0], [1, 1, i + 1, new.shape[3]])  # [1,1,1,1024]
+                    row = ttnn.repeat(row, [1, 1, self.Ud, 1])
+                    upd = ttnn.add(
+                        upd, ttnn.multiply(row, mk)
+                    )  # [1,1,Ud,1024] (column broadcast of the 0/1 mask, like the identity path)
+            else:
+                keep = ttnn.add(ttnn.neg(bufs["mask"]), 1.0)
+                upd = ttnn.add(ttnn.multiply(attn.prev_cs, keep), ttnn.multiply(new, bufs["mask"]))
             ttnn.copy(upd, attn.prev_cs)
             for t in (emb, new, keep, upd):
                 ttnn.deallocate(t)

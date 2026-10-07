@@ -128,11 +128,25 @@ class DSV41PrefillModel:
     def _host(self, t, dtype, layout):
         return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, mesh_mapper=self.shard)
 
-    def prep_inputs(self, tokens, hashes=None):
-        """CPU part of a chunk's inputs (safe to run in a worker thread): tokens [B, C] (padded) and the Engram row gather -> host tensors."""
+    def prep_inputs(self, tokens, hashes=None, active=None):
+        """CPU part of a chunk's inputs (safe to run in a worker thread): tokens [B, C] (padded) and the Engram row gather -> host tensors.
+        ``active`` (LongTensor of user indices, interleaved prefill): ``hashes`` then holds only those users ([len(active), C, ...]) and only their rows are
+        gathered from the Engram tables (the other users are masked fillers: zero rows)."""
         B, C = tokens.shape
         rows, R = self.rows, self.U * C
         out = {"tok": tokens.reshape(rows * R, 1).to(torch.int32)}
+        if active is not None:
+            act = torch.as_tensor(active).long()
+            for lid in self.engram:
+                t1 = time.perf_counter()
+                full = torch.zeros(B, C, self.engram[lid].kin, dtype=torch.bfloat16)
+                if len(act):
+                    full[act] = self.host_rows.rows(lid, hashes).to(torch.bfloat16)
+                out[lid] = full.reshape(rows, 1, R, full.shape[-1])
+                self.timing["host_rows_gather_dequant"] = (
+                    self.timing.get("host_rows_gather_dequant", 0.0) + time.perf_counter() - t1
+                )
+            return out
         for lid in self.engram:
             t1 = time.perf_counter()
             if (
@@ -564,6 +578,18 @@ class DSV41PrefillModel:
             ratios.add(pl.pa.ratio)
             rope_src.setdefault(pl.pa.compressed, pl.pa.a)
         self.dyn = DynCtx(self.md, C, S_pad, ratios, rope_src)
+        # interleaved prefill (DSV41_PF_UMASK=1): per-user 0/1 mask [U,1,1,1] (per mesh row, persistent, refreshed before every replay) that gates every write of
+        # the carried per-user prefill state (halo, latent / index-key FIFOs) INSIDE the trace, so users that are not part of a replay keep their state
+        self.dyn.umask = None
+        if os.environ.get("DSV41_PF_UMASK", "0") == "1":
+            self.dyn.umask = ttnn.from_torch(
+                torch.ones(self.rows * self.U, 1, 1, 1),
+                device=self.md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self.shard,
+            )
         for _, pl in self.layers:
             pl.pa.alloc_dyn(self.dyn)
         self.dyn_trace = None
@@ -593,11 +619,77 @@ class DSV41PrefillModel:
         t0 = time.perf_counter()
         self.dyn.update(s0)
         t1 = time.perf_counter()
+        if getattr(self.dyn, "umask", None) is not None:
+            act = getattr(self, "active_mask", None)
+            m = torch.ones(self.rows * self.U) if act is None else torch.as_tensor(act).float()
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    m.reshape(-1, 1, 1, 1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self.shard
+                ),
+                self.dyn.umask,
+            )
         for h in self.pre_replay_hooks:
             h(s0, C)
         t2 = time.perf_counter()
         self.timing["w_dynupd"] = self.timing.get("w_dynupd", 0.0) + t1 - t0
         self.timing["w_prehooks"] = self.timing.get("w_prehooks", 0.0) + t2 - t1
+
+    # ---- interleaved prefill: capture on dummy inputs, then replay one window (s0) at a time -------------------------------------------------
+    def dummy_inputs(self, C):
+        out = {"tok": torch.zeros(self.rows * self.U * C, 1, dtype=torch.int32)}
+        for lid, e in self.engram.items():
+            out[lid] = torch.zeros(self.rows, 1, self.U * C, e.kin, dtype=torch.bfloat16)
+        return out
+
+    def capture_dyn(self, C, S_pad):
+        """Compile + capture the chunk trace for (C, S_pad) on DUMMY inputs with every user masked (no real state is written), so that real windows are only ever
+        replayed (``replay_window``). Returns True when a (re)capture happened (the caller must drop everything that depends on the carried state).
+        """
+        assert C % 128 == 0
+        if self.dyn is not None and self.dyn.C == C and self.dyn.S_pad == S_pad and self.dyn_trace is not None:
+            return False
+        assert (
+            type(self).last_logits is not DSV41PrefillModel.last_logits
+        ), "interleaved prefill needs the ragged hand-off head (GenPrefillModel)"
+        t0 = time.perf_counter()
+        self.teardown_dyn()
+        self.setup_dyn(C, S_pad)
+        bufs = self.alloc_inputs(C)
+        self.active_mask = torch.zeros(self.rows * self.U)
+        self.upload_inputs(self.dummy_inputs(C), bufs)
+        self.begin_chunk(0, C)
+        self.forward_device(bufs, C, 0, C, dyn=True)  # compile pass (eager)
+        ttnn.synchronize_device(self.md)
+        xs0, pres0 = self.dyn_out
+        for x in list(xs0) + list(pres0):
+            ttnn.deallocate(x)
+        for _, pl in self.layers:
+            pl.pa.reset_dyn()  # before any capture only
+        ttnn.synchronize_device(self.md)
+        self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+        self.forward_device(bufs, C, 0, C, dyn=True)
+        ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
+        ttnn.synchronize_device(self.md)
+        self.timing["compile_and_capture"] = time.perf_counter() - t0
+        return True
+
+    def replay_window(self, tokens, hashes, s0, C, active):
+        """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,
+        ``active`` bool [B]. Returns (host seconds, device seconds)."""
+        t0 = time.perf_counter()
+        self.active_mask = torch.as_tensor(active).bool()
+        act = self.active_mask.nonzero().reshape(-1)
+        self.upload_inputs(self.prep_inputs(tokens, hashes, act), self._bufs[C])
+        self.begin_chunk(s0, C)
+        t1 = time.perf_counter()
+        ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.md)
+        t2 = time.perf_counter()
+        for hk in self.post_replay_hooks:
+            hk(s0, C)
+        self.timing["host_per_chunk"] = self.timing.get("host_per_chunk", 0.0) + t1 - t0
+        self.timing["replay_per_chunk"] = self.timing.get("replay_per_chunk", 0.0) + t2 - t1
+        return t1 - t0, t2 - t1
 
     def run_traced_chunks(self, tokens, chunk, hashes=None, S_pad_max=None):
         """tokens [B, S] -> logits [B, vocab] of the last prompt token. One trace of the chunk forward (C = ``chunk`` tokens per user, multiple of
