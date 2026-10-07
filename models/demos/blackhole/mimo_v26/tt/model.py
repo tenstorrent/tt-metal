@@ -127,6 +127,21 @@ class MiMoModel:
         lg = self.final_logits(self.upload_rows(last))
         return lg[:, :U].argmax(-1), lg[:, :U]
 
+    def decode_step(self, tokens, positions):
+        """One decode step for 32 slots per row. tokens int64 [rows,32] (dead slots: any id), positions [32] (same for every row; dead slots 0).
+        Returns host logits [rows, 32, VOCAB]."""
+        if not hasattr(self, "dio"):
+            self.dio = [lyr.attn.decode_io() for lyr in self.layers]
+        h = self.embed_tokens(tokens)
+        for lyr, io in zip(self.layers, self.dio):
+            lyr.attn.decode_set(io, positions)
+            h2 = lyr.decode(h, io["cur"], io["idx"])
+            ttnn.deallocate(h)
+            h = h2
+        lg = self.final_logits(h)
+        ttnn.deallocate(h)
+        return lg
+
     @staticmethod
     def _step(lyr, h, S, U):
         h2 = lyr.prefill(h, S, U)
