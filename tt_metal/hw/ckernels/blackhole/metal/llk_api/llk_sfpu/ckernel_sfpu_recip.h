@@ -292,6 +292,7 @@ inline void _record_reciprocal_fast_24b_5c_() {
 #endif
 }
 
+template <bool upper_macros = true>
 inline void _init_reciprocal_fast_24b_5c_() {
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t2 = p_sfpu::LREG1;
@@ -334,29 +335,31 @@ inline void _init_reciprocal_fast_24b_5c_() {
         TTI_SFPCONFIG(0, 4 + 1, 0);
     }
 
-    // Macro 2: [t2]
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (2 << 3) | (4 + 3);
-        constexpr std::uint32_t mad_bits = 0x00 | 0x00 | (0 << 3) | (4 + 2);
+    if constexpr (upper_macros) {
+        // Macro 2: [t2]
+        {
+            constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (2 << 3) | (4 + 3);
+            constexpr std::uint32_t mad_bits = 0x00 | 0x00 | (0 << 3) | (4 + 2);
 
-        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
-    }
+            TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
+        }
 
-    // Macro 3: [z]
-    {
-        // Keep the corrected result in z. Macro 0 still needs L16 for its delayed
-        // store of the next vector's approximate reciprocal. Even with instruction-
-        // counted delays, an issued MAD completes during scalar stalls (e.g. gcov),
-        // so writing its result to L16 can clobber that value before macro 0 stores it.
-        // The next load of z follows this macro's store, so z has no such overlap.
-        constexpr std::uint32_t simple_bits = 0;
-        constexpr std::uint32_t mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 2);
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
+        // Macro 3: [z]
+        {
+            // Keep the corrected result in z. Macro 0 still needs L16 for its delayed
+            // store of the next vector's approximate reciprocal. Even with instruction-
+            // counted delays, an issued MAD completes during scalar stalls (e.g. gcov),
+            // so writing its result to L16 can clobber that value before macro 0 stores it.
+            // The next load of z follows this macro's store, so z has no such overlap.
+            constexpr std::uint32_t simple_bits = 0;
+            constexpr std::uint32_t mad_bits = 0x80 | 0x00 | (1 << 3) | (4 + 2);
+            constexpr std::uint32_t round_bits = 0;
+            constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
 
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 3, 0);
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+            TTI_SFPCONFIG(0, 4 + 3, 0);
+        }
     }
 
     // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
@@ -389,8 +392,14 @@ inline void calculate_reciprocal() {
     }
 }
 
-// common_init false: a later tile of the ttnn unary chain; iter_constant false: without sfpu_reciprocal_iter's Prgm0.
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool common_init = true, bool iter_constant = true>
+// common_init false: a later tile of the ttnn unary chain; iter_constant false: without sfpu_reciprocal_iter's Prgm0;
+// own_state false: without ADDR_MOD_6 and the 32-bit program's macros 2 and 3, which no other op of the chain writes.
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    bool common_init = true,
+    bool iter_constant = true,
+    bool own_state = true>
 void recip_init() {
     // Full-tile reciprocal owns the shared LOADMACRO/Misc configuration and, for precise FP32,
     // SFPU replay slots 0-5. Reinitialize another SFPU macro/replay owner before using it again.
@@ -404,7 +413,9 @@ void recip_init() {
         sfpu::_init_sfpu_config_reg();
         addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     }
-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    if constexpr (own_state) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    }
     if constexpr (common_init) {
         math::reset_counters(p_setrwc::SET_ABD_F);
     }
@@ -414,7 +425,7 @@ void recip_init() {
     if constexpr (APPROXIMATION_MODE) {
         _init_reciprocal_fast_7b_();
     } else if constexpr (is_fp32_dest_acc_en) {
-        _init_reciprocal_fast_24b_5c_();
+        _init_reciprocal_fast_24b_5c_<own_state>();
     } else {
         _init_reciprocal_fast_8b_3c_();
     }

@@ -16,19 +16,23 @@
 
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
 // The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: a later tile's init re-programs only the op's
-// own state, square rounds without Prgm0-2 and stores through ADDR_MOD_4 (free here), the reciprocal leaves Prgm0.
+// state another op wrote, square rounds without Prgm0-2 and stores through ADDR_MOD_4 (free here), the reciprocal
+// leaves Prgm0.
 namespace ckernel {
 #ifdef SFPU_OP_EXP_INCLUDE
-template <bool approx = false>
+template <bool approx, bool constants, bool upper_macros>
 ALWI void exp_tile_chain_reinit() {
-    MATH((sfpu::exp_init<approx, 0x3F800000, true, DST_ACCUM_MODE, false>()));
+    MATH((sfpu::exp_init<approx, 0x3F800000, true, DST_ACCUM_MODE, false, constants, upper_macros>()));
 }
 #endif
 #ifdef SFPU_OP_RECIP_INCLUDE
 ALWI void recip_tile_chain_init() {
     MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, true, false)));
 }
-ALWI void recip_tile_chain_reinit() { MATH((sfpu::recip_init<APPROX, DST_ACCUM_MODE, false, false>())); }
+template <bool own_state>
+ALWI void recip_tile_chain_reinit() {
+    MATH((sfpu::recip_init<APPROX, DST_ACCUM_MODE, false, false, own_state>()));
+}
 ALWI void recip_tile_chain_rerecord() { MATH((sfpu::_record_reciprocal_fast_24b_5c_())); }
 #endif
 #ifdef SFPU_OP_RSQRT_INCLUDE
