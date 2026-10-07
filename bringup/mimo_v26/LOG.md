@@ -1522,3 +1522,13 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_verify_probe_03832654772.jsonl
 - paths: models/demos/blackhole/mimo_v26/tests/probe_verify_ops.py
 - data: {"v1_pcc_min":0.999362,"v1_ga64k_b4_ms":3.81,"v1_ga64k_b8_ms":7.71,"v2_rejected":1}
+## E261007-1446-7c5
+- date: 2026-10-07T14:46:49
+- commit: 883c1540cf1
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: COORDINATOR DECISIONS (spec decode): (1) DFlash drafter on device uses bf16 weights (bfp8 misses the 0.999 hidden PCC gate on the worst user: 0.99806 vs fp32 oracle 0.99809, bf16 0.99907; E261007-1446-a9a on branch ssinghal/mimo-spec). (2) Top-1 draft agreement gate: the coordinator's >=99% per position is unreachable at n=224 (bf16 CPU oracle vs fp32 oracle itself gives 0.9955,0.9866,0.9821,1.0,0.9911,0.9732,0.9821); redefined as: device not worse than that oracle floor per position (clarification, not a relaxation of the intent). (3) Verify design V1 approved: 1-token paged decode op with 8 virtual users per real user (E261007-1446-494), no C++; consequence: spec decode only for U<=4 users per row (8U <= 32 rows per mesh row), as in DSV4 (B=128 impossible with <=32 verify rows). (4) Hooks (capture hidden states of target layers 0,11,23,35,47 inside the traced decode step) per notes/spec_hooks.md on ssinghal/mimo-spec: decode agent implements the decode.py/layer.py part.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
