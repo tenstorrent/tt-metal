@@ -94,7 +94,7 @@ def test_moe_real_layer(mesh_device):
     ums = {}
     for op in OPS:
         t0 = time.time()
-        wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op != "loop"))
+        wts = build_expert_weights(md, lambda e: W[e], nd_sharded=(op not in ("loop", "mm")))
         ums[op] = MiMoPrefillMoE(
             md,
             wts,

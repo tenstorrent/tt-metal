@@ -151,7 +151,7 @@ class MiMoPrefillMoE:
         )
         ttnn.deallocate(offsets)
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
-        if self.expert_op == "loop":
+        if self.expert_op in ("loop", "mm"):
             # bf16-activation path (user decision: activations stay bf16): tilize the dispatched bf16 buffer (stays bf16), then per local expert
             # extract -> routed_expert_ffn (bf16 intermediates, bfp8 weights, DRAM-interleaved) -> insert in place. Costs max_per_expert rows per expert
             # (extract is fixed-size) instead of the real count.
