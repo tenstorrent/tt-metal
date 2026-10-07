@@ -101,7 +101,6 @@ def test_qwenimage_pipeline_performance(
             prompts=[prompts[0]],
             num_inference_steps=num_inference_steps,
             traced=True,
-            encoder_traced=False,
         )
     images[0].save(f"qwenimage_{image_w}_{image_h}_warmup.png")
 
@@ -133,7 +132,6 @@ def test_qwenimage_pipeline_performance(
                     prompts=[prompts[prompt_idx]],
                     num_inference_steps=num_inference_steps,
                     traced=True,
-                    encoder_traced=False,
                     on_event=profiler_event_callback(benchmark_profiler, i),
                 )
 
