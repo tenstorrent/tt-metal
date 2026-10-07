@@ -24,6 +24,12 @@ CASES = [
     ("p8k_1k_1k_bf16_hifi4", 8192, 1024, 1024, BF, BF, BF, "HiFi4"),
     ("p512_4k_4k_bfp8_hifi2", 512, 4096, 4096, BF, B8, BF, "HiFi2"),
     ("p4k_2k_2k_bfp8_lofi", 4096, 2048, 2048, B8, B8, B8, "LoFi"),
+    ("p4k_4k_4k_bf16_hifi2", 4096, 4096, 4096, BF, BF, BF, "HiFi2"),
+    ("p2k_8k_2k_bfp8_hifi2", 2048, 8192, 2048, BF, B8, BF, "HiFi2"),
+    ("p1k_4k_11k_bf16_hifi4", 1024, 4096, 11008, BF, BF, BF, "HiFi4"),
+    ("p2k_3k_3k_bfp8_hifi2", 2048, 3072, 3072, BF, B8, BF, "HiFi2"),
+    ("p4k_1k_4k_bfp8_hifi4", 4096, 1024, 4096, BF, B8, BF, "HiFi4"),
+    ("p2k_5k_5k_bfp8_lofi", 2048, 5120, 5120, BF, B8, BF, "LoFi"),
 ]
 
 
