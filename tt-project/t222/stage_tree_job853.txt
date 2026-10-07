@@ -1,0 +1,97 @@
+========================================================================================================
+DECODE TREE · t222 seed 0 profiled
+root 14917.4 ms  ·  test-measured 14918 ms (Δ -0.6)
+absolute totals inflated by one synchronize_device per span open/close
+--------------------------------------------------------------------------------------------------------
+label                                                           ms    %par    %tot    n  category        
+decode TOTAL                                               14917.4  100.0%  100.0%    1  -
+├─ det stages TOTAL (forward_context)                       1172.0    7.9%    7.9%    1  -
+│  ├─ host->mesh: upload latent (raw)                         21.3    1.8%    0.1%    1  host-transfer
+│  ├─ device: ghost pad + flatten                              1.0    0.1%    0.0%    1  reshape+permute
+│  ├─ conv_in (denorm folded)                                  1.1    0.1%    0.0%    1  mlp
+│  ├─ det stage 0 (in 21,34,60)                              528.2   45.1%    3.5%    1  -
+│  │  ├─ STAGE 1: 4x NABlock dim 2048                        513.6   97.2%    3.4%    1  -
+│  │  ├─ upsample 1                                           13.4    2.5%    0.1%    1  upsample
+│  │  └─ · other (unattributed)                                1.1    0.2%    0.0%       -
+│  ├─ det stage 1 (in 21,68,120)                             149.0   12.7%    1.0%    1  -
+│  │  ├─ reshard: replicated -> W-sharded                      2.4    1.6%    0.0%    1  reshape+permute
+│  │  ├─ stage 2 setup: rope tables + plan                     0.9    0.6%    0.0%    1  setup
+│  │  ├─ STAGE 2: 6x NABlock dim 1024                        142.2   95.4%    1.0%    1  -
+│  │  ├─ upsample 2                                            2.0    1.4%    0.0%    1  upsample
+│  │  └─ · other (unattributed)                                1.4    1.0%    0.0%       -
+│  ├─ det stage 2 (in 41,68,120)                              97.0    8.3%    0.7%    1  -
+│  │  ├─ stage 3 setup: rope tables + plan                     0.6    0.6%    0.0%    1  setup
+│  │  ├─ STAGE 3: 4x NABlock dim 512                          83.5   86.1%    0.6%    1  -
+│  │  ├─ upsample 3                                           11.9   12.3%    0.1%    1  upsample
+│  │  └─ · other (unattributed)                                1.0    1.1%    0.0%       -
+│  ├─ det stage 3 (in 81,136,240)                            349.2   29.8%    2.3%    1  -
+│  │  ├─ stage 4 setup: rope tables + plan                     2.3    0.7%    0.0%    1  setup
+│  │  ├─ STAGE 4: 2x NABlock dim 512                         286.6   82.1%    1.9%    1  -
+│  │  ├─ upsample 4                                           56.6   16.2%    0.4%    1  upsample
+│  │  └─ · other (unattributed)                                3.6    1.0%    0.0%       -
+│  ├─ ghost crop on T                                         23.0    2.0%    0.2%    1  reshape+permute
+│  └─ · other (unattributed)                                   2.2    0.2%    0.0%       -
+├─ stage5 TOTAL (forward)                                   9294.2   62.3%   62.3%    1  -
+│  ├─ stage5: context reshard                                 10.4    0.1%    0.1%    1  reshape+permute
+│  ├─ stage5: host patchify + embed x_t                     5486.0   59.0%   36.8%    1  host-compute
+│  ├─ stage5: brick x+context                                 26.0    0.3%    0.2%    1  reshape+permute
+│  ├─ stage5 diff-blocks (attn+MLP)                         3668.5   39.5%   24.6%    1  -
+│  │  ├─ stage5 setup: AdaLN + rope tables                     1.8    0.1%    0.0%    1  setup
+│  │  ├─ stage5 block 0                                      455.3   12.4%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.7    1.0%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        416.3   91.4%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.4    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.0    2.0%    0.1%       -
+│  │  ├─ stage5 block 1                                      457.1   12.5%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.9    1.1%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        417.0   91.2%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.4    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.8    2.1%    0.1%       -
+│  │  ├─ stage5 block 2                                      456.7   12.4%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.9    1.1%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        416.8   91.3%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.3    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.7    2.1%    0.1%       -
+│  │  ├─ stage5 block 3                                      456.2   12.4%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.9    1.1%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        416.3   91.3%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.4    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.7    2.1%    0.1%       -
+│  │  ├─ stage5 block 4                                      456.6   12.4%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.9    1.1%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        416.5   91.2%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.4    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.8    2.1%    0.1%       -
+│  │  ├─ stage5 block 5                                      457.0   12.5%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.9    1.1%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        416.9   91.2%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.4    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.8    2.1%    0.1%       -
+│  │  ├─ stage5 block 6                                      456.4   12.4%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.9    1.1%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        416.5   91.2%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.4    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.7    2.1%    0.1%       -
+│  │  ├─ stage5 block 7                                      456.6   12.4%    3.1%    1  -
+│  │  │  ├─ context-inject                                     4.9    1.1%    0.0%    1  context-inject
+│  │  │  ├─ attention                                        416.7   91.2%    2.8%    1  attention
+│  │  │  ├─ mlp                                               25.4    5.6%    0.2%    1  mlp
+│  │  │  └─ · other (unattributed)                             9.8    2.1%    0.1%       -
+│  │  └─ · other (unattributed)                               14.6    0.4%    0.1%       -
+│  ├─ stage5 tail: device->host pull                         100.2    1.1%    0.7%    1  host-transfer
+│  └─ · other (unattributed)                                   3.2    0.0%    0.0%       -
+└─ · other (unattributed)                                   4450.8   29.8%   29.8%       -
+--------------------------------------------------------------------------------------------------------
+CATEGORY ROLL-UP (exclusive self time)
+category                                            ms    %tot  spans
+other (uncategorized)                           5581.0   37.4%     20
+host-compute                                    5486.0   36.8%      1
+attention                                       3332.9   22.3%      8
+mlp                                              204.2    1.4%      9
+host-transfer                                    121.6    0.8%      2
+upsample                                          83.9    0.6%      4
+reshape+permute                                   63.2    0.4%      6
+context-inject                                    38.8    0.3%      8
+setup                                              5.8    0.0%      5
+TOTAL                                          14917.4  100.0%
+========================================================================================================
