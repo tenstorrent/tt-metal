@@ -79,10 +79,10 @@ struct AddrgenPosition {
     uint32_t bank_current;
 };
 
-// Address-generator register reads (rd_reg) need a fence (seen hanging on emu-quasar-2x3; the HW team confirmed a
-// fence is needed). Only a fence after every read has been safe everywhere: one fence after a series of reads passed
-// some kernels but hung the save in AddrgenLoopProbe's spill cases (2026-10-06), and a fence before the series hung
-// too. So each read is followed by its own fence. Only save pays this (~70 of a reload's ~300 cycles).
+// Address-generator register reads (rd_reg) must not be in flight together: two value-returning RoCC instructions
+// outstanding at once can hang the core (AIHWE-6506; AddrgenFenceRepro). The hardware workaround is a no-result RoCC
+// instruction between them (rocc_nop); a fence after each read also works but costs more. read_reg_separated is the
+// read every save uses.
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t read_reg_addrgen(uint32_t reg_offset) {
     return __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, reg_offset / 8);
@@ -90,7 +90,15 @@ inline __attribute__((always_inline)) uint64_t read_reg_addrgen(uint32_t reg_off
 
 inline __attribute__((always_inline)) void fence_reg_reads_addrgen() { asm volatile("fence" ::: "memory"); }
 
-// A register read and its fence: the form every read here uses.
+// A register read, then rocc_nop (AIHWE-6506): the form every read here uses.
+template <AddrGen ADDRGEN>
+inline __attribute__((always_inline)) uint64_t read_reg_separated(uint32_t reg_offset) {
+    const uint64_t value = read_reg_addrgen<ADDRGEN>(reg_offset);
+    rocc_nop();
+    return value;
+}
+
+// A register read and a fence (the earlier workaround; AddrgenFenceRepro compares the two).
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t read_reg_fenced(uint32_t reg_offset) {
     const uint64_t value = read_reg_addrgen<ADDRGEN>(reg_offset);
@@ -105,9 +113,9 @@ inline __attribute__((always_inline)) uint64_t read_reg_fenced(uint32_t reg_offs
 
 template <AddrGen ADDRGEN, Side SIDE>
 inline __attribute__((always_inline)) void save_position_addrgen(AddrgenPosition& p) {
-    p.bank_current = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, BANK_CURRENT));
-    p.inner_address = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, INNER_ADDRESS));
-    p.outer_address = read_reg_fenced<ADDRGEN>(OVERLAY_AG_REG(SIDE, OUTER_ADDRESS));
+    p.bank_current = read_reg_separated<ADDRGEN>(OVERLAY_AG_REG(SIDE, BANK_CURRENT));
+    p.inner_address = read_reg_separated<ADDRGEN>(OVERLAY_AG_REG(SIDE, INNER_ADDRESS));
+    p.outer_address = read_reg_separated<ADDRGEN>(OVERLAY_AG_REG(SIDE, OUTER_ADDRESS));
 }
 
 // Move a side to another position of its current program: write only the three position registers. The program (loop
@@ -117,6 +125,13 @@ inline __attribute__((always_inline)) void set_position_addrgen(const AddrgenPos
     __builtin_riscv_ttrocc_addrgen_wr_reg(ADDRGEN, OVERLAY_AG_REG(SIDE, BANK_CURRENT) / 8, p.bank_current);
     __builtin_riscv_ttrocc_addrgen_wr_reg(ADDRGEN, OVERLAY_AG_REG(SIDE, INNER_ADDRESS) / 8, p.inner_address);
     __builtin_riscv_ttrocc_addrgen_wr_reg(ADDRGEN, OVERLAY_AG_REG(SIDE, OUTER_ADDRESS) / 8, p.outer_address);
+}
+
+// Point a single-bank walk at another bank: write only BANK_BASE (the bank loop's first endpoint). With
+// set_position_addrgen this moves a walk to another shard without reprogramming its loops.
+template <AddrGen ADDRGEN, Side SIDE>
+inline __attribute__((always_inline)) void set_bank_base_addrgen(uint32_t base) {
+    __builtin_riscv_ttrocc_addrgen_wr_reg(ADDRGEN, OVERLAY_AG_REG(SIDE, BANK_BASE) / 8, base);
 }
 
 template <AddrGen ADDRGEN, Side SIDE>

@@ -2503,8 +2503,9 @@ namespace fence_repro {
 struct Case {
     const char* name;
     uint32_t stage;
-    uint32_t fence_mode;  // see addrgen_fence_repro.cpp: 0 fence each, 1 back to back + fence, 2 use each, 3 use each +
-                          // fence
+    // addrgen_fence_repro.cpp: 0 fence each, 1 back to back + fence, 2 use each, 3 use each + fence, 4 rocc_nop between
+    // (the AIHWE-6506 workaround)
+    uint32_t fence_mode;
 };
 
 }  // namespace fence_repro
@@ -2590,7 +2591,9 @@ INSTANTIATE_TEST_SUITE_P(
         fence_repro::Case{"SnapshotFenceAfter", 3, 1},
         fence_repro::Case{"SaveUseEach", 0, 2},
         fence_repro::Case{"SaveUseEachFenceAfter", 0, 3},
-        fence_repro::Case{"SnapshotUseEach", 3, 2}),
+        fence_repro::Case{"SnapshotUseEach", 3, 2},
+        fence_repro::Case{"SaveNopBetween", 0, 4},
+        fence_repro::Case{"SnapshotNopBetween", 3, 4}),
     [](const ::testing::TestParamInfo<fence_repro::Case>& info) { return std::string(info.param.name); });
 
 // Transfer-address microbenchmark (ta_perf_reader.cpp): the same kernel built with the address-generator path and
