@@ -8,6 +8,7 @@ pool of tt/kv_pool.py (GA: contiguous blocks per slot; SWA: ring with aliased pa
 Pad tokens of a ragged last chunk repeat the user's own prompt tokens cyclically (so MoE routing of pad tokens looks like real routing instead of piling onto
 a few experts); their KV rows are written beyond the user's length and are never read (GA: cur_pos masks; SWA: ring slots >= 513 positions older than the window).
 """
+import os
 import time
 
 import torch
@@ -149,6 +150,8 @@ class ChunkedPrefill:
                     slots.append(U)
                     starts.append(0)
                     info.append(None)
+            if os.environ.get("PF_VERBOSE"):
+                print(f"PFSTEP {step}/{nsteps} slots={slots} starts={starts}", flush=True)
             self.set_step(toks, slots, starts)
             out = self.run_step()
             need = collect_full or any(i is not None and i[3] for i in info)
