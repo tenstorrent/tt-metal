@@ -108,6 +108,38 @@ class MiMoMoEDecode:
             mask_host, device=self.mesh, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper()
         )
 
+    # -- DEVICE-RESIDENT mask derivation (no host copy per step): the decode step keeps dead/live flags (EOS, position cap) or per-row live counts as device tensors and derives the
+    #    [1,1,64,1] bf16 tile mask the MoE forward consumes with device ops inside the trace. The host API above stays as a fallback.
+    def mask_from_flags(self, flags):
+        """flags: device tensor whose LAST dim is the slot axis n <= 32 (any shape like [1,1,1,n] / [n] / [1,n]; per mesh row, replicated over columns; dtype uint32/int32/uint16/bf16/float32;
+        nonzero = live). Returns the mask [1,1,64,1] bf16 TILE (rows >= n are 0 = dead)."""
+        n = flags.shape[-1]
+        f = ttnn.reshape(flags, [1, 1, 1, n])
+        if f.layout != ttnn.TILE_LAYOUT:
+            f = ttnn.to_layout(f, ttnn.TILE_LAYOUT)
+        if f.dtype != ttnn.bfloat16:
+            f = ttnn.typecast(f, ttnn.bfloat16)
+        f = ttnn.gt(f, 0.0)  # any nonzero -> 1.0
+        col = ttnn.transpose(f, -2, -1)  # [1,1,n,1]
+        return ttnn.pad(col, [(0, 0), (0, 0), (0, SLOTS - n), (0, 0)], 0.0)
+
+    def mask_from_count(self, count):
+        """count: device tensor [1,1,1,1] (per mesh row live-slot count, uint32/int32/bf16): mask[i] = 1 for i < count. Returns [1,1,64,1] bf16 TILE."""
+        if not hasattr(self, "_arange"):
+            self._arange = ttnn.from_torch(
+                torch.arange(SLOTS).reshape(1, 1, SLOTS, 1).bfloat16(),
+                device=self.mesh,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+        c = count
+        if c.layout != ttnn.TILE_LAYOUT:
+            c = ttnn.to_layout(c, ttnn.TILE_LAYOUT)
+        if c.dtype != ttnn.bfloat16:
+            c = ttnn.typecast(c, ttnn.bfloat16)
+        return ttnn.lt(self._arange, c)
+
     def update_mask(self, mask_dev, mask_host):
         host = ttnn.from_torch(mask_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper())
         ttnn.copy_host_to_device_tensor(host, mask_dev)
