@@ -111,10 +111,17 @@ void kernel_main() {
         pack_init(dfb::rotated_interm);
 #endif
         ACQ();
+#ifdef ARCH_BLACKHOLE
+        for (uint32_t j = 0; j < Wt; ++j) {
+            matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
+        }
+        pack_block_mop(0, dfb::rotated_interm, Wt);
+#else
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
             pack_tile(j, dfb::rotated_interm, j);
         }
+#endif
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
         mul_bcast_rows_init(dfb::rotated_interm, dfb::sin);

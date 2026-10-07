@@ -334,8 +334,12 @@ void kernel_main() {
     tile_regs_commit();
 
     tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+    pack_block_mop(0, cb_final_out_id, 2);
+#else
     pack_tile(0, cb_final_out_id);  // softmax weights
     pack_tile(1, cb_final_out_id);  // indices
+#endif
     tile_regs_release();
 
     cb_final_out.push_back(2);

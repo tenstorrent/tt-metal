@@ -140,9 +140,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_inp_id, block.size());
+#else
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_inp_id);
                 }
+#endif
                 tile_regs_release();
             }
             dfb_inp.push_back(block.size());
@@ -216,8 +220,12 @@ void kernel_main() {
         dfb_scratch.reserve_back(2);
         tile_regs_wait();
         pack_reconfig_data_format(dfb::mean_spill, dfb::scratch);
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(dst1, dfb::scratch, 2);
+#else
         pack_tile(dst1, dfb::scratch);
         pack_tile(dst2, dfb::scratch);
+#endif
         dfb_scratch.push_back(2);
         tile_regs_release();
 #else
@@ -278,8 +286,12 @@ void kernel_main() {
         dfb_scratch.reserve_back(2);
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(dst1, dfb::scratch, 2);
+#else
         pack_tile(dst1, dfb::scratch);
         pack_tile(dst2, dfb::scratch);
+#endif
         dfb_scratch.push_back(2);
         tile_regs_release();
 #endif
@@ -296,8 +308,12 @@ void kernel_main() {
         dfb_out.reserve_back(2);
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(dst0, dfb::out, 2);
+#else
         pack_tile(dst0, dfb::out);
         pack_tile(dst1, dfb::out);
+#endif
         dfb_out.push_back(2);
         tile_regs_release();
     }

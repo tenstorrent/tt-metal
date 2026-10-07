@@ -147,8 +147,12 @@ void kernel_main() {
         dfb_stats.pop_front(stats_tiles_cols);
         dfb_stats_reduced.reserve_back(stats_tile_stride);
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb::stats_reduced, 2);
+#else
         pack_tile(0, dfb::stats_reduced);
         pack_tile(1, dfb::stats_reduced);
+#endif
         tile_regs_release();
         dfb_stats_reduced.push_back(stats_tile_stride);
         reduce_uninit();

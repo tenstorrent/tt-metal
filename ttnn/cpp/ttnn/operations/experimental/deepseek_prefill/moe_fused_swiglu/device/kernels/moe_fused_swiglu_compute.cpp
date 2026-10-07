@@ -206,9 +206,13 @@ ALWI void fold_dest(uint32_t num_contributors, uint32_t n) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, ACC, w);
+#else
         for (uint32_t i = 0; i < w; ++i) {
             pack_tile(i, ACC);  // THE only pack; in order, so the CB write pointer walks it
         }
+#endif
         tile_regs_release();
     }
     // Clear the latched `acc_to_dest`. It is a STICKY math-config bit, and the helpers that run next

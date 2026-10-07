@@ -227,9 +227,13 @@ void kernel_main() {
             dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
 #ifndef COMPACT_FP32_PRE_ADD
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, dfb_x, block.size());
+#else
             for (auto i : block.local()) {
                 pack_tile(i, dfb_x);
             }
+#endif
             tile_regs_release();
 #endif
             dfb_x_obj.push_back(static_cast<uint16_t>(block.full_block_size()));  // push the sum into the same buffer
@@ -354,9 +358,13 @@ void kernel_main() {
                 sub_bcast_cols_compensated(dfb_x, dfb_ex, 0, 0, block.size());
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_xmm, block.size());
+#else
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_xmm);
                 }
+#endif
                 tile_regs_release();
                 dfb_xmm_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
                 dfb_x_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
@@ -480,9 +488,13 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_im_or_out, block.size());
+#else
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_im_or_out);
                 }
+#endif
                 tile_regs_release();
             }
             dfb_im_or_out_obj.push_back(static_cast<uint16_t>(
@@ -524,9 +536,13 @@ void kernel_main() {
 
                 dfb_outg_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_outg, block.size());
+#else
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_outg);  // pack either to intermediate (dfb_fusion or dfb_out)
                 }
+#endif
                 tile_regs_release();
                 dfb_outg_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
             }
@@ -556,9 +572,13 @@ void kernel_main() {
 
                 dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, dfb_out, block.size());
+#else
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_out);  // pack either to intermediate (dfb_fusion or dfb_out)
                 }
+#endif
                 tile_regs_release();
                 dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
             }

@@ -116,9 +116,13 @@ void apply_fused_scale_mask(
         }
         tile_regs_wait();
         tile_regs_commit();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb_out, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, dfb_out);
         }
+#endif
         dfb_out_obj.push_back(static_cast<uint16_t>(rem));
         dfb_in_obj.pop_front(static_cast<uint16_t>(rem));
         tile_regs_release();
@@ -164,9 +168,13 @@ void apply_fused_attn_mask(
                 dfb_mask_padded, 0 /*in_tile_index*/, rem - 1);
         }
         tile_regs_commit();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb_out, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, dfb_out);
         }
+#endif
         dfb_out_obj.push_back(static_cast<uint16_t>(rem));
         dfb_in_obj.pop_front(static_cast<uint16_t>(rem));
         dfb_fused_attn_mask_obj.pop_front(static_cast<uint16_t>(rem));
@@ -199,9 +207,13 @@ void pad_input(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_le
         }
         tile_regs_wait();
         tile_regs_commit();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb_out, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, dfb_out);
         }
+#endif
         dfb_out_obj.push_back(static_cast<uint16_t>(rem));
         dfb_in_obj.pop_front(static_cast<uint16_t>(rem));
         tile_regs_release();
@@ -246,9 +258,13 @@ void exp_cb(std::uint32_t dfb_in, std::uint32_t dfb_out, std::uint32_t dfb_max, 
         }
         tile_regs_wait();
         tile_regs_commit();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb_out, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, dfb_out);
         }
+#endif
         dfb_out_obj.push_back(static_cast<uint16_t>(rem));
         tile_regs_release();
     }
@@ -314,9 +330,13 @@ void apply_recip(std::uint32_t dfb_in, std::uint32_t dfb_recip, std::uint32_t df
         }
         tile_regs_commit();
         dfb_out_obj.reserve_back(static_cast<uint16_t>(rem));
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, dfb_out, rem);
+#else
         for (std::uint32_t cur_dst = 0; cur_dst < rem; cur_dst++) {
             pack_tile(cur_dst, dfb_out);
         }
+#endif
         dfb_in_obj.pop_front(static_cast<uint16_t>(rem));
         dfb_out_obj.push_back(static_cast<uint16_t>(rem));
         tile_regs_release();
