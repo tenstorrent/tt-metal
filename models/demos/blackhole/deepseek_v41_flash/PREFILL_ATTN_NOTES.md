@@ -46,3 +46,14 @@ Replay-loop gain: -3.8% (.44), -2.6% (.34): about 0.25-0.33 s of 8.7 s (the eage
 Accuracy: 16/16 users' 64-token outputs identical on vs off (h44 pair and h34 pair); kernel bit-identical to fp4_fast in the unit test.
 Recommendation: safe to enable by default (bit-identical, ~3% of 4k prefill, scales with the number of index layers and with the q-head count x tokens, so it is slightly larger share at larger chunk work); next candidates: fold the indexer rope (matmul+addcmul, ~1 ms/layer) into the same kernel; mHC (7.6 ms/layer, 14%) and the MoE reduce-scatter are bigger but not attention.
 Reproduce: DSV41_PFA_FP4=fused with tools/spec_lt.sh <host> <name> "<grid env>" models/demos/blackhole/deepseek_v41_flash/demo/text_demo.py -k session; unit: pytest tests/test_pf_fp4_fused.py.
+
+## Extended validation of DSV41_PFA_FP4=fused (grid env, no MEMLOG, same host per pair, flag off vs on, 40 layers)
+Logs dsv4-logs/pf_spec_int_v_*_{off,on}.log. Replay loop = prefill timing total_replay_loop (s); outputs = the demo's decoded outputs of every user, compared off vs on.
+| cell | host | replay loop off -> on | outputs identical |
+| 4k B=32 (U=8) | .34 | 16.74 -> 16.16 (-3.5%) | 32/32 |
+| 4k B=4 (U=1) | .44 | 2.29 -> 2.23 (-2.6%) | 4/4 |
+| 60k B=4 (C=2048, U=1, ISL 60453) | .43 | 40.36 -> 39.21 (-2.9%); TTFT 43.7 -> 40.0 s | 4/4 |
+| 4k B=16, DEFAULT adaptive spec decode {1,3,5}, default unified/ring MoE | .44 | 8.72 -> 8.52 (-2.3%) | 16/16 plain + 2/2 spec outputs |
+| 4k B=16 (earlier) | .44 / .34 | 8.73 -> 8.40 / 8.70 -> 8.47 | 16/16 |
+Unit test (tests/test_pf_fp4_fused.py, 12 cases, device): 0 differing elements on q [U,64,C,128] for (1,2048) (= 60k B=4 and the 2048-row ratio-4 chunk at long context; the fp4 input depends only on the chunk, not on the context length), (4,1024), (8,512), (1,1024), and key shapes [U,1,C/4,128] (1,512), (4,256), (8,128), (1,32).
+Decode/spec: the fused kernel is used ONLY by the prefill indexer (DSV41PrefillIndexer._fp4 in tt/prefill_sparse.py). Decode and spec verify rounds use their own fp4 code (DSV41DecodeIndexer._fp4_blocks, tt/spec_paged.py), untouched by the flag.
