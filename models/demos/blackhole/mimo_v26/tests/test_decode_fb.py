@@ -43,6 +43,17 @@ def main():
                     t = r["times"][3:]
                     ms[fb].append(round(sorted(t)[len(t) // 2] * 1e3, 3))
                     toks[fb] = r["tokens"]
+            # device-bound reference: back-to-back replays of the feedback trace, one sync at the end (no ring read, no host work between enqueues)
+            gen.dec.set_feedback(True)
+            gen.generate(prompts, 8, S=S)
+            tr = gen.dec._tr
+            ttnn.synchronize_device(mesh)
+            t0 = time.perf_counter()
+            for _ in range(20):
+                ttnn.execute_trace(mesh, tr, cq_id=0, blocking=False)
+            enq = (time.perf_counter() - t0) / 20
+            ttnn.synchronize_device(mesh)
+            pipe = (time.perf_counter() - t0) / 20
             line = json.dumps(
                 dict(
                     case="fb_ab",
@@ -52,6 +63,8 @@ def main():
                     nofeedback_ms=ms[False],
                     feedback_ms=ms[True],
                     tokens_equal=toks[False] == toks[True],
+                    trace_pipelined_ms=round(pipe * 1e3, 3),
+                    enqueue_ms_per_step=round(enq * 1e3, 3),
                 )
             )
             print("FB_RESULT " + line, flush=True)
