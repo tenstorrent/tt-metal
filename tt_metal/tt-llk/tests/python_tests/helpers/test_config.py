@@ -1387,6 +1387,7 @@ class TestConfig:
         )
         if TestConfig.TEST_TARGET.run_simulator and sim_path.endswith(".so"):
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
+        OPTIONS_COMPILE += f"-DLLK_BP_MASK={int(os.environ['REPRO_BP_MASK'])} " if os.environ.get("REPRO_BP_MASK") else ""  # experiment
         OPTIONS_COMPILE += f"-DLLK_SETTLE={int(os.environ['REPRO_SETTLE'])} " if os.environ.get("REPRO_SETTLE") else ""  # experiment
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
