@@ -25,6 +25,28 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in0, dfb::scaler, dfb::out);
 
+#if defined(REDUCE_POST_MUL) && defined(ARCH_BLACKHOLE)
+    // An identity scalar takes the instantiation without a post-reduce op, which runs the SFPU reduce init only once.
+    if (get_arg(args::post_mul_scaler_bits) == k_identity_scaler_bits) {
+        compute_kernel_lib::reduce<
+            REDUCE_OP,
+            REDUCE_DIM,
+            dfb::in0,
+            dfb::scaler,
+            dfb::out,
+            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT,
+            fp32_mode>(
+            compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
+            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+            compute_kernel_lib::NoAccumulation{},
+            compute_kernel_lib::NoOp{});
+        DataflowBuffer dfb_scaler(dfb::scaler);
+        dfb_scaler.pop_front(1);
+        return;
+    }
+#endif
+
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
