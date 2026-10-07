@@ -12,16 +12,13 @@ write between host and device inside a capture region fails it. The replay's out
 are checked against the reference after the signposted region.
 """
 
-import subprocess
-
 import pytest
 import torch
-from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.experimental.bevformer.model_config import RESNET_KWARGS, tt_fpn_kwargs, tt_resnet_kwargs
 from models.experimental.bevformer.tests.common import (
+    signposted_trace,
     assert_pcc,
     build_reference_backbone,
     build_reference_fpn,
@@ -35,13 +32,6 @@ from models.experimental.bevformer.tt.model_preprocessing import (
 )
 from models.experimental.bevformer.tt.tt_fpn import TtFPN
 from models.experimental.bevformer.tt.tt_resnet import TtResNet
-
-
-def _head_sha():
-    try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    except (subprocess.CalledProcessError, OSError):
-        return "unknown"
 
 
 def _check(torch_outputs, tt_outputs):
@@ -58,8 +48,6 @@ def _check(torch_outputs, tt_outputs):
     indirect=True,
 )
 def test_backbone_fpn_perf(device, reset_seeds):
-    logger.info(f"device-perf run of commit {_head_sha()}")
-
     torch_backbone = build_reference_backbone()
     torch_fpn = build_reference_fpn()
     torch_input = random_image_batch()
@@ -95,19 +83,5 @@ def test_backbone_fpn_perf(device, reset_seeds):
     for out in tt_outputs:
         ttnn.deallocate(out)
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    tt_outputs = op_fn()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-
-    ttnn.synchronize_device(device)
-    # Drains and resets the device profiler buffers so the signposted region starts from
-    # empty; the warmup's markers would otherwise eat into the same budget.
-    ttnn.ReadDeviceProfiler(device)
-    signpost("start")
-    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-    signpost("stop")
-
-    try:
+    with signposted_trace(device, op_fn) as (_, tt_outputs):
         _check(torch_outputs, tt_outputs)
-    finally:
-        ttnn.release_trace(device, trace_id)
