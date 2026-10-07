@@ -233,7 +233,6 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     if _sfpu_has_compute_zones(raw_data):
         return _stats_l1_to_l1_four_trisc(raw_data)
 
-    # Pair events of the same marker and run_index, on arrays: a pandas groupby per pair cost more than the kernel run.
     markers = raw_data[MARKER].to_numpy(dtype=object)
     runs = raw_data["run_index"].to_numpy(dtype=np.int64)
     threads = raw_data["thread"].to_numpy(dtype=object)
@@ -451,7 +450,7 @@ class Profiler:
             return None
 
     @staticmethod
-    @functools.cache  # one read per variant; the metadata does not change within a session
+    @functools.cache
     def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}

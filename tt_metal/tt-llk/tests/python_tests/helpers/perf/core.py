@@ -720,8 +720,7 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     """
     if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
         return
-    # Plain Python over the few zones of one run: a pandas groupby here cost more host time than the kernel run.
-    raw = profiler_data.zones().raw()  # raw() checks that every ZONE_START pairs with the next ZONE_END
+    raw = profiler_data.zones().raw()
     starts = raw[raw["type"] == "ZONE_START"]
     if starts.empty:
         return
