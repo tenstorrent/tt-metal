@@ -1947,3 +1947,28 @@
 - paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py
 - supersedes: E261007-1705-c97
 - data: {"n":20,"identical":20,"identical_strict":18,"ties_one_bf16_ulp":2}
+
+## E261007-1806-8f6
+- date: 2026-10-07T18:06:00
+- commit: f8bafad0192
+- branch: ssinghal/mimo-spec
+- host: 41,48
+- track: spec
+- status: verified
+- claim: SPEC PROFILE (segment timing: every segment captured as its own trace on the real hidden state, 10 replays back to back, wall incl. per-trace dispatch; 12 layers built: L0 dense+global, L1-4/6-10 SWA+MoE, L5/L11 global+MoE; short context ~100 positions; U=1 (host .41) and U=4 (.48) users per mesh row). Per DECODE LAYER, ms (verify block 8 | plain block 1): U=1: dense/global L0 0.70|0.61; SWA+MoE 1.49-1.64|1.39-1.53; global+MoE L5/L11 1.62-1.63|1.53/1.39; stage split L1: attention part 0.413|0.320, MoE part 1.025|1.013; L5: attention 0.410|0.320, MoE 1.165|1.150; lm_head+norm 0.65|0.58. => 12-layer sum 21.35 | 19.54 (+9%), extrapolated 48 layers ~78 | ~71 ms, i.e. the VERIFY STEP IS ~1.1x A PLAIN STEP ON DEVICE at U=1 (8 virtual rows, 8 ordered cache updates and the MoE on 8 rows cost only +0.1-0.15 ms/layer). U=4 (32 virtual rows): per layer 1.76-2.10 | 1.55-1.70, attention part 0.55|0.34, MoE part 1.16|1.16, 12-layer sum 25.55 | 21.0 (+22%). DRAFTER (U=1 | U=4): embed 0.05; each of the 5 layers 0.86 | 0.97 ms (attention half of layer 1: 0.58 | 0.71), lm_head argmax ~0.64 | 0.88, full draft 4.96 | 5.78 ms of device time; append (fc + hidden_norm + 5 layers K/V + scatter) 1.0-1.2 | 1.4-1.6 ms. Host: set_round 5.4 | 12.1 ms (python mask building + 6 host->device copies). CONCLUSION: the earlier 'verify 397 ms / drafter 84 ms' (E261007-1703-80a) were artifacts of averaging over the trace-capture round (round 0 verify = 12.7 s, drafter capture 3.9 s); steady-state is in the next entry.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_prof_u1_f8bafad0192.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_spec_profile.py, models/demos/blackhole/mimo_v26/tt/dflash.py
+- data: {"verify_layer_ms_swa_u1":1.6,"plain_layer_ms_swa_u1":1.5,"draft_device_ms_u1":4.96,"append_device_ms_u1":1.02,"set_round_host_ms_u1":5.4}
+
+## E261007-1806-f73
+- date: 2026-10-07T18:06:00
+- commit: 52fab3f6323
+- branch: ssinghal/mimo-spec
+- host: 41
+- track: spec
+- status: verified
+- claim: SPEC DECODE STEADY-STATE SPEED (supersedes the speed part of E261007-1703-80a, whose means included the trace-capture round): 48 layers, GSM8K enable_thinking=false, 256 new tokens, host .41, unpaired, host-timed, rounds >= 2 only, one process per scenario, drafter traced from round 1, same token streams as before (U=1 4/4 identical, U=4 14/16, 2 exact bf16 ties). U=1 (B=4): set_round 5.0 ms, drafter incl set_round 15.9 ms (median), verify incl set_inputs 105.2 ms (set_inputs 8.4), append 8.8 ms => round 130 ms for 4.40 accepted tokens/round = 33.9 tok/s/user vs plain decode 73.5 ms/token = 13.6 tok/s/user: SPEC IS 2.5x FASTER. U=4 (B=16): drafter 21.1 (set_round 12.4), verify 126.6 (set_inputs 7.6), append 20.8 => round 168.5 ms for 4.33 accepted = 25.7 tok/s/user vs plain 92.5 ms = 10.8 tok/s/user: 2.4x. Targets of the coordinator (verify <= ~110 ms at U=1, drafter <= 10-15, append <= 3, round <= ~130): verify 105 OK, round 130 OK, drafter 15.9 (device 5 + host set_round 5 + readback), append 8.8 ms MISS (host-bound: python scatter/mask build and 5 host->device copies + synchronize, device 1 ms). Short context only (prompts 35-120 tokens, <= 350 positions): at 64k the global-layer verify attention costs 8x per virtual row (E261007-1446-494 probe) and is NOT measured here. Round time = sum of the medians (the loop adds ~1-2 ms of host accept/bookkeeping).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_z4_u4_52fab3f6323.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
+- supersedes: E261007-1703-80a
+- data: {"verify_ms_u1":105.2,"round_ms_u1":130,"tok_s_user_u1":33.9,"plain_tok_s_user_u1":13.6,"verify_ms_u4":126.6,"round_ms_u4":168.5,"tok_s_user_u4":25.7,"plain_tok_s_user_u4":10.8,"accepted_u1":4.40,"accepted_u4":4.33}
