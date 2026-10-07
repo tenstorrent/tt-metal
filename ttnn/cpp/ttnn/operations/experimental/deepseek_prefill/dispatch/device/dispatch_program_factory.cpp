@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "dispatch_device_operation.hpp"
 #include "kernels/dataflow/dispatch_plan.hpp"  // PlanHeader / PlanEntry layout (host sizes the plan CB from these)
 #include <algorithm>
@@ -433,7 +434,10 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     };
     const uint32_t max_dispatch_hops = max_hops_in_dim(mesh_view.num_rows()) + max_hops_in_dim(mesh_view.num_cols());
     const bool sparse_hops_fit = max_dispatch_hops <= sparse_mcast_max_hops;
-    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric && sparse_hops_fit;
+    // MiMo race hunt: MOE_DISPATCH_SPARSE_MCAST=0 forces the per-expert (non-multicast) dispatch path
+    const char* sm_env = std::getenv("MOE_DISPATCH_SPARSE_MCAST");
+    const bool sparse_env_on = (sm_env == nullptr) || sm_env[0] != '0';
+    const bool enable_sparse_mcast = is_1d_fabric && sparse_has_fabric && sparse_hops_fit && sparse_env_on;
     // Report sparse-mcast selection for BOTH layouts (this factory is unified via is_row_major). When
     // disabled, print each gate so the reason is obvious (2D fabric / no fabric / mesh too long).
     log_warning(
