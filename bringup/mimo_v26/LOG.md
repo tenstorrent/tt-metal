@@ -866,3 +866,15 @@
 - claim: Host .46: tt-metal device init failed ('Device 0 init: failed to initialize FW! Try resetting the board', timeout waiting for physical cores) at 05:43 for my traced chain test; combined with the asm agent's earlier 18 min 2500% CPU stall on .46 (E261007-0459-e2c) this is a second bad signature on .46: not used again; no reset attempted (not needed for my jobs). Also: my first 4-layer chain runs on .30 and .41 sat ~25 min at ~3000% CPU in test_decode_chain after the weights loaded with the OLD untraced moe_decode path and no output (killed own pids, hosts OK afterwards); the same test with the traced MiMoMoEDecode path finishes in a few minutes, so the stall was in the old decode MoE path (cause not isolated).
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_K5_chain4_traced.log
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py
+
+## E261007-0604-6d3
+- date: 2026-10-07T06:04:36
+- commit: 40cb127e4da
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: FIRST GSM8K NUMBER, 48-layer model, 4x8 mesh host .30, greedy, non-thinking template (enable_thinking=false; prompts identical to gsm8k_128_nothink.json items 0..63), bfp8 weights, unified bf16-activation experts, exact router, prefill = MiMoModel.prefill_first_token (S=256, groups of 8 users/row), traced decode loop (capture once, 511 replays), 64 users = 16 per mesh row, ragged, max_new 512, scored with reference/score_gsm8k.extract: 56/64 correct = 87.5% (Wilson95 77.2-93.5), 63/64 finished with EOS (one hit 512 tokens). Decode step time with 64 live users: median 103.7 ms (p10-p90 103.4-104.0 ms) after warm-up, step 0 (capture+compile) 11.4 s; = 9.6 tok/s/user, ~617 tok/s total live. Session: dedicated single-scenario process, trace on, UNPAIRED, host-timed replay + candidate readback, 47 MoE layers dominate (traced MiMoMoEDecode ~1.5 ms/layer per moe agent). Prefill 51.5 s for the 64 prompts (4 grouped calls incl. compile, not a perf number). Weights from cache: 1131 tensors loaded in 613 s on this host (cold page cache); DRAM allocated 1625 MB/bank (of 4010) with 32 slots x 1024 positions.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_L1_gsm64.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- data: {"gsm8k_n":64,"gsm8k_correct":56,"acc":0.875,"step_ms_median":103.7,"users":64,"tok_s_user":9.6}
