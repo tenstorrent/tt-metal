@@ -84,7 +84,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     // shifted tap view from it with local copies instead of rereading DRAM once per tap. The reader's row
     // offsets assume 2-byte elements; validate_on_program_cache_miss restricts input and history to BF16.
     TT_FATAL(
-        input.dtype() == DataType::BFLOAT16 && history.dtype() == DataType::BFLOAT16,
+        input.dtype() == tt::tt_metal::DataType::BFLOAT16 && history.dtype() == tt::tt_metal::DataType::BFLOAT16,
         "qkv_causal_conv1d_silu: activation window staging requires BF16 input and history");
     // validate_on_program_cache_miss checks qkv_causal_conv1d_silu_l1_bytes against the free L1 per core.
     const auto window_bytes =
