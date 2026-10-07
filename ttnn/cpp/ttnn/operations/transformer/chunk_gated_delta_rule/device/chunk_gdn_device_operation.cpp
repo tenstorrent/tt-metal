@@ -8,6 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/constants.hpp>
+#include "kernels/dataflow/chunk_gdn_handoff.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -92,12 +93,14 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     const uint32_t Vt = attrs.val_dim / TILE_WIDTH;
     TT_FATAL(Vt % attrs.nv == 0, "chunk_gdn_fused: nv ({}) must divide Vt ({})", attrs.nv, Vt);
     TT_FATAL(attrs.nv <= grid.x, "chunk_gdn_fused: nv ({}) exceeds the grid width {}", attrs.nv, grid.x);
-    // Per-(head, slot) credit words live in one 4 KB tile of the u/mask CB.
+    // Per-(head, slot) credit words live in one fp32 tile of the u/mask CB.
+    constexpr uint32_t kCreditWords = tt::tile_size(tt::DataFormat::Float32) / sizeof(uint32_t);
     TT_FATAL(
-        attrs.BH * attrs.nbuf <= 1024,
-        "chunk_gdn_fused: BH * nbuf ({} * {}) credit words exceed the 1024-word credit tile",
+        attrs.BH * attrs.nbuf <= kCreditWords,
+        "chunk_gdn_fused: BH * nbuf ({} * {}) credit words exceed the {}-word credit tile",
         attrs.BH,
-        attrs.nbuf);
+        attrs.nbuf,
+        kCreditWords);
     if (attrs.placement == 0) {
         const uint32_t hpr = grid.x / attrs.nv;
         TT_FATAL(
@@ -475,6 +478,16 @@ std::vector<Tensor> chunk_gdn(
             attrs.nbuf);
         attrs.unicast = fused_cfg->unicast;
         attrs.posted = fused_cfg->posted;
+        attrs.handoff_checks = fused_cfg->handoff_checks;
+        attrs.handoff_fault = fused_cfg->handoff_fault;
+        TT_FATAL(
+            attrs.handoff_fault < gdn_handoff::kFaultCount,
+            "chunk_gdn_fused: handoff_fault must be in [0, {}) (got {})",
+            gdn_handoff::kFaultCount,
+            attrs.handoff_fault);
+        TT_FATAL(
+            attrs.handoff_fault == 0 || attrs.handoff_checks,
+            "chunk_gdn_fused: handoff_fault requires handoff_checks=True");
         TT_FATAL(
             !attrs.posted || attrs.unicast,
             "chunk_gdn_fused: posted writes require the unicast transport (unicast=true)");

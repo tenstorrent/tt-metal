@@ -14,6 +14,7 @@
 
 #include "chunk_gdn_phased.hpp"
 #include "chunk_gdn_compute_config.hpp"
+#include "kernels/dataflow/chunk_gdn_handoff.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -74,6 +75,12 @@ constexpr uint32_t s3 = tt::CBIndex::c_31;
 constexpr uint32_t dl = vnew;             // 22: scan reads dl into prep's dl slot
 constexpr uint32_t scan_vnew = decayfac;  // 11: scan's v_new scratch
 }  // namespace pcb
+// The seven hand-off CBs and the u/mask CB must agree with the fused program and every GDN kernel.
+static_assert(
+    pcb::Tinv == gdn_handoff::kCbTinv && pcb::vbeta == gdn_handoff::kCbVbeta && pcb::w == gdn_handoff::kCbNkd &&
+        pcb::qdecay == gdn_handoff::kCbQdecay && pcb::intra == gdn_handoff::kCbIntra &&
+        pcb::kdec_t == gdn_handoff::kCbKdecT && pcb::vnew == gdn_handoff::kCbDl && pcb::u == gdn_handoff::kCbU,
+    "phased CB indices drifted from kernels/dataflow/chunk_gdn_handoff.hpp");
 
 namespace {
 
@@ -196,7 +203,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
 
     const uint32_t cc = Ct * Ct, ck = Ct * Kt, cv = Ct * Vt, kc = Kt * Ct;
     // Packed WY-inverse quadrant masks the prep reader always loads into the cb_u/cb_mask slot.
-    constexpr uint32_t kPrepMaskTiles = 3;
+    constexpr uint32_t kPrepMaskTiles = gdn_handoff::kMaskTiles;
     constexpr uint32_t kPrepOutBuf =
         2;  // two items of output capacity: the writer's DRAM drain of item i does not gate item i+1
     // Scratch, sized to what prep_chunk holds (qwen36-gdn-cb-inventory.md): scr1 carries decay_row (Ct), the

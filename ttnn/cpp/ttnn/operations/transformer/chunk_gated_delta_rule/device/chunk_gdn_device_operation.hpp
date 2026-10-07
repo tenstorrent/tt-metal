@@ -80,6 +80,11 @@ struct ChunkGdnParams {
     // on one (source, destination, VC, command buffer) — the argument tt-metal's matmul multicast
     // sender uses. Requires unicast.
     bool posted = false;
+    // Debug: compile the hand-off protocol's run-time checks into the fused writer and receiver (see
+    // chunk_gdn_handoff_protocol.md, "Runtime checks"); adds one canary tile to the u/mask CB.
+    bool handoff_checks = false;
+    // Test-only fault injection with handoff_checks (gdn_handoff::HandoffFault); 0 = none.
+    uint32_t handoff_fault = 0;
     // Placement: 0 = receivers row-major from row 0, producers fill the rest;
     // 1 = ROW-LOCAL: one head per row (receivers in columns 0..NV-1, its NP producers to their east in
     // the same row), heads beyond grid.y in the leftover columns as vertical blocks. NOC_1 routes -x
