@@ -17,9 +17,7 @@
 // in the block section (BINARY_NG_BLOCK), whose block unpack takes it for every op.
 #define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK)
 #include "api/compute/eltwise_binary.h"
-#if BINARY_NG_BLOCK_PACK
-#include "api/compute/experimental/pack_block.h"
-#endif
+#include "api/compute/pack.h"
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
@@ -60,9 +58,6 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_op_a.get_cb_id(), cb_op_b.get_cb_id(), cb_out.get_cb_id());
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
-#endif
-#if BINARY_NG_BLOCK_PACK
-    pack_block_contiguous_init(cb_out.get_cb_id());
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT)
@@ -105,7 +100,7 @@ void kernel_main() {
 
         tile_regs_wait();
 #if BINARY_NG_BLOCK_PACK
-        pack_block_contiguous(0, cb_out.get_cb_id(), n);
+        pack_block_mop(0, cb_out.get_cb_id(), n);
 #else
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, cb_out.get_cb_id());
