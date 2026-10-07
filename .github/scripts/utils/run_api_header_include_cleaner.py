@@ -22,10 +22,10 @@ Options:
 CMAKE_VERIFY_INTERFACE_HEADER_SETS and CMAKE_EXPORT_COMPILE_COMMANDS) and have had
 the `metalium_GeneratedHeaders` target built.
 
-misc-include-cleaner only reports on the main file of a translation unit, so it
-cannot be pointed at CMake's header verification stubs (#include <hdr>) the way
-IWYU's `pragma: associated` is: it would only look at the stub's single include.
-Instead each header becomes its own main file: the stub's compilation database
+misc-include-cleaner only reports on the main file of a translation unit. CMake's
+header verification stub for a header contains a single `#include <hdr>`, so with
+the stub as main file the check only sees that one include (and calls it unused)
+and never looks inside the header. Instead each header becomes its own main file: the stub's compilation database
 entry is copied with the stub path replaced by the header and `-x c++` by
 `-x c++-header`, and `-o <obj>` and `-c` dropped. All other flags are the real
 build's; none are assembled here. Per header this runs
@@ -37,7 +37,7 @@ build's; none are assembled here. Per header this runs
 `-x c++-header` (not `-x c++`) is what keeps `#pragma once` quiet: as a C++ main
 file clang reports "#pragma once in main file" as an error
 (clang-diagnostic-pragma-once-outside-header); the findings are otherwise the
-same. The stubs' `// IWYU pragma: associated` is irrelevant here.
+same.
 
 The check configuration is .github/api-include-cleaner.clang-tidy, passed with
 --config-file so that misc-include-cleaner is enabled for these headers only.
