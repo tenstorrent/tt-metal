@@ -434,6 +434,61 @@ def cmd_runtime_stats(a):
     json.dump({"yaml": a.yaml, "sku": a.sku, "workflows": wfs, "days": a.days, "groups": out}, sys.stdout)
 
 
+def _jobkey(name):
+    """'Sanity … (Ubuntu 22.04 with LLK asserts) / ttnn-sanity-tests / ttnn sdpa group [sim_bh_p150]'
+    -> 'ttnn sdpa group [sim_bh_p150]' (group + SKU, lane-independent)."""
+    return name.rsplit(" / ", 1)[-1].strip()
+
+
+def _run_jobs(slug, rid):
+    import subprocess
+    raw = subprocess.run(["gh", "api", "--paginate", "repos/%s/actions/runs/%s/jobs?per_page=100" % (slug, rid),
+                          "--jq", ".jobs[] | {name, conclusion, status} | tojson"],
+                         capture_output=True, text=True, check=False).stdout
+    out = []
+    for l in raw.splitlines():
+        try:
+            out.append(json.loads(l))
+        except ValueError:
+            continue  # a gh error line or a truncated page: skip, do not crash
+    return out
+
+
+def cmd_classify_run(a):
+    """Judge a targeted run job by job instead of by its overall conclusion:
+    the jobs the fix is about must pass; any other failed job that ALSO failed
+    on main in the last <hours> (same group + SKU, any lane, in the baseline
+    workflows) is pre-existing and does not block; the rest are new."""
+    import datetime as dt
+    relevant = set(_jobkey(x) for x in json.loads(a.relevant))
+    jobs = _run_jobs(a.repo_slug, a.run_id)
+    concl = {}
+    for j in jobs:
+        k = _jobkey(j["name"])
+        if concl.get(k) != "failure":
+            concl[k] = j.get("conclusion") or j.get("status")
+    since = (dt.datetime.utcnow() - dt.timedelta(hours=a.hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    main_failed = set()
+    for wf in [w for w in a.baseline.split(",") if w]:
+        runs = _gh_json(["repos/%s/actions/workflows/%s/runs?branch=main&per_page=30&created=>%s"
+                         % (a.repo_slug, wf, since[:10])]) or {}
+        for run in runs.get("workflow_runs") or []:
+            if run.get("created_at", "") < since:
+                continue
+            for j in _run_jobs(a.repo_slug, run["id"]):
+                if j.get("conclusion") == "failure":
+                    main_failed.add(_jobkey(j["name"]))
+    failed = sorted(k for k, c in concl.items() if c in ("failure", "timed_out", "cancelled"))
+    rel_missing = sorted(k for k in relevant if k not in concl)
+    rel_failed = sorted(k for k in relevant if concl.get(k) not in (None, "success"))
+    pre = sorted(k for k in failed if k not in relevant and k in main_failed)
+    new = sorted(k for k in failed if k not in relevant and k not in main_failed)
+    json.dump({"relevant_ok": not rel_failed and not rel_missing, "relevant": sorted(relevant),
+               "relevant_failed": rel_failed, "relevant_missing": rel_missing,
+               "new_failures": new, "preexisting": pre,
+               "passed": (not rel_failed and not rel_missing and not new)}, sys.stdout)
+
+
 def cmd_list(a):
     with Ledger() as d:
         rows = []
@@ -700,6 +755,10 @@ def main():
     mk.add_argument("sigs", nargs="+")
     sp.add_parser("list")
     sp.add_parser("scan-list")
+    cr = sp.add_parser("classify-run")
+    cr.add_argument("--run-id", required=True); cr.add_argument("--relevant", required=True)
+    cr.add_argument("--baseline", required=True); cr.add_argument("--hours", type=int, default=24)
+    cr.add_argument("--repo-slug", default="tenstorrent/tt-metal")
     rs = sp.add_parser("runtime-stats")
     rs.add_argument("--yaml", required=True); rs.add_argument("--sku", required=True)
     rs.add_argument("--workflows", default=""); rs.add_argument("--days", type=int, default=7)
@@ -716,7 +775,8 @@ def main():
     a = p.parse_args()
     {"update": cmd_update, "triaged": cmd_triaged, "eligible": cmd_eligible, "get": cmd_get,
      "mark": cmd_mark, "list": cmd_list, "dispatch": cmd_dispatch, "guard": cmd_guard,
-     "render": cmd_render, "scan-list": cmd_scan_list, "runtime-stats": cmd_runtime_stats}[a.cmd](a)
+     "render": cmd_render, "scan-list": cmd_scan_list, "runtime-stats": cmd_runtime_stats,
+     "classify-run": cmd_classify_run}[a.cmd](a)
 
 
 if __name__ == "__main__":

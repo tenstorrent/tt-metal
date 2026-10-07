@@ -353,7 +353,7 @@ merge_readiness() {
   v=$(gh pr view "$url" --json isDraft,mergeStateStatus,headRefOid,reviewDecision,statusCheckRollup --jq '
         {draft: .isDraft, mss: .mergeStateStatus, head: .headRefOid, review: (.reviewDecision // ""),
          failed: ([.statusCheckRollup[] | select(((.conclusion // .state) // "") | test("FAILURE|ERROR|TIMED_OUT|CANCELLED"))
-                   | (.name // .context)] | unique)}' 2>/dev/null) || return 0
+                   | (.name // .context) | select(startswith("autofix/") | not)] | unique)}' 2>/dev/null) || return 0
   draft=$(jq -r .draft <<<"$v"); mss=$(jq -r .mss <<<"$v"); head=$(jq -r .head <<<"$v")
   failed=$(jq -r '.failed | join(", ")' <<<"$v")
   [[ "$draft" == "true" ]] && return 0
@@ -364,6 +364,7 @@ merge_readiness() {
     tries=$($FIXLIB get "${sigs[0]}" | jq -r --arg s "${sigs[0]}" '.[$s].repair_tries // 0')
     jobs=$(gh pr view "$url" --json statusCheckRollup --jq '[.statusCheckRollup[]
              | select(((.conclusion // .state) // "") | test("FAILURE|ERROR|TIMED_OUT|CANCELLED"))
+             | select(((.name // .context) // "") | startswith("autofix/") | not)
              | {name: (.name // .context), job: ((.detailsUrl // "") | capture("/job/(?<j>[0-9]+)") | .j)}] | unique' 2>/dev/null || echo '[]')
     log "  PR #$num: checks failing on ${head:0:10}: $failed (repair attempts so far: $tries)"
     if (( tries < 2 )); then
@@ -431,9 +432,27 @@ followup() {
       if [[ -z "$rid" ]]; then new_disp=$(jq -c --argjson d "$d" '. + [$d]' <<<"$new_disp"); continue; fi
       concl=$(gh api "repos/$REPO/actions/runs/$rid" --jq '.status + "/" + (.conclusion // "")' 2>/dev/null || echo "?/")
       [[ "$concl" == completed/* ]] || all_done=0
-      [[ "$concl" == completed/success ]] || { [[ "$concl" == completed/* ]] && any_fail=1; }
-      lines+="• \`$(jq -r .workflow <<<"$d")\` → ${concl#completed/} $(run_url "$rid")"$'\n'
-      new_disp=$(jq -c --argjson d "$d" --arg c "$concl" '. + [$d + {conclusion: $c}]' <<<"$new_disp")
+      local verdict="" dwf note=""
+      dwf=$(jq -r .workflow <<<"$d")
+      if [[ "$concl" == completed/* && "$concl" != completed/success ]]; then
+        # Judge job by job: the fix's own jobs must pass; failures that also
+        # happen on main (same group + SKU, last 24 h) are pre-existing.
+        local rel base
+        rel=$($FIXLIB get "${sigs[@]}" | jq -c '[.[].sku_jobs[]?] | unique')
+        base="$dwf"; [[ "$dwf" == sanity-tests* && "$dwf" != "sanity-tests.yaml" ]] && base="$dwf,sanity-tests.yaml"
+        verdict=$(python3 "$FIX_HOME/fixlib.py" classify-run --run-id "$rid" --relevant "$rel" --baseline "$base" 2>>"$AGENT_ERR" || true)
+        if [[ "$(jq -r '.passed // false' <<<"$verdict" 2>/dev/null)" == "true" ]]; then
+          note=" (the fix's jobs passed; $(jq -r '.preexisting | length' <<<"$verdict") failure(s) also fail on main: $(jq -r '.preexisting | join(", ")' <<<"$verdict"))"
+        else
+          any_fail=1
+          [[ -n "$verdict" ]] && note=" ($(jq -r '[(if (.relevant_failed | length) > 0 then "fix jobs failed: " + (.relevant_failed | join(", ")) else empty end),
+                                                 (if (.relevant_missing | length) > 0 then "fix jobs did not run: " + (.relevant_missing | join(", ")) else empty end),
+                                                 (if (.new_failures | length) > 0 then "new failures: " + (.new_failures | join(", ")) else empty end)] | join("; ")' <<<"$verdict"))"
+        fi
+      fi
+      lines+="• \`$dwf\` → ${concl#completed/}$note $(run_url "$rid")"$'\n'
+      new_disp=$(jq -c --argjson d "$d" --arg c "$concl" --arg v "${verdict:-null}" \
+                   '. + [$d + {conclusion: $c, verdict: ($v | fromjson? // null)}]' <<<"$new_disp")
     done < <(jq -c '.[]' <<<"$disp")
     (( all_done )) || continue
     local head
@@ -449,7 +468,7 @@ $lines" >/dev/null
     else
       gh api "repos/$REPO/statuses/$head" -f state=success -f context="$CI_STATUS_CONTEXT" \
          -f description="Targeted CI passed — still needs human review" >/dev/null
-      gh pr comment "$url" --body "✅ **autofix:** all targeted CI legs passed. Still a draft: needs a human to review the diff and mark it ready.
+      gh pr comment "$url" --body "✅ **autofix:** the targeted CI legs passed for the jobs this fix is about. Still needs a human to review the diff.
 $lines" >/dev/null
       $FIXLIB mark --state ci_passed --extra "{\"dispatched\": $new_disp}" "${sigs[@]}"
       slack_sig "$EMOJI_PR_OPENED *autofix draft #$num — targeted CI ✅, needs your review*: $(jq -r .title <<<"$g")
