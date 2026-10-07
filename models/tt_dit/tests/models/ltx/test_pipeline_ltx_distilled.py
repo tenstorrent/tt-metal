@@ -186,7 +186,6 @@ def test_pipeline_distilled(
         height=height,
         width=width,
         fps=fps,
-        image_conditioning=bool(image_path),
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
