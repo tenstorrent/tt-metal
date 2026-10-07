@@ -102,6 +102,20 @@ def test_spec_exact(mesh_device):
         dram=dram(md),
     )
     gen.dec.release()
+    # ---- plain repeat (baseline: decode is not bit-reproducible run to run, LOG determinism entries)
+    gen2 = ChunkedGenerator(model, max_pos, pf, trace=TRACE, keep_logits=False, U=U, eos=eos)
+    gen2.prefill = lambda prompts_, S=None: (ids, None)
+    plain2 = gen2.generate(prompts, NEW, S=maxlen)["tokens"]
+    gen2.dec.release()
+    pp = []
+    for a, b in zip(plain, plain2):
+        n_ = min(len(a), len(b))
+        pp.append(next((k for k in range(n_) if a[k] != b[k]), None))
+    rec(
+        "plain_vs_plain",
+        identical=sum(1 for d_, a, b in zip(pp, plain, plain2) if d_ is None and len(a) == len(b)),
+        first_div=pp,
+    )
     # ---- spec
     eng = SpecEngine(model, pf, dr, U, max_pos, eos, cap=cap, trace=TRACE)
     eng.start(prompts, NEW, res=pre)
@@ -134,6 +148,7 @@ def test_spec_exact(mesh_device):
         tok_s_user=round(toks / len(prompts) / wall, 2),
         dram=dram(md),
     )
+    json.dump(dict(plain=plain, plain2=plain2, spec=out), open(OUT.replace(".jsonl", "_tokens.json"), "w"))
     rec("texts", sample=[tok.decode(out[i], skip_special_tokens=True)[:300] for i in range(min(4, len(out)))])
     eng.dec.release()
     dr.release()
