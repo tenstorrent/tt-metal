@@ -153,3 +153,75 @@
   packet-overhead bound and placement shows only ~5% (median). Under the production payload the win is 20%.
 - Tests added: perf harness cases `smallk`, `r2`; env knobs `MMRS_PAYLOAD`, `MMRS_LINKS`. Probes 032 (Ethernet
   channel ↔ core map) and 033 (placement dump + PCC).
+
+## Refinement 4 — Speed up the PERF FOCUS case: pipeline fill (sub-block sends)
+- Date: 2026-10-07
+- What was done:
+  - **Fill measured first** (verifier gate): a zone on the port senders from kernel start to the first sendable
+    segment. End chips send their first packet at ~35 us of a ~135 us kernel. Interior chips start at 45–68 us of
+    148–166 us; that is upstream data plus ~20 us of cross-chip launch skew. The fill is not hidden, so headroom
+    exists.
+  - **R4 waves built** (`waves_per_block`, live knob, parked at 1). Each wave is one compute unit with its own grid
+    factorization, hand-off slot, ready/ack round, and transport entry.
+    - Waves split the **scatter axis**: rows for `-2`, whole-segment column ranges for `-1`. Each wave streams a
+      disjoint slice and replays the resident one, so DRAM traffic is unchanged.
+    - The design's row split for `-1` was built first and measured: wave 0 stays W-stream bound (20 of 33 us), since
+      every wave re-reads the block's W. Replaced.
+    - Transport entries carry a window (rows × segment columns, `Window` / `next_wave_seg`). The sender counts
+      final-core increments per wave and finds the final half from `seg / L`.
+    - The final writer walks the same windows. `handoff_slots = HANDOFF_DEPTH·waves` keeps hand-off slack at
+      `HANDOFF_DEPTH` blocks.
+    - The plan cache keys on the blocking knobs.
+  - **Measured, not shipped on by default** (FOCUS, max of chips):
+    - Column waves: 167 → 192 us with 2 slots, 183 us with `2·waves` slots. End-chip fill drops 36 → 25 us, but a
+      20×28 wave factorizes to 2×4 tiles/core on the 11×9 grid, i.e. 16 vs 14 tiles/core per block. End chips turn
+      compute-bound, because their own block, computed last, gates the finals.
+    - MiMo row waves: 361 → 406 us.
+    - The planner takes waves only with no per-core work growth (`WAVES_WORK_SLACK = 0`), and `WAVES_MAX = 1`.
+      `MMRS_WAVES` pins them for A/B.
+  - **Shipped: what binds the fill.**
+    - Zones showed the line injectors (W on BRISC, A on NCRISC) are **issue-bound**: 3.1 us to issue a 112-tile
+      K-block, then a 1.5 us barrier and a 1.8 us multicast, about compute-balanced at ~27 us/block.
+    - `read_pages_strided` (injector header): pages `num_banks` apart share a bank, so a run is one stateful
+      `noc_async_read_one_packet_set_state` plus `_with_state` reads. W reads column by column (rows `Nt` pages
+      apart, one bank when `Nt % banks == 0`); A reads by residue mod banks. Issue time 3.1 → 1.8 us per K-block;
+      FOCUS end chips 135 → 131–134 us.
+    - `K_BLOCKS_MIN = 4` (lamp L2, pipeline fill at K-block granularity): every pass has ≥ 4 K-blocks. MiMo's
+      K-block had been all of K, so block 0 waited for the whole 835 KB resident W slice (~115 us of fill).
+  - **Parked**: injector read-ahead (`INJECT_READ_AHEAD`, issue K-block s+1 before multicasting s). It cost +3 us on
+    FOCUS: it delays the first multicast and never engages in steady state (no free slot).
+  - Shared injector walk (`matmul_reduce_scatter_injector.hpp`) for the A and W line kernels. Per-unit A row / W
+    column origins and `fresh` flags come from the host (replaces the CT `a_resident` / `w_resident`).
+  - Reused: every CB, kernel and descriptor branch. Added: two small kernel headers (injector walk, wave-window
+    walk), no new kernel or CB.
+- Perf (device kernel duration, steady state, max over 8 chips, 2×4 LoudBox, FABRIC_2D, 14 KiB packets, same-session
+  before → after):
+
+  | Case | Before | After |
+  |---|---|---|
+  | FOCUS (median of 3 runs) | 168.6 us | 167.4 us |
+  | FOCUS end chips | 135 us | 131–134 us |
+  | GLM | 219.0 us | 204.6 us |
+  | MiMo | 365.5 us | 339.6 us |
+  | small-K | 130.5 us | 131.9 us |
+  | R2 | 435 / 449 us | 449 / 445 us (noise; end chips 394–416 → 384–404) |
+  | `num_links=1` FOCUS | 241.4 us | 240.1 us |
+  | `num_links=1` small-K | 215.4 us | 215.3 us |
+
+  FOCUS max-of-chips is an interior chip: end-chip fill (~33 us) + the link-bound send of 3 blocks (~96 us) + relay
+  and final tail + ~20 us of launch skew.
+- Accuracy achieved (precision baseline, worst of 8 chips):
+  - FOCUS production (HiFi2, bf16 DEST): PCC 0.99986, rel-RMS 0.0241 (gate 0.055).
+  - fp32 DEST: PCC ≥ 0.99999, rel-RMS 0.0034–0.0054.
+  - MiMo: PCC 0.999991, rel-RMS 0.0054.
+  - A bf8 / W bf4 / bf16 DEST: rel-RMS 0.026.
+- Golden test progress:
+  - `test_ring_mock` + `test_fabric_configs` + `test_regression`: 102/102.
+  - `test_golden` slice (3 loose cases incl. the FOCUS rel-RMS gate, 640×512×7168, 640×1536×32, every
+    2048×2048×4096 cell): 171/171.
+  - Unit: acceptance + debug 56 passed / 1 skipped (default and `MMRS_WAVES=2`); precision baseline 11/11.
+- Issues encountered: the first column-window version computed a window's last segment column with a floor. When a
+  block row ends in a ragged segment (G=8 MiMo-rows `-1`: 16 tiles = 7 + 7 + 2), the unwaved window dropped that
+  segment (ring-mock PCC 0.93). Fixed with a ceiling, and pinned in the new test.
+- Tests added: `test_matmul_reduce_scatter_waves.py`. It pins waves=2 for column waves (`-1`) and row waves (`-2`),
+  asserts the plan took them, and covers the unwaved ragged-segment window (3/3).

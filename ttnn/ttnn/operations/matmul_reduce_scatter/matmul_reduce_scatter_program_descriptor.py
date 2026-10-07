@@ -30,11 +30,29 @@ BF16_TILE_BYTES = 2048
 
 # ---- Blocking knobs (single source of truth; every dependent quantity derives from these) --------------------------
 OPERAND_DEPTH = 2  # streamed operand K-blocks in flight (double buffering)
-HANDOFF_DEPTH = 2  # hand-off slots per compute core
+HANDOFF_DEPTH = 2  # hand-off slack per compute core, in scatter blocks (slots = HANDOFF_DEPTH * waves)
 BLOCKS_IN_FLIGHT = 1  # scatter blocks per compute pass (lamp L3; >1 is a future knob-turn)
 STREAM_BUDGET = 384 * 1024  # bytes of streamed operand K-blocks per compute core
 K_MIN_RESIDENT = 4  # residency must not force a degenerate K-block
-CORE_BLOCK_MAX = 64  # per-core block tiles (core_m_tiles * core_n_tiles); beyond -> R4 waves (deferred)
+# pipeline fill at K-block granularity (lamp L2): the first block's matmul starts after its first K-block (and, in R1,
+# the resident operand is loaded K-block by K-block alongside it), so every compute pass has at least K_BLOCKS_MIN
+# K-blocks (k_block_tiles <= Kt / K_BLOCKS_MIN, never below K_MIN_RESIDENT): a K-block of the whole K made the first
+# block wait for the entire resident slice (MiMo: ~115 us of fill). MMRS_K_BLOCKS_MIN overrides (1 = uncapped).
+K_BLOCKS_MIN = int(os.environ.get("MMRS_K_BLOCKS_MIN", "4"))
+CORE_BLOCK_MAX = 64  # per-core block tiles (core_m_tiles * core_n_tiles)
+# R4 sub-block sends: a scatter block is computed (and handed to the transport) as `waves` waves, each its own K pass
+# on the whole grid, so the transport starts on wave 0 after ~1/waves of a block. Waves split the block along the
+# scatter axis (rows for scatter_dim=-2, columns for -1): every wave then needs a disjoint slice of the streamed
+# operand and the same slice of the block-invariant one, so nothing is re-streamed (a split across the other axis
+# would make every wave re-read the block's whole streamed slice -- measured: the first wave stays stream-bound).
+# The planner picks the largest waves <= WAVES_MAX that divides the scattered extent into whole segments and keeps the
+# per-core work of a block within (1 + WAVES_WORK_SLACK) of the unwaved one. MMRS_WAVES pins a value (1 = unwaved).
+WAVES_MAX = 1
+WAVES_WORK_SLACK = 0.0
+# line injectors (A and W): issue the next K-block's DRAM reads before multicasting the current one (overlaps the
+# read with the multicast; 0 = the serial read -> barrier -> multicast walk). MMRS_READ_AHEAD overrides (A/B).
+INJECT_READ_AHEAD = int(os.environ.get("MMRS_READ_AHEAD", "0"))
+WAVES_PIN = int(os.environ["MMRS_WAVES"]) if os.environ.get("MMRS_WAVES") else None
 L1_RESERVE = 64 * 1024  # L1 kept free on compute cores beyond the CBs and the hand-off shard (semaphores, misc)
 XPORT_CB_BYTES = 112 * 1024  # transport CB sizing (reference)
 XPORT_GROUP_MAX = 8
@@ -89,6 +107,9 @@ class Blocking:
     scatter_dim: int
     blk_m_tiles: int
     blk_n_tiles: int
+    waves: int  # waves per scatter block (R4), along the scatter axis; one compute unit = one wave
+    unit_m_tiles: int  # rows of one wave (blk_m_tiles / waves for scatter_dim=-2, else blk_m_tiles)
+    unit_n_tiles: int  # columns of one wave (blk_n_tiles / waves for scatter_dim=-1, else blk_n_tiles)
     orientation: str  # "A": m-lines = grid rows; "B": m-lines = grid columns
     core_m_tiles: int
     core_n_tiles: int
@@ -106,22 +127,64 @@ class Blocking:
     acc_dtype: object  # cb_partial_accum page format: follows the DEST width (fp32_dest_acc_en)
     acc_tile_bytes: int
 
+    @property
+    def handoff_slots(self):
+        """cb_partial_handoff slots (one per compute unit): HANDOFF_DEPTH blocks of slack whatever the wave count, so
+        splitting a block into waves never shrinks how far the matmul may run ahead of a stalled transport."""
+        return HANDOFF_DEPTH * self.waves
 
-def _plan_blocking(*, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype, w_dtype, fp32_acc, l1_cb_budget):
-    """Grid factorization, K-block and regime (R1 resident invariant operand / R2 streamed) per the design."""
-    blk_m, blk_n = (Mt // G, Nt) if scatter_dim == -2 else (Mt, Nt // G)
+
+def _factorize(unit_m, unit_n, comp_rows, comp_cols):
+    """Grid factorization of one compute pass (unit_m x unit_n tiles) -> (orientation, cm, cn, m_lines, n_lines)."""
     best = None
     for orient, (m_avail, n_avail) in (("A", (comp_rows, comp_cols)), ("B", (comp_cols, comp_rows))):
-        cm, cn = _cdiv(blk_m, m_avail), _cdiv(blk_n, n_avail)
-        ml, nl = _cdiv(blk_m, cm), _cdiv(blk_n, cn)
+        cm, cn = _cdiv(unit_m, m_avail), _cdiv(unit_n, n_avail)
+        ml, nl = _cdiv(unit_m, cm), _cdiv(unit_n, cn)
         key = (cm * cn, -min(cm, cn), ml * nl)
         if best is None or key < best[0]:
             best = (key, orient, cm, cn, ml, nl)
-    _, orient, cm, cn, ml, nl = best
+    return best[1:]
+
+
+def _seg_tiles(blk_n_tiles):
+    """Tiles per transport segment (one fabric packet): the live payload, capped at a block row."""
+    return max(1, min(int(ttnn.get_tt_fabric_max_payload_size_bytes()) // BF16_TILE_BYTES, blk_n_tiles))
+
+
+def _plan_blocking(*, seg_tiles=None, **kw):
+    """Blocking with the R4 wave count: the largest waves <= WAVES_MAX (or MMRS_WAVES) that splits the scattered
+    extent of a block evenly (for scatter_dim=-1 into whole segments, so no segment straddles two waves) and keeps the
+    per-core work of a block within WAVES_WORK_SLACK of the unwaved plan; else the unwaved plan."""
+    Mt, Nt, G, sd = kw["Mt"], kw["Nt"], kw["G"], kw["scatter_dim"]
+    blk_m, blk_n = (Mt // G, Nt) if sd == -2 else (Mt, Nt // G)
+    seg = seg_tiles if seg_tiles is not None else _seg_tiles(blk_n)
+    base = _plan_blocking_waves(waves=1, **kw)
+    for waves in [WAVES_PIN] if WAVES_PIN else range(WAVES_MAX, 1, -1):
+        extent = blk_m if sd == -2 else blk_n
+        if waves <= 1 or extent % waves or (sd == -1 and (blk_n // waves) % seg):
+            continue
+        try:
+            blk = _plan_blocking_waves(waves=waves, **kw)
+        except ValueError:
+            continue
+        work = waves * blk.core_m_tiles * blk.core_n_tiles
+        if WAVES_PIN or work <= (1 + WAVES_WORK_SLACK) * base.core_m_tiles * base.core_n_tiles:
+            return blk
+    return base
+
+
+def _plan_blocking_waves(
+    *, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype, w_dtype, fp32_acc, l1_cb_budget, waves
+):
+    """Grid factorization of one wave (unit_m x unit_n), K-block and regime (R1 resident invariant operand / R2
+    streamed) per the design."""
+    blk_m, blk_n = (Mt // G, Nt) if scatter_dim == -2 else (Mt, Nt // G)
+    unit_m, unit_n = (blk_m // waves, blk_n) if scatter_dim == -2 else (blk_m, blk_n // waves)
+    orient, cm, cn, ml, nl = _factorize(unit_m, unit_n, comp_rows, comp_cols)
     if cm * cn > CORE_BLOCK_MAX:
         raise ValueError(
             f"matmul_reduce_scatter: per-core block {cm}x{cn} tiles exceeds {CORE_BLOCK_MAX} "
-            "(needs sub-block waves, regime R4, not built)"
+            "(R4 waves split the scatter axis only; a per-core block this large needs a finer grid or a K split)"
         )
 
     a_tile, w_tile = _tile_bytes(a_dtype), _tile_bytes(w_dtype)
@@ -129,13 +192,16 @@ def _plan_blocking(*, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype,
     acc_tile = _tile_bytes(acc_dtype)
     accum = cm * cn * acc_tile
     budget = l1_cb_budget
-    # R1: the block-invariant operand X resident for all G blocks, the other (Y) streamed.
+    # R1: the block-invariant operand X resident for all G blocks (and all their waves: waves split the scatter axis,
+    # along which X does not vary), the other (Y) streamed, a disjoint slice per wave.
     x_is_a = scatter_dim == -1
     core_x, tile_x = (cm, a_tile) if x_is_a else (cn, w_tile)
     core_y, tile_y = (cn, w_tile) if x_is_a else (cm, a_tile)
     resident = core_x * Kt * tile_x
     k_r1 = None
     for k in _divisors_desc(Kt):
+        if k > max(Kt // K_BLOCKS_MIN, min(K_MIN_RESIDENT, Kt)):
+            continue
         if k < min(K_MIN_RESIDENT, Kt):
             break
         if OPERAND_DEPTH * k * core_y * tile_y <= min(STREAM_BUDGET, budget - resident - accum):
@@ -147,6 +213,8 @@ def _plan_blocking(*, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype,
     else:
         regime, kbt = "R2", None
         for k in _divisors_desc(Kt):
+            if k > max(Kt // K_BLOCKS_MIN, 1):
+                continue
             if OPERAND_DEPTH * k * (cm * a_tile + cn * w_tile) <= min(STREAM_BUDGET, budget - accum):
                 kbt = k
                 break
@@ -165,6 +233,9 @@ def _plan_blocking(*, comp_rows, comp_cols, Mt, Kt, Nt, G, scatter_dim, a_dtype,
         scatter_dim=scatter_dim,
         blk_m_tiles=blk_m,
         blk_n_tiles=blk_n,
+        waves=waves,
+        unit_m_tiles=unit_m,
+        unit_n_tiles=unit_n,
         orientation=orient,
         core_m_tiles=cm,
         core_n_tiles=cn,
@@ -195,7 +266,7 @@ class Transport:
 
 
 def _plan_transport(blk: Blocking):
-    seg_tiles = max(1, min(int(ttnn.get_tt_fabric_max_payload_size_bytes()) // BF16_TILE_BYTES, blk.blk_n_tiles))
+    seg_tiles = _seg_tiles(blk.blk_n_tiles)
     seg_bytes = seg_tiles * BF16_TILE_BYTES
     segs_per_row = _cdiv(blk.blk_n_tiles, seg_tiles)
     group = max(1, min(XPORT_GROUP_MAX, XPORT_CB_BYTES // (2 * seg_bytes)))
@@ -248,6 +319,29 @@ def _schedule_mmrs(p, G, ring=False):
 
 def _count_segs(first, stride, total):
     return _cdiv(total - first, stride) if first < total else 0
+
+
+@dataclass
+class Window:
+    """A wave's place in its scatter block: tile origin (r0, c0) and its segments -- block rows [r0, r1) x segment
+    columns [s0, s1) of each row (row-waves: whole rows, a contiguous segment range; column-waves: a column range of
+    every row). Segments never straddle two waves (the planner splits columns into whole segments)."""
+
+    r0: int
+    c0: int
+    r1: int
+    s0: int
+    s1: int
+
+    def segs(self, first, stride, segs_per_row):
+        """This core's segments (seg = first mod stride) in the window, in walk order: (first seg, count)."""
+        mine = [
+            r * segs_per_row + c
+            for r in range(self.r0, self.r1)
+            for c in range(self.s0, self.s1)
+            if (r * segs_per_row + c) % stride == first % stride
+        ]
+        return (mine[0] if mine else 0), len(mine)
 
 
 def _incs(n):
@@ -422,6 +516,7 @@ def create_mesh_program_descriptor(
     virt = lambda c: (pl.vx[c.x], pl.vy[c.y])
     packed = lambda c: (pl.vx[c.x] << 16) | pl.vy[c.y]
 
+    num_banks = int(mesh_device.dram_grid_size().x * mesh_device.dram_grid_size().y)  # A / W interleave banks
     a_ct = list(ttnn.TensorAccessorArgs(a).get_compile_time_args())
     w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
     scr_ct = list(ttnn.TensorAccessorArgs(scratch).get_compile_time_args())
@@ -430,8 +525,20 @@ def create_mesh_program_descriptor(
     scr_addr, out_addr = int(scratch.buffer_address()), int(output.buffer_address())
     handoff_base = int(handoff.buffer_address())
 
+    W = blk.waves
     a_pages = cm * blk.Kt if blk.a_resident else OPERAND_DEPTH * cm * blk.k_block_tiles
     w_pages = blk.Kt * cn if blk.w_resident else OPERAND_DEPTH * blk.k_block_tiles * cn
+    um, un = blk.unit_m_tiles, blk.unit_n_tiles
+    rows_wave = blk.scatter_dim == -2  # waves split the scatter axis: rows (-2) or columns (-1)
+    win = [
+        (
+            Window(wv * um, 0, (wv + 1) * um, 0, xp.segs_per_row)
+            if rows_wave
+            # (a column-wave boundary is a whole segment; the block's last segment of a row may be ragged: ceil)
+            else Window(0, wv * un, blk.blk_m_tiles, wv * un // xp.seg_tiles, _cdiv((wv + 1) * un, xp.seg_tiles))
+        )
+        for wv in range(W)
+    ]
     xport_pages = xp.cap_segs * xp.seg_tiles
     # transport add block: the DEST batch, within one segment (the add walks segments x seg_tiles, row-blocked, so a
     # segment is never held back for the next one's tiles and no block straddles the CB wrap)
@@ -454,7 +561,9 @@ def create_mesh_program_descriptor(
         fwd, bwd, order, fwd_up, bwd_up = sched[p]
         my_fwd, my_bwd, my_finals = at(pl.fwd_ports, coord), at(pl.bwd_ports, coord), at(pl.finals, coord)
         consumers = [packed(c) for c in my_fwd + my_bwd + my_finals]
-        cidx = {j: i for i, j in enumerate(order)}
+        # compute units: each block of the order expanded into its waves 0..W-1
+        units = [(j, wv) for j in order for wv in range(W)]
+        cidx = {u: i for i, u in enumerate(units)}
         program = ttnn.ProgramDescriptor()
         kernels = []
 
@@ -465,12 +574,16 @@ def create_mesh_program_descriptor(
             _cb(CB_PARTIAL_ACCUM, block_tiles, blk.acc_tile_bytes, blk.acc_dtype, rect_set),
             ttnn.cb_descriptor_from_sharded_tensor(CB_PARTIAL_HANDOFF, handoff),
         ]
-        # per compute-order index: block, consumer kind (0 fwd ports, 1 bwd ports, 2 finals), cumulative acks
-        order_rt, cum = [], [0, 0, 0]  # cumulative acks per consumer kind (each kind acks in order)
-        for j in order:
+        # per compute unit: A row origin, consumer kind (0 fwd ports, 1 bwd ports, 2 finals), cumulative acks, A fresh
+        # (read, vs. replayed from the resident ring); W: column origin, W fresh
+        order_rt, w_order_rt, cum = [], [], [0, 0, 0]  # cumulative acks per consumer kind (each kind acks in order)
+        for b, (j, wv) in enumerate(units):
             kind = 2 if j == p else (0 if j in fwd else 1)
             cum[kind] += 2 * L if kind == 2 else L
-            order_rt += [j, kind, cum[kind]]
+            a_row = (j * blk.blk_m_tiles if rows_wave else 0) + win[wv].r0
+            order_rt += [a_row, kind, cum[kind], int(not (blk.a_resident and b > 0))]
+            w_col = (0 if rows_wave else j * blk.blk_n_tiles) + win[wv].c0
+            w_order_rt += [w_col, int(not (blk.w_resident and b > 0))]
 
         a_groups = {1: [], 0: []}
         w_groups = {1: [], 0: []}
@@ -487,8 +600,7 @@ def create_mesh_program_descriptor(
                         a_addr,
                         blk.Kt,
                         row0,
-                        min(cm, blk.blk_m_tiles - row0),
-                        blk.blk_m_tiles if blk.scatter_dim == -2 else 0,
+                        min(cm, um - row0),
                         sem_block_ready,
                         *sem_block_ack,
                     ]
@@ -499,9 +611,8 @@ def create_mesh_program_descriptor(
                     w_addr,
                     blk.Nt,
                     col0,
-                    min(cn, blk.blk_n_tiles - col0),
-                    blk.blk_n_tiles if blk.scatter_dim == -1 else 0,
-                ] + list(order)
+                    min(cn, un - col0),
+                ] + w_order_rt
 
         reader_kernels, writer_kernels = [], []
         for sends, cores in a_groups.items():
@@ -520,12 +631,13 @@ def create_mesh_program_descriptor(
                         cm,
                         blk.k_block_tiles,
                         blk.num_k_blocks,
-                        G,
+                        len(units),
                         block_tiles,
                         blk.a_tile_bytes,
                         sends,
-                        int(blk.a_resident),
                         L,
+                        INJECT_READ_AHEAD,
+                        num_banks,
                     ]
                     + a_ct,
                     runtime_args=rt,
@@ -547,10 +659,11 @@ def create_mesh_program_descriptor(
                         cn,
                         blk.k_block_tiles,
                         blk.num_k_blocks,
-                        G,
+                        len(units),
                         blk.w_tile_bytes,
                         sends,
-                        int(blk.w_resident),
+                        INJECT_READ_AHEAD,
+                        int(blk.Nt % num_banks == 0),
                     ]
                     + w_ct,
                     runtime_args=rt,
@@ -589,7 +702,7 @@ def create_mesh_program_descriptor(
                     blk.out_subblock_w,
                     blk.k_block_tiles,
                     blk.num_k_blocks,
-                    G,
+                    len(units),
                 ],
                 runtime_args=[],
                 config=compute_config,
@@ -599,7 +712,27 @@ def create_mesh_program_descriptor(
         # ---------------- transport row ----------------
         line_rt = [m for m in mcoords] + [n for n in ncoords]
 
-        def xport_reader_rt(first, stride, full, entries, arr_a, arr_b, ack_sem):
+        def xport_entries(blocks, ups, slot_a, slot_b, first, stride):
+            """Reader entries, one per (block, wave) of the list: [hand-off slot, scratch slot A, scratch slot B,
+            has_upstream, first seg, seg count, wave tile origin r0, c0, segment columns s0, s1] -- the core's
+            segments of the wave's window."""
+            return [
+                (
+                    cidx[(j, wv)] % blk.handoff_slots,
+                    slot_a(j),
+                    slot_b(j),
+                    int(u),
+                    *win[wv].segs(first, stride, xp.segs_per_row),
+                    win[wv].r0,
+                    win[wv].c0,
+                    win[wv].s0,
+                    win[wv].s1,
+                )
+                for j, u in zip(blocks, ups)
+                for wv in range(W)
+            ]
+
+        def xport_reader_rt(stride, entries, arr_a, arr_b, ack_sem):
             return (
                 [
                     scr_addr,
@@ -608,9 +741,7 @@ def create_mesh_program_descriptor(
                     xp.segs_per_block,
                     xp.segs_per_row,
                     blk.blk_n_tiles,
-                    first,
                     stride,
-                    full,
                     sem_block_ready,
                     n_cc,
                     arr_a,
@@ -697,17 +828,33 @@ def create_mesh_program_descriptor(
             peer_finals = at(pl.finals, peer)
             for l in range(L):
                 core = port_list[l]
-                full = _count_segs(l, L, xp.segs_per_block)
-                entries = [(cidx[j] % HANDOFF_DEPTH, j, 0, int(u)) for j, u in zip(blocks, ups)]
-                rt = xport_reader_rt(
-                    l, L, full, entries, sem_arr_fwd, sem_arr_fwd, sem_block_ack[0 if d == "fwd" else 1]
-                )
+                entries = xport_entries(blocks, ups, lambda j: j, lambda j: 0, l, L)
+                rt = xport_reader_rt(L, entries, sem_arr_fwd, sem_arr_fwd, sem_block_ack[0 if d == "fwd" else 1])
                 (rd_relay if relay else rd_end)[core.x][core.y] = rt
                 (relay_ports if relay else end_ports).append(core)
                 if relay:  # [segments copied through (upstream-less entries), segments added (relay entries)]
-                    add_relay[core.x][core.y] = [(len(blocks) - n_up) * full, n_up * full]
-                # sender: landing slot j, except the receiver's own block arriving backward -> slot G
-                slots = [G if (d == "bwd" and j == peer_p) else j for j in blocks]
+                    add_relay[core.x][core.y] = [
+                        sum(e[5] for e in entries if not e[3]),
+                        sum(e[5] for e in entries if e[3]),
+                    ]
+                # sender entries per (block, wave): [landing slot (j, except the receiver's own block arriving
+                # backward -> slot G), first seg, count, for the downstream finals (the last block: the downstream
+                # chip's own), their per-half counts in the wave (0 / 0 for relay blocks)]
+                snd_entries = []
+                for j in blocks:
+                    fin = j == blocks[-1]
+                    for wv in range(W):
+                        wn = win[wv]
+                        snd_entries += [
+                            G if (d == "bwd" and j == peer_p) else j,
+                            *wn.segs(l, L, xp.segs_per_row),
+                            int(fin),
+                            wn.segs(l, 2 * L, xp.segs_per_row)[1] if fin else 0,
+                            wn.segs(l + L, 2 * L, xp.segs_per_row)[1] if fin else 0,
+                            wn.s0,
+                            wn.s1,
+                        ]
+                expect_in = sum(_incs(e[5]) for e in entries if e[3])  # arrival increments upstream sends here
                 rc = virt(peer_opp[l])  # peer chip's opposite-direction port
                 pc = virt(peer_same[l])  # downstream port of the same (direction, link)
                 f0, f1 = virt(peer_finals[2 * l]), virt(peer_finals[2 * l + 1])
@@ -717,12 +864,10 @@ def create_mesh_program_descriptor(
                     xp.segs_per_block,
                     xp.segs_per_row,
                     blk.blk_n_tiles,
-                    l,
                     L,
-                    full,
                     sem_arr_fwd,
                     sem_arr_fwd if d == "fwd" else sem_arr_bwd,
-                    n_up * _incs(full),  # arrival increments the upstream sends into this port (per block, see sender)
+                    expect_in,
                     sem_ready_fence,
                     1,
                     rc[0],
@@ -733,12 +878,10 @@ def create_mesh_program_descriptor(
                     f0[1],
                     f1[0],
                     f1[1],
-                    _count_segs(l, 2 * L, xp.segs_per_block),
-                    _count_segs(l + L, 2 * L, xp.segs_per_block),
                     int(pn.mesh_id),
                     int(pn.chip_id),
-                    len(blocks),
-                ] + slots
+                    len(blocks) * W,
+                ] + snd_entries
                 args += list(ttnn.setup_fabric_connection(node(coord), pn, links[(coord, peer)][l], program, core))
                 snd_rt[core.x][core.y] = args
                 senders.append(core)
@@ -750,23 +893,23 @@ def create_mesh_program_descriptor(
         rd_final, add_final, wr_final = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for i, core in enumerate(finals):  # final (l, h): segments l + h L, stride 2 L
             first = i // 2 + (i % 2) * L
-            n = _count_segs(first, 2 * L, xp.segs_per_block)
-            rd_final[core.x][core.y] = xport_reader_rt(
-                first, 2 * L, n, [(cidx[p] % HANDOFF_DEPTH, p, G, 1)], sem_arr_fwd, sem_arr_bwd, sem_block_ack[2]
-            )
-            add_final[core.x][core.y] = [0, n]
+            entries = xport_entries([p], [True], lambda j: j, lambda j: G, first, 2 * L)
+            rd_final[core.x][core.y] = xport_reader_rt(2 * L, entries, sem_arr_fwd, sem_arr_bwd, sem_block_ack[2])
+            add_final[core.x][core.y] = [0, sum(e[5] for e in entries)]
+            incs = sum(_incs(e[5]) for e in entries)  # one increment stream per wave (see the port sender)
+            # the summed own block leaves the add kernel wave by wave: the writer walks the same windows
+            wr_entries = [v for e in entries for v in (e[4], e[5], e[8], e[9])]
             wr_final[core.x][core.y] = [
                 out_addr,
-                xp.segs_per_block,
                 xp.segs_per_row,
                 blk.blk_n_tiles,
-                first,
                 2 * L,
                 sem_arr_fwd,
-                _incs(n) if has_fa else 0,
+                incs if has_fa else 0,
                 sem_arr_bwd,
-                _incs(n) if has_fb else 0,
-            ]
+                incs if has_fb else 0,
+                len(entries),
+            ] + wr_entries
 
         xport_cores = relay_ports + end_ports + finals
         cbs.append(_cb(CB_XPORT_SUM, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(xport_cores)))

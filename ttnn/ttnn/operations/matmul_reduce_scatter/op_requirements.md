@@ -178,7 +178,7 @@ the ready fence. noc_placement already holds on the transport row (port reader N
 writer BRISC/NoC1 writes). split_reader (L4) was not built because no port RISC is issue-bound. Next: pipeline fill
 (Refinement 4, sub-block sends) and matmul grid utilization of the scatter block.
 
-### [ ] Refinement 4 — Speed up the PERF FOCUS case: pipeline fill (sub-block sends)
+### [x] Refinement 4 — Speed up the PERF FOCUS case: pipeline fill (sub-block sends)
 
 **Type**: perf
 
@@ -203,3 +203,30 @@ rather than forcing the restructure. The streamed operand (W for `-1`) is re-str
 
 **Done when**: measured device-ns improves on the FOCUS case (steady state) with the 0.055 rel-RMS gate holding, the
 golden suite green, and no regression across the same guard set as Refinement 3.
+
+**Outcome**: The fill was measured first, with a zone from kernel start to the first sendable segment on the port
+senders. End chips send their first packet at ~35 us of a 135 us kernel; interior chips at 45–68 us of 148–166 us.
+The interior excess is upstream data plus ~20 us of cross-chip launch skew, so the fill was real headroom.
+- R4 waves built as a live knob, parked at `waves = 1`. Waves split the scatter axis, so nothing is re-streamed.
+  The design's row split for `-1` measured wave 0 still W-stream bound (20 of 33 us), because every wave re-reads
+  the block's W slice. Each wave has its own hand-off slot, ready/ack round and transport window.
+- FOCUS column waves: end-chip fill 36 → 25 us, but 16 vs 14 tiles/core per block on the 11×9 grid. End chips
+  become compute-bound: 167 → 183 us with `handoff_slots = 2·waves`, 192 us without.
+- MiMo row waves: 361 → 406 us.
+- So the planner only waves when it adds no per-core work, and `WAVES_MAX = 1`.
+- What did win: the paired levers on the stage that binds the fill.
+  - Same-bank stateful injector reads: the line injectors were issue-bound at 3.1 us per 112-tile K-block, now
+    1.8 us.
+  - `K_BLOCKS_MIN = 4`: MiMo's whole-K K-block made block 0 wait for its entire resident W slice.
+- FOCUS: 168.6 → 167.4 us max-of-chips (median of 3 fresh runs each); end chips 135 → 131–134; rel-RMS 0.0241.
+- Other cases (same-session before → after): GLM 219.0 → 204.6, MiMo 365.5 → 339.6, small-K 130.5 → 131.9,
+  R2 435/449 → 449/445 (noise; end chips better), `num_links=1` FOCUS 241.4 → 240.1, small-K 215.4 → 215.3.
+- Read-ahead (issue K-block s+1 before multicasting s) is parked at 0: +3 us, because it delays the first multicast.
+
+Bottleneck now: FOCUS max-of-chips is an interior chip. Its time is end-chip fill (~33 us) + the link-bound send of
+3 blocks (~96 us at ≈36 GB/s per link) + relay/final tail + ~20 us of cross-chip launch skew.
+Next levers, not tried here:
+- Shrink the first block without growing per-block work: a grid whose 20×28 wave factorizes as evenly as the
+  20×56 block, or a waves-for-the-first-block-only schedule. Both need non-uniform units (different CB shapes per
+  unit), a larger restructure than this refinement.
+- MiMo's remaining fill: its W resident load reads at ~12 GB/s on NoC1 (lamp L6, move W reads to NoC0).

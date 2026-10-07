@@ -12,3 +12,4 @@
 {"event":"test_run","detail":"ring_mock 72/72, unit 53p/1s, fabric_configs+regression 30/30, golden slice 13/13, FOCUS perf 211us unchanged","ts":"2026-10-07T01:47:36+00:00"}
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-10-07T02:56:38+00:00"}
 {"event":"test_run","status":"pass","test":"test_golden.py -k 640x2048_2048x7168 BFLOAT8_B|BFLOAT4_B","result":"80 passed","ts":"2026-10-07T03:01:36+00:00"}
+{"event":"test_run","detail":"R4: waves built+parked (FOCUS col waves 183 vs 167, MiMo row waves 406 vs 361); stateful injector reads + K_BLOCKS_MIN=4 shipped: FOCUS 168.6->167.4, GLM 219->205, MiMo 366->340; golden ring/fabric/regression 102/102, golden slice 171/171","ts":"2026-10-07T07:57:37+00:00"}

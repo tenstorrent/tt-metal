@@ -3,11 +3,13 @@
 
 // matmul_reduce_scatter — compute-core NCRISC: activation (A, in0) operand + hand-off bookkeeping.
 //
-// Per scatter block (in compute order) and per K-block:
+// Per compute unit (one row-wave of a scatter block, in compute order) and per K-block:
 //   stream_operand_block / load_resident_operand: the m-line injector (A_SENDS) reads its rows' K-block from DRAM
 //   and multicasts it along its m-line (mcast_pipe SenderPipe); the other cores of the line receive it
-//   (ReceiverPipe). When A is the block-invariant operand (scatter_dim=-1) and resident (regime R1), blocks > 0
-//   only replay CB credits (reserve + push of the same pages; capacity = one K pass exactly).
+//   (ReceiverPipe). Each unit carries its A row origin and a `fresh` flag from the host: when A is the
+//   block-invariant operand (scatter_dim=-1) and resident (regime R1), only the first `waves` units (one slice per
+//   wave) read; later units replay CB credits (reserve + push of the same pages; capacity = waves K passes exactly,
+//   and units run wave 0..waves-1 per block, so the ring wraps onto the wave's own slice).
 // handoff_block / release_block (raw semaphores; the mcast pipe is one-sender -> one-rectangle, the hand-off is
 //   many producers -> few consumers with cumulative counters):
 //   - when block `signalled` is fronted in cb_partial_handoff: one noc_semaphore_inc of sem_block_ready on each of
@@ -23,6 +25,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "matmul_reduce_scatter_injector.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -32,13 +35,14 @@ void kernel_main() {
     constexpr uint32_t core_m_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t k_block_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(4);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(5);   // G scatter blocks per call
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(5);   // compute units per call (G blocks x waves)
     constexpr uint32_t block_tiles = get_compile_time_arg_val(6);  // core_m_tiles * core_n_tiles (one hand-off slot)
     constexpr uint32_t a_tile_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t a_sends = get_compile_time_arg_val(8);     // this core injects A along its m-line
-    constexpr uint32_t a_resident = get_compile_time_arg_val(9);  // R1 with A invariant: replay after block 0
-    constexpr uint32_t num_links = get_compile_time_arg_val(10);
-    constexpr auto a_args = TensorAccessorArgs<11>();
+    constexpr uint32_t a_sends = get_compile_time_arg_val(8);  // this core injects A along its m-line
+    constexpr uint32_t num_links = get_compile_time_arg_val(9);
+    constexpr bool read_ahead = get_compile_time_arg_val(10) != 0;  // injector DRAM read-ahead (injector header)
+    constexpr uint32_t num_banks = get_compile_time_arg_val(11);    // DRAM banks A is interleaved over
+    constexpr auto a_args = TensorAccessorArgs<12>();
     constexpr auto mc_a =
         McastArgs<get_named_compile_time_arg_val("a_ct_offset"), get_named_compile_time_arg_val("a_rt_offset")>();
 
@@ -47,15 +51,16 @@ void kernel_main() {
 
     size_t arg = 0;
     const uint32_t a_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t a_row_stride = get_arg_val<uint32_t>(arg++);      // Kt (A pages per tile-row)
-    const uint32_t a_row0 = get_arg_val<uint32_t>(arg++);            // m-line's first row within a block
-    const uint32_t a_valid_rows = get_arg_val<uint32_t>(arg++);      // <= core_m_tiles (ragged last m-line)
-    const uint32_t a_block_row_step = get_arg_val<uint32_t>(arg++);  // blk_m_tiles for scatter_dim=-2, else 0
+    const uint32_t a_row_stride = get_arg_val<uint32_t>(arg++);  // Kt (A pages per tile-row)
+    const uint32_t a_row0 = get_arg_val<uint32_t>(arg++);        // m-line's first row within a unit
+    const uint32_t a_valid_rows = get_arg_val<uint32_t>(arg++);  // <= core_m_tiles (ragged last m-line)
     const uint32_t ready_sem_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t ack_sem_base = arg;  // 3 ack counters (L1 addresses), one per consumer kind
     arg += 3;
-    const uint32_t order_idx = arg;  // num_blocks x [block j, consumer kind (0 fwd, 1 bwd, 2 finals), kind's cum. acks]
-    arg += 3 * num_blocks;
+    // num_blocks x [unit's A row origin, consumer kind (0 fwd, 1 bwd, 2 finals), kind's cum. acks, A fresh]
+    constexpr uint32_t order_stride = 4;
+    const uint32_t order_idx = arg;
+    arg += order_stride * num_blocks;
     const uint32_t consumers_idx = arg;  // 4L packed NoC coords (x << 16 | y): fwd ports, bwd ports, finals
     arg += 4 * num_links;
 
@@ -71,14 +76,14 @@ void kernel_main() {
             !cb_pages_available_at_front(cb_partial_handoff, (signalled - popped + 1) * block_tiles)) {
             return;
         }
-        const uint32_t kind = get_arg_val<uint32_t>(order_idx + 3 * signalled + 1);
+        const uint32_t kind = get_arg_val<uint32_t>(order_idx + order_stride * signalled + 1);
         const uint32_t first = kind == 0 ? 0 : (kind == 1 ? num_links : 2 * num_links);
         const uint32_t count = kind == 2 ? 2 * num_links : num_links;
         // A consumer counts ready signals cumulatively from every compute core, so no core may signal its next block
         // before the consumer is done with its current one (else a fast core's next-block signal could stand in for a
         // slow core's missing current-block signal): wait until this kind's consumers have acked every earlier block
         // of the kind.
-        if (kind_ack(kind) < get_arg_val<uint32_t>(order_idx + 3 * signalled + 2) - count) {
+        if (kind_ack(kind) < get_arg_val<uint32_t>(order_idx + order_stride * signalled + 2) - count) {
             return;
         }
         for (uint32_t c = 0; c < count; ++c) {
@@ -89,8 +94,8 @@ void kernel_main() {
     };
     // release_block: pop block `popped` once its consumers have acked it.
     auto try_release = [&]() {
-        if (popped < signalled && kind_ack(get_arg_val<uint32_t>(order_idx + 3 * popped + 1)) >=
-                                      get_arg_val<uint32_t>(order_idx + 3 * popped + 2)) {
+        if (popped < signalled && kind_ack(get_arg_val<uint32_t>(order_idx + order_stride * popped + 1)) >=
+                                      get_arg_val<uint32_t>(order_idx + order_stride * popped + 2)) {
             cb_pop_front(cb_partial_handoff, block_tiles);
             ++popped;
         }
@@ -107,39 +112,48 @@ void kernel_main() {
     };
 
     Noc noc;
-    // transfer(dst, row_base, kb): deliver one K-block of A into this core's CB at dst
-    auto run = [&](auto&& transfer) {
-        for (uint32_t b = 0; b < num_blocks; ++b) {
-            const uint32_t j = get_arg_val<uint32_t>(order_idx + 3 * b);
-            const uint32_t row_base = j * a_block_row_step + a_row0;
-            for (uint32_t kb = 0; kb < num_k_blocks; ++kb) {
-                reserve_polling(kblock_pages);
-                if (!(a_resident && b > 0)) {
-                    transfer(get_write_ptr(cb_act_operand), row_base, kb);
-                }
-                cb_push_back(cb_act_operand, kblock_pages);
-                poll();
-            }
-        }
+    // K-block steps: step s = (unit s / num_k_blocks, K-block s % num_k_blocks)
+    constexpr uint32_t steps = num_blocks * num_k_blocks;
+    auto fresh = [&](uint32_t s) {
+        return get_arg_val<uint32_t>(order_idx + order_stride * (s / num_k_blocks) + 3) != 0;
     };
     if constexpr (a_sends) {
         auto pipe = mc_a.sender(noc);
-        run([&](uint32_t dst, uint32_t row_base, uint32_t kb) {
-            // CB layout per K-block: [core_m_tiles][k_block_tiles]; padding rows of a ragged line stay unread (they
-            // only feed output rows nobody reads).
+        // CB layout per K-block: [core_m_tiles][k_block_tiles]; padding rows of a ragged line stay unread (they only
+        // feed output rows nobody reads).
+        auto issue = [&](uint32_t s, uint32_t dst) {
+            const uint32_t b = s / num_k_blocks, kb = s - b * num_k_blocks;
+            const uint32_t row_base = get_arg_val<uint32_t>(order_idx + order_stride * b) + a_row0;
+            // a row's K-block pages are consecutive: the ones num_banks apart share a bank, read them as one run
             for (uint32_t i = 0; i < a_valid_rows; ++i) {
                 const uint32_t page0 = (row_base + i) * a_row_stride + kb * k_block_tiles;
-                for (uint32_t k = 0; k < k_block_tiles; ++k) {
-                    noc_async_read(
-                        a_acc.get_noc_addr(page0 + k), dst + (i * k_block_tiles + k) * a_tile_bytes, a_tile_bytes);
+                for (uint32_t r = 0; r < num_banks && r < k_block_tiles; ++r) {
+                    mmrs::read_pages_strided(
+                        a_acc,
+                        page0 + r,
+                        num_banks,
+                        (k_block_tiles - r + num_banks - 1) / num_banks,
+                        dst + (i * k_block_tiles + r) * a_tile_bytes,
+                        num_banks * a_tile_bytes,
+                        a_tile_bytes,
+                        true);
                 }
             }
-            noc_async_read_barrier();
-            pipe.send(dst, dst, kblock_bytes);
-        });
+        };
+        mmrs::inject_operand<read_ahead>(
+            cb_act_operand,
+            steps,
+            kblock_pages,
+            kblock_bytes,
+            fresh,
+            issue,
+            reserve_polling,
+            [&](uint32_t dst) { pipe.send(dst, dst, kblock_bytes); },
+            poll);
     } else {
         auto pipe = mc_a.receiver(noc);
-        run([&](uint32_t, uint32_t, uint32_t) { pipe.receive(); });
+        mmrs::receive_operand(
+            cb_act_operand, steps, kblock_pages, fresh, reserve_polling, [&]() { pipe.receive(); }, poll);
     }
 
     while (popped < num_blocks) {
@@ -149,7 +163,8 @@ void kernel_main() {
     // re-arm each kind's counter by its total (the cumulative count of its last block)
     uint32_t totals[3] = {0, 0, 0};
     for (uint32_t b = 0; b < num_blocks; ++b) {
-        totals[get_arg_val<uint32_t>(order_idx + 3 * b + 1)] = get_arg_val<uint32_t>(order_idx + 3 * b + 2);
+        totals[get_arg_val<uint32_t>(order_idx + order_stride * b + 1)] =
+            get_arg_val<uint32_t>(order_idx + order_stride * b + 2);
     }
     for (uint32_t kind = 0; kind < 3; ++kind) {
         if (totals[kind] > 0) {

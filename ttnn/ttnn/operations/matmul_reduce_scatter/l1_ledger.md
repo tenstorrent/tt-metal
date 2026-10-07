@@ -12,7 +12,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axe
 | `cb_act_operand` | R1 & X=A: `core_m_tiles·Kt`; else `operand_depth·core_m_tiles·k_block_tiles` | R1 & X=A: the whole capacity (resident, replayed per scatter block); else `core_m_tiles·k_block_tiles` + one prefetch K-block | `{scatter_block: streams (R1 X=A: spans — reused by all G blocks), m: spans → core_m_tiles, n: streams (A does not vary with n; multicast), k: spans → Kt (resident) / k_block_tiles·operand_depth (streamed), segment: n/a, link: n/a, direction: n/a}` | Float16_b (A bf16; Bfp8_b when activation is bfloat8_b, TARGET) | reader (NCRISC) | compute | call | none — concurrently live with `cb_weight_operand` (both feed every matmul K-block); capacity > live set only by the `operand_depth` prefetch window (double buffering, `double_buffer` catalog entry) |
 | `cb_weight_operand` | R1 & X=W: `Kt·core_n_tiles`; else `operand_depth·k_block_tiles·core_n_tiles` | as above with W | `{scatter_block: streams (R1 X=W: spans), m: streams (W does not vary with m; multicast), n: spans → core_n_tiles, k: spans → Kt / k_block_tiles·operand_depth, segment: n/a, link: n/a, direction: n/a}` | Float16_b or Bfp8_b (follows W dtype; Bfp4_b TARGET) | writer (BRISC) | compute | call | none — concurrent with `cb_act_operand`; different page format (Bfp8_b) in the FOCUS case |
 | `cb_partial_accum` | `core_m_tiles·core_n_tiles` | the whole capacity during the K loop (packer L1 accumulation in place) | `{scatter_block: streams (re-used per block), m: spans → core_m_tiles, n: spans → core_n_tiles, k: streams (folded in place), segment: n/a, link: n/a, direction: n/a}` | Float32 iff `fp32_dest_acc_en` else Float16_b (audit 2: follows DEST width) | compute | compute | one `matmul_block` (per scatter block) | not with `cb_partial_handoff`: matmul_block's TileRowMajor layout requires interm to be its own region (matmul_block_helpers.hpp, `interm_buf` note: "TileRowMajor: must be its OWN region"), and the handoff slot of the previous block is still being drained while this accumulates; not with the operand CBs (concurrent) |
-| `cb_partial_handoff` | `handoff_depth·core_m_tiles·core_n_tiles` (backed by `handoff_l1`, globally allocated) | `core_m_tiles·core_n_tiles` being drained + one being packed | `{scatter_block: spans → handoff_depth blocks, m: spans → core_m_tiles, n: spans → core_n_tiles, k: n/a (final values), segment: streams (transport reads it segment by segment), link: streams, direction: streams}` | Float16_b (partials travel bf16; requirement allows it) | compute | reader (NCRISC) — remote transport readers only read bytes while the slot is fronted | call | none — it is the pipelining buffer between matmul and transport (explicit pipelining decision, depth knob); cannot alias `cb_partial_accum` (above) |
+| `cb_partial_handoff` | `handoff_slots·core_m_tiles·core_n_tiles`, `handoff_slots = handoff_depth·waves` (one slot per compute unit = wave; R4; `waves = 1` by default) (backed by `handoff_l1`, globally allocated) | `core_m_tiles·core_n_tiles` being drained + one being packed | `{scatter_block: spans → handoff_depth blocks, m: spans → core_m_tiles, n: spans → core_n_tiles, k: n/a (final values), segment: streams (transport reads it segment by segment), link: streams, direction: streams}` | Float16_b (partials travel bf16; requirement allows it) | compute | reader (NCRISC) — remote transport readers only read bytes while the slot is fronted | call | none — it is the pipelining buffer between matmul and transport (explicit pipelining decision, depth knob); cannot alias `cb_partial_accum` (above) |
 
 ## Transport cores (`2L` ports + `2L` finals per chip, in the transport row(s))
 
@@ -29,7 +29,8 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axe
 |--------|-------|-------------------------------------|
 | `core_m_tiles·core_n_tiles` | ≤ `CORE_BLOCK_MAX` = 64 | grid factorization in `_plan_blocking()`; a plan exceeding it raises `ValueError` (R4 needed); INPUTS max = 48 (G=2) |
 | `Kt` | unbounded op dimension; appears **only** in the R1 resident CB | R1 predicate `RESIDENT` (resident bytes ≤ `L1_CB_BUDGET`); otherwise R2, whose capacities use `k_block_tiles` only |
-| `k_block_tiles` | divisor of `Kt`, `operand_depth·k_block_tiles·core_y_tiles·w_tile ≤ STREAM_BUDGET` (384 KiB) | `_plan_blocking()` |
+| `k_block_tiles` | divisor of `Kt`, `operand_depth·k_block_tiles·core_y_tiles·w_tile ≤ STREAM_BUDGET` (384 KiB), and `≤ max(Kt / K_BLOCKS_MIN, K_MIN_RESIDENT)` (`K_BLOCKS_MIN = 4`, R4: pipeline fill at K-block granularity) | `_plan_blocking()` |
+| `waves` (`handoff_slots = handoff_depth·waves`) | `WAVES_MAX` (1 by default; `MMRS_WAVES` pins), must split the scattered extent of a block into whole segments | `_plan_blocking()` |
 | `operand_depth`, `handoff_depth` | 2 (Phase 0) | host constants |
 | `seg_tiles` | ≤ `max_payload // 2048` (≤ 7 at 14336 B) | live fabric config |
 | `xport_group` | `max(1, min(8, 112 KiB // (2·seg_bytes)))` | reference sizing |
@@ -57,6 +58,11 @@ Transport core: `F_xport = n_cbs·2·xport_group·seg_bytes ≤ 4·112 KiB` (fin
 line-end ports 1). Constant in every block knob except `seg_tiles` (payload).
 
 ## Data-movement budget (chosen split R1, FOCUS case, per chip, G = 4 line, L = 2)
+
+> Refinement 4 (R4 waves): waves split the scatter axis, so each wave streams a disjoint slice of the streamed operand
+> and replays the resident one. Every crossing count below is unchanged for any `waves`. The rejected row-wave split
+> for `-1` would have re-read W per wave (+(waves−1)·15.6 MB), or needed the block's `Kt·core_n_tiles` W slice
+> resident across its waves. `waves = 1` is the default, so the counts below are the shipped ones.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|

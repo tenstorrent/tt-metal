@@ -14,10 +14,10 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 from ttnn.operations.ccl import Topology
 
+from . import matmul_reduce_scatter_program_descriptor as _pd
 from .matmul_reduce_scatter_program_descriptor import (
     BF16_TILE_BYTES,
     BLOCKS_IN_FLIGHT,
-    HANDOFF_DEPTH,
     L1_RESERVE,
     _plan_blocking,
     _plan_placement,
@@ -230,6 +230,10 @@ def _get_plan(
         w_dtype,
         fp32_acc,
         str(fidelity),
+        # blocking knobs (module attributes, so an A/B pin never hits a plan built under another setting)
+        _pd.WAVES_PIN,
+        _pd.WAVES_MAX,
+        _pd.K_BLOCKS_MIN,
     )
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key][1]
@@ -261,9 +265,17 @@ def _get_plan(
     )
     # the hand-off shard depends on the per-core block; the factorization does not depend on L1, so solve once with
     # the full budget to get the block, then re-solve the K-block / regime with the shard taken out
-    probe = _plan_blocking(**plan_args, l1_cb_budget=l1_free)
-    handoff_bytes = HANDOFF_DEPTH * probe.core_m_tiles * probe.core_n_tiles * BF16_TILE_BYTES
-    blk = _plan_blocking(**plan_args, l1_cb_budget=l1_free - handoff_bytes)
+    # (the wave count may change with the budget, and with it the block: re-solve until the shard matches the block)
+    handoff_bytes = lambda b: b.handoff_slots * b.core_m_tiles * b.core_n_tiles * BF16_TILE_BYTES
+    blk = _plan_blocking(**plan_args, l1_cb_budget=l1_free)
+    for _ in range(3):
+        nxt = _plan_blocking(**plan_args, l1_cb_budget=l1_free - handoff_bytes(blk))
+        if handoff_bytes(nxt) <= handoff_bytes(blk):
+            blk = nxt
+            break
+        blk = nxt
+    else:
+        raise ValueError("matmul_reduce_scatter: blocking does not converge under the L1 budget")
     assert BLOCKS_IN_FLIGHT == 1, "blocks_in_flight > 1 is not built"
     xp = _plan_transport(blk)
 
@@ -277,7 +289,7 @@ def _get_plan(
     )
     compute_cores = [compute_core(pl, blk, ml, nl) for ml in range(blk.m_lines) for nl in range(blk.n_lines)]
     compute_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in compute_cores])
-    shard_tiles = HANDOFF_DEPTH * blk.core_m_tiles * blk.core_n_tiles
+    shard_tiles = blk.handoff_slots * blk.core_m_tiles * blk.core_n_tiles
     handoff_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,

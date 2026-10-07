@@ -6,12 +6,14 @@
 // fabric node).
 //
 // Every segment of cb_xport_sum (relay sums, or a line end's own partials) is one packet into the downstream chip's
-// relay_scratch page (slot * segs_per_block + seg). Increment streams (fused write + atomic inc on every inc_every-th
-// segment of a block and on the block's last -- never deferred across a block boundary: in a ring the downstream
-// port's next block depends on this chip's later blocks only through the ring, so a deferred increment would close a
-// wait cycle): relay blocks count on the downstream port's arrival counter; the last block
-// (the downstream chip's own) on the arrival counter (A forward / B backward) of the downstream final core that owns
-// the segment (alternating halves h = (seg / L) & 1).
+// relay_scratch page (slot * segs_per_block + seg). Entries are waves of the blocks (R4: one per compute unit, waves
+// in order; the entry gives its first segment, count and window, see matmul_reduce_scatter_segments.hpp).
+// Increment streams (fused write + atomic inc on every inc_every-th segment of an entry and on the entry's last --
+// never deferred across an entry boundary: in a ring the downstream port's next block depends on this chip's later
+// blocks only through the ring, so a deferred increment would close a wait cycle; with waves the downstream reader
+// releases each wave as its own hand-off slot): relay entries count on the downstream port's arrival counter; the
+// last block's entries (the downstream chip's own) on the arrival counter (A forward / B backward) of the downstream
+// final core that owns the segment (alternating halves h = (seg / L) & 1).
 // Ready fence (as fabric_reduce_scatter): first tell the peer port that writes into this chip that it may, then
 // wait for my own peer's ready before the first data packet. At the end: wait for everything upstream sends me,
 // then re-arm my arrival counter.
@@ -22,6 +24,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "matmul_reduce_scatter_segments.hpp"
 
 using namespace tt::tt_fabric;
 
@@ -52,9 +55,7 @@ void kernel_main() {
     const uint32_t segs_per_block = get_arg_val<uint32_t>(arg++);
     const uint32_t segs_per_row = get_arg_val<uint32_t>(arg++);
     const uint32_t blk_n_tiles = get_arg_val<uint32_t>(arg++);
-    const uint32_t first_seg = get_arg_val<uint32_t>(arg++);
-    const uint32_t seg_stride = get_arg_val<uint32_t>(arg++);  // L
-    const uint32_t full = get_arg_val<uint32_t>(arg++);
+    const uint32_t seg_stride = get_arg_val<uint32_t>(arg++);      // L
     const uint32_t arrival_addr = get_arg_val<uint32_t>(arg++);    // A: my counter, and the downstream port's
     const uint32_t final_sem_addr = get_arg_val<uint32_t>(arg++);  // A or B on the downstream final cores
     const uint32_t expect_in = get_arg_val<uint32_t>(arg++);
@@ -68,13 +69,14 @@ void kernel_main() {
     const uint32_t final_y0 = get_arg_val<uint32_t>(arg++);
     const uint32_t final_x1 = get_arg_val<uint32_t>(arg++);
     const uint32_t final_y1 = get_arg_val<uint32_t>(arg++);
-    const uint32_t full_f0 = get_arg_val<uint32_t>(arg++);
-    const uint32_t full_f1 = get_arg_val<uint32_t>(arg++);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
-    const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);  // entries: landing slot at the receiver
+    const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);  // entries
+    // num_blocks x [landing slot at the receiver, first seg, seg count, downstream own block (to the finals),
+    //               its segments owned by final half 0 / half 1 in this wave, wave segment columns s0, s1]
+    constexpr uint32_t entry_stride = 8;
     const uint32_t entries_idx = arg;
-    arg += num_blocks;
+    arg += entry_stride * num_blocks;
     const auto scr = TensorAccessor(scr_args, scr_addr, seg_bytes);
 
     if (num_blocks > 0 || send_ready) {
@@ -101,13 +103,22 @@ void kernel_main() {
         const uint64_t relay_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
         const uint64_t final_noc0 = get_noc_addr(final_x0, final_y0, final_sem_addr);
         const uint64_t final_noc1 = get_noc_addr(final_x1, final_y1, final_sem_addr);
-        uint32_t sent_f0 = 0, sent_f1 = 0;
         uint32_t h = 0, unflushed = 0, rpos = 0;
         for (uint32_t k = 0; k < num_blocks; ++k) {
-            const uint32_t base = get_arg_val<uint32_t>(entries_idx + k) * segs_per_block;
-            const bool fin = k + 1 == num_blocks;
-            uint32_t i = 0;
-            for (uint32_t seg = first_seg; seg < segs_per_block; seg += seg_stride, ++i) {
+            const uint32_t e = entries_idx + entry_stride * k;
+            const uint32_t base = get_arg_val<uint32_t>(e) * segs_per_block;
+            const uint32_t count = get_arg_val<uint32_t>(e + 2);
+            const bool fin = get_arg_val<uint32_t>(e + 3) != 0;
+            const uint32_t full_f0 = get_arg_val<uint32_t>(e + 4);
+            const uint32_t full_f1 = get_arg_val<uint32_t>(e + 5);
+            uint32_t sent_f0 = 0, sent_f1 = 0;
+            const uint32_t wave_s0 = get_arg_val<uint32_t>(e + 6);
+            const uint32_t wave_s1 = get_arg_val<uint32_t>(e + 7);
+            uint32_t seg = get_arg_val<uint32_t>(e + 1);
+            for (uint32_t i = 0; i < count; ++i) {
+                if (i > 0) {
+                    seg = mmrs::next_wave_seg(seg, seg_stride, segs_per_row, wave_s0, wave_s1);
+                }
                 const uint32_t row = seg / segs_per_row;
                 const uint32_t c0 = (seg - row * segs_per_row) * seg_tiles;
                 const uint32_t valid = blk_n_tiles - c0 < seg_tiles ? blk_n_tiles - c0 : seg_tiles;
@@ -120,13 +131,13 @@ void kernel_main() {
                 bool inc;
                 uint64_t ctr;
                 if (fin) {
-                    const bool h1 = (i & 1) != 0;  // final core half: seg = first + i * L, owner (l, i & 1)
+                    const bool h1 = ((seg / seg_stride) & 1) != 0;  // final core half: seg = l + t L, owner (l, t & 1)
                     uint32_t& sent = h1 ? sent_f1 : sent_f0;
                     ++sent;
                     inc = (sent % inc_every) == 0 || sent == (h1 ? full_f1 : full_f0);
                     ctr = h1 ? final_noc1 : final_noc0;
                 } else {
-                    inc = ((i + 1) % inc_every) == 0 || i + 1 == full;
+                    inc = ((i + 1) % inc_every) == 0 || i + 1 == count;
                     ctr = relay_noc;
                 }
                 if (inc) {
@@ -138,8 +149,7 @@ void kernel_main() {
                 conn.wait_for_empty_write_slot();
                 conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
                 ++unflushed;
-                const bool last = fin && seg + seg_stride >= segs_per_block;
-                if (unflushed == group || rpos + unflushed == cap_segs || last) {
+                if (unflushed == group || rpos + unflushed == cap_segs) {
                     noc_async_writes_flushed();  // sources + headers of the in-flight packets have left L1
                     cb_pop_front(cb_xport_sum, seg_tiles * unflushed);
                     rpos += unflushed;
@@ -149,6 +159,10 @@ void kernel_main() {
                     unflushed = 0;
                 }
             }
+        }
+        if (unflushed > 0) {  // the tail (an entry may hold no segment of this port, so flush after the walk)
+            noc_async_writes_flushed();
+            cb_pop_front(cb_xport_sum, seg_tiles * unflushed);
         }
         conn.close();
     }
