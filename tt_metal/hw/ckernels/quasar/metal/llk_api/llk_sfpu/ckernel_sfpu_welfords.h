@@ -469,5 +469,792 @@ inline void welfords_store_mean_var_to_dst(
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Shifted two-pass column statistics (port of tt-llk/common/ckernel_sfpu_welfords_common.h).
+//
+// Same register protocol, function names and signatures as the Blackhole/Wormhole helpers, so the
+// compute-API wiring maps one to one:
+//   - Pass one keeps a common anchor in LREG4 and accumulates (x - anchor) in LREG5, alternating
+//     with LREG6 when the dual accumulator is on. _two_pass_finish_shifted_mean_ turns the sum into
+//     the mean in LREG4 and clears LREG5/LREG6.
+//   - Pass two accumulates (x - mean)^2 in LREG5 (and LREG6 when dual).
+//   - The optional retained anchor lives in LREG7; the paired SFPTRANSPs of every quad load
+//     preserve it.
+//   - State spills use two consecutive Dest tiles: mean at raw offset 0, M2 at WELFORDS_TILE_STRIDE.
+//     The retained anchor can be parked in the unused group slot 1 (raw offset 4) of the mean tile.
+//   - Finalisers take reciprocals as fp32 bit patterns so the RISC-V never divides.
+//
+// Quasar deviations from Blackhole: SFPMOV/SFPNOP/SFPTRANSP encodings; -1 is LCONST_neg1 (LREG11,
+// as in the online path above); the column rotate is SFPSHFT2 mode 3 (the same rotate the Quasar
+// row reduce uses) with an SFPNOP before its reader; and the first-lane broadcast isolates SFPU
+// column 7 with zero-fill shifts (SFPSHFT2 mode 4) instead of masking with Blackhole's LTILEID.
+// The SFPNOPs Blackhole emits before an SFPTRANSP that reads a just-updated accumulator are kept.
+// ---------------------------------------------------------------------------------------------
+
+constexpr std::uint32_t TWO_PASS_MEAN_REG = p_sfpu::LREG4;                          // anchor in pass one, mean after it
+constexpr std::uint32_t TWO_PASS_ACC_REG = p_sfpu::LREG5;                           // shifted sum / M2 (even rows)
+constexpr std::uint32_t TWO_PASS_ACC2_REG = p_sfpu::LREG6;                          // second accumulator (odd rows)
+constexpr std::uint32_t TWO_PASS_ANCHOR_REG = p_sfpu::LREG7;                        // retained anchor
+constexpr std::uint32_t TWO_PASS_ANCHOR_STATE_OFFSET = 1U << WELFORDS_GROUP_SHIFT;  // group slot 1 of the mean tile
+constexpr std::uint32_t TWO_PASS_SFPU_COLUMNS = 8;                                  // SFPU column instances a row spans
+constexpr std::uint32_t TWO_PASS_SFPSHFT2_ROTATE = 3;             // rotate one LREG across columns, X -> X+1
+constexpr std::uint32_t TWO_PASS_SFPSHFT2_SHIFT_ZERO_FILL = 4;    // shift one LREG across columns, column 0 <- 0
+constexpr std::uint32_t TWO_PASS_LANE_RECIPROCAL_FP16B = 0x3D00;  // 1/32, one per lane population
+constexpr std::uint32_t FP32_SIGN_BIT = 0x80000000U;
+
+/** @brief Wait out the latency of the previous SFPU result before an SFPTRANSP/SFPSTORE reads it. */
+inline void _two_pass_drain_() { TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */); }
+
+/**
+ * @brief Load an fp32 bit pattern into every lane of LREG.
+ *
+ * @tparam LREG: Destination LREG.
+ * @param bits: fp32 bit pattern.
+ */
+template <std::uint32_t LREG>
+inline void _two_pass_load_fp32_(const std::uint32_t bits) {
+    TT_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_UPPER, bits >> FP32_HI16_SHIFT /* imm16: high half */);
+    TT_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_LOWER, bits & FP32_LO16_MASK /* imm16: low half, high kept */);
+}
+
+/** @brief Zero LREG. */
+template <std::uint32_t LREG>
+inline void _two_pass_zero_() {
+    TTI_SFPLOADI(LREG, sfpi::SFPLOADI_MOD0_FLOATB, FP16B_ZERO);
+}
+
+/** @brief LREG5 += LREG6: fold the dual accumulator into the primary one. */
+inline void _two_pass_fold_dual_() {
+    TTI_SFPADD(TWO_PASS_ACC_REG, p_sfpu::LCONST_1, TWO_PASS_ACC2_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+}
+
+/**
+ * @brief Accumulate one shifted input row: ACC += x - anchor.
+ *
+ * @tparam INPUT_LREG: LREG holding the row, values = <LREG0/LREG1/LREG2/LREG3>; clobbered.
+ * @tparam ACC_LREG: Accumulator, values = <LREG5/LREG6>
+ */
+template <std::uint32_t INPUT_LREG, std::uint32_t ACC_LREG>
+inline void _two_pass_accumulate_shifted_sum_row_() {
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, INPUT_LREG, INPUT_LREG, 0 /* instr_mod1 */);  // x - anchor
+    TTI_SFPADD(ACC_LREG, p_sfpu::LCONST_1, INPUT_LREG, ACC_LREG, 0 /* instr_mod1 */);                // ACC += it
+}
+
+/** @brief Accumulate a whole loaded quad through the two independent LREG5/LREG6 chains. */
+inline void _two_pass_accumulate_shifted_sum_block_() {
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG0, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG1, p_sfpu::LREG1, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG2, p_sfpu::LREG2, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG3, p_sfpu::LREG3, 0 /* instr_mod1 */);
+    TTI_SFPADD(TWO_PASS_ACC_REG, p_sfpu::LCONST_1, p_sfpu::LREG0, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    TTI_SFPADD(TWO_PASS_ACC2_REG, p_sfpu::LCONST_1, p_sfpu::LREG1, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
+    TTI_SFPADD(TWO_PASS_ACC_REG, p_sfpu::LCONST_1, p_sfpu::LREG2, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    TTI_SFPADD(TWO_PASS_ACC2_REG, p_sfpu::LCONST_1, p_sfpu::LREG3, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
+    _two_pass_drain_();  // the next quad's SFPTRANSP reads LREG6
+}
+
+/**
+ * @brief Accumulate row K of a loaded quad when it lies in [first, last).
+ *
+ * @tparam DUAL: Odd rows go to LREG6 instead of LREG5.
+ * @tparam K: Row within the quad, values = <0..3>
+ */
+template <bool DUAL, std::uint32_t K>
+inline void _two_pass_accumulate_shifted_sum_row_if_(const std::uint32_t first, const std::uint32_t last) {
+    if (first <= K && last > K) {
+        constexpr std::uint32_t ACC_LREG = (DUAL && (K & 1U) != 0) ? TWO_PASS_ACC2_REG : TWO_PASS_ACC_REG;
+        _two_pass_accumulate_shifted_sum_row_<p_sfpu::LREG0 + K /* INPUT_LREG */, ACC_LREG>();
+    }
+}
+
+/**
+ * @brief Accumulate rows [first, last) of an already-loaded quad.
+ *
+ * @tparam DUAL: Whether odd rows use LREG6.
+ * @param first: First selected row within the quad.
+ * @param last: One past the last selected row within the quad.
+ */
+template <bool DUAL>
+inline void _two_pass_accumulate_shifted_sum_loaded_block_(const std::uint32_t first, const std::uint32_t last) {
+    if constexpr (DUAL) {
+        if (first == 0 && last == WELFORDS_QUAD_ROWS) {
+            _two_pass_accumulate_shifted_sum_block_();
+            return;
+        }
+    }
+    _two_pass_accumulate_shifted_sum_row_if_<DUAL, 0 /* K */>(first, last);
+    _two_pass_accumulate_shifted_sum_row_if_<DUAL, 1 /* K */>(first, last);
+    _two_pass_accumulate_shifted_sum_row_if_<DUAL, 2 /* K */>(first, last);
+    _two_pass_accumulate_shifted_sum_row_if_<DUAL, 3 /* K */>(first, last);
+    _two_pass_drain_();  // the next quad's SFPTRANSP reads the accumulator
+}
+
+/** @brief Accumulate one centred square into the serial LREG5 chain (LREG6 is the residual scratch). */
+template <std::uint32_t INPUT_LREG>
+inline void _two_pass_accumulate_m2_single_() {
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, INPUT_LREG, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+}
+
+/**
+ * @brief Accumulate a whole loaded quad into the serial LREG5 chain, in row order.
+ *
+ * Residuals alternate between LREG6 and the dead first input LREG0, so a retained anchor in LREG7
+ * survives and the M2 updates stay in row order.
+ */
+inline void _two_pass_accumulate_m2_block_() {
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG0, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPMAD(TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG2, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG0, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG3, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPMAD(TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG0, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    _two_pass_drain_();  // the next quad's SFPTRANSP reads LREG5
+}
+
+/** @brief Accumulate one centred square into the selected dual chain; the input is formed in place. */
+template <std::uint32_t INPUT_LREG, std::uint32_t ACC_LREG>
+inline void _two_pass_accumulate_m2_dual_single_() {
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, INPUT_LREG, INPUT_LREG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(INPUT_LREG, INPUT_LREG, ACC_LREG, ACC_LREG, 0 /* instr_mod1 */);
+}
+
+/** @brief Accumulate a whole loaded quad, alternating the LREG5/LREG6 M2 chains. */
+inline void _two_pass_accumulate_m2_dual_block_() {
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG0, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG1, p_sfpu::LREG1, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG2, p_sfpu::LREG2, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, p_sfpu::LREG3, p_sfpu::LREG3, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG0, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG1, TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG2, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG3, TWO_PASS_ACC2_REG, TWO_PASS_ACC2_REG, 0 /* instr_mod1 */);
+    _two_pass_drain_();  // the next quad's SFPTRANSP reads LREG6
+}
+
+/** @brief Accumulate the centred square of row K of a loaded quad when it lies in [first, last). */
+template <bool DUAL, std::uint32_t K>
+inline void _two_pass_accumulate_m2_row_if_(const std::uint32_t first, const std::uint32_t last) {
+    if (first <= K && last > K) {
+        if constexpr (DUAL) {
+            constexpr std::uint32_t ACC_LREG = (K & 1U) != 0 ? TWO_PASS_ACC2_REG : TWO_PASS_ACC_REG;
+            _two_pass_accumulate_m2_dual_single_<p_sfpu::LREG0 + K /* INPUT_LREG */, ACC_LREG>();
+        } else {
+            _two_pass_accumulate_m2_single_<p_sfpu::LREG0 + K /* INPUT_LREG */>();
+        }
+    }
+}
+
+/**
+ * @brief Load quad (I, J) and process its intersection with rows [start_row, end_row).
+ *
+ * @tparam ACCUMULATE_M2: Pass two (centred squares) when true, pass one (shifted sums) otherwise.
+ * @tparam DUAL: Enables the second LREG6 dependency chain.
+ * @tparam I: Face pair, values = <0/1>
+ * @tparam J: Quad within the face pair, values = <0..WELFORDS_QUADS_PER_FACE_PAIR-1>
+ */
+template <bool ACCUMULATE_M2, bool DUAL, std::uint32_t I, std::uint32_t J>
+inline void _two_pass_block_rows_(const std::uint32_t start_row, const std::uint32_t end_row) {
+    constexpr std::uint32_t LO = (I * FACE_R_DIM) + (J * WELFORDS_QUAD_ROWS);
+    constexpr std::uint32_t HI = LO + WELFORDS_QUAD_ROWS;
+    if (start_row >= HI || end_row <= LO) {
+        return;
+    }
+    const std::uint32_t first = std::max(LO, start_row) - LO;
+    const std::uint32_t last = std::min(HI, end_row) - LO;
+
+    _welfords_load_quad_<I, J>();
+    if constexpr (ACCUMULATE_M2) {
+        if (first == 0 && last == WELFORDS_QUAD_ROWS) {
+            if constexpr (DUAL) {
+                _two_pass_accumulate_m2_dual_block_();
+            } else {
+                _two_pass_accumulate_m2_block_();
+            }
+            return;
+        }
+        _two_pass_accumulate_m2_row_if_<DUAL, 0 /* K */>(first, last);
+        _two_pass_accumulate_m2_row_if_<DUAL, 1 /* K */>(first, last);
+        _two_pass_accumulate_m2_row_if_<DUAL, 2 /* K */>(first, last);
+        _two_pass_accumulate_m2_row_if_<DUAL, 3 /* K */>(first, last);
+        _two_pass_drain_();  // the next quad's SFPTRANSP reads the accumulator
+    } else {
+        _two_pass_accumulate_shifted_sum_loaded_block_<DUAL>(first, last);
+    }
+}
+
+/**
+ * @brief Load quad (I, J), copy its first selected row into LREG4 as the anchor, zero the sums and
+ *        accumulate the quad's selected rows.
+ */
+template <bool DUAL, std::uint32_t I, std::uint32_t J>
+inline void _two_pass_initialize_anchor_and_accumulate_block_(
+    const std::uint32_t start_row, const std::uint32_t end_row) {
+    constexpr std::uint32_t LO = (I * FACE_R_DIM) + (J * WELFORDS_QUAD_ROWS);
+    constexpr std::uint32_t HI = LO + WELFORDS_QUAD_ROWS;
+    if (start_row >= HI || end_row <= LO) {
+        return;
+    }
+    const std::uint32_t first = std::max(LO, start_row) - LO;
+    const std::uint32_t last = std::min(HI, end_row) - LO;
+
+    _welfords_load_quad_<I, J>();
+    if (first == 0) {
+        TTI_SFPMOV(p_sfpu::LREG0, TWO_PASS_MEAN_REG, 0 /* instr_mod1: plain copy */);
+    } else if (first == 1) {
+        TTI_SFPMOV(p_sfpu::LREG1, TWO_PASS_MEAN_REG, 0 /* instr_mod1: plain copy */);
+    } else if (first == 2) {
+        TTI_SFPMOV(p_sfpu::LREG2, TWO_PASS_MEAN_REG, 0 /* instr_mod1: plain copy */);
+    } else {
+        TTI_SFPMOV(p_sfpu::LREG3, TWO_PASS_MEAN_REG, 0 /* instr_mod1: plain copy */);
+    }
+    _two_pass_zero_<TWO_PASS_ACC_REG>();
+    if constexpr (DUAL) {
+        _two_pass_zero_<TWO_PASS_ACC2_REG>();
+    }
+    _two_pass_accumulate_shifted_sum_loaded_block_<DUAL>(first, last);
+}
+
+/** @brief Pass-one quad dispatch: the quad holding start_row initialises the anchor when asked to. */
+template <bool INITIALIZE_ANCHOR, bool DUAL, std::uint32_t I, std::uint32_t J>
+inline void _two_pass_shifted_block_rows_(const std::uint32_t start_row, const std::uint32_t end_row) {
+    constexpr std::uint32_t LO = (I * FACE_R_DIM) + (J * WELFORDS_QUAD_ROWS);
+    constexpr std::uint32_t HI = LO + WELFORDS_QUAD_ROWS;
+    if constexpr (INITIALIZE_ANCHOR) {
+        if (start_row >= LO && start_row < HI) {
+            _two_pass_initialize_anchor_and_accumulate_block_<DUAL, I, J>(start_row, end_row);
+            return;
+        }
+    }
+    _two_pass_block_rows_<false /* ACCUMULATE_M2 */, DUAL, I, J>(start_row, end_row);
+}
+
+/**
+ * @brief Walk every quad of the tile, top to bottom, for pass one (Q is the flat quad index).
+ */
+template <bool INITIALIZE_ANCHOR, bool DUAL, std::uint32_t Q = 0>
+inline void _two_pass_all_shifted_blocks_(const std::uint32_t start_row, const std::uint32_t end_row) {
+    if constexpr (Q < WELFORDS_QUADS_PER_TILE) {
+        _two_pass_shifted_block_rows_<
+            INITIALIZE_ANCHOR,
+            DUAL,
+            Q / WELFORDS_QUADS_PER_FACE_PAIR /* I */,
+            Q % WELFORDS_QUADS_PER_FACE_PAIR /* J */>(start_row, end_row);
+        _two_pass_all_shifted_blocks_<INITIALIZE_ANCHOR, DUAL, Q + 1>(start_row, end_row);
+    }
+}
+
+/** @brief Walk every quad of the tile, top to bottom, for pass two (Q is the flat quad index). */
+template <bool DUAL, std::uint32_t Q = 0>
+inline void _two_pass_all_m2_blocks_(const std::uint32_t start_row, const std::uint32_t end_row) {
+    if constexpr (Q < WELFORDS_QUADS_PER_TILE) {
+        _two_pass_block_rows_<
+            true /* ACCUMULATE_M2 */,
+            DUAL,
+            Q / WELFORDS_QUADS_PER_FACE_PAIR /* I */,
+            Q % WELFORDS_QUADS_PER_FACE_PAIR /* J */>(start_row, end_row);
+        _two_pass_all_m2_blocks_<DUAL, Q + 1>(start_row, end_row);
+    }
+}
+
+/**
+ * @brief Pass two: accumulate centred M2 over rows [start_row, start_row + num_rows) of the tile.
+ *
+ * @tparam dual_m2: Odd quad rows accumulate into LREG6, even ones into LREG5.
+ * @param start_row: First tile row.
+ * @param num_rows: Rows to process; requires start_row + num_rows <= TILE_R_DIM.
+ * @note Run once per tile under VectorMode::RC_custom, after @ref _two_pass_finish_shifted_mean_.
+ */
+template <bool dual_m2>
+inline void _two_pass_update_rows_(const std::uint32_t start_row, const std::uint32_t num_rows) {
+    if (num_rows == 0) {
+        return;
+    }
+    LLK_ASSERT(num_rows <= TILE_R_DIM && start_row <= TILE_R_DIM - num_rows, "two-pass: row window runs past the tile");
+    if (start_row == 0 && num_rows == TILE_R_DIM) {
+        // Constant bounds let the compiler drop the per-quad intersection on the full-tile path.
+        _two_pass_all_m2_blocks_<dual_m2>(0, TILE_R_DIM);
+        return;
+    }
+    _two_pass_all_m2_blocks_<dual_m2>(start_row, start_row + num_rows);
+}
+
+/**
+ * @brief Pass one (shifted sums), or pass two when accumulate_m2, over a row window of the tile.
+ *
+ * @tparam accumulate_m2: Dispatch to @ref _two_pass_update_rows_ when true.
+ * @tparam initialize_anchor: Copy the first selected row into LREG4 and zero the sums first; set it
+ *         on the first call of a population only.
+ * @tparam dual_accumulator: Use LREG6 as a second accumulator.
+ * @param start_row: First tile row.
+ * @param num_rows: Rows to process; requires start_row + num_rows <= TILE_R_DIM.
+ * @note Run once per tile under VectorMode::RC_custom.
+ */
+template <bool accumulate_m2, bool initialize_anchor, bool dual_accumulator>
+inline void _two_pass_update_shifted_rows_(const std::uint32_t start_row, const std::uint32_t num_rows) {
+    if constexpr (accumulate_m2) {
+        _two_pass_update_rows_<dual_accumulator>(start_row, num_rows);
+        return;
+    }
+    if (num_rows == 0) {
+        return;
+    }
+    LLK_ASSERT(num_rows <= TILE_R_DIM && start_row <= TILE_R_DIM - num_rows, "two-pass: row window runs past the tile");
+    if (start_row == 0 && num_rows == TILE_R_DIM) {
+        _two_pass_all_shifted_blocks_<initialize_anchor, dual_accumulator>(0, TILE_R_DIM);
+        return;
+    }
+    _two_pass_all_shifted_blocks_<initialize_anchor, dual_accumulator>(start_row, start_row + num_rows);
+}
+
+/**
+ * @brief mean = anchor + shifted_sum * reciprocal into LREG4, then clear the M2 accumulators.
+ *
+ * @tparam dual_sum: Fold LREG6 into LREG5 first.
+ * @tparam retain_anchor: Keep the anchor in LREG7 for a compensated finaliser; requires dual_sum.
+ * @param reciprocal_bits: fp32 bits of 1/population.
+ */
+template <bool dual_sum, bool retain_anchor = false>
+inline void _two_pass_finish_shifted_mean_(const std::uint32_t reciprocal_bits) {
+    static_assert(!retain_anchor || dual_sum, "anchor retention requires the dual-accumulator statistics path");
+    if constexpr (retain_anchor) {
+        TTI_SFPMOV(TWO_PASS_MEAN_REG, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
+    }
+    _two_pass_load_fp32_<p_sfpu::LREG7>(reciprocal_bits);
+    if constexpr (dual_sum) {
+        _two_pass_fold_dual_();
+    }
+    TTI_SFPMAD(TWO_PASS_ACC_REG, p_sfpu::LREG7, TWO_PASS_MEAN_REG, TWO_PASS_MEAN_REG, 0 /* instr_mod1 */);
+    if constexpr (retain_anchor) {
+        TTI_SFPMOV(p_sfpu::LREG0, TWO_PASS_ANCHOR_REG, 0 /* instr_mod1: plain copy */);
+    }
+    _two_pass_zero_<TWO_PASS_ACC_REG>();
+    _two_pass_zero_<TWO_PASS_ACC2_REG>();
+}
+
+/** @brief Zero the mean / shifted-sum / M2 state in LREG4-LREG6. */
+inline void _two_pass_clear_stats_() {
+    _two_pass_zero_<TWO_PASS_MEAN_REG>();
+    _two_pass_zero_<TWO_PASS_ACC_REG>();
+    _two_pass_zero_<TWO_PASS_ACC2_REG>();
+}
+
+/** @brief Store the retained LREG7 anchor at raw offset 0 of the current Dest tile. */
+inline void _two_pass_store_anchor_to_dst_() {
+    TTI_SFPSTORE(TWO_PASS_ANCHOR_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg_addr */);
+}
+
+/** @brief Restore LREG7 from raw offset 0 of the current Dest tile. */
+inline void _two_pass_load_anchor_from_dst_() {
+    TTI_SFPLOAD(TWO_PASS_ANCHOR_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg_addr */);
+}
+
+/** @brief Park the retained anchor in the mean-state tile's unused group slot 1 (raw offset 4). */
+inline void _two_pass_store_anchor_to_state_dst_() {
+    TTI_SFPSTORE(TWO_PASS_ANCHOR_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, TWO_PASS_ANCHOR_STATE_OFFSET);
+}
+
+/** @brief Restore LREG7 from group slot 1 (raw offset 4) of the mean-state tile. */
+inline void _two_pass_load_anchor_from_state_dst_() {
+    TTI_SFPLOAD(TWO_PASS_ANCHOR_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, TWO_PASS_ANCHOR_STATE_OFFSET);
+}
+
+/**
+ * @brief Spill mean (LREG4) and M2 (LREG5) to the current tile and the one after it, raw layout.
+ *
+ * @tparam dual_m2: Fold LREG6 into LREG5 first. LREG6 is cleared afterwards.
+ */
+template <bool dual_m2>
+inline void _two_pass_store_mean_m2_to_dst_() {
+    if constexpr (dual_m2) {
+        _two_pass_fold_dual_();
+        _two_pass_drain_();
+    }
+    TTI_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg_addr */);
+    TTI_SFPSTORE(TWO_PASS_ACC_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
+    _two_pass_zero_<TWO_PASS_ACC2_REG>();
+}
+
+/**
+ * @brief Chan-combine the block state in LREG4/LREG5 with the (mean, M2) spilled at the current tile.
+ *
+ *   mean = mean_a + delta * n_b / (n_a + n_b)
+ *   M2   = M2_a + M2_b + delta^2 * n_a * n_b / (n_a + n_b),   delta = mean_b - mean_a
+ *
+ * The combined state is written back over the spill and left in LREG4/LREG5.
+ *
+ * @tparam dual_m2: Fold LREG6 into LREG5 first.
+ * @param total_reciprocal_bits: fp32 bits of 1 / (n_a + n_b).
+ * @param block_n_bits: fp32 bits of n_b, the current block's population.
+ */
+template <bool dual_m2>
+inline void _two_pass_combine_block_to_dst_(
+    const std::uint32_t total_reciprocal_bits, const std::uint32_t block_n_bits) {
+    if constexpr (dual_m2) {
+        _two_pass_fold_dual_();
+    }
+
+    // LREG2 = n_b / (n_a + n_b), LREG3 = n_b * (1 - LREG2) = n_a * n_b / (n_a + n_b).
+    _two_pass_load_fp32_<p_sfpu::LREG2>(total_reciprocal_bits);
+    _two_pass_load_fp32_<p_sfpu::LREG3>(block_n_bits);
+    TTI_SFPMUL(p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG2, 0 /* instr_mod1 */);
+    _two_pass_load_fp32_<p_sfpu::LREG7>(block_n_bits ^ FP32_SIGN_BIT);  // -n_b
+    TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG3, p_sfpu::LREG3, 0 /* instr_mod1 */);
+
+    // The preceding blocks' (mean_a, M2_a) from Dest.
+    TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg_addr */);
+    TTI_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
+
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG0, TWO_PASS_MEAN_REG, p_sfpu::LREG7, 0 /* instr_mod1 */);  // delta
+    TTI_SFPADD(p_sfpu::LREG1, p_sfpu::LCONST_1, TWO_PASS_ACC_REG, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);  // M2_a + M2_b
+    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG2, p_sfpu::LREG0, TWO_PASS_MEAN_REG, 0 /* instr_mod1 */);       // mean
+    TTI_SFPMAD(p_sfpu::LREG7, p_sfpu::LREG7, p_sfpu::LCONST_0, p_sfpu::LREG7, 0 /* instr_mod1 */);        // delta^2
+    _two_pass_drain_();
+    TTI_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, 0 /* dest_reg_addr */);
+    TTI_SFPMUL(p_sfpu::LREG7, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG7, 0 /* instr_mod1 */);
+    _two_pass_zero_<TWO_PASS_ACC2_REG>();
+    TTI_SFPADD(TWO_PASS_ACC_REG, p_sfpu::LCONST_1, p_sfpu::LREG7, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+    TTI_SFPSTORE(TWO_PASS_ACC_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
+}
+
+/**
+ * @brief Store the 4x8 lane vectors of LREG0-3 (after an SFPTRANSP) as one tile row at base.
+ */
+template <std::uint32_t FIRST_LREG>
+inline void _two_pass_store_row_(const std::uint32_t base) {
+    TT_SFPSTORE(FIRST_LREG + 0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, base + WELFORDS_LEFT_EVEN);
+    TT_SFPSTORE(FIRST_LREG + 1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, base + WELFORDS_LEFT_ODD);
+    TT_SFPSTORE(FIRST_LREG + 2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, base + WELFORDS_RIGHT_EVEN);
+    TT_SFPSTORE(FIRST_LREG + 3, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, base + WELFORDS_RIGHT_ODD);
+}
+
+/**
+ * @brief Variance = M2 * reciprocal; write mean as tile row 0 of the current tile and variance as
+ *        tile row 0 of the next one (rows 1-3 of each face pair's first quad are zero).
+ *
+ * @tparam dual_m2: Fold LREG6 into LREG5 first.
+ * @tparam store_mean: Also write the mean tile; the variance tile is always written.
+ * @param reciprocal_bits: fp32 bits of the variance divisor's reciprocal.
+ * @note Scrambles LREG0-7; the running state is invalid afterwards.
+ */
+template <bool dual_m2, bool store_mean = true>
+inline void _two_pass_store_mean_var_to_dst_row_(const std::uint32_t reciprocal_bits) {
+    if constexpr (dual_m2) {
+        _two_pass_fold_dual_();
+    }
+    if constexpr (store_mean) {
+        TTI_SFPMOV(
+            TWO_PASS_MEAN_REG, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);  // save mean before LREG4 is reused
+    }
+    _two_pass_load_fp32_<p_sfpu::LREG6>(reciprocal_bits);
+    TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG4, 0 /* instr_mod1 */);  // variance
+    if constexpr (store_mean) {
+        _two_pass_zero_<p_sfpu::LREG1>();
+        _two_pass_zero_<p_sfpu::LREG2>();
+        _two_pass_zero_<p_sfpu::LREG3>();
+    }
+    _two_pass_zero_<p_sfpu::LREG5>();
+    _two_pass_zero_<p_sfpu::LREG6>();
+    _two_pass_zero_<p_sfpu::LREG7>();
+    TTI_SFPTRANSP;  // lane values -> tile row 0 of LREG0-3 (mean) and LREG4-7 (variance)
+
+    if constexpr (store_mean) {
+        _two_pass_store_row_<p_sfpu::LREG0>(0);
+    }
+    _two_pass_store_row_<p_sfpu::LREG4>(WELFORDS_TILE_STRIDE);
+}
+
+/**
+ * @brief Store the retained anchor, anchor - mean and the variance for a compensated finaliser.
+ *
+ * Mean tile row 0 is the anchor and row 16 is anchor - mean; the next tile's row 0 is the variance.
+ *
+ * @tparam dual_m2: Fold LREG6 into LREG5 first.
+ * @param reciprocal_bits: fp32 bits of the variance divisor's reciprocal.
+ * @note Needs the anchor retained in LREG7 (@ref _two_pass_finish_shifted_mean_ with retain_anchor).
+ */
+template <bool dual_m2>
+inline void _two_pass_store_split_mean_var_to_dst_row_(const std::uint32_t reciprocal_bits) {
+    if constexpr (dual_m2) {
+        _two_pass_fold_dual_();
+    }
+    TTI_SFPMOV(TWO_PASS_ANCHOR_REG, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);  // anchor
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, TWO_PASS_MEAN_REG, TWO_PASS_ANCHOR_REG, TWO_PASS_MEAN_REG, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+    TTI_SFPMOV(TWO_PASS_MEAN_REG, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);  // anchor - mean
+    _two_pass_load_fp32_<p_sfpu::LREG6>(reciprocal_bits);
+    TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, TWO_PASS_MEAN_REG, 0 /* instr_mod1 */);  // variance
+    _two_pass_drain_();
+
+    // Park the variance in the next tile while the two transposes form rows 0 and 16 of this one.
+    TTI_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
+    TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG4, 0 /* instr_mod1: plain copy */);
+    _two_pass_zero_<p_sfpu::LREG1>();
+    _two_pass_zero_<p_sfpu::LREG2>();
+    _two_pass_zero_<p_sfpu::LREG3>();
+    _two_pass_zero_<p_sfpu::LREG5>();
+    _two_pass_zero_<p_sfpu::LREG6>();
+    _two_pass_zero_<p_sfpu::LREG7>();
+    TTI_SFPTRANSP;
+    _two_pass_store_row_<p_sfpu::LREG0>(0);                          // row 0: anchor
+    _two_pass_store_row_<p_sfpu::LREG4>(WELFORDS_FACE_PAIR_STRIDE);  // row 16: anchor - mean
+
+    // Expand the parked variance into row 0 of its own tile.
+    TTI_SFPLOAD(p_sfpu::LREG4, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE);
+    _two_pass_zero_<p_sfpu::LREG5>();
+    _two_pass_zero_<p_sfpu::LREG6>();
+    _two_pass_zero_<p_sfpu::LREG7>();
+    TTI_SFPTRANSP;
+    _two_pass_store_row_<p_sfpu::LREG4>(WELFORDS_TILE_STRIDE);
+}
+
+/**
+ * @brief Variance = M2 * reciprocal; store one group's mean and variance in its raw-face slots.
+ *
+ * @tparam dual_m2: Fold LREG6 into LREG5 first.
+ * @param group_id: Group slot, values = <0..WELFORDS_NUM_GROUPS-1>
+ * @param reciprocal_bits: fp32 bits of the variance divisor's reciprocal.
+ */
+template <bool dual_m2>
+inline void _two_pass_store_mean_var_to_dst_raw_group_(
+    const std::uint32_t group_id, const std::uint32_t reciprocal_bits) {
+    LLK_ASSERT(group_id < WELFORDS_NUM_GROUPS, "two-pass: group_id past the last group slot of the tile");
+    if constexpr (dual_m2) {
+        _two_pass_fold_dual_();
+        _two_pass_drain_();
+    }
+    _two_pass_load_fp32_<p_sfpu::LREG6>(reciprocal_bits);
+    TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+    const std::uint32_t group_offset = group_id << WELFORDS_GROUP_SHIFT;
+    TT_SFPSTORE(TWO_PASS_MEAN_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, group_offset);
+    TT_SFPSTORE(
+        TWO_PASS_ACC_REG, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, WELFORDS_TILE_STRIDE + group_offset);
+    _two_pass_zero_<TWO_PASS_ACC2_REG>();
+}
+
+/**
+ * @brief Save the single-accumulator state to one group slot and restore another into LREG4/LREG5.
+ *
+ * @tparam dual_accumulator: Must be false; LREG6 and a retained LREG7 are not part of a slot.
+ */
+template <bool dual_accumulator>
+inline void _two_pass_switch_group_(const std::uint32_t save_group_id, const std::uint32_t restore_group_id) {
+    static_assert(!dual_accumulator, "group switching only preserves the single-accumulator LREG4/LREG5 state");
+    welfords_store_mean_m2_to_dst<true /* GROUPED */>(save_group_id);
+    welfords_load_mean_m2_from_dst<true /* GROUPED */>(restore_group_id);
+}
+
+/** @brief Rotate LREG one SFPU column (X -> X+1, wrapping) and wait for the result. */
+template <std::uint32_t LREG>
+inline void _two_pass_rotate_() {
+    TTI_SFPSHFT2(0 /* imm12 */, LREG, LREG, TWO_PASS_SFPSHFT2_ROTATE);
+    _two_pass_drain_();  // SFPSHFT2 takes two cycles
+}
+
+/** @brief Rotate LREG by DISTANCE SFPU columns. */
+template <std::uint32_t LREG, std::uint32_t DISTANCE>
+inline void _two_pass_rotate_by_() {
+    if constexpr (DISTANCE > 0) {
+        _two_pass_rotate_<LREG>();
+        _two_pass_rotate_by_<LREG, DISTANCE - 1>();
+    }
+}
+
+/** @brief Shift LREG one SFPU column (X -> X+1), zero-filling column 0, and wait for the result. */
+template <std::uint32_t LREG, std::uint32_t DISTANCE>
+inline void _two_pass_shift_zero_fill_by_() {
+    if constexpr (DISTANCE > 0) {
+        TTI_SFPSHFT2(0 /* imm12 */, LREG, LREG, TWO_PASS_SFPSHFT2_SHIFT_ZERO_FILL);
+        _two_pass_drain_();  // SFPSHFT2 takes two cycles
+        _two_pass_shift_zero_fill_by_<LREG, DISTANCE - 1>();
+    }
+}
+
+/**
+ * @brief One stage of the column fold: SUM += SUM rotated by DISTANCE (copy kept in SCRATCH).
+ */
+template <std::uint32_t SUM, std::uint32_t SCRATCH, std::uint32_t DISTANCE>
+inline void _two_pass_fold_stage_() {
+    TTI_SFPMOV(SUM, SCRATCH, 0 /* instr_mod1: plain copy */);
+    _two_pass_rotate_by_<SCRATCH, DISTANCE>();
+    TTI_SFPADD(SUM, p_sfpu::LCONST_1, SCRATCH, SUM, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+}
+
+/**
+ * @brief Fold the 8 SFPU columns of SUM together: afterwards every column holds its row's total.
+ */
+template <std::uint32_t SUM, std::uint32_t SCRATCH>
+inline void _two_pass_fold_columns_() {
+    _two_pass_fold_stage_<SUM, SCRATCH, TWO_PASS_SFPU_COLUMNS / 2>();
+    _two_pass_fold_stage_<SUM, SCRATCH, TWO_PASS_SFPU_COLUMNS / 4>();
+    _two_pass_fold_stage_<SUM, SCRATCH, TWO_PASS_SFPU_COLUMNS / 8>();
+}
+
+/**
+ * @brief Horizontally sum LREG0 and LREG4 over all 32 lanes.
+ *
+ * @tparam broadcast_result: Broadcast each total to every lane; otherwise the totals are valid in
+ *         sub-row 0 only (LREG0-3 and LREG5-7 are clobbered either way).
+ */
+template <bool broadcast_result>
+inline void _two_pass_horizontal_sum_pair_() {
+    _two_pass_fold_columns_<p_sfpu::LREG0, p_sfpu::LREG1>();
+    _two_pass_fold_columns_<p_sfpu::LREG4, p_sfpu::LREG5>();
+
+    // Transpose the four row totals into LREG0-3 / LREG4-7 sub-row 0, then add them.
+    _two_pass_zero_<p_sfpu::LREG1>();
+    _two_pass_zero_<p_sfpu::LREG2>();
+    _two_pass_zero_<p_sfpu::LREG3>();
+    _two_pass_zero_<p_sfpu::LREG5>();
+    _two_pass_zero_<p_sfpu::LREG6>();
+    _two_pass_zero_<p_sfpu::LREG7>();
+    TTI_SFPTRANSP;
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG5, p_sfpu::LREG4, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG6, p_sfpu::LREG4, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG4, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG4, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+
+    if constexpr (broadcast_result) {
+        TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG5, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG2, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG6, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG3, 0 /* instr_mod1: plain copy */);
+        TTI_SFPMOV(p_sfpu::LREG4, p_sfpu::LREG7, 0 /* instr_mod1: plain copy */);
+        TTI_SFPTRANSP;
+    }
+}
+
+/**
+ * @brief Horizontally sum LREG0 over all 32 lanes; the total is valid in sub-row 0 only.
+ *
+ * The transpose also reduces a broadcast LREG4 to the same sub-row-0 layout (LREG5-7 are zeroed).
+ */
+inline void _two_pass_horizontal_sum_mean_() {
+    _two_pass_fold_columns_<p_sfpu::LREG0, p_sfpu::LREG1>();
+
+    _two_pass_zero_<p_sfpu::LREG1>();
+    _two_pass_zero_<p_sfpu::LREG2>();
+    _two_pass_zero_<p_sfpu::LREG3>();
+    _two_pass_zero_<p_sfpu::LREG5>();
+    _two_pass_zero_<p_sfpu::LREG6>();
+    _two_pass_zero_<p_sfpu::LREG7>();
+    TTI_SFPTRANSP;
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+}
+
+/**
+ * @brief Broadcast lane (sub-row 0, SFPU column 0) of LREG0 to all 32 lanes; LREG4-7 are kept.
+ *
+ * Seven zero-fill column shifts move column 0 to column 7 and leave every other column zero, in
+ * place of Blackhole's LTILEID mask.
+ */
+inline void _two_pass_broadcast_one_lane_() {
+    _two_pass_shift_zero_fill_by_<p_sfpu::LREG0, TWO_PASS_SFPU_COLUMNS - 1>();  // column 0 -> column 7, rest 0
+
+    // The first transpose isolates sub-row 0 in LREG0; replicate it before transposing back. The
+    // second transpose also restores LREG4-7.
+    _two_pass_zero_<p_sfpu::LREG1>();
+    _two_pass_zero_<p_sfpu::LREG2>();
+    _two_pass_zero_<p_sfpu::LREG3>();
+    TTI_SFPTRANSP;
+    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG1, 0 /* instr_mod1: plain copy */);
+    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG2, 0 /* instr_mod1: plain copy */);
+    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG3, 0 /* instr_mod1: plain copy */);
+    TTI_SFPTRANSP;
+
+    // Spread the single non-zero column: the columns stay disjoint, so no two anchors are added.
+    _two_pass_fold_columns_<p_sfpu::LREG0, p_sfpu::LREG1>();
+}
+
+/**
+ * @brief Finalise lane-local statistics, combine the 32 equal lane populations and store one group.
+ *
+ * Total variance = mean lane variance + variance of the lane means. The lane means are centred on
+ * one lane first, so the cross-lane sums do not cancel. The mean is stored broadcast to every lane
+ * of the group slot; the variance is valid in sub-row 0 (the first 8 lanes) of the slot.
+ *
+ * @tparam dual_m2: Fold LREG6 into LREG5 first.
+ * @tparam average_variance: Store the total variance; otherwise store 32 times it (the lane sum).
+ * @param group_id: Group slot, values = <0..WELFORDS_NUM_GROUPS-1>
+ * @param reciprocal_bits: fp32 bits of 1 / (per-lane population).
+ * @note Writes mean to the current tile and variance to the next one, and clobbers the tile after
+ *       that as scratch.
+ */
+template <bool dual_m2, bool average_variance = true>
+inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(
+    const std::uint32_t group_id, const std::uint32_t reciprocal_bits) {
+    LLK_ASSERT(group_id < WELFORDS_NUM_GROUPS, "two-pass: group_id past the last group slot of the tile");
+    if constexpr (dual_m2) {
+        _two_pass_fold_dual_();
+    }
+
+    // Each lane's M2 -> variance, then centre each lane's mean on one lane's mean.
+    _two_pass_load_fp32_<p_sfpu::LREG6>(reciprocal_bits);
+    TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    constexpr std::uint32_t SCRATCH = 2 * WELFORDS_TILE_STRIDE;
+    constexpr std::uint32_t SCRATCH_ANCHOR = SCRATCH + TWO_PASS_ANCHOR_STATE_OFFSET;
+
+    TTI_SFPMOV(TWO_PASS_MEAN_REG, p_sfpu::LREG0, 0 /* instr_mod1: plain copy */);
+    _two_pass_broadcast_one_lane_();
+    // Write both column parities, so every lane of the slot is defined.
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH_ANCHOR + WELFORDS_LEFT_EVEN);
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH_ANCHOR + WELFORDS_LEFT_ODD);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG0, TWO_PASS_MEAN_REG, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH + WELFORDS_LEFT_EVEN);
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH + WELFORDS_LEFT_ODD);
+    // Keep the lane-variance sum unscaled, so the final 1/32 applies once to both variance terms.
+    TTI_SFPMOV(TWO_PASS_ACC_REG, p_sfpu::LREG4, 0 /* instr_mod1: plain copy */);
+    _two_pass_horizontal_sum_pair_<true /* broadcast_result */>();
+
+    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, TWO_PASS_LANE_RECIPROCAL_FP16B);
+    TTI_SFPMUL(
+        p_sfpu::LREG0, p_sfpu::LREG6, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1 */);  // mean of centred means
+
+    // Variance of the centred lane means, then the absolute mean.
+    TTI_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH + WELFORDS_LEFT_EVEN);
+    TTI_SFPLOAD(p_sfpu::LREG7, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, SCRATCH_ANCHOR + WELFORDS_LEFT_EVEN);
+    TTI_SFPMAD(p_sfpu::LCONST_neg1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, 0 /* instr_mod1 */);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG7, p_sfpu::LREG7, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+    const std::uint32_t group_offset = group_id << WELFORDS_GROUP_SHIFT;
+    TT_SFPSTORE(p_sfpu::LREG7, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, group_offset + WELFORDS_LEFT_EVEN);
+    TT_SFPSTORE(p_sfpu::LREG7, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0 /* done */, group_offset + WELFORDS_LEFT_ODD);
+    TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0 /* instr_mod1 */);
+    _two_pass_drain_();
+    _two_pass_horizontal_sum_mean_();
+
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG4, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    if constexpr (average_variance) {
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, TWO_PASS_LANE_RECIPROCAL_FP16B);
+        TTI_SFPMUL(TWO_PASS_ACC_REG, p_sfpu::LREG6, p_sfpu::LCONST_0, TWO_PASS_ACC_REG, 0 /* instr_mod1 */);
+    }
+    _two_pass_drain_();
+    TT_SFPSTORE(
+        TWO_PASS_ACC_REG,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        0 /* done */,
+        WELFORDS_TILE_STRIDE + group_offset + WELFORDS_LEFT_EVEN);
+    TT_SFPSTORE(
+        TWO_PASS_ACC_REG,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        0 /* done */,
+        WELFORDS_TILE_STRIDE + group_offset + WELFORDS_LEFT_ODD);
+}
+
 }  // namespace sfpu
 }  // namespace ckernel
