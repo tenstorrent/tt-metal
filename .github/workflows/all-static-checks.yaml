@@ -221,7 +221,7 @@ jobs:
       - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60 # v3.30.5
         if: steps.find-changes.outputs.cmake-changed == 'true'
         with:
-          cmakeVersion: "~3.24.0"
+          cmakeVersion: "~3.25.0"
       - name: Check CMake version
         if: steps.find-changes.outputs.cmake-changed == 'true'
         run: cmake --version
