@@ -1264,11 +1264,13 @@ void validate_prefetcher_pipes_mcast_in0_geometry(
         "mcast_in0");
 }
 
-// gather_in0 over PrefetcherPipes streams: each worker's in1 K-blocks arrive in ring order, its own
-// K-block first, and the reader publishes each to compute as it lands, keeping one block of lookahead
-// as mcast_in0 does. A pipe ring is never read as a resident layer the way a batched global_cb is.
-// Ring worker i is the core holding activation shard i; it computes output column block i, per_core_N
-// tiles wide, in place in its own shard of the output.
+// gather_in0 over PrefetcherPipes: each worker's in1 K-blocks arrive one per ring position, and compute
+// takes them in ring order, the worker's own first, as the in0 shards come round. With stream_in1 they
+// arrive in that order, and the reader publishes each as it lands, keeping one block of lookahead as
+// mcast_in0 does. Without it they arrive in K order, and the ring holds the whole layer until the worker
+// is done with it, as a batched global_cb does. Ring worker i is the core holding activation shard i; it
+// computes output column block i, per_core_N tiles wide, in place in its own shard of the output. Hop
+// cores only pass in0 on.
 void validate_prefetcher_pipes_gather_in0_geometry(
     const ttnn::PrefetcherPipeList& prefetcher_pipes,
     const Tensor& input_tensor_a,
@@ -1278,28 +1280,11 @@ void validate_prefetcher_pipes_gather_in0_geometry(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
-    TT_FATAL(
-        program_config.stream_in1,
-        "gather_in0 prefetcher_pipes requires stream_in1=true: the pipes deliver each worker its in1 K-blocks in "
-        "ring order and the matmul consumes them as they arrive");
-    TT_FATAL(
-        program_config.hop_cores.empty(),
-        "gather_in0 prefetcher_pipes does not support hop_cores ({}); every ring core must compute an output block",
-        program_config.hop_cores);
-
-    // One K-block per ring position, as wide as an in0 shard. Padded shards would make the K-blocks
-    // narrower than the shards, and the pipes' entries would no longer match what compute reads.
+    // One K-block per ring position, an in0 shard wide. When K does not fill the ring the last shards are
+    // padded; compute reads only their unpadded K, but each pipe entry is still a whole shard wide.
     const auto& in0_shard_spec = input_tensor_a.shard_spec().value();
     const uint32_t ring_size = in0_shard_spec.grid.num_cores();
     const uint32_t in0_shard_width_tiles = in0_shard_spec.shape[1] / in0_tile.get_width();
-    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
-    TT_FATAL(
-        in0_shard_width_tiles * ring_size == weight_K_tiles,
-        "gather_in0 prefetcher_pipes needs the activation's {} shards of {} tiles to cover the weight's K of {} tiles "
-        "exactly, one K-block per ring position; pad K to a multiple of the ring size rather than padding the shards",
-        ring_size,
-        in0_shard_width_tiles,
-        weight_K_tiles);
 
     // A worker-sender pipe's producer is the caller's, so nothing on the in1 side ties per_core_N to the
     // weight's N; the ring's output column blocks have to reach the weight's last column.
@@ -1340,12 +1325,46 @@ void validate_prefetcher_pipes_gather_in0_geometry(
             i < out_shard_cores.size() ? out_shard_cores[i].str() : std::string("no core"));
     }
 
+    // The Tensor prefetcher cuts each receiver's slab of the weight into ring_size equal K-blocks, so the
+    // slab has to be ring_size shard widths deep, padded past the weight's K when the shards are. (A
+    // worker-sender pipe's producer is the caller's, and lays out its entries itself.) Checked ahead of
+    // the shared weight checks, whose K-blocking rule a padded ring with an unpadded slab would trip
+    // first; a weight that is not a 2D receiver-contiguous one is left to them.
+    if (ttnn::prefetcher_pipe_refs(prefetcher_pipes).front().get().sender_core_type() ==
+            tt::tt_metal::experimental::SenderCoreType::Dram &&
+        input_tensor_b.nd_shard_spec().has_value() && input_tensor_b.nd_shard_spec()->shard_shape.rank() == 2) {
+        const uint32_t slab_K_tiles = input_tensor_b.nd_shard_spec()->shard_shape[0] / in1_tile.get_height();
+        const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+        TT_FATAL(
+            slab_K_tiles == ring_size * in0_shard_width_tiles,
+            "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, but the Tensor prefetcher "
+            "cuts each receiver's {}-tile slab of the weight into {} K-blocks of a different depth. Give the weight's "
+            "NdShardSpec a K of {} tiles (ring_size * shard width), padded past the weight's K of {} tiles if need be.",
+            in0_shard_width_tiles,
+            slab_K_tiles,
+            ring_size,
+            ring_size * in0_shard_width_tiles,
+            weight_K_tiles);
+    }
+
+    const uint32_t in1_block_size_bytes =
+        in1_k_block_size_bytes(input_tensor_b, in1_tile, in0_shard_width_tiles, program_config);
     validate_prefetcher_pipes_in1_delivery(
-        prefetcher_pipes,
-        input_tensor_b,
-        program_config,
-        in1_k_block_size_bytes(input_tensor_b, in1_tile, in0_shard_width_tiles, program_config),
-        "gather_in0");
+        prefetcher_pipes, input_tensor_b, program_config, in1_block_size_bytes, "gather_in0");
+
+    if (!program_config.stream_in1) {
+        const uint32_t pipe_ring_size = ttnn::prefetcher_pipe_refs(prefetcher_pipes).front().get().ring_size();
+        TT_FATAL(
+            pipe_ring_size / in1_block_size_bytes >= ring_size,
+            "gather_in0 prefetcher_pipes with stream_in1=false delivers each worker its {} in1 K-blocks in K order "
+            "and reads them in ring order, its own first, so the pipe ring has to hold the whole layer: {} K-blocks "
+            "of {} B, but its {} B hold {}. Grow the ring, or set stream_in1=true and deliver them in ring order.",
+            ring_size,
+            ring_size,
+            in1_block_size_bytes,
+            pipe_ring_size,
+            pipe_ring_size / in1_block_size_bytes);
+    }
 }
 
 // Helper: warns if a caller of MatmulDeviceOperation's static API hasn't populated

@@ -201,13 +201,23 @@ void validate_gcb_size_cap(uint32_t size) {
         kMaxCbPagesBytes);
 }
 
+// How deep in K a receiver's slab of the weight may be. A gather_in0 matmul over PrefetcherPipes takes
+// K-blocks one in0 shard deep, and when K does not fill the ring its shards are padded, so the slab has
+// to run past the weight's K for the prefetcher to cut it into whole shard-deep K-blocks (the matmul
+// checks the depth against its shards). Every other consumer reads the weight's own K.
+enum class SlabDepth : uint8_t {
+    WeightK,
+    PaddedForPipeGather,
+};
+
 // Shared receiver-contiguous weight ↔ matmul cross-checks. Returns the number of K-blocks the
 // prefetcher must push per receiver: gather-in0 uses one block per ring position, while mcast-in0
 // uses the configured inner-dimension block width.
 uint32_t validate_recv_contig_weight_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
-    uint32_t receiver_count) {
+    uint32_t receiver_count,
+    SlabDepth slab_depth = SlabDepth::WeightK) {
     TT_FATAL(
         program_config.gather_in0 != program_config.mcast_in0,
         "receiver-contiguous Tensor prefetcher requires exactly one of gather_in0 or mcast_in0 to be true");
@@ -246,11 +256,19 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
 
     const auto& wp = weight.padded_shape();
     TT_FATAL(wp.rank() >= 2, "weight must be at least 2D; got rank {}", wp.rank());
-    TT_FATAL(
-        shard_K == static_cast<uint32_t>(wp[-2]),
-        "receiver-contiguous shard K ({}) must equal full weight K ({}); each shard spans the full K dimension",
-        shard_K,
-        static_cast<uint32_t>(wp[-2]));
+    if (slab_depth == SlabDepth::PaddedForPipeGather && program_config.gather_in0) {
+        TT_FATAL(
+            shard_K >= static_cast<uint32_t>(wp[-2]),
+            "receiver-contiguous shard K ({}) must cover the weight's K ({}); each shard spans the full K dimension",
+            shard_K,
+            static_cast<uint32_t>(wp[-2]));
+    } else {
+        TT_FATAL(
+            shard_K == static_cast<uint32_t>(wp[-2]),
+            "receiver-contiguous shard K ({}) must equal full weight K ({}); each shard spans the full K dimension",
+            shard_K,
+            static_cast<uint32_t>(wp[-2]));
+    }
 
     const auto& bds = weight.buffer()->buffer_distribution_spec();
     TT_FATAL(bds.has_value(), "receiver-contiguous weight buffer must have a BufferDistributionSpec");
@@ -445,7 +463,8 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
         "PrefetcherPipe delivery is receiver-contiguous only: allocate the weight with an NdShardSpec giving each "
         "receiver its own (full K, N/receiver_count) DRAM shard. The legacy K-row-major WIDTH_SHARDED layout needs a "
         "sender that slices one bank's shard across its receivers, which this transport does not do.");
-    return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
+    return validate_recv_contig_weight_for_matmul_1d(
+        program_config, weight, receiver_count, SlabDepth::PaddedForPipeGather);
 }
 
 // Builds the GCB for a legacy K-row-major (WIDTH_SHARDED) weight: one shard per DRAM bank, the

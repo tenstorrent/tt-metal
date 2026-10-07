@@ -4692,6 +4692,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out,
+    uint32_t k_tiles,
+    const CoreRangeSet& hop_cores,
+    bool stream_in1,
     const ttnn::PrefetcherPipeList& prefetcher_pipes) {
     TT_FATAL(
         !prefetcher_pipes.empty(),
@@ -4702,8 +4705,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     const CoreRangeSet ring_cores = in0_tensor.shard_spec()->grid;
     const std::vector<CoreCoord> ring = corerange_to_cores(ring_cores, std::nullopt, row_major);
     const auto ring_size = static_cast<uint32_t>(ring.size());
+    // Hop cores only pass in0 on, carrying the ring's link from its first core round to its last.
+    const std::vector<CoreCoord> hops = corerange_to_cores(hop_cores, std::nullopt, row_major);
 
-    // Validation has checked that the in0 shards tile K exactly, so every shard is one unpadded K-block.
+    // Each in0 shard is one K-block. When K does not fill the ring the last shards are short or empty;
+    // the kernels take each one's unpadded width from k_tiles.
     const uint32_t in0_block_w = in0_tensor.shard_spec()->shape[1] / in0_tile.get_width();
     const uint32_t num_blocks = ring_size;
 
@@ -4740,6 +4746,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     const KernelSpecName IN0_RING{"in0_ring"};
     const KernelSpecName IN1_READER{"in1_reader"};
     const KernelSpecName COMPUTE{"compute"};
+    const KernelSpecName IN0_HOP{"in0_hop"};
+    const KernelSpecName HOP_SINK{"hop_sink"};
 
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName IN2_DFB{"in2"};
@@ -4766,9 +4774,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         .tile_format_metadata = in0_tile,
         .borrowed_from = IN0,
     });
-    // in2: the other ring_size - 1 shards, as the ring delivers them. The in0 ring reader writes a
-    // peer's slot at its own slot's address, which holds because every ring worker runs this one
-    // buffer set. A one-worker ring receives nothing but still binds the buffer, so keep one entry.
+    // in2: the other ring_size - 1 shards, as the ring delivers them. A core writes the next core's
+    // slot at its own slot's address, which holds because every ring worker and hop core binds this one
+    // buffer, and a buffer sits at one address on every core it lives on. A one-worker ring receives
+    // nothing but still binds the buffer, so keep one entry.
     dataflow_buffers.push_back(DataflowBufferSpec{
         .unique_id = IN2_DFB,
         .entry_size = in0_single_tile_size,
@@ -4819,7 +4828,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     //                      Semaphores
     ////////////////////////////////////////////////////////////////////////////
     Group<SemaphoreSpec> semaphores = {
-        SemaphoreSpec{.unique_id = RING_SIGNAL_SEM, .target_nodes = ring_cores},
+        SemaphoreSpec{.unique_id = RING_SIGNAL_SEM, .target_nodes = ring_cores.merge(hop_cores)},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -4850,8 +4859,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                 {"shard_width_in_tiles", in0_block_w},
                 {"shard_height_in_tiles", per_core_M},
                 {"ring_size", ring_size},
+                {"k_tiles", k_tiles},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"next_core_noc_x", "next_core_noc_y"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"ring_idx", "next_core_noc_x", "next_core_noc_y"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .config_1xx =
@@ -4878,7 +4888,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                 {"in1_block_num_tiles", in1_block_num_tiles},
                 {"num_blocks", num_blocks},
                 {"out_block_num_tiles", out_block_num_tiles},
+                {"in1_in_ring_order", static_cast<uint32_t>(stream_in1)},
             },
+        .runtime_arg_schema = {.runtime_arg_names = {"ring_idx"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .config_1xx =
@@ -4903,6 +4915,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
             {"in1_block_num_tiles", in1_block_num_tiles},
             {"in1_block_w", in1_block_w},
             {"num_blocks", num_blocks},
+            {"k_tiles", k_tiles},
+            // stream_in1 delivers each worker's K-blocks in ring order, its own first; otherwise they
+            // arrive in K order and the pipe ring holds the whole layer.
+            {"in1_in_ring_order", static_cast<uint32_t>(stream_in1)},
             {"out_subblock_h", out_subblock_h},
             {"out_subblock_w", out_subblock_w},
             {"out_subblock_num_tiles", out_subblock_num_tiles},
@@ -4986,13 +5002,59 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                         .endpoint_type = DFBEndpointType::CONSUMER},
                 },
             .compile_time_args = std::move(compute_cta),
+            .runtime_arg_schema = {.runtime_arg_names = {"ring_idx"}},
             .hw_config = compute_hw,
+        });
+    }
+
+    if (!hops.empty()) {
+        kernels.push_back(KernelSpec{
+            .unique_id = IN0_HOP,
+            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                      "reader_bmm_tile_layout_in0_ring_hop_metal2.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = IN2_DFB, .accessor_name = "in2", .endpoint_type = DFBEndpointType::PRODUCER}},
+            .semaphore_bindings = {SemaphoreBinding{
+                .semaphore_spec_name = RING_SIGNAL_SEM, .accessor_name = "in0_ring_signal"}},
+            .compile_time_args =
+                {
+                    {"shard_width_in_tiles", in0_block_w},
+                    {"shard_height_in_tiles", per_core_M},
+                    {"ring_size", ring_size},
+                    {"k_tiles", k_tiles},
+                },
+            .runtime_arg_schema = {.runtime_arg_names = {"next_core_noc_x", "next_core_noc_y"}},
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                            .noc = in0_noc,
+                        },
+                },
+        });
+
+        // in2's consumer on the hop cores, as compute is on the workers (see the kernel). Like the
+        // workers' compute, it lists an unpack mode for in2 when in2 is Float32 under 32-bit DEST.
+        auto hop_sink_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
+        if (fp32_dest_acc_en && in0_data_format == tt::DataFormat::Float32) {
+            hop_sink_hw.unpack_modes.emplace(IN2_DFB, tt::tt_metal::UnpackMode::UnpackToSrc);
+        }
+        kernels.push_back(KernelSpec{
+            .unique_id = HOP_SINK,
+            .source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/gather_in0_hop_sink_metal2.cpp",
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = IN2_DFB, .accessor_name = "in2", .endpoint_type = DFBEndpointType::CONSUMER}},
+            .hw_config = std::move(hop_sink_hw),
         });
     }
 
     Group<WorkUnitSpec> work_units = {
         WorkUnitSpec{.name = "ring", .kernels = {IN0_RING, IN1_READER, COMPUTE}, .target_nodes = ring_cores},
     };
+    if (!hops.empty()) {
+        work_units.push_back(WorkUnitSpec{.name = "hops", .kernels = {IN0_HOP, HOP_SINK}, .target_nodes = hop_cores});
+    }
 
     Group<TensorParameter> tensor_parameters = {
         TensorParameter{.unique_id = IN0, .spec = in0_tensor.tensor_spec()},
@@ -5002,18 +5064,41 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime args
     ////////////////////////////////////////////////////////////////////////////
+    // Each core passes in0 to the one before it in ring order. The first core's link round to the last
+    // runs through the hop cores, in order, when there are any.
     KernelRunArgs in0_ring_run_args{.kernel = IN0_RING};
+    KernelRunArgs in1_reader_run_args{.kernel = IN1_READER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
     for (uint32_t i = 0; i < ring_size; ++i) {
-        const CoreCoord next_core_noc = device.worker_core_from_logical_core(ring[(i + ring_size - 1) % ring_size]);
+        const CoreCoord next_core = i > 0 ? ring[i - 1] : (hops.empty() ? ring[ring_size - 1] : hops.front());
+        const CoreCoord next_core_noc = device.worker_core_from_logical_core(next_core);
         AddRuntimeArgsForNode(
             in0_ring_run_args.runtime_arg_values,
             ring[i],
-            {{"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
+            {{"ring_idx", i},
+             {"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
              {"next_core_noc_y", static_cast<uint32_t>(next_core_noc.y)}});
+        AddRuntimeArgsForNode(in1_reader_run_args.runtime_arg_values, ring[i], {{"ring_idx", i}});
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, ring[i], {{"ring_idx", i}});
     }
 
     ProgramRunArgs run_args;
     run_args.kernel_run_args.push_back(std::move(in0_ring_run_args));
+    run_args.kernel_run_args.push_back(std::move(in1_reader_run_args));
+    run_args.kernel_run_args.push_back(std::move(compute_run_args));
+    if (!hops.empty()) {
+        KernelRunArgs in0_hop_run_args{.kernel = IN0_HOP};
+        for (size_t j = 0; j < hops.size(); ++j) {
+            const CoreCoord next_core = j + 1 < hops.size() ? hops[j + 1] : ring[ring_size - 1];
+            const CoreCoord next_core_noc = device.worker_core_from_logical_core(next_core);
+            AddRuntimeArgsForNode(
+                in0_hop_run_args.runtime_arg_values,
+                hops[j],
+                {{"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
+                 {"next_core_noc_y", static_cast<uint32_t>(next_core_noc.y)}});
+        }
+        run_args.kernel_run_args.push_back(std::move(in0_hop_run_args));
+    }
     run_args.tensor_args = {
         {IN0, in0_tensor},
         {OUTPUT, out_tensor},
@@ -6603,6 +6688,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
             in1_data_format,
             output_data_format,
             untilize_out,
+            get_K_dim(a_shape_padded, in0_tile),
+            program_config.hop_cores,
+            program_config.stream_in1,
             operation_attributes.prefetcher_pipes);
     }
 

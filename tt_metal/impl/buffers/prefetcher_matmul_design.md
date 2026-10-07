@@ -442,21 +442,31 @@ Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender
   and a bank pairing that sends worker `i` weight shard `i`. The matmul cannot check what a
   worker-sender pipe's producer sends, so there that contract is the producer's.
 
-#### Streaming gather-in0 over PrefetcherPipes
+#### Gather-in0 over PrefetcherPipes
 
 Gather-in0 drains PrefetcherPipes the same way, through the Metal 2.0 factory
 (`create_program_gather_in0_artifacts`), which builds only this transport; every other gather-in0
 in1 source stays on the legacy MeshWorkload builder.
 
-- Streaming only (`stream_in1=true`): each worker's pipe delivers its K-blocks in ring order, its own
-  K-block first (the identity rotation `prefetch_and_linear` queues), and the in1 reader publishes
-  each to compute as it lands with one block of lookahead, as mcast-in0 does. A pipe ring is never
-  read as a resident layer, so the batched gather has no pipe form.
-- One pipe entry is one K-block, an in0 shard wide (`K_tiles / ring_size`) by `per_core_N`, and the
-  relay pages it by tile. The in0 shards must cover K exactly (no padded shards); the ring holds at
-  least two K-blocks and may leave a trailing gap.
+- Compute takes each worker's K-blocks in ring order, its own first, as the in0 shards come round.
+  With `stream_in1=true` the pipe delivers them in that order (the identity rotation
+  `prefetch_and_linear` queues), and the in1 reader publishes each as it lands with one block of
+  lookahead, as mcast-in0 does. With `stream_in1=false` they arrive in K order and the ring holds the
+  whole layer, as a batched GCB does. Compute walks it in ring order with plain waits and pops: it
+  steps over the K-blocks before its own, and after the layer's last over the rest of the ring, which
+  holds none of the layer, back round to the layer's first. The in1 reader publishes those spans for
+  it to step over, and hands the layer back to the sender only once compute is done. A layer already
+  delivered is consumed without waiting on DRAM.
+- One pipe entry is one K-block, an in0 shard wide by `per_core_N`, and the relay pages it by tile.
+  When K does not fill the ring the last shards are padded: compute accumulates only the K each
+  shard holds, and the ring readers skip sending empty shards. The Tensor prefetcher cuts each
+  receiver's slab into `ring_size` equal K-blocks, so a padded ring needs the weight's NdShardSpec K
+  padded to `ring_size * shard width`. The ring holds at least two K-blocks and may leave a trailing
+  gap.
 - The pipes' receivers are exactly the ring workers, with the bank pairing that sends worker `i`
-  weight shard `i`. No hop cores, one weight.
+  weight shard `i`. Hop cores carry the ring's link from its first worker round to its last: each
+  runs a forwarder (`reader_bmm_tile_layout_in0_ring_hop_metal2.cpp`) that binds `in2`, so `in2` has
+  the workers' address there, and a no-op compute kernel as `in2`'s consumer. One weight.
 
 #### Fit ladder (receiver-contiguous)
 
@@ -559,7 +569,9 @@ Whoever changes prefetcher or receiver code must preserve these:
   alignment is in `tt_metal/hw/inc/internal/prefetcher_pipe_init.h`.
 - Gather-in0 over PrefetcherPipes: `create_program_gather_in0_artifacts` in the same factory file,
   with the `_metal2` forks of the ring kernels (`reader_bmm_tile_layout_in0_ring_all_gather_metal2.cpp`,
-  `bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp`) and the pipe-only in1 reader
+  `bmm_large_block_zm_fused_bias_activation_gathered_metal2.cpp`), the hop-core kernels
+  (`reader_bmm_tile_layout_in0_ring_hop_metal2.cpp`, `gather_in0_hop_sink_metal2.cpp`, sharing
+  `kernels/dataflow/in0_ring_forward.hpp` with the ring reader) and the pipe-only in1 reader
   `reader_bmm_tile_layout_in1_prefetcher_pipe_metal2.cpp`.
 - Both in1 readers drain the pipes through `kernels/dataflow/prefetcher_pipe_in1_window.hpp`, which
   holds the one-block lookahead window the host sizes the ring for.

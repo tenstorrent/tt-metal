@@ -61,6 +61,7 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     bank_receivers_strided as _bank_receivers_strided,
     bank_receivers_contiguous as _bank_receivers_contiguous,
     make_recv_contig_weight as _make_recv_contig_weight,
+    recv_contig_weight_memory_config as _recv_contig_weight_memory_config,
     make_krow_major_weight as _make_krow_major_weight,
     tensor_prefetcher_session,
     require_tensor_prefetcher,
@@ -1151,6 +1152,8 @@ def _streaming_gather_in0_setup(
     out_subblock_w=None,
     stream_in1=True,
     num_global_cb_receivers=1,
+    k_tiles=None,
+    hop_cores=None,
 ):
     """Weight, activation, program config and bank pairing for a gather-in0 matmul over a receiver ring.
 
@@ -1158,7 +1161,8 @@ def _streaming_gather_in0_setup(
     cell (P % ring_cols, P // ring_cols) for either distribution. One K-block is one in0 shard wide
     (``k_tiles_per_shard``) and one worker's output columns (``n_tiles_per_receiver``) across; that is
     one ``entry_size`` page of the GCB or the pipes. ``out_subblock_w`` defaults to one subblock across
-    the worker's columns.
+    the worker's columns. ``k_tiles`` below ``k_tiles_per_shard * ring_size`` pads the last in0 shards,
+    and the weight's per-receiver shard with them; ``hop_cores`` adds in0-only cores to the ring.
     """
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -1169,34 +1173,69 @@ def _streaming_gather_in0_setup(
     )
 
     M = ttnn.TILE_SIZE
-    K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
+    K_padded = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
+    K = K_padded if k_tiles is None else k_tiles * ttnn.TILE_SIZE
     N = ring_size * n_tiles_per_receiver * ttnn.TILE_SIZE
 
     # Weight (B): receiver-contiguous ND-sharded (num_shards = ring_size); the shard distribution
     # (ROUND_ROBIN_1D strided / CONTIGUOUS_1D contiguous) is matched by the bank pairing below.
     torch.manual_seed(zlib.crc32(name.encode()))
     pt_weight = torch.randn(1, 1, K, N)
-    tt_weight = _make_recv_contig_weight(
-        device,
-        pt_weight,
-        num_dram_banks=num_dram_banks,
-        ring_size=ring_size,
-        dtype=dtype,
-        distribution_strategy=distribution_strategy,
-    )
+
+    def make_weight(pt):
+        return _make_recv_contig_weight(
+            device,
+            pt,
+            num_dram_banks=num_dram_banks,
+            ring_size=ring_size,
+            dtype=dtype,
+            distribution_strategy=distribution_strategy,
+            shard_k=K_padded,
+        )
 
     # Activation (A): width-sharded across the receiver grid; K split across the ring.
     pt_act = torch.randn(1, 1, M, K)
     act_mem_config = ttnn.create_sharded_memory_config(
-        shape=(M, K // ring_size),
+        shape=(M, K_padded // ring_size),
         core_grid=receiver_cores,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    tt_act = ttnn.from_torch(
-        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
-    )
+
+    def make_act(pt):
+        return ttnn.from_torch(
+            pt, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
+        )
+
+    if K < K_padded:
+        # Tensor creation zero-fills shard padding, which a matmul that read the padding would add
+        # nothing from. Leave NaN there instead: fill each tensor's full padded shape with NaN at the
+        # address the real one then takes, and copy the real one in from DRAM, which writes only its
+        # logical tiles. Only skipping the padding then gives the right answer.
+        weight_source = ttnn.from_torch(
+            pt_weight, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        act_source = ttnn.from_torch(
+            pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        poison_weight = make_weight(torch.full((1, 1, K_padded, N), float("nan")))
+        poison_act = make_act(torch.full((1, 1, M, K_padded), float("nan")))
+        poison_addrs = (poison_weight.buffer_address(), poison_act.buffer_address())
+        ttnn.deallocate(poison_weight)
+        ttnn.deallocate(poison_act)
+        tt_weight = ttnn.to_memory_config(
+            weight_source,
+            _recv_contig_weight_memory_config(K, N, num_dram_banks, ring_size, distribution_strategy, K_padded),
+        )
+        tt_act = ttnn.to_memory_config(act_source, act_mem_config)
+        assert (tt_weight.buffer_address(), tt_act.buffer_address()) == poison_addrs, "NaN padding did not land"
+        # The copies' cached programs hold the receiver cores, and pipe rings come from the persistent
+        # L1 arena, which refuses a core a live Program holds; the caller makes the pipes next.
+        device.clear_program_cache()
+    else:
+        tt_weight = make_weight(pt_weight)
+        tt_act = make_act(pt_act)
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(ring_cols, ring_rows),
@@ -1209,7 +1248,7 @@ def _streaming_gather_in0_setup(
         fused_activation=None,
         mcast_in0=False,
         gather_in0=True,
-        hop_cores=ttnn.CoreRangeSet([]),
+        hop_cores=ttnn.CoreRangeSet([]) if hop_cores is None else hop_cores,
         num_global_cb_receivers=num_global_cb_receivers,
         untilize_out=False,
         stream_in1=stream_in1,
@@ -1834,9 +1873,9 @@ def test_tensor_prefetcher_gather_in0_pipes(
 ):
     """Streaming gather-in0 consuming in1 K-blocks from DRAM-sender PrefetcherPipes instead of a GCB.
 
-    ``ring_half_blocks`` is the ring depth in half K-blocks. A run streams ring_size K-blocks, which
-    depth 3 does not divide, so the second run resumes mid-ring; depth 2.5 is not a whole number of
-    K-blocks, so the pipe skips the trailing half block at every wrap.
+    ``ring_half_blocks`` is the ring depth in half K-blocks. A run streams ring_size K-blocks, several
+    times the ring, which depth 3 does not divide, so the second run resumes mid-ring; depth 2.5 is not
+    a whole number of K-blocks, so the pipe skips the trailing half block at every wrap.
     """
     setup = _streaming_gather_in0_setup(
         device,
@@ -1887,15 +1926,195 @@ def test_tensor_prefetcher_gather_in0_pipes(
     ), "second gather_in0 pipes invocation did not hit the program cache"
 
 
-def test_tensor_prefetcher_gather_in0_pipes_rejects_batched(device, expect_error):
-    """A pipe ring is consumed as it streams in, never read as a resident layer, so the batched
-    gather (stream_in1=False) is rejected."""
+def _hop_cores(device, num_hops):
+    """``num_hops`` single cores in the column right of the ring, one per row from the top."""
+    ring_cols = device.dram_grid_size().x
+    return ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(ring_cols, y), ttnn.CoreCoord(ring_cols, y)) for y in range(num_hops)}
+    )
+
+
+@pytest.mark.parametrize(
+    "stream_in1,num_hops,k_tiles_short",
+    [
+        (False, 0, 0),
+        (True, 1, 0),
+        (False, 2, 0),
+        (True, 0, 3),
+        (False, 2, 3),
+    ],
+    ids=["k_order", "hop1", "hop2_k_order", "padded", "padded_hop2_k_order"],
+)
+def test_tensor_prefetcher_gather_in0_pipes_ring_shapes(device, stream_in1, num_hops, k_tiles_short):
+    """Gather-in0 over Tensor-prefetcher pipes with the ring shapes beyond the plain one.
+
+    ``stream_in1=False`` delivers each worker its K-blocks in K order rather than ring order, into a
+    ring that holds the whole layer and a K-block and a half more, so the second layer starts mid-ring.
+    Hop cores carry the ring's link from its first worker round to its last. ``k_tiles_short`` takes that many tiles off K, so the
+    last shard is empty and the one before it short, and the weight's per-receiver shard is padded to
+    whole K-blocks. Each runs twice, the second hitting the program cache.
+    """
+    k_tiles_per_shard, recv_per_bank = 2, 2
+    ring_size = device.dram_grid_size().x * recv_per_bank
+    setup = _streaming_gather_in0_setup(
+        device,
+        f"ring_shapes_{stream_in1}_{num_hops}_{k_tiles_short}",
+        k_tiles_per_shard,
+        2,
+        recv_per_bank,
+        ttnn.bfloat16,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        stream_in1=stream_in1,
+        k_tiles=k_tiles_per_shard * ring_size - k_tiles_short,
+        hop_cores=_hop_cores(device, num_hops) if num_hops else None,
+    )
+    ring_half_blocks = 4 if stream_in1 else 2 * ring_size + 3
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
+    )
+
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
+    expected = setup["pt_act"].float() @ setup["pt_weight"].float()
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(2):
+            _prefetch_and_check_over_pipes(
+                setup,
+                pipes,
+                expected,
+                compute_kernel_config,
+                f"gather_in0_pipes_ring_shapes stream_in1={stream_in1} hops={num_hops} "
+                f"k_tiles_short={k_tiles_short} run={run}",
+            )
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "second gather_in0 pipes invocation did not hit the program cache"
+
+
+@pytest.mark.parametrize(
+    "distribution_strategy",
+    [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
+    ids=["strided", "contiguous"],
+)
+@pytest.mark.parametrize(
+    "name,k_tiles_per_shard,n_tiles_per_receiver,dtype,out_subblock_w,hifi4",
+    [
+        ("qkv_small_bf16", 1, 1, ttnn.bfloat16, None, True),
+        # Three output subblocks: the partials spill between K-blocks (packer L1 accumulation with
+        # HiFi4, a reload into DEST without it).
+        ("spill_bf8", 2, 6, ttnn.bfloat8_b, 2, True),
+        ("spill_bf16_lofi", 2, 6, ttnn.bfloat16, 2, False),
+    ],
+    ids=["qkv_small_bf16", "spill_bf8", "spill_bf16_lofi"],
+)
+@pytest.mark.parametrize(
+    "extra_half_blocks",
+    [0, 7, None],
+    ids=["one_layer", "layer_plus_3p5", "layer_and_a_half_plus_half"],
+)
+def test_tensor_prefetcher_gather_in0_pipes_k_order(
+    device,
+    name,
+    k_tiles_per_shard,
+    n_tiles_per_receiver,
+    dtype,
+    out_subblock_w,
+    hifi4,
+    extra_half_blocks,
+    distribution_strategy,
+):
+    """Gather-in0 over Tensor-prefetcher pipes with ``stream_in1=False``: each worker's K-blocks arrive
+    in K order, and the ring holds the whole layer while the worker walks it in ring order from its
+    own K-block, stepping over the rest of the ring to come back round to the layer's first.
+
+    ``extra_half_blocks`` is how many half K-blocks the ring holds beyond one layer (None: half a layer
+    and half a K-block). Three runs move the layer round the ring. With exactly one layer every run
+    fills the whole ring; with more, the later layers start mid-ring and straddle the ring's end at a
+    different K-block each run, skipping the trailing half block there, so a worker's walk can cross
+    the end of the ring as well as come back round from the layer's last K-block.
+    """
+    recv_per_bank = 2
+    ring_size = device.dram_grid_size().x * recv_per_bank
+    setup = _streaming_gather_in0_setup(
+        device,
+        name,
+        k_tiles_per_shard,
+        n_tiles_per_receiver,
+        recv_per_bank,
+        dtype,
+        distribution_strategy,
+        out_subblock_w=out_subblock_w,
+        stream_in1=False,
+    )
+    ring_half_blocks = 2 * ring_size + (ring_size + 1 if extra_half_blocks is None else extra_half_blocks)
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, setup["bank_to_receivers"], setup["entry_size"] * ring_half_blocks // 2
+    )
+
+    compute_kernel_config = _hifi4_compute_kernel_config(device) if hifi4 else _lofi_compute_kernel_config(device)
+    expected = setup["pt_act"].float() @ setup["pt_weight"].float()
+    pcc_threshold = 0.999 if dtype == ttnn.bfloat16 else 0.99
+    cache_entries_after_first = None
+    with tensor_prefetcher_session(device):
+        for run in range(3):
+            _prefetch_and_check_over_pipes(
+                setup,
+                pipes,
+                expected,
+                compute_kernel_config,
+                f"gather_in0_pipes_k_order {name} {distribution_strategy} half_blocks={ring_half_blocks} run={run}",
+                pcc_threshold=pcc_threshold,
+            )
+            if run == 0:
+                cache_entries_after_first = device.num_program_cache_entries()
+
+    assert (
+        device.num_program_cache_entries() == cache_entries_after_first
+    ), "later gather_in0 pipes invocations did not hit the program cache"
+
+
+def test_tensor_prefetcher_gather_in0_pipes_rejects_k_order_short_ring(device, expect_error):
+    """With stream_in1=False the K-blocks arrive in K order and each worker reads them in ring order, so
+    the ring has to hold the whole layer; a ring one K-block short is rejected."""
     setup = _streaming_gather_in0_setup(
         device, "qkv_small_bf16", 1, 1, 2, ttnn.bfloat16, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D, stream_in1=False
     )
-    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
-    with expect_error(RuntimeError, "requires stream_in1=true"):
+    _space, pipes = _make_tensor_prefetcher_pipes(
+        device, setup["bank_to_receivers"], (setup["ring_size"] - 1) * setup["entry_size"]
+    )
+    with expect_error(RuntimeError, "the pipe ring has to hold the whole layer"):
         _linear_over_pipes(setup, pipes)
+
+
+def test_tensor_prefetcher_gather_in0_pipes_rejects_unpadded_slab(device, expect_error):
+    """The Tensor prefetcher cuts each receiver's slab into ring_size equal K-blocks, so a ring whose
+    last in0 shards are padded needs the slab padded to match. A slab only as deep as K is rejected."""
+    k_tiles_per_shard, recv_per_bank = 2, 2
+    ring_size = device.dram_grid_size().x * recv_per_bank
+    setup = _streaming_gather_in0_setup(
+        device,
+        "qkv_small_bf16",
+        k_tiles_per_shard,
+        1,
+        recv_per_bank,
+        ttnn.bfloat16,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        k_tiles=k_tiles_per_shard * ring_size - 1,
+    )
+    unpadded_weight = _make_recv_contig_weight(
+        device,
+        setup["pt_weight"],
+        num_dram_banks=device.dram_grid_size().x,
+        ring_size=ring_size,
+        dtype=ttnn.bfloat16,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    with expect_error(RuntimeError, "Give the weight's NdShardSpec a K of"):
+        _linear_over_pipes(setup, pipes, weight=unpadded_weight)
 
 
 def test_tensor_prefetcher_gather_in0_pipes_rejects_ring_without_lookahead(device, expect_error):
@@ -1943,44 +2162,60 @@ def test_tensor_prefetcher_gather_in0_pipes_rejects_workers_short_of_N(device, e
         _linear_over_pipes(setup, pipes)
 
 
-def test_tensor_prefetcher_gather_in0_pipes_rejects_hop_cores(device, expect_error):
-    """Every ring core computes the output block of its own activation shard, so the ring has no room
-    for hop cores that only forward in0."""
-    setup = _streaming_gather_in0_setup(
-        device, "qkv_small_bf16", 1, 1, 2, ttnn.bfloat16, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
-    )
-    # One row below the ring, so the shared gather_in0 check that hop cores stay off the
-    # activation's shard grid passes.
-    hop_core = ttnn.CoreCoord(0, setup["program_config"].compute_with_storage_grid_size.y)
-    setup["program_config"].hop_cores = ttnn.CoreRangeSet({ttnn.CoreRange(hop_core, hop_core)})
-    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
-    with expect_error(RuntimeError, "does not support hop_cores"):
-        _linear_over_pipes(setup, pipes)
+@pytest.mark.parametrize(
+    "gather_stream_in1,ring_depth",
+    [
+        (True, "three_blocks"),
+        (True, "layer_and_a_half"),
+        (False, "layer_and_a_half"),
+        (False, "layer_plus_3p5"),
+    ],
+    ids=[
+        "ring_order_three_blocks",
+        "ring_order_layer_and_a_half",
+        "k_order_layer_and_a_half",
+        "k_order_layer_plus_3p5",
+    ],
+)
+def test_tensor_prefetcher_gather_and_mcast_in0_share_pipes(device, gather_stream_in1, ring_depth):
+    """An mcast-in0 and a gather-in0 matmul back to back on one pipe set.
 
-
-def test_tensor_prefetcher_gather_and_mcast_in0_share_pipes(device):
-    """A gather-in0 and an mcast-in0 matmul back to back on one pipe set.
-
-    The two consume different K-blocks (a whole in0 shard of K for the gather, ``in0_block_w`` tiles
-    for the mcast) in different orders (ring-rotated, natural), so every switch re-grids the rings and
-    the second consumer starts from wherever the first left the durable cursor. The pair runs twice so
-    each config's second invocation has to hit the program cache.
+    The two consume different K-blocks (``in0_block_w`` tiles for the mcast, a whole in0 shard of K
+    for the gather), the gather in ring or K order, so every switch re-grids the rings and the second
+    consumer starts from wherever the first left the durable cursor: every gather begins mid-ring,
+    behind data that has already gone through. A ring three gather K-blocks deep wraps several times
+    in every ring-order gather. A K-order gather needs the ring to hold its whole layer; one a layer
+    and a half deep plus half a K-block, or a layer plus three and a half K-blocks, has the layer
+    straddle the ring's end at a point that moves from one gather to the next, skipping the trailing
+    gap there. The pair runs twice so each config's second invocation has to hit the program cache.
     """
     # Both pair the banks for CONTIGUOUS_1D over the same num_dram_banks x 2 grid, so one pipe set
     # serves both.
     gather = _streaming_gather_in0_setup(
-        device, "share_gather", 2, 2, 2, ttnn.bfloat16, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+        device,
+        "share_gather",
+        2,
+        2,
+        2,
+        ttnn.bfloat16,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        stream_in1=gather_stream_in1,
     )
     mcast = _mcast_in0_pipe_setup(device, "recv_contig_contiguous", per_core_N=2)
     assert gather["entry_size"] != mcast["entry_size"]
 
-    ring_size = 3 * max(gather["entry_size"], mcast["entry_size"])
+    if ring_depth == "three_blocks":
+        ring_size = 3 * max(gather["entry_size"], mcast["entry_size"])
+    elif ring_depth == "layer_and_a_half":
+        ring_size = (3 * gather["ring_size"] + 1) * gather["entry_size"] // 2
+    else:
+        ring_size = (2 * gather["ring_size"] + 7) * gather["entry_size"] // 2
     _space, pipes = _make_tensor_prefetcher_pipes(device, gather["bank_to_receivers"], ring_size)
 
     compute_kernel_config = _hifi4_compute_kernel_config(device)
     consumers = [
         (label, setup, setup["pt_act"].float() @ setup["pt_weight"].float())
-        for label, setup in (("gather", gather), ("mcast", mcast))
+        for label, setup in (("mcast", mcast), ("gather", gather))
     ]
     cache_entries_after_first = None
     with tensor_prefetcher_session(device):
@@ -1991,7 +2226,7 @@ def test_tensor_prefetcher_gather_and_mcast_in0_share_pipes(device):
                     pipes,
                     expected,
                     compute_kernel_config,
-                    f"gather_and_mcast_in0_share_pipes {label} run={run}",
+                    f"gather_and_mcast_in0_share_pipes {label} {ring_depth} gather_stream_in1={gather_stream_in1} run={run}",
                 )
             if run == 0:
                 cache_entries_after_first = device.num_program_cache_entries()
