@@ -114,6 +114,11 @@ class MiMoDecoderLayer:
         self.gate = (
             None if wc.build_only else MiMoGate(mesh, gw.to(torch.bfloat16), gb, bias_shift=0.0, batch_per_device=None)
         )
+        if self.gate is not None and ROUTER_MODE == "exact":
+            # TTMoEGate keeps L1-sharded kernel buffers per instance; 47 layers of them exhaust L1 (rmsnorm CB clash at layer 48 build). Only the
+            # hilo/plain kernel paths read them, the exact path (fp32 matmul + topk) does not.
+            for n in ("tt_bias", "tt_input_indices", "tt_output", "tt_output_indices"):
+                ttnn.deallocate(getattr(self.gate, n))
         experts = {}
 
         def host(l, i):
