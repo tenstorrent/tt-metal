@@ -405,4 +405,8 @@ class MiMoAttention:
             oc, self.wo, dtype=ttnn.bfloat16, compute_kernel_config=_k_mm(), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(oc)
+        if part.shape[2] != B:  # nlp_concat_heads_decode pads the batch to 32 rows
+            sl = ttnn.slice(part, [0, 0, 0, 0], [1, 1, B, HIDDEN])
+            ttnn.deallocate(part)
+            part = sl
         return self._all_reduce(part)
