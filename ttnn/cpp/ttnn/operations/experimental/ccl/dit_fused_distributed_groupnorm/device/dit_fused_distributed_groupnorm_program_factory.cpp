@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <cstring>
 #include <set>
 #include <tuple>
 #include <unordered_map>
@@ -32,16 +31,6 @@ using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
-
-namespace {
-
-uint32_t float_to_u32(float v) {
-    uint32_t out;
-    std::memcpy(&out, &v, sizeof(float));
-    return out;
-}
-
-}  // namespace
 
 // Multi-core mcast GroupNorm across the device grid — the on-device reduction is identical to the
 // stock ttnn::group_norm mcast path (groupnorm_mcast_program_factory.cpp): cores split into
@@ -201,10 +190,17 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const bool welford_fp32_alias = welford_unpack_fp32_active;  // tilize_in == false
     const uint32_t cb_in0_welford_index =
         welford_fp32_alias ? static_cast<uint32_t>(tt::CBIndex::c_19) : static_cast<uint32_t>(tt::CBIndex::c_0);
+    // V1 accepts tiled BF16 input, so the FP32 aliases remain inactive. Its input CB holds one streamed
+    // block rather than the complete local input, requiring the reader to supply both statistics passes.
+    // V1 has no dedicated FP32 normalization aliases; keep its standard FPU finalizer even if FP32 input is added.
+    constexpr bool fp32_sfpu_normalizer = false;
+    constexpr uint32_t cb_ex_global_index = tt::CBIndex::c_15;
+    constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_27;
+    constexpr bool sfpu_two_pass_l1_replay = false;
 
     const bool has_gamma = gamma.has_value();
     const bool has_beta = beta.has_value();
-    const uint32_t groupnorm_mode = static_cast<uint32_t>(ttnn::prim::GroupNormMode::WELFORD_NATIVE);
+    const uint32_t groupnorm_mode = static_cast<uint32_t>(ttnn::prim::GroupNormMode::TWO_PASS);
 
     // ------------------------------------------------------------------------
     // Ring topology (unchanged from CCL scaffold)
@@ -492,6 +488,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"cb_in0_welford", cb_in0_welford_index},
         {"stats_is_fp32", static_cast<uint32_t>(stats_is_fp32)},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
     };
 
     std::map<std::string, std::string> reader_defines;
@@ -604,6 +601,15 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+        TT_FATAL(
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) ||
+                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
+        const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+        fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
+        fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         // The coalescing forwarder is fully parameterized by these CT args (stick_bytes,
         // max_rounds, num_chunks_per_device), so it is shared verbatim with the fused rmsnorm op.
         forwarder_kernel_ids[f] = CreateKernel(
@@ -631,12 +637,19 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         {"num_tiles_input_mask", num_groups_per_core * block_wt},
         {"num_out_blocks", num_out_blocks},
         {"num_channels_per_group", num_channels_per_group},
-        {"reciprocal_size", 0u},  // welford native
         {"TILE_WIDTH", tile_w},
         {"cb_in0_welford", cb_in0_welford_index},
         {"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)},
         {"welford_unpack_fp32_active", static_cast<uint32_t>(welford_unpack_fp32_active)},
         {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},
+        {"fp32_sfpu_normalizer", static_cast<uint32_t>(fp32_sfpu_normalizer)},
+        {"cb_normalize_in_fp32", cb_in0_welford_index},
+        {"cb_ex_global_fp32", cb_ex_global_index},
+        {"cb_ex2pe_fp32", cb_ex2pe_index},
+        {"sfpu_two_pass_l1_replay", static_cast<uint32_t>(sfpu_two_pass_l1_replay)},
+        {"sfpu_two_pass_reciprocal",
+         std::bit_cast<uint32_t>(
+             1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)))},
     };
     // Optional fused unary activation. "dst0" is the DEST index the final output tile lives in
     // when the compute kernel applies the activation (see welford_groupnorm.cpp).
@@ -835,7 +848,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         }
 
         std::vector<uint32_t> writer_rt = {
-            float_to_u32(args.eps),
+            std::bit_cast<uint32_t>(args.eps),
             output_addr,
             gamma_addr,
             beta_addr,

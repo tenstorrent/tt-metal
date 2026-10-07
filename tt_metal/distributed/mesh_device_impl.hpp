@@ -133,6 +133,7 @@ private:
     // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
     // on the device may not be thread safe.
     std::mutex api_mutex_;
+    bool command_list_builder_active_ = false;
     bool is_internal_state_initialized = false;
     // Which MetalContext instance this MeshDevice uses
     // To be removed in favor of directly passing around the MetalContext reference.
@@ -263,6 +264,11 @@ public:
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
     void push_corruptible_allocation_scope();
     void pop_corruptible_allocation_scope();
+
+    // Command List builder lifecycle. The reservation is device-wide; the active
+    // SubDeviceManagerId is captured separately by the builder for validation.
+    SubDeviceManagerId acquire_command_list_builder();
+    void release_command_list_builder();
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
