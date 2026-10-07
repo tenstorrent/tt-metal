@@ -32,6 +32,9 @@ U = int(os.environ.get("ATTN_U", "2"))
 ND = int(os.environ.get("ATTN_ND", "3"))
 SINKM = float(os.environ.get("ATTN_SINKM", "3"))
 P = CH * NCH
+RAGGED = os.environ.get("ATTN_RAGGED", "0") == "1"  # user u gets NCH-u chunks
+WD = {"bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[os.environ.get("ATTN_WDTYPE", "bf8")]
+LENS = [CH * max(1, NCH - u) if RAGGED else P for u in range(U)]
 MAXPOS = ((P + ND + 255) // 256) * 256 + 256
 OUT = os.environ.get("ATTN_OUT", "/tmp/attn_mesh.jsonl")
 
@@ -63,7 +66,7 @@ def main():
             nb = ring if cfg.window else MAXPOS // BLOCK
             perm = torch.randperm(32 * nb, generator=g).reshape(32, nb).to(torch.int32)
             t0 = time.time()
-            m = MiMoAttention(mesh, cfg, hw, perm, MAXPOS, ring_blocks=ring)
+            m = MiMoAttention(mesh, cfg, hw, perm, MAXPOS, ring_blocks=ring, wdtype=WD)
             rec("build", kind=kind, secs=round(time.time() - t0, 1), ring=ring if cfg.window else None)
             # data: x[row, user, T, 4096]
             T = P + ND
@@ -72,7 +75,9 @@ def main():
             ref = torch.zeros(rows, U, T, HIDDEN)
             for r in range(rows):
                 for u in range(U):
-                    ref[r, u] = ref_attention(x[r, u], q_w, k_w, v_w, o_w, sink, cfg.nkv, cfg.theta, cfg.window)
+                    ref[r, u, : LENS[u] + ND] = ref_attention(
+                        x[r, u, : LENS[u] + ND], q_w, k_w, v_w, o_w, sink, cfg.nkv, cfg.theta, cfg.window
+                    )
             rec("ref_done", kind=kind, secs=round(time.time() - t0, 1))
             to_mesh = lambda t, d=ttnn.bfloat16: ttnn.from_torch(
                 t,
@@ -90,7 +95,7 @@ def main():
             colspread = 0.0
             t0 = time.time()
             for u in range(U):
-                for c in range(NCH):
+                for c in range(LENS[u] // CH):
                     xin = x[:, u, c * CH : (c + 1) * CH].reshape(rows, 1, CH, HIDDEN)
                     o = m.prefill_chunk(to_mesh(xin), c * CH, u)
                     h = gather(o)  # [rows, 8, CH, 4096]
@@ -120,10 +125,11 @@ def main():
             )
             # ---- decode: slots 0..U-1 continue the prefilled users, the other slots hold zero caches
             xd_all = (torch.randn(rows, 32, ND, HIDDEN, generator=g)).bfloat16()
-            xd_all[:, :U] = x[:, :, P:]
+            for u in range(U):
+                xd_all[:, u] = x[:, u, LENS[u] : LENS[u] + ND]
             dres = []
             for step in range(ND):
-                pos = [P + step] * 32
+                pos = [(LENS[u] if u < U else P) + step for u in range(32)]
                 cur, idx = m.decode_inputs(pos)
                 xin = xd_all[:, :, step].reshape(rows, 1, 32, HIDDEN)
                 o = m.decode(to_mesh(xin), cur, idx)
