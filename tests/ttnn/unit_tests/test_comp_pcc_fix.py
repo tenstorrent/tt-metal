@@ -85,3 +85,52 @@ class TestCompPccConstantTensor:
         passing, pcc_val = comp_pcc(golden, calculated, pcc=0.99)
         assert passing, f"Expected high-PCC large-magnitude tensors to pass, got pcc={pcc_val}"
         assert pcc_val > 0.99, f"Expected pcc > 0.99, got {pcc_val}"
+
+
+def _bf16(*values):
+    return torch.tensor(values, dtype=torch.bfloat16)
+
+
+class TestCompPccLowPrecisionConstantTensor:
+    """PCC is undefined for constant tensors (every single-element tensor included), so comp_pcc
+    falls back to allclose. For 16-bit floats that fallback must accept a result a few ULP from the
+    golden -- the default rtol is float32-grade -- while still rejecting wrong results, including
+    small-magnitude ones, which only the caller's atol may absorb."""
+
+    @pytest.mark.parametrize(
+        "golden, calculated",
+        [
+            pytest.param(_bf16(-0.63671875), _bf16(-0.6328125), id="bf16_single_1ulp"),
+            pytest.param(_bf16(0.99609375), _bf16(0.98828125), id="bf16_single_2ulp_near_one"),
+            pytest.param(_bf16(*[0.5] * 8), _bf16(*[0.50390625] * 8), id="bf16_constant_1ulp"),
+            pytest.param(
+                torch.tensor([0.6367], dtype=torch.float16),
+                torch.tensor([0.6362], dtype=torch.float16),
+                id="fp16_single_1ulp",
+            ),
+        ],
+    )
+    def test_few_ulp_constant_result_passes(self, golden, calculated):
+        passing, pcc_val = comp_pcc(golden, calculated, pcc=0.999)
+        assert passing, f"a {golden.dtype} result a few ULP from the golden must pass, got pcc={pcc_val}"
+
+    @pytest.mark.parametrize(
+        "golden, calculated",
+        [
+            pytest.param(_bf16(0.63671875), _bf16(-0.63671875), id="wrong_sign"),
+            pytest.param(_bf16(0.5), _bf16(0.0), id="golden_nonzero_result_zero"),
+            pytest.param(_bf16(0.5), _bf16(0.55), id="ten_percent_off"),
+            pytest.param(_bf16(0.001), _bf16(0.02), id="small_magnitude_wrong"),
+            pytest.param(_bf16(0.0), _bf16(0.01), id="golden_zero_result_small"),
+        ],
+    )
+    def test_wrong_constant_result_fails(self, golden, calculated):
+        passing, pcc_val = comp_pcc(golden, calculated, pcc=0.999)
+        assert not passing, f"a wrong {golden.dtype} result must fail, got pcc={pcc_val}"
+
+    def test_float32_tolerance_unchanged(self):
+        """float32 keeps the caller's float32-grade tolerance: a bfloat16-sized error fails."""
+        passing, _ = comp_pcc(torch.tensor([0.5]), torch.tensor([0.5039]), pcc=0.999)
+        assert not passing
+        passing, _ = comp_pcc(torch.tensor([0.123456]), torch.tensor([0.1234565]), pcc=0.999)
+        assert passing
