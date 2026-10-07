@@ -947,7 +947,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
-    bool exact_mul_at_hifi2 = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1001,17 +1000,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         if (op_config.postprocess.has_value()) {
             post_activations.insert(post_activations.begin(), *op_config.postprocess);
         }
-
-        // At HiFi2 the FPU multiplies 7 significant bits of SrcB (the math right-hand operand) by 10 of SrcA, so a
-        // block-float SrcB times a bf16 or block-float SrcA is exact.
-        const auto block_float = [](DataType dt) { return dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B; };
-        const DataType srca_dtype = scalar_first ? b_dtype : a_dtype;
-        const DataType srcb_dtype = scalar_first ? a_dtype : b_dtype;
-        exact_mul_at_hifi2 = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op &&
-                             std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
-                             std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
-                             lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
-                             (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16);
 
         bool is_integer_division =
             (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
@@ -1397,7 +1385,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = exact_mul_at_hifi2 ? MathFidelity::HiFi2 : MathFidelity::HiFi4,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };
