@@ -11,7 +11,9 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_assert.h"
+#include "llk_defs.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -205,18 +207,75 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
     }
 }
 
-template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity, bool dense = false>
+/**
+ * @brief Address mods and MOP of the multiply for SrcDvalid::PerTile: SrcA holds a whole tile (its eight-row faces at rows 0 and 8) and
+ *        the fidelity phase is the outer loop over the two faces; one MOP run per tile at high fidelity, one per block at LoFi.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam num_tiles: Tiles per block
+ * @tparam dense: DEST holds the tiles two faces apart instead of four
+ */
+template <MathFidelity math_fidelity, std::uint32_t num_tiles, bool dense>
+inline void sdpa_bcast_col_srcb_reuse_configure_tile()
+{
+    constexpr bool high_fidelity     = is_high_fidelity(math_fidelity);
+    constexpr std::int16_t next_tile = dense ? FACE_R_DIM : 3 * FACE_R_DIM;
+    constexpr auto broadcast_type    = p_elwise::SRCB_BCAST_COL;
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_1);
+    addr_mod_t {.srca = {.incr = MAX_FPU_ROWS}, .srcb = {.incr = 0}, .dest = {.incr = FACE_R_DIM}}.set(ADDR_MOD_0);
+
+    if constexpr (high_fidelity)
+    {
+        // Next phase: SrcA and DEST back to the tile's face 0; after the last phase DEST moves to the next tile
+        addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = 0}, .dest = {.incr = 0, .cr = 1}, .fidelity = {.incr = 1}}.set(ADDR_MOD_2);
+        addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = 0}, .dest = {.incr = next_tile, .c_to_cr = 1}, .fidelity = {.incr = 0, .clr = 1}}.set(
+            ADDR_MOD_3);
+        ckernel_template tmp(
+            to_underlying(math_fidelity), 1, TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0), TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
+        tmp.program();
+    }
+    else
+    {
+        addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = 0}, .dest = {.incr = next_tile}}.set(ADDR_MOD_2);
+        addr_mod_t {.srca = {.incr = 0, .clr = 1}, .srcb = {.incr = MAX_FPU_ROWS}, .dest = {.incr = 0, .clr = 1}}.set(ADDR_MOD_3);
+        ckernel_template tmp(num_tiles, 1, TT_OP_ELWMUL(0, 0, broadcast_type, ADDR_MOD_0, 0), TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_inner_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_2, 0));
+        tmp.set_last_outer_loop_instr(TT_OP_ELWMUL(p_setrwc::CLR_A, 0, broadcast_type, ADDR_MOD_3, 0));
+        tmp.program();
+    }
+}
+
+/**
+ * @tparam src_dvalid: Source bank hand-off, values = <PerFace/PerTile>; must match the unpack init (@ref _llk_unpack_A_sdpa_init_).
+ *         PerTile takes a multiply of two-face tiles only.
+ */
+template <
+    EltwiseBinaryType eltwise_binary_type,
+    std::uint32_t num_tiles,
+    MathFidelity math_fidelity,
+    bool dense           = false,
+    SrcDvalid src_dvalid = SrcDvalid::PerFace>
 inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_faces, const std::uint32_t acc_to_dest)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    sdpa_bcast_col_srcb_reuse_configure_addrmod<eltwise_binary_type, math_fidelity, dense>(num_faces);
-
-    if constexpr (
-        (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
-        (eltwise_binary_type == EltwiseBinaryType::ELWMUL))
+    if constexpr (src_dvalid == SrcDvalid::PerTile)
     {
-        sdpa_bcast_col_srcb_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(num_faces, acc_to_dest);
+        static_assert(eltwise_binary_type == EltwiseBinaryType::ELWMUL, "SrcDvalid::PerTile takes ELWMUL only");
+        LLK_ASSERT(num_faces == 2, "SrcDvalid::PerTile takes two-face tiles");
+        sdpa_bcast_col_srcb_reuse_configure_tile<math_fidelity, num_tiles, dense>();
+    }
+    else
+    {
+        sdpa_bcast_col_srcb_reuse_configure_addrmod<eltwise_binary_type, math_fidelity, dense>(num_faces);
+
+        if constexpr (
+            (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
+            (eltwise_binary_type == EltwiseBinaryType::ELWMUL))
+        {
+            sdpa_bcast_col_srcb_reuse_configure_mop<eltwise_binary_type, num_tiles, math_fidelity>(num_faces, acc_to_dest);
+        }
     }
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);

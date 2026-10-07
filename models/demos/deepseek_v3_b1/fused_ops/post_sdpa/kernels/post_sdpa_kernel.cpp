@@ -31,6 +31,8 @@
 // - CCL sender core (11, 9): gather3 receiver + dual fabric writers (NCRISC link 1, BRISC link 0)
 // - CCL receiver core (12, 9): fabric reader (NCRISC) + reduction compute (TRISC)
 
+#define SDPA_BCAST_COL_REUSE_PER_TILE_HANDOFF true
+
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/matmul.hpp"
