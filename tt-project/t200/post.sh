@@ -39,5 +39,5 @@ export PYTHONPATH=$S:$W/ttnn:$W/tools LTX_EVAL_THREADS=8 HF_HUB_OFFLINE=1
 nice -n 19 timeout 2400 python -m models.tt_dit.tests.models.ltx.tools.ltx_eval batch --cand-dir $R --ref-dir $REF \
   --out $R/eval_vs_ref_t48_s2x2 --jobs 3 --vbench-ref \
   --vbench subject_consistency,background_consistency,motion_smoothness,imaging_quality,aesthetic_quality \
-  < /dev/null > $R/eval_vs_ref_t48_s2x2.log 2>&1
+  < /dev/null > $R/eval_vs_ref_t48_s2x2.log 2>&1 || echo "ltx_eval rc=$? (1 = QUALITY/BATCH FAIL, scores written)" >> $R/eval_vs_ref_t48_s2x2.log
 reason="ok"
