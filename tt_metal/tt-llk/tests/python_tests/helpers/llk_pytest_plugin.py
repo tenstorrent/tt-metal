@@ -214,6 +214,22 @@ def pytest_addoption(parser):
     )
 
     parser.addoption(
+        "--ulp-emit",
+        action="store_true",
+        help="Re-measure rather than gate: the exhaustive unary sweep records what it "
+        "measures and folds it back into helpers/sfpu_accuracy_budget.yaml at the end "
+        "of the session, replacing the rows of each (op, in, out) it measured and "
+        "keeping hand-maintained rows. Writes the table; use it deliberately.",
+    )
+    parser.addoption(
+        "--ulp-report",
+        action="store_true",
+        help="Log the measured ULP distance for every comparison on a ULP-capable "
+        "format, on a pass as well as a failure, and including ops that carry no step "
+        "budget yet. Reporting only: it cannot change a verdict.",
+    )
+
+    parser.addoption(
         "--bit-exact-runs",
         action="store",
         type=int,
@@ -458,6 +474,22 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
+    if config.getoption("--ulp-emit"):
+        from . import ulp_sweep
+        from .sfpu_accuracy_budget import MEASURED_ARCH
+
+        if TestConfig.CHIP_ARCH != MEASURED_ARCH:
+            # finish_emit refuses this too, but only at session end: emit bypasses the
+            # tolerance-cell skip, so every cell would compile and run first.
+            raise pytest.UsageError(
+                f"--ulp-emit measures the table's unkeyed rows, which are read as "
+                f"{MEASURED_ARCH.value} measurements; this session targets "
+                f"{TestConfig.CHIP_ARCH.value}"
+            )
+        ulp_sweep.EMIT = True
+    if config.getoption("--ulp-report"):
+        utils_module._ULP_REPORT = True
+
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
         # Refresh order folder with setup_files function
@@ -629,13 +661,7 @@ def _select_tests_by_op(config, items):
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(config, items):
-    _select_tests_by_op(config, items)
-
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
-        _collapse_runtime_only_variants(config, items)
-
+def _restore_test_order(config, items):
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -670,6 +696,19 @@ def pytest_collection_modifyitems(config, items):
     logger.info(
         f"Executing {len(items)} variants as they were executed on runner {temp_runner_name} on run recorded to file {test_order_file}"
     )
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    # Choose compile representatives only after other plugins apply selection filters.
+    result = yield
+    _select_tests_by_op(config, items)
+    _restore_test_order(config, items)
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
+    return result
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
@@ -979,9 +1018,76 @@ def perf_report(request, worker_id):
     temp_report.dump_csv(post_path)
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Merge an xdist worker's ``--ulp-emit`` measurements into the controller's."""
+    from . import ulp_sweep
+
+    ulp_sweep.merge_measured(
+        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY, ())
+    )
+
+
+def _finish_ulp_emit(session):
+    """Under ``--ulp-emit``, write the whole session's measurements into the table once,
+    after every cell of an op has been seen. A refusal fails the session."""
+    from . import ulp_sweep
+
+    if not ulp_sweep.EMIT:
+        return
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE or session.config.option.collectonly:
+        # The producer only compiles -- TestConfig.run() skips before the device -- so it
+        # can never measure. It takes --ulp-emit only to collect the wider op set the
+        # consumer will run, and failing it would fail the documented emit workflow.
+        # `--collect-only --ulp-emit` previews that set, and runs nothing either.
+        _ulp_emit_line(
+            session, "--ulp-emit: nothing runs in this session; nothing to write"
+        )
+        return
+    try:
+        if not ulp_sweep.MEASURED:
+            # Silence here read as a successful rewrite: a `-k` that matched nothing, a
+            # mode that deselects the sweep.
+            raise RuntimeError("nothing was measured, so the table was not touched")
+        # pytest runs this hook after a Ctrl-C as well, with INTERRUPTED already in
+        # `exitstatus`; the failure count and the grid check cannot tell that apart from
+        # a run that ended on its own. Passed through as pytest set it, enum or int.
+        message = ulp_sweep.finish_emit(
+            get_chip_architecture(),
+            session.testsfailed,
+            exitstatus=session.exitstatus,
+        )
+    except (RuntimeError, ValueError) as exc:
+        message = f"--ulp-emit: {exc}"
+        # Escalate only a clean session: a refusal *because* the run was interrupted, hit
+        # an internal error or called pytest.exit(returncode=N) keeps that status, which a
+        # calling script would otherwise read as an ordinary test failure.
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    _ulp_emit_line(session, message)
+
+
+def _ulp_emit_line(session, message):
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(message)
+    else:
+        print(message)
+
+
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
+        # Each worker measured its own share; the controller merges them in
+        # pytest_testnodedown and writes the table once.
+        from . import ulp_sweep
+
+        if ulp_sweep.EMIT:
+            session.config.workeroutput[ulp_sweep.WORKEROUTPUT_KEY] = (
+                ulp_sweep.export_measured()
+            )
         return
+
+    _finish_ulp_emit(session)
 
     if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
