@@ -255,10 +255,18 @@ inline void calculate_sfpu_binary_div(
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
+        // sfpu_reciprocal_iter<2> written out, so that in0's load fills the bubble after the first multiply-add.
+        sfpi::vFloat r = sfpi::approx_recip(in1);
+        sfpi::vFloat t = in1 * r - sfpi::vConstFloatPrgm0;
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat y1 = r * -t - 0.0f;
+        v_if(t < 0) {
+            t = in1 * y1 - sfpi::vConstFloatPrgm0;
+            r = y1 * -t - 0.0f;
+        }
+        v_endif;
         sfpi::vFloat result = in0 * r;
         if constexpr (is_fp32_dest_acc_en) {
             // Skip quotient refinement when in0*r is already non-finite.
