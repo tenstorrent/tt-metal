@@ -81,9 +81,7 @@ inline __attribute__((always_inline)) void rmw_write_word()
 template <Access A, RegisterScope Scope, std::uint32_t Addr, std::uint32_t Shamt, std::uint32_t Mask>
 inline __attribute__((always_inline)) void write_word(const std::uint32_t value, volatile std::uint32_t* tt_reg_ptr cfg)
 {
-    static_assert(
-        A == Access::MMIO || A == Access::TensixCfgUnit,
-        "composed CFG writes require Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand");
+    static_assert(A == Access::MMIO || A == Access::TensixCfgUnit, "composed CFG writes require Access::MMIO or Access::TensixCfgUnit");
     if constexpr (A == Access::MMIO)
     {
         static_assert(Scope == RegisterScope::State, "Access::MMIO targets the state CFG; use Access::TensixCfgUnit for thread CFG (SETC16)");
@@ -156,51 +154,22 @@ inline __attribute__((always_inline)) void write_array_mmio(volatile std::uint32
     }
 }
 
-// GPR transfers: WRCFG through the CFG unit or REG2FLOP through the scalar unit.
+// GPR transfers use WRCFG through the CFG unit.
 
 template <Access A, const Field& F, Sec S, std::uint32_t GprIndex, GprTransferSize Size, WrcfgCompletion Completion>
 inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprIndex, Size, Completion>& transfer)
 {
-    static_assert(
-        A == Access::TensixCfgUnit || A == Access::TensixScalarUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit or Access::TensixScalarUnit");
-    if constexpr (Size == GprTransferSize::Bits128)
-    {
-        static_assert((F.addr32(S) & 0x3u) == 0u, "128-bit GPR cfg::write destination must be four-word aligned");
-    }
-
     if constexpr (A == Access::TensixScalarUnit)
     {
-        constexpr std::uint32_t address = F.addr32(S);
-        static_assert(
-            address >= THCON_CFGREG_BASE_ADDR32 && address < GLOBAL_CFGREG_BASE_ADDR32, "Access::TensixScalarUnit supports THCON CFG destinations only");
-        if constexpr (Size == GprTransferSize::Bits128)
-        {
-            static_assert(address + 3u < GLOBAL_CFGREG_BASE_ADDR32, "128-bit REG2FLOP transfer crosses the THCON CFG range");
-        }
-
-        constexpr std::uint32_t size_sel   = Size == GprTransferSize::Bits128 ? 0u : 1u;
-        constexpr std::uint32_t flop_index = address - THCON_CFGREG_BASE_ADDR32;
-        if constexpr (GprIndex == hal::detail::DynamicGprIndex)
-        {
-            LLK_ASSERT(transfer.source.index < 64u, "REG2FLOP GPR index must be in [0, 63]");
-            if constexpr (Size == GprTransferSize::Bits128)
-            {
-                LLK_ASSERT((transfer.source.index & 0x3u) == 0u, "128-bit REG2FLOP source GPR must be four-word aligned");
-            }
-            TT_REG2FLOP(size_sel, 0, 0, 0, flop_index, transfer.source.index);
-        }
-        else
-        {
-            static_assert(GprIndex < 64u, "REG2FLOP GPR index must be in [0, 63]");
-            if constexpr (Size == GprTransferSize::Bits128)
-            {
-                static_assert((GprIndex & 0x3u) == 0u, "128-bit REG2FLOP source GPR must be four-word aligned");
-            }
-            TTI_REG2FLOP(size_sel, 0, 0, 0, flop_index, GprIndex);
-        }
+        static_assert(A != Access::TensixScalarUnit, "Blackhole does not handle REG2FLOP properly. Use Access::TensixCfgUnit (WRCFG)");
     }
     else
     {
+        static_assert(A == Access::TensixCfgUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit");
+        if constexpr (Size == GprTransferSize::Bits128)
+        {
+            static_assert((F.addr32(S) & 0x3u) == 0u, "128-bit GPR cfg::write destination must be four-word aligned");
+        }
         if constexpr (GprIndex == hal::detail::DynamicGprIndex)
         {
             LLK_ASSERT(transfer.source.index < 64u, "WRCFG GPR index must be in [0, 63]");

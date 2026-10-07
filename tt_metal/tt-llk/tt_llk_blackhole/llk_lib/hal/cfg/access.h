@@ -179,9 +179,7 @@ inline __attribute__((always_inline)) void read(hal::Gpr<GprIndex>)
 template <Access A, const Field& F, Sec S>
 inline __attribute__((always_inline)) void write(const std::uint32_t value)
 {
-    static_assert(
-        A == Access::MMIO || A == Access::TensixCfgUnit,
-        "value-backed cfg::write requires Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand");
+    static_assert(A == Access::MMIO || A == Access::TensixCfgUnit, "value-backed cfg::write requires Access::MMIO or Access::TensixCfgUnit");
     static_assert(F.width <= 32, "field wider than 32b cannot be written through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
@@ -276,16 +274,16 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
 /**
  * @brief Transfer one or four GPR words to complete state-CFG register words.
  *
- * @tparam A Access path: Access::TensixCfgUnit or Access::TensixScalarUnit.
+ * @tparam A Access path; must be Access::TensixCfgUnit.
  * @tparam Anchor Field, or field group with a Raw anchor, identifying the first destination
  *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
  * @tparam S Register section; must be within the anchor's count.
  * @tparam Size Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
- * @tparam Completion WRCFG completion policy used by Access::TensixCfgUnit; defaults to WrcfgCompletion::Deferred.
+ * @tparam Completion WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
  * @tparam GprIndex GPR index deduced from source.
  * @param source Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
- * @note TensixCfgUnit emits WRCFG and its requested completion NOP. TensixScalarUnit
- *       emits REG2FLOP without a completion NOP and accepts only THCON destinations.
+ * @note Emits WRCFG and its requested completion NOP. Access::TensixScalarUnit
+ *       is unsupported because Blackhole does not handle REG2FLOP properly.
  */
 template <
     Access A,
