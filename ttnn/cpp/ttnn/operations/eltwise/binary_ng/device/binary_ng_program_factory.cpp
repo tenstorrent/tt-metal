@@ -1397,10 +1397,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
 
-    // Blackhole: a section of the sharded no-broadcast FPU op is unpacked with one call, and packed with one into bf16 or fp32.
+    // Blackhole, 16 or more tiles per core: a section of the sharded no-broadcast FPU op is unpacked with one call, and packed
+    // with one into bf16 or fp32.
     const bool block_section = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
                                !is_where_op && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
-                               num_tiles_per_cycle > 1 &&
+                               num_tiles_per_cycle > 1 && c_num_tiles_per_shard.value_or(0) >= 16 &&
                                std::getenv("EB_R3_NO_BLOCK") == nullptr;  // CI measurement toggle, not in the PR
     const bool block_pack =
         block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32) &&

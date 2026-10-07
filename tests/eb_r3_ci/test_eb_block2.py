@@ -21,8 +21,8 @@ def device():
 HS = {4: (256, 128), 8: (512, 128), 16: (1024, 128), 32: (1024, 256), 64: (1024, 512), 128: (1024, 1024)}
 OUT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b, "fp32": ttnn.float32}
 DTS = [("bf16", "bf16"), ("bfp8", "bfp8"), ("bfp8", "bf16"), ("bf16", "fp32")]
-CASES = [(op, f"hs8_t{t}", di, do) for op in ("add", "mul") for t in HS for (di, do) in DTS if not (do == "fp32" and t > 64)]
-CASES += [(op, m, di, do) for op in ("add", "mul") for m in ("ws32_t4", "bs64_t80") for (di, do) in DTS if not (do == "fp32" and m == "bs64_t80")]
+CASES = [(op, f"hs8_t{t}", di, do) for op in ("add", "sub", "mul") for t in HS for (di, do) in DTS if not (do == "fp32" and t > 64)]
+CASES += [(op, m, di, do) for op in ("add", "sub", "mul") for m in ("ws32_t4", "bs64_t80") for (di, do) in DTS if not (do == "fp32" and m == "bs64_t80")]
 
 
 def _mem(name):
@@ -48,9 +48,9 @@ def test_block2(device, op, mem, di, do):
     kw = dict(dtype=OUT[do], memory_config=mc)
     if op == "mul":
         kw["fast_and_approximate_mode"] = True
-    fn = ttnn.add if op == "add" else ttnn.multiply
+    fn = {"add": ttnn.add, "sub": ttnn.subtract, "mul": ttnn.multiply}[op]
     for _ in range(3):
         out = fn(ta, tb, **kw)
     got = ttnn.to_torch(out).float()
-    ref = (torch.add if op == "add" else torch.mul)(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float())
+    ref = {"add": torch.add, "sub": torch.sub, "mul": torch.mul}[op](ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float())
     assert torch.allclose(got, ref, rtol=0.05, atol=0.1), float((got - ref).abs().max())
