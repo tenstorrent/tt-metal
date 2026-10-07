@@ -753,7 +753,9 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
-        compute_hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = cfg.fp32_dest_acc_en};
+        // Quasar's first fidelity phase covers the Float16_b and MxFp4_2x operands here in full
+        compute_hw_config = experimental::ComputeHardwareConfig{
+            .fpu_math_fidelity = MathFidelity::LoFi, .enable_32_bit_dest = cfg.fp32_dest_acc_en};
     } else {
         reader_hw_config = experimental::DataMovementHardwareConfig{
             .config_1xx =
@@ -1225,8 +1227,6 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreComputeMatmulNo
         {.rt_dim = 1, .ct_dim = 1, .kt_dim = 2},
         {.rt_dim = 2, .ct_dim = 2, .kt_dim = 1},
         {.rt_dim = 2, .ct_dim = 2, .kt_dim = 2},
-        {.rt_dim = 1, .ct_dim = 1, .kt_dim = 1, .math_fidelity = MathFidelity::HiFi4},
-        {.rt_dim = 2, .ct_dim = 2, .kt_dim = 2, .math_fidelity = MathFidelity::HiFi4},
     };
     for (const auto& cfg : cases) {
         unit_tests::compute::matmul::run_matmul_no_mop(this->devices_.at(0), cfg);

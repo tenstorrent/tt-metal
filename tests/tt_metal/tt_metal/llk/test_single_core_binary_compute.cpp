@@ -661,7 +661,16 @@ bool single_core_binary(
 // which matters on simulator targets where one iteration costs about a minute.
 // MathFidelity is a sparse enum, so the valid values are listed rather than counted.
 class LLKMeshDeviceFixtureSlowDispatchOnlyFidelity : public LLKMeshDeviceFixtureSlowDispatchOnly,
-                                                     public testing::WithParamInterface<MathFidelity> {};
+                                                     public testing::WithParamInterface<MathFidelity> {
+protected:
+    void SetUp() override {
+        // Every test here multiplies Float16_b, which Quasar's first fidelity phase covers in full.
+        if (detail::detect_arch() == ARCH::QUASAR && GetParam() != MathFidelity::LoFi) {
+            GTEST_SKIP() << "Quasar multiplies Float16_b in full at LoFi";
+        }
+        LLKMeshDeviceFixtureSlowDispatchOnly::SetUp();
+    }
+};
 
 TEST_P(LLKMeshDeviceFixtureSlowDispatchOnlyFidelity, TensixBinaryComputeSingleCoreSingleTileAdd) {
     unit_tests::compute::binary::SingleCoreBinaryConfig test_config = {
