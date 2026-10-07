@@ -14,8 +14,10 @@ import math
 import os
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt import pf_tune
 
 TILE = 32
+MAX_M = 512  # rows of the own-token block up to which ``shared`` is bit-identical to prefill_layer.shared_big (tests/test_sd_numerics.py: M = 64..512 equal, 1024+ differs: other auto in0_block_w)
 
 
 def enabled():
@@ -42,14 +44,14 @@ def _subblock(pm, pn, cap=4):
     return best
 
 
-def mm_cfg(grid_xy, m_tiles, k_tiles, n_tiles):
+def mm_cfg(grid_xy, m_tiles, k_tiles, n_tiles, bw=None):
     gx, gy = grid_xy
     pm = math.ceil(m_tiles / gy)
     pn = math.ceil(n_tiles / gx)
     sh, sw = _subblock(pm, pn)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
-        in0_block_w=_divisor_le(k_tiles, 8),
+        in0_block_w=bw or _divisor_le(k_tiles, 8),
         out_subblock_h=sh,
         out_subblock_w=sw,
         per_core_M=pm,
@@ -179,13 +181,19 @@ class SDOverlap:
     def shared(self, sh, h):
         """Shared expert of ``h`` [1,1,M,D] bf16 on sub-device 1 (same maths / dtypes as prefill_layer.shared_big) -> [1,1,M,D] fp32."""
         self.split_weights(sh)
+        ckc = pf_tune.shared_ckc(
+            sh, h.device()
+        )  # SAME compute config as prefill_layer.shared_big (HiFi2 under the prefill umbrella; sh.ckc is HiFi4)
         m, kt, nt = h.shape[2] // TILE, sh.dim // TILE, sh.inter // TILE
-        c1, c2 = mm_cfg(self.s_grid, m, kt, nt), mm_cfg(self.s_grid, m, nt, kt)
+        bw = int(
+            os.environ.get("DSV41_MO_BW", "2")
+        )  # K-block of the matmuls: with the HiFi2 packer-L1-accumulate config the result depends on in0_block_w; 2 = what shared_big's auto config picks
+        c1, c2 = mm_cfg(self.s_grid, m, kt, nt, bw), mm_cfg(self.s_grid, m, nt, kt, bw)
         mm = lambda x, w, pc, dt: ttnn.matmul(
             x,
             w,
             program_config=pc,
-            compute_kernel_config=sh.ckc,
+            compute_kernel_config=ckc,
             dtype=dt,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             sub_device_id=self.s_id,

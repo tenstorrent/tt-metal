@@ -351,8 +351,8 @@ class DSV41PrefillLayer:
         hh_own = ttnn.concat([e[4] for e in st], dim=2) if n8 > 1 else st[0][4]
         ov = None
         self._sh_pre = None
-        if moe_overlap.enabled() and hasattr(
-            L.shared, "w01"
+        if (
+            moe_overlap.enabled() and hasattr(L.shared, "w01") and hh_own.shape[2] <= moe_overlap.MAX_M
         ):  # shared expert on a sub-device concurrently with the dispatch (tt/moe_overlap.py)
             ov = moe_overlap.SDOverlap.get(L.mesh_device)
             box = []

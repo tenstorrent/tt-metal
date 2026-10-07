@@ -151,7 +151,7 @@ def test_moe_overlap(mesh_device):
             a, b = dev(res["seq"][0], r, c).float(), dev(res["ovl"][0], r, c).float()
             pa, pb = dev(res["seq"][1], r, c).float(), dev(res["ovl"][1], r, c).float()
             print(
-                f"MO eager shared pcc seq vs overlap ({r},{c}): {pcc(a, b):.6f}  moe partial: {pcc(pa, pb):.6f} equal {bool(torch.equal(pa, pb))}",
+                f"MO eager shared pcc seq vs overlap ({r},{c}): {pcc(a, b):.6f} shared_equal {bool(torch.equal(a, b))} maxdiff {float((a-b).abs().max()):.3e} moe partial: {pcc(pa, pb):.6f} equal {bool(torch.equal(pa, pb))}",
                 flush=True,
             )
     timed("sequential (shared_big + MoE section)", seq)
@@ -166,6 +166,6 @@ def test_moe_overlap(mesh_device):
             a, b = dev(res["seq"][0], r, c).float(), dev(res["ovl"][0], r, c).float()
             pa, pb = dev(res["seq"][1], r, c).float(), dev(res["ovl"][1], r, c).float()
             print(
-                f"MO traced shared pcc seq vs overlap ({r},{c}): {pcc(a, b):.6f}  moe partial: {pcc(pa, pb):.6f} equal {bool(torch.equal(pa, pb))}",
+                f"MO traced shared pcc seq vs overlap ({r},{c}): {pcc(a, b):.6f} shared_equal {bool(torch.equal(a, b))} maxdiff {float((a-b).abs().max()):.3e} moe partial: {pcc(pa, pb):.6f} equal {bool(torch.equal(pa, pb))}",
                 flush=True,
             )
