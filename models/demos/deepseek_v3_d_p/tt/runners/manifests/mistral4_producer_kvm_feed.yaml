@@ -1,0 +1,37 @@
+# Mistral-Small-4 — feed KV into DRAM for the KVM wiring test.
+#
+# Pairs with mistral4_binding_kvm_file_export_1rank.yaml. This only pushes chunks so the KV cache
+# is populated; the reading is done by kv_manager's own kv_dram_poke against the exported table,
+# which is the point of the exercise. check_pcc is off because the file-export path writes the
+# device map as KVM-format text, not the JSON prefill_producer's read-back expects.
+
+model:
+  variant: mistral_small_4
+  num_layers: 36
+  max_seq_len: 10240
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: mistral4_prefill   # [MATCH RUNNER]
+  connect_timeout_s: 120
+
+workload:
+  num_users: 2                       # fills slots 0 and 1
+  chunks: "2"
+  max_requests: 2
+  interleave: round_robin
+  check_pcc: false
+  trace_dir: /mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L
+  # Distinct prompt per slot, so a copy that reads the wrong source or writes the wrong
+  # destination cannot pass: with one shared trace every slot holds identical KV and a
+  # crossed or no-op copy still compares clean. Two non-overlapping 10240-token spans of
+  # the golden above (102/10240 positions coincide, all common tokens).
+  # Only valid while check_pcc is false -- these dirs carry token_ids, not golden KV.
+  slot_prompts:
+    - /data/akhan/runs/m4/traces/slotA_0
+    - /data/akhan/runs/m4/traces/slotB_20480
+
+migration:
+  issue: false

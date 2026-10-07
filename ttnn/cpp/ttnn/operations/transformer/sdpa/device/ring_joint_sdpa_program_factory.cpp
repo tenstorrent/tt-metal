@@ -1649,6 +1649,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         TensorAccessorArgs(tensor_args.slot_id->buffer()).append_to(reader_compile_time_args);
         if (kv_pad_from_metadata) {
             TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
+            // Own accessor for the same different-DRAM-bank reason; the kernel places it right here.
+            if (tensor_args.has_kv_valid_end()) {
+                TensorAccessorArgs(tensor_args.kv_valid_end->buffer()).append_to(reader_compile_time_args);
+            }
         }
     }
     // Appended as a pair when either is present (null accessor for the absent one) so kernel offsets do not
@@ -1797,6 +1801,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
     if (kv_pad_from_metadata) {
         TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
+        if (tensor_args.has_kv_valid_end()) {
+            TensorAccessorArgs(tensor_args.kv_valid_end->buffer()).append_to(writer_compile_time_args);
+        }
     }
     if (has_logical_n_tensor || has_logical_l_tensor) {
         TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
@@ -2976,6 +2983,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         log_debug(tt::LogOp, "K chain mode: head (NHK != 1, {})", head_mcast_enabled ? "mcast" : "unicast");
     }
 
+    // Opt-in KV-valid-end clamp: the reader and writer both derive logical_nt from the same tensor (the device
+    // operation validates it only alongside kv_pad_from_metadata). A define rather than a compile arg so no
+    // existing compile-arg slot moves.
+    if (tensor_args.has_kv_valid_end()) {
+        defines["KV_VALID_END"] = "1";
+    }
+
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
@@ -3038,6 +3052,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             reader_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(reader_common_args);
+        if (tensor_args.has_kv_valid_end()) {
+            // After the logical-length pair, so no existing common-arg index moves.
+            reader_common_args.push_back(tensor_args.kv_valid_end->buffer());
+        }
         reader_kernel.emplace_common_runtime_args(reader_common_args);
     }
 
@@ -3057,6 +3075,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             writer_common_args.push_back(tensor_args.kv_actual_isl->buffer());
         }
         append_logical_length_common_args(writer_common_args);
+        if (tensor_args.has_kv_valid_end()) {
+            writer_common_args.push_back(tensor_args.kv_valid_end->buffer());
+        }
         writer_kernel.emplace_common_runtime_args(writer_common_args);
     }
 

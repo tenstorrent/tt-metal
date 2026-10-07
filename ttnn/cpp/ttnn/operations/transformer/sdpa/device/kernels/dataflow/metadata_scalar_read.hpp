@@ -79,6 +79,22 @@ inline uint32_t logical_tile_rows_clamped_to_cache(
            (chunk_global_tile_rows < remaining_tile_rows ? chunk_global_tile_rows : remaining_tile_rows);
 }
 
+// Opt-in tightening of the extent above: the padded tail of a partially filled final chunk holds no real
+// tokens, so attention can stop at the tile holding the last real one. valid_end is the global length of
+// real tokens (metadata[2], actual_end). Only a valid_end inside the chunk (start < valid_end < padded end)
+// tightens; anything else -- a fully padded chunk, or a length past the padded end -- keeps the padded
+// extent, the same fallback the bounded_* helpers use. Every consumer of logical_nt must call this with
+// the same inputs, or the SDPA reader/writer work masks and the Q mapping drift apart.
+inline uint32_t logical_tile_rows_clamped_to_valid_end(
+    uint32_t kv_actual_isl, uint32_t chunk_global_tile_rows, uint32_t cache_global_tile_rows, uint32_t valid_end) {
+    constexpr uint32_t tile_height = 32;
+    const uint32_t padded_end =
+        logical_tile_rows_clamped_to_cache(kv_actual_isl, chunk_global_tile_rows, cache_global_tile_rows);
+    const uint32_t start = kv_actual_isl / tile_height;
+    const uint32_t valid_end_tile_rows = (valid_end + tile_height - 1) / tile_height;
+    return (valid_end_tile_rows > start && valid_end_tile_rows < padded_end) ? valid_end_tile_rows : padded_end;
+}
+
 // One-slot traces cannot replay a Q range that needs two predecessor tails.
 inline uint32_t bounded_sliding_kv_actual_isl(
     uint32_t kv_actual_isl,

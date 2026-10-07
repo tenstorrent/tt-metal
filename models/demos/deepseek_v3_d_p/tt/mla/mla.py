@@ -435,6 +435,9 @@ class ttMLA:
         )
         sdpa_fidelity = getattr(config, "mla_chunked_sdpa_matmul_fidelity", None)
         self.sdpa_matmul_fidelity = getattr(ttnn.MathFidelity, sdpa_fidelity) if sdpa_fidelity and is_chunked else None
+        # Opt-in per model: ring_mla reads the real-token count (metadata[2]) and skips the padded tail of the
+        # final chunk. Off by default, so other models keep their padded-chunk attention and baselines.
+        self.clamp_attention_to_valid_end = bool(getattr(config, "mla_chunked_clamp_attention_to_valid_end", False))
 
         # Create CCL object for semaphore management
         self.tt_ccl = get_tt_ccl(mesh_device)
@@ -1035,6 +1038,8 @@ class ttMLA:
                 "kv_cache_num_layers": self.layer_num,
                 "kv_cache_layer_idx": cache_layer_idx,
             }
+            if self.clamp_attention_to_valid_end:
+                meta_slot_kwargs["kv_valid_end_tensor"] = metadata[2]
             ring_logical_n = kvpe_cache.storage.shape[2] * self.sp_factor  # global cache capacity
         else:
             meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}

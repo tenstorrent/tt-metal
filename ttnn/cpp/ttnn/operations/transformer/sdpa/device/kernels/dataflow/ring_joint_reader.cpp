@@ -342,10 +342,25 @@ void kernel_main() {
     constexpr uint32_t kv_meta_args_offset =
         kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+    // Opt-in (KV_VALID_END define, set by the host only on the metadata path): a third single-page tensor
+    // holding the global count of real tokens, so logical_nt can stop at the last real tile instead of the
+    // padded chunk end. Own accessor for the same different-DRAM-bank reason as kv_actual_isl; same VALID
+    // fallback offset when absent.
+#ifdef KV_VALID_END
+    constexpr bool has_kv_valid_end = kv_pad_from_metadata;
+#else
+    constexpr bool has_kv_valid_end = false;
+#endif
+    constexpr uint32_t kv_valid_end_args_offset =
+        has_kv_valid_end ? kv_meta_args.next_compile_time_args_offset() : kv_meta_args_offset;
+    constexpr auto kv_valid_end_args = TensorAccessorArgs<kv_valid_end_args_offset>();
     constexpr uint32_t chains_base_no_kv_pad =
         slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
     constexpr uint32_t post_meta_args_offset =
-        kv_pad_from_metadata ? kv_meta_args.next_compile_time_args_offset() : chains_base_no_kv_pad;
+        kv_pad_from_metadata
+            ? (has_kv_valid_end ? kv_valid_end_args.next_compile_time_args_offset()
+                                : kv_meta_args.next_compile_time_args_offset())
+            : chains_base_no_kv_pad;
     // logical_n / logical_l accessors follow the metadata accessors, appended as a pair so these offsets do
     // not depend on which one was supplied. Same VALID-fallback trick as meta_args above.
     constexpr uint32_t logical_n_args_offset =
@@ -549,8 +564,20 @@ void kernel_main() {
                     trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
             }
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
-            logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+            if constexpr (has_kv_valid_end) {
+                // The valid-end common arg follows the logical-length pair (when present), so no existing
+                // common-arg index moves. Must match ring_joint_writer.cpp's derivation exactly.
+                const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
+                    meta_noc,
+                    kv_valid_end_args,
+                    get_common_arg_val<uint32_t>(logical_length_common_arg_base + (has_logical_length_tensor ? 2 : 0)),
+                    meta_l1);
+                logical_nt = trace_metadata::logical_tile_rows_clamped_to_valid_end(
+                    kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size, kv_valid_end);
+            } else {
+                logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
+                    kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+            }
             const uint32_t tensor_rank =
                 ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
                     fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);

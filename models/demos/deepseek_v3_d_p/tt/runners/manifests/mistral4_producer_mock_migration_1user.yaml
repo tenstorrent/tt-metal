@@ -1,0 +1,34 @@
+# Mistral-Small-4 — Gate 1 producer for the CI-matching variant: ONE slot, 11 chunks.
+# Pairs with mistral4_binding_mock_migration_1rank_cimatch.yaml.
+#
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/deepseek_v3_d_p/tt/runners/manifests/mistral4_producer_mock_migration_1user.yaml
+
+model:
+  variant: mistral_small_4
+  num_layers: 36
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: mistral4_prefill   # [MATCH RUNNER]
+  connect_timeout_s: 120
+
+workload:
+  num_users: 1
+  chunks: "11"
+  max_requests: 1
+  interleave: round_robin
+  check_pcc: true
+  trace_dir: /mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L
+
+migration:
+  issue: false
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/mistral4_kv_chunk_table.pb        # [MATCH RUNNER]
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/mistral4_kv_device_map.json  # [MATCH RUNNER]
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.85"
+  PREFILL_PCC_GOLDEN_LEN: "56320"

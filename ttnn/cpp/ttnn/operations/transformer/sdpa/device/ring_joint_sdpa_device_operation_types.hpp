@@ -180,11 +180,18 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> logical_n_tensor;
     std::optional<Tensor> logical_l_tensor;
 
+    // Opt-in tightening of the metadata path (needs slot_id / kv_actual_isl): a 1-element uint32 DRAM tensor
+    // holding the global count of real tokens (actual_end). The kernels then stop attention at the tile
+    // holding the last real token instead of the padded chunk end. Absent = unchanged behaviour.
+    std::optional<Tensor> kv_valid_end;
+
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 
     bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 
     bool has_logical_l_tensor() const { return logical_l_tensor.has_value(); }
+
+    bool has_kv_valid_end() const { return kv_valid_end.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

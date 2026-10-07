@@ -1,0 +1,42 @@
+# Mistral-Small-4 — Gate 1 producer manifest: push 2 slots x 11 chunks, then read the KV back
+# device-lessly through the published table and PCC it against the golden trace.
+#
+# Pairs with mistral4_binding_mock_migration_1rank.yaml (PREFILL_MOCK_MIGRATION=1). No endpoint.
+#
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/deepseek_v3_d_p/tt/runners/manifests/mistral4_producer_mock_migration.yaml
+#
+# prefill_producer (not migration_driver): this gate migrates nothing.
+#
+# `variant` is what keeps the producer off its kimi_k2_7 default — without it the 320-wide Mistral
+# cache is decoded through Kimi's 576-wide branch against Kimi's golden.
+
+model:
+  variant: mistral_small_4
+  num_layers: 36
+  max_seq_len: 56320
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: mistral4_prefill   # [MATCH RUNNER]
+  connect_timeout_s: 120
+
+workload:
+  num_users: 2
+  chunks: "11"                       # 11 x 5120 = 56320, the full span the golden covers
+  max_requests: 2                    # one resident request per slot
+  interleave: round_robin
+  check_pcc: true                    # this IS the gate: per-slot read-back vs golden
+  trace_dir: /mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L
+
+migration:
+  issue: false
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/mistral4_kv_chunk_table.pb        # [MATCH RUNNER]
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/mistral4_kv_device_map.json  # [MATCH RUNNER]
+  # Same floor the mistral4_pp4_kv_pcc CI leg runs at.
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.85"
+  PREFILL_PCC_GOLDEN_LEN: "56320"

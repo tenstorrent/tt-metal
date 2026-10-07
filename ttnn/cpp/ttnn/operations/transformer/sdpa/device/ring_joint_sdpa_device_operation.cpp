@@ -223,6 +223,13 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
         tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
         "metadata tensors slot_id and kv_actual_isl_tensor must be supplied together, or neither supplied");
 
+    // The kernels apply the clamp only where they derive logical_nt from the metadata (chunked prefill), so a
+    // tensor handed to any other configuration would be silently ignored while still adding an accessor.
+    TT_FATAL(
+        !tensor_args.has_kv_valid_end() || tensor_args.kv_pad_from_metadata(),
+        "kv_valid_end_tensor requires the slot_id / kv_actual_isl metadata path with chunked-shaped prefill "
+        "(Q.seq < K.seq)");
+
     if (!tensor_args.slot_id.has_value()) {
         return;
     }
@@ -239,6 +246,9 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
 
     validate_metadata_tensor(tensor_args.slot_id.value(), "slot_id");
     validate_metadata_tensor(tensor_args.kv_actual_isl.value(), "kv_actual_isl_tensor");
+    if (tensor_args.has_kv_valid_end()) {
+        validate_metadata_tensor(tensor_args.kv_valid_end.value(), "kv_valid_end_tensor");
+    }
 }
 
 // Everything the program hash does not key, so it runs on every dispatch (miss and hit): the host scalars
@@ -479,6 +489,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             !tensor_args.is_chunked(),
             "logical_n as a tensor is incompatible with chunked-shaped prefill (Q.seq < K.seq); use the "
             "kv_actual_isl metadata path there");
+    }
+    if (tensor_args.has_kv_valid_end()) {
+        // The sliding-window derivation (bounded_sliding_kv_actual_isl, halo sources) is not clamped.
+        TT_FATAL(!args.has_sliding_window(), "kv_valid_end_tensor is incompatible with sliding-window attention");
     }
     if (tensor_args.has_logical_l_tensor()) {
         // The placeholder is the padded ring total (per-shard L * ring_size), which selects the
@@ -1153,6 +1167,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         // Presence changes how the kernels compile; the numeric attrs above hash as stable placeholders.
         tensor_args.has_logical_n_tensor(),
         tensor_args.has_logical_l_tensor(),
+        // Selects the KV_VALID_END kernel variant and adds an accessor; the value is read on-device.
+        tensor_args.has_kv_valid_end(),
         // The layer fold is baked into kernel runtime args only on the metadata path; the host path re-patches
         // the folded index per dispatch, so keying the factors there would only multiply programs per layer.
         tensor_args.has_metadata() ? args.kv_cache_num_layers : 0u,
@@ -1298,7 +1314,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<uint32_t> sliding_window_size,
     const bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& logical_n_tensor,
-    const std::optional<ttnn::Tensor>& logical_l_tensor) {
+    const std::optional<ttnn::Tensor>& logical_l_tensor,
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1514,7 +1531,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         .slot_id = slot_id,
         .kv_actual_isl = kv_actual_isl_tensor,
         .logical_n_tensor = logical_n_tensor,
-        .logical_l_tensor = logical_l_tensor};
+        .logical_l_tensor = logical_l_tensor,
+        .kv_valid_end = kv_valid_end_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

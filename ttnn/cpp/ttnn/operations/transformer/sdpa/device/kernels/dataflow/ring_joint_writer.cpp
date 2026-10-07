@@ -550,10 +550,23 @@ void kernel_main() {
     constexpr uint32_t meta_args_offset =
         kv_pad_from_metadata ? stats_args.next_compile_time_args_offset() : kFirstAccessorArgOffset;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();
-    // logical_n / logical_l accessors follow the metadata accessor, appended as a pair so the offsets do
+    // Opt-in (KV_VALID_END define, metadata path only): the real-token-count tensor the reader also reads,
+    // so both derive the same logical_nt. Own accessor, VALID fallback offset when absent (see the reader).
+#ifdef KV_VALID_END
+    constexpr bool has_kv_valid_end = kv_pad_from_metadata;
+#else
+    constexpr bool has_kv_valid_end = false;
+#endif
+    constexpr uint32_t kv_valid_end_args_offset =
+        has_kv_valid_end ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+    constexpr auto kv_valid_end_args = TensorAccessorArgs<kv_valid_end_args_offset>();
+    // logical_n / logical_l accessors follow the metadata accessors, appended as a pair so the offsets do
     // not depend on which one was supplied.
     constexpr uint32_t post_meta_args_offset =
-        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : stats_args.next_compile_time_args_offset();
+        kv_pad_from_metadata
+            ? (has_kv_valid_end ? kv_valid_end_args.next_compile_time_args_offset()
+                                : meta_args.next_compile_time_args_offset())
+            : stats_args.next_compile_time_args_offset();
     constexpr uint32_t logical_n_args_offset =
         has_logical_length_tensor ? post_meta_args_offset : kFirstAccessorArgOffset;
     constexpr auto logical_n_args = TensorAccessorArgs<logical_n_args_offset>();
@@ -702,8 +715,19 @@ void kernel_main() {
             kv_actual_isl =
                 trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
         }
-        logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-            kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+        if constexpr (has_kv_valid_end) {
+            // Must match ring_joint_reader.cpp's derivation exactly (same inputs, same helper).
+            const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
+                noc,
+                kv_valid_end_args,
+                get_common_arg_val<uint32_t>(logical_length_common_arg_base + (has_logical_length_tensor ? 2 : 0)),
+                cb_meta_scratch.get_write_ptr());
+            logical_nt = trace_metadata::logical_tile_rows_clamped_to_valid_end(
+                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size, kv_valid_end);
+        } else {
+            logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
+                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+        }
         // Joint trio stays defaulted: KV-pad rotation is validated incompatible with a sharded joint.
         const auto masks = ring_joint::build_ring_work_masks_device<full_mesh_rank_mapping>({
             .transport_rank = fused_op_receiver.seq.ring_index,

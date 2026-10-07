@@ -1,0 +1,49 @@
+# Mistral-Small-4 — Gate 2 driver manifest: prefill 2 slots, migrate 0->2 and 1->3 in loopback,
+# then read the destinations back and assert they are byte-identical to the sources.
+#
+# Pairs with mistral4_binding_loopback_migration_1rank.yaml.
+#
+#   python -m models.demos.common.prefill.runners.migration_driver \
+#     --manifest models/demos/deepseek_v3_d_p/tt/runners/manifests/mistral4_driver_loopback_migration.yaml
+#
+# migration_driver, NOT prefill_producer: invoking the driver IS the opt-in to migrate.
+# Single host, so run_migration_driver.sh is unnecessary -- it would just exec the module.
+
+model:
+  variant: mistral_small_4
+  num_layers: 36
+  max_seq_len: 10240
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: mistral4_prefill   # [MATCH RUNNER]
+  connect_timeout_s: 120
+
+workload:
+  num_users: 2                       # src slots 0,1 (dst 2,3 come from dst_slot_offset)
+  chunks: "2"
+  max_requests: 2                    # one resident request per slot
+  interleave: round_robin
+  check_pcc: true                    # source-slot golden PCC, before the migrate
+  trace_dir: /mnt/models/blaze/mistralai/Mistral-Small-4-Cache/golden/mistral4_56320_36L
+
+migration:
+  issue: true
+  dest_endpoint_id: 1                # == our own endpoint id => loopback
+  dst_slot_offset: 2                 # 0->2, 1->3
+  timeout_ms: 3600000
+  done_file: /tmp/mistral4_migration_done.sentinel
+  table_path: /tmp/mistral4_kv_chunk_table.pb        # [MATCH RUNNER]
+  device_map_path: /tmp/mistral4_kv_device_map.json  # [MATCH RUNNER]
+  cmd_queue: /mig_ep1_cmd                            # [MATCH ENDPOINT]
+  table_queue: /mig_ep1_table
+  resp_queue: /mig_ep1_resp
+
+env:
+  # "both" is the honest setting for a new model: dst-bytes isolates the transport, dst-golden says
+  # whether what was transported was right to begin with. Neither has a typed manifest field.
+  PREFILL_VERIFY_MIGRATION: "both"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.85"
+  # Leave PREFILL_SEND_SHUTDOWN unset while iterating so the runner stays up for repeat driver runs.
