@@ -1427,7 +1427,14 @@ class LTXPipeline:
         return tensor / 127.5 - 1.0
 
     def decode_latents(
-        self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"
+        self,
+        latent: torch.Tensor,
+        latent_frames: int,
+        latent_h: int,
+        latent_w: int,
+        *,
+        output_type: str = "float",
+        defer_yuv: bool = False,
     ) -> torch.Tensor:
         """Decode latent tensor to video pixels.
 
@@ -1437,6 +1444,7 @@ class LTXPipeline:
             output_type: "float" → (B, 3, F, H, W) torch in [-1, 1] (for in-pipeline export);
                          "rgb"   → (B, 3, F, H, W) uint8 numpy, RGB planar
                          "yuv"   → (T, H*3//2, W) uint8 numpy, yuv420p planar (converted on device)
+            defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` whose host assembly runs on ``result()``
 
         Returns:
             decoded video in the requested format
@@ -1457,10 +1465,11 @@ class LTXPipeline:
             if output_type == "yuv" and getattr(self.vae_decoder, "trace_yuv_output", False) and self.dynamic_load:
                 raise ValueError("LTX_TRACE_YUV_OUTPUT requires resident weights (dynamic_load=False)")
             log_dram(self.mesh_device, f"before video decode ({type(self.vae_decoder).__name__})")
-            video = self.vae_decoder(latent_spatial, output_type=output_type)
+            extra = {"defer_yuv": True} if defer_yuv else {}
+            video = self.vae_decoder(latent_spatial, output_type=output_type, **extra)
             log_dram(self.mesh_device, f"after video decode ({type(self.vae_decoder).__name__})")
         if output_type == "yuv":
-            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
+            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array (or its deferred form)
         if output_type != "float":
             return video.numpy()
         return video

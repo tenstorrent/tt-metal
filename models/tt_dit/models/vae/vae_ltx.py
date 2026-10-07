@@ -994,7 +994,9 @@ class LTXVideoDecoder(Module):
         chwt = ttnn.reshape(chwt, (3, h * q, w * r, t))
         return rgb_chwt_to_yuv_device(chwt)
 
-    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False) -> torch.Tensor:
+    def forward(
+        self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False, defer_yuv: bool = False
+    ) -> torch.Tensor:
         """Decode latent (B, 128, F', H', W') → video.
 
         output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar;
@@ -1002,6 +1004,8 @@ class LTXVideoDecoder(Module):
         traced: capture the device decode once and replay it from a resident ttnn trace, dropping per-op
             host dispatch. A single decode does not amortize the capture, so this pays off only when the
             decoder is reused across generations; the mesh must be opened with a trace_region_size.
+        defer_yuv: with "yuv" on the unfused path, return a ``DeferredYuvPlanar`` once the device reads have
+            landed; the host assembly runs when its ``result()`` is called.
         """
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
@@ -1067,6 +1071,7 @@ class LTXVideoDecoder(Module):
                 ccl_manager=self.ccl_manager,
                 logical_h=h_out,
                 logical_w=w_out,
+                defer=defer_yuv,
             )
             # Reshape flat (T, H*W*3//2) -> self-describing
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)

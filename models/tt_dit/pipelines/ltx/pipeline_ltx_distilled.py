@@ -2270,8 +2270,18 @@ class LTXDistilledPipeline(LTXPipeline):
         # Roots recorded before this call belong to warm-up or an earlier gen; keep only what THIS
         # decode records so the perf table's breakdown never describes a different pass.
         roots_before = timing_tree.root_count()
+        # LTX_AUDIO_OVERLAP=1 (opt-in): the VAE returns once its YUV reads land and the export worker
+        # assembles the planar frames, so the audio decode is queued on the device without waiting for that
+        # host-only step. The bytes are the same either way.
+        defer_yuv = (
+            yuv_export
+            and os.environ.get("LTX_AUDIO_OVERLAP", "0") == "1"
+            and os.environ.get("LTX_ASYNC_EXPORT", "1") != "0"
+        )
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+        video_pixels = self.decode_latents(
+            s2_video, latent_frames, latent_h, latent_w, output_type=decode_type, defer_yuv=defer_yuv
+        )
         if num_frames_out != num_frames:  # drop the tail-pad frame(s): (T,H*3/2,W) yuv planes or (B,3,F,H,W) float
             video_pixels = video_pixels[:num_frames_out] if yuv_export else video_pixels[:, :, :num_frames_out]
         t_vae_decode = time.time() - t0
