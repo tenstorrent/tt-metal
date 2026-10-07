@@ -34,4 +34,4 @@ if [[ "${GRID}" == 2x3 ]]; then
   export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2"
   GRID_ARGS=(--qwen-expect-grid "${EMU_GRID}")
 fi
-run_pytest "craq_${GRID}" "${GRID_ARGS[@]}"
+run_pytest "craq_${GRID}" --qwen-quasar-config "${GRID_ARGS[@]}"
