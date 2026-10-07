@@ -8,7 +8,6 @@
 #include <cmath>
 #include <limits>
 #include <random>
-
 #include <tt_stl/assert.hpp>
 
 namespace {
@@ -135,6 +134,7 @@ std::vector<uint32_t> create_random_vector_of_float8_e4m3(
     std::mt19937 rng(seed);
     std::uniform_real_distribution<float> dist(0, rand_max_float);
 
+    // num_bytes fp8 elements, packed 4 per uint32
     std::vector<uint32_t> result(num_bytes / sizeof(uint32_t), 0);
     for (uint32_t& word : result) {
         float8_e4m3 a(dist(rng) + offset);
