@@ -6,7 +6,7 @@ tolerance. For the ops enrolled here it is a **step budget**: "every element is 
 N representable values of the reference". Most unary budgets come from the exhaustive
 sweep, which checks an op against *every distinct finite value of a 16-bit input format*
 -- `±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0` -- or, for
-`Float32`, a stride of 65,279 of them across the whole range (`ulp_sweep.is_exhaustive`
+`Float32`, a strided sample of 65,279 of them across the whole range (`ulp_sweep.is_exhaustive`
 tells the two apart). The exceptions are the `Signbit`, isinf/isnan and threshold-family
 rows, measured on their functional drivers' hand-built stimuli (`MEASURED_ON_SWEEP`, after
 the format table below). The isinf/isnan sweep feeds `±inf` and NaN on purpose.
@@ -68,8 +68,8 @@ is the format's.
 `Bfp4_b` is input-only: it keeps 2 fractional bits, so a bfloat16 step count would read
 every legal quantization of a `Bfp4_b` *output* as a 32-step error.
 
-Binary and ternary rows are measured over those drivers' own sweeps, and those drivers
-gate on the whole contract, `Float32` included. So do the unary signbit, isinf/isnan
+Binary, ternary and scalar rows are measured over those drivers' own sweeps, and those
+drivers gate on the whole contract, `Float32` included. So do the unary signbit, isinf/isnan
 and threshold sweeps, whose hand-built stimuli are what the predicates' rows were
 measured on (`MEASURED_ON_SWEEP` in `test_sfpu_accuracy_budget.py`). The isinf/isnan
 and threshold predicates have no registered domain, so those sweeps are their only gate;
@@ -112,8 +112,10 @@ which ends at 65504 and is reduced correctly throughout). Not the functional dri
 sampling window, which is where points are drawn rather than where an op stops being
 defined, and not `_SFPU_UNDEFINED_RANGES`, whose holes are guard bands around those
 points rather than the points themselves. A golden past the output format's range is
-excused only where the store saturated -- NaN, or an infinity of the golden's sign; a
-finite answer to an infinite golden is a failure.
+excused only where the store saturated -- NaN, an infinity of the golden's sign, or on a
+`Float16` output the pack's clamp to ±65504 of that sign (an out-of-range value from a
+wider Dest packs to the format's largest magnitude). Any other finite answer to an
+infinite golden is a failure.
 
 One more exclusion is a defect already on the books rather than the sweep's doing.
 `ulp_sweep._KNOWN_NONFINITE_LANES` names, per op and per cell, the inputs on which the

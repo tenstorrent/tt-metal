@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+import math
 from typing import List, Optional
 
 import torch
@@ -152,11 +153,18 @@ class IdentityStrategy:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+#: How far, in units of the stride, each strided float32 sample moves along its own
+#: stride-wide cell from the one before: 1/phi, whose multiples mod 1 are as evenly
+#: spread as any sequence's. See `_enumerate_fp32_in_range`.
+_CELL_PHASE_STEP = (math.sqrt(5) - 1) / 2
+
+
 def _enumerate_fp32_in_range(
     low: float, high: float, max_elements: int, *, offset: int = 0, stride: int = 1
 ) -> torch.Tensor:
     """Give back the float32 numbers in [low, high], smallest to largest — up to
-    max_elements of them, skipping the first `offset`, taking every `stride`-th.
+    max_elements of them, skipping the first `offset`, and one from each run of
+    `stride` consecutive ones.
 
     There are 4 billion float32 numbers, so we can't just list them all. The
     trick: adding 1 to a float's bit pattern (read as an integer) gives the very
@@ -166,6 +174,15 @@ def _enumerate_fp32_in_range(
     sweeping a big range in chunks never repeats numbers already covered; `stride`
     spreads one tensor's worth over a range far wider than it, down to the whole
     format. Keyword-only, both: the two are ints side by side, and a swap runs.
+
+    With `stride` > 1, sample `i` is taken at a different place inside its own run of
+    `stride` values, `(i * stride / phi) mod stride` along it, rather than at the
+    run's start. A fixed position is a fixed set of low bits: a stride of 2**16 from
+    -inf lands only on bfloat16 values, already swept as Float16_b, and one of
+    2**16 + 1 ties the low half to the high, so a whole binade (128 consecutive
+    samples) sits at one point of each bfloat16 cell. The golden-ratio step puts
+    consecutive samples far apart in their cells, and on a power-of-two stride never
+    twice at the same place within `stride` samples.
     """
     INT_MIN = -(2**31)
 
@@ -189,9 +206,16 @@ def _enumerate_fp32_in_range(
     # max_elements consecutive values, which for float32 is a microscopic slice of one
     # binade. Every binade holds the same number of representable values, so striding
     # the total order gives each one an equal share of the sample.
-    hi_key = min(base_hi, lo_key + (max_elements - 1) * stride)
-
-    keys = torch.arange(lo_key, hi_key + 1, stride, dtype=torch.int64)
+    count = min(max_elements, (base_hi - lo_key) // stride + 1)
+    index = torch.arange(count, dtype=torch.int64)
+    keys = lo_key + index * stride
+    if stride > 1:
+        # Integer arithmetic on a step rounded to the nearest odd number of values: odd
+        # is coprime with a power-of-two stride, so the phase only returns to 0 after
+        # `stride` samples. The last cell may then reach past `high`.
+        phase_step = int(stride * _CELL_PHASE_STEP) | 1
+        keys = keys + (index * phase_step) % stride
+        keys = keys[keys <= base_hi]
     bits = torch.where(keys < 0, INT_MIN - keys, keys).to(torch.int32)
     return bits.view(torch.float32)
 
@@ -215,9 +239,10 @@ def _enumerate_representable(
     `offset` lets a big range be covered in chunks across several calls
     (offset = 0, max_elements, 2*max_elements, ...).
 
-    `stride` takes every stride-th value instead of consecutive ones, so a range
-    with more values than one tensor holds is sampled across its whole width
-    rather than only at its start.
+    `stride` takes one value from each run of `stride` consecutive ones instead of
+    every value, so a range with more values than one tensor holds is sampled across
+    its whole width rather than only at its start: the run's first value on a 16-bit
+    format, a different place in each run on float32 (see _enumerate_fp32_in_range).
     """
     if stimuli_format in (DataFormat.Float16_b, DataFormat.Float16):
         dtype = (
@@ -225,17 +250,13 @@ def _enumerate_representable(
         )
         all_bits = torch.arange(0, 2**16, dtype=torch.int16)
         all_vals = all_bits.view(dtype).to(torch.float32)
-        # 16-bit enumerates the whole domain up front, so the offset is applied
-        # when slicing the sorted in-range values below.
-        slice_start = offset
     elif stimuli_format == DataFormat.Float32:
         dtype = torch.float32
-        # float32 applies the offset inside the walk (jumps straight to it), so
-        # the slice below starts at 0.
+        # float32 applies the offset and the stride inside the walk (jumps straight to
+        # them), so the slicing below is the 16-bit formats' alone.
         all_vals = _enumerate_fp32_in_range(
             low, high, max_elements, offset=offset, stride=stride
         )
-        slice_start = 0
     else:
         raise ValueError(
             f"ULP_SWEEP supports Float16_b, Float16, and Float32 formats, "
@@ -252,10 +273,11 @@ def _enumerate_representable(
         vals = vals[unique_mask]
 
     if stimuli_format != DataFormat.Float32:
-        # The 16-bit formats enumerate their whole domain first, so they stride here;
-        # float32 already strided inside the walk above.
-        vals = vals[::stride]
-    vals = vals[slice_start : slice_start + max_elements]
+        # The 16-bit formats enumerate their whole domain first, so they skip and stride
+        # here -- the offset first, as the float32 walk does: `offset` counts in-range
+        # values, not strided samples. (No in-cell phase: no sweep strides them.)
+        vals = vals[offset::stride]
+    vals = vals[:max_elements]
 
     return vals.to(dtype)
 

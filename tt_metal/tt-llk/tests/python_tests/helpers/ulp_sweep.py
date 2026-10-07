@@ -56,12 +56,16 @@ _STIMULI_FORMAT: Dict[DataFormat, DataFormat] = {
 #: Float32 has 2**32 values and one run holds 2**16, so it is the one input the sweep
 #: samples rather than enumerates. Striding the total order gives every binade an equal
 #: share (each holds the same number of values); a consecutive walk of one run's 2**16
-#: would cover 1/128 of one binade's 2**23. Odd on purpose: the walk starts on a multiple of 2**16, so
-#: a stride of exactly 2**16 lands only on values whose low 16 mantissa bits are zero --
-#: the bfloat16 set, already swept as Float16_b -- and an fp32 path that reads those
-#: bits (a LUT index, a truncating convert) went untested. 2**16 + 1 keeps the count
-#: at 65,279 and walks the low bits through every value.
-_FP32_STRIDE = 2**16 + 1
+#: would cover 1/128 of one binade's 2**23. One sample per bfloat16 cell, 65,279 of
+#: them, but not at the cell's start: the walk starts on -inf, a multiple of 2**16, so
+#: every sample would be a bfloat16 value -- the Float16_b sweep again -- and an fp32
+#: path that reads the low 16 mantissa bits (a LUT index, a truncating convert) would go
+#: untested. The walk moves each sample along its cell by 1/phi of a cell from the one
+#: before (`_enumerate_fp32_in_range`), so the low half is never zero and lands in either
+#: half of the cell about equally often within every binade. A stride
+#: of 2**16 + 1 did not: it tied the low half to the high, and all 128 samples of a
+#: binade sat at one point of their cells.
+_FP32_STRIDE = 2**16
 
 #: One 64-tile run: the most values a sweep variant generates.
 _SWEEP_TENSOR = 2**16
@@ -283,14 +287,6 @@ def _normal_input(
     return survives & ~quantized_subnormal
 
 
-def flushed_inputs(
-    src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
-) -> torch.Tensor:
-    """Lanes whose input the unpack path flushes or saturates and the golden does not:
-    the complement of :func:`_normal_input`."""
-    return ~_normal_input(src, input_format, output_format, dest_acc)
-
-
 def measurable_mask(
     src: torch.Tensor,
     golden: torch.Tensor,
@@ -316,7 +312,7 @@ def measurable_mask(
       One such lane is worth ~48,000 steps.
     * the sweep's own zero padding -- see :func:`padding_lanes`.
     * subnormal inputs, as generated or as the block-float quantizer hands them to the
-      golden (:func:`flushed_inputs`). The hardware flushes them on the way in and the
+      golden (:func:`_normal_input`). The hardware flushes them on the way in and the
       golden does not, so ``ceil(5.69e-39)`` is 1 in the model and 0 on silicon --
       16,129 bf16 steps for a difference that is the unpack path's flush, not the op's
       accuracy. Measured, it is the whole of Ceil's, Floor's and Sqrt's apparent error:
@@ -487,10 +483,11 @@ def _known_lanes() -> Dict:
     # #58607: on a 16-bit Float16 Dest these ops answer inf where the answer is one of
     # the four largest fp16 values, 65408..65504. The same inputs on a 32-bit Dest read
     # 1-2 steps, and Abs/Identity read 0 on the same cell, so it is neither the input
-    # nor the store alone. A strided Float32 input reaches the same band (x=65479).
+    # nor the store alone. Float16 inputs only: the strided Float32 walk has no lane in
+    # the band, so a Float32 entry would excuse nothing and read as stale.
     top_of_fp16 = dict(
         issue="#58607",
-        inputs=(DataFormat.Float16, DataFormat.Float32),
+        inputs=(DataFormat.Float16,),
         output=DataFormat.Float16,
         dest=DestAccumulation.No,
         low=65408.0,
@@ -571,6 +568,8 @@ def _known_lanes() -> Dict:
             # value to NaN). Approximate sqrt lands on 2**16 exactly where the answer
             # rounds to 65504. The store's *clamp* of (65504, 2**16) to 65504 is the
             # same issue but needs no entry: `nonfinite_failures` reads it as saturation.
+            # Bounded by where sqrt(x) rounds to 65504 in fp16, [65488**2, 65520**2],
+            # not by the one lane a walk happens to put there.
             MathOperation.Sqrt: (
                 KnownNonfiniteLanes(
                     issue="#57215",
@@ -578,8 +577,8 @@ def _known_lanes() -> Dict:
                     output=DataFormat.Float16,
                     approx=ApproximationMode.Yes,
                     dest=DestAccumulation.Yes,
-                    low=4.2917e9,
-                    high=4.2918e9,
+                    low=65488.0**2,
+                    high=65520.0**2,
                     why="inf where sqrt(x) rounds to 65504: the approximation lands on 2**16, the one value the store carries to inf",
                 ),
             ),
@@ -593,10 +592,15 @@ def known_nonfinite_lanes(
     src: torch.Tensor,
     input_format: DataFormat,
     output_format: DataFormat,
+    *,
     approx_mode,
     dest_acc,
 ) -> torch.Tensor:
-    """The lanes of *src* a :data:`_KNOWN_NONFINITE_LANES` entry names on this cell."""
+    """The lanes of *src* a :data:`_KNOWN_NONFINITE_LANES` entry names on this cell.
+
+    The cell's two enums are keyword-only, here and in :func:`stale_excuses` and
+    :func:`nonfinite_failures`: a swap raises nothing (the enums just compare unequal),
+    and in ``stale_excuses`` it would silently turn the stale-entry gate off."""
     received = received_inputs(src, input_format)
     excused = torch.zeros(src.shape, dtype=torch.bool, device=src.device)
     for entry in _known_lanes().get(op, ()):
@@ -612,6 +616,7 @@ def stale_excuses(
     result: torch.Tensor,
     input_format: DataFormat,
     output_format: DataFormat,
+    *,
     approx_mode,
     dest_acc,
 ) -> List[KnownNonfiniteLanes]:
@@ -647,6 +652,7 @@ def nonfinite_failures(
     result: torch.Tensor,
     input_format: DataFormat,
     output_format: DataFormat,
+    *,
     dest_acc=None,
     approx_mode=None,
     known_lanes: bool = True,
@@ -655,9 +661,11 @@ def nonfinite_failures(
     non-question: the two sides disagreeing about being non-finite where the output
     format could have held the answer.
 
-    *approx_mode* and *dest_acc* name the cell for :data:`_KNOWN_NONFINITE_LANES`; left
-    unset, only an entry that pins neither can apply. *known_lanes* False leaves those
-    entries out altogether, which is how :func:`stale_excuses` asks what they buy.
+    *dest_acc* also sets the unpack's cutoff and ceiling (:func:`_normal_input`): left
+    unset, only the stimuli format's own cutoff applies. With *approx_mode* it names the
+    cell for :data:`_KNOWN_NONFINITE_LANES`, where an unset one matches only an entry
+    that pins neither. *known_lanes* False leaves those entries out altogether, which is
+    how :func:`stale_excuses` asks what they buy.
 
     ``passed_test`` rejects these positionally whatever the budget says, but the sweep
     driver ranks a distance rather than calling it, so it has to ask separately -- a
@@ -666,7 +674,7 @@ def nonfinite_failures(
 
     The exclusions, and whose doing each one is:
 
-    * **flushed inputs** (:func:`flushed_inputs`), on the same grounds as in the mask --
+    * **flushed inputs** (:func:`_normal_input`), on the same grounds as in the mask --
       the unpack path flushes a subnormal and the golden does not, so a disagreement
       there is the flush. As generated or as the block-float quantizer hands it to the
       golden: the sweep's ``-0.0`` becomes ``-2**-127`` in a Bfp8_b block of subnormals.
@@ -729,7 +737,12 @@ def nonfinite_failures(
         & _claimed(op, src, input_format)
         & ~(
             known_nonfinite_lanes(
-                op, src, input_format, output_format, approx_mode, dest_acc
+                op,
+                src,
+                input_format,
+                output_format,
+                approx_mode=approx_mode,
+                dest_acc=dest_acc,
             )
             if known_lanes
             else torch.zeros_like(src, dtype=torch.bool)
@@ -738,8 +751,12 @@ def nonfinite_failures(
     )
 
 
-#: How many offending lanes a non-finite verdict spells out.
-NAMED_LANES = 4
+#: How many offending lanes a non-finite verdict spells out. Two: the verdict is written
+#: on each of the table's ~400 not-measurable rows, and at four the named lanes were a
+#: tenth of the file and took it past the repo's 500 KB `check-large-files` limit
+#: (test_the_table_fits_the_repos_file_size_limit). The count beside them says how many
+#: there are; two show the kind.
+NAMED_LANES = 2
 
 
 def nonfinite_reason(

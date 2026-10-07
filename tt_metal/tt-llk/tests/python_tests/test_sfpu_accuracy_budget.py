@@ -37,6 +37,7 @@ from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
     _TABLE_PATH,
     DEFAULT,
+    EXACT_BY_CONSTRUCTION_OPS,
     MEASURED_ARCH,
     TOLERANCE_CONTRACT,
     AccuracyContract,
@@ -61,7 +62,15 @@ from helpers.ulp import (
     has_ulp_gate,
     ulp_dtype,
 )
-from helpers.ulp_sweep import _DATED, _EMITTED_NOTE, _row_fields, _split_key_line
+from helpers.ulp_sweep import (
+    _DATED,
+    _EMITTED_NOTE,
+    _is_exact,
+    _row_fields,
+    _split_key_line,
+    _verdict,
+    sweep_cells,
+)
 from helpers.utils import passed_test
 
 UNSWEPT_ARCHS = [a for a in ChipArchitecture if a != MEASURED_ARCH]
@@ -969,16 +978,16 @@ def test_enrolled_ops_is_sorted_and_stable():
 
 
 #: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, five transcendentals whose *best*
+#: whose per-format tolerances moved into the table, four transcendentals whose *best*
 #: cell is already past its output's usable ceiling (6 bf16, 51 fp16, 25 Bfp8_b) -- the
 #: measurements are on their rows, not repeated here to drift -- and Expm1Cw, which
 #: returns -1 where expm1 overflows (x past ~88.7) on every cell, so no cell has a lane
 #: count a step budget can describe. Recorded, not fixed; tracked: Erfc #51137, Digamma
 #: #51128, Softplus #51866 (input clamps, under #52178) and Lgamma #55356.
 #:
-#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1 and SfpuElwmul are not here: per
-#: variant, some of their cells are inside the ceiling, and the rest fall through to
-#: tolerance.
+#: Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1, Polygamma and SfpuElwmul are not
+#: here: per variant, some of their cells are inside the ceiling, and the rest fall
+#: through to tolerance.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
@@ -986,7 +995,6 @@ ONLY_EVER_TOLERANCE = frozenset(
         MathOperation.SfpuElwpow,
         MathOperation.SfpuXlogy,
         MathOperation.Erfc,
-        MathOperation.Polygamma,
         MathOperation.Softplus,
         MathOperation.Lgamma,
         MathOperation.Digamma,
@@ -1390,7 +1398,6 @@ def test_every_swept_cell_of_an_exact_op_is_gated_or_waived(op):
     emitter demoted to tolerance is invisible to it -- and the sweep does not gate
     tolerance cells. Every swept, non-block cell of these ops must resolve to a step
     budget, or be listed above with its measurement."""
-    from helpers.ulp_sweep import sweep_cells
 
     demoted = set()
     # The Wormhole cells, whatever CHIP_ARCH this host sets: the contracts below are
@@ -1701,7 +1708,6 @@ def test_the_emitter_and_the_guards_agree_on_which_ops_are_exact():
     """The emitter keeps a strided 0 only on EXACT_BY_CONSTRUCTION_OPS, and the guards
     here judge by their own finer lists; an op in one and not the other would be
     floored by one and held to 0 by the other."""
-    from helpers.sfpu_accuracy_budget import EXACT_BY_CONSTRUCTION_OPS
 
     listed = {*EXACT_BY_CONSTRUCTION, *EXACT_ZERO_BY_CONSTRUCTION, *EXACT_SELECTIONS}
     assert listed == EXACT_BY_CONSTRUCTION_OPS, sorted(
@@ -1790,7 +1796,6 @@ def _budgets_past_their_measurement(path=_TABLE_PATH):
     comment beside it, which is the table header's rule for raising one. A sampled row
     may sit anywhere in ``[measured, MEASUREMENT_HEADROOM * measured]``, and at 1 over
     a measured 0: a finite sample cannot assert exactness."""
-    from helpers.ulp_sweep import _is_exact, _row_fields, _verdict
 
     problems = []
     for op, body, budget, measured, exhaustive in _measured_budget_rows(path):
@@ -1827,7 +1832,6 @@ def test_a_demotion_note_names_the_budget_the_emitter_computes():
     and it does cross C. A block kept verbatim is never re-rendered, so a
     stale figure there -- Gelu's 31406 from the old float ceil, where 28550 x 1.1 is
     exactly 31405 -- survives every re-emit unless something reads it."""
-    from helpers.ulp_sweep import _is_exact, _verdict
 
     note = re.compile(r"max (\d+) ULP, budget (\d+) > ceiling (\d+)")
     wrong, op = [], None
@@ -1938,6 +1942,7 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
             MathOperation.Cosh,
             MathOperation.Exp,
             MathOperation.Exp2,
+            MathOperation.ExpWithBase,
             MathOperation.Expm1,
             MathOperation.Selu,
             MathOperation.Sinh,
@@ -1980,45 +1985,66 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         ApproximationMode.Yes,
         None,
     ): ("the same shortfall from a strided Float32 input, one lane"),
-    # -- kernel behaviour over a wide band of the format, not yet triaged -----------
-    # Each is what the sweep found and the row records; none is a golden or store
-    # artefact, and none is a handful of lanes an issue could name. They hold their
-    # cells on tolerance until the kernel is looked at.
-    (MathOperation.Digamma, None, None, None, None): (
-        "non-finite of the wrong sign for |x| above ~1e36, and a finite -61312 where a "
-        "block-quantized input lands on the pole at 0"
-    ),
-    (MathOperation.ExpWithBase, None, None, ApproximationMode.Yes, None): (
-        "past the overflow point the approximate kernel returns x itself instead of "
-        "inf, and NaN for large negative x where the answer is 0"
-    ),
     (
         MathOperation.ExpWithBase,
         DataFormat.Float16,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
         None,
-        ApproximationMode.No,
-        DestAccumulation.Yes,
-    ): (_GOLDEN_IN_INPUT_FORMAT),
+    ): (
+        "the same shortfall through the 0.5 scale: approximate exp(0.5 x) answers "
+        "64256..64640 for x in 22.19..22.22, where the answer is past 65504"
+    ),
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): (
+        "the same shortfall through the 0.5 scale from a strided Float32 input, one lane"
+    ),
+    # -- kernel behaviour over a wide band of the format -----------------------------
+    # Each is what the sweep found and the row records; none is a golden or store
+    # artefact, and none is a handful of lanes an issue could name. Each names the issue
+    # that tracks it, or says why it is no defect, so retiring the entry is tied to
+    # something: the stale check below fails once no row needs it.
+    (MathOperation.Digamma, None, None, None, None): (
+        "wrong for negative x, which the LUT has no branch for (#58682): -inf of the "
+        "wrong sign for large negative x, and a finite -61312 where a block-quantized "
+        "input lands on the pole at 0 (the saturation below the fit range is #51128)"
+    ),
     (MathOperation.Expm1Cw, None, None, None, None): (
-        "past the overflow point (x >= 90) the kernel returns -1, the x -> -inf limit, "
-        "instead of inf"
+        "past the overflow point (x ~ 89) the kernel returns -1, the x -> -inf limit, "
+        "instead of inf: only the low side is clamped, and SFPSETEXP wraps the "
+        "exponent above it (#54770, closed because ELU/SELU/CELU feed it only x < 0; "
+        "the test-only calculate_expm1_cw wrapper is the one caller that reaches it)"
     ),
     (MathOperation.I0, None, None, None, None): (
-        "saturates at 6.05e37 where i0 overflows fp32: a finite answer to an infinite "
-        "golden from |x| ~ 90 up"
+        "a finite answer to an infinite golden from |x| ~ 92 up: the kernel is a bare "
+        "Taylor series with no large-|x| branch (#50465, closed without a fix on main; "
+        "the fix is #52126)"
     ),
     (MathOperation.I1, None, None, None, None): (
-        "saturates at -1.16e37 where i1 overflows fp32, half the format"
+        "saturates at +-1.16e37 where i1 overflows fp32, half the format: the input is "
+        "clamped at 88.5 (#52174, under #52178)"
     ),
     (MathOperation.Lgamma, None, None, None, None): (
-        "saturates at 3.32e38 where lgamma overflows fp32"
+        "no defect: the driver runs calculate_lgamma_stirling alone, which answers "
+        "lgamma(1 - x) below 0.5 (the reflection correction is the next stage, "
+        "lgamma.h), so at the negative-integer poles it answers finite until lgamma(1 - x) "
+        "itself overflows near |x| = 4e36. Its in-domain error is #55356"
     ),
     (MathOperation.Polygamma, None, None, None, None): (
-        "0 for |x| above ~1e36 where the golden is inf, and inf near x = -7 where the "
-        "golden is 1.8e31"
+        "wrong for x < 0, where the Euler-Maclaurin tail is evaluated outside its "
+        "domain (#52278): 0 for large negative x where the golden is inf, and a finite "
+        "or NaN answer beside the poles at the negative integers"
     ),
     (MathOperation.Rpow, None, None, None, None): (
-        "NaN where the answer is 0 and 1 where it is inf, for |x| above ~8e31"
+        "2**x for |x| above ~8e31: 1 where the answer is inf on a 16-bit Dest, whose "
+        "power body has no overflow guard (#52675), and inf where it is 0 on a 32-bit "
+        "Dest, whose Veltkamp split overflows (#55129); NaN on a Float16 output is the "
+        "store's inf (#57215)"
     ),
 }
 
@@ -2181,19 +2207,39 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
         None,
     ): 2,
     (MathOperation.Digamma, None, None, None, None): 22,
-    (MathOperation.ExpWithBase, None, None, ApproximationMode.Yes, None): 25,
     (
         MathOperation.ExpWithBase,
         DataFormat.Float16,
+        DataFormat.Float16_b,
         None,
-        ApproximationMode.No,
         DestAccumulation.Yes,
     ): 2,
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        None,
+        DestAccumulation.Yes,
+    ): 2,
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): 2,
+    (
+        MathOperation.ExpWithBase,
+        DataFormat.Float32,
+        DataFormat.Float16,
+        ApproximationMode.Yes,
+        None,
+    ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 25,
-    (MathOperation.I0, None, None, None, None): 22,
+    (MathOperation.I0, None, None, None, None): 20,
     (MathOperation.I1, None, None, None, None): 20,
     (MathOperation.Lgamma, None, None, None, None): 20,
-    (MathOperation.Polygamma, None, None, None, None): 46,
+    (MathOperation.Polygamma, None, None, None, None): 48,
     (MathOperation.Rpow, None, None, None, None): 22,
 }
 
@@ -2201,7 +2247,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
 def _not_measurable_cells(path=_TABLE_PATH):
     """``(op, in, out, approx_or_None, dest_or_None)`` for every ``not measurable`` row
     on an output a step budget could gate."""
-    from helpers.ulp_sweep import _row_fields
 
     cells, op = [], None
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -2223,6 +2268,23 @@ def _not_measurable_cells(path=_TABLE_PATH):
             )
         )
     return cells
+
+
+#: The repo's `check-large-files` pre-commit hook (scripts/check_file_size.py): a file of
+#: more than this many KB, rounded up, fails it, and the table has no exclude there.
+_REPO_FILE_SIZE_LIMIT_KB = 500
+
+
+def test_the_table_fits_the_repos_file_size_limit():
+    """The hook only runs in pre-commit, so a re-emit that grows the table past it is
+    otherwise found by CI. It grows with every op enrolled and every not-measurable
+    verdict (``ulp_sweep.NAMED_LANES`` lanes each): trim a recurring note before raising
+    anything, or give the hook a justified exclude."""
+    kb = math.ceil(_TABLE_PATH.stat().st_size / 1024)
+    assert kb <= _REPO_FILE_SIZE_LIMIT_KB, (
+        f"{_TABLE_PATH.name} is {kb} KB, past the {_REPO_FILE_SIZE_LIMIT_KB} KB "
+        "check-large-files limit"
+    )
 
 
 def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
@@ -2263,7 +2325,6 @@ def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
     like a cell nobody ever enrolled. ``test_every_swept_cell_of_an_exact_op_is_gated_or_waived`` asks this
     of the exact ops; this asks it of every enrolled op."""
     from helpers.sfpu_domains import sfpu_unary_ops
-    from helpers.ulp_sweep import sweep_cells
 
     unary = sfpu_unary_ops()
     unresolved, resolved = [], []

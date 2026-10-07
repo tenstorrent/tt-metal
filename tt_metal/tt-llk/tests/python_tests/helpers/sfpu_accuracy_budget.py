@@ -24,8 +24,8 @@ ULP -- which is how the block floats keep their block-aware lattice compares.
 :data:`MEASURED_ARCH`; a ULP row binds elsewhere only if its own key names that
 architecture. A step budget is enrolled from the exhaustive sweep
 (``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing. The rows it does
-not reach keep the declared tolerance, or a sampled measurement: the binary and ternary
-drivers gate theirs, as do the unary signbit, isinf/isnan and threshold sweeps, which
+not reach keep the declared tolerance, or a sampled measurement: the binary, ternary and
+scalar drivers gate theirs, as do the unary signbit, isinf/isnan and threshold sweeps, which
 measured on their own stimuli; any other sampled unary row is read by no gate yet.
 """
 
@@ -598,13 +598,13 @@ def assert_against_contract(
 ) -> None:
     """Resolve *op*'s declared contract for the variant that ran, and gate on it.
 
-    The binary and ternary drivers' shared last line, so that the resolution and the
-    caveats below are written once. The numbers live beside the op in the registry, and
+    The binary, ternary and scalar drivers' shared last line, so that the resolution
+    and the caveats below are written once. The numbers live beside the op in the registry, and
     an unenrolled op resolves to today's per-format tolerance unchanged; enrolment is a
     table edit rather than a driver edit.
 
-    The whole contract, step budget included: every binary and ternary row was measured
-    over those drivers' own sweeps, so unlike a unary budget from the exhaustive sweep
+    The whole contract, step budget included: every binary, ternary and scalar row was
+    measured over those drivers' own sweeps, so unlike a unary budget from the exhaustive sweep
     it describes the stimuli it gates. Ranked under :data:`FLUSH_SUBNORMAL_OUTPUTS`.
 
     *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming

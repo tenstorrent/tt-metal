@@ -209,11 +209,14 @@ class StimuliSpec:
         filling the tensor.  This lets a range too large for one run be swept
         in batches (offset = 0, N, 2N, …). Defaults to 0.
     stride: int
-        For "ulp_sweep" only: take every *stride*-th representable value rather
-        than consecutive ones.  A range with more values than one tensor can hold
-        is otherwise covered only at its start; striding the total order instead
-        spreads the sample evenly over every binade, because each binade holds the
-        same number of representable values.  Defaults to 1 (consecutive).
+        For "ulp_sweep" only: take one representable value from each run of
+        *stride* consecutive ones rather than every value.  A range with more values
+        than one tensor can hold is otherwise covered only at its start; striding the
+        total order instead spreads the sample evenly over every binade, because
+        each binade holds the same number of representable values.  Float32 takes
+        each sample at a different place in its run, so the low bits vary too.
+        *offset* is applied first, in values, not samples.  Defaults to 1
+        (consecutive).
     """
 
     distribution: Union[DistributionKind, Callable] = DistributionKind.UNIFORM

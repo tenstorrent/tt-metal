@@ -465,8 +465,11 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     {
         // "exp with base b" = b^x = exp(x * ln b); implemented as the SCALE_EN path
         // of calculate_exponential (multiplies the input by a bf16 scale before exp).
-        // Init is identical to exponential; the scale is applied in the calculate call.
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
+        // The accurate paths apply the scale in the calculate call. The approximate
+        // clamp path does not read it there: it bakes the scale into the constants this
+        // init programs, so the init carries the same 0.5 (fp32 0x3F000000) -- with 1.0
+        // here it computed exp(x) against an exp(0.5 * x) golden.
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F000000 /* exp_base_scale_factor: 0.5 */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::erfinv)
     {
@@ -907,6 +910,20 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     // The bf16-accurate path (_sfpu_exp_21f_bf16_tti_) lowers the scale via TTI_SFPMULI,
     // whose immediate operand must be a compile-time constant. Pass the scale through the
     // test-only adapter's template arguments so SFPU_UNARY_CALL preserves that constness.
+    // The approximate clamp path is hand-unrolled for 8 rows and ignores ITERATIONS
+    // (tt-llk#1486), so it runs as Exp's does: 8 iterations per face, all four faces.
+    // Through the single call below it processed 8 of a tile's 32 rows and left the
+    // other 24 holding their input.
+    else if constexpr (OPERATION == SfpuType::exp_with_base && APPROX_MODE && CLAMP_NEGATIVE)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_exponential_const_scale,
+            (APPROX_MODE, is_fp32_dest_acc_en, 8, CLAMP_NEGATIVE, 0x3F00u /* bf16(0.5) exp base scale */),
+            dst_index,
+            VectorMode::RC);
+    }
     else if constexpr (OPERATION == SfpuType::exp_with_base)
     {
         SFPU_UNARY_CALL(

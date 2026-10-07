@@ -8,6 +8,7 @@ worth pinning is about what it must *not* touch. The table's rows are contracts,
 regeneration that quietly drops one weakens a gate with nothing to notice.
 """
 
+import math
 import re
 
 import pytest
@@ -20,9 +21,9 @@ from helpers.ulp_sweep import (
     EMIT_HEADROOM,
     MEASURED,
     _known_lanes,
+    _normal_input,
     export_measured,
     finish_emit,
-    flushed_inputs,
     golden_input,
     measurable_mask,
     merge_measured,
@@ -440,8 +441,10 @@ def test_the_unpack_format_bounds_which_inputs_count():
         False,
     ]
     assert measurable_mask(src, golden, result, fp32, fp16, yes)[0]
-    assert not nonfinite_failures(_OP, src, golden, result, fp32, fp16, no).any()
-    assert nonfinite_failures(_OP, src, golden, result, fp32, fp16, yes)[2]
+    assert not nonfinite_failures(
+        _OP, src, golden, result, fp32, fp16, dest_acc=no
+    ).any()
+    assert nonfinite_failures(_OP, src, golden, result, fp32, fp16, dest_acc=yes)[2]
 
 
 def test_an_fp16_pack_clamp_is_a_saturated_store():
@@ -569,8 +572,8 @@ def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
     zero = len(below)
     assert float(src[zero]) == 0.0
 
-    as_bf16 = flushed_inputs(src, DataFormat.Float16_b)
-    as_block = flushed_inputs(src, DataFormat.Bfp8_b)
+    as_bf16 = ~_normal_input(src, DataFormat.Float16_b)
+    as_block = ~_normal_input(src, DataFormat.Bfp8_b)
     assert as_bf16.tolist() == [True] * zero + [False] + [True] * len(above)
     assert as_block.all()
 
@@ -623,6 +626,34 @@ def test_the_golden_sees_the_zero_the_kernel_receives(fmt, dest_acc, keeps_sign)
     assert not torch.signbit(received[1])
     assert torch.equal(received, src)  # -0.0 == 0.0: the values themselves are kept
     assert torch.equal(received[2:], src[2:])
+
+
+def test_the_unary_golden_still_rounds_a_float32_output_to_a_16bit_input():
+    """#58590, pinned until it lands. UnarySFPUGolden tilizes and untilizes its Dest
+    result in the *input* format, so a bfloat16 input's Float32 golden at a 32-bit Dest
+    is rounded to bfloat16 while the kernel keeps fp32: 1.0078125**2 reads 1.015625
+    against the exact 1.0156860. Every 16-bit/block input -> Float32, ``dest: "Yes"``
+    row of the table measures that rounding rather than the kernel (the YAML header
+    says so), and nothing else would tell them apart once the golden is fixed.
+
+    So when this fails, the golden has stopped rounding there: re-emit the whole table
+    (`--ulp-emit`) on the fix, which tightens those rows, drop the header paragraph, and
+    delete this test."""
+    from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
+
+    x = 1.0 + 2.0**-7  # bf16-exact; its square is not
+    src = torch.full((1024,), x, dtype=torch.bfloat16)
+    golden = get_golden_generator(UnarySFPUGolden)(
+        MathOperation.Square,
+        src,
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        DataFormat.Float16_b,
+        [32, 32],
+    )
+    assert golden.dtype == torch.float32
+    rounded = float(torch.tensor(x * x, dtype=torch.bfloat16))
+    assert float(golden[0]) == rounded != x * x
 
 
 def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():
@@ -704,22 +735,28 @@ def test_an_entry_no_lane_of_which_disagrees_is_stale():
     fmt = DataFormat.Float16
     src = torch.tensor([65408.0, 65504.0], dtype=torch.float16)
     golden = src.clone()
-    cell = (fmt, fmt, ApproximationMode.No, DestAccumulation.No)
+    cell = dict(approx_mode=ApproximationMode.No, dest_acc=DestAccumulation.No)
     still_broken = torch.tensor([float("inf"), 65504.0], dtype=torch.float16)
-    assert stale_excuses(MathOperation.Celu, src, golden, still_broken, *cell) == []
+    assert (
+        stale_excuses(MathOperation.Celu, src, golden, still_broken, fmt, fmt, **cell)
+        == []
+    )
     fixed = golden.clone()
     assert [
-        e.issue for e in stale_excuses(MathOperation.Celu, src, golden, fixed, *cell)
+        e.issue
+        for e in stale_excuses(MathOperation.Celu, src, golden, fixed, fmt, fmt, **cell)
     ] == ["#58607"]
     # On a cell the entry does not name there is nothing to go stale.
-    other = (fmt, fmt, ApproximationMode.No, DestAccumulation.Yes)
-    assert stale_excuses(MathOperation.Celu, src, golden, fixed, *other) == []
+    other = dict(approx_mode=ApproximationMode.No, dest_acc=DestAccumulation.Yes)
+    assert (
+        stale_excuses(MathOperation.Celu, src, golden, fixed, fmt, fmt, **other) == []
+    )
     # An entry another exclusion already covers is stale too: against a NaN golden the
     # same inf answers are excused before the entry is consulted, so it buys nothing.
     nan_golden = torch.full_like(golden, float("nan"))
-    assert stale_excuses(MathOperation.Celu, src, nan_golden, still_broken, *cell) == [
-        _known_lanes()[MathOperation.Celu][0]
-    ]
+    assert stale_excuses(
+        MathOperation.Celu, src, nan_golden, still_broken, fmt, fmt, **cell
+    ) == [_known_lanes()[MathOperation.Celu][0]]
 
 
 def test_every_known_lane_entry_names_an_issue_and_a_gateable_cell():
@@ -928,6 +965,42 @@ def test_the_sweep_tile_count_holds_every_swept_value():
     assert sweep.SWEEP_DIMENSIONS[0] * sweep.SWEEP_DIMENSIONS[1] == lanes
     for fmt in SWEEP_INPUT_FORMATS:
         assert swept_value_count(fmt) <= lanes, fmt.name
+
+
+def test_the_float32_walk_is_pinned_end_to_end():
+    """`swept_value_count` enumerates at most `_SWEEP_TENSOR` lanes, so the check above
+    cannot fail for Float32 whatever `_FP32_STRIDE` is: a stride of 2**15 would stop the
+    walk near -1.2e-38, negatives only, and stay green. So the count, the ends, the
+    tensor size and what the in-cell phase buys are pinned here: one sample per bfloat16
+    cell, none of them a bfloat16 value, and both halves of the cell reached in every
+    binade (a stride of 2**16 + 1 put a whole binade at one point of its cells)."""
+    import test_unary_sfpu_ulp as sweep
+    from helpers.golden_generators import TILE_DIMENSIONS
+    from helpers.stimuli_generator.strategies.structured import (
+        _enumerate_representable,
+    )
+    from helpers.ulp_sweep import _FP32_STRIDE, _SWEEP_TENSOR, swept_value_count
+
+    lanes = sweep.SWEEP_TILE_COUNT * TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
+    assert _SWEEP_TENSOR == lanes
+    assert swept_value_count(DataFormat.Float32) == 65279
+    walk = _enumerate_representable(
+        DataFormat.Float32, -math.inf, math.inf, _SWEEP_TENSOR, stride=_FP32_STRIDE
+    )
+    assert walk.numel() == 65279
+    assert float(walk.min()) < -3.38e38 and float(walk.max()) > 3.39e38
+
+    bits = walk.view(torch.int32)
+    low = bits & 0xFFFF
+    assert bool((low != 0).all()), "a sample is a bfloat16 value"
+    assert (bits >> 16).unique().numel() == walk.numel(), "two samples share a cell"
+    # Per sign and binade, the share of samples in the lower half of their cell.
+    normal = torch.isfinite(walk) & (walk.abs() >= torch.finfo(torch.float32).tiny)
+    binade = ((bits >> 23) & 0x1FF)[normal]  # sign and exponent
+    lower = (low < 0x8000)[normal].to(torch.float64)
+    for b in binade.unique().tolist():
+        share = float(lower[binade == b].mean())
+        assert 0.3 < share < 0.7, (hex(b), share)
 
 
 @pytest.mark.parametrize(

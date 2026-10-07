@@ -244,13 +244,27 @@ def test_unary_sfpu_ulp_sweep(mathop, in_fmt, out_fmt, approx_mode, dest_acc):
 
     mask = measurable_mask(src, golden, result, in_fmt, out_fmt, dest_acc)
     overflowed = nonfinite_failures(
-        mathop, src, golden, result, in_fmt, out_fmt, dest_acc, approx_mode=approx_mode
+        mathop,
+        src,
+        golden,
+        result,
+        in_fmt,
+        out_fmt,
+        dest_acc=dest_acc,
+        approx_mode=approx_mode,
     )
     if not ulp_sweep.EMIT:
         # An excused lane that agrees again means the defect its issue tracks is gone
         # from this cell; the entry has to go with it, or its lanes stay ungated.
         stale = ulp_sweep.stale_excuses(
-            mathop, src, golden, result, in_fmt, out_fmt, approx_mode, dest_acc
+            mathop,
+            src,
+            golden,
+            result,
+            in_fmt,
+            out_fmt,
+            approx_mode=approx_mode,
+            dest_acc=dest_acc,
         )
         assert not stale, (
             f"{cell}: no lane the _KNOWN_NONFINITE_LANES entry for "
