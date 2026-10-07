@@ -795,6 +795,22 @@ def test_quantize_rounds_ties_to_even(device, input_dtype, out_dtype, zero_point
     assert torch.equal(result, expected), f"{(result != expected).sum().item()} of {expected.numel()} differ"
 
 
+@pytest.mark.parametrize(
+    "zero_point,input_values,expected",
+    [
+        (8388608, [-8388607.0, -8388544.0], [1, 64]),
+        # 4194307.5 is a tie. It rounds to 4194308 before the zero point is added.
+        (-4194305, [4194307.5, 4194176.0], [3, -128]),
+    ],
+)
+def test_quantize_large_zero_point(device, zero_point, input_values, expected):
+    """Test quantize with a zero point outside [-2^22, 2^22]"""
+    input_tr = torch.tensor([input_values], dtype=torch.float32)
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.to_torch(ttnn.quantize(input_tt, 1.0, zero_point, dtype=ttnn.int32))
+    assert result.tolist() == [expected], f"got {result.tolist()} expected {[expected]}"
+
+
 @pytest.mark.parametrize("in_dtype", [ttnn.int32, ttnn.int8])
 @pytest.mark.parametrize(
     "out_dtype,out_zero_point,q_min,q_max",
