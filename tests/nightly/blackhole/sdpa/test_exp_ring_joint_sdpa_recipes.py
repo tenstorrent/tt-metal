@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Exp ring joint SDPA with precision recipes on a 1x2 Blackhole mesh, against an FP64 reference.
+"""Exp ring joint SDPA with precision recipes on a ring of four Blackholes, against an FP64 reference.
 
 Recipes and their numerics: tech_reports/FlashAttention/SDPAPrecisionRecipes.md. Ring joint SDPA recipes:
 test_ring_joint_sdpa_recipes.py.
@@ -14,7 +14,6 @@ import ttnn
 
 from models.common.utility_functions import is_blackhole
 from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa_recipes import (
-    RING,
     close_ring_mesh,
     host_length,
     length_tensor,
@@ -44,13 +43,18 @@ def exp_ring_mesh():
         ttnn.FabricManagerMode.DEFAULT,
         router,
     )
-    mesh, manager, cores, _ = open_ring_mesh(fabric)
-    semaphores = [ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(2)]
+    mesh, manager, cores, _ = open_ring_mesh(fabric, ring=EXP_RING)
+    semaphores = [ttnn.create_global_semaphore(mesh, cores, 0) for _ in range(EXP_RING_LINKS)]
     try:
         yield mesh, semaphores
     finally:
         close_ring_mesh(mesh, manager)
 
+
+# The op runs exactly two links, one per ring direction (one semaphore per link). Like the legacy exp ring tests it
+# needs a ring of four devices (a BH QuietBox 2): the two chips of a single P300 share only two ethernet channels.
+EXP_RING = 4
+EXP_RING_LINKS = 2
 
 # heads, local rows, joint rows, logical_n (None = all rows), grid (SDPA columns + 1 MUX column, 4 rows), q_chunk.
 # Heads x Q segments over the 4 grid rows set the passes per row (1-3).
@@ -79,7 +83,7 @@ def run_exp_ring(mesh, semaphores, inputs, joints, backing, *, grid, q_chunk, lo
         ),
         dim=2,
         multi_device_global_semaphore=semaphores,
-        num_links=2,
+        num_links=EXP_RING_LINKS,
         cluster_axis=1,
         mesh_device=mesh,
         topology=ttnn.Topology.Ring,
@@ -92,9 +96,9 @@ def run_exp_ring(mesh, semaphores, inputs, joints, backing, *, grid, q_chunk, lo
 
 def exp_ring_case(mesh, variant, case):
     heads, local, joint, logical_n, grid, q_chunk = EXP_RING_CASES[case]
-    q, k, v = (randn(1, heads, RING * local, 128, seed=10 + i) for i in range(3))
-    logical_n = logical_n or RING * local
-    if logical_n < RING * local:
+    q, k, v = (randn(1, heads, EXP_RING * local, 128, seed=10 + i) for i in range(3))
+    logical_n = logical_n or EXP_RING * local
+    if logical_n < EXP_RING * local:
         for x in (k, v):
             x[..., logical_n:, :] = 8 * torch.randn(x[..., logical_n:, :].shape).bfloat16()
     inputs = precision_inputs(mesh, variant, (q, k, v), ttnn.ShardTensorToMesh(mesh, dim=2))
@@ -124,7 +128,7 @@ def test_exp_ring_joint_sdpa_recipe(exp_ring_mesh, variant, case):
     out = run_exp_ring(
         mesh, semaphores, inputs, joints, backing, logical_n=logical_n, precision=VARIANTS[variant][0], **kwargs
     )
-    for chip in range(RING):
+    for chip in range(EXP_RING):
         got = per_chip(out[0])[chip]
         if has_joint:
             got = torch.cat([got, per_chip(out[1])[chip]], dim=2)
@@ -166,5 +170,5 @@ def test_exp_ring_joint_sdpa_recipe_op_selected_blocking(exp_ring_mesh, variant)
     out = run_exp_ring(
         mesh, semaphores, inputs, joints, backing, logical_n=logical_n, precision=VARIANTS[variant][0], **kwargs
     )
-    for chip in range(RING):
+    for chip in range(EXP_RING):
         assert l2_pct(per_chip(out[0])[chip], expected(chip)) < L2_PCT_BOUND[variant], f"chip {chip}"
