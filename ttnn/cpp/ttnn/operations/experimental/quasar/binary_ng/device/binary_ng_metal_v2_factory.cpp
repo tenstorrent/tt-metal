@@ -440,9 +440,9 @@ ProgramArtifacts create_no_bcast_artifacts(
 
     // --- Activation assembly (faithful copy of the descriptor factory). ---
     {
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = op.lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = op.rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations = op.post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = op.lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = op.rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = op.post_activations;
 
         if (op_config.process_lhs.has_value()) {
             lhs_activations.push_back(*op_config.process_lhs);

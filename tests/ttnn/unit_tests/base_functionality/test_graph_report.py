@@ -542,6 +542,7 @@ class TestImportGraphUnit:
                     "device_id": None,
                     "address": None,
                     "buffer_type": None,
+                    "storage_type": "HOST",
                 },
                 {
                     "tensor_id": 1002,
@@ -552,6 +553,19 @@ class TestImportGraphUnit:
                     "device_id": None,
                     "address": None,
                     "buffer_type": None,
+                    "storage_type": "HOST",
+                },
+                # Written before storage_type existed: the memory config marks a device tensor
+                {
+                    "tensor_id": 1003,
+                    "shape": "Shape([1, 32])",
+                    "dtype": "DataType.BFLOAT16",
+                    "layout": "Layout.TILE",
+                    "memory_config": "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,"
+                    "buffer_type=BufferType::L1,shard_spec=std::nullopt)",
+                    "device_id": 0,
+                    "address": 4096,
+                    "buffer_type": 1,
                 },
             ],
         }
@@ -565,8 +579,11 @@ class TestImportGraphUnit:
         cursor.execute("SELECT * FROM global_tensor_comparison_records")
         assert cursor.fetchall() == [(101, 1002, 1, 0.9999, 1.0, 0)]
 
-        cursor.execute("SELECT tensor_id FROM tensors WHERE tensor_id IN (1001, 1002) AND rank = 0 ORDER BY tensor_id")
-        assert cursor.fetchall() == [(1001,), (1002,)]
+        cursor.execute(
+            "SELECT tensor_id, buffer_type, storage_type FROM tensors "
+            "WHERE tensor_id IN (1001, 1002, 1003) AND rank = 0 ORDER BY tensor_id"
+        )
+        assert cursor.fetchall() == [(1001, None, "HOST"), (1002, None, "HOST"), (1003, 1, "DEVICE")]
         conn.close()
 
     def test_multiple_output_tensors(self, tmp_path):
@@ -1584,6 +1601,173 @@ class TestImportGraphUnit:
         assert row[6] == 12345678  # address
         assert row[7] == 0  # buffer_type (0=DRAM)
 
+        # No storage_type param (older capture): the memory config marks it as a device tensor
+        cursor.execute("SELECT storage_type FROM tensors")
+        assert cursor.fetchone() == ("DEVICE",)
+
+        conn.close()
+
+    @staticmethod
+    def _graph_with_input_tensors(*tensor_params):
+        """One ttnn::add consuming a tensor node per ``tensor_params`` entry, so host tensors are kept."""
+        tensor_nodes = [
+            {"counter": 1 + i, "node_type": "tensor", "params": params, "connections": []}
+            for i, params in enumerate(tensor_params)
+        ]
+        start = len(tensor_nodes) + 1
+        return [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": []},
+            *tensor_nodes,
+            {
+                "counter": start,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "input_tensors": [node["counter"] for node in tensor_nodes],
+            },
+            {
+                "counter": start + 1,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "duration_ns": 1000,
+            },
+            {"counter": start + 2, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+
+    @staticmethod
+    def _tensor_placement_rows(cursor):
+        cursor.execute(
+            "SELECT tensor_id, memory_config, device_id, address, buffer_type, storage_type "
+            "FROM tensors ORDER BY tensor_id"
+        )
+        return cursor.fetchall()
+
+    _L1_MEMORY_CONFIG = (
+        "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)"
+    )
+
+    def test_host_tensor_buffer_type_is_null(self, tmp_path):
+        """A host tensor has no buffer type; 0 would claim DRAM."""
+        graph = self._graph_with_input_tensors({"tensor_id": "1", "shape": "[1, 32]", "storage_type": "HOST"})
+        conn, cursor = _import_to_db(_make_report(graph), tmp_path)
+
+        assert self._tensor_placement_rows(cursor) == [(1, None, None, None, None, "HOST")]
+        conn.close()
+
+    def test_unaddressed_device_tensor_keeps_declared_buffer_type(self, tmp_path):
+        """A device tensor without a backing buffer still records the buffer type its memory config declares."""
+        graph = self._graph_with_input_tensors(
+            {
+                "tensor_id": "2",
+                "shape": "[1, 32]",
+                "storage_type": "DEVICE",
+                "memory_config": self._L1_MEMORY_CONFIG,
+                "buffer_type": 1,
+            }
+        )
+        conn, cursor = _import_to_db(_make_report(graph), tmp_path)
+
+        assert self._tensor_placement_rows(cursor) == [(2, self._L1_MEMORY_CONFIG, None, None, 1, "DEVICE")]
+        conn.close()
+
+    def test_legacy_tensor_without_buffer_type_is_null(self, tmp_path):
+        """Captures predating storage_type: a missing buffer type stays NULL rather than becoming DRAM."""
+        graph = self._graph_with_input_tensors(
+            {"tensor_id": "3", "shape": "[1, 32]"},
+            {"tensor_id": "4", "shape": "[1, 32]", "memory_config": self._L1_MEMORY_CONFIG},
+        )
+        conn, cursor = _import_to_db(_make_report(graph), tmp_path)
+
+        assert self._tensor_placement_rows(cursor) == [
+            # Host, or a deallocated device tensor: older captures can't tell them apart
+            (3, None, None, None, None, None),
+            (4, self._L1_MEMORY_CONFIG, None, None, None, "DEVICE"),
+        ]
+        conn.close()
+
+    def test_unreferenced_device_tensor_without_buffer_is_kept(self, tmp_path):
+        """Only host tensors need an I/O reference to be kept; a device tensor without a buffer is not one."""
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": []},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "5",
+                    "shape": "[1, 32]",
+                    "storage_type": "DEVICE",
+                    "memory_config": self._L1_MEMORY_CONFIG,
+                    "buffer_type": 1,
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "tensor",
+                "params": {"tensor_id": "6", "shape": "[1, 32]", "storage_type": "HOST"},
+                "connections": [],
+            },
+            {
+                "counter": 4,
+                "node_type": "function_end",
+                "params": {"name": "ttnn::add"},
+                "connections": [],
+                "duration_ns": 1000,
+            },
+            {"counter": 5, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        conn, cursor = _import_to_db(_make_report(graph), tmp_path)
+
+        assert self._tensor_placement_rows(cursor) == [(5, self._L1_MEMORY_CONFIG, None, None, 1, "DEVICE")]
+        conn.close()
+
+    def test_python_io_output_tensor_row_matches_captured_node(self, tmp_path):
+        """A Python-level output ID copied from its C++ node gets the same row a captured tensor would."""
+        graph = [
+            {"counter": 0, "node_type": "capture_start", "params": {}, "connections": []},
+            {
+                "counter": 1,
+                "node_type": "function_start",
+                "params": {"name": "ttnn.to_torch"},
+                "connections": [],
+                "input_tensors": [],
+            },
+            {
+                "counter": 2,
+                "node_type": "tensor",
+                "params": {
+                    "tensor_id": "10",
+                    "shape": "[1, 32]",
+                    "dtype": "DataType::BFLOAT16",
+                    "layout": "Layout::ROW_MAJOR",
+                    "storage_type": "HOST",
+                },
+                "connections": [],
+            },
+            {
+                "counter": 3,
+                "node_type": "function_end",
+                "params": {"name": "ttnn.to_torch"},
+                "connections": [2],
+                "duration_ns": 1000,
+            },
+            {"counter": 4, "node_type": "capture_end", "params": {}, "connections": []},
+        ]
+        python_io = [{"name": "ttnn.to_torch", "arguments": {}, "input_tensor_ids": [], "output_tensor_ids": [99]}]
+        conn, cursor = _import_to_db(_make_report(graph, python_io=python_io), tmp_path)
+
+        cursor.execute(
+            "SELECT dtype, layout, memory_config, buffer_type, storage_type FROM tensors WHERE tensor_id = 99"
+        )
+        assert cursor.fetchall() == [("DataType.BFLOAT16", "Layout.ROW_MAJOR", None, None, "HOST")]
         conn.close()
 
     def test_edges_populated_from_captured_graph(self, tmp_path):
