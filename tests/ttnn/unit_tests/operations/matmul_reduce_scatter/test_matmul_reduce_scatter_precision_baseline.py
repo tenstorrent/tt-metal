@@ -52,7 +52,7 @@ def _stacked_randn(mesh_device, shape, seed, scale=1.0):
 
 
 def _as_device_holds(stacked, dtype):
-    if dtype == ttnn.bfloat8_b:
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
         t = ttnn.from_torch(stacked.reshape(-1, stacked.shape[-1]).float(), dtype=dtype, layout=ttnn.TILE_LAYOUT)
         return ttnn.to_torch(t).reshape(stacked.shape).to(torch.bfloat16)
     return stacked
@@ -114,7 +114,7 @@ HIFI2_BF16_ACC = dict(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=Fa
 HIFI2_FP32_ACC = dict(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True)
 HIFI4_FP32_ACC = dict(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True)
 
-# (A, W, cluster_axis, scatter_dim, weight dtype, compute config, PCC floor)
+# (A, W, cluster_axis, scatter_dim, weight dtype, compute config, PCC floor[, activation dtype])
 CASES = [
     pytest.param((1, 1, 256, 512), (512, 1024), 1, -2, ttnn.bfloat16, HIFI4_FP32_ACC, 0.999, id="small_bf16_hifi4"),
     pytest.param((1, 1, 640, 512), (512, 7168), 1, -1, ttnn.bfloat8_b, HIFI2_FP32_ACC, 0.998, id="shared_down_bf8b"),
@@ -122,20 +122,63 @@ CASES = [
     pytest.param((1, 1, 640, 2048), (2048, 7168), 1, -1, ttnn.bfloat8_b, HIFI2_FP32_ACC, 0.998, id="focus_fp32acc"),
     pytest.param((1, 1, 2048, 2048), (2048, 4096), 1, -2, ttnn.bfloat8_b, HIFI2_FP32_ACC, 0.998, id="mimo_rows"),
     pytest.param((1, 1, 640, 8448), (8448, 7168), 0, -1, ttnn.bfloat16, HIFI2_FP32_ACC, 0.999, id="large_k_bf16"),
+    # Refinement 2: bfloat8_b activations and/or bfloat4_b weights (golden floor for bfloat4_b: PCC 0.99)
+    pytest.param(
+        (1, 1, 640, 2048), (2048, 7168), 1, -1, ttnn.bfloat8_b, HIFI2_FP32_ACC, 0.998, ttnn.bfloat8_b, id="focus_a_bf8b"
+    ),
+    pytest.param((1, 1, 640, 2048), (2048, 7168), 1, -1, ttnn.bfloat4_b, HIFI2_FP32_ACC, 0.99, id="focus_w_bf4b"),
+    pytest.param(
+        (1, 1, 640, 2048),
+        (2048, 7168),
+        1,
+        -1,
+        ttnn.bfloat4_b,
+        HIFI2_BF16_ACC,
+        0.99,
+        ttnn.bfloat8_b,
+        id="focus_bf8b_bf4b_bf16acc",
+    ),
+    pytest.param(
+        (1, 1, 2048, 2048),
+        (2048, 4096),
+        1,
+        -2,
+        ttnn.bfloat4_b,
+        HIFI2_FP32_ACC,
+        0.99,
+        ttnn.bfloat8_b,
+        id="mimo_rows_bf8b_bf4b",
+    ),
+    pytest.param(
+        (1, 1, 640, 8448),
+        (8448, 7168),
+        0,
+        -1,
+        ttnn.bfloat4_b,
+        HIFI2_FP32_ACC,
+        0.99,
+        ttnn.bfloat8_b,
+        id="large_k_bf8b_bf4b",
+    ),
 ]
 
 
-@pytest.mark.parametrize("a_shape,w_shape,cluster_axis,scatter_dim,weight_dtype,cfg,pcc_floor", CASES)
-def test_precision_baseline(mesh_device, a_shape, w_shape, cluster_axis, scatter_dim, weight_dtype, cfg, pcc_floor):
+CASES = [c if len(c.values) == 8 else pytest.param(*c.values, ttnn.bfloat16, id=c.id) for c in CASES]
+
+
+@pytest.mark.parametrize("a_shape,w_shape,cluster_axis,scatter_dim,weight_dtype,cfg,pcc_floor,a_dtype", CASES)
+def test_precision_baseline(
+    mesh_device, a_shape, w_shape, cluster_axis, scatter_dim, weight_dtype, cfg, pcc_floor, a_dtype
+):
     g = tuple(mesh_device.shape)[cluster_axis]
     extent = a_shape[-2] if scatter_dim == -2 else w_shape[-1]
     if g < 2 or extent % (32 * g):
         pytest.skip(f"G={g} cannot split extent {extent}")
-    a = _stacked_randn(mesh_device, a_shape, 0)
+    a = _as_device_holds(_stacked_randn(mesh_device, a_shape, 0), a_dtype)
     w = _as_device_holds(_stacked_randn(mesh_device, w_shape, 1, scale=w_shape[0] ** -0.5), weight_dtype)
     expected = _reference(a, w, cluster_axis, scatter_dim)
     out = matmul_reduce_scatter(
-        _to_mesh(a, mesh_device, ttnn.bfloat16),
+        _to_mesh(a, mesh_device, a_dtype),
         _to_mesh(w, mesh_device, weight_dtype),
         cluster_axis=cluster_axis,
         scatter_dim=scatter_dim,
@@ -155,7 +198,7 @@ def test_precision_baseline(mesh_device, a_shape, w_shape, cluster_axis, scatter
             worst = ((r, c), m, allclose_msg)
     (r, c), m, allclose_msg = worst
     logger.info(
-        f"PRECISION {a_shape}x{w_shape} axis={cluster_axis} dim={scatter_dim} w={weight_dtype} cfg={cfg} "
+        f"PRECISION {a_shape}x{w_shape} axis={cluster_axis} dim={scatter_dim} a={a_dtype} w={weight_dtype} cfg={cfg} "
         f"worst_dev=({r},{c}) pcc={m['pcc']:.6f} max_abs={m['max_abs']:.5f} mean_abs={m['mean_abs']:.6f} "
         f"rel_rms={m['rel_rms']:.5f} ulp_mean={m['ulp_mean']:.3f} ulp_p99={m['ulp_p99']:.2f} "
         f"ratio_median={m['ratio_median']:.5f} ratio_p5={m['ratio_p5']:.4f} ratio_p95={m['ratio_p95']:.4f} "

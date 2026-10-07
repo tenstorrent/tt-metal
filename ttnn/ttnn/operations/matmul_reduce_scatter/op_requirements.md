@@ -96,7 +96,7 @@ hop. It stands alone.
 `Topology.Ring` is in `SUPPORTED["topology"]`, the exact-once regression tests still pass, and the full golden suite
 is green with zero loud categories.
 
-### [ ] Refinement 2 — Numerical configurability: bfloat8_b activations + bfloat4_b weights
+### [x] Refinement 2 — Numerical configurability: bfloat8_b activations + bfloat4_b weights
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` (activation `A`) and `ttnn.bfloat4_b` to
 `SUPPORTED["weight_dtype"]`. `compute_kernel_config` is already exposed and honoured (HiFi2 / `fp32_dest_acc_en`

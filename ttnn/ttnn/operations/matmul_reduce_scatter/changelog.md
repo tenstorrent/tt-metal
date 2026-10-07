@@ -70,3 +70,36 @@
   arrival wait, compute NCRISCs at the hand-off drain).
 - Tests added: none in the unit directory (the multi-device ring needs a wrapped fabric config per mesh, which the
   golden ring-mock fixture provides). Probes 026–031 cover repeated-call determinism and the G=8 tiny-shape hang.
+
+## Refinement 2 — Numerical configurability: bfloat8_b activations + bfloat4_b weights
+- Date: 2026-10-07
+- What was done: `ttnn.bfloat8_b` added to `SUPPORTED["dtype"]` and `ttnn.bfloat4_b` to `SUPPORTED["weight_dtype"]`.
+  It was a SUPPORTED-only change with no kernel or descriptor edits, because the existing paths already followed
+  the input dtypes:
+  `cb_act_operand` / `cb_weight_operand` take `a.dtype` / `w.dtype` as page format with `_tile_bytes(dtype)` page
+  sizes (Bfp8_b 1088 B, Bfp4_b 576 B); the injectors read with the `a_tile_bytes` / `w_tile_bytes` CT args; the
+  compute kernel is `matmul_block` behind `compute_kernel_hw_startup(act, weight, handoff)` (per-operand unpack
+  formats, no hard-coded formats). Output stays bf16, transport stays bf16 on the wire with fp32 adds, and
+  `cb_partial_accum` still follows `fp32_dest_acc_en`. `compute_kernel_config` is unchanged (HiFi2 / fp32 DEST
+  default).
+  - Residency predicate: confirmed it exploits the smaller tiles (host-only planner run, approx. BH compute grid,
+    fp32 DEST). 2048x4096x4096 `scatter_dim=-1`: A bf16/W bf8 → R2 k=8; A bf8 → R1 k=32; A bf8/W bf4 → R1 k=64.
+    `scatter_dim=-2`: W bf4 flips R2 → R1 (k=32, k=64 with A bf8). 640x8448x7168 `scatter_dim=-1`: R1 k 12 → 24
+    (A bf8) → 44 (A bf8 + W bf4).
+  - Reused: every CB, kernel and planner path. Added: two SUPPORTED entries, plus a precision-baseline axis.
+- Accuracy achieved (`test_matmul_reduce_scatter_precision_baseline.py`, worst of 8 chips, reference on the
+  device-quantized operands, HiFi2):
+  - FOCUS 640x2048x7168, A bf8 / W bf8, fp32 DEST: PCC 0.999996, rel-RMS 0.0034
+  - FOCUS, A bf16 / W bf4, fp32 DEST: PCC 0.999991, rel-RMS 0.0054
+  - FOCUS, A bf8 / W bf4, bf16 DEST: PCC 0.99981, rel-RMS 0.039, median ratio 1.024. This is the same
+    bf16-accumulation bias as the Phase-0 `focus_bf16acc` case (rel-RMS 0.024, 1.016).
+  - MiMo rows 2048x2048x4096, A bf8 / W bf4: PCC 0.999996, rel-RMS 0.0035
+  - large K 640x8448x7168 (axis 0), A bf8 / W bf4: PCC 0.999997, rel-RMS 0.0024
+  - All golden tolerances (bfloat4_b: PCC 0.99, rel-RMS 0.08) hold with margin.
+- Golden test progress: targeted `test_golden.py` slices, 300/300 pass. Shapes: 640x2048x7168 (2-D and 4-D A),
+  640x8448x7168, 640x1536x32, 640x1536x128, 1x1x2048x4096x4096, 1x2048x2048x4096 (3-D A), 640x4608x7168. Each slice
+  covered every new-dtype cell (both cluster axes, both scatter dims, 1/2 links), and a few prior cells were
+  caught by the `-k` filter. No EXCLUSIONS needed (every TARGET shape is tile-aligned).
+- Issues encountered: None.
+- Tests added: `test_matmul_reduce_scatter_precision_baseline.py` gained an activation-dtype axis and 5
+  bfloat8_b / bfloat4_b cases (11/11 pass).
