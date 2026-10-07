@@ -237,7 +237,7 @@ WORKAROUNDS = [
         target="ttnn.rms_norm",
         reason="models/common/rmsnorm.py builds its own config with fp32_dest_acc_en=True (tt_transformers never passes "
         "False), bypassing the bf16-dest policy; craq-sim cannot unpack bf16 to Tf32 for it (QUASAR_GAPS S4)",
-        remove_when="craq-sim implements bf16->Tf32 unpack, or RMSNorm takes the model's dest-acc setting",
+        remove_when="the craq-sim build has tenstorrent/craq-sim#419 (bf16->Tf32 unpack; issue craq-sim#403)",
         applies=_quasar_fp32_dest_acc,
         rewrite=_with_bf16_dest_acc,
     ),
