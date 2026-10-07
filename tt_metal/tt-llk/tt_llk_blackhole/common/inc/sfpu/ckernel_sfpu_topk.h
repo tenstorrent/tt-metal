@@ -152,7 +152,6 @@ inline void topk_uint16_prepare_value_tile_for_pack(std::uint32_t dst_tile_index
     {
         TOPK_SFPENCC_ALL_LANES_ON(); // the constant write and the strip sweep are lane-predicated
         sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
-        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
         set_dst_write_addr(0);
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         if (dst_tile_index == 0)
@@ -180,7 +179,6 @@ inline void _topk_uint16_move_dest_tile_to_pack_half_(std::uint32_t dst_tile_ind
 {
     TOPK_SFPENCC_ALL_LANES_ON(); // the constant write and the strip sweep are lane-predicated
     sfpi::vConstIntPrgm0 = TOPK_LO16_MASK;
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     switch (dst_tile_index)
@@ -448,7 +446,6 @@ inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
 {
     TOPK_SFPENCC_ALL_LANES_ON();
     sfpi::vConstIntPrgm0 = ~topk_tag_mask<TAG_BITS>(); // keep the value bits, clear the rank tag field
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     if (dst_tile_index == 0)
@@ -466,8 +463,8 @@ inline void _topk_strip_rank_tags_(std::uint32_t dst_tile_index)
 // uint16 index tile in 32-bit DEST: rotate the [0|idx] integer into the high half the packer reads.
 inline void _topk_finalize_hi16_index_tile_(std::uint32_t dst_tile_index)
 {
+    // The SFPENCC, SETC16 and SETRWC before the first SFPLOAD are the three instructions an FPU write to Dst needs.
     TOPK_SFPENCC_ALL_LANES_ON();
-    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     const std::uint32_t base = dst_tile_index * 64;
