@@ -200,3 +200,70 @@ def test_the_backbone_rule_reaches_the_rendered_builder_prompt(tmp_path: Path, m
     monkeypatch.setattr(E, "_required_heads_block", lambda model_id, all_tasks: "")
     prompt = E._build_agent_prompt(model_id="some/model", demo_dir=tmp_path, pcc=0.99)
     assert _one_line(E.BACKBONE_FIDELITY_RULE) in _one_line(prompt)
+
+
+# --------------------------------------------------------------------------------------------
+# where the error sits: the batch-mean error map's worst line, from one constant
+# --------------------------------------------------------------------------------------------
+
+
+def test_the_local_error_rule_states_its_measure_from_its_constant() -> None:
+    """Batch-averaged error map, per-line means, worst line against the median line -- with the bound
+    coming from the named constant, and why a whole-output PCC misses it."""
+    rule = E.LOCAL_ERROR_RULE
+    assert "average |tt - golden| over the whole batch" in rule
+    assert ("worst line is at most %.1fx the median line" % E._LOCAL_LINE_RATIO) in rule
+    assert "A whole-output PCC cannot see it" in rule
+    assert ("inside the test %s names" % E._GATE_DECLARATION) in rule, "optimize only re-runs the declared gate"
+    assert 1.5 < E._LOCAL_LINE_RATIO < 6.4, "the bound sits between the measured fixed and defective runs"
+
+
+def test_the_builder_s_checklist_carries_the_local_error_rule_as_item_7() -> None:
+    contract = E._TT_ONLY_CONTRACT
+    assert E._LOCAL_ERROR_RULE_SLOT not in contract, "the local-error slot was never filled"
+    assert _one_line(E.LOCAL_ERROR_RULE) in _one_line(contract)
+    item = contract.index("7. CHECK WHERE THE ERROR SITS, NOT ONLY HOW MUCH")
+    assert contract.index("HOLD THE FIRST STAGE'S HIDDEN STATE") < item < contract.index("ALLOWED HF USAGE")
+
+
+def test_the_local_error_rule_is_written_once() -> None:
+    src = Path(E.__file__).read_text()
+    assert src.count("assert WHERE the error sits") == 1
+
+
+def test_the_local_error_rule_reaches_the_rendered_builder_prompt(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(E, "_required_heads_block", lambda model_id, all_tasks: "")
+    prompt = E._build_agent_prompt(model_id="some/model", demo_dir=tmp_path, pcc=0.99)
+    assert _one_line(E.LOCAL_ERROR_RULE) in _one_line(prompt)
+
+
+def test_the_local_error_rule_reaches_every_fix_round_prompt(tmp_path: Path) -> None:
+    """The builder is re-prompted every gate round; the rule rides that prompt too, not only the first."""
+    prompt = E._build_cc_fix_prompt(model_id="some/model", demo_dir=tmp_path, pcc=0.99)
+    assert _one_line(E.LOCAL_ERROR_RULE) in _one_line(prompt)
+
+
+def _worst_line_ratio(tt, ref):
+    """The rule's measure, as the rule words it: batch- and channel-mean |tt - ref| map, mean along every
+    row and every column, worst line over the median line."""
+    m = (tt - ref).abs().mean(dim=(0, 1))
+    lines = __import__("torch").cat([m.mean(1), m.mean(0)])
+    return float(lines.max() / lines.median())
+
+
+def test_the_measure_flags_a_shared_edge_defect_and_passes_scattered_drift() -> None:
+    """Synthetic batch: every sample drifts in its own random hot spot (as a free-running sampler does);
+    a layout defect puts the same quarter of the first row off by 0.5 in every sample (as the measured
+    gather defect did). Only the defect trips."""
+    torch = __import__("torch")
+    g = torch.Generator().manual_seed(0)
+    B, C, H, W = 32, 3, 64, 64
+    ref = torch.rand(B, C, H, W, generator=g)
+    tt = ref + 0.01 * torch.randn(B, C, H, W, generator=g)
+    for b in range(B):  # per-sample local drift, somewhere different each time
+        y, x = torch.randint(0, H - 8, (2,), generator=g).tolist()
+        tt[b, :, y : y + 8, x : x + 8] += 0.5
+    assert _worst_line_ratio(tt, ref) < E._LOCAL_LINE_RATIO
+    bad = tt.clone()
+    bad[:, :, 0, 16:32] = ref[:, :, 0, 16:32] - 0.5  # off by 0.5 on the same quarter of the edge row, every sample
+    assert _worst_line_ratio(bad, ref) > E._LOCAL_LINE_RATIO

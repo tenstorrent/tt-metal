@@ -1216,6 +1216,35 @@ BACKBONE_FIDELITY_RULE = (
 )
 _BACKBONE_RULE_SLOT = "<BACKBONE_FIDELITY_RULE>"
 
+# The tool's OWN protocol for the ONE test in an emitted package that is the correctness gate.
+# Nothing here names a model, a stage or a component: it is a module-level constant the emitted
+# test file sets to the name of its own gate function.
+_GATE_DECLARATION = "E2E_CORRECTNESS_GATE"
+
+# WHERE the error sits, not only how much of it there is. A whole-output PCC, even per sample, averages a
+# layout defect away: on an image-edit port the last stage's cross-device output gather zeroed stretches of
+# the first pixel row (grey dashes on the top edge) and every sample still passed a 0.95 PCC gate. Such
+# a defect (a gather, halo, pad or slice bug) corrupts the SAME edge row or shard seam in every sample,
+# while trajectory drift lands somewhere different in each -- per-sample local error cannot tell them
+# apart (drift alone put single tiles 70x above their sample's median). Averaged over the batch, the
+# drift washes out and the defect stays: worst line / median line read 6.4 with the bug, 1.5 once fixed.
+_LOCAL_LINE_RATIO = 3.0  # worst line of the batch-mean error map, as a multiple of its median line
+
+# Written ONCE and read by the builder's checklist (_TT_ONLY_CONTRACT), item 7 of OUTPUT CORRECTNESS.
+LOCAL_ERROR_RULE = (
+    "For an output with spatial or temporal axes (an image, a video, a spectrogram, a waveform), also "
+    "assert WHERE the error sits: average |tt - golden| over the whole batch (and the channels) into one "
+    "error map, take its mean along every line of each such axis (every row and every column of an "
+    "image; fixed-length windows of a 1-D signal), and assert the worst line is at most %.1fx the median "
+    "line. A gather, halo, pad or slice defect corrupts the same edge or shard seam in every sample, "
+    "while trajectory drift lands somewhere different in each, so the batch average keeps the defect and "
+    "washes out the drift. A whole-output PCC cannot see it: a port whose output gather zeroed parts "
+    "of the first row passed a per-sample PCC gate on every sample (worst line 6.4x the median; 1.5x "
+    "once fixed). Assert it inside the test %s names, the one optimize re-runs after every change."
+    % (_LOCAL_LINE_RATIO, _GATE_DECLARATION)
+)
+_LOCAL_ERROR_RULE_SLOT = "<LOCAL_ERROR_RULE>"
+
 
 def _identifier_mentions(identifier: str, token: str) -> bool:
     """True when `identifier` names `token` -- as the whole name or one underscore-separated part.
@@ -1271,12 +1300,6 @@ def _renders_signal(demo_dir: Path) -> bool:
             if name and name.lower() in _OUTPUT_RATE_FIELDS:
                 return True
     return False
-
-
-# The tool's OWN protocol for the ONE test in an emitted package that is the correctness gate.
-# Nothing here names a model, a stage or a component: it is a module-level constant the emitted
-# test file sets to the name of its own gate function.
-_GATE_DECLARATION = "E2E_CORRECTNESS_GATE"
 
 
 def _declared_gate(path: Path):
@@ -2310,6 +2333,10 @@ OUTPUT CORRECTNESS (what the PCC/correctness test must ASSERT, not report):
   6. HOLD THE FIRST STAGE'S HIDDEN STATE TIGHTER THAN THE PCC TARGET.
      <BACKBONE_FIDELITY_RULE>
 
+  7. CHECK WHERE THE ERROR SITS, NOT ONLY HOW MUCH. Skip it for tokens, logits
+     or a hidden state.
+     <LOCAL_ERROR_RULE>
+
 ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
   1. hf_model.config.<X> / hf_model.generation_config.<X> — pure attribute reads
   2. weight extraction at build time: hf_model.<X>.<Y>.weight / .bias
@@ -2331,6 +2358,13 @@ _TT_ONLY_CONTRACT = _TT_ONLY_CONTRACT.replace(
     "     " + _BACKBONE_RULE_SLOT,
     textwrap.fill(
         BACKBONE_FIDELITY_RULE, width=78, initial_indent="     ", subsequent_indent="     ", break_on_hyphens=False
+    ),
+)
+# Item 7's sentence likewise.
+_TT_ONLY_CONTRACT = _TT_ONLY_CONTRACT.replace(
+    "     " + _LOCAL_ERROR_RULE_SLOT,
+    textwrap.fill(
+        LOCAL_ERROR_RULE, width=78, initial_indent="     ", subsequent_indent="     ", break_on_hyphens=False
     ),
 )
 
