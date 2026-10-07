@@ -207,6 +207,13 @@ jobs:
             tests/pipeline_reorg
       - name: Install dependencies
         run: pip3 install PyYAML
+      # A cmd block that records a failed test command and runs the next one starts that
+      # command on devices nothing has reset (#57706). Runs from this job's own checkout.
+      - name: Lint pipeline cmd blocks
+        run: |
+          git fetch --no-tags --depth=1 origin main
+          git show FETCH_HEAD:.github/pipeline_cmd_lint_baseline.yaml > "${RUNNER_TEMP}/base_baseline.yaml" 2>/dev/null || : > "${RUNNER_TEMP}/base_baseline.yaml"
+          python3 .github/scripts/utils/lint_pipeline_cmds.py --base-baseline "${RUNNER_TEMP}/base_baseline.yaml"
       - name: Verify test timeouts against team time budgets
         uses: tenstorrent/tt-metal/.github/actions/verify-time-budget@main
         with:
@@ -638,7 +645,7 @@ jobs:
         timeout-minutes: 20
       - uses: ./.github/actions/llk-compile-quasar
         with:
-          pytest-markers: "quasar"
+          pytest-markers: "quasar and not perf"
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.

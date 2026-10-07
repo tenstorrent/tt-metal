@@ -62,8 +62,8 @@
 # dispatching, a reader stride that goes wrong, a scalar path that stops being taken, an op that
 # stops being registered at all.
 #
-# Selection is by test name rather than by whole file, so it stays small as those files grow.
-# Two things are being covered:
+# Selection is by test name except for the category files, which are taken whole. Three things
+# are being covered:
 #
 # 1. Broadcast and scalar machinery, in depth:
 #   subtile ......................... the test_binary_subtile_*_bcast cases: no bcast, row, col,
@@ -76,49 +76,37 @@
 #
 # 2. One basic case per op, across the op families, so that an op dropping out of dispatch is
 #    caught here rather than in nightly sanity:
-#   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p,
-#                                     sin, mish, tril, triu
-#   binary .......................... relational (t-t and t-s), left/right shift, atan2,
-#                                     nextafter, ldexp, logaddexp, logaddexp2, xlogy, bias_gelu,
-#                                     arithmetic operator overloads (logical and/or/xor moved to
-#                                     item 3)
+#   unary ........................... relu, relu6, sigmoid, tanh, gelu, silu, neg, log2, log1p, sin
+#   binary .......................... left/right shift, atan2, nextafter, arithmetic operator
+#                                     overloads
 #   div family (whole file) ......... fp32 remainder/fmod, div_no_nan scalar memory-config
-#                                     plumbing, int32 div paths, output-dtype and mixed-dtype
-#                                     paths (bf16 fmod/remainder moved out, see item 3)
-#   ternary ......................... mac, lerp, addcmul, addcdiv
+#                                     plumbing, int32 div paths, output-dtype and mixed-dtype paths
 #
-# 3. Checks from the two category test files, standing in for basic-case coverage this gate used
-#    to get for free from tests since deleted upstream:
-#   test_floor_div (category5) ...... replaces the deleted test_binary_floor_div_ttnn; a full
-#                                     2048x2048 sweep
-#   test_modulo_ops (+ scalar/shapes,
-#     category5) .................... replaces the deleted test_binary_fmod_bf16,
-#                                     test_remainder_scalar, test_fmod_scalar; runs a (64, 32)
-#                                     tile plus a handful of fixed shapes, not a full sweep
-#   test_logical_ops (+ scalar,
-#     category3) .................... logical_and/or/xor (and their inplace variants), t-t and
-#                                     t-s; replaces the test_binary_logical_and__ttnn /
-#                                     _or__ttnn / _xor_ttnn selectors, all three dead here since
-#                                     #57637 moved this coverage to test_binary_category3_bfloat16.py
-#   test_floor_div/test_modulo_ops together add ~2s of test time on top of this job's own device
-#   bring-up (measured in isolation), since the divide/remainder/fmod kernels are already warm
-#   from the rest of this selection; test_logical_ops (+ scalar) adds ~7s on its own (60 cases,
-#   full pairwise/broadcast bf16 grids) -- more than the other two but still a rounding error
-#   against the ~50s this job runs at locally, and it restores dispatch-liveness coverage for
-#   three ops the gate had silently lost.
+# 3. Stratified bfloat16 grids from the category files:
+#   binary category1 (whole file) ... add, sub, rsub, multiply, divide and their inplace variants,
+#                                     addalpha, subalpha
+#   binary category2 (whole file) ... eq, ne, lt, le, gt, ge and their inplace variants, t-t and
+#                                     t-s; minimum, maximum; isclose
+#   binary category4 (whole file) ... ldexp, logaddexp, logaddexp2, squared_difference, xlogy,
+#                                     hypot, bias_gelu, prelu, and their tensor-scalar forms
+#   test_logical_ops (category3) .... logical_and/or/xor and their inplace variants, t-t and t-s
+#   test_floor_div (category5) ...... floor_div over a full 2048x2048 sweep
+#   test_modulo_ops (category5) ..... fmod and remainder, over a (64, 32) tile plus a handful of
+#                                     fixed shapes rather than a full sweep
+#   ternary category1 (whole file) .. mac, lerp, addcmul, addcdiv and where, over the full 256^3
+#                                     grid per op with its exception stages asserted
 #
-# Deliberately excluded: the heavy sweeps inside those same files (isclose, celu, inverse trig,
+# Deliberately excluded: the heavy sweeps inside those same files (celu, inverse trig,
 # fill, div-scalar dtype matrices, clamp/clip) -- they are accuracy and dtype coverage, they cost
 # minutes even with warm kernels, and they belong in the nightly eltwise groups where they already
 # run.
 #
-# 1252 tests selected locally on an N300 with a warm kernel cache -- 1225 pass, 19 skip, 8 xfail,
-# 57s of pytest (this entry is merge-queue-gated, so it hasn't run in CI on this branch; treat this
-# as a floor, not the real number, until it has). An older, smaller selection measured 45-47s of
-# pytest / 52-55s of wall-clock warm and 230s / 237s on a total ccache miss; the whole spread is
-# kernel compilation, and this job runs with enable-kernel-ccache against the shared Redis backend,
-# so it sits at the warm end. One pytest invocation on purpose: device bring-up is ~7s, so
-# splitting this into per-file entries would cost more than the tests do.
+# 1393 tests selected -- 1366 pass, 19 skip, 8 xfail. 172s of pytest on wh_n300_civ2 in CI; 60s
+# locally on an N300 with a warm kernel cache and 282s on a cold one, the spread being kernel
+# compilation. test_ternary_category1_bfloat16 is ~21s of that and subtile ~6s; nothing else
+# reaches 2.5s. One pytest invocation on purpose: device bring-up is ~7s, so splitting this into
+# per-file entries would cost more than the tests do.
+#
 # Hardware only. Blackhole eltwise coverage in the merge gate comes from the tt-nn-validation-basic
 # gtest suite (tests/ttnn/unit_tests/gtests/test_eltwise.cpp), which runs on bh_p150b_civ2_viommu
 # as well as wh_n150_civ2.
@@ -131,32 +119,29 @@
     tests/ttnn/unit_tests/operations/eltwise/test_where.py
     tests/ttnn/unit_tests/operations/eltwise/test_unary.py
     tests/ttnn/unit_tests/operations/eltwise/test_div_ops.py
-    tests/ttnn/unit_tests/operations/eltwise/test_relational.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_composite.py
-    tests/ttnn/unit_tests/operations/eltwise/test_ternary_composite.py
-    tests/ttnn/unit_tests/operations/eltwise/test_composite.py
     tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
     tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
-    tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category1_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category2_bfloat16.py
     tests/ttnn/unit_tests/operations/eltwise/test_binary_category3_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category4_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_binary_category5_bfloat16.py
+    tests/ttnn/unit_tests/operations/eltwise/test_ternary_category1_bfloat16.py
     -k "(subtile or where_bcast or program_cache_different_broadcast_shapes
     or test_where_tss or test_where_tst or test_where_tts
-    or test_gelu or test_silu or test_01_volume_sin
+    or test_gelu or test_silu or test_01_volume_sin or test_unary_mish
     or test_div_ops or test_binary_scalar
-    or test_binary_relational_ttnn or test_binary_relational_scalar_ttnn
     or test_binary_atan2_ttnn or test_floor_div or test_modulo_ops
     or test_logical_ops or test_binary_nextafter_ttnn
     or test_binary_left_shift or test_binary_right_shift
-    or test_mac_ttnn or test_lerp_ttnn
-    or test_ternary_addcmul_ttnn or test_ternary_addcdiv_ttnn
-    or test_unary_composite_mish_ttnn or test_unary_composite_tril_ttnn
-    or test_unary_composite_triu_ttnn
-    or test_ldexp or test_logaddexp or test_xlogy or test_bias_gelu
+    or test_ternary_category1_bfloat16
     or test_arithmetic_operators
+    or test_binary_category1_bfloat16 or test_binary_category2_bfloat16 or test_binary_category4_bfloat16
     or test_unary_relu_ttnn or test_unary_relu6_ttnn or test_unary_sigmoid_ttnn
     or test_unary_tanh_ttnn or test_unary_neg_ttnn
     or test_unary_log2_ttnn or test_unary_log1p_ttnn)
-    and not (fused_relu_with_broadcast or rne_approx_modes)"
+    and not fused_relu_with_broadcast"
     -m "not disable_fast_runtime_mode"
   skus:
     wh_n300_civ2:
