@@ -26,8 +26,9 @@ FORCE_INLINE uint32_t tile_face_index(uint32_t r, uint32_t c) {
 //   1: post core 8
 //   2: comb core 9
 //
-// Core 0 owns the one-core width-sharded fused_w. It reads the tile once and
-// multicasts it into the identically-addressed CB on the other nine cores.
+// Core 0 owns the one-core width-sharded fused_w. It reads it once -- a whole tile, or just
+// the one row of a ROW_MAJOR fused_w -- and multicasts it into the identically-addressed CB on
+// the other nine cores.
 void kernel_main() {
     constexpr uint32_t role = get_compile_time_arg_val(0);
     constexpr uint32_t cb_fused_w = get_compile_time_arg_val(1);
@@ -54,8 +55,10 @@ void kernel_main() {
     constexpr uint32_t receiver_ready_sem_id = get_compile_time_arg_val(22);
     constexpr uint32_t sender_noc_x = get_compile_time_arg_val(23);
     constexpr uint32_t sender_noc_y = get_compile_time_arg_val(24);
+    constexpr bool fused_w_row_major = get_compile_time_arg_val(25) != 0;
+    constexpr uint32_t fused_w_read_bytes = get_compile_time_arg_val(26);
 
-    constexpr auto fused_w_args = TensorAccessorArgs<25>();
+    constexpr auto fused_w_args = TensorAccessorArgs<27>();
     constexpr auto pre_bias_args = TensorAccessorArgs<fused_w_args.next_compile_time_args_offset()>();
     constexpr auto post_bias_args = TensorAccessorArgs<pre_bias_args.next_compile_time_args_offset()>();
     constexpr auto hidden_args = TensorAccessorArgs<post_bias_args.next_compile_time_args_offset()>();
@@ -92,7 +95,7 @@ void kernel_main() {
     cb_fw.reserve_back(one_tile);
     const uint32_t fw_l1_addr = cb_fw.get_write_ptr();
     if (is_source) {
-        noc.async_read(fused_w, cb_fw, tile_size_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read(fused_w, cb_fw, fused_w_read_bytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
 
         if constexpr (num_receivers > 0) {
@@ -105,7 +108,7 @@ void kernel_main() {
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(fw_l1_addr),
                 MulticastEndpoint{},
-                tile_size_bytes,
+                fused_w_read_bytes,
                 num_receivers,
                 {},
                 {.noc_x_start = dst_start_x,
@@ -127,7 +130,13 @@ void kernel_main() {
     }
 
     const volatile tt_l1_ptr uint16_t* fw = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(cb_fw.get_read_ptr());
-    auto fused_w_at = [&](uint32_t k) { return fw[tile_face_index(0, k & 31u)]; };
+    auto fused_w_at = [&](uint32_t k) {
+        if constexpr (fused_w_row_major) {
+            return fw[k];
+        } else {
+            return fw[tile_face_index(0, k & 31u)];
+        }
+    };
 
     if constexpr (role == 0) {
         CircularBuffer cb_pw(cb_pre_w);

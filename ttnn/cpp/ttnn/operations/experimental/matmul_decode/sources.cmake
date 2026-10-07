@@ -6,6 +6,7 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_API_HEADERS
     packed_weight_spec.hpp
     device/matmul_decode_device_operation.hpp
     device/matmul_decode_descriptor.hpp
+    device/matmul_decode_large_k_device_operation.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_SRCS
@@ -15,6 +16,8 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_SRCS
     device/partial_width_sharded_program_factory.cpp
     device/batched_width_sharded_program_factory.cpp
     device/matmul_decode_descriptor.cpp
+    device/matmul_decode_large_k_device_operation.cpp
+    device/large_k_tree_reduce_program_factory.cpp
 )
 
 # Device kernels installed with the op (FILE_SET kernels). Listed here rather than
@@ -23,18 +26,21 @@ set(TTNN_OP_EXPERIMENTAL_MATMUL_DECODE_KERNELS
     device/kernels/compute/compute_batched_width_sharded.cpp
     device/kernels/compute/compute_full_width_ring_gather.cpp
     device/kernels/compute/compute_full_width_sharded.cpp
+    device/kernels/compute/compute_large_k_tree_reduce.cpp
     device/kernels/compute/compute_partial_width_sharded.cpp
     device/kernels/dataflow/all_gather_local_output.hpp
     device/kernels/dataflow/full_width_rms_norm_transport.hpp
     device/kernels/dataflow/reader_batched_width_sharded.cpp
     device/kernels/dataflow/reader_full_width_ring_gather.cpp
     device/kernels/dataflow/reader_full_width_sharded.cpp
+    device/kernels/dataflow/reader_large_k_tree_reduce.cpp
     device/kernels/dataflow/reader_partial_width_ring_gather.cpp
     device/kernels/dataflow/reader_partial_width_sharded.cpp
     device/kernels/dataflow/writer_batched_width_sharded.cpp
     device/kernels/dataflow/writer_full_width_all_gather.cpp
     device/kernels/dataflow/writer_full_width_output_mcast.cpp
     device/kernels/dataflow/writer_full_width_rms_norm.cpp
+    device/kernels/dataflow/writer_large_k_tree_reduce.cpp
     device/kernels/dataflow/writer_partial_width_sharded.cpp
 )
 

@@ -186,6 +186,46 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("rms_norm_gamma") = nb::none(),
         nb::arg("rms_norm_epsilon") = 1.0e-6F,
         nb::arg("rms_norm_group_size") = 0);
+
+    ttnn::bind_function<"matmul_decode_large_k", "ttnn.experimental.">(
+        mod,
+        R"doc(matmul_decode_large_k(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, dtype: Optional[ttnn.DataType] = None, reduce_fan_in: int = 2) -> ttnn.Tensor
+
+        Decode matmul ``A @ B`` for a large K and a small N. K is split across cores and the
+        per-core partials are summed up a reduction tree, with no gather of A and no global
+        synchronization: each core waits only on its own children and signals only its parent.
+
+        Core ``i`` of A's grid (row-major shard order) holds the ``i``-th K-slice of both
+        operands, multiplies them locally, and its partial joins the tree. At level ``l``
+        (stride ``s = reduce_fan_in ** l``) each core whose index is a multiple of
+        ``s * reduce_fan_in`` adds the running sums of cores ``i + j * s``
+        (``j = 1 .. reduce_fan_in - 1``). The result ends up on the first core of the grid.
+
+        Args:
+            input_tensor_a (ttnn.Tensor): ``[M, K]`` BFLOAT16, ROW_MAJOR, WIDTH_SHARDED in L1 with
+                ROW_MAJOR shard orientation and shard ``[M, Kc]``. ``M <= 32`` and ``Kc`` must be
+                a multiple of 32. Each row is consumed as a 1x32 tile.
+            input_tensor_b (ttnn.Tensor): ``[K, N]`` TILE (32x32), HEIGHT_SHARDED in L1 on the
+                same cores and orientation as ``input_tensor_a``, shard ``[Kc, N]``. BFLOAT16,
+                BFLOAT8_B or BFLOAT4_B. ``N`` must be a multiple of 32.
+
+        Keyword Args:
+            dtype (ttnn.DataType, optional): BFLOAT16 or FLOAT32 output. Defaults to the dtype
+                of ``input_tensor_a``. FLOAT32 also accumulates the reduction in fp32.
+            reduce_fan_in (int, optional): partials summed per tree node, at least 2. A larger
+                fan-in makes the tree shallower, so fewer serial hops, at the cost of more adds
+                per node. Defaults to 2.
+
+        Returns:
+            ttnn.Tensor: ``[M, N]`` ROW_MAJOR, WIDTH_SHARDED in L1 on the first core of
+            ``input_tensor_a``'s grid, shard ``[M, N]``.
+        )doc",
+        &ttnn::experimental::matmul_decode_large_k,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("reduce_fan_in") = 2);
 }
 
 // Descriptor-level bindings for models/experimental/ops/descriptors/matmul_decode.py, mirroring
