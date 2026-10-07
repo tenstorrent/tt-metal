@@ -2238,6 +2238,14 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             os.environ.setdefault("HF_MODEL", model_path)
             # Share the text model's mesh/CCL setup so the vision tower's TP
             # all-reduces reuse the same semaphores and link/topology tuning.
+            # Guard: a loader that hands out tensors backed by freed memory shows up
+            # here first (the text model never touches these). Measured 2026-10-07:
+            # NaN / inf / 1e34 values in every vision tensor via the AutoModel
+            # fallback; the loader now resolves hub ids to the local snapshot.
+            for _k in [k for k in state_dict if "vision" in k or "embed_vision" in k][:4]:
+                _v = state_dict[_k].float()
+                if not torch.isfinite(_v).all() or _v.abs().max() > 1e6:
+                    raise ValueError(f"vision weight {_k} is corrupt (max {_v.abs().max()}): stale state dict memory?")
             if has_unified_vision_weights(state_dict):
                 # 12B "unified": no SigLIP tower; raw patches project straight to text space.
                 vision_tower = Gemma4UnifiedVisionEmbedder(
