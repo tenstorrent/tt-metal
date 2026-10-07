@@ -56,6 +56,16 @@ class CT_DIM(TemplateParameter):
         return f"constexpr std::uint32_t CT_DIM = {self.ct_dim};"
 
 
+@dataclass
+class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the custom init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
+
+
 # Row height of the srcA operand. 32 -> full 32x32 tiles (num_faces=4);
 # 16 -> 16x32 "tiny tiles" (one face-row, num_faces=2).
 _TILE_ROWS = [32, 16]
@@ -195,6 +205,7 @@ def test_eltwise_bcast_col_custom(
             MATH_OP(mathop=mathop),
             BROADCAST_TYPE(broadcast_type),
             CT_DIM(ct_dim),
+            PRESERVE_SRC_ZERO_FLAG(False),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -256,4 +267,117 @@ def test_eltwise_bcast_col_custom(
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
+    ), "Assert against golden failed"
+
+
+# Smallest positive bf16 denormal, 2^-133.
+BF16_DENORMAL_MIN = 2.0**-133
+
+
+def test_eltwise_bcast_col_custom_flushes_denormal_srcb_after_keep_flag():
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    Even rows broadcast a bf16 denormal from SrcB, which a bf16 FPU op flushes to zero. Against srcA rows of
+    2^100 a kept denormal gives a nonzero product, so those rows must come out exactly 0. Odd rows are normal
+    and check the rest of the op. MUL only: a denormal is lost in a SUB result either way.
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
+    mathop = MathOperation.Elwmul
+
+    formats = input_output_formats([DataFormat.Float16_b])[0]
+    tile_rows, ct_dim = 32, 2
+    tile_dims = [tile_rows, 32]
+    input_dimensions_A = [tile_rows, ct_dim * 32]
+    input_dimensions_B = [tile_rows, 32]
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
+    num_faces = num_faces_r_dim * num_faces_c_dim
+    denormal_rows = torch.arange(tile_rows) % 2 == 0
+
+    torch.manual_seed(0)
+    src_A = torch.randn(input_dimensions_A)
+    src_A[denormal_rows] = 2.0**100
+    # One value per row, so the column broadcast reads it whichever column it takes.
+    row_values = torch.randn(tile_rows)
+    row_values[denormal_rows] = (
+        BF16_DENORMAL_MIN * torch.randint(1, 128, (int(denormal_rows.sum()),)).float()
+    )
+    src_B = row_values[:, None].expand(input_dimensions_B).clone()
+    flushed_B = torch.where(denormal_rows, 0.0, row_values)[:, None]
+    golden = (src_A * flushed_B).to(torch.bfloat16)
+    src_A = src_A.to(torch.bfloat16).flatten()
+    src_B = src_B.to(torch.bfloat16).flatten()
+
+    def _tilize(t, dims):
+        return tilize_block(
+            t,
+            dims,
+            formats.input_format,
+            num_faces=num_faces,
+            tile_dimensions=tile_dims,
+            face_r_dim=face_r_dim,
+        ).flatten()
+
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        DestAccumulation.No,
+        formats,
+        input_dimensions_A,
+        tile_dimensions=tile_dims,
+    )
+    configuration = TestConfig(
+        "sources/multiple_tiles_eltwise_custom_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(MathFidelity.LoFi),
+            INPUT_DIMENSIONS(
+                full_rt_dim=1,
+                full_ct_dim=ct_dim,
+                block_ct_dim=ct_dim,
+                block_rt_dim=1,
+            ),
+            MATH_OP(mathop=mathop),
+            BROADCAST_TYPE(BroadcastType.Column),
+            CT_DIM(ct_dim),
+            PRESERVE_SRC_ZERO_FLAG(True),
+        ],
+        runtimes=[
+            TILE_COUNT(ct_dim),
+            NUM_FACES(num_faces, num_faces, num_faces),
+            TEST_FACE_DIMS(face_r_dim),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            _tilize(src_A, input_dimensions_A),
+            formats.input_format,
+            _tilize(src_B, input_dimensions_B),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=ct_dim,
+            tile_count_B=1,
+            tile_count_res=ct_dim,
+            num_faces=num_faces,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dims,
+            use_dense_tile_dimensions=True,
+        ),
+        dest_acc=DestAccumulation.No,
+    )
+    res = untilize_block(
+        configuration.run().result,
+        formats.output_format,
+        input_dimensions_A,
+        num_faces=num_faces,
+        tile_dimensions=tile_dims,
+        face_r_dim=face_r_dim,
+    ).flatten()
+    res = torch.tensor(res, dtype=torch.bfloat16).reshape(input_dimensions_A)
+
+    kept = res[denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"
+    assert passed_test(
+        golden.flatten(), res.flatten(), formats.output_format
     ), "Assert against golden failed"

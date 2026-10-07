@@ -48,6 +48,9 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; the FPU op needs the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_eltwise_binary_uninit_custom_()
