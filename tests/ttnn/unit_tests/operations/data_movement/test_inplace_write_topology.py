@@ -28,11 +28,19 @@ Each test states in its docstring what the label was before the fix (the negativ
 where the op runs twice, asserts the program cache is untouched by the second dispatch: topology is
 not part of the program hash, so the relabelling must not cost a recompile.
 
-A full-mesh src whose ``mesh_coords()`` list the same devices as dst in a different order -- the
-case the set comparison exists for -- cannot be built here: every mesh mapper emits its coordinates
-in row-major order of the region it maps (``ttnn/core/distributed/distributed_tensor.cpp``), so on a
-1x2 mesh the only full-mesh order is ``[(0, 0), (0, 1)]``. The set and vector comparisons differ only
-for that permuted case; the sub-mesh test below is the case both must classify as partial.
+Neither branch of the copy / typecast coverage decision can be driven from Python beyond the
+full-coverage case these tests use. A full-mesh src whose ``mesh_coords()`` list the same devices as
+dst in a different order -- what the set comparison exists for -- cannot be built: every mesh mapper
+emits its coordinates in row-major order of the region it maps
+(``ttnn/core/distributed/distributed_tensor.cpp``), so on a 1x2 mesh the only full-mesh order is
+``[(0, 0), (0, 1)]``. A src whose label spans a strict subset of dst's coordinates cannot be built
+either: a tensor restricted to some coordinates (``ttnn.get_device_tensors(t)[i]``, or what
+``launch()`` hands back after a partial dispatch) shares its parent's ``TensorTopology`` and so lists
+the whole mesh, and a host tensor mapped onto one device with ``mesh_shape_override=MeshShape([1])``
+reaches the mesh with one shard in its storage but a label listing every coordinate (the
+host-to-mesh write path labels a single-shard upload as replicated over the whole mesh --
+pre-existing, not touched here). The partial branch is therefore defensive today; it is exercised
+by reasoning in the hook comments, not by a test.
 """
 
 import pytest
@@ -369,53 +377,6 @@ def test_sharded_src_into_replicated_dst_adopts_shard(mesh_device, write_into, d
     assert entries > 0
     keep_alive.append(run(2))
     assert mesh_device.num_program_cache_entries() == entries, "relabelling must not miss the program cache"
-
-
-@MESH_PARAMS
-@pytest.mark.parametrize("write_into, dst_dtype, dst_torch_dtype", _WRITE_INTO_DST)
-def test_sub_mesh_src_into_full_mesh_dst_keeps_callers_label(mesh_device, write_into, dst_dtype, dst_torch_dtype):
-    """src on one device of the mesh, dst replicated over the whole mesh: partial coverage.
-
-    Only src's coordinate is rewritten, so no label of dst's describes all of its shards. The hook defers to the
-    shared caller-owned rule, which declines for an operand on a different coordinate set, and the result takes
-    the framework union. ``launch()`` hands back a new tensor restricted to src's coordinates, so the caller's dst
-    handle keeps its own label and coordinates, and the other device's data is untouched.
-
-    One coordinate against two is a case the set comparison and the old vector comparison classify alike
-    (partial); they differ only for a full-mesh src with a permuted coordinate order, which no mapper produces on
-    this mesh (see the module docstring).
-    """
-    num_devices = mesh_device.get_num_devices()
-    shape = [1, 1, 64, 64]
-    torch.manual_seed(0)
-    src = torch.randn(shape).bfloat16()
-    one_device = ttnn.create_mesh_mapper(
-        mesh_device,
-        ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate()], mesh_shape_override=ttnn.MeshShape([1])),
-    )
-    src_t = _from_torch(src, mesh_device, one_device)
-    assert src_t.tensor_topology().distribution_shape().mesh_size() == 1, "precondition: one-device distribution"
-    assert len(ttnn.get_device_tensors(src_t)) == 1
-    dst_t = _replicated(torch.zeros(shape, dtype=dst_torch_dtype), mesh_device, dtype=dst_dtype)
-    dst_names_before = _placement_names(dst_t.tensor_topology())
-    dst_coords_before = _mesh_coords(dst_t.tensor_topology())
-    assert dst_names_before == ["Replicate"], "precondition: dst is replicated over the whole mesh"
-    assert len(dst_coords_before) == num_devices
-    assert _mesh_coords(src_t.tensor_topology()) == dst_coords_before[:1], "precondition: strict subset"
-
-    returned = write_into(src_t, dst_t)
-
-    # The caller's handle is untouched: same label, same coordinates.
-    assert _placement_names(dst_t.tensor_topology()) == dst_names_before
-    assert _mesh_coords(dst_t.tensor_topology()) == dst_coords_before
-    # The returned handle covers src's coordinate only and carries the union label (both operands replicated).
-    assert len(ttnn.get_device_tensors(returned)) == 1
-    _assert_labels(returned, ["Replicate"], "returned handle (framework union)")
-    assert returned.dtype == dst_dtype
-    dst_shards = _per_device(dst_t)
-    assert torch.equal(dst_shards[0], src.to(dst_torch_dtype))
-    for untouched in dst_shards[1:]:
-        assert torch.equal(untouched, torch.zeros(shape, dtype=dst_torch_dtype))
 
 
 @MESH_PARAMS
