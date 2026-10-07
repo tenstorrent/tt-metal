@@ -20,8 +20,7 @@ def main():
     try:
         g = torch.Generator().manual_seed(0)
         for rows in (1, 8, 32):
-            x = (torch.randn(1, 1, 32, 4096, generator=g) * 3).bfloat16()
-            x[:, :, rows:] = 0
+            x = (torch.randn(1, 1, rows, 4096, generator=g) * 3).bfloat16()
             w = (torch.rand(1, 1, 128, 32, generator=g) + 0.5).bfloat16()
             xt = ttnn.from_torch(
                 x,
@@ -30,7 +29,6 @@ def main():
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
-            xt = ttnn.reshape(xt, (1, 1, rows, 4096)) if rows != 32 else xt
             wt = ttnn.from_torch(
                 w,
                 device=mesh,
