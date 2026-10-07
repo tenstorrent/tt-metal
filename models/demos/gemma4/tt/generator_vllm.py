@@ -28,6 +28,7 @@ from models.demos.gemma4.tt.common import (
 )
 from models.demos.gemma4.tt.dflash_constants import VERIFY_WIDTH_MARGIN
 from models.demos.gemma4.tt.generator import (
+    vision_state_dict_for,
     SDPA_CHUNK_ALIGN,
     ChunkedPrefillPageTableGuardMixin,
     _build_vision_state_dict,
@@ -323,6 +324,8 @@ def _build_gemma4_vision(
         return None, None, None, None
     pad_token_id = getattr(getattr(hf_config, "text_config", hf_config), "pad_token_id", 0)
     os.environ.setdefault("HF_MODEL", model_path)
+    # Warm text weight cache -> placeholder dict: read the vision tensors for real.
+    state_dict = vision_state_dict_for(state_dict, model_path)
     if has_unified_vision_weights(state_dict):
         # 12B "unified": no SigLIP tower; the embedder projects straight to text space.
         embedder = Gemma4UnifiedVisionEmbedder(
@@ -1499,7 +1502,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # the demo's ``multimodal=True`` default). The vision tower + embedder are
         # built once, tensor-parallel over the full mesh; text-only serving is
         # unaffected.
-        if _gemma4_has_vision_weights(state_dict):
+        if _gemma4_has_vision_weights(state_dict) or getattr(state_dict, "is_placeholder", False):
             vision_dtype_name = os.environ.get("GEMMA4_VISION_DTYPE", "bfloat8_b")
             vision_dtype = getattr(ttnn, vision_dtype_name, ttnn.bfloat8_b)
             text_hidden_size = model[0].hidden_size
