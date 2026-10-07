@@ -18,3 +18,4 @@
   eval_vs_ref_t48_f6b8/ (PCC/PSNR + VBench 5 dims, ref scored too), POST.done}.
 - Next: read per-seed E2E_WALL_S gen#1..5 from run.log, summary.json, look at the 5 sbs stills;
   if visuals degrade, second job with LTX_S2_SIGMAS=0.909375,0.725,0.0 (label s2x2b).
+- DROP: blx01 job 715 killed by broker device recovery (exit -9, 72.6 s, ~04:46 UTC 2026-10-07; smarton's job; chips/tray: see /var/log/tt-device-broker/2026-10-07_044459_715.log). No outputs; fetch failed. Next: once blx01 health passes, resubmit s2x2 once (first drop of this config on blx01).
