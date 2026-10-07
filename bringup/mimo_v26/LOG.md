@@ -628,3 +628,25 @@
 - claim: USER DECISION 2026-10-07: keep expert activations bf16 (layer-5 MoE PCC 0.9915-0.9949 with the unified op's internal bfp8 activations, E261007-0251-c0a / -559). Weights stay bfp8. Next: bf16-activation expert path with existing ops, no C++; any C++ patch still needs separate approval.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0346-4c1
+- date: 2026-10-07T03:46:11
+- commit: a9f8e9910cd
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: bf16-activation expert path 'mm' (NO C++): dispatch(bf16 RM) -> tilize bf16 -> per local expert extract -> ttnn.matmul gate/up (bfp8 weights DRAM-interleaved, HiFi2 fp32 acc, bf16 out) -> silu*up -> down matmul (M chunked 256) -> insert -> combine -> post_combine_reduce; exact router. Real weights, real dump tokens, 4x8, PCC vs bf16 dump ffn_out per mesh row: L5 dump routing 0.99986-0.99991, exact router (set match 0.9888) 0.99978-0.99990 (unified op: 0.9915-0.9949); L1 dump routing 0.99997, exact router 0.99982-0.99994; 5 runs bit-identical; no dropped tokens (worst chip load L1 1856, L5 896 of max_buf 8416 at cf4; cf=1 also fits at N=512/row). N=2048/row (real tokens repeated 4x, L5): same PCC, worst load 3264 rows vs max_buf 8416 (cf1) / 32992 (cf4: 258 MB bf16 dispatch buffer/chip), max_per_expert 8192. Gate >=0.999 met for L1 and L5. routed_expert_ffn (no C++) cannot do fp32 acc (fixed blocking fails: out_subblock_w 6 > 4); with bf16 DEST it gives 0.9986-0.9991 (L5, below gate)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_C_L5_mm_unified_a9f8e9910cd.log
+- paths: models/demos/blackhole/mimo_v26
+
+## E261007-0346-36b
+- date: 2026-10-07T03:46:11
+- commit: a9f8e9910cd
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: mm path timing hint (paired alternating one process, host-timed, N=512/row incl dispatch+combine): mm 30 ms vs unified 2.3-2.8 ms per layer (13x slower: extract/FFN run on max_per_expert=2048 padded rows for each of 8 experts; real counts are ~64 avg). N=64/row decode-sized (32 slots padded to 64, ragged live 32/20/7/1): mm 7.8 ms vs unified 2.1 ms, mm PCC 0.99989-0.99998 vs unified 0.9917-0.9997 at L5. Decode-sized finding: dead pad tokens routed to a fixed expert set overflowed max_buf (worst chip load 1280 of 1248 at N=64 cf=4) -> pad tokens must be spread/masked (padding_config) or cf raised. Weights: one DRAM-interleaved bfp8 per-expert copy (analytic 214 MB/chip/layer, ~10 GB at 47 layers) works for mm, loop, unified and fused ops, so prefill and decode via these ops can share it; moe_compute ring layout still needs the C++ patch
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_C_L5_decode_a9f8e9910cd.log
+- paths: models/demos/blackhole/mimo_v26
