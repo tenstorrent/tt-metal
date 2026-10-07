@@ -10,6 +10,7 @@ use.
 """
 
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
@@ -802,18 +803,22 @@ def fpn_rows(level):
     return level.permute(0, 1, 3, 4, 2).reshape(1, 1, -1, level.shape[2])
 
 
-def frame_metas(batch_size, num_frames, generator, yaw_step_deg=0.0):
+def frame_metas(batch_size, num_frames, generator, yaw_step_deg=0.0, motion=None):
     """Per frame, ``img_metas`` with the relative CAN bus of an ego that moves by ``EGO_STEP_M`` and
-    turns by ``EGO_TURN_DEG`` per frame, both times ``b + 1`` for sample ``b``. The CAN bus's other
-    readings are random."""
+    turns by ``EGO_TURN_DEG`` per frame, both times ``b + 1`` for sample ``b``. ``motion`` scales
+    each of the ``num_frames - 1`` steps, 1 by default; -1 drives one step backwards and turns the
+    other way. The CAN bus's other readings are random."""
+    motion = [1.0] * (num_frames - 1) if motion is None else list(motion)
+    assert len(motion) == num_frames - 1, f"{len(motion)} step scales for {num_frames} frames"
     frames, previous = [], [None] * batch_size
     for i in range(num_frames):
+        travelled = sum(motion[:i])
         metas = img_metas(batch_size, yaw_step_deg=yaw_step_deg)
         for b, meta in enumerate(metas):
             can_bus = torch.randn(CAN_BUS_DIMS, generator=generator, dtype=torch.float64)
-            heading = 0.3 + 0.2 * b + i * math.radians(EGO_TURN_DEG) * (b + 1)
-            can_bus[0] = i * EGO_STEP_M[0] * (b + 1)
-            can_bus[1] = i * EGO_STEP_M[1] * (b + 1)
+            heading = 0.3 + 0.2 * b + travelled * math.radians(EGO_TURN_DEG) * (b + 1)
+            can_bus[0] = travelled * EGO_STEP_M[0] * (b + 1)
+            can_bus[1] = travelled * EGO_STEP_M[1] * (b + 1)
             can_bus[2] = 0.0
             can_bus[-2] = heading
             can_bus[-1] = math.degrees(heading)
@@ -821,3 +826,27 @@ def frame_metas(batch_size, num_frames, generator, yaw_step_deg=0.0):
             previous[b] = can_bus
         frames.append(metas)
     return frames
+
+
+@contextmanager
+def signposted_trace(device, forward):
+    """Captures ``forward()`` as a trace and replays it once between Tracy's ``start`` and ``stop``
+    signposts; yields the trace id and the outputs the replays write into. Run ``forward`` once
+    before, so the capture records already-compiled programs. The trace is released on exit."""
+    # Imported here: only the perf harnesses run under Tracy.
+    from tracy import signpost
+
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    outputs = forward()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        ttnn.synchronize_device(device)
+        # Drains and resets the device profiler buffers so the signposted region starts from
+        # empty; the warmup's markers would otherwise eat into the same budget.
+        ttnn.ReadDeviceProfiler(device)
+        signpost("start")
+        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+        signpost("stop")
+        yield trace_id, outputs
+    finally:
+        ttnn.release_trace(device, trace_id)
