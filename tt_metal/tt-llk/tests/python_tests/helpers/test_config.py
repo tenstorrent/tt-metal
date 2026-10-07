@@ -1229,14 +1229,22 @@ class TestConfig:
         return (
             self.profiler_build == ProfilerBuild.Yes
             and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-            and (not TestConfig.TEST_TARGET.run_simulator or os.environ.get("LLK_SIM_BARRIER") == "1")  # experiment
+            and (
+                not TestConfig.TEST_TARGET.run_simulator
+                or os.environ.get("LLK_SIM_BARRIER") == "1"
+            )  # experiment
+            and os.environ.get("LLK_NO_BARRIER") != "1"  # experiment
         )
 
     def _kernel_placement_include(self) -> str:
         """C++ snippet that pins run_kernel at a fixed address (kernel_placement.h) in profiler builds, the only
         ones that are timed; the alignment would cost the other kernels code space. The fuser writes its own.
         """
-        if self.skip_build_header or self.profiler_build != ProfilerBuild.Yes:
+        if (
+            self.skip_build_header
+            or self.profiler_build != ProfilerBuild.Yes
+            or os.environ.get("LLK_NO_PIN") == "1"
+        ):
             return ""
         return '#include "kernel_placement.h"\n'
 
@@ -1401,7 +1409,15 @@ class TestConfig:
             OPTIONS_COMPILE += "-DTT_METAL_TTSIM "
         if TestConfig.TEST_TARGET.run_simulator:
             OPTIONS_COMPILE += "-DLLK_SIMULATOR "
-        OPTIONS_COMPILE += "-DLLK_BRISC_OLD_POLL " if os.environ.get("LLK_BRISC_OLD_POLL") == "1" else ""  # experiment
+        OPTIONS_COMPILE += (
+            "-DLLK_BRISC_OLD_POLL "
+            if os.environ.get("LLK_BRISC_OLD_POLL") == "1"
+            else ""
+        )  # experiment
+        if int(
+            os.environ.get("LLK_FN_NOPS", "0")
+        ):  # experiment: N never executed nops before every function
+            OPTIONS_COMPILE += f"-fpatchable-function-entry={int(os.environ['LLK_FN_NOPS'])},{int(os.environ['LLK_FN_NOPS'])} "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
@@ -1876,6 +1892,7 @@ class TestConfig:
         threads = (
             TestConfig.LAYOUT_THREADS.get(getattr(self, "current_run_type", None), ())
             if self._wormhole_perf_barrier()
+            and os.environ.get("LLK_NO_PADS") != "1"  # experiment
             else ()
         )
         if not threads:
