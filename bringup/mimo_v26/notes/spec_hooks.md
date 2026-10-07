@@ -64,3 +64,28 @@ The round counter `dec.vcnt` and the rings `rpost`/`rcommit` ([1,N,U,8] / [1,N,U
 Semantics = Decoder.verify + Decoder.accept_prefix + spec.py bookkeeping: block row 0 = anchor, draft j accepted iff argmax[j-1] == block[j] for all earlier drafts too; committed tokens = argmax[:k+1]; next anchor = argmax[k] (bonus), position += k+1.
 Dead users feed token 0 / position 0 / update index 0 and are marked dead in the MoE live mask (same as set_inputs). The host-fed `verify(tokens, positions, dead)` path is unchanged.
 Verified by tests/test_verify_device.py (device rounds vs host verify+accept_prefix, 4 layers, U=1,2,4, ragged acceptance, eos pass): see LOG.
+# Device-resident spec round (spec agent, tt/spec_dev.py, commit 697008e0aad) - design as built + what changes when the decode agent's vdev verify lands
+
+One trace per round, enqueue only. Everything between "drafter inputs" and "state update" is device ops on persistent fp32 state [1,U,..] per mesh row: pos, alive, anchor, cnt (stream length), out (committed token stream,
+scatter by one-hot masks at cnt+t), ring_pos (drafter ring slot -> position), rcount (alive rounds). Per round:
+1. block positions pos+iota8 -> uint32 -> embedding lookup of cos/sin tables (positions up to max_pos+16) -> rope rows for the drafter block (rows (head,tok)) and for the ring append rows.
+2. window mask = (1 - [ring_pos in [pos-1024, pos) and >= 0]) * NEG concat [8 zeros, NEG pad] (row mask, broadcast over the 64 q rows; the per-head sink is a constant per-layer tensor).
+3. drafter forward (tt/dflash.py `_draft_forward(inp=...)`), cross-column argmax on device (all_gather of the per-column (max, idx), argmax over columns = lowest vocab id on ties) -> block = [anchor, d1..d7].
+4. verify inputs written in place into the Decoder's persistent tensors with ttnn.assign: tok (uint32 [1,B]), pos["cur"] (int32 [B]), pos["idx"], upd[t] (index = position for the rows of token t, -1 otherwise = the decode agent's
+   MIMO_VERIFY_WRITE=skip pattern), live mask (alive expanded to the B virtual rows through a [B,U] 0/1 matmul, padded to 64 rows). Dead rows (alive=0): token 0 / position 0. Then `dec._forward()` (the decode agent's graph, unchanged).
+5. accept on device: eq(argmax[:7], block[1:8]) -> triangular matmul of the mismatch vector -> leading-ones count k; bonus = argmax[k] by one-hot sum; valid rows = (iota8 <= k) * alive; eos hit = any valid committed row equals an EOS id;
+   alive_next = alive * !eos * (cnt + k + 1 < max_new) * (pos + k + 1 + 9 < max_pos).
+6. drafter ring append from dec.feat rows 0..k: slot = pos+t mod 1024 (fp32 floor), S = (iota1024 == slot) * valid, keep = 1 - sum(S), ring = ring*keep + S@new (bf16 one-hot matmul, exact), ring_pos likewise (elementwise, fp32 exact).
+7. state update with ttnn.assign; host loop = execute_trace(blocking=False) x chunk (4) then ONE blocking read of (alive, cnt, out, rcount) per chunk. Trace capture order here: prefill trace, then the single round trace
+   (drafter + verify inside it), so the 'drafter before verify' hang cannot occur. Warm-up round runs eagerly on a snapshot (clones of all state + rings) which is restored before capture.
+Interface used from decode.py: Decoder(block=8, capture=...), persistent dec.tok / dec.pos / dec.upd / dec.live.t, dec._forward() -> (vals, idx, _, feat); nothing else. To switch to the decode agent's `vdev` prologue/epilogue the round would
+keep steps 1-3 and 6-7 and replace 4-5 by write_drafts + verify_enqueue; vpost/vk/vcommit/vvalid/vposrows replace my steps 5 inputs (the ring append consumes vvalid and vposrows).
+
+## Prefill: per-chunk HOST work today (tt/prefill.py set_step) and the device version (proposal, not implemented)
+Today per step: (a) tokens [rows,CH] host->device (needed, the only real input); (b) per attention kind (ga, swa) four host-built row-sharded tensors copied to the device: rope_idx = arange(start..start+CH) per row,
+fill_pt = the chunk's page-table slice, sdpa_pt = the user's full page-table row (padded to 8), start = chunk_start; (c) python scheduling of (slot, start, last-chunk) per row per step; (d) after the last chunk of a user the host reads
+the whole hidden chunk of that row to the host, picks the last real row, and runs final norm + lm_head separately; (e) pad-token construction (cyclic prompt repeat) on the host.
+Device version: upload once per BATCH (not per chunk) the schedule tensors [steps,rows] (slot, start, is_last) plus the page tables [slots,nb] (already constant), and the token matrix [rows, steps*CH] padded; a device step counter selects row `step`
+of each (embedding lookup / slice by counter): rope_idx = start + iota(CH) (ttnn iota arithmetic), fill_pt = embedding(page_table_row(slot), block index start/64 + iota(CH/64)) (gather), sdpa_pt = embedding(slot, table), start = scheduled start; counter += 1 at the end of the trace.
+The last real hidden row of each user is gathered on device (one-hot over positions via (iota == len-1-start) * is_last, matmul into a per-user [rows,U,4096] buffer), final norm + lm_head + the cross-column argmax (the same code as in spec_dev.global_argmax) run once after the last step,
+and the first tokens land in a device buffer read once. Pad tokens can be produced on device from the prompt (cyclic index = iota % len). Host per chunk then = enqueue only. Cost: one trace per (CH), schedule size is tiny; capture order stays prefill first.
