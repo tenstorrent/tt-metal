@@ -65,3 +65,34 @@ def test_quasar_transpose_specless_sharded_output_grid_shrinks_block_col_major(d
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+def test_quasar_transpose_wh_sharded_rm_l1_budget_counts_tiles(device):
+    """RM WH CB budget must count the streaming CBs in tiles, as TransposeWHProgramFactory allocates them.
+
+    W is sized so the old element-count estimate fits in free L1 while the real allocation does not;
+    the op must then fall back to permute instead of overflowing L1 at CB allocation.
+    """
+    tile_bytes, H, num_cores = 2048, 64, 2
+    cb_limit = ttnn._ttnn.reports.get_device_info(device).cb_limit
+    W = (cb_limit // 196 + cb_limit // 320) // 2 // 32 * 32
+    Ht, Wt = H // 32, W // 32
+    free_l1 = cb_limit - (H // num_cores) * W * 2
+    elementwise_estimate = (2 * W + 2 * H + H * W) * 2
+    allocated = (2 * Wt + 2 * Ht + Ht * Wt) * tile_bytes
+    if not elementwise_estimate < free_l1 < allocated:
+        pytest.skip(f"No W separates the estimates on this device (cb_limit={cb_limit})")
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (H // num_cores, W), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch.manual_seed(0)
+    x = torch.rand((1, 1, H, W), dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_in = ttnn.to_memory_config(ttnn_in, in_mc)
+    result = ttnn.experimental.quasar.transpose(ttnn_in, 2, 3)
+    got = ttnn.to_torch(result.cpu())
+    assert_with_ulp(expected_result=x.transpose(2, 3), actual_result=got, ulp_threshold=0)
