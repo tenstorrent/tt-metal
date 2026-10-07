@@ -178,28 +178,19 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
 }
 
-// The closed block and the per-tile packs, out of line: one copy per kernel rather than one per call site.
+// The per-tile packs of a block that is neither contiguous nor closable, out of line: one copy per kernel.
 template <bool is_fp32_dest_acc_en>
-__attribute__((noinline)) void llk_pack_block_not_contiguous(
+__attribute__((noinline)) void llk_pack_block_per_tile(
     std::uint32_t start_tile_index, std::uint8_t output_id, std::uint32_t ntiles) {
-    if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
-        const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
-        std::uint32_t pack_tile_addr =
-            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
-        get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
-        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
-            start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
-    } else {
-        for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-            std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
-            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
-        }
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
     }
 }
 
 // Same arguments and CB contract as llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>; a contiguous block
-// of two or more tiles is one _llk_pack_block_ run, a single tile one _llk_pack_ (inline, as pack_tile), any other block
-// (block-float, padded pages, tiny tiles) one _llk_pack_block_closed_ run.
+// of two or more tiles is one _llk_pack_block_ run, any other block (block-float, padded pages, tiny tiles) one
+// _llk_pack_block_closed_ run, a single tile one _llk_pack_, and a block of pages of 4 KB or more one _llk_pack_ per tile.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
@@ -226,10 +217,17 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
         _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
             start_tile_index, pack_tile_addr, ntiles);
+    } else if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
+        const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
     } else if (ntiles == 1) {
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
             start_tile_index, get_output_tile_address<false, PackMode::Default>(output_id, 0));
     } else {
-        llk_pack_block_not_contiguous<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
+        llk_pack_block_per_tile<is_fp32_dest_acc_en>(start_tile_index, output_id, ntiles);
     }
 }
