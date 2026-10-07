@@ -23,3 +23,4 @@ Driver: blx01 /var/tmp/fasth3/t219/drv/driver.sh (pid 3677629, started 20:01 UTC
   outputs /var/tmp/fasth3/t219/out; then cmpS.py vs diffvae/ref -> drv/cmp.json, still drv/still_seed0_f72.jpg (top: 2-D, bottom: ref).
 Baseline C1 (job 824, same script + tree, 1-D): mean 10.313 s, PSNR 55.1-55.8 dB.
 Next: when the marker exists, read cmp.json + stage_tree.txt; if correct and faster, land the 3 code commits on t48.
+2026-10-07 light wake: job D dropped twice on blx01 (833: chip 14 dead at 20:05:50 UTC; 843: chip 11 dead at 20:20:58 UTC; both ~80 s in, whose=smarton t222 D). Driver skipped D on blx01 per the two-drop rule. No cmp.json/stage_tree. Next (standard): judge whether the 2-D path itself causes the drops (two different chips, same point in the run), then move D to blx03 runner or exabox.
