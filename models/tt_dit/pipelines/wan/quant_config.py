@@ -78,6 +78,11 @@ class QuantConfig:
     # program (the fused norms take `dtype=`); their outputs are pinned back to bf16 because the
     # fused norms require a bf16 input.
     norm_output_dtype: ttnn.DataType | None = None
+    # Sprint 7 (A3). Dtype of the AdaLN shift and 1+scale fed to norm1 / norm3 / norm_out (None =
+    # the fp32 reference). bf16 halves the fused norms' affine operand and drops the two `1 +
+    # scale` programs per block (the +1 is folded into fp32 table rows once per load). A rounding
+    # change: presets only, PCC- and fidelity-gated.
+    modulation_affine_dtype: ttnn.DataType | None = None
 
     @staticmethod
     def default() -> QuantConfig:
@@ -247,8 +252,23 @@ def _all_bf8_lofi_act8_out8() -> QuantConfig:
     return base
 
 
+def _all_bf8_lofi_act8_mod16() -> QuantConfig:
+    """`all_bf8_lofi_act8` plus bf16 AdaLN shift / 1+scale into norm1, norm3 and norm_out (sprint 7, A3).
+
+    The fp32 affine operand is the whole 84 vs 56 us gap between norm1/norm3 and the bf16-affine
+    norm2 (same kernel, same phases); emitting the modulation as bf16 from its add also removes
+    the two `1 + scale` programs per block (62 per step). Expected ~-4 ms/step T2V, ~-7 ms I2V
+    (the per-token affine is fetched as full tiles per tile-row). Deviates from the diffusers
+    fp32 modulation like Flux2 / MiniMax-H3 / SD3.5 do; PCC- and same-seed-fidelity gated.
+    """
+    base = _all_bf8_lofi_act8()
+    base.modulation_affine_dtype = ttnn.bfloat16
+    return base
+
+
 QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
 QuantConfig.all_bf8_lofi_act8_out8 = staticmethod(_all_bf8_lofi_act8_out8)
+QuantConfig.all_bf8_lofi_act8_mod16 = staticmethod(_all_bf8_lofi_act8_mod16)
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +359,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     for idx, block in enumerate(model.blocks):
         # Norm output dtype (A1): what norm1 / norm2 / norm3 hand to the qkv, cross to_q and ff1 gathers.
         block.norm_output_dtype = config.norm_output_dtype
+        # AdaLN affine dtype (A3): shift / 1+scale emitted as bf16 with the +1 pre-folded.
+        block.modulation_affine_dtype = config.modulation_affine_dtype
 
         # Self-attention linears
         _apply_linear_config(block.attn1.to_qkv, config.self_attn_qkv, arch, f"blocks[{idx}].attn1.to_qkv", **act)
@@ -369,6 +391,8 @@ def apply_quant_config(model, config: QuantConfig) -> None:
             # Materialise the typed empty joint input now, outside any trace capture.
             block.attn1.dummy_joint_as(config.ring_sdpa.input_dtype)
 
+    model.norm_out_affine_dtype = config.modulation_affine_dtype
+
     # Log summary
     weight_dtypes = set()
     for lc in [
@@ -397,7 +421,7 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     logger.info(f"  Math fidelities: {fidelities}")
     logger.info(
         f"  Activations: apply_activation_dtype={config.apply_activation_dtype}, "
-        f"norm_output_dtype={config.norm_output_dtype}"
+        f"norm_output_dtype={config.norm_output_dtype}, modulation_affine_dtype={config.modulation_affine_dtype}"
     )
     logger.info(
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
@@ -467,6 +491,7 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_bf8_lofi_sdpa_lofi",
             "all_bf8_lofi_act8",
             "all_bf8_lofi_act8_out8",
+            "all_bf8_lofi_act8_mod16",
         ]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)

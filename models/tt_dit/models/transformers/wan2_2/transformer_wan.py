@@ -150,6 +150,15 @@ class WanTransformerBlock(Module):
         # byte-identical to before.
         self._table_rows: tuple[ttnn.Tensor, ...] | None = None
         self._table_rows_src: ttnn.Tensor | None = None
+        # `(1 + scale_row, 1 + c_scale_row)` in fp32, built with `_table_rows` for the bf16-affine
+        # path below (sprint 7, A3): the +1 is folded once per load instead of once per step.
+        self._table_rows_plus1: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
+        # Output dtype of the AdaLN shift and 1+scale handed to norm1 / norm3 (None = fp32, the
+        # bit-exact reference layout). bf16 halves the fused norms' affine operand (the fp32
+        # weight is the whole 84 vs 56 us gap between norm1/norm3 and norm2) and removes the two
+        # `1 + scale` programs per block; a rounding change, so it lives in the opt-in presets
+        # (QuantConfig.modulation_affine_dtype), never in the bf16 default. Gates stay fp32.
+        self.modulation_affine_dtype: ttnn.DataType | None = None
         # Output dtype of norm1 / norm2 / norm3 (None = input dtype, bf16). Set by
         # `apply_quant_config` (QuantConfig.norm_output_dtype) for the bf8-activation presets so
         # the qkv / cross to_q / ff1 gathers move block-float pages; the matmuls pin their
@@ -177,6 +186,7 @@ class WanTransformerBlock(Module):
     def deallocate_weights(self) -> None:
         super().deallocate_weights()
         self._table_rows = None
+        self._table_rows_plus1 = None
         self._table_rows_src = None
 
     def _split_table(self) -> tuple[ttnn.Tensor, ...]:
@@ -192,6 +202,7 @@ class WanTransformerBlock(Module):
         if self._table_rows is None or self._table_rows_src is not data:
             width = data.shape[-1]
             self._table_rows = tuple(ttnn.slice(data, [0, 0, k, 0], [1, 1, k + 1, width]) for k in range(6))
+            self._table_rows_plus1 = (self._table_rows[1] + 1.0, self._table_rows[4] + 1.0)
             self._table_rows_src = data
         return self._table_rows
 
@@ -208,18 +219,36 @@ class WanTransformerBlock(Module):
         one `prepare_modulation` produced). `1.0 + scale` stays a separate op: folding the one
         into the table rows would change the fp32 rounding. Returns the same six tensors as
         `prepare_modulation`, and bit-identical ones (gate: `test_cfg_hoist_ti2v_5b.py`).
+
+        With `modulation_affine_dtype` set (opt-in presets, A3) the shift and 1+scale come out of
+        their add in that dtype and the +1 is pre-folded into fp32 table rows: four adds per
+        block instead of six, bf16 affine operands into the fused norms. Not bit-exact with the
+        fp32 reference; the gate runs with the attribute unset.
         """
         assert len(proj_chunks) == 6, f"expected 6 projection chunks, got {len(proj_chunks)}"
         t_shift, t_scale, t_gate, t_c_shift, t_c_scale, t_c_gate = self._split_table()
         p_shift, p_scale, p_gate, p_c_shift, p_c_scale, p_c_gate = proj_chunks
 
-        shift_msa_1B1D = t_shift + p_shift
-        scale_msa_1B1D = t_scale + p_scale
         # NOTE: workaround - addcmul (fused and unfused) is less accurate with fp32 gate input
         gate_msa_1B1D = ttnn.add(t_gate, p_gate, dtype=ttnn.bfloat16)
+        c_gate_msa_1B1D = ttnn.add(t_c_gate, p_c_gate, dtype=ttnn.bfloat16)
+
+        if self.modulation_affine_dtype is not None:
+            dt = self.modulation_affine_dtype
+            t_scale1, t_c_scale1 = self._table_rows_plus1
+            return (
+                ttnn.add(t_shift, p_shift, dtype=dt),
+                ttnn.add(t_scale1, p_scale, dtype=dt),
+                gate_msa_1B1D,
+                ttnn.add(t_c_shift, p_c_shift, dtype=dt),
+                ttnn.add(t_c_scale1, p_c_scale, dtype=dt),
+                c_gate_msa_1B1D,
+            )
+
+        shift_msa_1B1D = t_shift + p_shift
+        scale_msa_1B1D = t_scale + p_scale
         c_shift_msa_1B1D = t_c_shift + p_c_shift
         c_scale_msa_1B1D = t_c_scale + p_c_scale
-        c_gate_msa_1B1D = ttnn.add(t_c_gate, p_c_gate, dtype=ttnn.bfloat16)
 
         return (
             shift_msa_1B1D,
@@ -507,6 +536,10 @@ class WanTransformer3DModel(Module):
         # `_norm_out_table_rows` and `WanTransformerBlock._split_table` for the rationale.
         self._norm_out_rows: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
         self._norm_out_rows_src: ttnn.Tensor | None = None
+        self._norm_out_scale1_row: ttnn.Tensor | None = None  # `1 + scale_row`, fp32, for the bf16-affine path
+        # Output dtype of the norm_out (shift, 1+scale) pair; None = fp32 reference (see
+        # WanTransformerBlock.modulation_affine_dtype). Set by apply_quant_config.
+        self.norm_out_affine_dtype: ttnn.DataType | None = None
 
         self.hifi4_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -545,6 +578,7 @@ class WanTransformer3DModel(Module):
         super().deallocate_weights()
         self._norm_out_rows = None
         self._norm_out_rows_src = None
+        self._norm_out_scale1_row = None
 
     def prepare_modulation_constants(self) -> None:
         """Build the per-block and norm_out split tables now, outside any trace capture.
@@ -641,6 +675,7 @@ class WanTransformer3DModel(Module):
             width = data.shape[-1]
             rows = tuple(ttnn.slice(data, [0, k, 0], [1, k + 1, width]) for k in range(2))
             self._norm_out_rows = tuple(ttnn.reshape(row, (1, 1, 1, width)) for row in rows)
+            self._norm_out_scale1_row = self._norm_out_rows[1] + 1.0
             self._norm_out_rows_src = data
         return self._norm_out_rows
 
@@ -653,6 +688,9 @@ class WanTransformer3DModel(Module):
         (1, B, N, D/tp) `temb`; for the latter it also drops the `ttnn.concat([temb, temb])`.
         """
         shift_row, scale_row = self._norm_out_table_rows()
+        if self.norm_out_affine_dtype is not None:
+            dt = self.norm_out_affine_dtype
+            return ttnn.add(shift_row, temb_11BD, dtype=dt), ttnn.add(self._norm_out_scale1_row, temb_11BD, dtype=dt)
         shift_11BD = shift_row + temb_11BD
         scale_11BD = scale_row + temb_11BD
         return shift_11BD, 1 + scale_11BD
