@@ -53,6 +53,9 @@ def test_dflash_device(mesh_device):
     sd32 = {k: (v.float() if torch.is_tensor(v) else v) for k, v in sd.items()}
     hn32 = D.ctx_features(feats.float(), sd32)
     E32 = Etab.float()
+    sd32 = {k: (v.float() if torch.is_tensor(v) else v) for k, v in sd.items()}
+    hn32 = D.ctx_features(feats.float(), sd32)
+    E32 = Etab.float()
     rep = ttnn.ReplicateTensorToMesh(md)
     embed = ttnn.from_torch(
         Etab,
@@ -92,6 +95,20 @@ def test_dflash_device(mesh_device):
         # device lm_head path too
         dl = dr.logits(y).reshape(4, UPR, 8, -1)[:, :, 1:].argmax(-1)
         agree_dev = (dl == rt).float().mean((0, 1)).tolist()
+        ref32 = torch.stack(
+            [D.draft_blocks(hn32[b], tok[b, p : p + 1], torch.tensor([p]), sd32, E32)[0] for b in users]
+        ).reshape(4, UPR, 7, 4096)
+        r32t = (ref32.reshape(-1, 4096).bfloat16() @ head.T).argmax(-1).reshape(4, UPR, 7)
+        pc32 = [pcc(hid[r, u], ref32[r, u]) for r in range(4) for u in range(UPR)]
+        floor = [pcc(ref[r, u], ref32[r, u]) for r in range(4) for u in range(UPR)]
+        rec(
+            "round32",
+            anchor=p,
+            dev_vs_fp32_pcc_min=round(min(pc32), 5),
+            bf16oracle_vs_fp32_pcc_min=round(min(floor), 5),
+            dev_vs_fp32_top1=[round(a, 4) for a in (dt == r32t).float().mean((0, 1)).tolist()],
+            bf16oracle_vs_fp32_top1=[round(a, 4) for a in (rt == r32t).float().mean((0, 1)).tolist()],
+        )
         rec(
             "round",
             wdtype=E("DF_WDTYPE", "bf8"),
