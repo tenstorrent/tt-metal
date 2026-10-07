@@ -440,27 +440,44 @@ def _detect_mesh(demo_dir: Path) -> tuple[int, int] | None:
 _RUN_IT_TITLE = "Run it on device (demo)"
 
 
-def _run_it_section(checkout: Path, demo_dir: Path, slug: str) -> str | None:
+def _run_it_section(checkout: Path, demo_dir: Path, slug: str, task_hint: str = "") -> str | None:
     """Build a 'how to actually run this model' section pointing at the model's OWN on-device demo —
     discovered (the demo entry script, the checkout's branch + remote), never hardcoded. This is the
     real runnable path for a model that isn't vLLM-servable yet."""
     import glob as _g
+    import re as _re
     import subprocess
 
-    stem = None
+    # Collect every runnable demo script, then pick the real TASK demo -- not the demo.py dispatcher
+    # (a multi-task model's demo.py only prints "run one of ..."). Prefer an explicit demo_* whose
+    # name best overlaps the run's task tokens (its gate test + model id).
+    cands = []
     for f in _g.glob(str(Path(demo_dir) / "demo" / "*.py")):
-        if Path(f).name.startswith("__"):
+        nm = Path(f).stem
+        if nm.startswith("__"):
             continue
         try:
-            src = Path(f).read_text()
+            s = Path(f).read_text()
         except Exception:
             continue
-        if "__main__" in src or "def main" in src:
-            stem = Path(f).stem
-            break
-    demo_mod = f"models.demos.{slug}.demo.{stem}" if stem else None
-    if not demo_mod:
+        if "__main__" in s or "def main" in s:
+            # A dispatcher lists the other demos by name; mark it so a real task demo wins.
+            is_dispatcher = (nm == "demo") and ("demo_" in s)
+            cands.append((nm, is_dispatcher))
+    if not cands:
         return None
+    _task = [t for t in _re.split(r"[^a-z0-9]+", (task_hint or "").lower()) if len(t) > 2]
+
+    def _score(item):
+        nm, is_disp = item
+        low = nm.lower()
+        s = sum(1 for t in _task if t in low)
+        if not is_disp:
+            s += 1  # an explicit task demo beats the bare dispatcher on a tie
+        return s
+
+    stem = max(cands, key=_score)[0]
+    demo_mod = f"models.demos.{slug}.demo.{stem}"
 
     def _g1(*a):
         return subprocess.run(["git", "-C", str(checkout), *a], capture_output=True, text=True).stdout.strip()
@@ -1332,7 +1349,9 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     if not servable:
         # Never claim a stub package serves — say so plainly, and give the REAL way to run it.
         _upload_card_section(args, _SERVE_STATUS_TITLE, _SERVE_STATUS_STUB)
-        run_it = _run_it_section(Path(checkout), Path(demo_dir), slug)
+        _cfg = state.get("config") or {}
+        _hint = " ".join(str(x) for x in (slug, _cfg.get("pcc_test", ""), _cfg.get("perf_test", "")))
+        run_it = _run_it_section(Path(checkout), Path(demo_dir), slug, _hint)
         if run_it:
             _upload_card_section(args, _RUN_IT_TITLE, run_it)
         print("  [publish-hf] card marked NOT-YET-SERVABLE + added on-device run instructions.")
