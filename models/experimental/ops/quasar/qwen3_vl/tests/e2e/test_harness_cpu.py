@@ -788,3 +788,31 @@ def test_quasar_experimental_sdpa_resolves_dotted_name(monkeypatch):
     fake = types.SimpleNamespace(scaled_dot_product_attention=lambda *a, **k: ("q-sdpa", a, k))
     monkeypatch.setattr(ttnn.experimental.quasar, "transformer", fake)
     assert wa.rewrite(None, ("q", "k", "v"), {"is_causal": False}) == ("q-sdpa", ("q", "k", "v"), {"is_causal": False})
+
+
+def test_quasar_rms_norm_bf16_dest_only_rewrites_fp32_configs_on_quasar(monkeypatch):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "quasar_rms_norm_bf16_dest")
+    assert wa.target == "ttnn.rms_norm"
+    fp32 = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    bf16 = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False)
+    monkeypatch.setattr(ttnn, "Tensor", _ArchTensor)
+    q, wh = _ArchTensor(ttnn.device.Arch.QUASAR), _ArchTensor(ttnn.device.Arch.WORMHOLE_B0)
+    assert wa.applies((q,), {"compute_kernel_config": fp32})
+    assert not wa.applies((wh,), {"compute_kernel_config": fp32})  # WH keeps fp32 dest acc
+    assert not wa.applies((q,), {"compute_kernel_config": bf16})
+    assert not wa.applies((q,), {})
+    seen = {}
+    wa.rewrite(lambda *a, **k: seen.update(k), (q,), {"compute_kernel_config": fp32, "epsilon": 1e-6})
+    c = seen["compute_kernel_config"]
+    assert (
+        not c.fp32_dest_acc_en
+        and c.math_fidelity == ttnn.MathFidelity.HiFi2
+        and c.packer_l1_acc
+        and seen["epsilon"] == 1e-6
+    )

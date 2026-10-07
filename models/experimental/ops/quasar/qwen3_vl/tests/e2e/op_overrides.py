@@ -145,6 +145,24 @@ def _to_experimental_quasar(name):
     return rewrite
 
 
+def _quasar_fp32_dest_acc(args, kwargs):
+    ckc = kwargs.get("compute_kernel_config")
+    return ckc is not None and getattr(ckc, "fp32_dest_acc_en", False) and _on_quasar(args, kwargs)
+
+
+def _with_bf16_dest_acc(original, args, kwargs):
+    import ttnn
+
+    ckc = kwargs["compute_kernel_config"]
+    bf16 = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ckc.math_fidelity,
+        math_approx_mode=ckc.math_approx_mode,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=ckc.packer_l1_acc,
+    )
+    return original(*args, **{**kwargs, "compute_kernel_config": bf16})
+
+
 def _largest_divisor(n, at_most):
     return next(d for d in range(min(n, at_most), 0, -1) if n % d == 0)
 
@@ -201,6 +219,15 @@ WORKAROUNDS = [
         remove_when="base ttnn.transformer.scaled_dot_product_attention is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("transformer.scaled_dot_product_attention"),
+    ),
+    Workaround(
+        name="quasar_rms_norm_bf16_dest",
+        target="ttnn.rms_norm",
+        reason="models/common/rmsnorm.py builds its own config with fp32_dest_acc_en=True (tt_transformers never passes "
+        "False), bypassing the bf16-dest policy; craq-sim cannot unpack bf16 to Tf32 for it (QUASAR_GAPS S4)",
+        remove_when="craq-sim implements bf16->Tf32 unpack, or RMSNorm takes the model's dest-acc setting",
+        applies=_quasar_fp32_dest_acc,
+        rewrite=_with_bf16_dest_acc,
     ),
 ]
 
