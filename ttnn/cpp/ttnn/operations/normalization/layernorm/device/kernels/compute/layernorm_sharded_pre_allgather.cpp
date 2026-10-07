@@ -290,7 +290,8 @@ void kernel_main() {
         dfb_scaler_global.wait_front(1);
         reconfig_data_format(dfb_scaler_global_id, dfb_ex_external2_id);
         pack_reconfig_data_format(dfb_reduction_out);
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(dfb_ex_external2_id, dfb_scaler_global_id, dfb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, compute_kernel_lib::reduce_pow2_scaler>(
+            dfb_ex_external2_id, dfb_scaler_global_id, dfb_reduction_out);
 #ifdef ARCH_QUASAR
         pack_init(dfb_reduction_out);
 #endif
@@ -308,7 +309,11 @@ void kernel_main() {
             for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
                 dfb_ex_external2.wait_front(1);
-                reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                reduce_tile<
+                    PoolType::AVG,
+                    ReduceDim::REDUCE_ROW,
+                    DST_ACCUM_MODE,
+                    compute_kernel_lib::reduce_pow2_scaler>(
                     dfb_ex_external2_id,
                     dfb_scaler_global_id,
                     0,
