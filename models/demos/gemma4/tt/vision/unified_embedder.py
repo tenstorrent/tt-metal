@@ -29,15 +29,29 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 
-PREFIX = "model.vision_embedder."
-PROJECTION_KEY = "model.embed_vision.embedding_projection.weight"
+# Two key layouts reach us for the same weights:
+#   * the safetensors checkpoint:  model.vision_embedder.<p>  +  model.embed_vision.embedding_projection.weight
+#   * an HF module's state_dict (the loader's AutoModel fallback, e.g. when given a
+#     hub id): model.embed_vision.<p>  +  model.embed_vision.multimodal_embedder.embedding_projection.weight
+_LAYOUTS = (
+    ("model.vision_embedder.", "model.embed_vision.embedding_projection.weight"),
+    ("model.embed_vision.", "model.embed_vision.multimodal_embedder.embedding_projection.weight"),
+)
+PREFIX, PROJECTION_KEY = _LAYOUTS[0]
 PATCH_DENSE_KEY = PREFIX + "patch_dense.weight"
 TILE = 32
 
 
+def _layout(state_dict):
+    for prefix, proj in _LAYOUTS:
+        if prefix + "patch_dense.weight" in state_dict and proj in state_dict:
+            return prefix, proj
+    return None
+
+
 def has_unified_vision_weights(state_dict) -> bool:
     """True when the checkpoint ships the encoder-free embedder (12B unified)."""
-    return PATCH_DENSE_KEY in state_dict and PROJECTION_KEY in state_dict
+    return _layout(state_dict) is not None
 
 
 class Gemma4UnifiedVisionEmbedder(LightweightModule):
@@ -58,10 +72,12 @@ class Gemma4UnifiedVisionEmbedder(LightweightModule):
         self.ln_eps = ln_eps
         self.rms_eps = rms_eps
         self.text_hidden_size = text_hidden_size
-        if not has_unified_vision_weights(state_dict):
+        layout = _layout(state_dict)
+        if layout is None:
             raise KeyError(f"'{PATCH_DENSE_KEY}' / '{PROJECTION_KEY}' not in checkpoint: not a unified Gemma-4 checkpoint")
+        PREFIX, PROJECTION_KEY = layout  # noqa: N806 - shadow the module defaults with this checkpoint's layout
 
-        dense_w = state_dict[PATCH_DENSE_KEY]  # [mm_embed, patch_dim]
+        dense_w = state_dict[PREFIX + "patch_dense.weight"]  # [mm_embed, patch_dim]
         self.mm_embed_dim, self.patch_dim = int(dense_w.shape[0]), int(dense_w.shape[1])
         # pos table [mm_posemb_size, 2, mm_embed] stays on host (float32) for the gather.
         self.pos_table = state_dict[PREFIX + "pos_embedding"].float()
