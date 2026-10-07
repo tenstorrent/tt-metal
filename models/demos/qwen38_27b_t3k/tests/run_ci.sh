@@ -35,7 +35,7 @@ export TT_METAL_CACHE="$work/tt-cache" TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=
 # TT_MESH_GRAPH_DESC_PATH is deliberately unset: ttnn resolves the T3K descriptor itself, and
 # a mismatched one can leave the first collective hanging rather than failing.
 git clone https://github.com/tenstorrent/vllm-tt-plugin.git "$work/plugin"
-qwen_plugin_ref=b7e4292e4193cba20abe9c7c68ce489201b2e36b
+qwen_plugin_ref=c7b25b0180b67a811bb0fd62b4a20a254dcf95fc
 plugin_ref="${VLLM_TT_PLUGIN_REF:-$qwen_plugin_ref}"
 # The shared workflow defaults predate the Qwen device-sampling fallback. Keep
 # explicit non-default overrides while vllm-tt-plugin#140 is under review.
@@ -51,6 +51,10 @@ pushd "$work/plugin"
 source docs/install-vllm-tt.sh
 uv pip install 'pytest>=8,<9'
 popd
+# The model declares recurrent_prefix_snapshots and the server below runs with prefix caching on.
+# A plugin that cannot read that key serves hits no snapshot backs, and the model only refuses
+# those mid-request, so a server leg would fail deep instead of here.
+python -c 'from vllm_tt_plugin.config import get_tt_recurrent_prefix_capacity'
 export MODEL_WEIGHTS_DIR
 MODEL_WEIGHTS_DIR=$(python -c 'from models.demos.qwen38_27b_t3k.tt.model import checkpoint_path; print(checkpoint_path())')
 python -m pytest "$model_dir/tests/unit" "$model_dir/tests/vllm" "$model_dir/tests/test_benchmark.py" \
