@@ -32,7 +32,7 @@
 4. Grid mismatch between the WH/craq-sim override and the emulator — expected: `--qwen-expect-grid` makes the test fail at start if `compute_with_storage_grid_size()` differs.
 5. Deepstack remap applied to only one side — expected: TT and HF configs are both derived from one function; a unit test asserts identical indexes/depth.
 
-## Execution status and amendments (updated 2026-10-06, binding over the task text below)
+## Execution status and amendments (updated 2026-10-07, binding over the task text below)
 
 **Done** (ledger: `.superpowers/sdd/2026-10-05-qwen3-vl-quasar-e2e/progress.md`):
 - Tasks 1-12 committed. Tiny, V=2 T=2 K=1, `--deepstack-at 0`, Quasar config (bf16, HIFI4_FP16), 17 per-sublayer stages:
@@ -56,6 +56,8 @@
 11. **Droppable commit:** `[droppable] WH exp: SFPNOP after SFPMAD ...` (2d4ad39875e after the 2026-10-06 rebase) carries the #59510 fix; keep it separate and drop it when the upstream fix lands. WH-only, no effect on Quasar.
 12. **Silicon vs simulator:** the scripts set `TT_METAL_DISABLE_SFPLOADMACRO=1` on every target. When silicon and a simulator disagree, check simulator-only env vars first.
 13. **Task 14 specifics:** craq-sim is `/localdev/$USER/sim/libttsim.so` (default of `run_craq.sh`, override with `QWEN_CRAQ_SIM`). Isolated op repros on craq-sim (Task 14 step 2.3) use that path for `TT_METAL_SIMULATOR`, plus `TT_METAL_SLOW_DISPATCH_MODE=1`. For bisecting, prefer `--host-ops <op>` (certified, no extra flag) to get past a blocking op and reach the next gap; log the gap first. vsureshTT PRs: run without them first to record gaps, then ask the user before cherry-picking (#58914 reshape_view most likely relevant on craq-sim; #58909 only at demo size; #58912 and #58913 not needed with DRAM-interleaved weights and `use_qk_fused=False`). Before the first 8x4 craq run, the WH counterpart is ttsim WH with override `"7,3"` and `--qwen-expect-grid 8x4`.
+14. **`ttnn.experimental.quasar` policy (user directive, 2026-10-07).** `ttnn/cpp/ttnn/operations/experimental/quasar/` holds stop-gap Quasar ports of base ops (functional, not performant) until the base ops are ported. Use one only when the base op fails on Quasar and has not been brought up there, and the experimental counterpart exists and works: then route the base op to it on Quasar through an `op_overrides.py` workaround (`_to_experimental_quasar(<name>)`, applied only when the tensor's arch is Quasar), keeping the base-op failure as a QUASAR_GAPS row that names the workaround. If the experimental op also fails, stop and report to the user with the size of the gap between base and experimental op, so they decide whether to bring up the base op, patch the experimental op, or both. Host fallbacks stay a bisecting tool for ops with no working device path.
+15. **Droppable kernel fixes carried on the branch:** #59510 WH exp `SFPNOP` (see 11) and the Quasar layernorm `pack_init` fix (`[droppable] layernorm (Quasar): ...`, upstream draft PR #59576). Drop each once its upstream fix lands.
 
 ---
 
