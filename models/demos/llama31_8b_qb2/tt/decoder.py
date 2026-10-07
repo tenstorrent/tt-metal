@@ -251,9 +251,7 @@ class LlamaDecoder(LightweightModule):
 
         self.compute = compute(p["compute_fidelities"]["norm_rope"], p["accumulation"]["norm_rope_fp32"])
         self.sdpa_compute = compute(p["compute_fidelities"]["sdpa"], p["accumulation"]["sdpa_fp32"], False)
-        self.decode_sdpa_compute = compute(
-            p["compute_fidelities"]["sdpa"], p["accumulation"]["sdpa_fp32"], False, dst_full_sync_en=True
-        )
+        self.decode_sdpa_compute = compute(p["compute_fidelities"]["sdpa"], p["accumulation"]["sdpa_fp32"], False)
         self.prefill_computes = {
             g: compute(f, p["accumulation"]["matmul_fp32"]) for g, f in p["compute_fidelities"]["prefill"].items()
         }
