@@ -1303,3 +1303,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
 - data: {"gsm8k_n":128,"gsm8k_correct":113,"acc":0.8828,"gate_min_correct":109,"step_ms":123.4,"b":128,"tok_s_user":8.1,"tok_s_total":1037,"b64_correct":56,"b64_step_ms":123.3}
+
+## E261007-0845-8d0
+- date: 2026-10-07T08:45:41
+- commit: c14a403a7ea
+- branch: ssinghal/mimo-moe
+- host: 48,35,43
+- track: moe
+- status: verified
+- claim: RACE reproduced with the MoE alone (MiMoMoEDecode, real layers 1-6 chained in one trace, identical inputs, 3000 replays, 18000 layer-calls per run): router exact 5 glitching layer-calls (rows 1,2), exact with dispatch sparse_mcast OFF (new env MOE_DISPATCH_SPARSE_MCAST=0) 4 (rows 1,2,3), router fast 2 (row 3 and ROW 0). Max abs diff 0.0020-0.0242, values repeat exactly across runs -> one deterministic missing/duplicated/stale contribution, not random noise. NOT the sparse multicast dispatch, NOT the router variant. Hand-over note bringup/mimo_v26/notes/determinism.md; stress test tests/test_moe_race_stress.py; race agent takes over
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_I_base_exact_h48_5c4b1ee7013.log
+- paths: models/demos/blackhole/mimo_v26/tt
