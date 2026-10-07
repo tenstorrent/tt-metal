@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
 // The test stores stream tiles in resident CB 3. Copy them through the
 // planner-sized input FIFO, exercising real producer/consumer synchronization
@@ -21,18 +20,12 @@ void kernel_main() {
     const uint32_t packets = batches * rows * columns;
     DataflowBuffer source(3);
     DataflowBuffer input(Call::input_cb_id);
-    Noc noc;
-    UnicastEndpoint self;
     const uint32_t packet_bytes = packet_tiles * get_tile_size(Call::input_cb_id);
     for (uint32_t packet = 0; packet < packets; ++packet) {
         input.reserve_back(packet_tiles);
-        noc.async_read(
-            self,
-            input,
-            packet_bytes,
-            dataflow_kernel_lib::local_addr(source.get_read_ptr() + packet * packet_bytes, noc.get_noc_id()),
-            {});
-        noc.async_read_barrier();
+        noc_async_read(
+            get_noc_addr(source.get_read_ptr() + packet * packet_bytes), input.get_write_ptr(), packet_bytes);
+        noc_async_read_barrier();
         input.push_back(packet_tiles);
     }
 }
