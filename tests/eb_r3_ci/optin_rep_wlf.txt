@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather_welford.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

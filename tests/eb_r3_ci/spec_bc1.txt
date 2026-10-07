@@ -1,0 +1,4 @@
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true|tests/eb_r3_ci/test_eb_r3_ops.py::test_group_norm_dram_tile_reduction
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm_sharded_v2.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true|tests/eb_r3_ci/test_eb_r3_ops.py::test_group_norm_sharded_sdxl
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm_sharded_v2.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true|tests/eb_r3_ci/test_eb_r3_ops.py::test_group_norm_sharded_welford
+ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/welford_groupnorm.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true|tests/eb_r3_ci/test_eb_r3_ops.py::test_group_norm_dram_welford

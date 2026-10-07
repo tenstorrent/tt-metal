@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
+#include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -695,6 +697,17 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 
             auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
                 operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
+            // CI only (#58726): a block or width shard's broadcast period is its own row width or tile count
+            if (rt_has_sharding && std::getenv("EB_R3_NATIVE_BCAST") != nullptr &&
+                a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
+                if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B) {
+                    freq = c_current_shard_width;
+                    counter = 0;
+                } else if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
+                    freq = c_num_tiles_core;
+                    counter = 0;
+                }
+            }
             if (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                 operation_attributes.binary_op_type == BinaryOpType::WHERE_TST) {
                 // The kernel bit-casts float scalars as one fp32 word, so pack them as fp32.
@@ -838,6 +851,10 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 }  // namespace
 
 // Implements c = a op b
+namespace {
+bool eb_r3_env(const char* name) { return std::getenv(name) != nullptr; }  // CI only (ci5)
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
@@ -1027,7 +1044,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                        std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
                        std::get<OpConfig::FpuBinaryOp>(op_config.binary_op) == OpConfig::FpuBinaryOp::MUL &&
                        lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
-                       (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16);
+                       (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16) && !eb_r3_env("EB_R3_NO_HIFI3");
         has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
         has_post_activations = !post_activations.empty();
         post_zero_point = has_post_activations && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
@@ -1114,12 +1131,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         (!(has_operand_activations && has_post_activations) &&
          a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
     const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded &&
+                                !eb_r3_env("EB_R3_NO_BCAST_CHUNK") &&
+                                !(eb_r3_env("EB_R3_NO_BCAST_ACT") && (has_operand_activations || has_post_activations)) &&
                                 c_sharded &&
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
+    // CI only (#58725): the operand pass over EB_R3_MULTI_PASS sections before one binary init
+    const char* eb_mp_env = std::getenv("EB_R3_MULTI_PASS");
+    const uint32_t eb_multi_pass =
+        (eb_mp_env != nullptr && bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 &&
+         (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE || !b.has_value()))
+            ? static_cast<uint32_t>(std::atoi(eb_mp_env))
+            : 0;
     const uint32_t a_intermediate_tiles =
-        bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle;
+        (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) *
+        std::max<uint32_t>(eb_multi_pass, 1);
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1177,7 +1204,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
+            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle * std::max<uint32_t>(eb_multi_pass, 1),
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
@@ -1434,10 +1461,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool block_unpack_alone = block_kernel &&
                                     compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
                                     !has_post_activations && unpack_alone_formats;
-    if (block_pack || block_unpack_alone) {
+    if ((block_pack || block_unpack_alone) && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
     }
-    if (block_pack) {
+    if (block_pack && !eb_r3_env("EB_R3_NO_BLOCK")) {
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
 
@@ -1446,11 +1473,35 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
         if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
-            c_data_format == tt::DataFormat::Float16_b) {
+            c_data_format == tt::DataFormat::Float16_b && !eb_r3_env("EB_R3_NO_BLOCK")) {
             compute_kernel_defines["BINARY_NG_BLOCK"] = "1";
         }
     }
 
+    if (eb_multi_pass > 1) {
+        compute_kernel_defines["EB_R3_MULTI_PASS"] = std::to_string(eb_multi_pass);
+    }
+    if (eb_r3_env("EB_R3_PROBE_CHUNK_INIT")) {
+        compute_kernel_defines["EB_R3_PROBE_CHUNK_INIT"] = "1";
+    }
+    if (eb_r3_env("EB_R3_MAIN_REINIT")) {
+        compute_kernel_defines["EB_R3_MAIN_REINIT"] = "1";
+    }
+    if (eb_r3_env("EB_R3_PER_FACE")) {
+        compute_kernel_defines["EB_R3_PER_FACE"] = "1";
+    }
+    if (eb_r3_env("EB_R3_LOG_RULE")) {
+        auto eb_def = [&](const char* k) {
+            const auto it = compute_kernel_defines.find(k);
+            return it == compute_kernel_defines.end() ? std::string("-") : it->second;
+        };
+        std::fprintf(stderr, "EB_R3_RULE kernel=%d block=%s block_pack=%s chunk=%s opact=%d post=%d a=%d b=%d c=%d n=%u\n",
+            static_cast<int>(compute_kernel), eb_def("BINARY_NG_BLOCK").c_str(),
+            eb_def("BINARY_NG_BLOCK_PACK").c_str(), eb_def("BCAST_OTHER_CHUNK").c_str(),
+            static_cast<int>(has_operand_activations), static_cast<int>(has_post_activations),
+            static_cast<int>(a_data_format), static_cast<int>(b_data_format), static_cast<int>(c_data_format),
+            c_tiles_per_core);
+    }
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;

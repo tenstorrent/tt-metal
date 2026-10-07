@@ -1,0 +1,5 @@
+ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_h_sharded_optimised.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_hw_metal2.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/compute/bcast_w.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

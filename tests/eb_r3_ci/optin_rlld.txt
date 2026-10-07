@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

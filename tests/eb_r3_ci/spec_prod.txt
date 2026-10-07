@@ -1,0 +1,4 @@
+ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|tests/eb_r3_ci/test_eb_r3_ops.py -k test_prod_all
+ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|tests/eb_r3_ci/test_eb_r3_ops.py -k test_prod_nc
+ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|tests/eb_r3_ci/test_eb_r3_ops.py -k test_prod_all
+ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|tests/eb_r3_ci/test_eb_r3_ops.py -k test_prod_nc

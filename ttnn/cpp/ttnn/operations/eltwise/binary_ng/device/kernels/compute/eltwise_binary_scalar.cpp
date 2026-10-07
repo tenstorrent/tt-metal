@@ -12,7 +12,16 @@
 #endif
 // Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one, except
 // in the block section (BINARY_NG_BLOCK), whose block unpack takes it for every op.
-#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK)
+#ifndef EB_R3_PER_FACE
+#define EB_R3_PER_FACE 0
+#endif
+#ifndef EB_R3_MULTI_PASS
+#define EB_R3_MULTI_PASS 0
+#endif
+#ifndef EB_R3_PROBE_CHUNK_INIT
+#define EB_R3_PROBE_CHUNK_INIT 0
+#endif
+#define ELTWISE_BINARY_PER_TILE_HANDOFF ((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK) && !EB_R3_PER_FACE)
 #include "api/compute/eltwise_binary.h"
 #if BINARY_NG_BLOCK_PACK
 #include "api/compute/experimental/pack_block.h"
@@ -70,14 +79,22 @@ void kernel_main() {
     cb_post_rhs.wait_front(1);
 
     // Inline lambda to process n tiles with the scalar value
+#if EB_R3_MULTI_PASS
+    auto pre_tiles = [&](uint32_t n) { PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n); };
+#endif
     auto process_tiles = [&](uint32_t n) {
+#if !EB_R3_MULTI_PASS
         PREPROCESS(LHS, CircularBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+#endif
         cb_post_lhs.wait_front(n);
 
         cb_out.reserve_back(n);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
+#if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT) && !EB_R3_MULTI_PASS
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_op_a.get_cb_id(), cb_op_b.get_cb_id());
+#if EB_R3_PROBE_CHUNK_INIT
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_op_a.get_cb_id(), cb_op_b.get_cb_id());
+#endif
 #endif
         tile_regs_acquire();
 #if BINARY_NG_BLOCK
@@ -112,17 +129,32 @@ void kernel_main() {
         cb_out.push_back(n);
     };
 
-    // Process full chunks
     uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
+    uint32_t remainder = num_tiles % num_tiles_per_cycle;
+#if EB_R3_MULTI_PASS
+    // CI only (#58725): the operand pass over up to EB_R3_MULTI_PASS sections, then one binary init for all of them
+    const uint32_t num_chunks = full_chunks + (remainder > 0);
+    for (uint32_t g = 0; g < num_chunks; g += EB_R3_MULTI_PASS) {
+        const uint32_t m = num_chunks - g < EB_R3_MULTI_PASS ? num_chunks - g : EB_R3_MULTI_PASS;
+        for (uint32_t j = 0; j < m; ++j) {
+            pre_tiles(g + j < full_chunks ? num_tiles_per_cycle : remainder);
+        }
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_op_a.get_cb_id(), cb_op_b.get_cb_id());
+        for (uint32_t j = 0; j < m; ++j) {
+            process_tiles(g + j < full_chunks ? num_tiles_per_cycle : remainder);
+        }
+    }
+#else
+    // Process full chunks
     for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
         process_tiles(num_tiles_per_cycle);
     }
 
     // Process remainder
-    uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
         process_tiles(remainder);
     }
+#endif
 
     // Pop the scalar tile from RHS CB
     cb_post_rhs.pop_front(1);

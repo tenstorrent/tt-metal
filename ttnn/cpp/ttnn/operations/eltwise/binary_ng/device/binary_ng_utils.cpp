@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
@@ -856,13 +857,30 @@ bool is_native_L1_sharding(
             a.logical_shape()[-2], a.logical_shape()[-1], b->logical_shape()[-2], b->logical_shape()[-1]);
         [[maybe_unused]] bool is_height = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
+        // CI only (#58726): native routing for a block or width sharded a with a column or scalar b (a scalar b only
+        // when every shard lies within one H plane), and for a row b
+        const bool eb_native = std::getenv("EB_R3_NATIVE_BCAST") != nullptr;
+        const auto a_shard_h = a.memory_config().shard_spec().has_value() ? a.memory_config().shard_spec()->shape[0] : 0u;
+        const bool eb_shard_in_plane = a_shard_h != 0 && a.padded_shape()[-2] % a_shard_h == 0;
         switch (subtile_bcast) {
-            case SubtileBroadcastType::COL_A:
             case SubtileBroadcastType::COL_B:
-            case SubtileBroadcastType::SCALAR_A:
-            case SubtileBroadcastType::SCALAR_B: return is_height;
-            case SubtileBroadcastType::ROW_A:
+                if (eb_native) {
+                    return true;
+                }
+                return is_height;
+            case SubtileBroadcastType::SCALAR_B:
+                if (eb_native && eb_shard_in_plane) {
+                    return true;
+                }
+                return is_height;
             case SubtileBroadcastType::ROW_B:
+                if (std::getenv("EB_R3_NATIVE_ROW") != nullptr) {
+                    return true;
+                }
+                break;
+            case SubtileBroadcastType::COL_A:
+            case SubtileBroadcastType::SCALAR_A: return is_height;
+            case SubtileBroadcastType::ROW_A:
             case SubtileBroadcastType::ROW_A_COL_B:
             case SubtileBroadcastType::ROW_B_COL_A:
             case SubtileBroadcastType::NONE: break;

@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

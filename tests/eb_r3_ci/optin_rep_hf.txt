@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/device/kernels/compute/rotary_embedding_hf.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true

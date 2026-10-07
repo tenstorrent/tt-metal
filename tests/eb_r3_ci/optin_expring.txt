@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

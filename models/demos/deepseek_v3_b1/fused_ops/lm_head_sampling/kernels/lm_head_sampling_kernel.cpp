@@ -50,7 +50,6 @@
 //     embedding in CB 8 does not affect next iteration primary rmsnorm (that reads CB 0),
 //     but breaks e_rmsnorm/EH path and can leave bad state.
 
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/matmul.hpp"
