@@ -59,14 +59,18 @@ NamedShm& NamedShm::operator=(NamedShm&& other) noexcept {
     return *this;
 }
 
-NamedShm NamedShm::create(const std::string& name, size_t size) {
+NamedShm NamedShm::create(const std::string& name, size_t size) { return create_impl(name, size, false); }
+
+NamedShm NamedShm::create_for_device(const std::string& name, size_t size) { return create_impl(name, size, true); }
+
+NamedShm NamedShm::create_impl(const std::string& name, size_t size, bool device_access) {
     TT_FATAL(!name.empty() && name[0] == '/' && !is_hugepage_path(name), "Invalid POSIX shm name: {}", name);
     TT_FATAL(size > 0, "Shared memory size must be > 0");
 
     auto& tracker = ShmResourceTracker::instance();
     std::string backing = name;
     if (const char* dir = std::getenv("TT_METAL_SOCKET_HUGEPAGE_DIR");
-        dir && *dir && size > static_cast<size_t>(sysconf(_SC_PAGESIZE))) {
+        device_access && dir && *dir && size > static_cast<size_t>(sysconf(_SC_PAGESIZE))) {
         TT_FATAL(std::filesystem::path(dir).is_absolute(), "TT_METAL_SOCKET_HUGEPAGE_DIR must be absolute");
         backing = (std::filesystem::path(dir) / name.substr(1)).string();
         TT_FATAL(is_hugepage_path(backing), "TT_METAL_SOCKET_HUGEPAGE_DIR cannot be the root directory");
