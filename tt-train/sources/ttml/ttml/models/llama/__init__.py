@@ -250,6 +250,7 @@ class Llama(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         kv_cache: Optional[ttml.models.KvCache] = None,
         new_tokens: Optional[int] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
         # Token IDs must be padded to the tile boundary so the embedding lookup
         # produces a tile-aligned tensor.  The padding is stripped after lookup.
@@ -280,7 +281,7 @@ class Llama(AbstractModuleBase):
             out = ttml.autograd.create_tensor(out_val)
 
         for layer_idx, block in enumerate(self.blocks):
-            extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)
+            extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens, position_ids)
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
                 out = memory_efficient_runner(block, out, mask, *extra_args)
             elif self.config.runner_type == ttml.models.RunnerType.Default:
