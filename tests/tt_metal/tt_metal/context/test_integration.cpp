@@ -40,6 +40,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_state.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
+#include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 
 #include <ttnn/graph/graph_query_op_constraints.hpp>
 #include <ttnn/operations/ccl/all_gather/all_gather.hpp>
@@ -313,6 +314,18 @@ void ExpectDeviceProfilerSkippedOnMock(distributed::MeshDevice& mock_mesh_device
             << "Device profiler was started on mock device " << device_id
             << " -- it must be skipped for mock/emulated clusters";
     }
+
+#if defined(TRACY_ENABLE)
+    // The trace hooks must act on the mock mesh's own (empty) profiler state and never reach the silicon profiler's.
+    // The chip id is one the silicon profiler cannot know, so a hook that wrongly used the silicon state would throw.
+    const std::vector<ChipId> unknown_device_ids{100000};
+    constexpr uint32_t trace_id = 0;
+    EXPECT_NO_THROW({
+        TracyTTMetalBeginMeshTrace(mock_mesh_device.impl(), unknown_device_ids, trace_id);
+        TracyTTMetalReplayMeshTrace(mock_mesh_device.impl(), unknown_device_ids, trace_id);
+        TracyTTMetalEndMeshTrace(mock_mesh_device.impl(), unknown_device_ids, trace_id);
+    });
+#endif
 }
 
 // Shared body: open a real silicon mesh first, then two mock meshes on the same arch. When
