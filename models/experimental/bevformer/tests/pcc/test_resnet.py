@@ -6,13 +6,12 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.bevformer.model_config import IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS
+from models.experimental.bevformer.model_config import IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS, tt_resnet_kwargs
 from models.experimental.bevformer.tests.common import (
     assert_pcc,
     build_reference_backbone,
     from_conv_layout,
     to_conv_layout,
-    tt_resnet_kwargs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_resnet_parameters
 from models.experimental.bevformer.tt.tt_resnet import TtBottleneck, TtResLayer, TtResNet
@@ -33,9 +32,7 @@ def reference_and_parameters():
 
 def _layer_kwargs(i):
     """The per-layer arguments TtResNet gives layer ``i`` in this configuration."""
-    stage_config = tt_resnet_kwargs()
-    stage_config.pop("out_indices")
-    return TtResNet.layer_kwargs(i, **stage_config)
+    return TtResNet.layer_kwargs(i, **tt_resnet_kwargs())
 
 
 def _check(torch_output, ttnn_model, ttnn_output):

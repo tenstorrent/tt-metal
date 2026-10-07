@@ -5,14 +5,13 @@
 import pytest
 import torch
 
-from models.experimental.bevformer.model_config import FPN_KWARGS, IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS
+from models.experimental.bevformer.model_config import FPN_KWARGS, IMAGE_HEIGHT, IMAGE_WIDTH, NUM_CAMS, tt_fpn_kwargs
 from models.experimental.bevformer.tests.common import (
     BACKBONE_OUTPUT_DTYPES,
     assert_pcc,
     build_reference_fpn,
     from_conv_layout,
     to_conv_layout,
-    tt_fpn_kwargs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_fpn_parameters
 from models.experimental.bevformer.tt.tt_fpn import TtFPN

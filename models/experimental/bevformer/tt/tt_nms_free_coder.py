@@ -22,10 +22,13 @@ from models.experimental.bevformer.model_config import (
     CODE_WL,
     CODE_XY,
     CODE_Z,
+    MAX_NUM,
+    NUM_CLASSES,
+    PC_RANGE,
+    POST_CENTER_RANGE,
+    SCORE_DTYPE,
 )
-from models.experimental.bevformer.model_config import MAX_NUM, NUM_CLASSES, PC_RANGE, POST_CENTER_RANGE
 from models.experimental.bevformer.reference.nms_free_coder import filter_boxes
-from models.experimental.bevformer.model_config import SCORE_DTYPE
 
 # Bisection steps that narrow the k-th logit's bracket around the bfloat16 pivot, 2^-5 of the
 # pivot wide, down to one float32 value; 19 suffice, the rest is margin. See TtNMSFreeCoder.topk.
@@ -33,7 +36,7 @@ PIVOT_BISECTION_STEPS = 22
 
 
 def denormalize_bbox(normalized_bboxes):
-    """Box predictions (``config/decoder_config.py``'s code, centers in metres) to
+    """Box predictions (``model_config.py``'s box code, centers in metres) to
     ``(cx, cy, cz, w, l, h, yaw, vx, vy)`` boxes."""
     return ttnn.concat(
         [
