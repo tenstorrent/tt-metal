@@ -46,6 +46,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
             output_bf16_mask (int): Bit mask selecting BFLOAT16 storage for outputs.
                 Bits 0, 1, 2, 4, and 5 are supported; unselected outputs use FLOAT32.
                 Defaults to 0.
+            gate_scale (float): Multiplies ``g`` before its within-chunk cumulative sum, so a
+                caller can fold a constant gate scale into preparation. Defaults to 1.0.
 
         Returns:
             list[ttnn.Tensor]: Seven new TILE-layout tensors, in order:
@@ -76,7 +78,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("output_bf16_mask") = 0,
         nb::arg("actual_start") = nb::none(),
         nb::arg("actual_end") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("gate_scale") = 1.0F);
 }
 
 }  // namespace ttnn::operations::experimental::kda::prepare_chunk_recurrence::detail

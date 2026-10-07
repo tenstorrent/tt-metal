@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    decay_projection_program_config,
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
@@ -177,6 +178,16 @@ class ttKDA:
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
+        # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
+        self.decay_activation = (
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if config.gate_lower_bound is not None else None
+        )
+        self.decay_projection_program_config = decay_projection_program_config(
+            mesh_device.compute_with_storage_grid_size(),
+            self.active_seq_len_local,
+            *tuple(self.weights.decay_output_projection.shape)[-2:],
+            self.decay_activation,
+        )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
@@ -194,6 +205,8 @@ class ttKDA:
             heads=self.config.num_heads,
             key_dim=self.config.head_k_dim,
             value_dim=self.config.head_v_dim,
+            # The bounded gate's lower-bound scale is applied by chunk preparation.
+            gate_scale=1.0 if config.gate_lower_bound is None else config.gate_lower_bound,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -382,6 +395,12 @@ class ttKDA:
             bias=weights.decay_bias_flat,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
+            program_config=self.decay_projection_program_config,
+            activation=(
+                "sigmoid"
+                if self.decay_activation is not None and self.decay_projection_program_config is None
+                else None
+            ),
         )
         return self._activate_decay(gate), beta_for_recurrence
 
@@ -396,16 +415,10 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _bounded_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
-        # The fused sigmoid is bit-identical to a separate op; fusing the lower-bound scale is not.
-        gate = ttnn.multiply(
-            self.weights.decay_scale_flat,
-            gate,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
-        )
-        return ttnn.multiply(gate, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    @staticmethod
+    def _bounded_decay(gate: ttnn.Tensor) -> ttnn.Tensor:
+        # The projection already applied sigmoid(scale * (x @ W + bias)); chunk preparation applies the lower bound.
+        return gate
 
     def _kda_rms_norm(
         self,

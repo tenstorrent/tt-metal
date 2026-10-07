@@ -4,6 +4,7 @@
 #include "prepare_chunk_recurrence_device_operation.hpp"
 
 #include <array>
+#include <cmath>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -163,7 +164,9 @@ std::vector<Tensor> prepare_chunk_recurrence(
     uint32_t output_bf16_mask,
     const std::optional<Tensor>& actual_start,
     const std::optional<Tensor>& actual_end,
-    uint32_t sequence_parallel_axis) {
+    uint32_t sequence_parallel_axis,
+    float gate_scale) {
+    TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
     TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
     if (actual_start) {
         kda_factory_detail::check_actual_start(q, *actual_start, "prepare_chunk_recurrence");
@@ -194,6 +197,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .key_dim = key_dim,
             .value_dim = value_dim,
             .output_bf16_mask = output_bf16_mask,
+            .gate_scale = gate_scale,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         PrepareChunkRecurrenceInputs{

@@ -481,6 +481,30 @@ def test_prepare_chunk_recurrence_token_major_beta_matches_by_chunk_beta(device:
         ttnn.deallocate(tensor)
 
 
+def test_prepare_chunk_recurrence_gate_scale_matches_prescaled_gate(device: ttnn.Device) -> None:
+    """gate_scale must equal scaling g on the host; a power of two keeps both paths exact."""
+    case = _UNIT_TEST_CASE
+    gate_scale = -4.0
+    host_inputs = _case_host_inputs(case, seed=1931)
+    unscaled_gate = tuple(host_inputs[:3]) + (host_inputs[3] / gate_scale,) + tuple(host_inputs[4:])
+    prescaled_inputs = _device_inputs(host_inputs, device)
+    unscaled_inputs = _device_inputs(unscaled_gate, device)
+    start = make_actual_start(device, 0)
+
+    def run(inputs: tuple[ttnn.Tensor, ...], **kwargs) -> list[ttnn.Tensor]:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return ttnn.experimental.kda.prepare_chunk_recurrence(
+                *inputs, case.num_heads, actual_start=start, output_bf16_mask=_PRODUCTION_OUTPUT_BF16_MASK, **kwargs
+            )
+
+    prescaled = run(prescaled_inputs)
+    scaled = run(unscaled_inputs, gate_scale=gate_scale)
+    for name, expected, actual in zip(OUTPUT_NAMES, prescaled, scaled, strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} gate_scale")
+    for tensor in (*prescaled, *scaled, *prescaled_inputs, *unscaled_inputs, start):
+        ttnn.deallocate(tensor)
+
+
 def test_prepare_chunk_recurrence_rejects_end_without_start(device, expect_error):
     inputs = _device_inputs(_host_inputs(2, 2, 32, 32), device)
     end = make_actual_start(device, 64)
