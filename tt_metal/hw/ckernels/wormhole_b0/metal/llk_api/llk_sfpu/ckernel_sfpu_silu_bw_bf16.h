@@ -15,6 +15,8 @@ inline void calculate_silu_bw_bf16() {
     using namespace sfpi;
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
+        v_if(sfpi::is_nan(vFloat(dst_reg[32 + d]))) { dst_reg[32 + d] = std::numeric_limits<float>::quiet_NaN(); }
+        v_endif;
         vFloat es;
         {
             vFloat a = setsgn(vFloat(dst_reg[d]), 0);
@@ -32,6 +34,8 @@ inline void calculate_silu_bw_bf16() {
             core = core * core_r + 0.24022121727466583f;
             core = core * core_r + 0.6931469440460205f;
             core = core * core_r + 1.0000001192092896f;
+            v_if(setsgn(core_t, 0) < 1.4901161193847656e-08f) { core = 1.0f; }
+            v_endif;
             vInt core_e = exexp(core, ExponentMode::Biased) + core_k + 64;
             v_if(core_e <= 0) { core = 0.0f; }
             v_else { core = setexp(core, core_e); }
@@ -44,6 +48,8 @@ inline void calculate_silu_bw_bf16() {
         P = P * (-denominator * P + 2.0f);
         P = P * (-denominator * P + 2.0f);
         P = P * (-denominator * P + 2.0f);
+        v_if(e < 2.9802322387695312e-08f) { P = 1.0f; }
+        v_endif;
         vFloat N = e * P;
         vFloat x = dst_reg[d];
         vFloat S = P;
@@ -56,9 +62,15 @@ inline void calculate_silu_bw_bf16() {
         vFloat product = dst_reg[32 + d] * (S * (1.0f + (T * x)));
         v_if(setsgn(x, 0) >= 69.31472778320312f && x < 0.0f) {
             vFloat Ss = es * P;
-            product = convert<vFloat16b>(dst_reg[32 + d] * (Ss * (1.0f + (T * x))), RoundMode::Nearest) *
-                      5.421010862427522e-20f;
+            vFloat t = dst_reg[32 + d] * (Ss * (1.0f + (T * x)));
+            v_if(sfpi::is_nan(t)) { t = std::numeric_limits<float>::quiet_NaN(); }
+            v_endif;
+            product = convert<vFloat16b>(t, RoundMode::Nearest) * 5.421010862427522e-20f;
+            v_if(es == 0.0f) { product = 0.0f; }
+            v_endif;
         }
+        v_endif;
+        v_if(sfpi::is_nan(product)) { product = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
         vFloat result = convert<vFloat16b>(product, RoundMode::Nearest);
         vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();

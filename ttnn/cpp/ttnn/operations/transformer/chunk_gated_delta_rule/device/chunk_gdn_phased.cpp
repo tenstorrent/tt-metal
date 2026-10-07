@@ -56,6 +56,7 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
     TT_FATAL(attrs.chunk_size % TILE_HEIGHT == 0, "chunk_size must be a multiple of 32");
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
+    validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
 }
 
 ChunkGdnPrepOperation::spec_return_value_t ChunkGdnPrepOperation::compute_output_specs(
@@ -108,7 +109,8 @@ std::vector<Tensor> chunk_gdn_prep(
     float scale,
     bool qk_flat,
     uint32_t Hk,
-    bool prep_serial) {
+    bool prep_serial,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -130,6 +132,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .qk_norm = qk_norm,
         .scale = scale,
         .prep_serial = prep_serial,
+        .tinv = gdn_tinv_resolve(wy_inverse, chunk_size, q),
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

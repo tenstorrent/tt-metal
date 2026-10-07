@@ -75,6 +75,9 @@ class TtPrefillRuntimeConfig:
     # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
     # ones the D2H service. M3 has no traced path, so it stays False.
     use_trace: bool = False
+    # MoE layers: run the shared expert on its own sub-device concurrently with dispatch (the runner's
+    # PrefillRunParams.overlap_shared_expert_with_dispatch). Off: it runs before the MoE on the full grid.
+    overlap_shared_expert: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -158,6 +161,7 @@ class TtPrefillRuntime:
             layer_indices=self.config.layer_indices,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            overlap_shared_expert=self.config.overlap_shared_expert,
         )
         self.model_built = True
 
@@ -226,6 +230,15 @@ class TtPrefillRuntime:
         # capacity-sized: drop them so re-targets do not accumulate dead DRAM (~0.7 GB/chip per capacity at 1M).
         self.model.ccl_manager.release_scratch_buffers()
         self.compiled = False
+
+    def release_sub_device_managers(self) -> None:
+        """Remove the MoE overlap sub-device manager before the mesh is closed. Idempotent."""
+        if self.model_built:
+            self.model.release_sub_device_managers()
+
+    def release_trace(self) -> None:
+        """The prefill runner's pre-close hook. M3 has no trace; this releases the sub-device managers."""
+        self.release_sub_device_managers()
 
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
@@ -567,6 +580,9 @@ class TtPrefillRuntime:
         One device slice + one mesh compose per cache. DRAM_MEMORY_CONFIG on the slice is required —
         the cache is ND-sharded ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM
         core on host read-back.
+
+        A TP-deduped index_k (``kv_cache.index_k_tp_axis``) is returned in the SAME layout as the replicated
+        one: its per-column stripes are re-interleaved on host, so callers need no special case.
         """
         start = slot * self.config.num_layers
         end = start + self.config.num_layers
@@ -593,10 +609,39 @@ class TtPrefillRuntime:
             ttnn.deallocate(sl)
             return host[:, :1] if collapse_tp else host
 
+        def _tp_sharded_slot_block(tensor):
+            """A TP-deduped cache's slot, re-interleaved to the TP-replicated layout ``[L, 1, sp*rows, hd]``.
+
+            Chip (s, t) holds stripe t (``chunk_local/tp`` rows) of every slab n at local rows
+            ``n*stripe + i``; the compose stacks the cols on dim 1, so ``host[:, t, s*n_slabs*stripe +
+            n*stripe + i]`` moves to ``s*n_slabs*chunk_local + n*chunk_local + t*stripe + i``."""
+            sp, tp = self.config.sp_factor, self.mesh_device.shape[kv_cache.index_k_tp_axis]
+            chunk_local = self.config.chunk_size // sp
+            stripe = chunk_local // tp
+            assert rows % chunk_local == 0, f"read of {rows} rows/chip is not a whole number of {chunk_local}-row slabs"
+            n_slabs = rows // chunk_local
+            s = list(tensor.shape)
+            assert n_slabs * stripe <= s[2], f"read of {n_slabs} slabs past the {s[2]}-row index_k cache"
+            sl = ttnn.slice(
+                tensor,
+                [start, 0, 0, 0],
+                [end, s[1], n_slabs * stripe, s[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            host = ttnn.to_torch(sl, mesh_composer=composer).float()  # [L, tp, sp*n_slabs*stripe, hd]
+            ttnn.deallocate(sl)
+            n_l, hd = host.shape[0], host.shape[3]
+            host = host.reshape(n_l, tp, sp, n_slabs, stripe, hd).permute(0, 2, 3, 1, 4, 5)
+            return host.reshape(n_l, 1, sp * n_slabs * chunk_local, hd)
+
+        if kv_cache.index_k_tp_axis is None:
+            index_k = _slot_block(kv_cache.index_k, collapse_tp=True)
+        else:
+            index_k = _tp_sharded_slot_block(kv_cache.index_k)
         return [
             _slot_block(kv_cache.k),
             _slot_block(kv_cache.v),
-            _slot_block(kv_cache.index_k, collapse_tp=True),
+            index_k,
         ]
 
     def read_seq_len(self, n_tokens: int | None) -> int:
