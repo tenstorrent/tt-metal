@@ -272,14 +272,6 @@ json credit_ref_json(const manifest::CreditRef& credit) {
     return out;
 }
 
-// The NoC is written as its number: NOC's RISCV_*_default aliases share its values, so it has no unique name.
-json noc_write_config_json(const manifest::NocWriteConfig& config) {
-    json out;
-    out["noc"] = static_cast<uint32_t>(config.noc);
-    out["cmd_buf"] = lower_enum_name(config.cmd_buf);
-    return out;
-}
-
 // Keyed by field. Each carries its category and kind, then its region, its stream register or its value.
 json fields_json(const std::vector<manifest::Field>& fields) {
     json out = json::object();
@@ -394,29 +386,14 @@ json sender_channel_json(
     return out;
 }
 
-json noc_forward_config_json(const manifest::NocForwardConfig& config) {
-    json out;
-    out["noc"] = static_cast<uint32_t>(config.noc);
-    out["data_cmd_buf"] = lower_enum_name(config.data_cmd_buf);
-    out["sync_cmd_buf"] = lower_enum_name(config.sync_cmd_buf);
-    return out;
-}
-
 json receiver_channel_json(const manifest::ReceiverChannel& receiver) {
     json out;
     out["status"] = lower_enum_name(receiver.status);
     out["serviced_by"] = serviced_by_json(receiver.serviced_by);
     out["forwards_on"] =
         receiver.forwards_on.has_value() ? json(fmt::format("vc{}", *receiver.forwards_on)) : json(nullptr);
-    out["forwarding_disabled"] = receiver.forwarding_disabled;
-    out["intermesh_ingress"] = receiver.intermesh_ingress;
-    out["forward_noc"] = noc_forward_config_json(receiver.forward_noc);
-    out["local_write_noc"] = noc_write_config_json(receiver.local_write_noc);
     out["ring_buffer"] = l1_region_json(receiver.ring_buffer);
-    out["pkts_sent"] = stream_ref_json(receiver.pkts_sent);
-    if (receiver.free_slots.has_value()) {
-        out["free_slots"] = stream_ref_json(*receiver.free_slots);
-    }
+    out["fields"] = fields_json(receiver.fields);
     return out;
 }
 
@@ -476,10 +453,12 @@ json downstream_edges_json(
 // ============ Fields ============
 
 // Keyed erisc<N>.
-json eriscs_json(const std::vector<std::vector<manifest::Field>>& erisc_fields) {
+json eriscs_json(const std::vector<manifest::Erisc>& eriscs) {
     json out = json::object();
-    for (size_t risc_id = 0; risc_id < erisc_fields.size(); ++risc_id) {
-        out[fmt::format("erisc{}", risc_id)]["fields"] = fields_json(erisc_fields[risc_id]);
+    for (size_t risc_id = 0; risc_id < eriscs.size(); ++risc_id) {
+        json& erisc = out[fmt::format("erisc{}", risc_id)];
+        erisc["processor"] = lower_enum_name(eriscs[risc_id].processor);
+        erisc["fields"] = fields_json(eriscs[risc_id].fields);
     }
     return out;
 }
@@ -543,11 +522,19 @@ json make_router_json(
     out["channels"]["receivers"] = channels_by_vc_json(router.channels.receivers, receiver_channel_json);
     out["intra_chip_downstream_edges"] = downstream_edges_json(router, control_plane, cluster, node, physical_chip_id);
     out["fields"] = fields_json(router.fields);
-    out["eriscs"] = eriscs_json(router.erisc_fields);
+    out["eriscs"] = eriscs_json(router.eriscs);
     return out;
 }
 
 // ============ Chip and mesh ============
+
+json local_sync_json(const manifest::LocalSync& local_sync) {
+    json out;
+    out["master_eth_chan"] = local_sync.master_eth_chan;
+    out["num_routers"] = local_sync.num_routers;
+    out["router_channels_mask"] = local_sync.router_channels_mask;
+    return out;
+}
 
 // Each edge lands on a sender channel its sibling has, at the compact index the builder recorded for it.
 void check_edge_landings(const manifest::Chip& chip, const ControlPlane& control_plane, FabricNodeId node) {
@@ -745,6 +732,7 @@ json make_chip_json(
     chip["asic_id"] = fmt::format("0x{:016x}", *control_plane.get_asic_id_from_fabric_node_id(node));
     chip["is_local"] = true;
     chip["z_port_role"] = lower_enum_name(collected.z_port_role);
+    chip["local_sync"] = collected.local_sync ? local_sync_json(*collected.local_sync) : json(nullptr);
     chip["routers"] = make_chip_routers_json(collected, control_plane, cluster, fabric_type, node, *physical_chip_id);
     return chip;
 }
