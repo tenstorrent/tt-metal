@@ -505,6 +505,9 @@ struct PrefetcherPipeRelayParams {
     m2::DFBAccessPattern cap = m2::DFBAccessPattern::STRIDED;
     std::optional<uint32_t> receiver_entry_size_override = std::nullopt;
     uint32_t trisc_delay_iterations = 0;
+    // Relay entries per pipe entry: the relay pages each pipe entry this much finer (1 = like the
+    // pipe). The receiver DM publishes that many relay entries per pipe entry.
+    uint32_t relay_pages_per_entry = 1;
     // When true: one program with sender + relay receiver + TRISC (backpressure).
     // Supports num_sender_threads>1 (Quasar).
     bool same_program = false;
@@ -521,8 +524,8 @@ struct RelayConsumerSpecs {
 };
 
 struct RelayConsumerParams {
-    uint32_t entry_size = 256;
-    uint32_t ring_depth = 4;
+    uint32_t entry_size = 256;          // pipe entry
+    uint32_t ring_depth = 4;            // whole pipe entries in the ring
     uint32_t pipe_total_entries = 4;    // pipe entries the receiver DM consumes over the run
     uint32_t pipe_batch_size = 1;       // pipe entries per wait_front / pop_front
     uint32_t entries_per_consumer = 4;  // relay entries each TRISC thread pops
@@ -531,6 +534,7 @@ struct RelayConsumerParams {
     uint32_t num_producers = 1;  // receiver DM threads = pipe credit lanes
     uint32_t num_consumers = 1;  // TRISC threads
     m2::DFBAccessPattern cap = m2::DFBAccessPattern::STRIDED;
+    uint32_t relay_pages_per_entry = 1;  // relay entries per pipe entry
 };
 
 RelayConsumerSpecs make_relay_consumer(std::vector<m2::PrefetcherPipeParamName> pipes, const RelayConsumerParams& p) {
@@ -541,15 +545,18 @@ RelayConsumerSpecs make_relay_consumer(std::vector<m2::PrefetcherPipeParamName> 
         .relay =
             m2::DataflowBufferSpec{
                 .unique_id = relay_name,
-                .entry_size = p.entry_size,
-                .num_entries = p.ring_depth,
+                .entry_size = p.entry_size / p.relay_pages_per_entry,
+                .num_entries = p.ring_depth * p.relay_pages_per_entry,
                 .data_format_metadata = tt::DataFormat::Float16_b,
                 .advanced_options = {.prefetcher_pipe_relays = pipes},
             },
     };
     bind_pipe(c.receiver, std::move(pipes), "in");
     c.receiver.dfb_bindings.push_back(m2::ProducerOf(relay_name, "relay"));
-    c.receiver.compile_time_args = {{"total_entries", p.pipe_total_entries}, {"batch_size", p.pipe_batch_size}};
+    c.receiver.compile_time_args = {
+        {"total_entries", p.pipe_total_entries},
+        {"batch_size", p.pipe_batch_size},
+        {"relay_pages_per_entry", p.relay_pages_per_entry}};
     c.compute.dfb_bindings.push_back(
         p.cap == m2::DFBAccessPattern::ALL ? m2::AllConsumerOf(relay_name, "relay")
                                            : m2::StridedConsumerOf(relay_name, "relay"));
@@ -570,7 +577,9 @@ m2::ProgramRunArgs::KernelRunArgs compute_result_args(const CoreRangeSet& receiv
 }
 
 // Per-receiver-core check of the TRISC relay consumer output. ALL: every thread saw every entry;
-// STRIDED: the threads partition the entries. Returns the number of receiver cores that match.
+// STRIDED: the threads partition the entries. total_entries counts relay entries, relay_pages_per_entry
+// of them per pipe entry, each starting with its pipe entry's pattern word. Returns the number of
+// receiver cores that match.
 uint32_t verify_relay_results(
     distributed::MeshDevice& device,
     const CoreRangeSet& receiver_cores,
@@ -578,8 +587,10 @@ uint32_t verify_relay_results(
     uint32_t num_consumers,
     m2::DFBAccessPattern cap,
     uint32_t entries_per_consumer,
-    uint32_t total_entries) {
-    const uint32_t expected_checksum = prefetcher_pipe_relay_expected_checksum(total_entries);
+    uint32_t total_entries,
+    uint32_t relay_pages_per_entry = 1) {
+    const uint32_t expected_checksum =
+        relay_pages_per_entry * prefetcher_pipe_relay_expected_checksum(total_entries / relay_pages_per_entry);
     uint32_t pass_count = 0;
     for (const CoreCoord& core : corerange_to_cores(receiver_cores)) {
         std::vector<uint32_t> result(num_consumers * 2, 0);
@@ -639,14 +650,19 @@ uint32_t run_prefetcher_pipe_relay(
     TT_FATAL(params.ring_depth % params.batch_size == 0, "Relay test ring_depth must be divisible by batch_size");
     TT_FATAL(params.num_producers >= 1, "num_producers must be >= 1");
     TT_FATAL(params.num_consumers >= 1, "num_consumers must be >= 1");
+    const uint32_t relay_pages = params.relay_pages_per_entry;
+    TT_FATAL(relay_pages >= 1, "relay_pages_per_entry must be >= 1");
+    TT_FATAL(
+        relay_pages == 1 || (params.batch_size == 1 && !params.receiver_entry_size_override.has_value()),
+        "A relay paged finer than the pipe is tested with batch_size 1 and one entry size");
     if (params.cap == m2::DFBAccessPattern::STRIDED) {
         TT_FATAL(
-            params.total_entries % params.num_consumers == 0,
-            "STRIDED: total_entries must be divisible by num_consumers");
+            (params.total_entries * relay_pages) % params.num_consumers == 0,
+            "STRIDED: relay entries must be divisible by num_consumers");
     }
     TT_FATAL(
-        params.ring_depth % std::max(params.num_producers, params.num_consumers) == 0,
-        "ring_depth must be divisible by max(P,C)");
+        (params.ring_depth * relay_pages) % std::max(params.num_producers, params.num_consumers) == 0,
+        "relay depth must be divisible by max(P,C)");
     TT_FATAL(params.num_sender_threads >= 1, "num_sender_threads must be >= 1");
     if (params.num_producers > 1) {
         TT_FATAL(is_quasar_arch(), "Multi-producer PrefetcherPipe relay requires Quasar");
@@ -669,8 +685,8 @@ uint32_t run_prefetcher_pipe_relay(
     distributed::MeshDevice& device = *mesh_device;
     const CoreRangeSet& receiver_cores = pipe.receiver_cores();
     const uint32_t recv_entry_size = params.receiver_entry_size_override.value_or(params.entry_size);
+    // Whole entries only: a ring the entry does not divide leaves a trailing gap the pipe skips.
     const uint32_t recv_num_entries = pipe.ring_size() / recv_entry_size;
-    TT_FATAL(pipe.ring_size() % recv_entry_size == 0, "receiver entry size must divide ring");
     TT_FATAL(
         recv_num_entries == params.ring_depth || params.receiver_entry_size_override.has_value(),
         "ring_depth must match pipe.ring_size/entry_size unless overriding recv entry size");
@@ -681,8 +697,9 @@ uint32_t run_prefetcher_pipe_relay(
         "pushed bytes must be divisible by recv entry size");
     TT_FATAL(recv_total_entries % params.batch_size == 0, "recv_total_entries must be divisible by batch_size");
 
+    const uint32_t relay_total_entries = recv_total_entries * relay_pages;
     const uint32_t entries_per_consumer =
-        (params.cap == m2::DFBAccessPattern::ALL) ? recv_total_entries : (recv_total_entries / params.num_consumers);
+        (params.cap == m2::DFBAccessPattern::ALL) ? relay_total_entries : (relay_total_entries / params.num_consumers);
     TT_FATAL(entries_per_consumer % params.batch_size == 0, "entries_per_consumer must be divisible by batch_size");
 
     // Pipe-side batch for the relay receiver DM. The receiver publishes one relay entry per
@@ -732,6 +749,7 @@ uint32_t run_prefetcher_pipe_relay(
             .num_producers = params.num_producers,
             .num_consumers = params.num_consumers,
             .cap = params.cap,
+            .relay_pages_per_entry = relay_pages,
         });
 
     if (params.same_program) {
@@ -791,7 +809,8 @@ uint32_t run_prefetcher_pipe_relay(
         params.num_consumers,
         params.cap,
         entries_per_consumer,
-        recv_total_entries);
+        relay_total_entries,
+        relay_pages);
 }
 
 // 1P1C relay with an optional receiver-side entry size that differs from the sender's.
@@ -1733,9 +1752,35 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
     }
 
     {
-        // Relay entry size must match the pipe parameter's.
+        // A relay may page each pipe entry as a whole number of its own entries (two here).
         m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 256, .with_relay = true});
         spec.dataflow_buffers[0].entry_size = 128;
+        spec.dataflow_buffers[0].num_entries = 8;
+        EXPECT_NO_THROW(m2::MakeProgramFromSpec(*mesh_device, spec));
+    }
+
+    {
+        // A relay entry coarser than the pipe entry is rejected; the ring stays exactly covered.
+        m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 256, .with_relay = true});
+        spec.dataflow_buffers[0].entry_size = 512;
+        spec.dataflow_buffers[0].num_entries = 2;
+        EXPECT_THROW(m2::MakeProgramFromSpec(*mesh_device, spec), std::exception);
+    }
+
+    {
+        // A pipe entry the ring does not divide leaves a trailing gap the pipe skips at the wrap
+        // (two 384 B entries of the 1024 B ring); the relay covers only those whole entries.
+        m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 384, .with_relay = true});
+        EXPECT_NO_THROW(m2::MakeProgramFromSpec(*mesh_device, spec));
+    }
+
+    {
+        // The same whole entries paged finer: six 128 B relay entries cover them, and eight, which
+        // would also cover the gap, are rejected.
+        m2::ProgramSpec spec = receiver_program_spec(pipe, {.entry_size = 384, .with_relay = true});
+        spec.dataflow_buffers[0].entry_size = 128;
+        spec.dataflow_buffers[0].num_entries = 6;
+        EXPECT_NO_THROW(m2::MakeProgramFromSpec(*mesh_device, spec));
         spec.dataflow_buffers[0].num_entries = 8;
         EXPECT_THROW(m2::MakeProgramFromSpec(*mesh_device, spec), std::exception);
     }
@@ -2462,6 +2507,86 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Parallel_STRIDED_1P2C_Batc
                 .cap = m2::DFBAccessPattern::STRIDED,
             }),
         1u);
+}
+
+namespace {
+
+// A relay paging each pipe entry as relay_pages relay entries, over a ring the pipe entry does not
+// divide: the pipe runs on its two whole entries and skips the trailing half entry at every wrap,
+// and the relay covers those whole entries. Sender and consumers share one program so the ring wraps.
+constexpr uint32_t kGapRelayEntrySize = 256;
+constexpr uint32_t kGapWholeEntries = 2;
+
+uint32_t ring_with_half_entry_gap(uint32_t relay_pages) {
+    const uint32_t entry_size = kGapRelayEntrySize * relay_pages;
+    return (entry_size * kGapWholeEntries) + (entry_size / 2);
+}
+
+PrefetcherPipeRelayParams relay_over_ring_gap(uint32_t relay_pages, uint32_t num_consumers, m2::DFBAccessPattern cap) {
+    return PrefetcherPipeRelayParams{
+        .entry_size = kGapRelayEntrySize * relay_pages,
+        .ring_depth = kGapWholeEntries,
+        .total_entries = 3 * kGapWholeEntries,
+        .batch_size = 1,
+        .num_consumers = num_consumers,
+        .cap = cap,
+        .relay_pages_per_entry = relay_pages,
+        .same_program = true,
+    };
+}
+
+}  // namespace
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_TwoPagesPerEntry_RingGap) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto pipe =
+        make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), ring_with_half_entry_gap(2));
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(mesh_device, pipe, relay_over_ring_gap(2, 1, m2::DFBAccessPattern::STRIDED)), 1u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Parallel_STRIDED_1P2C_EntryPerConsumer_RingGap) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "Multi-consumer PrefetcherPipe relay uses Quasar DFB TC slots";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto pipe =
+        make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), ring_with_half_entry_gap(2));
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(mesh_device, pipe, relay_over_ring_gap(2, 2, m2::DFBAccessPattern::STRIDED)), 1u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Parallel_STRIDED_1P4C_EntryPerConsumer_RingGap) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "Multi-consumer PrefetcherPipe relay uses Quasar DFB TC slots";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto pipe =
+        make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), ring_with_half_entry_gap(4));
+    EXPECT_EQ(
+        run_prefetcher_pipe_relay(mesh_device, pipe, relay_over_ring_gap(4, 4, m2::DFBAccessPattern::STRIDED)), 1u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Parallel_ALL_1P2C_TwoPagesPerEntry_RingGap) {
+    if (!is_quasar_arch()) {
+        GTEST_SKIP() << "Multi-consumer PrefetcherPipe relay uses Quasar DFB TC slots";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto pipe =
+        make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), ring_with_half_entry_gap(2));
+    EXPECT_EQ(run_prefetcher_pipe_relay(mesh_device, pipe, relay_over_ring_gap(2, 2, m2::DFBAccessPattern::ALL)), 1u);
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_Backpressure_NoOverwrite) {

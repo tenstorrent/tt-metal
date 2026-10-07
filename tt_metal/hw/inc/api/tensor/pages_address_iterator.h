@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include "api/tensor/page.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include "internal/tensor/helpers.h"
 
 namespace tensor_accessor {
@@ -19,10 +20,12 @@ namespace tensor_accessor {
 template <typename Accessor>
 class PagesAddressIteratorSharded {
 public:
-    using value_type = Page;
+    // AccessorPage (not plain Page) so a NoC transfer of the page knows its accessor -- for op-to-op R/W inference
+    // (its binding) and the Quasar address generator. It is a Page, so `const Page&` call sites are unaffected.
+    using value_type = AccessorPage<Accessor>;
     using difference_type = std::ptrdiff_t;
-    using reference = const Page&;
-    using pointer = const Page*;
+    using reference = const AccessorPage<Accessor>&;
+    using pointer = const AccessorPage<Accessor>*;
 
     // Constructor that initializes the iterator at a starting position
     PagesAddressIteratorSharded(
@@ -98,7 +101,7 @@ public:
         return tmp;
     }
 
-    const Page& operator[](difference_type n) const {
+    reference operator[](difference_type n) const {
         auto temp = *this;
         temp += n;
         return *temp;
@@ -126,9 +129,9 @@ private:
     uint32_t run_pages_per_step_ = 0;
     // Contiguous pages from current_page_id, inclusive. Only valid when run_pages_per_step_ != 0.
     uint32_t run_pages_left_ = 0;
-    mutable Page current_page{0, 0};
+    mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
-    void update_current_page() { current_page = Page(current_noc_addr, current_page_id); }
+    void update_current_page() { current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor); }
 
     void set_noc_addr(uint32_t page_id) { current_noc_addr = accessor.get_noc_addr(page_id, 0, noc); }
 
@@ -148,10 +151,12 @@ private:
 template <typename Accessor>
 class PagesAddressIteratorInterleaved {
 public:
-    using value_type = Page;
+    // AccessorPage (not plain Page) so a NoC transfer of the page knows its accessor -- for op-to-op R/W inference
+    // (its binding) and the Quasar address generator. It is a Page, so `const Page&` call sites are unaffected.
+    using value_type = AccessorPage<Accessor>;
     using difference_type = std::ptrdiff_t;
-    using reference = const Page&;
-    using pointer = const Page*;
+    using reference = const AccessorPage<Accessor>&;
+    using pointer = const AccessorPage<Accessor>*;
 
     PagesAddressIteratorInterleaved(
         const Accessor& accessor,
@@ -210,7 +215,7 @@ public:
         return tmp;
     }
 
-    const Page& operator[](difference_type n) const {
+    reference operator[](difference_type n) const {
         auto temp = *this;
         temp += n;
         return *temp;
@@ -239,11 +244,11 @@ private:
     const uint32_t end_page_id_ = 0;
     const uint32_t stride_ = 1;
     const uint8_t noc = noc_index;
-    mutable Page current_page{0, 0};
+    mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
     void update_current_page() {
-        auto current_noc_addr = accessor.get_noc_addr(current_page_id, 0, noc);
-        current_page = Page(current_noc_addr, current_page_id);
+        auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
+        current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor);
     }
 };
 
