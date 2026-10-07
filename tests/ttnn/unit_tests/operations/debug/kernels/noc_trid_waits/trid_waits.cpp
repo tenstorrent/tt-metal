@@ -9,7 +9,7 @@
 // MODE 0: noc_async_read_barrier_with_trid   - the read data must have landed.
 // MODE 1: noc_async_write_barrier_with_trid  - NIU_MST_REQS_OUTSTANDING_ID(trid) must be 0.
 // MODE 2: noc_async_write_flushed_with_trid  - NIU_MST_WRITE_REQS_OUTGOING_ID(trid) must be 0.
-// IMPL 0: the API; IMPL 1: the counter poll the API used before ordering it after NOC_CMD_CTRL.
+// IMPL 0: the API; IMPL 1: the counter poll the API used before it waited on noc_cmd_buf_ready().
 //
 // Scratch layout (same L1 address on both cores): [0, 16 KB) local buffer, [16, 32 KB) remote buffer
 // (host-filled with word index i at word i), result words at +32 KB.
@@ -76,7 +76,7 @@ void kernel_main() {
                     while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, TRID)) {
                     }
                 }
-                ncrisc_noc_order_after_cmd_ctrl_write(noc_index, write_cmd_buf);
+                while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));  // order the probe after the issue store
                 if (NOC_STATUS_READ_REG(noc_index, NIU_MST_REQS_OUTSTANDING_ID(TRID)) != 0) {
                     early++;
                 }
@@ -87,7 +87,7 @@ void kernel_main() {
                     while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, TRID)) {
                     }
                 }
-                ncrisc_noc_order_after_cmd_ctrl_write(noc_index, write_cmd_buf);
+                while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));  // order the probe after the issue store
                 if (NOC_STATUS_READ_REG(noc_index, NIU_MST_WRITE_REQS_OUTGOING_ID(TRID)) != 0) {
                     early++;
                 }

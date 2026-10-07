@@ -6,7 +6,7 @@
 
 The per-trid NIU counters are incremented when NOC_CMD_CTRL is written. A counter read issued right
 after that store can be emitted first, see 0, and let the wait return before the transaction is even
-counted. The waits now read back NOC_CMD_CTRL of the command buffer they cover before polling.
+counted. The waits now wait on noc_cmd_buf_ready() (a read of NOC_CMD_CTRL) before polling the counter.
 """
 
 import os
