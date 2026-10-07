@@ -47,34 +47,35 @@ def main():
         from models.demos.blackhole.mimo_v26.tt.decode import Decoder
 
         g.dec = Decoder(model, trace=E("DEC_TRACE", "1") == "1", keep_logits=True)
-        b = g.generate(prompts, STEPS, S=S, teacher=ta)
-        c = g.generate(prompts, STEPS, S=S, teacher=ta)
-        f_same = bool(torch.equal(b["first_logits"], c["first_logits"]))
-        f_diff = float((b["first_logits"] - c["first_logits"]).abs().max())
-        first_bad = None
-        worst = 0.0
-        for i in range(N):
-            for k, (x, y) in enumerate(zip(b["step_logits"][i], c["step_logits"][i])):
-                d = float((x - y).abs().max())
-                worst = max(worst, d)
-                if d > 0 and (first_bad is None or k < first_bad[1]):
-                    first_bad = (i, k, d)
+        ge = Generator(model, 512, trace=False, keep_logits=True)
+        e = ge.generate(prompts, STEPS, S=S, teacher=ta)
+        runs = {"E": e}
+        for name in ("B", "C"):
+            runs[name] = g.generate(prompts, STEPS, S=S, teacher=ta)
+        runs["E2"] = ge.generate(prompts, STEPS, S=S, teacher=ta)
+
+        def cmp(x, y):
+            bad = [
+                (i, k, float((p - q).abs().max()))
+                for i in range(N)
+                for k, (p, q) in enumerate(zip(runs[x]["step_logits"][i], runs[y]["step_logits"][i]))
+                if not torch.equal(p, q)
+            ]
+            first = min(bad, key=lambda t: t[1]) if bad else None
+            return dict(
+                first_logits_equal=bool(torch.equal(runs[x]["first_logits"], runs[y]["first_logits"])),
+                n_bad_user_steps=len(bad),
+                n_bad_users=len({t[0] for t in bad}),
+                first_bad=first,
+                tokens_equal=runs[x]["tokens"] == runs[y]["tokens"],
+            )
+
         rec(
             "determinism",
             layers=NL,
             n=N,
             steps=STEPS,
-            first_logits_bit_identical=f_same,
-            first_logits_maxdiff=f_diff,
-            decode_logits_worst_maxdiff=worst,
-            first_mismatch_user_step_diff=first_bad,
-            tokens_equal_BC=b["tokens"] == c["tokens"],
-            tokens_equal_AB=ta == b["tokens"],
-            n_mismatching_users=sum(
-                1
-                for i in range(N)
-                if any(float((x - y).abs().max()) > 0 for x, y in zip(b["step_logits"][i], c["step_logits"][i]))
-            ),
+            **{f"{x}_vs_{y}": cmp(x, y) for x, y in (("E", "E2"), ("E", "B"), ("E", "C"), ("B", "C"))},
         )
     finally:
         close_mesh(mesh)
