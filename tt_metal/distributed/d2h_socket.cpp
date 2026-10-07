@@ -114,7 +114,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
         host_buffer_ = std::shared_ptr<uint32_t[]>(
             static_cast<uint32_t*>(p), [alloc_size](uint32_t* ptr) { munmap(ptr, alloc_size); });
     } else {
-        shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+        shm_ = std::make_unique<NamedShm>(NamedShm::create_for_device(shm_name, alloc_size));
         aligned_ptr = shm_->ptr();
         // NamedShm::create zero-initializes the region; no explicit memset needed.
         host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
