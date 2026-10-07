@@ -1093,13 +1093,22 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
-    // Blackhole FPU op whose sharded a and c with a column or scalar broadcast b run DEST sections (below)
+    // Blackhole FPU op whose sharded a and c with a column or scalar broadcast b run DEST sections (below); with an
+    // activation (operand or post, not both) only a height-sharded a. An operand activation there runs a section at a
+    // time, so a's intermediate CB holds one.
     const bool bh_fpu_op = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && !is_sfpu_op && !is_where_op &&
                            std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) && !post_zero_point;
-    const bool bcast_sections = bh_fpu_op && !has_operand_activations && !has_post_activations && a_sharded &&
+    const bool sections_activations =
+        !(has_operand_activations || has_post_activations) ||
+        (!(has_operand_activations && has_post_activations) &&
+         a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
+    const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded &&
                                 c_sharded &&
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
+    const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
+    const uint32_t a_intermediate_tiles =
+        bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle;
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1126,7 +1135,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
+            .total_size = a_intermediate_single_tile_size * a_intermediate_tiles,
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
