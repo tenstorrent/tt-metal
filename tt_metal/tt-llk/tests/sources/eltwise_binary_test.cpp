@@ -114,6 +114,12 @@ inline void perf_binary_source_handshakes(
     }
 }
 
+#include "params.h"
+#ifndef EB_BLOCK_DEFINED
+constexpr bool EB_BLOCK_UNPACK = false;
+constexpr bool EB_BLOCK_PACK   = false;
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB.h"
@@ -190,11 +196,28 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            if constexpr (EB_BLOCK_UNPACK)
             {
-                for (std::uint32_t i = 0; i < num_total_tiles; ++i)
+                const std::uint32_t n        = INPUT_NUM_TILES_IN_BLOCK;
+                const std::uint32_t stride_a = num_total_tiles > 1 ? L1_ADDRESS(buffer_A[1]) - L1_ADDRESS(buffer_A[0]) : 0;
+                const std::uint32_t stride_b = num_total_tiles > 1 ? L1_ADDRESS(buffer_B[1]) - L1_ADDRESS(buffer_B[0]) : 0;
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
-                    _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
+                    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(INPUT_NUM_BLOCKS); ++block)
+                    {
+                        _llk_unpack_AB_block_<BroadcastType::NONE>(
+                            L1_ADDRESS(buffer_A[block * n]), L1_ADDRESS(buffer_B[block * n]), n, stride_a, stride_b);
+                    }
+                }
+            }
+            else
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t i = 0; i < num_total_tiles; ++i)
+                    {
+                        _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
+                    }
                 }
             }
         }
@@ -381,6 +404,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_block.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -434,6 +458,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
         _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
+        if constexpr (EB_BLOCK_PACK)
+        {
+            _llk_pack_block_contiguous_mop_config_(tensor_shape.face_r_dim, num_faces);
+        }
         PROFILER_SYNC();
     }
     {
@@ -451,7 +479,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_packer_wait_for_math_done_();
                     }
-                    for (std::uint32_t tile = 0; tile < output_tiles_in_block; ++tile)
+                    if constexpr (EB_BLOCK_PACK)
+                    {
+                        _llk_pack_block_contiguous_<dest_sync, is_fp32_dest_acc_en>(
+                            0, L1_ADDRESS(buffer_Res[block * output_tiles_in_block]), output_tiles_in_block);
+                    }
+                    for (std::uint32_t tile = 0; !EB_BLOCK_PACK && tile < output_tiles_in_block; ++tile)
                     {
                         const std::uint32_t res_tile_idx = block * output_tiles_in_block + tile;
                         LLK_ASSERT(

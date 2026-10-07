@@ -294,6 +294,7 @@ def _run_eltwise_binary_test(
     run_types=None,
     loop_factor=1,
     per_face_handoff=None,
+    extra_templates=(),
 ):
     if per_face_handoff is None:
         # Blackhole: functional variants take the per-tile hand-off; perf variants take it where the opted-in kernels do,
@@ -454,6 +455,7 @@ def _run_eltwise_binary_test(
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
             ACC_TO_DEST(acc_to_dest),
             PER_FACE_HANDOFF(per_face_handoff),
+            *extra_templates,
         ],
         "runtimes": [
             generate_input_dim(
