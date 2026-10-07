@@ -76,7 +76,9 @@ def test_moe_decode_4x8(mesh_device):
         cf=int(os.environ.get("MIMO_UM_CF", "4")),
     )
     m2 = ttnn.ShardTensor2dMesh(md, dims=(0, None), mesh_shape=(ROWS, COLS))
-    N = USERS
+    N = max(
+        64, -(-USERS // 64) * 64
+    )  # masked_bincount needs tokens % 64 == 0: 32 users/row are padded with dead rows to 64
     failures = []
     for layer in LAYERS:
         gw, gb = load_gate(layer)  # [256,4096] fp32, [256]
