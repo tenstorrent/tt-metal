@@ -107,10 +107,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             //   5. Fp32_enabled=1: restore FP32 dest mode
             const std::uint32_t tile_base = dst_index * 64;
             TTI_SETDVALID(0b10);
-            // MOVD2B does not wait for the Matrix Unit to own the SrcB bank it writes. SETDVALID above runs on
-            // the Miscellaneous Unit and the previous tile's CLEARDVALID flips the bank inside the FPU, so wait
-            // for both to land (MATH drains the flip, SRCB_VLD sees the publication) before the moves.
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
 
             // Source row 0 -> faces 0 (rows 0-15) and 2 (rows 32-47)
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
@@ -170,10 +166,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // all 16 datums within each row.
             const std::uint32_t tile_base = dst_index * 64;
             TTI_SETDVALID(0b10);
-            // MOVD2B does not wait for the Matrix Unit to own the SrcB bank it writes. SETDVALID above runs on
-            // the Miscellaneous Unit and the previous tile's CLEARDVALID flips the bank inside the FPU, so wait
-            // for both to land (MATH drains the flip, SRCB_VLD sees the publication) before the moves.
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
 
             // Extract source scalar from dest row 0 into B register
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
@@ -219,10 +211,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // face (rows 16-31). Same hi16/lo16 split as ROW/SCALAR broadcasts.
             const std::uint32_t tile_base = dst_index * 64;
             TTI_SETDVALID(0b10);
-            // MOVD2B does not wait for the Matrix Unit to own the SrcB bank it writes. SETDVALID above runs on
-            // the Miscellaneous Unit and the previous tile's CLEARDVALID flips the bank inside the FPU, so wait
-            // for both to land (MATH drains the flip, SRCB_VLD sees the publication) before the moves.
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
 
 #pragma GCC unroll 2
             for (int offset = 0; offset < 2; ++offset)
