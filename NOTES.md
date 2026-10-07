@@ -34,3 +34,20 @@ Box: blx01 (g15blx01), everything under /var/tmp/fasth3/t170 (nothing under blx0
   Broker recovered (705 hold ended 23:37:58); host rebooted ~23:34, killing the driver.
 - 23:41 UTC: driver relaunched (pid 62236) with PRIOR_DROP=exact_shard5; exact_shard5 = job 707 (-t 450).
   A second drop skips it. Next: on DRIVER.done, tmp/t170/score_g15.sh baseline5 exact_shard5 detached on g15.
+- 00:00 UTC: DRIVER.done "0". Phase-2 scoring done (data/g15/t170/SCORE_p2a.done): baseline5 and exact_shard5
+  clips are byte-identical (md5); vs ref_dv145 PCC 0.9931 mean (worst 0.9816), PSNR 34.25 dB mean (worst 31.72);
+  VBench subj 0.888 / bg 0.922 / img 0.563 / motion 0.984 (ref 0.893/0.926/0.553/0.985).
+  Warm e2e gen1-5: baseline5 5.995 s mean, exact_shard5 5.939 s mean (-56 ms, every seed faster; VAE 0.56 -> 0.51).
+- Visual check of pack stills (data/g15/t170/stills/grid_g12.jpg, gen1 boat + gen2 fisherman): gate/adaln/all look
+  as clean as baseline; they diverge in trajectory (pose, birds), no artifacts. The driver's phase-2 gate
+  (PSNR >= 25 on gen2) dropped them on metrics alone, so one more phase-2 job: fast5 = exact_shard + gate + adaln
+  (lofi/agmm left out: no speed gain, lower PCC). Code commit a3216e1486d flips LTX_VAE_EXACT_SHARD default on.
+- 00:05 UTC: driver bug: broker server.log rotated at midnight -> health() saw no event; now reads server.log.1 too.
+  Relaunched TAG=fast PHASE2_LIST=configs5b.txt (pid 221453); fast5 = broker job 708, -t 400.
+  g15: tmp/t170/score_after_fast.sh detached (ttp detach t170-score-fast) waits for driver_fast/DRIVER.done,
+  then score_g15.sh fast5 -> data/g15/t170/SCORE.done.
+## Next (on wake)
+- Read res/summary_configs5b.md on blx01 (fast5 timing + PCC vs baseline5) and data/g15/t170/score.log (VBench).
+  Look at data/g15/t170/fast5/vbench/seed*_cmp_f072.png vs baseline5. If fast5 VBench ~= baseline5 and no visual
+  regression: also flip LTX_FUSE_GATE_ON_DEVICE / LTX_FUSE_NORM_ADALN defaults (code commit), else exact_shard only.
+- Write RESULTS.md (tables, recommendation, video paths + still, drop log), land code on ttp/t48 via a -land branch.
