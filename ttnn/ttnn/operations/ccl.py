@@ -205,24 +205,56 @@ def _golden_function_mesh_partition(
     if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
         return None
 
-    # The input is replicated across each cluster-axis group; every device takes its slice along dim.
+    normalized_dim = _normalize_dim(dim, input_tensor[0].ndim)
+    mesh_shape = tuple(_ttnn_golden_mesh_shape)
+    shard_dims = tuple(_ttnn_golden_mesh_shard_dims)
+    if cluster_axis is not None and cluster_axis < 0:
+        cluster_axis += len(mesh_shape)
+    if _mesh_partition_keeps_input_label(mesh_shape, shard_dims, normalized_dim, cluster_axis):
+        # The op cannot state this result with a TensorTopology and leaves the input's label on it; comparison mode
+        # would compose the device output by that label and no host composition matches it. Decline to compare.
+        return None
+
+    # Every device keeps its own slice along dim: position-th chunk of ITS OWN input within its cluster-axis group.
+    # For the usual replicated input that is a slice of the shared tensor; for an input already sharded along dim
+    # (the op's "output bytes" stance) each device partitions the shard it holds.
     per_device_outputs = [None] * len(input_tensor)
-    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
-        full = input_tensor[group[0]]
-        chunks = torch.chunk(full, len(group), dim=dim)
+    for group in _get_collective_groups(mesh_shape, cluster_axis):
         for position, device_index in enumerate(group):
-            per_device_outputs[device_index] = chunks[position]
+            per_device_outputs[device_index] = torch.chunk(input_tensor[device_index], len(group), dim=dim)[position]
 
     # After partition the tensor is sharded along dim across the cluster axis. With no cluster axis device k holds
     # chunk k in row-major device order, i.e. dim is sharded on every mesh axis (the op labels that output as the
     # collapsed {N}, [Shard(dim)]), so the composition concatenates every device along dim.
-    normalized_dim = _normalize_dim(dim, input_tensor[0].ndim)
-    output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
+    output_shard_dims = list(shard_dims)
     if cluster_axis is not None:
         output_shard_dims[cluster_axis] = normalized_dim
     else:
         output_shard_dims = [normalized_dim] * len(output_shard_dims)
-    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
+    return _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, output_shard_dims)
+
+
+def _mesh_partition_keeps_input_label(mesh_shape, shard_dims, dim, cluster_axis):
+    """The cases in which mesh_partition's output-topology hook declines and the result keeps the input's label
+    (see the rule table in mesh_partition_device_operation.hpp), as far as a label's placements show them: a
+    whole-mesh partition of a tensor sharded on another dim along a non-trivial axis (rule 2); a cluster-axis
+    partition of a dim another non-trivial axis already shards unless that axis is outer and every further axis is
+    trivial (rule 1(iii) vs 1(ii)); a cluster axis the label has no placement for (a collapsed label on a multi-axis
+    mesh, rules 3-5, which this golden's mesh model cannot represent)."""
+    if cluster_axis is None:
+        return any(
+            size > 1 and shard_dim is not None and shard_dim != dim for size, shard_dim in zip(mesh_shape, shard_dims)
+        )
+    if cluster_axis >= len(shard_dims):
+        return True
+    partitioned_composes = shard_dims[cluster_axis] is None or shard_dims[cluster_axis] == dim
+    for axis, (size, shard_dim) in enumerate(zip(mesh_shape, shard_dims)):
+        if axis == cluster_axis or shard_dim != dim or size == 1:
+            continue
+        other_axes_trivial = all(s == 1 for other, s in enumerate(mesh_shape) if other not in (axis, cluster_axis))
+        if not (axis < cluster_axis and partitioned_composes and other_axes_trivial):
+            return True
+    return False
 
 
 ttnn.attach_golden_function(
