@@ -418,17 +418,9 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 @dataclass
 class SFPU_DROPOUT_PARAMS(TemplateParameter):
-    """Probability, seed and scale for the Quasar dropout kernel.
+    """Dropout probability (p * INT_MAX), seed and scale, as macros (the header selects on ``#ifdef``).
 
-    Emitted as macros rather than constexprs for the same reason as
-    :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations_quasar.h selects on ``#ifdef``, the header is
-    shared by every unary test, and only the dedicated dropout tests set these. Unset means
-    p = 0 with the dispatcher's default seed and scale 2.0, the deterministic ``x * scale`` the
-    unified sweep checks.
-
-    ``dropout_probability`` is ``p * INT_MAX`` (0 .. DROPOUT_PROBABILITY_MAX);
-    ``dropout_scale`` is emitted as its exact fp32 bit pattern. The fields carry a ``dropout_``
-    prefix because every parameter field name becomes a perf-CSV column and must be unique.
+    Fields are ``dropout_``-prefixed because every param field name is a perf-CSV column.
     """
 
     dropout_probability: int = 0

@@ -421,8 +421,7 @@ def prepare_inputs_for_operation(
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop in (MathOperation.Neg, MathOperation.Dropout):
-        # Negation, and dropout's p = 0 path (x * 2.0), are exact for any representable value;
-        # span both signs (mirrors sfpu_domains' Neg spec).
+        # Neg and dropout's p = 0 path (x * 2.0) are exact; span both signs.
         min_val = -10.0
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
@@ -879,8 +878,7 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    # Dropout at the dispatcher's default p = 0: no datum is dropped, so the golden is x * 2.0.
-    # The drop path is covered by test_dropout_probability_quasar below.
+    # p = 0 only (golden x * 2.0); the drop path is tested by test_dropout_* below.
     OpConfig(MathOperation.Dropout, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     # Column-wise cumulative sum: a whole-tile op (VectorMode::RC_custom, one call per
@@ -1559,48 +1557,26 @@ def test_typecast_fp32_to_uint16_edge_cases_quasar(dest_sync):
     )
 
 
-# ---------------------------------------------------------------------------
-# Dropout drop-path detectors.
-#
-# The sweep above runs dropout at p = 0, which proves the x * scale path but never drops a
-# datum. The PRNG mask is not predictable from the host, so the drop path gets its own
-# oracles here:
-#   * p = 1 (probability = INT_MAX) drops every datum, an exact all-zero result;
-#   * p = 1/2 and p = 0.3 must leave every datum at 0 or x * scale, with the dropped fraction
-#     near p and the per-row-pair masks varying within the run (a mask that repeats per row
-#     pair still lands near p on average);
-#   * p = 0.3 also uses the real caller scale 1 / (1 - p), whose fp32 low half is non-zero, so
-#     the kernel's lower-16-bit scale load is checked (scale 2.0 has a zero low half). It runs on
-#     Float32 only so output rounding cannot hide a wrong low half;
-#   * drop_half_lockup_seed seeds with all ones, the XNOR-LFSR lock-up state, which
-#     init_prng_seed must remap;
-#   * reseeding: the same seed twice must give the same mask, and a different seed a different
-#     one, which fails if dropout_init does not actually reseed the PRNG.
-# ---------------------------------------------------------------------------
+# Dropout drop path: the PRNG mask is unpredictable, so check 0-or-x*scale, the dropped fraction,
+# varying row-pair masks, and same-seed repeatability.
 DROPOUT_DETECTOR_FORMATS = input_output_formats(
     [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
 DROPOUT_FP32_FORMATS = input_output_formats([DataFormat.Float32], same=True)
 
-# Stimulus: magnitudes in [DROPOUT_MIN_MAGNITUDE, DROPOUT_MIN_MAGNITUDE + DROPOUT_MAGNITUDE_SPAN]
-# with random signs, so no input is itself zero and a zero output can only mean a drop.
+# Nonzero inputs, so a zero output can only mean a drop.
 DROPOUT_MIN_MAGNITUDE = 0.5
 DROPOUT_MAGNITUDE_SPAN = 9.5
 DROPOUT_NEGATIVE_FRACTION = 0.5
 DROPOUT_UNIFORM_SPEC = StimuliSpec.uniform(low=0.0, high=1.0)
 
-# One SFPU row pair on Quasar: 2 Dest rows of 16 datums, all sharing one PRNG step.
 DROPOUT_ROW_PAIR_DATUMS = 32
-# Fraction of row-pair masks in a run that must be distinct; independent per-lane PRNGs make
-# a repeat among 32-bit masks rare, a per-row-pair repeating mask gives exactly one.
+# A mask repeating per row pair gives one distinct mask; independent lanes give ~all distinct.
 DROPOUT_MIN_DISTINCT_MASK_FRACTION = 0.9
 
 DROPOUT_P_REAL = 0.3
-DROPOUT_SCALE_REAL = 1.0 / (
-    1.0 - DROPOUT_P_REAL
-)  # fp32 bits 0x3FB6DB6E: non-zero low half
+DROPOUT_SCALE_REAL = 1.0 / (1.0 - DROPOUT_P_REAL)
 
-# The alternate seed for the reseed check.
 DROPOUT_SEED_ALT = 0x1234ABCD
 DROPOUT_SEED_LFSR_LOCKUP = 0xFFFFFFFF
 
@@ -1622,7 +1598,7 @@ DROPOUT_PROBABILITY_CASES = (
         DROPOUT_SCALE_REAL,
         DROPOUT_SEED,
     ),
-    # All ones is the XNOR-LFSR lock-up seed; init_prng_seed must remap it, or the stream is stuck.
+    # All ones is the XNOR-LFSR lock-up seed, which init_prng_seed must remap.
     (
         "drop_half_lockup_seed",
         DROPOUT_PROBABILITY_MAX // 2,
@@ -1631,12 +1607,11 @@ DROPOUT_PROBABILITY_CASES = (
         DROPOUT_SEED_LFSR_LOCKUP,
     ),
 )
-# drop_real_scale checks the scale's low half, so it runs where the output keeps it.
+# 1 / (1 - p) has a non-zero fp32 low half; only Float32 output keeps it.
 DROPOUT_CASE_FORMATS = {"drop_real_scale": DROPOUT_FP32_FORMATS}
 
 
 def _dropout_stimuli(formats, input_dimensions):
-    """Nonzero stimuli for the dropout detectors (see DROPOUT_MIN_MAGNITUDE)."""
     src_A, tile_cnt, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -1654,7 +1629,6 @@ def _dropout_stimuli(formats, input_dimensions):
 
 
 def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
-    """The unary harness configuration for dropout at ``dropout_params``."""
     formats = variant.formats
     configuration = create_test_or_perf_config(
         is_perf=False,
@@ -1703,10 +1677,8 @@ def _dropout_config(variant, src_A, src_B, tile_cnt, dropout_params):
 
 
 def _dropout_result(configuration, variant, src_A):
-    """Run a :func:`_dropout_config` configuration; returns the fp32 result."""
     formats = variant.formats
     res_from_L1 = configuration.run().result
-    # Dropout is element-wise, so the result is read back in the stimulus' row-major order.
     result = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format]).to(
         torch.float32
     )
@@ -1717,7 +1689,7 @@ def _dropout_result(configuration, variant, src_A):
 
 
 def _check_dropout_values(name, src_A, result, scale, output_format):
-    """Every output is 0 or x * scale (rounded to the output format); returns the drop mask."""
+    """Every output is 0 or x * scale; returns the drop mask."""
     kept = (
         (src_A.to(torch.float32).flatten() * torch.tensor(scale, dtype=torch.float32))
         .to(format_dict[output_format])
@@ -1734,7 +1706,6 @@ def _check_dropout_values(name, src_A, result, scale, output_format):
 
 
 def _check_row_pair_masks_vary(name, dropped):
-    """The per-row-pair drop masks of one run are not one repeated pattern."""
     masks = dropped.reshape(-1, DROPOUT_ROW_PAIR_DATUMS)
     distinct = torch.unique(masks, dim=0).shape[0]
     assert distinct >= DROPOUT_MIN_DISTINCT_MASK_FRACTION * masks.shape[0], (
@@ -1756,11 +1727,7 @@ def _check_row_pair_masks_vary(name, dropped):
     ],
 )
 def test_dropout_probability_quasar(dropout_case_variant_dims):
-    """
-    Prove the dropout kernel's PRNG compare, predicated zero and scale load: every output is
-    either 0 or x * scale, the dropped fraction matches the requested probability, and the
-    row-pair masks vary within the run.
-    """
+    """Outputs are 0 or x * scale, the dropped fraction is near p, and row-pair masks vary."""
     (
         _,
         (case_name, probability, (min_frac, max_frac), scale, seed),
@@ -1803,10 +1770,7 @@ def test_dropout_probability_quasar(dropout_case_variant_dims):
     ],
 )
 def test_dropout_reseed_quasar(dropout_variant):
-    """
-    dropout_init must reseed the PRNG: the same seed reproduces the drop mask exactly, a
-    different seed changes it. Runs A, A, B on one stimulus at p = 1/2.
-    """
+    """Seeds A, A, B: the same seed must repeat the mask exactly, a different seed must change it."""
     _, variant = dropout_variant[0]
     formats = variant.formats
     probability = DROPOUT_PROBABILITY_MAX // 2
@@ -1823,8 +1787,7 @@ def test_dropout_reseed_quasar(dropout_variant):
         )
         for seed in seeds
     ]
-    # Build every seed's ELFs before the first run: in the split compile / simulate flow, run()
-    # stops the compile step after the first configuration.
+    # Build every ELF first: in the split flow, run() ends the compile step after one config.
     for configuration in configurations:
         configuration.prepare()
 

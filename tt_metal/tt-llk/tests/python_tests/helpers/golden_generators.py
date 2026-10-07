@@ -3301,7 +3301,7 @@ class UnarySFPUGolden:
         return -x
 
     def _dropout(self, x):
-        # The kept path only: the unified sweep runs dropout at p = 0, where no datum is dropped.
+        # p = 0 path only; the drop path has its own tests.
         return x * DROPOUT_SCALE
 
     def _typecast(self, x):
