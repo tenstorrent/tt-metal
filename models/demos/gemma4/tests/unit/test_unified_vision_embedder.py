@@ -15,13 +15,21 @@ from models.demos.gemma4.tt.vision.unified_embedder import PREFIX, PROJECTION_KE
 
 def _hf_embedder():
     from transformers import AutoConfig
-    from transformers.models.gemma4_unified.modeling_gemma4_unified import (
-        Gemma4UnifiedMultimodalEmbedder,
-        Gemma4UnifiedVisionEmbedder as HFVisionEmbedder,
-    )
+
+    try:
+        from transformers.models.gemma4_unified.modeling_gemma4_unified import (
+            Gemma4UnifiedMultimodalEmbedder,
+            Gemma4UnifiedVisionEmbedder as HFVisionEmbedder,
+        )
+    except ImportError:  # transformers without the unified Gemma 4 classes
+        pytest.skip("transformers has no gemma4_unified module")
 
     model_path = os.environ.get("HF_MODEL", "google/gemma-4-12B-it")
     cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    if getattr(getattr(cfg, "vision_config", None), "model_patch_size", None) is None:
+        # Tower-style (SigLIP) config, e.g. the 31B or the checked-in config-only
+        # dirs: the encoder-free embedder does not apply.
+        pytest.skip(f"{model_path} is not a unified (encoder-free) Gemma 4 checkpoint")
     torch.manual_seed(0)
     vis = HFVisionEmbedder(cfg.vision_config, cfg.text_config)
     # Random init: the checkpoint's constructor leaves the position table at zero
