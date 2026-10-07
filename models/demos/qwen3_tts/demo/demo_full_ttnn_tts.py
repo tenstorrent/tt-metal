@@ -82,7 +82,7 @@ def run_full_ttnn_tts(
     use_2cq: bool = False,
     seed: Optional[int] = None,
     ref_cache: str = None,
-    trim_frames: int = 4,
+    trim_frames: int = 0,  # 4 deleted the first 0.32 s of target speech (WER 0.22); see decode_icl_audio
     load_cpu_inputs: str = None,
     hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
 ):
@@ -113,7 +113,9 @@ def run_full_ttnn_tts(
     # Load tokenizer
     from transformers import AutoTokenizer
 
-    tokenizer = AutoTokenizer.from_pretrained(hf_id, trust_remote_code=True)
+    from models.demos.qwen3_tts.tt.server import hf_revision
+
+    tokenizer = AutoTokenizer.from_pretrained(hf_id, trust_remote_code=True, revision=hf_revision(hf_id))
 
     # Open device with explicit trace region.
     # MESH_DEVICE env var follows the tt_transformers convention (see
@@ -486,8 +488,8 @@ def main():
     parser.add_argument(
         "--trim-frames",
         type=int,
-        default=4,
-        help="Codec frames to trim from start (removes reference echo, default: 4)",
+        default=0,
+        help="Codec frames to trim from the start (default 0; 4 used to cut the start of the target speech)",
     )
     # Kept so an existing command line still parses, but the generator refuses them:
     # it has no untraced or cacheless path to fall back to.

@@ -11,10 +11,14 @@ reference on the same codes.
 ``order=before`` builds and warms the decoder before any trace is captured, as the
 runner must. ``mode=continue`` is the serving default (host front-end from a cached
 reference state, device back-end over 12 context + generated frames); ``mode=full``
-runs the whole decoder on device over cat(ref, generated). ``order=after`` builds it after capture and is a negative control: its
-buffers then overlap the traces' freed intermediates and are overwritten when the
-talker trace executes, so it must fail (strict xfail). If it ever passes, this test
-no longer detects the corruption.
+runs the whole decoder on device over cat(ref, generated). ``order=after`` builds it after capture and is a negative control.
+Whether the talker's own traces free memory where a late decoder lands depends on the
+talker stack's allocation order (the original stack did; the PR #56212 generation stack
+does not), so the control also captures a "scribble" trace right before building the
+decoder: 64 intermediates of 8 MiB, all alive during capture and freed together after
+it, so the late decoder is allocated into memory the scribble trace rewrites every time
+it replays (before each decode). The control must fail (strict xfail); if it ever
+passes, this test no longer detects the hazard.
 
 Run (~2 min per case):
     pytest -s models/demos/qwen3_tts/tests/test_device_decoder_coexistence.py
@@ -26,6 +30,8 @@ import time
 
 import pytest
 import torch
+
+import ttnn
 
 os.environ.setdefault("TT_QWEN3_CP_FP32", "1")  # as tt-media-server
 
@@ -42,6 +48,37 @@ SERVING_DEVICE_PARAMS = {
     "trace_region_size": 512_000_000,
     "num_command_queues": 2,
 }
+
+
+def _capture_scribble_trace(device, count: int = 64, rows: int = 4096):
+    """Capture a trace whose ``count`` intermediates (``rows`` x 1024 bf16, 8 MiB each) are
+    freed after capture. Anything allocated afterwards can land on them; replaying the trace
+    rewrites them. Returns the trace id; the caller replays it with ``ttnn.execute_trace``."""
+    import ttnn
+
+    x = ttnn.from_torch(
+        torch.ones(1, 1, rows, 1024, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def body():
+        held, y = [], x
+        for _ in range(count):
+            y = ttnn.multiply(y, 1.0001, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            held.append(y)
+        return held
+
+    for t in body():  # compile outside the trace
+        ttnn.deallocate(t)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    held = body()
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    for t in held:  # freed after capture: the region a late allocation reuses
+        ttnn.deallocate(t)
+    ttnn.synchronize_device(device)
+    return tid, x
 
 
 def _snr_db(test: torch.Tensor, ref: torch.Tensor) -> float:
@@ -92,10 +129,12 @@ def test_device_decoder_survives_talker_traces(device, order, mode):
     config.hidden_size = talker_config.hidden_size
     ctx = api.init_server_context(device, model, config, main_weights)
 
+    scribble = None
     if decoder is None:
+        scribble = _capture_scribble_trace(device)
         decoder = build_decoder()
 
-    tokenizer = AutoTokenizer.from_pretrained(HF_ID, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(HF_ID, trust_remote_code=True, revision=api.hf_revision(HF_ID))
     speaker_embedding = model.extract_speaker_embedding(audio_data)
     ref_state = api.prepare_icl_decoder_state(ref_codes, decoder_weights)
     torch.manual_seed(0)
@@ -124,6 +163,8 @@ def test_device_decoder_survives_talker_traces(device, order, mode):
             config=config,
             use_2cq=True,
         )
+        if scribble is not None:
+            ttnn.execute_trace(device, scribble[0], cq_id=0, blocking=True)
         t0 = time.perf_counter()
         if mode == "continue":
             dev = api.decode_icl_audio(ref_codes, codes, decoder_weights, ref_state=ref_state, device_decoder=decoder)
@@ -140,6 +181,9 @@ def test_device_decoder_survives_talker_traces(device, order, mode):
             f"[{order}/{mode}] {text!r}: {codes.shape[0]} frames, decode {decode_ms:.0f} ms, snr={snr:.2f} dB, "
             f"rms dev/cpu={results[-1][3]:.4f}/{results[-1][4]:.4f}"
         )
+
+    if scribble is not None:
+        ttnn.release_trace(device, scribble[0])
 
     for text, frames, snr, _, _ in results:
         assert snr >= MIN_SNR_DB, f"{text!r} ({frames} frames): {snr:.2f} dB < {MIN_SNR_DB} dB"

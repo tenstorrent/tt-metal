@@ -172,13 +172,28 @@ class TTSConfig:
             }
 
 
+# Hugging Face revisions this code is validated against. An unpinned download follows the
+# repo's main branch, so a new upload would silently change what an image serves.
+# QWEN3_TTS_REVISION overrides the pin (any branch, tag or commit).
+HF_REVISIONS = {
+    "Qwen/Qwen3-TTS-12Hz-1.7B-Base": "fd4b254389122332181a7c3db7f27e918eec64e3",
+    "Qwen/Qwen3-TTS-12Hz-0.6B-Base": "5d83992436eae1d760afd27aff78a71d676296fc",
+}
+
+
+def hf_revision(hf_id: str) -> Optional[str]:
+    """Revision to download for ``hf_id``: ``QWEN3_TTS_REVISION``, else the pin, else None (main)."""
+    return os.environ.get("QWEN3_TTS_REVISION") or HF_REVISIONS.get(hf_id)
+
+
 def load_weights(hf_id: str = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"):
     """Load model weights."""
     from huggingface_hub import snapshot_download
     from safetensors.torch import load_file
 
-    print(f"Loading model weights ({hf_id})...")
-    model_path = Path(snapshot_download(hf_id, allow_patterns=["*.safetensors"])).resolve()
+    revision = hf_revision(hf_id)
+    print(f"Loading model weights ({hf_id} @ {revision or 'main'})...")
+    model_path = Path(snapshot_download(hf_id, revision=revision, allow_patterns=["*.safetensors"])).resolve()
 
     # Main model weights
     main_dict = {}
@@ -1629,7 +1644,11 @@ def generate_codes_ttnn(
     # Allocating before the cache puts the tables on the same side as the model
     # weights, which are never hit. The integrity check after the first frame
     # (QWEN3_TTS_CP_CHECK_CORRUPT=1) is how to confirm this if the layout changes.
-    use_fused_cp = os.environ.get("QWEN3_TTS_CP_FUSED", "1") != "0"
+    # Off by default: on Wormhole N150 with this tt-metal build the fused frame is slower than
+    # per-step traces (55.6 vs 49.3 ms/frame steady, 2026-10-06), and the serving path
+    # (init_server_context / run_inference) uses per-step traces anyway. QWEN3_TTS_CP_FUSED=1
+    # turns it on.
+    use_fused_cp = os.environ.get("QWEN3_TTS_CP_FUSED", "0") != "0"
     if config.greedy and os.environ.get("QWEN3_TTS_CP_FUSED_FORCE", "0") == "0":
         # --greedy keeps the per-step argmax path by default. Forcing fusion under
         # greedy (with QWEN3_TTS_CP_NOISE=0) is the A/B gate that proves the whole
@@ -3614,7 +3633,6 @@ def prepare_icl_decoder_state(ref_codes: torch.Tensor, decoder_weights: dict) ->
         )
 
 
-
 def decode_icl_audio(
     ref_codes: torch.Tensor,
     codes: torch.Tensor,
@@ -3666,7 +3684,6 @@ def decode_icl_audio(
         )
 
 
-
 def build_device_decoder(device, decoder_weights: dict, max_decode_bucket: int = None, variant: dict = None):
     """Build the on-device TTNN speech-tokenizer decoder once (reuse per request).
 
@@ -3690,7 +3707,6 @@ def build_device_decoder(device, decoder_weights: dict, max_decode_bucket: int =
     return decoder
 
 
-
 def decode_bucket_for(max_ref_frames: int, max_new_tokens: int, step: int = 64) -> int:
     """Bucket length covering the longest ref+generated decode, rounded to a power of two.
 
@@ -3707,7 +3723,6 @@ def decode_bucket_for(max_ref_frames: int, max_new_tokens: int, step: int = 64) 
     while bucket < total:
         bucket *= 2
     return bucket
-
 
 
 def prepare_device_decoder(
@@ -3741,7 +3756,6 @@ def prepare_device_decoder(
     ``pin_single_bucket`` trades that away for a single conv cache.
     """
     from models.demos.qwen3_tts.reference.functional import DECODER_BACKEND_CONTEXT_FRAMES
-
     from models.demos.qwen3_tts.tt.speech_tokenizer import DECODE_MIN_BUCKET
 
     step = DECODE_MIN_BUCKET  # must match TtSpeechTokenizerDecoder's smallest bucket
@@ -3761,7 +3775,6 @@ def prepare_device_decoder(
     )
     warmup_device_decoder(decoder, buckets, freeze=True, backend_only=icl_continue)
     return decoder, buckets
-
 
 
 def decode_audio_device(ref_codes: torch.Tensor, codes: torch.Tensor, device_decoder) -> torch.Tensor:
@@ -3794,7 +3807,6 @@ def decode_audio_device(ref_codes: torch.Tensor, codes: torch.Tensor, device_dec
     return audio[..., ref_samples:].contiguous()
 
 
-
 def warmup_device_decoder(device_decoder, bucket_frames, freeze: bool = True, backend_only: bool = False) -> None:
     """Pre-compile the device decoder for each expected bucket length.
 
@@ -3823,4 +3835,3 @@ def warmup_device_decoder(device_decoder, bucket_frames, freeze: bool = True, ba
             _ = device_decoder.forward(dummy.T.unsqueeze(0))
     if freeze:
         device_decoder.freeze_cache()
-
