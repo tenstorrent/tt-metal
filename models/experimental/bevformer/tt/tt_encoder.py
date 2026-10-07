@@ -21,7 +21,7 @@ ego shift included.
 import ttnn
 from ..reference.point_sampling_3d_2d import bev_reference_points, camera_geometry
 from .tt_common import layer_norm
-from ..model_config import GRID_DTYPE
+from models.experimental.bevformer.model_config import GRID_DTYPE
 from .tt_ms_deformable_attention import fp32_grid_sample_config
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan, update_rebatch_plan
 from .tt_temporal_self_attention import TTTemporalSelfAttention, tsa_grid_bias

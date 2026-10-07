@@ -16,7 +16,7 @@ from models.experimental.bevformer.tests.common import (
     assert_pcc,
     build_reference_head,
     center_channels,
-    random_bev_features,
+    random_bev,
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_head_parameters
 from models.experimental.bevformer.tt.tt_head import TtBEVFormerHead
@@ -38,7 +38,7 @@ DEVICE_PARAMS = [{"trace_region_size": 32 * 1024 * 1024}]
 def _bev_embed(bev_shape, batch_size, seed):
     """Batch-first ``(bs, bev_h * bev_w, C)`` BEV features, as the encoder emits them."""
     generator = torch.Generator().manual_seed(seed)
-    return random_bev_features(bev_shape, batch_size, generator).permute(1, 0, 2).contiguous()
+    return random_bev(bev_shape, batch_size, generator).permute(1, 0, 2).contiguous()
 
 
 def _models(bev_shape, device):

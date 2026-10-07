@@ -17,6 +17,7 @@ The sampling grid is float32 by default: in bfloat16 a point in (0.5, 1) moves i
 
 import torch
 import ttnn
+from models.experimental.bevformer.model_config import EMBED_DIMS, GRID_DTYPE, NUM_HEADS, TSA_NUM_POINTS
 
 from .tt_ms_deformable_attention import multi_scale_deformable_attn_ttnn
 
@@ -49,11 +50,11 @@ class TTTemporalSelfAttention:
         device,
         *,
         bev_shape,
-        embed_dims=256,
-        num_heads=8,
-        num_points=4,
+        embed_dims=EMBED_DIMS,
+        num_heads=NUM_HEADS,
+        num_points=TSA_NUM_POINTS,
         num_bev_queue=2,
-        grid_dtype=ttnn.float32,
+        grid_dtype=GRID_DTYPE,
         grid_sample_compute_config=None,
     ):
         """``params`` from ``create_temporal_self_attention_parameters``; ``bev_shape`` the

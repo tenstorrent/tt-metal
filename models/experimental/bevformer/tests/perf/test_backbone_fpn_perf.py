@@ -20,6 +20,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.experimental.bevformer.model_config import RESNET_KWARGS, tt_fpn_kwargs, tt_resnet_kwargs
 from models.experimental.bevformer.tests.common import (
     assert_pcc,
     build_reference_backbone,
@@ -27,8 +28,6 @@ from models.experimental.bevformer.tests.common import (
     from_conv_layout,
     random_image_batch,
     to_conv_layout,
-    tt_fpn_kwargs,
-    tt_resnet_kwargs,
 )
 from models.experimental.bevformer.tt.model_preprocessing import (
     create_fpn_parameters,
@@ -70,7 +69,11 @@ def test_backbone_fpn_perf(device, reset_seeds):
     backbone_parameters = create_resnet_parameters(torch_backbone, torch_input)
     fpn_parameters = create_fpn_parameters(torch_fpn, torch_features)
     tt_backbone = TtResNet(
-        backbone_parameters.conv_args, backbone_parameters["res_model"], device, **tt_resnet_kwargs()
+        backbone_parameters.conv_args,
+        backbone_parameters["res_model"],
+        device,
+        out_indices=RESNET_KWARGS["out_indices"],
+        **tt_resnet_kwargs(),
     )
     tt_fpn = TtFPN(
         conv_args=fpn_parameters.conv_args,
