@@ -143,8 +143,18 @@ ALWI void round_tile(uint32_t idst, int32_t decimals) {
  */
 // clang-format on
 ALWI void stochastic_round_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _calculate_stochastic_round_,
+        (APPROX, 32 /*ITERATIONS*/),
+        idst,
+        VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_stochastic_round_, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
+#endif
 }
 
 // clang-format off
