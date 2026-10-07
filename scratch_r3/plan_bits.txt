@@ -1,0 +1,7 @@
+bits head test_jsdpa_prof.py
+bits jsd2 test_jsdpa_prof.py
+bits head test_v12_prof.py - test_v12
+bits gk test_v12_prof.py - test_v12
+bits kl test_v12_prof.py - test_v12_mm
+bits es test_v12_prof.py - test_v12_mm
+bits head test_sync_prof.py
