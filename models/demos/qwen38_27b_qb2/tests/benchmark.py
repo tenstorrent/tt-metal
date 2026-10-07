@@ -18,6 +18,8 @@ import httpx
 MODEL = "Qwen/Qwen3.8-27B"
 MODEL_REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
 DATASET_REVISION = "633f5ee89ab8ad4522a9f850766b73f62147ffdd"
+# Git blob ID from the pinned Hub revision's gpqa_diamond.csv tree entry.
+GPQA_CSV_GIT_BLOB = "7589e3e467d69a1dceb126a60c4108d6d4f1d166"
 HARNESS_REVISION = "321e3bb68cb750a58c76606ab57832533302be73"
 GPQA_TOKENS = 32768
 GPQA_COUNT = 10
@@ -36,7 +38,17 @@ def validate_gpqa_settings(*, count, concurrency, max_tokens, threshold):
         raise ValueError("Invalid GPQA output budget or accuracy threshold")
 
 
-def load_gpqa(count=GPQA_COUNT):
+def validate_gpqa_csv(path):
+    """Allow an existing authorized cache only when it matches the pinned bytes."""
+    path = Path(path)
+    data = path.read_bytes()
+    git_blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+    if git_blob != GPQA_CSV_GIT_BLOB:
+        raise ValueError("Local GPQA CSV does not match the pinned Hugging Face dataset revision")
+    return dict(path=str(path.resolve()), git_blob=git_blob, sha256=hashlib.sha256(data).hexdigest())
+
+
+def load_gpqa(count=GPQA_COUNT, csv_path=None):
     import datasets
     from lm_eval.api.task import ConfigurableTask
     from lm_eval.tasks import TaskManager
@@ -47,7 +59,11 @@ def load_gpqa(count=GPQA_COUNT):
     random.seed(42)
     path = TaskManager().task_index["r1_gpqa_diamond"]["yaml_path"]
     config = load_yaml_config(path)
-    config["dataset_kwargs"] = {"revision": DATASET_REVISION}
+    if csv_path is None:
+        config["dataset_kwargs"] = {"revision": DATASET_REVISION}
+    else:
+        local = validate_gpqa_csv(csv_path)
+        config.update(dataset_path="csv", dataset_name=None, dataset_kwargs={"data_files": {"train": local["path"]}})
     task = ConfigurableTask(config=config)
     docs = task.validation_docs()
     if len(docs) != 198:
@@ -305,7 +321,8 @@ async def main(args):
     if args.mode != "performance" and (args.output_dir / "gpqa-responses.jsonl").exists():
         raise FileExistsError("Use a fresh output directory for another measured GPQA run")
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    task, cases = load_gpqa(gpqa["count"]) if args.mode != "performance" else (None, [])
+    local_dataset = validate_gpqa_csv(args.gpqa_csv) if args.mode != "performance" and args.gpqa_csv else None
+    task, cases = load_gpqa(gpqa["count"], args.gpqa_csv) if args.mode != "performance" else (None, [])
     inputs = "".join(json.dumps(c, sort_keys=True) + "\n" for c in cases)
     # GPQA terms prohibit publishing examples. Keep reproducibility hashes,
     # including the shuffled choices, without saving documents or prompts.
@@ -319,6 +336,9 @@ async def main(args):
         "server_capacity": args.server_capacity,
         "checkpoint_revision": MODEL_REVISION,
         "dataset_revision": DATASET_REVISION,
+        "dataset_source": {"transport": "validated_local_csv", **local_dataset}
+        if local_dataset
+        else {"transport": "hub"},
         "harness_revision": HARNESS_REVISION,
         "selection": f"first {gpqa['count']} Diamond rows, choice shuffle seed 42",
         "scope": (
@@ -400,6 +420,7 @@ if __name__ == "__main__":
     parser.add_argument("--gpqa-concurrency", type=int, default=GPQA_CONCURRENCY)
     parser.add_argument("--gpqa-max-tokens", type=int, default=GPQA_TOKENS)
     parser.add_argument("--gpqa-threshold", type=float, default=GPQA_THRESHOLD)
+    parser.add_argument("--gpqa-csv", type=Path, help="Existing authorized CSV cache; must match the pinned Hub blob")
     args = parser.parse_args()
     if args.server_capacity < args.gpqa_concurrency and args.mode != "performance":
         parser.error("GPQA concurrency must not exceed --server-capacity")

@@ -125,6 +125,7 @@ def gpqa_args(output_dir, *, prepare_only=False):
         gpqa_concurrency=10,
         gpqa_max_tokens=32768,
         gpqa_threshold=0.9,
+        gpqa_csv=None,
     )
 
 
@@ -186,7 +187,7 @@ def test_gpqa_artifacts_and_logs_contain_only_metadata(monkeypatch, tmp_path, ca
             "decode_tokens_per_s": 40,
         }
 
-    monkeypatch.setattr(benchmark, "load_gpqa", lambda count: (SimpleNamespace(process_results=score), cases))
+    monkeypatch.setattr(benchmark, "load_gpqa", lambda count, csv_path: (SimpleNamespace(process_results=score), cases))
     monkeypatch.setattr(benchmark, "complete", complete)
     assert benchmark.run(gpqa_args(tmp_path, prepare_only=True)) == 0
     manifest = [json.loads(line) for line in (tmp_path / "inputs.jsonl").read_text().splitlines()]
@@ -261,6 +262,21 @@ def test_gpqa_rejects_incomplete_selection_before_network(expect_error, tmp_path
     with expect_error(ValueError, "every selected row"):
         asyncio.run(benchmark.run_gpqa(None, tmp_path, None, cases, count=198))
     assert not (tmp_path / "gpqa-responses.jsonl").exists()
+
+
+def test_local_gpqa_cache_must_match_pinned_dataset_bytes(monkeypatch, tmp_path, expect_error):
+    path = tmp_path / "synthetic.csv"
+    data = b"synthetic cache content\n"
+    path.write_bytes(data)
+    with expect_error(ValueError, "does not match"):
+        benchmark.validate_gpqa_csv(path)
+    blob = hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+    monkeypatch.setattr(benchmark, "GPQA_CSV_GIT_BLOB", blob)
+    receipt = benchmark.validate_gpqa_csv(path)
+    assert receipt == dict(path=str(path.resolve()), git_blob=blob, sha256=hashlib.sha256(data).hexdigest())
+    path.write_bytes(data + b"changed")
+    with expect_error(ValueError, "does not match"):
+        benchmark.validate_gpqa_csv(path)
 
 
 def test_gpqa_rerun_preserves_existing_receipts_and_protocol(tmp_path):

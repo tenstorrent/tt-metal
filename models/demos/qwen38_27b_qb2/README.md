@@ -142,9 +142,19 @@ exact question selection and protocol. `gpqa-progress.json` updates after every
 completed question; the JSONL preserves per-question scores, truncations,
 timings, usage and response hashes. Interrupted runs keep completed receipts,
 and a rerun refuses to overwrite them. Prompts and generated evaluation content
-are not written to these publication artifacts. Sixteen host tests pass,
+are not written to these publication artifacts. Seventeen host tests pass,
 including synthetic full-dataset accounting, interrupted streams and bounded
 concurrency; these tests do not measure model accuracy.
+
+An existing authorized CSV cache can be used with `--gpqa-csv PATH`. The loader
+requires its Git blob ID to equal the `gpqa_diamond.csv` entry at the pinned Hub
+revision (`7589e3e467d69a1dceb126a60c4108d6d4f1d166`) and records its SHA256. It
+then uses the same harness processing, seeded choice shuffle, prompt and scorer.
+This path successfully prepared all 198 questions on the Galaxy host after the
+Hub download reported `DatasetNotFoundError`; the existing Kimi CSV was verified
+byte-for-byte against the pinned Hub blob. Prepared protocol and input hashes
+are in `galaxy-evidence/gpqa-prepared-v2/`. This is dataset preparation, not a
+completed model evaluation. The CSV and question text are not committed.
 
 The 0.892 threshold above is the published
 [model-card GPQA-D score](https://huggingface.co/Qwen/Qwen3.8-27B/blob/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/README.md).
@@ -161,7 +171,9 @@ base uv environment to be relocatable, copies it using separate inodes, keeps
 the Torch/Transformers/NumPy pins, installs the plugin's pinned vLLM empty
 target, and installs the existing evaluation requirements separately. It
 refuses to replace existing environments and does not launch a server or open
-devices. Hardware serving and reference evaluations remain to be qualified.
+devices. This setup completed successfully on `.98`; 35 adapter host tests and
+18 subtests pass in `serving_env`. Hardware serving and reference evaluations
+remain to be qualified.
 
 ## Run the demo
 
