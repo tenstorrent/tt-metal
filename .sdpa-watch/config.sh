@@ -17,6 +17,12 @@ SLACK_WEBHOOK_FILE="$HOME/.sdpa-watch/slack_webhook"
 SLACK_BOT_TOKEN_FILE="$HOME/.sdpa-watch/slack_bot_token"
 SLACK_CHANNEL_ID="C0B72MVR88G"   # #sdpa-watch (private)
 
+# ---- Slack emoji for PR states ---------------------------------------------
+# Workspace custom emoji, used by the digest notes (watch.sh) and the autofix
+# bot's messages (~/.sdpa-fix). An unknown name shows as plain ":name:" text.
+EMOJI_PR_OPENED=":git-opened:"
+EMOJI_PR_MERGED=":git-merged:"
+
 # ---- Auth ----------------------------------------------------------------
 # The org retired console API keys (2026-07), so there is no api_key file.
 # watch.sh authenticates the headless agent one of two ways, in this order:

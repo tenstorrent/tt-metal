@@ -680,7 +680,8 @@ autofix_annotate() {
     [[ "$(cut -d'|' -f2 <<<"$e")" == "$display" ]] && { wf="${e%%|*}"; break; }
   done
   [[ -n "$wf" ]] || { printf '%s' "$block"; return 0; }
-  out=$(jq -r --arg w "$wf" --arg b "$block" --arg gh "https://github.com/$REPO" '
+  out=$(jq -r --arg w "$wf" --arg b "$block" --arg gh "https://github.com/$REPO" \
+              --arg eo "${EMOJI_PR_OPENED:-🛠️}" --arg em "${EMOJI_PR_MERGED:-🟣}" '
     def prlink: if . == null or . == "" then "" else "<\(.)|#\(split("/") | last)>" end;
     def commitlink($sha): if ($sha // "") == "" then "" else "<\($gh)/commit/\($sha)|\($sha[0:10])>" end;
     def fixref: ((.reason // "") | (capture("#(?<n>[0-9]{4,6})") // {}) | .n) as $n
@@ -688,10 +689,10 @@ autofix_annotate() {
                      (commitlink(.fix_sha) | select(. != "")) ] | join(" "));
     [ .sigs[] | select(.workflow == $w)
       | {f: (.test | split("::") | last | split("[") | first),
-         n: (if .state == "pr_open" then "🛠️ draft PR \(.pr.url | prlink), targeted CI running"
-             elif .state == "ci_passed" then "🛠️ draft PR \(.pr.url | prlink), targeted CI ✅, awaiting review"
-             elif .state == "ci_failed" then "🛠️ draft PR \(.pr.url | prlink), targeted CI ❌"
-             elif .state == "merged" then "🟣 fix \(.pr.url | prlink) merged, not in this run yet"
+         n: (if .state == "pr_open" then "\($eo) draft PR \(.pr.url | prlink), targeted CI running"
+             elif .state == "ci_passed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ✅, awaiting review"
+             elif .state == "ci_failed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ❌"
+             elif .state == "merged" then "\($em) fix \(.pr.url | prlink) merged, not in this run yet"
              elif .state == "fixed_upstream" then "📌 already fixed on main by \(fixref), not in this run yet"
              elif .state == "proposed_dryrun" then "🛠 autofix proposal (dry run): \(.verdict_title // "see proposals/")"
              elif .state == "no_fix" then "🛠 no safe autofix"
