@@ -51,6 +51,7 @@ add_subdirectory(qkv_causal_conv1d_silu)
 add_subdirectory(reduce_affine_transforms)
 add_subdirectory(chain_affine_transforms)
 add_subdirectory(select_final_carry)
+add_subdirectory(exchange_histories)
 add_subdirectory(select_tile_rows)
 add_subdirectory(affine_exclusive_scan)
 add_subdirectory(prepare_chunk_recurrence)
@@ -68,6 +69,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::KDA::ReduceAffineTransforms
         TTNN::Ops::Experimental::KDA::ChainAffineTransforms
         TTNN::Ops::Experimental::KDA::SelectFinalCarry
+        TTNN::Ops::Experimental::KDA::ExchangeHistories
         TTNN::Ops::Experimental::KDA::SelectTileRows
         TTNN::Ops::Experimental::KDA::AffineExclusiveScan
         TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
@@ -87,6 +89,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ReduceAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ChainAffineTransforms>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SelectFinalCarry>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::ExchangeHistories>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::SelectTileRows>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::AffineExclusiveScan>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>

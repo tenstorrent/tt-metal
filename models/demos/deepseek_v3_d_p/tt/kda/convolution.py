@@ -2,10 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Compact predecessor and replacement carry exchange, with fixed collective participation."""
 
-from functools import partial
-
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import _layout as _selection_layout
 
 
 def exchange_convolution_carry(
@@ -25,22 +22,15 @@ def exchange_convolution_carry(
     projection whose leading ``width`` columns are the channels. Every selection derives its rows on device from
     the bounds.
     """
-    select = partial(
-        ttnn.experimental.kda.select_history_rows,
+    # One fabric exchange gathers the outgoing and local final history from the projection, sends the outgoing
+    # rows to the next physical rank and the last valid token's owner's final rows to every rank.
+    predecessor, final_carry = ttnn.experimental.kda.exchange_histories(
+        projected_qkv,
+        width=width,
         actual_start=actual_start,
-        sequence_parallel_axis=sequence_parallel_axis,
         local_rows=local_rows,
         actual_end=actual_end,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    # One selection packs the outgoing and the local final history as six rows per rank, so one gather along rows
-    # carries both; one selection then splits the predecessor's outgoing and the final owner's local final rows.
-    (histories,) = select(projected_qkv, _selection_layout.OUTGOING_AND_LOCAL_FINAL_HISTORY, width=width)
-    # The six-row gather is latency-bound: the plain all_gather beats the high-bandwidth transport here.
-    gathered = ttnn.all_gather(
-        histories, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    predecessor, final_carry = select(
-        gathered, _selection_layout.PREDECESSOR_AND_FINAL_HISTORY, rows_per_output=_selection_layout.HISTORY_ROWS
+        sequence_parallel_axis=sequence_parallel_axis,
     )
     return predecessor, final_carry
