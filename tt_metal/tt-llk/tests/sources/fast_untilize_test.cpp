@@ -337,7 +337,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("UNINIT")
-        ckernel::_llk_pack_fast_untilize_uninit_<ckernel::FAST_UNTILIZE_MAX_UNIT_DIM, FULL_CT_DIM>(formats.pack_src);
+        ckernel::_llk_pack_fast_untilize_uninit_(formats.pack_src);
     }
 
     if (NUM_GUARD > 1)

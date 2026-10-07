@@ -145,8 +145,6 @@ inline void _llk_math_fast_untilize_block_(const std::uint32_t dst_index, const 
 
 inline void _llk_math_fast_untilize_uninit_()
 {
-    // Nothing to restore: ADDR_MODs are transient (every init programs the ones it uses),
-    // and DEST remap stays enabled, as after fast tilize.
 }
 
 } // namespace ckernel

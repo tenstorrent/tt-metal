@@ -328,9 +328,8 @@ inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const st
 // preserved inside a ~256 KiB window; beyond it the high address bits are
 // dropped and rows overwrite each other (verified on silicon: BF16 full_ct_dim
 // 133/256 corrupt without a rebase, FP32 corrupts from ~ct 137). The window is
-// not pinned down in the public BH ISA docs (see
-// _llk_pack_fast_untilize_program_output_row_stride_); 256 KiB is the
-// silicon-characterized bound used here.
+// not in the public BH ISA docs; 256 KiB is the silicon-characterized bound
+// used here.
 constexpr std::uint32_t PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B = 256 * 1024 / 16;
 
 // Emit one phase (16 output rows) as `runs_per_phase` runs of `rows_per_run`
@@ -413,7 +412,6 @@ inline void _llk_pack_fast_untilize_block_strided_(
     _llk_pack_fast_untilize_restore_pack_counters_<true>();
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
 {
     // set_packer_strides also zeroes the channel-1 Y stride the strided path programs.
