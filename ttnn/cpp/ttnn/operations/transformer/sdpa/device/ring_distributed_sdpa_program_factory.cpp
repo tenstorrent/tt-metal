@@ -228,8 +228,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
 
     // Host code is responsible for determining matmul configuration
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    // The streaming kernel was measured on Blackhole, where only fp32 DEST accumulation keeps the legacy one; other
-    // archs keep main's legacy kernel.
+    // The streaming kernel was measured only on Blackhole.
     const bool use_streaming_compute = !fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE;
     const uint32_t qk_in0_block_w = DHt;
     auto [qk_out_subblock_h, qk_out_subblock_w] =
@@ -300,7 +299,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         0,                                            // mla_kv_overlap
         qk_out_subblock_h,                            // qk_subblock_h
         0,                                            // sliding_window_size (ring uses no sliding window)
-        static_cast<uint32_t>(use_streaming_compute)  // arg 28
+        static_cast<uint32_t>(use_streaming_compute)  // arg 27
     };
     // Semaphore placeholders (not used in ring, but kernel expects them at indices 28-31)
     reader_compile_time_args.push_back(0);                                            // sender_semaphore_id

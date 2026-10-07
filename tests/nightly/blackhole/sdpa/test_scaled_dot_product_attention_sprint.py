@@ -286,9 +286,7 @@ def test_sdpa_create_perf_table(request, b, nh, s, d):
     """
     from tracy.process_model_log import run_device_profiler
 
-    # Every chunk configuration below runs pytest in a subprocess under the tracy profiler, and each of those
-    # needs the chip. Once any test in this process has opened a device the process keeps the chip lock for
-    # its lifetime, so the subprocesses wait on it forever. The table therefore only runs on its own.
+    # A process that opened a device keeps the chip lock, so the profiler subprocesses below would wait forever.
     if any(item.originalname != "test_sdpa_create_perf_table" for item in request.session.items):
         pytest.skip("run test_sdpa_create_perf_table on its own: its profiler subprocesses need the chip")
 

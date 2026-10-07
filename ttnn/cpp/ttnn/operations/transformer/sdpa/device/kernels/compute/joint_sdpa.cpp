@@ -10,7 +10,6 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "compute_common.hpp"
-// The factory defines SDPA_JOINT_STREAMING with the streaming kernel (Blackhole); without it this is main's kernel.
 #ifdef SDPA_JOINT_STREAMING
 #include "compute_streaming.hpp"
 #endif
@@ -85,12 +84,9 @@ void kernel_main() {
         CircularBuffer(cb_identity_scale_in).wait_front(1);
         LightweightMaskContext lw_mask;
         lw_mask.neginf_tile_idx = 0;
-        // When the spatial segment ends inside chunk mask_chunk_0, its padded tiles are narrowed away and the
-        // partial tile, when there is one, is stamped from palette tile 1.
+        // Mask palette: neginf, then the spatial segment's partial tile (chunk mask_chunk_0), then the joint tail's.
         constexpr uint32_t n_partial_tiles = n_partial_col > 0 ? 1u : 0u;
         if constexpr (k_partial_col > 0) {
-            // The joint tail ends inside the last K chunk: whole padded tiles are narrowed away, the partial
-            // tile is stamped from the palette tile after the spatial one.
             lw_mask.global_n_partial_col = k_partial_col;
             lw_mask.global_n_partial_tile_idx = 1 + n_partial_tiles;
             constexpr uint32_t last_chunk_first_tile = ((valid_Skt - 1) / Sk_chunk_t) * Sk_chunk_t;

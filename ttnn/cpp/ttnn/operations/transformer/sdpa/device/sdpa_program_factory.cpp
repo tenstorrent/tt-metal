@@ -77,14 +77,8 @@ tt::DataFormat select_mask_dataformat(const std::optional<Tensor>& attn_mask, bo
     return use_streaming_compute ? tt::DataFormat::Float16_b : tt::DataFormat::Bfp4_b;
 }
 
-// Streaming compute (v2) handles every SDPA variant. With fp32 DEST accumulation it keeps the scores, the output
-// accumulator and the row sums in fp32, so it is only taken when those buffers fit in L1 next to the K/V slots.
-// The fp32 rescale costs a fixed amount per K chunk step; below 256x256 chunks it is not amortized and the
-// legacy kernel is faster, so small chunks with fp32 DEST stay on the legacy kernel. Its normalize sums the rows
-// with the Blackhole SFPU row reduce, so fp32 DEST streams on Blackhole only. That normalize is a fixed cost per Q
-// chunk, which the K loop pays back from 16 K chunks on (measured on Blackhole: 0.5 percent slower at 8).
-// The streaming kernel runs the approximate softmax exp, so with exp_approx_mode off fp32 DEST keeps the legacy
-// kernel, which then runs the accurate one.
+// fp32 DEST streaming needs the Blackhole SFPU row reduce and always runs the approximate exp; its fixed rescale and
+// normalize costs pay off only from 256x256 chunks and 16 K chunks (measured on Blackhole: 0.5 percent slower at 8).
 constexpr uint32_t kFp32StreamingMinChunkTiles = 8;
 constexpr uint32_t kFp32StreamingMinKChunks = 16;
 
@@ -209,8 +203,7 @@ uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_c
     return use_streaming_compute ? 1 : q_chunk_tiles;
 }
 
-// A third K/V slot lets the reader run one forwarded chunk further ahead of the writer. It is taken up to k256 and
-// only while the CBs still fit L1 with it (a d512 head does not fit a third k128 slot next to its accumulators).
+// A third K/V slot lets the reader run one forwarded chunk further ahead of the writer.
 uint32_t kv_chain_slots(
     uint32_t kv_chain_mode,
     uint32_t Sk_chunk_t,
@@ -241,8 +234,7 @@ struct WindowedSetup {
     uint32_t q_token_offset = 0;
 };
 
-// Chains need K chunk counts that add up the same for every zigzag pair; that holds for equal chunk sizes and
-// for a q chunk that is a multiple of the k chunk.
+// Chains need the K chunk counts of every zigzag pair to add up the same.
 bool causal_pairs_uniform(uint32_t q_num_chunks, uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t Skt) {
     auto needed = [&](uint32_t q) { return (std::min((q + 1) * Sq_chunk_t, Skt) + Sk_chunk_t - 1) / Sk_chunk_t; };
     const uint32_t first = needed(0) + needed(q_num_chunks - 1);
@@ -254,8 +246,7 @@ bool causal_pairs_uniform(uint32_t q_num_chunks, uint32_t Sq_chunk_t, uint32_t S
     return true;
 }
 
-// The causal chains cut K/V DRAM reads, so they pay once the stream is DRAM bound: on 64 cores or more, and from 32
-// for bf16 K/V at d128 and up with bf16 DEST (measured on Blackhole; below that the relay costs up to 2 percent).
+// Chains pay once the K/V stream is DRAM bound (measured on Blackhole; below that the relay costs up to 2 percent).
 bool causal_chains_pay(uint32_t num_cores, uint32_t DHt, bool bf16_kv, bool fp32_dest_acc_en) {
     return num_cores >= 64 || (bf16_kv && !fp32_dest_acc_en && DHt >= 4 && num_cores >= 32);
 }
@@ -277,35 +268,28 @@ uint32_t kv_chain_mode_for(
     if (!is_causal) {
         return 1;
     }
-    // The causal chains below were measured on Blackhole only; other archs keep main's configuration.
+    // Causal chains were measured on Blackhole only.
     if (!blackhole || !chains_pay) {
         return 0;
     }
-    // The legacy kernel with fp32 DEST is compute bound: with block float K/V a chain's relay latency costs more than
-    // the DRAM reads it saves, at both exp_approx_mode settings (measured on Blackhole).
+    // The fp32 DEST legacy kernel is compute bound: with block float K/V the relay costs more than the reads it saves.
     if (fp32_legacy_block_float_kv) {
         return 0;
     }
-    // No q tile gate: the reader side forward that used to cost more than the DRAM reads it saved past four
-    // q tiles per chunk (measured at q256 k128 on Blackhole) now runs on the writer RISC.
     if (!(causal_pairs && causal_pairs_uniform(q_num_chunks, Sq_chunk_t, Sk_chunk_t, Skt))) {
         return 0;
     }
-    // Measured on Blackhole: at one or two q tiles per chunk the relay latency rules and the reader's own forward
-    // is fastest; at four the writer's forward pays; from eight q tiles the DRAM stream is already hidden behind
-    // the compute and the chain handshake only adds to the step (1 to 5 percent at q256 with k128 and k256).
+    // Measured on Blackhole: reader forwarding wins at 1-2 q tiles, writer at 4; from 8 a chain adds 1 to 5 percent.
     if (Sq_chunk_t > 4) {
         return 0;
     }
     return Sq_chunk_t <= 2 ? 2 : 3;
 }
 
-// Every hop of a chain adds one chunk of latency before the pipeline flows, so long chains are cut into
-// pieces of this many cores, each with its own injector.
+// Each hop adds a chunk of startup latency, so longer chains are cut into pieces with their own injectors.
 constexpr std::size_t kMaxCausalChainCores = 8;
-// A head whose own segments already make a chain this long keeps it; shorter ones are pooled across the Q
-// heads that share the K/V head. Pooling only pays once a chunk has enough q tiles to hide the relay latency
-// of a longer chain (measured on Blackhole: -8 percent at four q tiles, +9 percent at one).
+// Shorter head chains are pooled across the Q heads sharing the K/V head, which pays only from four q tiles per
+// chunk (measured on Blackhole: -8 percent at four, +9 percent at one).
 constexpr std::size_t kMinOwnHeadChain = 6;
 constexpr uint32_t kMinQTilesToPool = 4;
 
@@ -366,11 +350,8 @@ void link_causal_chain_pieces(
     }
 }
 
-// Causal chains of a KV head: segments in ascending pair order, so the lowest pairs (longest heavy prefixes)
-// stream from DRAM and each core forwards the prefix its successor needs. Chain partners exchange chunk i of
-// their segments at the same time, so a segment a core reaches only after finishing another head would hold
-// its partner idle; only a core's first segment qualifies. The segments arrive head by head; a head with
-// enough of them chains on its own, the rest are pooled across the group by pair position.
+// Ascending pair order puts the longest heavy prefixes at the injector. Only a core's first segment joins: partners
+// exchange chunk i together, so a segment reached after another head would idle its partner.
 void build_causal_chains(
     const std::vector<HeadSegmentRef>& segments,
     const std::vector<CoreWork>& core_work,
@@ -407,7 +388,6 @@ void build_causal_chains(
     link_causal_chain_pieces(segments, pool, core_work, core_chain_info, heads_per_group, chains_built, chains_skipped);
 }
 
-// The segments of the Q heads that share one K/V head are chained together, group by group.
 void build_grouped_causal_chains(
     const std::vector<std::vector<HeadSegmentRef>>& head_segments,
     const std::vector<CoreWork>& core_work,
@@ -435,8 +415,7 @@ void build_grouped_causal_chains(
     }
 }
 
-// Blackhole serves DRAM slowest on the low rows of the full grid, so a minority causal remainder goes to the last
-// cores where that was measured to pay: block float Q or the reader forwarded chains (main's order otherwise).
+// Blackhole serves DRAM slowest on the low rows of the full grid; moving the remainder off them pays in these cases.
 bool remainder_goes_to_last_cores(
     bool is_causal,
     bool is_blackhole,
@@ -450,8 +429,6 @@ bool remainder_goes_to_last_cores(
            num_cores == grid_cores;
 }
 
-// Core i's [start, start + count) range of flat Q chunks: the base chunks, the extra ones on the cores from
-// first_extra_core on, clamped to the total.
 std::pair<uint32_t, uint32_t> global_q_range(
     uint32_t i,
     uint32_t first_extra_core,
@@ -474,7 +451,6 @@ std::pair<uint32_t, uint32_t> global_q_range(
     return {start, count};
 }
 
-// The injector of a uniform chain is the core whose physical X is furthest from the existing injectors.
 void rotate_injector_to_spread_dram(
     std::vector<std::size_t>& chain_order,
     const std::vector<HeadSegmentRef>& segments,
@@ -549,7 +525,6 @@ WindowedSetup setup_windowed_cbs(
     return w;
 }
 
-// Reader scratch for one row of block flags; returns the stick size, 0 without a map.
 template <typename AllocateCb>
 uint32_t allocate_mask_block_map_cb(const SDPAInputs& tensors, sdpa_cb::CBIds& cb_ids, const AllocateCb& allocate_cb) {
     if (!tensors.attn_mask_block_map.has_value()) {
@@ -804,8 +779,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
     const uint32_t bf16_tile_bytes = tt::tile_size(tt::DataFormat::Float16_b);
     const auto [stream_out_h, stream_out_w] = detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, 2);
-    // Every CB of the fp32 DEST streaming kernel: Q, two K/V slots, the fp32 scores, accumulators and row sums, the
-    // row maxes, the output ping pong and the small ones (mask, identities, sink, recip, chain control).
+    // L1 bytes of every CB of the fp32 DEST streaming kernel, the small ones included.
     const uint32_t fp32_streaming_bytes =
         Sq_chunk_t * DHt * q_buffer_factor *
             tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype())) +
@@ -844,7 +818,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             ? (Sk % TILE_HEIGHT)
             : 0;
     const bool lw_partial_active = (k_partial_col > 0);
-    // 0: no K/V chains, 1: the non causal lock step chain, 2: causal prefix chains (see build_causal_chain).
+    // 0: no K/V chains, 1: the non causal lock step chain, 2 and 3: causal prefix chains (see build_causal_chains).
     const bool block_float_kv =
         input_tensor_k.dtype() == DataType::BFLOAT8_B || input_tensor_k.dtype() == DataType::BFLOAT4_B;
     const uint32_t kv_chain_mode = kv_chain_mode_for(
@@ -877,15 +851,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             global_q_extra_chunks_per_core,
             total_q_chunks);
     };
-    // Every program without the causal kernel carries the chain semaphores, as on main, whether or not a chain forms.
     const bool kv_chain_semaphores = !use_causal_kernel || kv_chains_possible;
-    // Causal chains run along the Q heads that share one K/V head when K and V are grouped the same way.
     const uint32_t chain_heads_per_group = (NKH == NVH && NQH % NKH == 0) ? NQH / NKH : 1;
     uint32_t mask_tiles = lightweight_mask
                               ? lightweight_mask_tile_count(use_causal_kernel, has_sliding_window, lw_partial_active)
                               : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
-    // Upper bound of the other CBs: Q, the scores, both output accumulators and the row sums at their fp32 DEST
-    // format, the output, and the mask, the row maxes and the small CBs (identities, sink, recip) at fp32.
+    // Upper bound on the non K/V CBs, counting the mask, row maxes and small CBs at fp32.
     const uint32_t kv_chunk_bytes =
         Sk_chunk_t * (DHt * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype())) +
                       vDHt * tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype())));
@@ -1180,8 +1151,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat im_df =
         tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
-    // With the flag on the QK scores and the row sums stay fp32 on both kernels. The streaming kernel's fused
-    // rescale packs the sum and the output accumulator together, so its accumulator follows the sum format.
+    // The streaming rescale packs the output accumulator with the sum, so the accumulator takes the sum's format.
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat out_im_df = use_streaming_compute ? sum_df : im_df;
@@ -1230,8 +1200,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
     cb_ids.k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     cb_ids.v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
-    // Causal chains: reader -> writer forward requests, {address, bytes} per K/V chunk plus one header per Q chunk,
-    // deep enough that the reader runs out of K/V slots before it runs out of entries. Valid fallback id otherwise.
+    // Deep enough that the reader runs out of K/V slots before it runs out of forward request entries.
     cb_ids.kv_fwd_ctrl = cb_ids.q_in;
     if (kv_chain_mode >= 2) {
         constexpr uint32_t kv_fwd_entry_bytes = 16;
@@ -1306,7 +1275,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
-    // Semaphores for KV chain forwarding.
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2, fwd_done=3 (causal chains).
     if (kv_chain_semaphores) {
         desc.semaphores.push_back(SemaphoreDescriptor{
@@ -1519,7 +1487,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             }
 
             if (uniform_q) {
-                // All cores have equal q_chunk_count, so spread the injectors over DRAM channels by physical X.
+                // Equal q_chunk_counts make any core a valid injector.
                 rotate_injector_to_spread_dram(chain_order, segments, core_work, injector_phys_x);
             } else {
                 // Mixed q_chunk_counts — sort descending so heavier cores come first.
@@ -1883,7 +1851,6 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(chunked_q_chunk_offset);
         reader_args.push_back(read_offset);  // read_offset
 
-        // Add chain metadata when chains can exist: every non causal program, or causal prefix chains
         if (!use_causal_kernel || kv_chain_mode >= 2) {
             reader_args.push_back(static_cast<uint32_t>(chain.participates));
             reader_args.push_back(static_cast<uint32_t>(chain.is_injector));
@@ -1909,7 +1876,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         reader_args.push_back(cu_window_seqlens_eles);
         reader_args.push_back(windowed_q_token_offset);
         reader_args.push_back(windowed_q_offset_buffer);
-        // Feature tails, only for the programs that use them (read by the kernel behind the same flags).
+        // Feature tails: the kernel reads them behind the same flags.
         if (use_mask_block_map) {
             reader_args.push_back(buffer_or_null(tensor_args.attn_mask_block_map));
             reader_args.push_back(block_map_stick_size);
@@ -1937,7 +1904,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         writer_args.push_back(cu_window_seqlens_eles);    // 10: window count + 1
         writer_args.push_back(windowed_q_token_offset);   // 11: global origin of this Q shard (scalar)
         writer_args.push_back(windowed_q_offset_buffer);  // 12: same, per-device (nullptr => use 11)
-        // Causal chain tail: the writer forwards K/V to the next core (parsed by the writer at 13..15).
+        // Causal chain tail, parsed by the writer at 13..15.
         if (kv_chain_mode >= 2) {
             writer_args.push_back(static_cast<uint32_t>(chain.participates));
             writer_args.push_back(static_cast<uint32_t>(chain.next_physical.x));

@@ -1762,8 +1762,7 @@ class ModelArgs:
             is_blackhole() and grid is not None and grid.x > 8 and grid.y > 4 and self.max_batch_size >= 8
         )
         if wide_blackhole_grid:
-            # Decode Q is height sharded on the 8x4 block and the op reads batch b's Q from the b-th core of
-            # sub_core_grids, so that block has to come first; the rest of the grid supplies the workers.
+            # The op reads batch b's Q from the b-th core of sub_core_grids, so the 8x4 Q shard block comes first.
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(grid.x, grid.y),
                 sub_core_grids=ttnn.CoreRangeSet(

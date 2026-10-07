@@ -260,8 +260,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // A core group can be laid out in either row-major or column-major order on the core grid.
     // By default core groups are laid out in row-major order. But when Q heads is parallelized,
     // column-major group indexing is used to keep batch groups spatially close for efficient K multicast along columns.
-    // Without replicated Q the reader fetches Q from the group's output core, so the column major layout
-    // (and the K multicast that comes with it) is used only when the Q shards already sit on those cores.
+    // Without replicated Q the reader fetches Q from the group's output core, so Q shards must already sit there.
     auto col_major_layout_possible = [&]() -> bool {
         if (q_heads_parallel_factor <= 1 || grid_size.y < num_cores_per_head || on_subcoregrid) {
             return false;

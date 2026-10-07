@@ -66,8 +66,7 @@ void kernel_main() {
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
-    // Streaming: one palette [neginf, spatial partial tile, joint tail partial tile] stays fronted; compute
-    // narrows the padded tiles.
+    // Streaming: one palette [neginf, spatial partial tile, joint tail partial tile] stays fronted for the run.
     if constexpr (use_streaming_compute && use_joint_mask) {
         generate_lightweight_mask_tiles<n_partial_col, k_partial_col, cb_mask_in, false, 0u>(noc);
     }
