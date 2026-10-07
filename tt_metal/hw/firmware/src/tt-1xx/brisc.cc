@@ -341,7 +341,7 @@ inline void trigger_sync_register_init() { subordinate_sync->trisc0 = RUN_SYNC_M
 inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t noc_mode, uint32_t end_cb_index) {
 #if defined(ARCH_BLACKHOLE)
     // cq_dispatch does not update noc transaction counts so skip this barrier on the dispatch core
-    if (end_cb_index != NUM_CIRCULAR_BUFFERS) {
+    if (end_cb_index != NUM_USABLE_CIRCULAR_BUFFERS) {
         WAYPOINT("NABW");
         if (noc_mode == DM_DYNAMIC_NOC) {
             do {

@@ -16,7 +16,7 @@
 // Device compilation context:
 //   - ARCH_WORMHOLE is defined ONLY when compiling for Wormhole
 //   - Wormhole has fewer CBs due to limited TRISC memory (2KB)
-//   - Blackhole supports the full CB count
+//   - Blackhole reserves the last two counter pairs for DM/compute scratch synchronization
 //
 // Why this works safely:
 //   - Host allocates space for the maximum CB count in all data structures
@@ -30,6 +30,12 @@
 //
 // TODO: This is TEMPORARY code structure - eventually will be replaced by Dataflow Buffers (DFBs)
 
+// Blackhole stream-counter resources: CBs own [0, 62), scratch sync owns [62, 64).
+inline constexpr std::uint32_t BLACKHOLE_NUM_CB_COUNTERS = 64;
+inline constexpr std::uint32_t BLACKHOLE_NUM_SCRATCH_SYNC_CHANNELS = 2;
+inline constexpr std::uint32_t BLACKHOLE_NUM_CIRCULAR_BUFFERS =
+    BLACKHOLE_NUM_CB_COUNTERS - BLACKHOLE_NUM_SCRATCH_SYNC_CHANNELS;
+
 #if defined(ARCH_WORMHOLE)
 // Device compilation for Wormhole (limited by 2KB TRISC memory)
 inline constexpr std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
@@ -37,6 +43,14 @@ inline constexpr std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
 // Blackhole device and HOST compilation (uses max for array sizing)
 inline constexpr std::uint32_t NUM_CIRCULAR_BUFFERS = 64;
 #endif
+// Device-side configuration indexing follows the usable limit reported by the host HAL.
+// Keep NUM_CIRCULAR_BUFFERS unchanged for storage and initialization of all counter pairs.
+#if defined(ARCH_BLACKHOLE)
+inline constexpr std::uint32_t NUM_USABLE_CIRCULAR_BUFFERS = BLACKHOLE_NUM_CIRCULAR_BUFFERS;
+#else
+inline constexpr std::uint32_t NUM_USABLE_CIRCULAR_BUFFERS = NUM_CIRCULAR_BUFFERS;
+#endif
+
 inline constexpr std::uint32_t UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG = 4;
 inline constexpr std::uint32_t UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG = 2;
 inline constexpr std::uint32_t CIRCULAR_BUFFER_COMPUTE_WORD_SIZE = 16;
