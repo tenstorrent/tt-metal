@@ -282,6 +282,38 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
             "participant (i.e. a kernel that appears on both sides).",
             dfb.unique_id);
     }
+
+    // (5) Gen1: same-role DM kernels must share config_1xx->processor. The DFB's hardware config
+    // carries a single processor per role, and on Gen1 the processor is user-specified (compute
+    // kernels are always placed on the same Tensix processor, and kinds agree by (3)).
+    // (Skipped under allow_multi — see above.)
+    auto check_role_processor = [&](const auto& records, std::string_view role) {
+        if (records.size() < 2 || !records[0].kernel->is_data_movement_kernel()) {
+            return;
+        }
+        const KernelSpec* first_kernel = records[0].kernel;
+        const DataMovementProcessor first_processor =
+            std::get<DataMovementHardwareConfig>(first_kernel->hw_config).config_1xx->processor;
+        for (size_t i = 1; i < records.size(); ++i) {
+            const DataMovementProcessor processor =
+                std::get<DataMovementHardwareConfig>(records[i].kernel->hw_config).config_1xx->processor;
+            TT_FATAL(
+                processor == first_processor,
+                "DFB '{}' has multiple {} KernelSpecs ('{}', '{}') with mismatched processor placement "
+                "(RISCV_{} vs RISCV_{}). Multi-binding requires all same-role data-movement kernels to "
+                "share DataMovement1XXConfig::processor.",
+                dfb.unique_id,
+                role,
+                first_kernel->unique_id,
+                records[i].kernel->unique_id,
+                static_cast<int>(first_processor),
+                static_cast<int>(processor));
+        }
+    };
+    if (!allow_multi && is_gen1_arch(hal)) {
+        check_role_processor(endpoints.producers, "PRODUCER");
+        check_role_processor(endpoints.consumers, "CONSUMER");
+    }
 }
 
 }  // namespace

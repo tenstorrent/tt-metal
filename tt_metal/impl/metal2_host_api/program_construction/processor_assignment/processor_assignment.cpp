@@ -9,6 +9,7 @@
 #include <numeric>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -403,6 +404,42 @@ KernelRiscMaskMap SolveGen2KernelRiscMasks(const ProgramSpec& spec, const Collec
     }
     for (const auto& [kernel, mask] : compute_assignments) {
         result[kernel] = static_cast<uint16_t>(mask.to_ulong() << 8);  // Compute engines in bits 8-15
+    }
+
+    // For multi-binding DFBs, all KernelSpecs on the same role must end up with identical risc_masks:
+    // the DFB has a single producer_risc_mask / consumer_risc_mask in its hardware config. The solver
+    // gives every member of a DM coupling group the same DM mask, and compute masks are deterministic
+    // from num_threads (uniform per role), so this holds by construction; checked defensively.
+    for (const auto& dfb : spec.dataflow_buffers) {
+        if (dfb.advanced_options.allow_instance_multi_binding) {
+            continue;
+        }
+        const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
+        auto check_uniform_mask = [&](const auto& records, std::string_view role) {
+            if (records.size() < 2) {
+                return;
+            }
+            const uint16_t first_mask = result.at(records[0].kernel);
+            const auto* first_kernel = records[0].kernel;
+            for (size_t i = 1; i < records.size(); ++i) {
+                const uint16_t mask = result.at(records[i].kernel);
+                if (mask == first_mask) {
+                    continue;
+                }
+                TT_THROW(
+                    "Internal error: Gen2 solver produced disagreeing risc_masks for DFB '{}' "
+                    "{} bindings ('{}' = 0x{:x} vs '{}' = 0x{:x}). The coupling-group solver "
+                    "extension should guarantee per-role mask uniformity by construction.",
+                    dfb.unique_id,
+                    role,
+                    first_kernel->unique_id,
+                    first_mask,
+                    records[i].kernel->unique_id,
+                    mask);
+            }
+        };
+        check_uniform_mask(endpoints.producers, "PRODUCER");
+        check_uniform_mask(endpoints.consumers, "CONSUMER");
     }
     return result;
 }
