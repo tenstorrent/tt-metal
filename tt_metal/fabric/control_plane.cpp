@@ -1136,6 +1136,11 @@ const std::vector<LinkInfo>& ControlPlane::get_downed_links() const {
     return this->link_health_ == nullptr ? kNone : this->link_health_->get_downed_links();
 }
 
+const std::vector<LinkInfo>& ControlPlane::get_unused_downed_links() const {
+    static const std::vector<LinkInfo> kNone;
+    return this->link_health_ == nullptr ? kNone : this->link_health_->get_unused_downed_links();
+}
+
 const std::vector<LinkInfo>& ControlPlane::get_locally_unhealthy_links() const { return this->locally_unhealthy_; }
 
 void ControlPlane::refresh_connectivity_diff() {

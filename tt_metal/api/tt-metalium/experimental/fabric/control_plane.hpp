@@ -388,6 +388,7 @@ public:
 
     bool is_link_healthy(FabricNodeId fabric_node_id, chan_id_t chan) const;
     const std::vector<LinkInfo>& get_downed_links() const;
+    const std::vector<LinkInfo>& get_unused_downed_links() const;
 
     // The downed links on this host that the cluster also reports ethernet-down for. A record here is one
     // this rank confirmed with the hardware rather than only inferred from the descriptors.
