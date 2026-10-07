@@ -88,9 +88,13 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     };
 
     // The reader stages one channel block's tile rows plus the three history rows, then builds each
-    // shifted tap view from it with local copies instead of rereading DRAM once per tap.
+    // shifted tap view from it with local copies instead of rereading DRAM once per tap. The reader's row
+    // offsets assume 2-byte elements; validate_on_program_cache_miss restricts input and history to BF16.
+    TT_FATAL(
+        input.dtype() == DataType::BFLOAT16 && history.dtype() == DataType::BFLOAT16,
+        "qkv_causal_conv1d_silu: activation window staging requires BF16 input and history");
     const uint32_t window_bytes =
-        (tt::constants::TILE_HEIGHT + tap_count - 1) * block_ct * tt::constants::TILE_WIDTH * sizeof(uint16_t);  // BF16
+        (tt::constants::TILE_HEIGHT + tap_count - 1) * block_ct * tt::constants::TILE_WIDTH * input.element_size();
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(act_rm_dfb_name, 2 * block_ct),
