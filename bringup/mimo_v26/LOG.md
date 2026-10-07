@@ -77,3 +77,38 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log
 - paths: bringup/mimo_v26/scorecard.json
 - data: {"ckpt_files":65,"bytes":172932505264}
+
+## E261007-0222-e5a
+- date: 2026-10-07T02:22:11
+- commit: a367b32445b
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: decision
+- status: verified
+- claim: qkv layout PROVEN with the real HF MiMoV2DecoderLayer (fp32, real weights, 2x128 real GSM8K chat-template tokens): rank-blocked de-interleave gives sane layers (L0 out rms 0.0275 vs in 0.0107; L1 out 0.0284 vs in 0.0275, attention entropy/log n 0.79 = peaked, logit rms 27.9) while the naive contiguous Q|K|V reading blows the stream up (L0 out rms 0.284, L1 2.55 = 90x input) and gives near-uniform attention (L0 entropy 0.99999, logit rms 0.006). DECISION: loader.load_layer(qkv_layout='rank') is the default; every consumer must use per-TP4-rank [q_r|k_r|v_r] with scale blocks over each rank's rows.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_qkv_layout_proof.log
+- paths: models/demos/blackhole/mimo_v26/reference/loader.py, models/demos/blackhole/mimo_v26/reference/hf_layer.py
+- supersedes: E261007-0059-cb0
+- data: {"L0_out_rms_rank":0.0275,"L0_out_rms_naive":0.2836,"L1_out_rms_rank":0.0284,"L1_out_rms_naive":2.554,"in_rms_L0":0.0107}
+
+## E261007-0222-f3c
+- date: 2026-10-07T02:22:11
+- commit: a367b32445b
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: decision
+- status: verified
+- claim: fp4 experts (real L1 experts 17/100/200, 2048 real tokens): nibble order = LOW nibble first (DSV4 convention): act-norm ratio routed/unrouted tokens 1.56/1.52/1.74 with low-first vs 1.09/0.97/0.80 with high-first (an expert must respond more to tokens the router sends it). e8m0 scale byte b -> 2**(b-127) (torch float8_e8m0fnu view equals exactly; bytes 118..122 in expert 3 gate). Bias 127 gives expert gate rms 0.0215 (126: 0.043, 128: 0.0108; dense L0 gate rms 0.037) - bias is the standard e8m0 bias, magnitude check only plausibility, no independent bf16 ground truth exists. Per-block max |code| is 6 for 53% of blocks, >=4 for 100% (amax-based quantisation signature). No HF dequant path exists for fp4 (HF code sees dequantised weights), so the check is functional.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_fp4_order_check.log
+- paths: models/demos/blackhole/mimo_v26/reference/loader.py, models/demos/blackhole/mimo_v26/reference/probes/fp4_order_check.py
+
+## E261007-0222-c56
+- date: 2026-10-07T02:22:11
+- commit: a367b32445b
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: decision
+- status: verified
+- claim: fp32 independent oracle (ref_layer.py, written from the spec) vs HF MiMoV2DecoderLayer on real tokens (embeddings of 2x128 GSM8K prompts): L0 PCC 1.000000 maxabs 0; L1 (SWA+MoE) PCC 1.000000 rel 1.1e-8; L5 (global+MoE) PCC 1.000000 rel 5e-8; router expert SETS identical on all 256 tokens for L1 and L5. Mask: transformers (5.12.1) create_sliding_window_causal_mask == oracle mask (j<=i, j>i-128: window 128 INCLUDING self; row 200 sees 73..200 = 128 keys); global mask causal. Covered by this equality (same semantics as modeling_mimo_v2.py eager path): sink = raw per-head logit appended after the 192**-0.5 scaling, softmax over [scores, sink], sink column dropped; V*0.707 before cache/attention; RoPE on first 64 of 192 dims, split-half rotate_half, theta 1e7 global / 1e4 SWA; router fp32 sigmoid, selection on score+bias, weights from unbiased score renormalised, scale 1.0, no clamp. NOTE: the checkpoint's modeling file targets transformers 5.3 (calls create_causal_mask(input_embeds=, cache_position=)); this env has 5.12.1 (inputs_embeds, no cache_position) so the harness builds masks itself with the new API.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_oracle_vs_hf.log
+- paths: models/demos/blackhole/mimo_v26/reference/ref_layer.py, models/demos/blackhole/mimo_v26/reference/hf_layer.py, models/demos/blackhole/mimo_v26/reference/probes/oracle_vs_hf.py
