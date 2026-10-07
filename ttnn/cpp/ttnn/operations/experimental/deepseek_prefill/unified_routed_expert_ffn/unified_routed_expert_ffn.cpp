@@ -83,8 +83,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const ttnn::Tensor output =
         x_is_row_major ? ttnn::empty(
                              dispatched_buffer.logical_shape(),
-                             // MiMo patch: MOE_UNI_BF16_OUT=1 keeps the expert outputs bf16 (default bfp8, unchanged)
-                             (std::getenv("MOE_UNI_BF16_OUT") != nullptr && std::getenv("MOE_UNI_BF16_OUT")[0] == '1')
+                             // MiMo patch: expert outputs bf16 by default; MOE_UNI_BF16_OUT=0 restores bfp8
+                             (std::getenv("MOE_UNI_BF16_OUT") == nullptr || std::getenv("MOE_UNI_BF16_OUT")[0] != '0')
                                  ? tt::tt_metal::DataType::BFLOAT16
                                  : tt::tt_metal::DataType::BFLOAT8_B,
                              tt::tt_metal::Layout::TILE,

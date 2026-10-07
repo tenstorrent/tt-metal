@@ -22,7 +22,9 @@ SLOTS = 64  # masked_bincount needs tokens % 64 == 0: 32 decode slots + 32 pad r
 
 
 class MiMoMoEDecode:
-    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None):
+    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None, router="exact"):
+        """router: \"exact\" (original, 64-row ttnn path) or \"fast\" (router_select kernel on the 32 live slots; identical expert sets on all 47 layers)."""
+        self.router = router
         self.mesh, self.gate, self.moe, self.do_ar = mesh, gate, moe, all_reduce
         rep = ttnn.ReplicateTensorToMesh(mesh)
         # spread routing for the 64 slots of one mesh row, expert ids exact in bf16 (<= 256), weights 1/8
@@ -39,6 +41,20 @@ class MiMoMoEDecode:
             device=mesh,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=rep,
+        )
+        self.zw = ttnn.from_torch(
+            torch.zeros(32, 1, 1, TOPK).bfloat16(),
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=rep,
+        )
+        self.zi = ttnn.from_torch(
+            torch.zeros(32, 1, 1, TOPK).to(torch.int32),
+            device=mesh,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=rep,
         )
         self.ones = ttnn.from_torch(
@@ -84,7 +100,14 @@ class MiMoMoEDecode:
         """upto (stage-timing hook): 0 = pad+router+spread, 1..4 = moe stages (counts, dispatch, experts, combine), 5 = full moe without all-reduce."""
         B = x.shape[2]
         xp = ttnn.pad(x, [(0, 0), (0, 0), (0, SLOTS - B), (0, 0)], 0.0)
-        wts, idx = self.gate.route(xp, "exact")
+        if self.router == "fast":
+            assert B <= 32
+            xr = x if B == 32 else ttnn.pad(x, [(0, 0), (0, 0), (0, 32 - B), (0, 0)], 0.0)
+            w32, i32 = self.gate.route_v(xr, "sel_mm1x8")
+            wts = ttnn.concat([w32, self.zw], dim=0)  # pad rows 32..63: replaced by the spread routing through the mask
+            idx = ttnn.concat([i32, self.zi], dim=0)
+        else:
+            wts, idx = self.gate.route(xp, "exact")
         wts2, idx2 = self._spread(wts, idx, mask)
         if upto == 0:
             return wts2, idx2

@@ -1188,3 +1188,59 @@
 - claim: COORDINATOR DECISION: first_token gate left MISSING. E261007-0604-642 (21/22 top-1 agreement) compares a 6-layer truncated device model with a CPU final norm + lm_head on the L5 dump; counting it for the 48-layer gate would weaken the gate. A 48-layer reference does not exist by policy. Options for the user: drop the gate in favour of the GSM8K 85% gate, or allow the hosted xiaomi/mimo-v2.6-flash as a first-token oracle. Also noted: decode_phase PASS (E261007-0604-8da) uses the device's own chunked-prefill state, not a reference-prefilled state as the gate note says; layer_pcc gates are device-vs-dump teacher-forced (equivalent in effect, different wording from the gate note).
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+## E261007-0616-c59
+- date: 2026-10-07T06:16:24
+- commit: a83094a5555
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: correctness
+- status: verified
+- claim: ATTRIBUTION of the device-vs-oracle gap (CPU, teacher-forced on device captures, S=128 b16; probes device_attribution.py, device_attribution2.py, device_scale_bias.py; logs ref_device_attribution{,2}.jsonl, ref_device_scale_bias.jsonl). (b) bfp8 emulation (reference/bfp.py: 16-groups along the last dim of the tile = output dim of an [N,K] weight, 7-bit mantissa, shared exponent) is BIT-EXACT vs a real ttnn host roundtrip of bfloat8_b (random [64,128] tensor, 100% equal; the alternative column grouping matched only 86%; NOTE importing ttnn on this host printed UMD cluster open/close lines although no device job was run). bfp8 qkv/o weights do NOT explain the attention gap: attn_out ratio over floor L6 4.9->4.6, L16 2.3->2.2, L17 4.6->4.4, L41 4.2->4.1, L47 3.8->3.8 (device vs oracle with bfp8 weights, bf16 act). Convention variants on the device attn_in are all far worse than the baseline (V scale 1.0: 0.29 vs 0.028 rel; sink/sqrt192: 0.48; no sink 0.91; sink*sqrt192: 599; rope interleaved 0.91; theta x2 0.17, /2 0.66; window 127/129 identical at S=128) => attention conventions on device are right, residual gap is device numerics (2.3-5x floor, rel 0.014-0.049). (a) MoE with the DEVICE routing and DEVICE ffn_in forced: device ffn_out vs fp32 oracle rel 0.013 (L16) 0.018 (L41) 0.028 (L6) 0.027 (L7) 0.025 (L8) 0.023 (L17) 0.025 (L47) vs bf16-vs-fp32 floor 0.0023-0.0046 (5-8x): so the ffn gap is NOT router flips. bfp8 experts (device layout) change it little (L16 0.0133->0.0111, others unchanged: fp4 values x e8m0 scales are nearly representable in bfp8); bfp8/bf16-trunc activation emulation does not reach the floor either (L16 best 0.0056 with truncating-bfp8 intermediate, L6 stays 0.025). KEY FINDING: the error is a SYSTEMATIC SCALE BIAS: best alpha with device_ffn_out ~ alpha*oracle is 0.974-0.993 in EVERY layer 6-47 (median 0.985 SWA, 0.984 global; cos(delta,ref) -0.75 to -0.96), i.e. device MoE output is ~1.5% too small; after rescaling the L16 error drops to 0.0039 (~1.7x floor) and L41/L16 flags largely vanish, L6-8 keep 0.013-0.019. Attention alpha: 1.040/1.024/1.021 at L6/7/8 (device attn_out 2-4% too LARGE), ~1.00 L9-17, ~0.99 L18-47. Free-routing split: tokens whose device set == oracle set have rel error ~ the forced error; flipped tokens 0.09-0.38 (but only 1-23% of tokens). UNEXPLAINED: (1) the -1.5% MoE output scale in all layers (candidates: device activation/silu approximation, truncating bfp8 packer on intermediates, bf16 weighted-combine; not routing weights: device routing_w sums to 1.0000+-0.003); (2) attention error 2.3-5x floor after bfp8 weights (L6-8 early layers have +2-4% scale and the worst ratios); this is not a conventions bug.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_device_attribution.jsonl
+- paths: models/demos/blackhole/mimo_v26/reference/probes, models/demos/blackhole/mimo_v26/reference/bfp.py, models/demos/blackhole/mimo_v26/reference/ref_layer.py
+- data: {"moe_ffn_alpha_median_swa":0.9852,"moe_ffn_alpha_median_global":0.9840,"moe_ffn_alpha_min":0.9736,"moe_ffn_alpha_max":0.9925,"attn_alpha_L6":1.0399,"attn_alpha_late_median":0.990,"bfp8_emulation_vs_ttnn_exact":true,"flagged_L16_ffn_rel_after_alpha":0.0039}
+
+## E261007-0616-6ca
+- date: 2026-10-07T06:16:27
+- commit: a83094a5555
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: dflash
+- status: verified
+- claim: DFlash drafter oracle (reference/dflash_ref.py, loader load_dflash) + TEACHER-FORCED draft quality on the device captures (no target run; 16 seq x 128 tokens GSM8K prompt+gold, anchors 16..120, 1680 anchors, bf16, target lm_head): per-position top-1 for draft tokens p+1..p+7 = 0.596 0.460 0.374 0.297 0.248 0.214 0.178; expected accepted length per round (leading matches+1) 2.81 (assumes target greedy == gold text: upper-bound proxy, off-policy gold text). Answer-region anchors (818): 0.671 0.555 0.479 0.388 0.331 0.291 0.238 -> 3.43; question-region (862): 2.22. Findings: partial rotary (first 64/128) is essential (full rotary: 1.45); sink on/off, V scale 0.612 vs 1.0 and the hidden-state convention (layer outputs L47 pre/post-norm, or layer inputs) are NOT distinguishable (2.72-2.79); shipped dflash.py lacks sinks/V-scale/partial-rotary and cannot run on the MiMo HF code (no hidden_states output); the target embedding row 151675 is ~0 (norm 2e-5): the drafter needs mask_embedding.pt (norm 0.76). Requirements per round for device integration are in reference/DFLASH_NOTES.md (5 layers x 4096 hidden states of accepted rows = 40 KB/position, drafter KV 20 KB/position/ window 1024, lm_head on 7 rows).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dflash_teacher_forced.json
+- paths: models/demos/blackhole/mimo_v26/reference/dflash_ref.py, models/demos/blackhole/mimo_v26/reference/probes/dflash_teacher_forced.py, models/demos/blackhole/mimo_v26/reference/DFLASH_NOTES.md
+- data: {"per_pos_top1":[0.596,0.460,0.374,0.297,0.248,0.214,0.178],"expected_accept_len_gold_proxy":2.81,"answer_region_accept_len":3.43,"n_anchors":1680}
+
+## E261007-0624-041
+- date: 2026-10-07T06:24:45
+- commit: 32d4799dbee
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: correctness
+- status: verified
+- claim: Attention scale table for the attention owner: /mnt/tt-data/ssinghal/mimo-logs/ref_attn_alpha_L6-47.json (per layer 6-47: attn_alpha = best scalar with device attn_out ~ alpha*oracle attention [fp32, bfp8 qkv/o, on the device attn_in], rel, rel_after_alpha, and ffn_alpha under forced device routing): attn alpha 1.040/1.024/1.021 at L6/7/8, ~1.00 L9-L17, ~0.99 L18-L47 (device 1% low). probes/device_vs_oracle.py now also records scale_alpha, rel_after_alpha, rel_over_floor and a flag (>=5x floor or |alpha-1|>=1%) for attn_out/ffn_out/h_out so the per-layer check detects scale bias (PCC is scale-invariant; L16 ffn: pcc 0.99999, alpha 0.989, 10.2x floor, flagged). tt-model-reference and tt-moe-correctness skills carry the one-line rule.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_attn_alpha_L6-47.json
+- paths: models/demos/blackhole/mimo_v26/reference/probes/device_vs_oracle.py, models/demos/blackhole/mimo_v26/reference/probes/device_scale_bias.py
+
+## E261007-0745-799
+- date: 2026-10-07T07:45:04
+- commit: 9a8fd8582e5
+- branch: ssinghal/mimo-moe
+- host: 48
+- track: moe
+- status: verified
+- claim: MoE scale bias (alpha<1) CAUSE FOUND: math fidelity + bf16 accumulation in the expert matmuls (not router, combine, silu, weights, tilize). L5 real weights, dump routing, fp32 CPU oracle on same bf16 ffn_in (floor: bf16-chain dump vs oracle alpha 0.9998 rel 0.0051). Total device vs oracle (alpha, rel): unified LoFi/bf16-DEST (as shipped) 0.9762/0.0411; unified HiFi2 1.0008-per-slot .. total 0.9965/0.0326; mm path HiFi2 fp32acc 1.0039/0.0162; mm path HiFi4 fp32acc 1.0006/0.0058 (PCC 0.99998); mm bf16 weights identical to bfp8 weights (weights innocent), fp32 intermediates no help. Per-slot expert-output alpha: LoFi 0.9823, HiFi2 1.0008 (rel 0.0073 but 2% typical per-slot error), HiFi4 1.0113 with bf16 partials/bf16 DEST. Unified op had kFp32DestAccEn=false (bf16 DEST accumulation over a 16-tile K block) and bf16 K-loop partials: with fp32 DEST + fp32 partials + HiFi4/HiFi3 total alpha 1.0014 rel 0.0044 (below the CPU bf16 floor 0.0051), PCC 0.99999. Reduce stage (post_combine_reduce, packer L1 bf16 accumulate) adds +0.09% typical (alpha 1.0009) and +0.39% on the massive-activation token (norm 5655, 4 per run) which dominates a global alpha. Evidence stats: bfp8 device-read weights vs dequantised bf16 mean ratio 0.9991-1.0000
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_H_alpha_L5_h48_1cf05f84a7c.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+
+## E261007-0745-795
+- date: 2026-10-07T07:45:04
+- commit: 9a8fd8582e5
+- branch: ssinghal/mimo-moe
+- host: 48
+- track: moe
+- status: verified
+- claim: FIX (C++ private relink, commit 9a8fd8582e5, defaults ON, =0 restores originals; artifact /mnt/tt-data/ssinghal/mimo/artifacts/moe_B_9a8fd8582e5/lib/_ttnncpp.so): unified_routed_expert_moe now: bf16 x/intermediates/output, fp32 K-loop partials, fp32 DEST accumulation, HiFi3 (HiFi3 == HiFi4 accuracy; HiFi2 not enough); mm path forced to HiFi4+fp32 acc (MIMO_MM_FID=hifi2 for A/B). Gates vs fp32 oracle (alpha, rel(floor), PCC): L1 unified 1.0007/0.0042(0.0027)/0.99999, mm 1.0005/0.0044; L5 unified 1.0014/0.0044(0.0051)/0.99999, mm 1.0006/0.0058; L16 (device capture) unified 1.0038/0.0047/1.0 (alpha excluding the massive token 1.0009; per-slot expert alpha 0.9999), mm 1.0049/0.0055. Layer PCC vs bf16 dump 0.99984-0.99999 (L1, L5, both ops), 5 runs bit-identical. Cost: decode MoE per layer (traced, fast router, host-timed) 1.34 ms original (LoFi) -> 1.56 ms (HiFi3 fp32 DEST/partials) vs 1.78 ms (HiFi4); prefill 512 tok/row unified 2.3 -> 2.8 ms. 47 layers decode: 63 -> 73 ms/token MoE-only
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_H_g_L5_h48_9a8fd8582e5.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
