@@ -38,8 +38,30 @@ def _recorded_gcb(build: Callable, *args, **kwargs):
     return gcb
 
 
-def make_matmul_decode_gcb(*args, **kwargs):
-    return _recorded_gcb(_make_matmul_decode_gcb, *args, **kwargs)
+def gcb_config_buffer_type(device) -> ttnn.BufferType:
+    """Where a GCB built here keeps its per-receiver config pages: L1_SMALL when ``device`` reserves any, else L1.
+
+    The pages hold the ring's read pointer and credit counters, which carry from one decode step to the next.
+    L1_SMALL lies above every statically allocated circular buffer, so a prefill program whose circular buffers
+    alias the (empty) ring data between decode steps cannot overwrite them.
+    """
+    if ttnn.get_memory_view(device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0:
+        return ttnn.BufferType.L1_SMALL
+    return ttnn.BufferType.L1
+
+
+def gcb_config_in_l1_small(gcb) -> bool:
+    """Whether ``gcb`` (built here) keeps its config pages in L1_SMALL."""
+    entry = _GCB_RECIPES.get(id(gcb))
+    if entry is None:
+        raise RuntimeError("this GCB was not built through layers.py")
+    return entry[3].get("config_buffer_type") == ttnn.BufferType.L1_SMALL
+
+
+def make_matmul_decode_gcb(device, *args, **kwargs):
+    return _recorded_gcb(
+        _make_matmul_decode_gcb, device, *args, config_buffer_type=gcb_config_buffer_type(device), **kwargs
+    )
 
 
 def take_gcb_recipe(gcb) -> tuple:
@@ -357,7 +379,11 @@ def make_shared_decode_gcb(device, specs, dtype: ttnn.DataType, num_pages: int =
     bank_to_receivers = _bank_to_receivers(num_b_cores, device, ring_cols)
     size = num_pages * decode_gcb_page_bytes(specs, dtype)
     return _recorded_gcb(
-        ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher, device, bank_to_receivers, size
+        ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher,
+        device,
+        bank_to_receivers,
+        size,
+        config_buffer_type=gcb_config_buffer_type(device),
     )
 
 

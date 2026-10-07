@@ -19,8 +19,12 @@ namespace ttnn::global_circular_buffer {
 void py_module_types(nb::module_& mod) {
     nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer")
         .def("size", &GlobalCircularBuffer::size)
-        .def("sender_cores", &GlobalCircularBuffer::sender_cores, nb::rv_policy::reference_internal)
-        .def("receiver_cores", &GlobalCircularBuffer::receiver_cores, nb::rv_policy::reference_internal)
+        // Copies: a reference_internal CoreRangeSet would keep the whole GCB, and with it the
+        // ring's L1, allocated for as long as Python holds the core set.
+        .def("sender_cores", &GlobalCircularBuffer::sender_cores, nb::rv_policy::copy)
+        .def("receiver_cores", &GlobalCircularBuffer::receiver_cores, nb::rv_policy::copy)
+        .def("buffer_address", &GlobalCircularBuffer::buffer_address)
+        .def("config_address", &GlobalCircularBuffer::config_address)
         .def("sender_core_type", [](const GlobalCircularBuffer& gcb) {
             return tt::tt_metal::experimental::sender_core_type(gcb) ==
                            tt::tt_metal::experimental::SenderCoreType::Worker

@@ -15,7 +15,7 @@ maximum length; each decode step slices the single position row(s) it needs.
 The test has two deployment variants:
 
 * ``tp4_8chip``: two 1x4 tensor-parallel stages on an 8-chip mesh.
-* ``tp4_32chip``: the same two 1x4 stages on a 32-chip Galaxy (24 chips idle).
+* ``tp4_32chip``: eight 1x4 tensor-parallel stages, one per row of a 32-chip Galaxy.
 
 Attention uses q_a/kv, replicated full-width on every rank of a
 stage; head-sharded SDPA, batched local-group O_A and row-parallel O_B.
@@ -38,6 +38,12 @@ Run it (ttnn venv)::
 
 Set ``DEEPSEEK_V4_START_POS`` to begin prefill at a non-zero absolute position,
 for example ``DEEPSEEK_V4_START_POS=1024``.
+
+The CSA lightning indexer is on: CSA attends densely until ``compress_rate * index_topk``
+(2048) positions and through the indexer from there on, so it is only exercised by runs
+that reach that far (the default ``DEEPSEEK_V4_MAX_NEW_TOKENS`` does).
+``DEEPSEEK_V4_INDEX_DENSE_MAX_POSITIONS`` moves the switch later and ``DEEPSEEK_V4_INDEXER=0``
+turns the indexer off.
 """
 
 from __future__ import annotations
@@ -64,6 +70,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
 )
 from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
+from models.experimental.deepseek_v4_flash.tt.system_config import load_system_config
 from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     DeepseekV4WeightLoader,
@@ -265,6 +272,22 @@ def _traced_max_seq(config, needed: int) -> int:
     return ((max_seq + step - 1) // step) * step
 
 
+def _indexer_system_config(mesh_device):
+    """The mesh's profile with the CSA lightning indexer on from the earliest legal position.
+
+    The profiles keep CSA on dense SDPA up to 10240 positions, past what this demo decodes.
+    ``index_dense_max_positions=0`` moves the switch down to ``compress_rate * index_topk``
+    (2048), the first position at which top-k has enough closed windows to select from.
+    ``DEEPSEEK_V4_INDEXER`` / ``DEEPSEEK_V4_INDEX_DENSE_MAX_POSITIONS`` still win when set.
+    """
+    attention = {}
+    if "DEEPSEEK_V4_INDEXER" not in os.environ:
+        attention["indexer"] = True
+    if "DEEPSEEK_V4_INDEX_DENSE_MAX_POSITIONS" not in os.environ:
+        attention["index_dense_max_positions"] = 0
+    return load_system_config(mesh_device=mesh_device, attention=attention).log()
+
+
 def _build_and_prefill(
     mesh_device,
     text: str,
@@ -272,13 +295,15 @@ def _build_and_prefill(
     system_config=None,
     *,
     tp_size: int = 1,
+    num_stages: int | None = None,
 ):
     """Build the full ttnn model, prepare the static traced-decode buffers, and
     prefill ``text`` one token at a time. Returns the populated state shared by
     the decode demo and the max-perf measurement tests.
 
     ``system_config`` pins the tuning profile; ``None`` lets the model pick the one
-    matching the open mesh's device count."""
+    matching the open mesh's device count. ``num_stages`` sets the pipeline depth;
+    ``None`` keeps the model's default (two stages at TP4)."""
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -313,6 +338,7 @@ def _build_and_prefill(
         system_config=system_config,
         loader=loader,
         config=config,
+        num_stages=num_stages,
     )
 
     # --- prefill the prompt by replaying decode one token at a time --------- #
@@ -408,34 +434,52 @@ class _InterruptFlag:
     ids=["fabric_1d"],
 )
 @pytest.mark.parametrize(
-    "mesh_device,tp_size",
+    "mesh_device,tp_size,num_stages",
     [
         # TP4 opens the mesh directly in the 1x4-stage shape so no ``mesh.reshape``
         # runs — on an 8-chip P150 host, reshaping (8, 1) -> (2, 4) has been seen
         # to leave submesh 1 with a downgraded per-device compute grid, which
         # breaks the single-user hyperconnection's width-sharded layout.
-        pytest.param((2, 4), 4, id="tp4_8chip"),
-        pytest.param((8, 4), 4, id="tp4_32chip"),
+        pytest.param((2, 4), 4, 2, id="tp4_8chip"),
+        # One 1x4 stage per Galaxy row, spanning all 32 chips.
+        pytest.param((8, 4), 4, 8, id="tp4_32chip"),
     ],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
-def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: int) -> None:
+def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: int, num_stages: int) -> None:
     import time
 
     # The prefetcher session spans prefill and generation both, so it is opened inside
     # ``_build_and_prefill`` (once the model exists) against this stack.
     with contextlib.ExitStack() as prefetcher:
-        state = _build_and_prefill(mesh_device, text, prefetcher, tp_size=tp_size)
+        state = _build_and_prefill(
+            mesh_device,
+            text,
+            prefetcher,
+            _indexer_system_config(mesh_device),
+            tp_size=tp_size,
+            num_stages=num_stages,
+        )
         model, tokenizer = state["model"], state["tokenizer"]
         prompt_ids, real_len = state["prompt_ids"], state["real_len"]
         start_pos = state["start_pos"]
         max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
         next_id = state["next_id"]
         generated: list[int] = [next_id]
-        _assert_decode_parallelism(model, tp_size)
+        _assert_decode_parallelism(model, tp_size, num_stages)
         _assert_prefetch_rings(model)
         assert model.paged, "traced decode must use the paged KV layout"
+        if model._indexer_active():
+            index_from = model._index_dense_limit() - 1
+            logger.info(f"lightning indexer: attached, CSA switches to it at pos {index_from}")
+            if start_pos + real_len + max_new_tokens <= index_from:
+                logger.warning(
+                    f"this run ends before pos {index_from}, so the lightning indexer is never used "
+                    f"(raise DEEPSEEK_V4_MAX_NEW_TOKENS)"
+                )
+        else:
+            assert "DEEPSEEK_V4_INDEXER" in os.environ, "the CSA lightning indexer must be attached"
 
         # Each step feeds the previously generated token at its absolute position and
         # reads back the single-token logits (no recompute over the prior context).
