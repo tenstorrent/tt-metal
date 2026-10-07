@@ -10,7 +10,7 @@ latent/padding-mask inputs. All six input addresses and layouts must remain
 stable. The tail preserves both casts and all eight in-place operations in their
 original order. Python `dt` values come from the same float32 sigma scalars;
 identical values reuse a trace. Custom and shortened warmup schedules can add
-entries beyond the shipped 8+3 schedule. No device scalar cache is created.
+entries beyond the shipped 8+2 schedule. No device scalar cache is created.
 
 Preparation uses cloned inputs; capture records commands and executes the actual
 state update once. The tail returns no temporary outputs. Cleanup releases every
@@ -41,7 +41,7 @@ C10_RESULTS=<fresh.pt> python -m pytest \
 `[f07]` selects its 2x4 mesh. The test preallocates independent baseline/candidate
 latents, velocity inputs and masks before all captures. Tiny traced producers
 supply retained declared outputs. Two sequence lengths and both velocity dtypes
-exercise all11 steps, changed inputs, per-chip exact BF16 comparisons, padding,
+exercise all 10 steps, changed inputs, per-chip exact BF16 comparisons, padding,
 and a final stage revisit after all trace families coexist. Raw mismatches and
 partial records are saved before failure. The five recorded tail-only timings
 exclude the producer, uploads and validation readback; they are observations,
@@ -51,7 +51,7 @@ Prewarm that manifest using the host's existing CPU tool before collection.
 
 Native contract success is only the first gate. Follow with fresh-process
 baseline/candidate full-model runs at the frozen source/build/model scope,
-all11 latent step comparisons and real prompt A/B/A, existing AV quality gates,
+all 10 latent step comparisons and real prompt A/B/A, existing AV quality gates,
 compile-free warm generations, and inclusive generation timings. The potential
 benefit is reduced dispatch of the Euler tail; its contribution to full-pipeline
 latency is not yet measured.
