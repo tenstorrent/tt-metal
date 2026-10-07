@@ -20,50 +20,78 @@
 #include "api/dataflow/dataflow_api.h"
 #endif
 
-// Experimental DM <-> TRISC sync on caller-owned L1 scratch, with no CB ID. Same counters and the same
-// register path as a CB; performance must be measured on hardware. Channel Ch (0 or 1) owns the
-// stream counters of CB 62 + Ch:
-// tiles_received (written only by the producer) and tiles_acked (written only by the consumer).
+// Scratch CB (experimental): producer/consumer sync between a DM kernel and a compute kernel, without
+// allocating a circular buffer.
 //
-// CB IDs 62 and 63 are reserved by the Blackhole host allocation limit. The caller owns the
-// L1 slots and picks which one to use; l1_addr only tags the profiler sync events. Capacity defaults to
-// one page per channel: alternate <0> and <1> for two independently synchronized scratch slots. An
-// explicit Capacity supports a FIFO ring per channel; use the same Capacity in all calls on both sides.
-// One side is DM and the other is compute: DM -> UNPACK or PACK -> DM. On compute, calls on
-// the other TRISC threads compile to nothing, as in CircularBuffer.
+// It works like the reserve/push/wait/pop calls of a CB, but only the synchronization is provided.
+// You own the L1 memory: pick the address, write and read it yourself, and step through your slots
+// yourself. Nothing here allocates memory or moves a read/write pointer.
 //
-// Firmware zeros both counters before every kernel (init_sync_registers in trisc.cc). Each channel has
-// one producer and one consumer with fixed roles for the launch. Balanced push/pop operations allow
-// reuse within the launch. Both sides must use the same FIFO order and backing slots.
-// Complete DM NoC writes before push and NoC reads before pop using the appropriate NoC barrier.
-// The address is a profiler tag, not an allocation or an independent synchronization resource.
+// Who can talk to whom
+//   One side is a DM kernel and the other is compute:
+//     DM  -> UNPACK   (DM reserves and pushes, UNPACK waits and pops)
+//     PACK -> DM      (PACK reserves and pushes, DM waits and pops)
+//   On compute, reserve/push run on PACK and wait/pop run on UNPACK; on the other TRISCs they compile
+//   to nothing, as with CircularBuffer.
 //
-// A page is a caller-defined unit of work, not a tile format or a CB descriptor. This API allocates
-// no payload memory and does not advance pointers. Capacity is a compile-time number of such units
-// (1..65535); the caller supplies enough storage for all outstanding units. Counters wrap at 16 bits.
-// Each call requires 0 < num_pages <= Capacity. Reserve/wait only observe availability: repeated
-// calls before push/pop are cumulative checks, not additional reservations. Publish only after
-// reserve succeeds, and release only units covered by wait. Both sides must agree on the unit size.
+// Template parameters
+//   Ch        Channel, 0 or 1. Each channel is an independent producer/consumer pair, so you can run
+//             two at once (e.g. channel 0 for DM -> UNPACK and channel 1 for PACK -> DM). Channel Ch
+//             uses the hardware counters of CB 62 + Ch; CB IDs 62 and 63 are never handed out by the
+//             host allocator, so they don't collide with real CBs.
+//   Capacity  How many pages the channel can hold at once (1..65535, default 1). With Capacity 1 the
+//             producer waits until the consumer has popped before writing again. A larger Capacity
+//             lets the producer run ahead, as a ring of Capacity slots. Use the same Capacity in every
+//             call on both sides of a channel.
 //
-// Example, channel 0 with two caller-managed slots (one credit per slot):
-//   DM:     scratch_reserve_back<0, 2>(slot_addr, 1);
-//           ... write slot; complete NoC writes with the appropriate barrier ...
-//           scratch_push_back<0, 2>(slot_addr, 1);
-//   UNPACK: scratch_wait_front<0, 2>(slot_addr, 1);
-//           ... unpack from slot using the compute 2.0 API ...
-//           scratch_pop_front<0, 2>(slot_addr, 1);
-// Both sides select slots in the same FIFO order. These calls are not an all-TRISC barrier and do
-// not support multiple producers or consumers on one channel, and endpoints cannot change within a launch.
+// Function arguments
+//   num_pages  How many pages to reserve/push/wait/pop, 1..Capacity. A "page" is whatever unit you
+//              choose (a tile, a buffer, a message); both sides just have to agree on it. Same as
+//              num_pages in cb_reserve_back/cb_push_back/cb_wait_front/cb_pop_front.
+//   l1_addr    Optional, default 0. Only labels the event in the sync profiler, e.g. pass the slot
+//              address to see which slot a wait was stuck on. It does not select memory or affect
+//              synchronization, and is compiled out when the profiler is off.
+//
+// Rules
+//   - Each channel has exactly one producer and one consumer, and they stay the same for the whole
+//     kernel launch. These calls are not a barrier across all TRISCs.
+//   - Both sides must walk the slots in the same order.
+//   - On DM, finish NoC writes (barrier) before push, and finish NoC reads before pop.
+//   - Reserve and wait only check that space or data is available; calling them twice does not
+//     reserve twice. Push only what you reserved, pop only what you waited for.
+//   - Counters start at 0 for every kernel launch and wrap at 16 bits, so a channel can be reused
+//     any number of times within a launch as long as pushes and pops balance.
+//
+// Example: DM fills two slots in turn on channel 0 and UNPACK consumes them.
+//   constexpr uint32_t kCapacity = 2;
+//
+//   DM kernel:
+//     for (uint32_t i = 0; i < n; ++i) {
+//         uint32_t slot = base_addr + (i % kCapacity) * page_size;
+//         scratch_reserve_back<0, kCapacity>(1);   // wait for a free slot
+//         ... write the slot (e.g. noc_async_read into it), then noc_async_read_barrier() ...
+//         scratch_push_back<0, kCapacity>(1);      // hand it to compute
+//     }
+//
+//   Compute kernel:
+//     for (uint32_t i = 0; i < n; ++i) {
+//         uint32_t slot = base_addr + (i % kCapacity) * page_size;
+//         scratch_wait_front<0, kCapacity>(1);     // wait for DM to fill it
+//         ... unpack from the slot using the compute 2.0 API ...
+//         scratch_pop_front<0, kCapacity>(1);      // give the slot back to DM
+//     }
+//
+//   To label profiler events with the slot, pass it last: scratch_wait_front<0, kCapacity>(1, slot);
 
 namespace experimental {
 
 // Producer: block until num_pages pages of channel Ch are free.
 template <std::uint32_t Ch, std::uint16_t Capacity = 1>
-inline void scratch_reserve_back(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void scratch_reserve_back(std::int32_t num_pages, std::uint32_t l1_addr = 0) {
     static_assert(Ch < kScratchCbChannels, "scratch CB channel must be 0 or 1");
     static_assert(Capacity > 0, "scratch CB capacity must be positive");
 #ifdef COMPILE_FOR_TRISC
-    PACK((scratch_cb_detail::llk_scratch_pack_reserve_back<Ch, Capacity>(l1_addr, num_pages)));
+    PACK((scratch_cb_detail::llk_scratch_pack_reserve_back<Ch, Capacity>(num_pages, l1_addr)));
 #else
     constexpr std::uint32_t cb = scratch_cb_detail::cb_id<Ch>();
     uintptr_t pages_acked_ptr = (uintptr_t)get_cb_tiles_acked_ptr(cb);
@@ -86,11 +114,11 @@ inline void scratch_reserve_back(std::uint32_t l1_addr, std::int32_t num_pages) 
 
 // Producer: publish num_pages pages of channel Ch.
 template <std::uint32_t Ch, std::uint16_t Capacity = 1>
-inline void scratch_push_back(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void scratch_push_back(std::int32_t num_pages, std::uint32_t l1_addr = 0) {
     static_assert(Ch < kScratchCbChannels, "scratch CB channel must be 0 or 1");
     static_assert(Capacity > 0, "scratch CB capacity must be positive");
 #ifdef COMPILE_FOR_TRISC
-    PACK((scratch_cb_detail::llk_scratch_pack_push_back<Ch>(l1_addr, num_pages)));
+    PACK((scratch_cb_detail::llk_scratch_pack_push_back<Ch>(num_pages, l1_addr)));
 #else
     volatile tt_reg_ptr std::uint32_t* pages_received_ptr = get_cb_tiles_received_ptr(scratch_cb_detail::cb_id<Ch>());
     SYNC_SIGNAL("SYNC-SCRATCH-CB-PUSH", l1_addr);
@@ -100,11 +128,11 @@ inline void scratch_push_back(std::uint32_t l1_addr, std::int32_t num_pages) {
 
 // Consumer: block until num_pages pages of channel Ch have been pushed.
 template <std::uint32_t Ch, std::uint16_t Capacity = 1>
-inline void scratch_wait_front(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void scratch_wait_front(std::int32_t num_pages, std::uint32_t l1_addr = 0) {
     static_assert(Ch < kScratchCbChannels, "scratch CB channel must be 0 or 1");
     static_assert(Capacity > 0, "scratch CB capacity must be positive");
 #ifdef COMPILE_FOR_TRISC
-    UNPACK((scratch_cb_detail::llk_scratch_unpack_wait_front<Ch>(l1_addr, num_pages)));
+    UNPACK((scratch_cb_detail::llk_scratch_unpack_wait_front<Ch>(num_pages, l1_addr)));
 #else
     constexpr std::uint32_t cb = scratch_cb_detail::cb_id<Ch>();
     std::uint32_t pages_acked = get_cb_tiles_acked_ptr(cb)[0];
@@ -124,11 +152,11 @@ inline void scratch_wait_front(std::uint32_t l1_addr, std::int32_t num_pages) {
 
 // Consumer: free num_pages pages of channel Ch.
 template <std::uint32_t Ch, std::uint16_t Capacity = 1>
-inline void scratch_pop_front(std::uint32_t l1_addr, std::int32_t num_pages) {
+inline void scratch_pop_front(std::int32_t num_pages, std::uint32_t l1_addr = 0) {
     static_assert(Ch < kScratchCbChannels, "scratch CB channel must be 0 or 1");
     static_assert(Capacity > 0, "scratch CB capacity must be positive");
 #ifdef COMPILE_FOR_TRISC
-    UNPACK((scratch_cb_detail::llk_scratch_unpack_pop_front<Ch>(l1_addr, num_pages)));
+    UNPACK((scratch_cb_detail::llk_scratch_unpack_pop_front<Ch>(num_pages, l1_addr)));
 #else
     volatile tt_reg_ptr std::uint32_t* pages_acked_ptr = get_cb_tiles_acked_ptr(scratch_cb_detail::cb_id<Ch>());
     SYNC_SIGNAL("SYNC-SCRATCH-CB-POP", l1_addr);

@@ -68,7 +68,7 @@ void kernel_main() {
         for (std::uint32_t i = 0; i < num_iters; ++i) {
             const std::uint32_t slot = ring_addr + (i % capacity) * tile_bytes;
             if constexpr (!nosync) {
-                experimental::scratch_reserve_back<0, capacity>(slot, 1);
+                experimental::scratch_reserve_back<0, capacity>(1, slot);
             }
             noc_async_read(get_noc_addr(in_addr + (i % num_tiles) * tile_bytes), slot, tile_bytes);
             noc_async_read_barrier();
@@ -83,7 +83,7 @@ void kernel_main() {
                 }
                 real_cb.push_back(1);
             }
-            experimental::scratch_push_back<0, capacity>(slot, 1);
+            experimental::scratch_push_back<0, capacity>(1, slot);
         }
     }
 
@@ -93,7 +93,7 @@ void kernel_main() {
         for (std::uint32_t i = 0; i < num_iters; ++i) {
             const std::uint32_t slot = ring_addr + (i % capacity) * tile_bytes;
             if constexpr (!nosync) {
-                experimental::scratch_wait_front<1, capacity>(slot, 1);
+                experimental::scratch_wait_front<1, capacity>(1, slot);
             }
             invalidate_l1_cache();
             const auto* original = l1(in_addr + (i % num_tiles) * tile_bytes);
@@ -118,7 +118,7 @@ void kernel_main() {
                 }
                 real_cb.pop_front(1);
             }
-            experimental::scratch_pop_front<1, capacity>(slot, 1);
+            experimental::scratch_pop_front<1, capacity>(1, slot);
         }
         l1(report_addr)[0] = errors;
         l1(report_addr)[1] = real_cb_errors;
@@ -130,9 +130,9 @@ void kernel_main() {
         std::uint32_t high_water = 0;
         for (std::uint32_t i = 0; i < num_iters; i += batch) {
             if constexpr (!nosync) {
-                experimental::scratch_reserve_back<0, capacity>(ring_addr, batch);
+                experimental::scratch_reserve_back<0, capacity>(batch);
             }
-            experimental::scratch_push_back<0, capacity>(ring_addr, batch);
+            experimental::scratch_push_back<0, capacity>(batch);
             const std::uint16_t in_flight = static_cast<std::uint16_t>(i + batch - reg_read(acked_ptr));
             high_water = in_flight > high_water ? in_flight : high_water;
         }
@@ -147,16 +147,16 @@ void kernel_main() {
         std::uint32_t errors = 0;
         const auto* original = l1(in_addr);
         for (std::uint32_t i = 0; i < num_iters; ++i) {
-            experimental::scratch_reserve_back<0, capacity>(ring_addr, 1);
+            experimental::scratch_reserve_back<0, capacity>(1, ring_addr);
             noc_async_read(get_noc_addr(i == 0 ? in_addr : ring_b_addr), ring_addr, tile_bytes);
             noc_async_read_barrier();
             if (i > 0) {
-                experimental::scratch_pop_front<1, capacity>(ring_b_addr, 1);
+                experimental::scratch_pop_front<1, capacity>(1, ring_b_addr);
             }
             l1(ring_addr)[0] = sequence_tag(i);
-            experimental::scratch_push_back<0, capacity>(ring_addr, 1);
+            experimental::scratch_push_back<0, capacity>(1, ring_addr);
 
-            experimental::scratch_wait_front<1, capacity>(ring_b_addr, 1);
+            experimental::scratch_wait_front<1, capacity>(1, ring_b_addr);
             invalidate_l1_cache();
             for (std::uint32_t word = 0; word < tile_bytes / sizeof(std::uint32_t); ++word) {
                 if (l1(ring_b_addr)[word] != (word == 0 ? sequence_tag(i) : original[word])) {
@@ -167,7 +167,7 @@ void kernel_main() {
         }
         noc_async_write(ring_b_addr, get_noc_addr(out_addr), tile_bytes);
         noc_async_write_barrier();
-        experimental::scratch_pop_front<1, capacity>(ring_b_addr, 1);
+        experimental::scratch_pop_front<1, capacity>(1, ring_b_addr);
         l1(report_addr)[0] = errors;
     }
 }
