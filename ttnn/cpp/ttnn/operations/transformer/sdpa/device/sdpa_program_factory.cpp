@@ -882,10 +882,14 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.attention_sink = allocate_tile_cb(attention_sink_tiles, sink_tile_size, sink_df);
     }
 
-    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+    // Streaming compute v2: recip scratch CB for normalize_row_streaming, one tile per row of a normalize row group
+    // (the single-K-chunk path computes a whole row group's 1/sum at once).
     // No row buffers needed — cb_push_back_hold_wr_ptr writes directly to cb_qkt_im.
     if (use_streaming_compute) {
-        cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
+        cb_ids.recip_scratch = allocate_tile_cb(
+            ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t),
+            im_tile_size,
+            im_df);
     }
 
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);

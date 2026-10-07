@@ -575,7 +575,8 @@ void sub_exp_block_bcast_cols(
     uint32_t global_col_base,
     uint32_t sbh,
     uint32_t sbw,
-    bool skip_pack_configure = false) {
+    bool skip_pack_configure = false,
+    bool skip_row_sum = false) {
     const uint32_t tiles_per_row = sbh;
     const uint32_t tiles_per_column = sbw;
     const uint32_t max_row_base = q_subblock * tiles_per_row;
@@ -628,8 +629,10 @@ void sub_exp_block_bcast_cols(
         } else {
             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
         }
-        configure_single_tile_pack(reduce_cb);
-        {
+        // Row sums: L1-accumulate every exp tile into reduce_cb, unless normalize row-reduces the scores itself
+        // (skip_row_sum), which takes this second pack pass off the pack thread.
+        if (!skip_row_sum) {
+            configure_single_tile_pack(reduce_cb);
             uint32_t dst_index = 0;
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -802,7 +805,15 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_out_cb,
     uint32_t sbh,
     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
-    [[maybe_unused]] uint32_t sink_row_offset = 0) {
+    [[maybe_unused]] uint32_t sink_row_offset = 0,
+    // When scores_cb is set (Blackhole), each tile row's denominator is the row sum of that row's exp'd scores in
+    // scores_cb (tiles scores_tile_base + s * scores_stride + [0, scores_cols)), and cur_sum_cb's contents are not
+    // read. scratch_cb must then hold sbh tiles.
+    uint32_t scores_cb = INVALID_CB,
+    uint32_t scores_tile_base = 0,
+    uint32_t scores_cols = 0,
+    uint32_t scores_stride = 0) {
+    const bool sum_from_scores = scores_cb != INVALID_CB;
     // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
     // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
     if constexpr (use_attention_sink) {
@@ -810,9 +821,43 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         CircularBuffer(cur_max_cb_rt).wait_front(sink_row_offset + sbh);
     }
     configure_single_tile_pack(scratch_cb);
+#ifdef ARCH_BLACKHOLE
+    if (sum_from_scores) {
+        // The whole row group at once: scores rows × col_identity accumulated in DST, one matmul call per score column
+        // with rt_dim = sbh (col_identity unpacked once per call, the rows kt_dim = scores_stride tiles apart), then
+        // every row's reciprocal, into sbh scratch tiles.
+        MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
+        matmul_block_init(scores_cb, col_identity_cb, 0, 1, sbh, scores_stride);
+        reconfig_data_format(col_identity_cb, scores_cb);
+        sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
+        CircularBuffer(col_identity_cb).wait_front(1);
+        CircularBuffer(cur_sum_cb).wait_front(sbh);
+        CircularBuffer(scratch_cb).reserve_back(sbh);
+        tile_regs_acquire();
+        for (uint32_t c = 0; c < scores_cols; ++c) {
+            matmul_block(scores_cb, col_identity_cb, scores_tile_base + c, 0, 0, 0, 1, sbh, scores_stride);
+        }
+        recip_tile_init();
+        for (uint32_t i = 0; i < sbh; ++i) {
+            MATH((recip_tile(i, VectorMode::C)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < sbh; ++i) {
+            pack_tile(i, scratch_cb);
+        }
+        tile_regs_release();
+        CircularBuffer(scratch_cb).push_back(sbh);
+        CircularBuffer(cur_sum_cb).pop_front(sbh);
+        // Leave the 1x1 matmul state the per-row path leaves: the next row group's V matmul only re-inits short
+        // (mm_no_mop_reinit_short) and hangs on the rt_dim / kt_dim programmed above.
+        matmul_block_init(scores_cb, col_identity_cb, 0, 1, 1, 1);
+        reconfig_data_format(cur_out_cb, scratch_cb);
+    }
+#endif
     for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
-        {
+        if (!sum_from_scores) {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
             matmul_block_init(cur_sum_cb, col_identity_cb, 0, N, 1, N);
@@ -869,12 +914,14 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
         // Process in batches of up to dst_size tiles (DST capacity).
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+            // batched sums leave the row group's reciprocals at scratch tiles [0, sbh)
+            const uint32_t recip_tile_idx = sum_from_scores ? s : 0;
             constexpr uint32_t batch = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
             mul_bcast_cols_init(cur_out_cb, scratch_cb);
             // Pack output to normalized_out_cb; old/new skips when it has the same format as scratch.
             sdpa_maybe_pack_reconfig_data_format<scratch_cb, normalized_out_cb>();
             CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
-            CircularBuffer(scratch_cb).wait_front(1);
+            CircularBuffer(scratch_cb).wait_front(recip_tile_idx + 1);
 
             CircularBuffer(normalized_out_cb).reserve_back(head_dim_t_);
             for (uint32_t base = 0; base < head_dim_t_; base += batch) {
@@ -882,7 +929,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 const uint32_t cur_batch = (base + batch <= head_dim_t_) ? batch : last_batch;
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < cur_batch; ++j) {
-                    mul_tiles_bcast_cols(cur_out_cb, scratch_cb, base + j, 0, j);
+                    mul_tiles_bcast_cols(cur_out_cb, scratch_cb, base + j, recip_tile_idx, j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -893,7 +940,9 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             }
             CircularBuffer(normalized_out_cb).push_back(head_dim_t_);
 
-            CircularBuffer(scratch_cb).pop_front(1);
+            if (!sum_from_scores || s + 1 == sbh) {
+                CircularBuffer(scratch_cb).pop_front(sum_from_scores ? sbh : 1);
+            }
             CircularBuffer(cur_out_cb).pop_front(head_dim_t_);
         }
     }
@@ -1402,6 +1451,18 @@ static void sdpa_inner_loop_step(
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qkt_subblock_h;
     constexpr uint32_t q_subblock_num_tiles = qkt_subblock_h * in0_block_w;
     constexpr uint32_t row_tiles = qkt_subblock_h * KT_stride;  // Use KT_stride for cb_qkt_im row width
+    // One K chunk covers all of Sk (no online-softmax correction), so normalize sums the exp'd scores left in cb_qkt_im
+    // on the math thread (a matmul against col_identity) instead of sub_exp L1-accumulating them into cur.sum on the
+    // pack thread, the busier thread in the Q@KT / sub_exp loop. Normalize's row groups are qktv_h tall, in order.
+    constexpr uint32_t norm_row_h =
+        ttnn::transformer::sdpa::streaming_qktv_h(qktv_subblock_h, qktv_subblock_w, dst_size, Sq_chunk_t);
+#if defined(SDPA_SUM_ON_PACK) || !defined(ARCH_BLACKHOLE)
+    constexpr bool sum_from_scores_ok = false;
+#else
+    constexpr bool sum_from_scores_ok =
+        !ring_mode && !kt_inplace_v && !use_attention_sink && (Sq_chunk_t % norm_row_h == 0);
+#endif
+    const bool sum_from_scores = sum_from_scores_ok && is_first_iter && is_last_iter;
     static_assert(!(use_padded_mask && ring_mode), "use_padded_mask and ring_mode are mutually exclusive");
 
     uint32_t pushed_rows = 0;
@@ -1486,7 +1547,8 @@ static void sdpa_inner_loop_step(
                     kt_subblock * actual_sbw,
                     qkt_subblock_h,
                     actual_sbw,
-                    /*skip_pack_configure=*/true);
+                    /*skip_pack_configure=*/true,
+                    /*skip_row_sum=*/sum_from_scores);
                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
                 sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
                 sdpa_mm_reinit(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
@@ -1693,7 +1755,9 @@ static void sdpa_inner_loop_step(
                         q_num_subblocks - 1,
                         kt_sub * actual_sbw,
                         qkt_subblock_h,
-                        actual_sbw);
+                        actual_sbw,
+                        /*skip_pack_configure=*/false,
+                        /*skip_row_sum=*/sum_from_scores);
                     if constexpr (qktv_first_group_reads_inplace_row) {
                         // PACK half only; SEMGET head-of-line-blocks the unpack thread, so the
                         // UNPACK half waits just before the matmul instead of stalling the setup
@@ -1830,7 +1894,16 @@ static void sdpa_inner_loop_step(
                 cb_normalized_out,
                 scale_fp32,
                 use_attention_sink,
-                cb_attention_sink>(cur.sum, out_cb, sbh, cur.max, sink_row_offset);
+                cb_attention_sink>(
+                cur.sum,
+                out_cb,
+                sbh,
+                cur.max,
+                sink_row_offset,
+                sum_from_scores ? cb_qkt_im : INVALID_CB,
+                pushed * norm_row_h * KT_stride,
+                active_Sk,
+                KT_stride);
             if constexpr (use_attention_sink) {
                 sink_row_offset += sbh;
             }
