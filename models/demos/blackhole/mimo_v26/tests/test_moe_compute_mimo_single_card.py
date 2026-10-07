@@ -9,6 +9,8 @@ with bfp8 weights. Reuses the upstream single-card harness (same goldens/validat
 Pass = all upstream validators + PCC >= 0.999. If the op rejects these dims (ring tile counts) the failure message is the
 evidence: log it, do not weaken the gate.
 """
+import os
+
 import pytest
 from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
 from ttnn.operations.ccl import MoEActivationFunction
@@ -80,9 +82,12 @@ def _strict(fn):
 @pytest.mark.parametrize("k", [8, 4], ids=["top8", "top4"])
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
 def test_moe_compute_mimo_single_card(mesh_device, mesh_shape, compute_only, k, monkeypatch):
-    monkeypatch.setattr(up, "_build_quantized_weight_tensors_cpu_prepare", _upload_bfp8)
-    monkeypatch.setattr(up, "validate_matmul", _strict(up.validate_matmul))
-    monkeypatch.setattr(up, "validate_combine", _strict(up.validate_combine))
+    if (
+        os.environ.get("MIMO_CONTROL") != "bfp4"
+    ):  # control run: unmodified upstream bfp4 upload + thresholds at MiMo dims
+        monkeypatch.setattr(up, "_build_quantized_weight_tensors_cpu_prepare", _upload_bfp8)
+        monkeypatch.setattr(up, "validate_matmul", _strict(up.validate_matmul))
+        monkeypatch.setattr(up, "validate_combine", _strict(up.validate_combine))
     hidden = 4096
     ring_n = effective_matmul_ring_size(mesh_device)
     print(f"RESULT ring_n={ring_n} width_shard={auto_output_width_shard_dim(hidden, matmul_ring_size=ring_n)}")
