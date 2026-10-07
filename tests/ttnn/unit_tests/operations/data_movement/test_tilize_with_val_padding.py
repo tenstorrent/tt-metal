@@ -1028,6 +1028,7 @@ DRAM = ttnn.BufferType.DRAM
         (DRAM, L1, 512, 4),
         (L1, DRAM, 512, 4),
         (DRAM, DRAM, 16384, 8),  # row of tiles doesn't fit in L1
+        (DRAM, L1, 16384, 8),  # wide row to L1 sharded output
         (L1, None, 16384, 8),  # wide L1 sharded to DRAM interleaved
     ],
 )

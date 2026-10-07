@@ -145,7 +145,12 @@ ttnn::Tensor tilize_with_val_padding(
         if (input_tensor.memory_config().is_sharded() && !enough_space_height &&
             !ttnn::prim::can_use_tilize_with_val_padding_sharded_factory(
                 {.output_padded_shape = output_shape,
+                 .pad_value = pad_value,
                  .output_mem_config = output_mem_config,
+                 .output_dtype = dtype,
+                 .use_multicore = use_multicore,
+                 .enough_space_width = enough_space_width,
+                 .enough_space_height = enough_space_height,
                  .sub_core_grids = sub_core_grids},
                 input_tensor)) {
             auto interleaved_tile = ttnn::prim::tilize_with_val_padding(
