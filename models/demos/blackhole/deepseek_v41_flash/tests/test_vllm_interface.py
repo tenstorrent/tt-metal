@@ -387,3 +387,131 @@ def test_context_bound_by_batch(monkeypatch):
     assert C.bounded_max_seq_len(65536, 64) == 65536
     monkeypatch.setenv("DSV41_VLLM_MAX_CTX", "40000")
     assert C.bounded_max_seq_len(65536, 64) == 40000
+
+
+# ---- speculative decoding (plugin model-owned drafter contract) against a fake SpecRunner ----------------------------------------------------
+class FakeSpec:
+    """Stand-in of tt/spec_model.SpecRunner: target argmax of a row = (token + 1) % 7; drafts continue the chain from the last committed token."""
+
+    def __init__(self, B, k):
+        self.B, self.k, self.n, self.released = B, k, k + 1, 0
+        self.d_final = torch.zeros(B, 5, dtype=torch.long)
+        self.dev_first = torch.zeros(B, dtype=torch.long)
+        self.rounds = []
+
+    def release(self):
+        self.released += 1
+
+    def seed(self, tokens, lens, first):
+        self.rounds.append(("seed", lens.clone(), first.clone()))
+        self.dev_first = first.clone()
+        self.d_final = torch.stack([(first + j + 1) % 7 for j in range(5)], dim=1)
+
+    def _round(self, X, base, force):
+        self.rounds.append(("round", X.clone(), base.clone(), force.clone()))
+        a = (X + 1) % 7
+        m = torch.zeros(self.B, dtype=torch.long)
+        for b in range(self.B):
+            while m[b] < self.k and int(X[b, m[b] + 1]) == int(a[b, m[b]]):
+                m[b] += 1
+            if force[b] >= 0:
+                m[b] = int(force[b])
+        last = a[torch.arange(self.B), m]
+        d = torch.stack([(last + j + 1) % 7 for j in range(5)], dim=1)
+        return a, m, d
+
+
+def make_spec(max_num_seqs=8, k=3):
+    B = VS.padded_batch(max_num_seqs)
+    m = FakeModel(B)
+    spec = FakeSpec(B, k)
+    gen = SimpleNamespace(m=m, spec=spec, prefill_chunk=None, auto_chunk=lambda max_len: 256)
+    return DeepseekV41ForCausalLM(gen, max_num_seqs, 4096), m, spec
+
+
+def test_spec_plan_by_batch():
+    f = DeepseekV41ForCausalLM.spec_plan
+    cfg = SimpleNamespace(model_config=SimpleNamespace(max_model_len=33280))
+    assert f(cfg, 32, 5).effective_k == 3  # U=8: 8 * (1 + 3) = 32 rows
+    assert f(cfg, 16, 5).effective_k == 5 and f(cfg, 4, 2).effective_k == 2
+    assert f(cfg, 128, 3).reason and not hasattr(f(cfg, 128, 3), "effective_k")  # B=128: refused
+    assert f(SimpleNamespace(model_config=SimpleNamespace(max_model_len=60000)), 32, 3).supported_k == (
+        1,
+        2,
+        3,
+    )  # context too long for the runners
+
+
+def test_spec_prefill_seeds_and_propose_offers_drafts():
+    gen, m, spec = make_spec(8, 3)
+    toks = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]], dtype=torch.int32)
+    first = gen.prefill_forward(toks, prompt_lens=[3, 2], empty_slots=[0, 1], sampling_params=GREEDY)
+    assert spec.released == 1 and spec.rounds[-1][0] == "seed"
+    assert spec.rounds[-1][1].tolist() == [3, 2, 1, 1, 1, 1, 1, 1]  # idle rows replay one dummy token
+    committed = torch.zeros(8, 4, dtype=torch.int32)
+    committed[0, 0], committed[1, 0] = first[0], first[1]
+    cpos = torch.full((8, 4), -1)
+    cpos[0, 0], cpos[1, 0] = 3, 2
+    out = gen.propose_draft_tokens(3, committed, cpos, torch.ones(8, dtype=torch.int32))
+    assert out.num_valid.tolist() == [3, 3, 0, 0, 0, 0, 0, 0]
+    assert out.draft_token_ids[0].tolist() == [(int(first[0]) + j + 1) % 7 for j in range(3)]
+
+
+def test_spec_verify_walks_like_the_plugin_and_forces_zero_without_drafts():
+    gen, m, spec = make_spec(8, 3)
+    toks = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]], dtype=torch.int32)
+    first = gen.prefill_forward(toks, prompt_lens=[3, 2], empty_slots=[0, 1], sampling_params=GREEDY)
+    f0, f1 = int(first[0]), int(first[1])
+    X = torch.zeros(8, 4, dtype=torch.int32)
+    X[0] = torch.tensor([f0, (f0 + 1) % 7, (f0 + 2) % 7, (f0 + 3) % 7])  # all drafts right
+    X[1] = torch.tensor([f1, -1, -1, -1])  # no drafts (placeholders)
+    pos = torch.full((8, 4), -1)
+    pos[0], pos[1, 0] = torch.arange(3, 7), 2
+    nv = torch.tensor([3, 0, 0, 0, 0, 0, 0, 0], dtype=torch.int32)
+    vo = gen.decode_forward(
+        X, pos, num_valid_drafts=nv, accepted_counts=torch.ones(8, dtype=torch.int32), spec_mode="argmax_ids"
+    )
+    r = spec.rounds[-1]
+    assert (
+        r[0] == "round" and r[3][0] == -1 and r[3][1] == 0
+    )  # row 0 free, row 1 forced to commit nothing beyond its token
+    assert vo.argmax_ids.shape == (8, 4) and vo.argmax_ids[0].tolist() == [
+        (f0 + 1) % 7,
+        (f0 + 2) % 7,
+        (f0 + 3) % 7,
+        (f0 + 4) % 7,
+    ]
+    assert vo.argmax_ids[2:].eq(0).all()
+    p0, p1 = gen.slots.physical(0), gen.slots.physical(1)
+    assert int(gen.book.n[p0]) == 3 + 4 and int(gen.book.n[p1]) == 2 + 1  # fed: token + 3 accepted drafts / the token
+    # the next proposal continues from what the plugin commits (its walk: 3 accepted + bonus; row 1: the argmax)
+    committed = torch.zeros(8, 4, dtype=torch.int32)
+    committed[0] = vo.argmax_ids[0]
+    committed[1, 0] = vo.argmax_ids[1, 0]
+    cpos = torch.full((8, 4), -1)
+    cpos[0], cpos[1, 0] = torch.arange(4, 8), 3
+    acc = torch.ones(8, dtype=torch.int32)
+    acc[0] = 4
+    out = gen.propose_draft_tokens(3, committed, cpos, acc)
+    assert out.num_valid[:2].tolist() == [3, 3]
+    # a row whose committed token is not the one the drafts continue gets nothing
+    committed[1, 0] = (int(committed[1, 0]) + 1) % 7
+    assert gen.propose_draft_tokens(3, committed, cpos, acc).num_valid[:2].tolist() == [3, 0]
+
+
+def test_spec_refuses_partial_drafts_and_plain_calls(expect_error):
+    gen, m, spec = make_spec(8, 3)
+    toks = torch.tensor([[1, 2, 3, 0]], dtype=torch.int32)
+    gen.prefill_forward(toks, prompt_lens=[3], empty_slots=[0], sampling_params=GREEDY)
+    pos = torch.full((8, 4), -1)
+    pos[0] = torch.arange(3, 7)
+    with expect_error(ValueError, ".*valid drafts.*"):
+        gen.decode_forward(
+            torch.zeros(8, 4, dtype=torch.int32),
+            pos,
+            num_valid_drafts=torch.tensor([2] + [0] * 7, dtype=torch.int32),
+            accepted_counts=torch.ones(8, dtype=torch.int32),
+            spec_mode="argmax_ids",
+        )
+    with expect_error(RuntimeError, ".*narrow decode.*"):
+        gen.decode_forward(torch.zeros(8, 1, dtype=torch.int32), torch.tensor([3] + [-1] * 7), sampling_params=GREEDY)

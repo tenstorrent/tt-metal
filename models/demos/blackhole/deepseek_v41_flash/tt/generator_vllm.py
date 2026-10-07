@@ -73,6 +73,10 @@ class DeepseekV41ForCausalLM:
         # device sampling = greedy only: temperature > 0 with top_k != 1 falls back to host sampling on the logits this class returns
         "max_device_top_k": 1,
         "supports_device_penalties": False,
+        # speculative decoding through the plugin's model-owned drafter contract (``speculative_config`` method custom_class): see ``spec_plan`` and the SPECULATIVE DECODING section
+        "supports_spec_decode": True,
+        "spec_requirements": ["device_propose"],
+        "spec_hidden_handoff": [],
     }
 
     # ---- construction ------------------------------------------------------------------------------------------------------------------------
@@ -92,13 +96,15 @@ class DeepseekV41ForCausalLM:
             os.environ.setdefault(
                 "DSV41_CKPT", ckpt
             )  # tt/model_args.py reads it at import time: set before the model modules are imported
-        # The vLLM interface is PLAIN decode: no spec runners are ever built here, and a spec-capable pool (DSV41_RING_ROWS=288, chosen by tt/spec_policy at build time) would only cost DRAM.
-        # Force it (the serving catalog entry need not carry DSV41_SPEC=0); MoE compute precision defaults to what the tt-metal demo measurements use.
-        if int(os.environ.get("DSV41_SPEC", "0") or 0) > 0:
+        # Decode mode of the vLLM interface: PLAIN unless the server runs with a ``speculative_config`` (method custom_class = the plugin's model-owned drafter): then the model is built with a
+        # spec-capable pool (DSV41_RING_ROWS=288, chosen by tt/spec_policy at build time) and ONE fixed-k SpecRunner is built before any trace exists. The catalog entry need not carry DSV41_SPEC;
+        # an env value is overridden (the interface never uses the demo's adaptive default). MoE compute precision defaults to what the tt-metal demo measurements use.
+        spec_k = cls.configured_spec_k()
+        if os.environ.get("DSV41_SPEC", "0") not in ("", "0", str(spec_k)):
             logger.warning(
-                f"DSV41_SPEC={os.environ['DSV41_SPEC']} ignored: speculative decoding is not part of the vLLM interface (plain decode)"
+                f"DSV41_SPEC={os.environ['DSV41_SPEC']} ignored by the vLLM interface (decode mode: {'spec k=%d' % spec_k if spec_k else 'plain'})"
             )
-        os.environ["DSV41_SPEC"] = "0"
+        os.environ["DSV41_SPEC"] = str(spec_k)
         os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
         os.environ.setdefault("MOE_COMPUTE_BFP8_WEIGHTS", "1")
         max_seq_len = cls.bounded_max_seq_len(max_seq_len, B)
@@ -119,7 +125,76 @@ class DeepseekV41ForCausalLM:
         args, model, _pool, _ = create_tt_model(
             mesh_device, B, max_seq_len, paged, layer_ids=layer_ids, log=lambda m: logger.info(m)
         )
-        return cls(Generator([model], [args], mesh_device, tokenizer=args.tokenizer), max_batch_size, max_seq_len)
+        generator = Generator([model], [args], mesh_device, tokenizer=args.tokenizer)
+        if spec_k:
+            from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy
+
+            generator.spec_choice = spec_policy.SpecChoice(
+                "fixed",
+                spec_k,
+                [],
+                False,
+                "vLLM speculative_config (model-owned drafter)",
+                True,
+                ring_rows=spec_policy.RING_ROWS_SPEC,
+            )
+            # BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on its scratch memory (demo DSV41_SPEC_EARLY)
+            generator.enable_spec(spec_k)
+            logger.info(f"DSV4.1 vLLM: speculative decoding ON, {generator.spec_choice.describe()}")
+        return cls(generator, max_batch_size, max_seq_len)
+
+    # ---- speculative decoding: configuration ----------------------------------------------------------------------------------------------
+    @staticmethod
+    def configured_spec_k():
+        """Draft length of the server's ``speculative_config`` (0 = plain decode). Read from the vLLM config being loaded (``get_current_vllm_config``); DSV41_VLLM_SPEC_K is a fallback for
+        runs outside a vLLM config context (tests / scripts)."""
+        env = os.environ.get("DSV41_VLLM_SPEC_K")
+        if env:
+            return int(env)
+        try:
+            from vllm.config import get_current_vllm_config
+
+            sc = get_current_vllm_config().speculative_config
+            if sc is not None and getattr(sc, "method", None) == "custom_class":
+                return int(sc.num_speculative_tokens)
+        except Exception:  # no config context / no vllm
+            pass
+        return 0
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs, requested_k):
+        """Plugin admission of ``speculative_config`` (docs/SPEC_DECODE_CONTRACT.md section 2). One verify round runs T = U (1 + k) token rows per mesh row (U = users per mesh row = ceil(B / 4)),
+        and the mHC / router kernels support at most 32: U = 8 (B = 32) -> k <= 3, U <= 4 -> k <= 5 (the drafter proposes 5 tokens). B >= 64 is refused (the demo's default is plain there too). The
+        spec runners' DRAM cost bounds the context (tt/spec_policy.SPEC_MAX_CTX)."""
+        from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
+
+        from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy
+
+        B = VS.padded_batch(int(max_num_seqs))
+        U = B // VS.MESH_ROWS
+        ks = tuple(k for k in range(1, 6) if U * (1 + k) <= 32)
+        if not ks:
+            return SpecReject(
+                f"batch {B} (U={U} users per mesh row): a verify round needs U*(1+k) <= 32 token rows per mesh row; use max_num_seqs <= 32 for speculative decoding",
+                (),
+            )
+        ctx = getattr(getattr(vllm_config, "model_config", None), "max_model_len", None)
+        lim = spec_policy.SPEC_MAX_CTX.get(U, spec_policy.SPEC_MAX_CTX[8])
+        if ctx is not None and int(ctx) > lim:
+            return SpecReject(
+                f"max_model_len {ctx} exceeds the context the spec runners fit in DRAM at B={B} ({lim})", ks
+            )
+        if int(requested_k) < 1:
+            return SpecReject("num_speculative_tokens must be >= 1", ks)
+        return SpecPlan(
+            effective_k=min(int(requested_k), max(ks)),
+            lanes_per_request=1,
+            extra_bytes_per_seq=0,
+            extra_bytes_per_token=0,
+            accept_modes=("argmax_ids",),
+            drafter_state="internal",
+            supports_narrow_decode=False,
+        )
 
     # Longest context the model is built for per padded batch size (the KV pool + index-key slabs + prefill tables must fit DRAM). Measured (40 layers, fp8 pool): B=128 at 65536 runs out of DRAM while building
     # the prefill-sparse tables (PrefillKV, 2.2 GB request with 145 MB/bank free); the longest validated B=128 context is 33280 (the default tt-inference-server sweep needs 32768 + 128).
@@ -146,6 +221,15 @@ class DeepseekV41ForCausalLM:
         self.book = VS.TokenBook(self.B, self.max_seq_len + 1024)
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")
         self.kv_cache = None
+        self.spec = getattr(generator, "spec", None)  # fixed-k SpecRunner (speculative_config) or None (plain decode)
+        self.spec_k = self.spec.k if self.spec is not None else 0
+        if self.spec is not None:
+            self.spec_drafts = torch.zeros(
+                self.B, self.spec.k, dtype=torch.int32
+            )  # next proposal per physical slot (the last round / the seeding)
+            self.spec_last = torch.full((self.B,), -1, dtype=torch.long)  # the committed token those drafts continue
+            self.spec_has = torch.zeros(self.B, dtype=torch.bool)
+            self.spec_stats = {"rounds": 0, "accepted": 0, "rows": 0}
         self.timing = {}
         self._warm = False
         self._calls = {"prefill": 0, "decode": 0}
@@ -243,9 +327,8 @@ class DeepseekV41ForCausalLM:
         phys_new = self.slots.claim(empty_slots)
         live_other = sorted(self.slots.live - set(phys_new))
         live_other = [p for p in live_other if int(self.book.n[p]) > 0]
-        refill = (
-            bool(live_other) and self.m.use_indexer
-        )  # shared index-key slabs: re-prefill the live users too (module docstring)
+        # shared index-key slabs: re-prefill the live users too (module docstring). With speculative decoding ALWAYS: the drafter is seeded from a prefill hand-off state of every row
+        refill = bool(live_other) and (self.m.use_indexer or self.spec is not None)
         ctx = {p: self.book.context(p) for p in live_other} if refill else None
         toks_B, lens_B, active_B, index_of = VS.build_prefill_batch(self.B, phys_new, tokens.reshape(N, -1), lens, ctx)
         S = int(lens_B.max())
@@ -253,6 +336,8 @@ class DeepseekV41ForCausalLM:
         s_pad = VS.s_pad_bucket(S, chunk, self.s_pad_policy)
         want_logits = not device_sampling
         self.m.release_trace()  # decode trace: recaptured by the next decode step
+        if self.spec is not None:
+            self.spec.release()  # spec trace: a prefill replay (or its allocations) must not clobber it; re-captured by the seeding below
         self._first_decode_after_prefill = True
         logger.info(
             f"DSV4.1 prefill: {N} new request(s) in slots {empty_slots} (users {phys_new}), lens max {S}, chunk {chunk}, S_pad {s_pad}, "
@@ -270,6 +355,8 @@ class DeepseekV41ForCausalLM:
         )
         for i, p in enumerate(phys_new):
             self.book.set_prompt(p, tokens[i, : lens[i]].reshape(-1))
+        if self.spec is not None:
+            self._spec_seed(toks_B, lens_B, active_B, first)
         rows = torch.tensor(phys_new, dtype=torch.long)
         self.timing["prefill"] = time.perf_counter() - t0
         self._calls["prefill"] += 1
@@ -295,8 +382,16 @@ class DeepseekV41ForCausalLM:
         slot_remap [max_num_seqs] optional permutation of the logical slots. Returns the next tokens [W, 1] (int32, greedy on device) when ``sampling_params`` is
         given, else the fp32 logits [W, 1, vocab] of the step (host sampling)."""
         device_sampling = sampling_params is not None
-        if kwargs.get("num_valid_drafts") is not None or kwargs.get("spec_mode") is not None:
-            raise ValueError("speculative decoding is not part of the DSV4.1 vLLM interface")
+        if kwargs.get("spec_mode") is not None or kwargs.get("num_valid_drafts") is not None:
+            if self.spec is None:
+                raise ValueError(
+                    "a speculative verify call arrived but the server runs plain decode (no speculative_config)"
+                )
+            return self._spec_verify(tokens, start_pos, slot_remap=slot_remap, **kwargs)
+        if self.spec is not None:
+            raise RuntimeError(
+                "ordinary [B, 1] decode call in a speculative launch: the adapter declares no narrow decode, every decode step must be a verify"
+            )
         if slot_remap is not None:
             self.slots.apply_remap(slot_remap)
         W = int(tokens.shape[0])
@@ -370,6 +465,8 @@ class DeepseekV41ForCausalLM:
         if p is not None:
             self.m.pool.release(p)
             self.book.clear(p)
+            if self.spec is not None:
+                self.spec_has[p] = False
 
     def warmup_model_prefill(self, kv_cache=None, enable_trace=True, *args, **kwargs):
         """No-op: the prefill trace is keyed by the (chunk, S_pad) of the first prompt and cannot be captured without one. The first request compiles and captures
@@ -377,11 +474,137 @@ class DeepseekV41ForCausalLM:
         """
         return
 
+    # ---- speculative decoding (plugin model-owned drafter contract) ---------------------------------------------------------------------------
+    # Design (docs: /mnt/tt-data/ssinghal/vllm-tt-plugin/docs/SPEC_DECODE_CONTRACT.md):
+    #  * method ``custom_class`` + ``--no-async-scheduling``; this class declares supports_spec_decode / device_propose, NO narrow decode: every decode step is a verify ``[B, 1 + K]``.
+    #  * The device does a whole round in ONE traced step (tt/spec_model.SpecRunner): verify the block rows, greedy argmax of every row, accept count m (leading drafts equal to the
+    #    argmax), state commit of m, and the NEXT 5 drafts of the drafter. ``_spec_verify`` runs that round on the block the plugin sent (its drafts are the ones ``propose_draft_tokens`` returned
+    #    from the previous round) and returns ``argmax_ids`` (column j = the model's choice at position j, column K the bonus: the plugin's own greedy walk reaches the same m as the device).
+    #    The round's new drafts are kept per physical slot and handed out by ``propose_draft_tokens`` (permission of contract section 4a: the result is computed in the verify call).
+    #  * A row with ``num_valid_drafts == 0`` (a request's first step after the prefill) runs the same round with the accept count FORCED to 0 (``SpecDecoder.set_force``): one token is
+    #    committed, exactly what the plugin credits. Partial counts 0 < nv < K cannot be expressed on the device and are refused (the proposal always offers all K or none).
+    #  * Drafter state: seeded by ``SpecRunner.seed`` (replay of the last 128 tokens through the verify trace with forced accepts) right after EVERY prefill, for all rows. A prefill therefore
+    #    re-prefills all live rows from their token history (the hand-off state is what the seeding needs) and releases the spec trace first (a prefill replay must not run over a captured trace).
+    #  * Rejection needs no rollback: a speculative round writes K/V rows of the block into pages / window rings of the user (rejected rows are overwritten by the next round: the ring has
+    #    288 rows) and commits the compressor state only for the accepted count ``m`` on the device.
+    def _spec_seed(self, toks_B, lens_B, active_B, first):
+        """After a prefill: seed the drafter of EVERY active row (new requests and re-prefilled live ones) and keep its first proposal. Idle rows replay one dummy token."""
+        B, K = self.B, self.spec.k
+        tokens, lens, firstB = toks_B.clone(), lens_B.clone(), first.clone().long()
+        idle = ~active_B
+        tokens[idle] = 0
+        lens[idle] = 1
+        firstB[idle] = 0
+        firstB[firstB < 0] = 0
+        t0 = time.perf_counter()
+        self.spec.seed(tokens, lens, firstB)  # compile + trace capture on first use after every release
+        d = self.spec.d_final
+        act = active_B.nonzero().reshape(-1)
+        self.spec_drafts[act] = d[act, :K].to(torch.int32)
+        self.spec_last[act] = firstB[act]
+        self.spec_has[act] = True
+        self.spec_has[idle.nonzero().reshape(-1)] = False
+        bad = int((self.spec.dev_first[act] != firstB[act]).sum())
+        logger.info(
+            f"DSV4.1 spec seeding of {len(act)} rows took {time.perf_counter() - t0:.2f} s (replayed first token != prefill first token on {bad} rows)"
+        )
+
+    def _spec_verify(
+        self, tokens, start_pos, num_valid_drafts=None, accepted_counts=None, spec_mode=None, slot_remap=None, **kwargs
+    ):
+        from vllm_tt_plugin.spec_decode import VerifyOutput
+
+        if spec_mode != "argmax_ids":
+            raise ValueError(f"DSV4.1 verifies in argmax_ids mode only, got {spec_mode!r}")
+        if slot_remap is not None:
+            self.slots.apply_remap(slot_remap)
+        W, n = int(tokens.shape[0]), int(tokens.shape[1])
+        K = self.spec.k
+        if n != K + 1:
+            raise ValueError(f"verify block width {n} != 1 + K ({1 + K})")
+        B = self.B
+        X = torch.zeros(B, n, dtype=torch.long)
+        base = torch.zeros(B, dtype=torch.long)
+        force = torch.zeros(B)  # idle users: commit nothing beyond the (dummy) first token
+        rows = []
+        for i in range(W):
+            pos = int(start_pos[i, 0])
+            if pos < 0:
+                continue
+            p = self.slots.physical(i)
+            if p not in self.slots.live:
+                raise RuntimeError(f"verify of logical slot {i} (user {p}) that was never prefilled")
+            nv = int(num_valid_drafts[i])
+            if nv not in (0, K):
+                raise ValueError(
+                    f"row {i}: {nv} valid drafts of {K}: the device round verifies all K or forces 0 accepted"
+                )
+            X[p] = tokens[i].long().clamp(min=0)
+            base[p] = pos
+            force[p] = -1.0 if nv > 0 else 0.0
+            rows.append((i, p, pos))
+        t0 = time.perf_counter()
+        a, mm, d = self.spec._round(X, base, force)
+        t1 = time.perf_counter()
+        self.timing["decode"] = t1 - t0
+        self._calls["decode"] += 1
+        for i, p, pos in rows:
+            m = int(mm[p])
+            for j in range(m + 1):  # fed to the model: the committed token and the accepted drafts
+                self.book.note_fed(p, pos + j, int(X[p, j]))
+            self.spec_drafts[p] = d[p, :K].to(torch.int32)
+            self.spec_last[p] = int(a[p, m])
+            self.spec_has[p] = True
+            self.spec_stats["accepted"] += m
+        self.spec_stats["rounds"] += 1
+        self.spec_stats["rows"] += len(rows)
+        st = self.__dict__.setdefault("_sstat", {"n": 0, "t": 0.0, "g": 0.0, "last": None})
+        st["n"] += 1
+        st["t"] += t1 - t0
+        if st["last"] is not None and t0 - st["last"] < 2.0:
+            st["g"] += t0 - st["last"]
+        st["last"] = t1
+        every = int(os.environ.get("DSV41_VLLM_STATS_EVERY", "256"))
+        if every > 0 and st["n"] % every == 0:
+            ss = self.spec_stats
+            logger.info(
+                f"DSV4.1 spec stats over {st['n']} rounds: round {1e3 * st['t'] / st['n']:.1f} ms, between rounds {1e3 * st['g'] / st['n']:.1f} ms, "
+                f"{ss['accepted'] / max(ss['rows'], 1):.2f} accepted drafts per row-round (k={K}; cumulative since start)"
+            )
+            st.update(n=0, t=0.0, g=0.0)
+        out = VS.scatter_rows(a.to(torch.int32), [(i, p, pos) for i, p, pos in rows], W)
+        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=out.reshape(W, n))
+
+    def propose_draft_tokens(self, num_drafts, committed_tokens, committed_positions, accepted_counts, hidden=None):
+        """Hand out the drafts of the last round / seeding (computed on the device already). A row is offered only if the token its drafts continue is the token the plugin committed."""
+        from vllm_tt_plugin.spec_decode import DraftOutput
+
+        K = self.spec.k
+        W = int(committed_tokens.shape[0])
+        ids = torch.zeros(W, int(num_drafts), dtype=torch.int32)
+        nv = torch.zeros(W, dtype=torch.int32)
+        for i in range(W):
+            if int(committed_positions[i, 0]) < 0:
+                continue
+            p = self.slots.physical(i)
+            if p not in self.slots.live or not bool(self.spec_has[p]):
+                continue
+            last = int(committed_tokens[i, int(accepted_counts[i]) - 1])
+            if last != int(self.spec_last[p]):
+                logger.warning(
+                    f"DSV4.1 spec: row {i} (user {p}) committed token {last} != the drafter's {int(self.spec_last[p])}: no drafts offered"
+                )
+                self.spec_has[p] = False
+                continue
+            ids[i, :K] = self.spec_drafts[p]
+            nv[i] = min(K, int(num_drafts))
+        return DraftOutput(draft_token_ids=ids, num_valid=nv)
+
     def warmup_model_decode(self, *args, **kwargs):
         """Optional synthetic warm-up (DSV41_VLLM_WARMUP_ISL tokens, one request): compiles the prefill chunk programs and the decode trace before the first request.
         Skipped by default: with the ISL unknown it would capture a prefill trace for the wrong S_pad."""
         isl = int(os.environ.get("DSV41_VLLM_WARMUP_ISL", "0"))
-        if self._warm or isl <= 0 or not kwargs.get("enable_trace", True):
+        if self._warm or isl <= 0 or not kwargs.get("enable_trace", True) or self.spec is not None:
             return
         self._warm = True
         t0 = time.perf_counter()
