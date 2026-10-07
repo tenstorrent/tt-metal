@@ -48,11 +48,6 @@ class _BenchmarkCase:
 
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Recalibrated 2026-10-07 on one Blackhole Galaxy device, firmware 19.12.0.0, after
-# the reader stopped rereading DRAM once per tap. Seven real-time-profiler sessions
-# produced 83377-83469 ns, 46238-46438 ns, and 50555-50631 ns; the inline references
-# are their medians. The 5% symmetric margin leaves 2.3-4.2 us on both sides,
-# against an observed spread of 76-200 ns.
 _PRODUCTION_CASES = (
     _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=83_401),
     _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=46_345),
