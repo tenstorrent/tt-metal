@@ -17,6 +17,66 @@ from models.demos.blackhole.mimo_v26.tt.layer import EPS, _k_norm, rms_decode_sh
 HIDDEN, SLOTS, T64 = 4096, 32, 64
 
 
+def global_argmax(lg, tok_out, vocab_local):
+    """Greedy token of every row from the vocab-sharded logits lg [1,1,U,V/8] (bf16 tile, one shard per mesh column), all on device, written in place into tok_out [1,U] uint32 RM
+    (the embedding input of the next step). Ties between columns go to the lowest column = lowest vocab id (same rule as the host path).
+    """
+    U = lg.shape[2]
+    vals = ttnn.max(lg, dim=3, keepdim=True)  # [1,1,U,1]
+    idx = ttnn.argmax(ttnn.to_layout(lg, ttnn.ROW_MAJOR_LAYOUT), dim=3, keepdim=True)  # uint32 [1,1,U,1] local ids
+    # global id = local + column * V/8 : the column offset is a per-device constant tensor
+    gidx = ttnn.add(
+        ttnn.typecast(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), ttnn.float32), _col_offset(lg.device(), U, vocab_local)
+    )
+    vpad = ttnn.pad(vals, [(0, 0), (0, 0), (0, 0), (0, 31)], 0.0)  # [1,1,U,32]
+    gpad = ttnn.pad(gidx, [(0, 0), (0, 0), (0, 0), (0, 31)], 0.0)
+    gv = ttnn.all_gather(vpad, dim=3, cluster_axis=1)  # [1,1,U,256]: column c occupies [32c, 32c+32), value at 32c
+    gi = ttnn.all_gather(gpad, dim=3, cluster_axis=1)
+    cv = ttnn.slice(gv, [0, 0, 0, 0], [1, 1, U, 256], [1, 1, 1, 32])  # [1,1,U,8]
+    ci = ttnn.slice(gi, [0, 0, 0, 0], [1, 1, U, 256], [1, 1, 1, 32])
+    m = ttnn.max(cv, dim=3, keepdim=True)
+    hit = ttnn.typecast(ttnn.eq(cv, m), ttnn.float32)  # 1 where the column holds the max
+    # first hit wins: weight columns 8..1 and take the argmax of hit*weight
+    w = ttnn.from_torch(
+        torch.arange(8, 0, -1, dtype=torch.float32).reshape(1, 1, 1, 8),
+        device=lg.device(),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(lg.device()),
+    )
+    sc = ttnn.multiply(hit, w)
+    mx = ttnn.max(sc, dim=3, keepdim=True)
+    onehot = ttnn.typecast(ttnn.eq(sc, mx), ttnn.float32)
+    onehot = ttnn.multiply(onehot, hit)
+    pick = ttnn.sum(ttnn.multiply(onehot, ci), dim=3, keepdim=True)  # [1,1,U,1] float32 global id
+    nxt = ttnn.typecast(pick, ttnn.uint32)
+    nxt = ttnn.reshape(ttnn.to_layout(nxt, ttnn.ROW_MAJOR_LAYOUT), (1, U))
+    ttnn.copy(nxt, tok_out)
+    return tok_out
+
+
+_COL_OFF = {}
+
+
+def _col_offset(mesh, U, vocab_local):
+    """float32 tile [1,1,U,1] per device = mesh column * vocab_local"""
+    key = (id(mesh), U, vocab_local)
+    if key not in _COL_OFF:
+        rows, cols = mesh.shape
+        t = torch.zeros(rows, cols, 1, U, 1)
+        for c in range(cols):
+            t[:, c] = float(c * vocab_local)
+        _COL_OFF[key] = ttnn.from_torch(
+            t.reshape(rows, cols, U, 1),
+            device=mesh,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, 1)),
+        )
+        _COL_OFF[key] = ttnn.reshape(_COL_OFF[key], (1, 1, U, 1))
+    return _COL_OFF[key]
+
+
 class LiveMask:
     """Persistent live-slot mask for tt/moe_decode.MiMoMoEDecode: bf16 tile [rows,1,64,1] sharded over mesh rows, 1.0 = live slot (slots 32..63 are pad rows, always 0).
     Dead slots get their routing spread round-robin over all experts (they would otherwise all pick the same experts and overflow a chip's dispatch buffer).
