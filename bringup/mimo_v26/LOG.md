@@ -1639,3 +1639,27 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/perf1_prof2_u8/.logs/cpp_device_perf_report.csv
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
 - data: {"wall_blocking_ms":[78.0,97.6,112.0],"kernel_mean_ms":[69.4,73.6,87.3],"kernel_sum_of_max_ms":[92.6,100,125.4],"attention_ms":[11.4,13.9,20.3],"norm_ms":6.3,"moe_ffn_ms_u8":54.0,"host_ms":3.4}
+
+## E261007-1912-53b
+- date: 2026-10-07T19:12:49
+- commit: af570a75349
+- branch: ssinghal/mimo-perf1
+- host: 48
+- track: perf
+- status: verified
+- claim: PERF STEP 2 (paired in-process A/B, 48 layers, U=1/8/32, ms/step trace-blocking, round spread <=0.05): baseline plain norm/exact router 74.0/86.4/99.5 (== race agent 73.6/85.8/99.0; earlier unpaired 78/97.6/112 was host-load noise); sharded rms_norm -5.7/-5.6/-5.3 (68.3/80.7/94.2); rope cos/sin hoist -2.2/-2.6/-2.4 (66.0/78.0/91.9); fast router (router_select) -9.3/-9.3/-9.2 (56.7/68.7/82.7); 1D qkv(60 cores)+o_proj(32 cores) matmul configs -2.4/-2.2/-2.5 (56.75/68.87/82.78 -> 54.33/66.72/80.28, P10). Cumulative 54.3/66.7/80.3 ms vs 74.0/86.4/99.5. Gates: 4L oracle token-exact U=1,4,32 (G1) and verify U=1,2,4 exact with fast router; GSM8K n=128 111/128 (G3, before mm1d) and 112/128 with mm1d (F8/F11), both deterministic in-process; NOTE mm1d changes generations vs plain matmul (not bit-identical in the full model, accuracy within gate). Defaults now: MIMO_NORM=sharded, MIMO_ROPE_HOIST=1, MIMO_ROUTER=fast, MIMO_QKV_CORES=60, MIMO_WO_CORES=32.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P10_ab_mm1d.log
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py
+- data: {"baseline_ms":[74.0,86.4,99.5],"sharded_norm_delta_ms":[-5.7,-5.6,-5.3],"rope_hoist_delta_ms":[-2.2,-2.6,-2.4],"fast_router_delta_ms":[-9.3,-9.3,-9.2],"mm1d_delta_ms":[-2.4,-2.2,-2.5],"cumulative_ms":[54.3,66.7,80.3]}
+
+## E261007-1913-6b9
+- date: 2026-10-07T19:13:00
+- commit: af570a75349
+- branch: ssinghal/mimo-perf1
+- host: 48
+- track: perf
+- status: verified
+- claim: DEVICE-RESIDENT DECODE LOOP (MIMO_FEEDBACK=1; Decoder(feedback=True), Generator chunked loop): inside a chunk of N=16 steps the host only enqueues non-blocking execute_trace (0.015-0.022 ms per enqueue, measured) - no copy_host_to_device, no host compute, no readback: the traced step ends with on-device cross-column argmax (lowest-id tie rule), writes next token/cur/idx/live-mask in place, advances positions, clears alive on eos/context cap, writes tokens into a device ring at a device step counter; host reads the ring once per chunk. Paired A/B in one process (end-to-end Generator step time incl. everything host-side): U=1 66.1 -> 58.8 (-7.3), U=8 84.5 -> 79.6 (-4.9), U=32 100.3 -> 95.1 (-5.2) ms; device-bound pipelined replay 76.2 (U=8) / 91.4 (U=32). Token-exact: 4L oracle U=1,2,4,8,16,32 teacher+free (F4), fb vs plain 40 steps U=1,8,32 equal, 150 steps U=32 with injected early eos equal (F10), GSM8K n=128 all 128 texts identical to the host-fed run on another host (F8 fb h40 vs F11 plain h48, 112/128, in-process repeat identical).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_F9_dev_ab.log
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tests/test_decode_fb.py
+- data: {"ab_U1_ms":[66.1,58.8],"ab_U8_ms":[84.5,79.6],"ab_U32_ms":[100.3,95.1],"enqueue_ms":0.02,"gsm_correct":112}
