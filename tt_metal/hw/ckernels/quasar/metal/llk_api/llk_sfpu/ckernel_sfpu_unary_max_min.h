@@ -48,9 +48,9 @@ constexpr std::uint32_t UNARY_MAX_MIN_INT32_MIN_BITS = 0x80000000u;
  *        for DataFormat::Int32 (in both Dest encodings). With SIGN_MAGNITUDE_FORMAT it must not be
  *        INT32_MIN, which has no sign-magnitude encoding.
  * @note No init call is required.
- * @note The SFPNOP between SFPSWAP and SFPSTORE avoids the SFPSWAP -> SFPSTORE auto-stall hardware bug
- *       (same NOP as ckernel_sfpu_reduce.h reduce_combine and the topk SFPSTORE rule). sfpi does not
- *       model it: without the builtin, sfpi 7.83 issues the SFPSTORE right after the SFPSWAP.
+ * @note No SFPNOP after the SFPSWAP: the Quasar scoreboard stalls the SFPSTORE (or SFPCAST) that reads its
+ *       result. TEN-4581 / TEN-4605 list the dependents it misses after a 2-cycle op (SFPNONLINEAR
+ *       mode 3-5, SFPIADD/SFPSHFT, SFPCONFIG, SFPSHFT2 mode 2-4, SFPSWAP), and sfpi pads exactly those.
  */
 template <
     bool IS_MAX_OP,
@@ -78,11 +78,7 @@ inline void calculate_unary_max_min(const std::uint32_t value) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vInt x = sfpi::dst_reg[0].mode<layout>();
-            x = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
-            if constexpr (!SIGN_MAGNITUDE_FORMAT) {
-                __builtin_rvtt_sfpnop();  // SFPSWAP -> SFPSTORE spacing; SM32 puts an SFPCAST there instead
-            }
-            sfpi::dst_reg[0].mode<layout>() = x;
+            sfpi::dst_reg[0].mode<layout>() = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
             sfpi::dst_reg++;
         }
     } else {
@@ -90,9 +86,7 @@ inline void calculate_unary_max_min(const std::uint32_t value) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat x = sfpi::dst_reg[0];
-            x = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
-            __builtin_rvtt_sfpnop();  // SFPSWAP -> SFPSTORE spacing
-            sfpi::dst_reg[0] = x;
+            sfpi::dst_reg[0] = IS_MAX_OP ? sfpi::max(x, s) : sfpi::min(x, s);
             sfpi::dst_reg++;
         }
     }
