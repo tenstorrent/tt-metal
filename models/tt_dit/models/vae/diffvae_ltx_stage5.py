@@ -1012,7 +1012,13 @@ class DiffVAEStage5(Module):
         volume = (grid.t, grid.h, grid.w)
         context_window = tuple(min(window, extent) for window, extent in zip(self.config.kernel_size, volume))
         self._brick = brick_override(volume) or _choose_sharded_brick(
-            volume, context_window, self.config.gna_stride, grid.w // self.sp, self.sp
+            volume,
+            context_window,
+            self.config.gna_stride,
+            grid.w // self.sp,
+            self.sp,
+            height_local=grid.h // self.hs if self.h_axis is not None else None,
+            h_shard_count=self.hs,
         )
         return self._brick
 
