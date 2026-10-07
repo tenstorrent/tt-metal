@@ -252,6 +252,23 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
+// ts (measurement): each row's base addresses go into two GPRs, stored by the RISC, and the thread writes them to the
+// context's base registers with WRCFG, in order with its own UNPACRs; Auto TTSync orders the RISC's GPR stores against
+// the GPR-reading instructions it pushed (the previous row's WRCFGs and MOP), so no context poll and no TRISC_CFG stall
+constexpr std::uint32_t TS_BASE_GPR_SEC0 = 50; // in1, unpacker 0
+constexpr std::uint32_t TS_BASE_GPR_SEC1 = 51; // in0, unpacker 1
+inline bool ts_ttsync_on = false;
+
+inline void _ts_enable_ttsync_()
+{
+    if (!ts_ttsync_on)
+    {
+        set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
+        tensix_sync(); // the enables take effect before the first tracked GPR store
+        ts_ttsync_on = true;
+    }
+}
+
 template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
@@ -308,6 +325,7 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
     _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face, stream_narrow);
+    _ts_enable_ttsync_();
 }
 
 /**
@@ -363,7 +381,6 @@ inline void _llk_unpack_AB_matmul_(
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
 
-    volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     const bool reuse_a        = ct_dim >= rt_dim;
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
@@ -390,16 +407,23 @@ inline void _llk_unpack_AB_matmul_(
         std::uint32_t address_a = base_address_a + offset_address_a;
         std::uint32_t address_b = base_address_b + offset_address_b;
 
-        // Wait for free context
-        wait_for_next_context(2);
-
-        // Validate and configure addresses (note: address_b goes to SEC0, address_a to SEC1 for matmul)
-        _llk_unpack_configure_addresses_(address_b, address_a, cfg);
-
-        semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
-
-        // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
+        LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
+        // ts: the row stays visible to the context poll of other unpack calls (the Tensix SEMGET below releases it)
+        semaphore_post(semaphore::UNPACK_SYNC);
+        regfile[TS_BASE_GPR_SEC0] = address_b;
+        regfile[TS_BASE_GPR_SEC1] = address_a;
+        if (unp_cfg_context == 0)
+        {
+            TTI_WRCFG(TS_BASE_GPR_SEC0, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_address_ADDR32);
+            TTI_WRCFG(TS_BASE_GPR_SEC1, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_address_ADDR32);
+        }
+        else
+        {
+            TTI_WRCFG(TS_BASE_GPR_SEC0, p_cfg::WRCFG_32b, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
+            TTI_WRCFG(TS_BASE_GPR_SEC1, p_cfg::WRCFG_32b, THCON_SEC1_REG3_Base_cntx1_address_ADDR32);
+        }
+        TTI_NOP; // the instruction after a WRCFG must not read the config it writes
 
         if (reuse_a)
         {
