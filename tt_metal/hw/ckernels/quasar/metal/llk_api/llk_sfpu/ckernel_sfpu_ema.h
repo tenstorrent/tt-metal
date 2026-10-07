@@ -88,14 +88,13 @@ inline void _calculate_ema_row_quad_() {
     // LREG_j = tile row j
     TTI_SFPTRANSP;
 
-    // Independent beta * x first, so only one MAD per row sits on the serial carry chain
+    // beta * x of a later row fills each carry step's MAD latency slot (result ready 2 issues on)
     TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG0, p_sfpu::LCONST_0, p_sfpu::LREG0, EMA_PLAIN_MOD1);
     TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG1, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, EMA_PLAIN_MOD1);
-    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG3, EMA_PLAIN_MOD1);
-
     TTI_SFPMAD(EMA_ALPHA_REG, EMA_CARRY_REG, p_sfpu::LREG0, p_sfpu::LREG0, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG2, EMA_PLAIN_MOD1);
     TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG1, EMA_PLAIN_MOD1);
+    TTI_SFPMAD(EMA_BETA_REG, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG3, EMA_PLAIN_MOD1);
     TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG2, EMA_PLAIN_MOD1);
     TTI_SFPMAD(EMA_ALPHA_REG, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpu::LREG3, EMA_PLAIN_MOD1);
 
