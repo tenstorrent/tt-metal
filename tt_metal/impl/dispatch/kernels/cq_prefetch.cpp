@@ -1460,7 +1460,13 @@ uint32_t process_relay_paged_cmd(uintptr_t cmd_ptr, uint32_t& downstream__data_p
     // command buffer with is their own, since the writes to the dispatcher go out on a different one. Programming it
     // with no send is the same thing paged_read_into_cmddat_q and noc_read_64bit_any_len do, and leaves the address
     // registers to the read loop, which has to write them anyway.
+#ifdef ARCH_BLACKHOLE
+    // Larger DRAM pages go through noc_async_read, which splits them into BH_DRAM_READ_MAX_PACKET_SIZE reads.
+    const bool single_read =
+        specialize_paged_read_loop && page_size <= (is_dram ? BH_DRAM_READ_MAX_PACKET_SIZE : NOC_MAX_BURST_SIZE);
+#else
     const bool single_read = specialize_paged_read_loop && page_size <= NOC_MAX_BURST_SIZE;
+#endif
     if (single_read) {
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT>(
             noc_index, 0, 0, 0, page_size);
