@@ -28,26 +28,62 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 
-#ifdef WELFORD_SFPU_HAS_ARECIP
-/** @brief Newton-Raphson steps of the no-table reciprocal after SFPARECIP: two reach fp32, the third corrects the rounding. */
-constexpr std::uint32_t WELFORD_RECIP_NEWTON_STEPS = 3;
+#ifdef WELFORD_INTEGER_RECIP
+/**
+ * @brief The fp32 bits of 1.0f / static_cast<float>(count) for every count >= 1, in integer arithmetic on the math RISC
+ * (the same bits as its soft-float division, in a fraction of the time).
+ */
+inline std::uint32_t _welford_recip_bits_(const std::uint32_t count)
+{
+    std::uint32_t k = 31 - __builtin_clz(count);
+    std::uint32_t c = count;
+    std::uint32_t s = 0;
+    if (k > 23)
+    {
+        // The division sees the count rounded to fp32: c * 2^s, c the top 24 bits rounded to nearest even.
+        s                        = k - 23;
+        const std::uint32_t rem  = count & ((1u << s) - 1);
+        const std::uint32_t half = 1u << (s - 1);
+        c                        = (count >> s) + ((rem > half) || ((rem == half) && ((count >> s) & 1)));
+        k                        = 31 - __builtin_clz(c);
+    }
+    if ((c & (c - 1)) == 0)
+    {
+        return (127 - k - s) << 23;
+    }
+    // d = c scaled into (2^31, 2^32); y ~ 2^63 / d from a 16-bit quotient and one Newton step, never above it.
+    const std::uint32_t d = c << (31 - k);
+    std::uint32_t y       = (0xFFFFFFFFu / ((d >> 16) + 1)) << 15;
+    const std::uint32_t e = static_cast<std::uint32_t>(((std::uint64_t {1} << 63) - std::uint64_t {d} * y) >> 32);
+    y += static_cast<std::uint32_t>((std::uint64_t {y} * e) >> 31);
+    // q = floor(2^55 / d): the estimate is low by at most one; then round to nearest (no ties, d is not a power of two).
+    std::uint32_t q = y >> 8;
+    std::uint64_t r = (std::uint64_t {1} << 55) - std::uint64_t {q} * d;
+    if (r >= d)
+    {
+        ++q;
+        r -= d;
+    }
+    q += (r << 1) > d;
+    return ((126 - k - s) << 23) | (q - (1u << 23));
+}
 #endif
 
 /**
  * @brief Loads the reciprocal of (idx + 1) into LREG7, using a lookup table if available.
  *
- * With a table (reciprocal_size > 0) reciprocal_lut[idx] is loaded into LREG7 with two immediate loads. Without one the SFPU
- * computes it (the count cast to fp32, SFPARECIP, WELFORD_RECIP_NEWTON_STEPS Newton steps), within one fp32 ulp of the correctly rounded value.
- * Without WELFORD_SFPU_HAS_ARECIP (no SFPARECIP on the architecture) the math RISC divides instead.
+ * This function either loads a precomputed reciprocal value from the provided lookup table
+ * (reciprocal_lut) into the LREG7 register, or, if the lookup table entry is not available,
+ * computes the reciprocal at runtime as 1.0f/(idx + 1) and loads its bit representation
+ * into the register.
  *
- * @tparam reciprocal_size The number of entries in the reciprocal lookup table (0: no table).
- * @tparam lreg0_free True when LREG0 is free at the call, so the no-table path may keep the count there.
- * @param idx The (zero-based) index of the value to load: the reciprocal is 1 / (idx + 1).
+ * @tparam reciprocal_size The number of entries in the reciprocal lookup table.
+ * @param idx The (zero-based) index (in the reciprocal lookup table) of the value to load.
  * @param reciprocal_lut Lookup table containing precomputed reciprocals packed as uint32_t.
  *
- * @note The reciprocal is written to ckernel::p_sfpu::LREG7; the no-table path also overwrites LREG6 and, with lreg0_free, LREG0.
+ * @note The reciprocal is written to ckernel::p_sfpu::LREG7.
  */
-template <std::size_t reciprocal_size, bool lreg0_free = false>
+template <std::size_t reciprocal_size>
 sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<std::uint32_t, reciprocal_size>& reciprocal_lut)
 {
     if constexpr (reciprocal_size > 0)
@@ -58,46 +94,10 @@ sfpi_inline void _load_recip_of_idx_(const std::uint32_t idx, const std::array<s
         return;
     }
 
-#ifdef WELFORD_SFPU_HAS_ARECIP
-    // No table: 1 / count on the SFPU; the count lives in LREG0 when free, else in LREG7, which each step overwrites.
-    constexpr std::uint32_t count_lreg = lreg0_free ? ckernel::p_sfpu::LREG0 : ckernel::p_sfpu::LREG7;
-    const std::uint32_t count          = idx + 1;
-    const auto load_count              = [count]()
-    {
-        // The count as an integer, then cast to fp32; one immediate load covers counts below 2^16.
-        if (count < 0x10000)
-        {
-            TT_SFPLOADI(count_lreg, sfpi::SFPLOADI_MOD0_USHORT, count);
-        }
-        else
-        {
-            TT_SFPLOADI(count_lreg, sfpi::SFPLOADI_MOD0_UPPER, count >> 16);
-            TT_SFPLOADI(count_lreg, sfpi::SFPLOADI_MOD0_LOWER, count & 0xFFFF);
-        }
-        TTI_SFPCAST(count_lreg, count_lreg, sfpi::SFPCAST_MOD1_SM32_TO_FP32_RNE);
-    };
-
-    load_count();
-    // LREG6 = approximate 1 / count (about 7.5 correct bits).
-    TTI_SFPARECIP(0, count_lreg, ckernel::p_sfpu::LREG6, sfpi::SFPARECIP_MOD1_RECIP);
-    for (std::uint32_t step = 0; step < WELFORD_RECIP_NEWTON_STEPS; ++step)
-    {
-        // LREG7 = 1 - count * r (the multiply-add negates its first operand: SFPMAD_MOD1_NEGATE_VA)
-        TTI_SFPMAD(count_lreg, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LCONST_1, ckernel::p_sfpu::LREG7, 1);
-        if (step + 1 < WELFORD_RECIP_NEWTON_STEPS)
-        {
-            // r = r + e * r
-            TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, 0);
-            if constexpr (!lreg0_free)
-            {
-                load_count();
-            }
-        }
-        else
-        {
-            TTI_SFPMAD(ckernel::p_sfpu::LREG7, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG6, ckernel::p_sfpu::LREG7, 0);
-        }
-    }
+#ifdef WELFORD_INTEGER_RECIP
+    const std::uint32_t reciprocal_bits = _welford_recip_bits_(idx + 1);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, reciprocal_bits >> 16);
+    TT_SFPLOADI(ckernel::p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, reciprocal_bits & 0xFFFF);
 #else
     // Fallback to float division
     const float reciprocal = 1.0f / static_cast<float>(idx + 1);
@@ -267,14 +267,13 @@ sfpi_inline void _calculate_welfords_block_(std::uint32_t start_idx, const std::
     _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
     _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG0>();
 
-    // The row program of row 0 has consumed LREG0; the no-table reciprocal may keep its count there.
-    _load_recip_of_idx_<reciprocal_size, true>(start_idx + 1, reciprocal_lut);
+    _load_recip_of_idx_<reciprocal_size>(start_idx + 1, reciprocal_lut);
     _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG1>();
 
-    _load_recip_of_idx_<reciprocal_size, true>(start_idx + 2, reciprocal_lut);
+    _load_recip_of_idx_<reciprocal_size>(start_idx + 2, reciprocal_lut);
     _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG2>();
 
-    _load_recip_of_idx_<reciprocal_size, true>(start_idx + 3, reciprocal_lut);
+    _load_recip_of_idx_<reciprocal_size>(start_idx + 3, reciprocal_lut);
     _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG3>();
 }
 
@@ -319,7 +318,6 @@ sfpi_inline void _calculate_welfords_block_w_offset_(
 
     _welfords_load_block_<I, J>();
 
-    // LREG0 is free for rows 1 to 3: row 0 has either consumed it or is not processed in this call.
     if ((start_row == 0) && (end_row > 0))
     {
         _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
@@ -328,19 +326,19 @@ sfpi_inline void _calculate_welfords_block_w_offset_(
     }
     if ((start_row <= 1) && (end_row > 1))
     {
-        _load_recip_of_idx_<reciprocal_size, true>(start_idx, reciprocal_lut);
+        _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
         _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG1>();
         ++start_idx;
     }
     if ((start_row <= 2) && (end_row > 2))
     {
-        _load_recip_of_idx_<reciprocal_size, true>(start_idx, reciprocal_lut);
+        _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
         _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG2>();
         ++start_idx;
     }
     if ((start_row <= 3) && (end_row > 3))
     {
-        _load_recip_of_idx_<reciprocal_size, true>(start_idx, reciprocal_lut);
+        _load_recip_of_idx_<reciprocal_size>(start_idx, reciprocal_lut);
         _execute_welfords_row_replay_buffer_<ckernel::p_sfpu::LREG3>();
         ++start_idx;
     }

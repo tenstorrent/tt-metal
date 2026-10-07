@@ -3,7 +3,7 @@
 
 """Functional coverage for the Welford SFPU kernel: the mean and the population variance of T tiles
 against a float64 reference, with and without a reciprocal table, and the no-table reciprocal against
-the host's fp32 division for every count from 1 to 16384 and around 2^16 and 2^20, within one ulp.
+the host's fp32 division, bit for bit, for every count from 1 to 65536, around 2^20 and below 2^24.
 """
 
 import numpy as np
@@ -112,8 +112,9 @@ _SLAB_COLUMN_START = (0, 1, 16, 17)
 
 
 @parametrize(
-    # 1..16384 exhaustively, then windows around 2^16 and 2^20.
-    base=[0, 4096, 8192, 12288, 2**16 - 2048, 2**20 - 2048],
+    # 1..65536 exhaustively, then windows across 2^20, 2^24 and 2^31 and the top of the uint32 range.
+    base=list(range(0, 2**16, _RECIP_PER_RUN))
+    + [2**20 - 2048, 2**24 - 2048, 2**31 - 2048, 2**32 - 1 - _RECIP_PER_RUN],
 )
 def test_sfpu_welford_reciprocal(base):
     if isinstance(base, tuple):
@@ -170,16 +171,12 @@ def test_sfpu_welford_reciprocal(base):
                     (int(counts[tile * 32 + slab]), int(want), int(got[0, 0]))
                 )
 
-    # The multiply-add truncates its product, so the result is the correctly rounded reciprocal or its
-    # upper neighbour; both are positive normals, so one ulp is one step of the bit pattern.
-    beyond_one_ulp = [(c, w, g) for c, w, g in mismatches if abs(g - w) != 1]
     print(
         f"WELFORD_RECIP base={base}: {_RECIP_PER_RUN} counts, {len(mismatches)} differ from the host's fp32 "
-        f"division by one ulp, {len(beyond_one_ulp)} by more, {slabs_not_uniform} slabs not lane-uniform"
+        f"division, {slabs_not_uniform} slabs not lane-uniform"
     )
     assert slabs_not_uniform == 0, "a reciprocal slab is not lane-uniform"
-    assert not beyond_one_ulp, (
-        f"{len(beyond_one_ulp)} of {_RECIP_PER_RUN} reciprocals differ from the host's fp32 division by more "
-        f"than one ulp; first (count, expected bits, got bits): "
-        f"{[(c, hex(w), hex(g)) for c, w, g in beyond_one_ulp[:8]]}"
+    assert not mismatches, (
+        f"{len(mismatches)} of {_RECIP_PER_RUN} reciprocals differ from the host's fp32 division; "
+        f"first (count, expected bits, got bits): {[(c, hex(w), hex(g)) for c, w, g in mismatches[:8]]}"
     )
