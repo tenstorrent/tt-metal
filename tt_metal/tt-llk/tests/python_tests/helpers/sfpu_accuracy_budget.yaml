@@ -1710,9 +1710,12 @@ SfpuElwmul:
 SfpuAtan2:
   - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 9 variants / 246k lanes, 2026-09-18
   - {out: Float16_b, max_ulp: 1}     # max 1 ULP, 9 variants / 246k lanes, 2026-09-18
+# logsigmoid was re-measured for the fixed kernel over its test's [-30, 30] sweep; Float32 input
+# reaches 2 steps. The pre-fix kernel measures 131072 on a Float32 output (128325 from a Float32
+# input) and 2 on Float16_b, which keeps 2: one step above the simulator measurement, for silicon.
 SfpuLogsigmoid:
-  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 3 variants over the [-30, 30] sweep, Float32 input 2 ULP (pre-fix kernel 131072, Float32 input 128325), ttsim WH + BH, 2026-10-07
-  - {out: Float16_b, max_ulp: 2}     # max 1 ULP, 3 variants over the [-30, 30] sweep, ttsim WH + BH; 2 keeps one step for silicon (pre-fix kernel 2), 2026-10-07
+  - {out: Float32, max_ulp: 81920}   # max 65536 ULP, 3 variants, [-30, 30] sweep, ttsim WH + BH, 2026-10-07
+  - {out: Float16_b, max_ulp: 2}     # max 1 ULP, 3 variants, [-30, 30] sweep, ttsim WH + BH, 2026-10-07
 
 # fmod and remainder share an implementation and measure identically.
 SfpuBinaryFmod:

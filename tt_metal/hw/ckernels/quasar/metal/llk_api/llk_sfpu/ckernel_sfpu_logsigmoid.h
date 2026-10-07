@@ -172,6 +172,7 @@ sfpi_inline void logsigmoid_x2(const std::uint32_t in, sfpi::vFloat& result0, sf
         // 0.44 at worst, not the 2^-21 the name suggests -- so it sits under the half-ULP
         // that round-to-nearest absorbs, and rounding t to bfloat16 quantizes it away
         // instead of letting it through the residual.
+        // Quasar: carried over from Wormhole/Blackhole, not re-measured on a Quasar target.
         // Measured on ttsim over every finite bfloat16 input with x <= 87 (49710 points),
         // passing <true> here trades a max of 1.43 ULP for 0.88 but takes the mean from
         // 0.29 to 0.35 and the count of not-correctly-rounded results from 1009 to 28584.
