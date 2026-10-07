@@ -53,7 +53,7 @@ def main():
                 for fb in (False, True):
                     gen.dec.set_feedback(fb)
                     r = gen.generate(prompts, steps, S=S)
-                    t = r["times"][3:]
+                    t = r["times"][gen.dec.N :]  # skip the first chunk (trace capture)
                     ms[fb].append(round(sorted(t)[len(t) // 2] * 1e3, 3))
                     toks[fb] = r["tokens"]
             # device-bound reference: back-to-back replays of the feedback trace, one sync at the end (no ring read, no host work between enqueues)
