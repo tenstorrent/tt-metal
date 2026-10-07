@@ -27,10 +27,8 @@ def _make_input(shape, dtype):
 _DTYPES = [ttnn.bfloat16]
 _DTYPE_IDS = ["bfloat16"]
 
-# Sub-tile TILE H/W repeats run row-major between one untilize and one retilize, so they route to
-# codegen. The golden is torch: a repeat is a pure copy.
-# A corner sample of the sweep's 12x11 grid (smallest, mid and largest inputs; small, large and
-# all-dims repeats): every case compiles three fresh programs, so the full grid costs minutes per run.
+# Sub-tile TILE H/W repeats reach codegen through an untilize/retilize round trip.
+# A corner sample of the sweep grid: each case compiles three programs, so the full grid costs minutes.
 _ROUTING = [
     ([1, 1, 1, 1], {"repeat_dims": ttnn.Shape([1, 3, 22, 44])}, ttnn.TILE_LAYOUT),
     ([1, 1, 1, 1], {"repeat_dims": ttnn.Shape([1, 3, 4, 8])}, ttnn.TILE_LAYOUT),
@@ -74,9 +72,7 @@ def test_repeat_codegen_routing(device, shape, kwargs, dtype, layout):
 # --- Off-grid regressions (hand-added; edit here, not the emitter) ---
 
 # Mixed placement (interleaved DRAM input, interleaved L1 output requested via
-# memory_config) routes to codegen: DRAM/L1 page alignments differ, so every RM slot
-# is sized as the larger of the two aligned pages (rm_slot_bytes). A slot sized from
-# one side would overrun destination pages or CB slots and show up as a wrong answer.
+# memory_config) routes to codegen; an RM slot sized from one side's alignment would overrun the other.
 _MIXED_PLACEMENT = [
     # higher-dim RM: a writer paced by the wider DRAM pitch would overrun narrower L1 pages
     ([1, 2, 10, 20], {"repeat_dims": ttnn.Shape([1, 3, 1, 1])}, ttnn.ROW_MAJOR_LAYOUT),
@@ -104,14 +100,8 @@ def test_repeat_codegen_routing_mixed_placement(device, shape, kwargs, layout):
     assert grew, "auto served a DRAM->L1 repeat on native; expected codegen"
 
 
-# A row-major leg pages one stick per CB slot, the slot holds the larger of the leg's input and
-# output sticks, and routing sends a leg to codegen only when two slots fit the static L1 window. A
-# case where they do not is otherwise fully in codegen scope; without the capacity gate it
-# routes to codegen and then throws out of circular-buffer allocation instead of falling back.
-#
-# 131072 bf16 elements is a 256 KiB input stick. A last-dim x3 repeat makes the output stick
-# 768 KiB, so two slots are 1.5 MiB -- the whole of L1 on the largest arch, hence past the window
-# on every arch. Native's last-dim CBs hold the input stick, so native still serves it.
+# A last-dim x3 repeat of this width needs two 768 KiB output-stick slots, past L1 on every arch, so it
+# must fall back to native (whose CBs hold only the input stick) rather than fail CB allocation.
 _L1_OVERFLOW_WIDTH = 131072
 
 
@@ -142,11 +132,7 @@ def test_forced_codegen_refuses_a_wide_rm_case_that_exceeds_l1(device, expect_er
 
 
 def _pin_l1_headroom(device, headroom_bytes):
-    """Lowers the live L1 frontier to about `headroom_bytes` above the CB base on every bank.
-
-    Interleaved L1 spreads pages round-robin over the banks, so N tiles per bank lower the lowest
-    occupied address by the same amount on all of them; only the occupancy matters.
-    """
+    """Lowers the live L1 frontier to about `headroom_bytes` above the CB base on every bank."""
     info = ttnn._ttnn.reports.get_device_info(device)
     tiles_per_bank = (info.cb_limit - headroom_bytes) // (32 * 32 * 2)
     resident = ttnn.allocate_tensor_on_device(
@@ -169,10 +155,8 @@ def _wide_last_dim_case(device, num_repeats):
 
 
 def test_repeat_codegen_rm_cb_plan_follows_live_l1(device):
-    # Routing budgets two slots against the static L1 window, but the CB depth comes from the L1 free
-    # at dispatch. A case warmed on a clear device and repeated with the free window pinned between one
-    # and two slots must compile a single-slot program rather than replay the cached double-buffered one,
-    # whose CBs would overlap the pinned buffer.
+    # CB depth follows the L1 free at dispatch: with 1-2 slots free the cached double-buffered program
+    # would overlap the pinned buffer, so a single-slot program must be compiled.
     xt, repeat_dims, expected, slot_bytes = _wide_last_dim_case(device, 2)
     out, grew = _auto_route_grows_cache(device, xt, repeat_dims)
     assert_equal(expected, ttnn.to_torch(out))
@@ -190,8 +174,7 @@ def test_repeat_codegen_rm_cb_plan_follows_live_l1(device):
 
 
 def test_repeat_codegen_falls_back_when_free_l1_holds_no_slot(device):
-    # With less than one output stick of L1 free, codegen has no CB plan at all. Native's last-dim CBs
-    # stage the input stick, a quarter of it at x4, so the call must route there instead of failing.
+    # With under one output stick free codegen has no CB plan; native stages only the input stick.
     xt, repeat_dims, expected, slot_bytes = _wide_last_dim_case(device, 4)
     device.clear_program_cache()
     resident, headroom = _pin_l1_headroom(device, 3 * slot_bytes // 4)
@@ -274,15 +257,8 @@ def test_forced_codegen_refuses_non_default_tile(device, expect_error, tile):
         _force_codegen(xt, ttnn.Shape([1, 1, 3, 1]))
 
 
-# --- Routing of the sharded and perf-demoted configs ---
-
-
 def _auto_route_grows_cache(device, xt, repeat_dims, **kwargs):
-    """Runs ttnn.repeat after priming the native program on an empty cache; returns (out, grew).
-
-    Clearing first makes "grew" mean "auto compiled a program native does not use" regardless of what
-    earlier tests left cached, so a codegen route is observable, not only a native fallback.
-    """
+    """Primes native on an empty cache, then runs ttnn.repeat; returns (out, grew), grew meaning codegen ran."""
     device.clear_program_cache()
     _force_native(xt, repeat_dims, **kwargs)
     entries_before = device.num_program_cache_entries()
@@ -662,8 +638,7 @@ def test_repeat_codegen_program_cache_hit(device, shape, kwargs, dtype, layout, 
     golden = ttnn.to_torch(_force_native(xt, **kwargs))
     assert_equal(golden, ttnn.to_torch(_force_codegen(xt, **kwargs)))
     entries_after_miss = device.num_program_cache_entries()
-    # Same spec, a distinct allocation: the cached program must rebind its Buffer*s
-    # instead of reusing the first dispatch's addresses.
+    # Same spec, new allocation: the cached program must rebind its Buffer*s.
     yt = ttnn.from_torch(_make_input(shape, dtype), dtype=dtype, layout=layout, device=device, memory_config=placement)
     second_golden = ttnn.to_torch(_force_native(yt, **kwargs))
     assert_equal(second_golden, ttnn.to_torch(_force_codegen(yt, **kwargs)))
@@ -685,7 +660,6 @@ _H = ttnn.ShardStrategy.HEIGHT
 _W = ttnn.ShardStrategy.WIDTH
 
 # Cases codegen serves faster than native, on device and on wall time; a perf demotion must not catch them.
-# Each: (shape, repeat_dims, dtype, layout, input placement, output memory_config or None).
 _CODEGEN_WINS = [
     *[
         ([1, 2, h, w], [1, 2, 1, 1], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, None)

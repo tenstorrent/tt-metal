@@ -2,12 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Direct outer-axis TILE repeat for an L1 output. TensorAccessor maps the
-// global destination page IDs for interleaved or page-identical sharded TILE
-// storage.
-//
-// Each worker owns disjoint source pages. It reads each source tile once and
-// writes every repeated destination page, avoiding one source read per copy.
+// Outer-axis TILE repeat: each source tile is read once and written to every copy.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

@@ -42,7 +42,6 @@ std::optional<tt::tt_metal::ShardSpec> generate_repeat_shard_spec(
     tt::tt_metal::TensorMemoryLayout memory_layout,
     std::optional<tt::tt_metal::ShardOrientation> orientation_hint = std::nullopt);
 
-// The (dim, count) of the only repeated axis; nullopt when zero or several axes repeat.
 inline std::optional<std::pair<int32_t, uint32_t>> single_repeated_dim(const ttsl::SmallVector<uint32_t>& repeat_dims) {
     std::optional<std::pair<int32_t, uint32_t>> found;
     for (size_t i = 0; i < repeat_dims.size(); ++i) {
@@ -61,7 +60,6 @@ inline tt::tt_metal::MemoryConfig interleaved_in(tt::tt_metal::BufferType buffer
     return tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type};
 }
 
-// The spec of a buffer of `shape`/`layout` at `memory_config`, with `ref`'s dtype and tile.
 inline tt::tt_metal::TensorSpec spec_like(
     const Tensor& ref,
     const ttnn::Shape& shape,

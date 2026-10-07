@@ -36,7 +36,6 @@ bool is_sub_tile(const ttnn::Shape& shape) {
 using repeat::interleaved_in;
 using repeat::spec_like;
 
-// Per-bank bytes a buffer of `spec` takes out of L1 on `ref`'s device; zero when it lives in DRAM.
 uint64_t l1_bytes_per_bank(const Tensor& ref, const tt::tt_metal::TensorSpec& spec) {
     if (spec.memory_config().buffer_type() != BufferType::L1) {
         return 0;
@@ -46,16 +45,7 @@ uint64_t l1_bytes_per_bank(const Tensor& ref, const tt::tt_metal::TensorSpec& sp
         allocator->get_alignment(BufferType::L1), allocator->get_num_banks(BufferType::L1));
 }
 
-// Both ROW_MAJOR branches page one stick per CB slot, and a stick scales with the tensor's width, so a
-// leg whose two slots do not fit routes to native instead.
-//
-// The budget is the static L1 window less `committed_l1`, the per-bank bytes of the L1 buffers this
-// call keeps alive alongside the leg. Live occupancy is never read here: this gate runs at routing and
-// again on a program-cache miss, with the op's own outputs allocated in between, and the two answers
-// must agree.
-//
-// The slot is sized from the leg's own input and output specs, exactly as the factory sizes it from
-// their buffers.
+// Uses the static L1 window, not live occupancy: routing and a later cache miss must give the same answer.
 bool rm_leg_fits_in_l1(
     const Tensor& input,
     const tt::tt_metal::TensorSpec& leg_input,
@@ -113,13 +103,11 @@ bool shard_spec_is_page_identical(const MemoryConfig& memory_config, const ttnn:
     if (is_tile && (shard_h % tt::constants::TILE_HEIGHT != 0 || shard_w % tt::constants::TILE_WIDTH != 0)) {
         return false;
     }
-    // A partial final shard changes the page-to-core map away from the one the accessor computes.
     if (height % shard_h != 0 || width % shard_w != 0) {
         return false;
     }
     const uint64_t height_shards = height / shard_h;
     const uint64_t width_shards = width / shard_w;
-    // A ROW_MAJOR page is the whole stick only when the shard spans the whole row.
     if (!is_tile && width_shards != 1) {
         return false;
     }
@@ -190,18 +178,14 @@ CodegenLegPlan plan_codegen_legs(
 
     CodegenLegPlan plan;
     plan.round_trip = needs_row_major_round_trip(input, repeat_dims);
-    // A page-identical sharded input is read where it lies. Anything else unshards once, so a single
-    // hop feeds every leg; the untilize of the round trip is interleaved-only.
+    // The round trip's untilize is interleaved-only.
     plan.unshard_input =
         input_mc.is_sharded() && (plan.round_trip || !shard_spec_is_page_identical(input_mc, shape, input.layout()));
-    // A repeated shape does not tile the input's shard spec, so intermediates are interleaved.
     plan.intermediate_mc = interleaved_in(plan.unshard_input ? BufferType::DRAM : input_mc.buffer_type());
 
     const bool tile_legs = input.layout() == ttnn::TILE_LAYOUT && !plan.round_trip;
     plan.leg_repeats.assign(repeat_dims.cbegin(), repeat_dims.cbegin() + ndim);
-    // The highest axis a fold may land on. A row-major leg must keep the stick whole, and a TILE leg
-    // copies whole tile pages exactly only along an outer axis. Ascending, so a run of size-1 axes
-    // chains into one leg.
+    // Row-major legs must keep the stick whole; TILE legs are exact only along outer axes.
     const int32_t fold_limit = static_cast<int32_t>(ndim) - (tile_legs ? 3 : 2);
     for (int32_t d = 0; d + 1 <= fold_limit; ++d) {
         if (shape[d] == 1 && plan.leg_repeats[d] > 1 && plan.leg_repeats[d + 1] > 1) {
@@ -210,8 +194,7 @@ CodegenLegPlan plan_codegen_legs(
         }
     }
 
-    // Row-major legs repeat the stick first, so tiny multi-dim repeats do not carry a wider
-    // intermediate through the per-stick work. TILE legs run outermost first.
+    // Row-major legs run innermost first so small multi-dim repeats avoid a wide intermediate in per-stick work.
     for (uint32_t i = 0; i < ndim; ++i) {
         const uint32_t d = tile_legs ? i : ndim - 1 - i;
         if (plan.leg_repeats[d] > 1) {
@@ -220,7 +203,6 @@ CodegenLegPlan plan_codegen_legs(
     }
     plan.row_major_legs = tile_legs ? 0 : plan.rep_dims.size();
 
-    // On a round trip the retilize produces the result, and it cannot land in a shard spec.
     const bool last_leg_writes_result = !plan.round_trip;
     auto out_shape = shape;
     for (uint32_t d = 0; d < ndim; ++d) {
@@ -250,7 +232,6 @@ bool supported_by_codegen(
         return true;
     }
     if (input.layout() == ttnn::ROW_MAJOR_LAYOUT) {
-        // bfloat8_b is block-float and has no row-major page layout.
         if (input.dtype() == DataType::BFLOAT8_B) {
             return false;
         }
@@ -258,8 +239,6 @@ bool supported_by_codegen(
             // Not yet on device (e.g. host-side probing); nothing to bound against.
             return true;
         }
-        // Only this step's own input and output are known here; the whole-call gate, which also
-        // counts the call's other live intermediates, subtracts at least as much.
         auto out_shape = shape;
         out_shape[rep_dim] *= num_repeats;
         const auto& in_spec = input.tensor_spec();
@@ -270,7 +249,6 @@ bool supported_by_codegen(
     if (input.layout() != ttnn::TILE_LAYOUT) {
         return false;
     }
-    // The prim copies whole tile pages, which is exact along H or W only when that axis is tile-aligned.
     if (rep_dim == 3) {
         return shape[-1] % tt::constants::TILE_WIDTH == 0;
     }
@@ -282,11 +260,7 @@ bool supported_by_codegen(
 
 namespace {
 
-// Walks the row-major legs in the order the router executes them, handing `fits` each leg's input and
-// output specs and the per-bank L1 of `committed` plus the round trip's untilized copy and every leg
-// output so far. All of those count as live for the whole call, which never undercounts whatever the
-// allocator frees in between. With `final_output_allocated`, a last leg that writes in place lands in
-// a buffer the caller has already allocated, so it is not charged again.
+// Every leg output so far stays charged as live, so whatever the allocator frees in between is never undercounted.
 template <typename LegFits>
 bool row_major_legs_fit(
     const Tensor& input,
@@ -297,8 +271,6 @@ bool row_major_legs_fit(
     LegFits&& fits) {
     const auto& shape = input.logical_shape();
     const CodegenLegPlan plan = plan_codegen_legs(input, repeat_dims, output_mem_config);
-    // What the first leg reads: the input where it lies, its interleaved DRAM copy, or the round trip's
-    // untilized copy.
     tt::tt_metal::TensorSpec leg_in = input.tensor_spec();
     if (plan.unshard_input) {
         leg_in = spec_like(input, shape, input.layout(), interleaved_in(BufferType::DRAM));
@@ -342,27 +314,20 @@ bool supported_by_codegen(
     if (std::none_of(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r > 1; })) {
         return false;
     }
-    // The legs repeat only the dims above 1, so a zero elsewhere would be dropped instead of emptying
-    // the output.
+    // The legs skip dims <= 1, so a zero would be dropped instead of emptying the output.
     if (std::any_of(repeat_dims.cbegin(), repeat_dims.cend(), [](uint32_t r) { return r == 0; })) {
         return false;
     }
-    // The router resolves a sharded output's spec before asking; one still missing here has no page
-    // grid for the final leg to write.
     if (output_mem_config.is_sharded() && !output_mem_config.shard_spec().has_value()) {
         return false;
     }
-    // A sharded input that is not page-identical is unsharded once up front, so any shard spec is
-    // served; only the tile/stick rules below constrain the call.
     const bool round_trip = needs_row_major_round_trip(input, repeat_dims);
     if (input.layout() == ttnn::TILE_LAYOUT && !round_trip) {
-        // Only outer axes, or tile-aligned H/W, are repeated: plain tile-page copies.
         return true;
     }
     if (input.layout() != ttnn::TILE_LAYOUT && input.layout() != ttnn::ROW_MAJOR_LAYOUT) {
         return false;
     }
-    // Every leg below runs row-major, the round trip's included.
     if (input.dtype() == DataType::BFLOAT8_B) {
         return false;
     }
@@ -370,9 +335,7 @@ bool supported_by_codegen(
         // Not yet on device (e.g. host-side probing); nothing to bound against.
         return true;
     }
-    // With the input, the output and so every intermediate in DRAM, no leg commits any L1 and all
-    // pages share DRAM's alignment. A leg never narrows the stick, so the last leg's output stick is
-    // the largest slot any leg sizes, and it alone decides the gate.
+    // All-DRAM: no leg commits L1 and the last leg's stick is the widest, so it alone decides.
     if (input.memory_config().buffer_type() == BufferType::DRAM &&
         output_mem_config.buffer_type() == BufferType::DRAM) {
         const uint64_t widest_stick = static_cast<uint64_t>(shape[-1]) * repeat_dims.back() * input.element_size();
@@ -380,7 +343,6 @@ bool supported_by_codegen(
             widest_stick, static_cast<uint64_t>(input.device()->allocator()->get_alignment(BufferType::DRAM)));
         return ttnn::prim::rm_slot_routable(slot, ttnn::operations::data_movement::get_static_l1_space(input));
     }
-    // Each row-major leg's CB shares L1 with the input as well as the buffers the walk counts.
     return row_major_legs_fit(
         input,
         repeat_dims,
@@ -401,8 +363,7 @@ bool row_major_cbs_fit_free_l1(
         (input.layout() == ttnn::TILE_LAYOUT && !needs_row_major_round_trip(input, repeat_dims))) {
         return true;
     }
-    // The input and any preallocated output are already allocated, so the free window has paid for
-    // them; only the buffers the call has yet to allocate are charged against it.
+    // Already-allocated buffers are paid for by the free window; charge only those still to allocate.
     const uint64_t free_l1 = ttnn::operations::data_movement::get_max_l1_space(input);
     return row_major_legs_fit(
         input,
@@ -420,10 +381,8 @@ bool row_major_cbs_fit_free_l1(
 
 namespace {
 
-// A last-dim row-major repeat from a page-identical HEIGHT_SHARDED L1 input into a HEIGHT_SHARDED
-// output. Native repeats each shard on its own core; codegen splits the widened sticks over the whole
-// worker grid, so every stick leaves its shard core and comes back. That was measured losing on shard
-// grids wider than tall, and winning by up to 6x down a column.
+// Native repeats each shard on its own core; codegen spreads sticks over the whole grid, which measured
+// slower on shard grids wider than tall.
 bool is_row_shard_last_dim(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
     const auto& input_mc = input.memory_config();
@@ -443,12 +402,7 @@ bool is_row_shard_last_dim(
     return repeat_dims[ndim - 1] != 1 && extent.x > extent.y;
 }
 
-// A ROW_MAJOR shard narrower than the row makes each page a partial stick, which the codegen page map
-// cannot address, so the codegen route unshards the whole input to DRAM before its legs and, for a
-// sharded output, reshards after them. When exactly one axis is repeated and native's sharded
-// predicate accepts the call, native instead repeats each shard where it lies in one program, so the
-// codegen route pays two or three extra full-tensor moves for the same work. With two or more
-// repeated axes native unshards up front too, and the two routes compete on equal terms.
+// Codegen must unshard a partial-stick shard (and reshard after); native repeats a single axis in place.
 bool is_partial_stick_shard_native_in_place(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
     const auto& input_mc = input.memory_config();
@@ -462,14 +416,10 @@ bool is_partial_stick_shard_native_in_place(
                input.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, single->first, single->second);
 }
 
-// Shard rows at least this many cores wide were measured losing on both arches; rows of 2 or 4
-// cores, and every multi-row grid measured, keep codegen ahead.
+// Measured threshold on both arches; narrower rows and multi-row grids keep codegen ahead.
 constexpr uint32_t kShardRowHotspotMinCores = 8;
 
-// The first leg of an outer-axis repeat reads a page-identical HEIGHT_SHARDED L1 input where it lies,
-// split over the whole worker grid, while native unshards first and reads from interleaved storage.
-// With every shard on one row, the reads converge on that row's links. TILE was measured losing into
-// every output placement, ROW_MAJOR only into an interleaved L1 output.
+// Reading in place from a one-row shard grid converges every core's reads on that row's links.
 bool is_shard_row_read_hotspot(
     const Tensor& input, const ttsl::SmallVector<uint32_t>& repeat_dims, const MemoryConfig& output_mem_config) {
     const auto& input_mc = input.memory_config();

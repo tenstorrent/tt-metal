@@ -30,14 +30,11 @@ const MemoryConfig& output_mem_config_of(
                                                           : operation_attributes.output_mem_config;
 }
 
-// The output checks both validators run. A preallocated output is not part of the program-cache key
-// beyond its spec, so a hit can pair a cached program with a buffer that aliases the input or sits on
-// another device.
+// Also run on a cache hit: the key sees only the output's spec, not its buffer or device.
 void validate_output(const RepeatCodegenParams& operation_attributes, const RepeatCodegenInputs& tensor_args) {
     const Tensor& input = tensor_args.input;
     auto expected_shape = input.logical_shape();
     expected_shape[operation_attributes.rep_dim] *= operation_attributes.num_repeats;
-    // The writers address the output by page id alone, so a sharded output must keep the interleaved page grid.
     TT_FATAL(
         repeat_codegen::shard_spec_is_page_identical(
             output_mem_config_of(operation_attributes, tensor_args), expected_shape, input.layout()),
@@ -76,19 +73,11 @@ void RepeatCodegenDeviceOperation::validate_on_program_cache_miss(
 
 void RepeatCodegenDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // The key pins the input spec, the attributes and the CB plan; only the buffers can differ.
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
     validate_output(operation_attributes, tensor_args);
 }
 
-// The default key is the attributes and the tensor specs, and neither sees what else occupies L1. A
-// row-major CB is sized to the L1 left free, and Program::validate_circular_buffer_region re-checks a
-// cached program's CB region against the current frontier on every enqueue, so the key also carries
-// the plan: a frontier that moves without changing the plan still hits. create_output_tensors() has
-// run by the time the key is computed, so this sees the frontier create_descriptor() will.
-//
-// A custom hash opts this op out of the canonical program-cache key, so a 64-bit collision between two
-// distinct repeat specs resolves to a wrong hit rather than a rebuild.
+// Row-major CBs are sized to the free L1, so the key carries the CB plan the factory will build.
 ttsl::hash::hash_t RepeatCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     uint32_t cb_batch = 0;
@@ -140,15 +129,12 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> RepeatCodegenDeviceOp
 
 RepeatCodegenDeviceOperation::tensor_return_value_t repeat_codegen(
     const Tensor& input, const RepeatCodegenParams& params, std::optional<Tensor> optional_output_tensor) {
-    // The factory indexes a 4D page map by rep_dim and divides the output page count by num_repeats.
     TT_FATAL(
         input.logical_shape().rank() == 4,
         "RepeatCodegen expects a 4D input, got rank {}",
         input.logical_shape().rank());
     TT_FATAL(params.rep_dim < 4, "RepeatCodegen rep_dim must be in [0, 3], got {}", params.rep_dim);
     TT_FATAL(params.num_repeats >= 1, "RepeatCodegen num_repeats must be at least 1, got {}", params.num_repeats);
-    // The kernels split total_out_pages writes across the output buffer, so a page map that does not
-    // describe this input addresses pages past its end.
     const auto page_map = derive_page_map(input, params.rep_dim, params.num_repeats);
     TT_FATAL(
         params.lower_pages == page_map.lower_pages && params.rep_dim_pages == page_map.rep_dim_pages &&

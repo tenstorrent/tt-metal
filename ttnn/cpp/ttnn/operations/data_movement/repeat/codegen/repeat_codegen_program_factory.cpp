@@ -40,22 +40,16 @@ constexpr const char* kWriterInterleaved =
 // SEQ_REPEAT, see common/kernels/codegen/sequencers.h.
 constexpr uint32_t kSeqRepeat = 1;
 
-// The direct outer-axis reader stages one source tile at a time.
 constexpr uint32_t kDirectCbDepth = 1;
 
-// Blackhole worker caps for an outer-axis TILE repeat into sharded storage. A full-grid producer set
-// repeatedly crossing a small shard grid saturates the NoC links into it; fewer workers keep enough
-// read parallelism while cutting that many-to-few injection pressure. A WIDTH_SHARDED output below
-// kWidthShardedCapMinOutPages stays uncapped: there the fixed per-worker overhead dominates.
+// Blackhole: a full grid writing into a small shard grid saturates the NoC links into it, so cap the workers.
 constexpr uint32_t kCoreCapMinRepeats = 4;
 constexpr uint32_t kBlockShardedOuterRepeatCores = 100;
 constexpr uint32_t kWidthShardedOuterRepeatCores = 64;
 constexpr uint32_t kWidthShardedCapMinOutPages = 1024;
 
-// Axes 2 and 3 of the 4D page map are H and W; anything below is an outer axis.
 constexpr uint32_t kFirstTileAxis = 2;
 
-// `work[i]` is the page count of `cores_in_order[i]`; page ranges are handed out in that order.
 struct CoreSplit {
     CoreRangeSet all_cores;
     std::vector<CoreCoord> cores_in_order;
@@ -80,10 +74,13 @@ std::optional<uint32_t> tuned_core_cap(const Tensor& input, const Tensor& output
 CoreSplit split_work(const Tensor& input, uint32_t total_work, std::optional<uint32_t> max_cores = std::nullopt) {
     MeshDevice* device = input.device();
     auto grid_size = device->compute_with_storage_grid_size();
-    // Column-major enumeration (row_wise=false). When the work fills the grid the order does not
-    // matter. A small split, such as a few sticks spread over a mostly idle grid, lands on the first
-    // cores of the first columns, which sit next to a DRAM column, so every page range takes
-    // fewer NoC hops than the row-major order would give it.
+    // row_wise=false (column-major core enumeration) to match the generator's
+    // split_cores()/emit_per_core_rt(), which always calls ttnn.split_work_to_cores
+    // and corerange_to_cores at their row_wise=False default. This is a no-op for
+    // work counts that fill the whole grid, but for the small per-core-page RM
+    // cases (a handful of sticks spread over a mostly-idle grid) the enumeration
+    // order picks a different physical core per page range, which changes NOC
+    // hop distance to the DRAM channel enough to show up as a device-time delta.
     const auto grid_cores = static_cast<uint32_t>(grid_size.x * grid_size.y);
     auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
         max_cores.has_value() ? tt::tt_metal::split_work_to_cores(
@@ -137,11 +134,9 @@ RepeatPageMap derive_page_map(const Tensor& input, uint32_t rep_dim, uint32_t nu
         map.total_out_pages = dim_pages[0] * dim_pages[1] * dim_pages[2] * dim_pages[3] * num_repeats;
         return map;
     }
-    // A ROW_MAJOR page is one stick.
     map.stick_size = shape[3] * input.element_size();
     const uint32_t sticks = shape[0] * shape[1] * shape[2];
     if (rep_dim == 3) {
-        // The repeat widens each stick and leaves the page count alone.
         map.total_out_pages = sticks;
         return map;
     }
@@ -172,10 +167,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
 
     ProgramDescriptor desc;
 
-    // An outer-axis TILE repeat into L1 reads each source tile once and writes all of its copies,
-    // instead of re-reading the source once per output page. The writes go through a TensorAccessor
-    // by global page id, which validation guarantees is the interleaved page grid for a sharded output.
-    // BLOCK_SHARDED stays on the sequenced pair, whose writer's core cap was tuned for that placement.
+    // Reads each source tile once and writes all its copies. BLOCK_SHARDED keeps the sequenced pair and its core cap.
     const auto out_layout = output.memory_config().memory_layout();
     const bool direct_outer_tile =
         !is_row_major && operation_attributes.rep_dim < kFirstTileAxis && dst_buffer->buffer_type() == BufferType::L1 &&
@@ -227,7 +219,6 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         is_row_major ? std::nullopt : tuned_core_cap(input, output, operation_attributes));
 
     if (!is_row_major) {
-        // TILE path: the shared sequencer reader walks SEQ_REPEAT's page map into the shared writer.
         const uint32_t page_size = static_cast<uint32_t>(dst_buffer->aligned_page_size());
 
         desc.cbs.push_back(CBDescriptor{
@@ -289,13 +280,10 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         return desc;
     }
 
-    // ROW_MAJOR paths. Each side moves its own buffer type's aligned page, and DRAM and L1 align
-    // differently, so a slot holds whichever is larger. On the higher-dim path input and output share
-    // one stick; on the last-dim path the output page is `num_repeats` input sticks wide.
     const uint32_t in_aligned = static_cast<uint32_t>(src_buffer->aligned_page_size());
     const uint32_t out_aligned = static_cast<uint32_t>(dst_buffer->aligned_page_size());
     const uint32_t slot_size = rm_slot_bytes(in_aligned, out_aligned);
-    // The program-cache key sized the plan from the output spec; this is the buffer allocated from it.
+    // The program-cache key sized the CB plan from the output spec.
     TT_FATAL(
         out_aligned == spec_aligned_page_bytes(input, output.tensor_spec()),
         "RepeatCodegen: output aligned page {} does not match its spec",
@@ -315,10 +303,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
         }}},
     });
 
-    // The last-dim leg widens each stick, so it has its own reader. A higher-dim leg copies whole
-    // sticks through SEQ_REPEAT's page map, but with the repeat geometry as compile-time constants:
-    // a stick transfer is short enough that the shared reader's per-page runtime divides dominate it.
-    // Each read moves the source's aligned page into a slot at least that large.
+    // Higher-dim legs bake the repeat geometry in at compile time: runtime divides would dominate a stick copy.
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = split.all_cores;
@@ -345,8 +330,7 @@ ProgramDescriptor RepeatCodegenProgramFactory::create_descriptor(
     }
     reader_desc.compile_time_args = std::move(reader_ct_args);
 
-    // The writer takes its L1 stride from the CB and clamps each transfer to the destination page, so
-    // it needs only the requested transfer size: the output's aligned page.
+    // The writer takes its L1 stride from the CB, so only the output's aligned page is passed.
     std::vector<uint32_t> writer_ct_args = {0, out_aligned};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
     writer_ct_args.push_back(cb_batch);

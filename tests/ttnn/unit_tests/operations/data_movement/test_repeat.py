@@ -127,10 +127,8 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
 # repeat_force.hpp). These duplicate the correctness / program-cache checks above but pin the
 # codegen path so the suite exercises it regardless of the gate's verdict.
 #
-# The codegen path supports only a subset of cases (see repeat_codegen_supported.cpp). Every shape below
-# is hand-picked to satisfy that gate, so the forced entry resolves instead of raising. random inputs
-# (not arange) keep bf16 comparisons exact -- repeat copies values verbatim, so a lossless round-trip
-# means assert_equal holds.
+# Every shape below satisfies the codegen gate (repeat_codegen_supported.cpp), so the forced entry resolves.
+# Random inputs (not arange) keep bf16 exact: repeat copies values verbatim.
 codegen_supported_cases = [
     # (shape, repeat_shape, layout) -- TILE
     ((1, 1, 32, 32), (2, 1, 1, 1), ttnn.TILE_LAYOUT),  # N (batch) repeat

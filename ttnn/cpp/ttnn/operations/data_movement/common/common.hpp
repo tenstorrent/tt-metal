@@ -88,8 +88,7 @@ uint32_t get_estimated_size_of_cbs(
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
-// L1 per worker core that the allocator can ever hand to buffers and CBs, whatever is allocated now.
-// A routing gate budgets against this, since live occupancy moves between routing and a cache miss.
+// L1 per worker core the allocator can ever hand out, independent of current occupancy.
 uint32_t get_static_l1_space(const Tensor& input_tensor_a);
 
 // One set of buffers, sized for a single block width.

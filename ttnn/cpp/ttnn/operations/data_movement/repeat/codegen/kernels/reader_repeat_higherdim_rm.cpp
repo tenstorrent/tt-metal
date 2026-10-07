@@ -4,9 +4,7 @@
 
 // Repeat-local reader for HIGHER-DIM replication on RM interleaved tensors.
 //
-// The page map is SEQ_REPEAT's from sequencers.h, with the repeat geometry as
-// compile-time args so its per-stick div/mod strength-reduces; a stick transfer is
-// short enough that software divides would dominate it.
+// Geometry is compile-time so SEQ_REPEAT's per-stick div/mod strength-reduces.
 //
 // CT args: xfer_size, l1_stride, TensorAccessorArgs(in_t),
 //          cb_id, NUM_REPEATS, LOWER_PAGES, REP_DIM_PAGES, BATCH

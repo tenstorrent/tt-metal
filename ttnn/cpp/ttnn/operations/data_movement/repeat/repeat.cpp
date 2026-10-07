@@ -290,10 +290,7 @@ bool same_placement(const MemoryConfig& a, const MemoryConfig& b) {
 
 using repeat::interleaved_in;
 
-// A sharded output with no shard_spec -- what a sharded input gets when no memory_config is passed --
-// is given the spec native lands it in: the input's spec resized for the repeat when native repeats
-// that input in place, otherwise one synthesized for the repeated shape, otherwise interleaved in the
-// same buffer type. The codegen legs need the spec up front to decide where the final leg writes.
+// Gives a spec-less sharded output the spec native would land it in; the legs need it to plan the final write.
 MemoryConfig resolve_codegen_output_mem_config(
     const ttnn::Tensor& working_tensor,
     const ttsl::SmallVector<uint32_t>& working_repetition_vector,
@@ -334,11 +331,7 @@ MemoryConfig resolve_codegen_output_mem_config(
     return interleaved_in(output_mem_config.buffer_type());
 }
 
-// Decomposes a (possibly multi-dim) repeat into single-dim prim::repeat_codegen legs. Each leg is
-// independent (orthogonal axes), so leg order affects only intermediate sizes, never the result.
-// Intermediate legs are interleaved, in DRAM when the input was unsharded and in the input's buffer
-// type otherwise. Only the final leg writes the requested placement, and only when its pages
-// line up with it; otherwise one placement hop runs at the end.
+// Legs repeat orthogonal axes, so their order changes only intermediate sizes, never the result.
 ttnn::Tensor repeat_via_codegen(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& repetition_vector,
@@ -369,9 +362,7 @@ ttnn::Tensor repeat_via_codegen(
             is_final ? final_out : std::nullopt);
     }
 
-    // A folded leg leaves its size-1 axis unexpanded; the pages are already in output order. A
-    // row-major fold can land on H, and a TILE view cannot move rows across tile padding, so the
-    // round trip restores the shape before it retilizes.
+    // A fold leaves the shape short; view before retilizing, since a TILE view cannot move rows across padding.
     auto out_shape = tensor.logical_shape();
     for (size_t d = 0; d < repetition_vector.size(); ++d) {
         out_shape[d] *= repetition_vector[d];
@@ -655,7 +646,6 @@ ttnn::Tensor repeat(
     auto [working_tensor, working_repetition_vector] = detail::match_input_rank(input_tensor, repetition_vector);
     const MemoryConfig output_mem_config =
         detail::derive_output_mem_config(input_tensor, memory_config, optional_output_tensor);
-    // Native derives its own spec from output_mem_config; only the codegen route needs it resolved.
     const MemoryConfig codegen_output_mem_config =
         detail::resolve_codegen_output_mem_config(working_tensor, working_repetition_vector, output_mem_config);
     // Ahead of the routing decision, so a rejected preallocated output raises the same way whichever
@@ -663,19 +653,15 @@ ttnn::Tensor repeat(
     detail::validate_optional_output(
         input_tensor, working_tensor, working_repetition_vector, memory_config, optional_output_tensor);
 
-    // compute_output_specs() hands a preallocated output's spec straight back, so a tile the input
-    // does not share would reach kernels generated for the input's pages.
+    // A preallocated output's spec is used as-is, so a mismatched tile would reach kernels built for the input's.
     const bool output_page_ok = !optional_output_tensor.has_value() ||
                                 repeat_codegen::output_matches_input_page(input_tensor, *optional_output_tensor);
-    // The demotion predicates are cheap placement and shape tests; the support gate budgets L1 per leg,
-    // so it runs only for a call that could still take the codegen route.
+    // Cheap demotion checks first; the support gate walks every leg's L1 budget.
     if (output_page_ok &&
         !repeat_codegen::is_demoted(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
         repeat_codegen::supported_by_codegen(working_tensor, working_repetition_vector, codegen_output_mem_config) &&
         repeat_codegen::row_major_cbs_fit_free_l1(
             working_tensor, working_repetition_vector, codegen_output_mem_config, optional_output_tensor.has_value())) {
-        // The final leg lands in the prealloc when it can write that placement directly; otherwise the
-        // result is copied in.
         return detail::finalize_into_preallocated(
             detail::repeat_via_codegen(
                 working_tensor, working_repetition_vector, codegen_output_mem_config, optional_output_tensor),
