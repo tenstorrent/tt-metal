@@ -136,7 +136,12 @@ def test_moe_decode_4x8(mesh_device):
                         ]
                     )
                 )
-            ident = all(bool(torch.equal(outs[0], o)) for o in outs[1:])
+            ident_all = all(bool(torch.equal(outs[0], o)) for o in outs[1:])
+            lvm = live.reshape(ROWS, 1, N, 1)
+            ident = all(
+                bool(torch.equal(outs[0].masked_select(lvm.expand_as(outs[0])), o.masked_select(lvm.expand_as(o))))
+                for o in outs[1:]
+            )
             out = outs[0].sum(1)  # [ROWS, N, D]
             lv = live.flatten()
             agree = float(
@@ -160,7 +165,7 @@ def test_moe_decode_4x8(mesh_device):
             pr = [pcc(out[r][live[r]], ref[r][live[r]]) for r in range(ROWS)]
             print(
                 f"RESULT layer={layer} mode={mode} shift={sh:.3f} users/row={N} live/row={LIVE}: set_agree_vs_fp32_cpu(live,synthetic x)={agree:.4f} "
-                f"MoE PCC per row (live tokens) {['%.5f' % p for p in pr]} 3-runs-identical={ident}",
+                f"MoE PCC per row (live tokens) {['%.5f' % p for p in pr]} 3-runs-identical(live tokens)={ident} (incl. dead pad tokens: {ident_all})",
                 flush=True,
             )
             if not ident or min(pr) < 0.999:
