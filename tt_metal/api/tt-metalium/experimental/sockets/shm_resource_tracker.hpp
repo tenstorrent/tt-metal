@@ -46,12 +46,15 @@ public:
 
     static void cleanup_stale_resources();
 
+    // kill(2)-based check that also rejects zombies; the start-time aware
+    // variant lives in the runtime-internal shm_owner_liveness.hpp.
+    static bool is_pid_alive(pid_t pid);
+
 private:
     ShmResourceTracker();
 
     void flush_manifest();
     static std::string manifest_path_for_pid(pid_t pid);
-    static bool is_pid_alive(pid_t pid);
 
     std::mutex mutex_;
     std::set<std::string> shm_names_;

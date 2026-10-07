@@ -41,7 +41,11 @@ struct D2HStreamServiceDescriptor {
     std::vector<std::pair<MeshCoordinate, HDSocketDescriptor>> per_coord_entries;
 
     void write_to_file(const std::string& path) const;
+    static D2HStreamServiceDescriptor read_from_file(const std::string& path);
     static D2HStreamServiceDescriptor wait_and_read(const std::string& path, uint32_t timeout_ms = 10000);
+
+    // All per-coord sockets are exported by one owner process, so the first entry speaks for the file.
+    bool owner_alive() const { return per_coord_entries.empty() || per_coord_entries.front().second.owner_alive(); }
 };
 
 inline std::string descriptor_path_for_d2h_service(const std::string& service_id) {
