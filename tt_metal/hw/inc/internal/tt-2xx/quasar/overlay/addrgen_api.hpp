@@ -67,6 +67,11 @@ constexpr CmdBuf paired_cmdbuf(AddrGen addrgen) { return static_cast<CmdBuf>(sta
 
 enum bank_order_e { BANK_INNER = 0, BANK_MIDDLE, BANK_OUTER };
 
+/* A RoCC instruction with no result. Hardware workaround (AIHWE-6506): two value-returning RoCC instructions in flight
+ * at once (e.g. back-to-back rd_reg into different registers) can hang the core; a rocc_nop between them avoids it.
+ * The compiler is to insert it automatically; until then the library calls it between such instructions. */
+inline __attribute__((always_inline)) void rocc_nop() { CMDBUF_GET_VC_SPACE_NO_RESULT(0); }  // cmdbuf 0
+
 /*
  * Configuration structs for address generators.
  *

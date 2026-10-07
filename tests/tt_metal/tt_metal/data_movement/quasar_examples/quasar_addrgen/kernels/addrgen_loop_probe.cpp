@@ -43,7 +43,7 @@ constexpr uint64_t kOuterStride = 0x1000;
 constexpr uint64_t kOuterEnd = 0x10000;
 constexpr uint32_t kNumRegWords = 12;
 
-// Every register of one side the walk depends on, read straight from hardware (fenced: see read_reg_fenced) into
+// Every register of one side the walk depends on, read straight from hardware (separated: see read_reg_separated) into
 // `out` as 64-bit words (low word, then high word). Written straight to the report: the DM stack is small.
 #define PROBE_AG_REG(SIDE, name)                                                                       \
     ((SIDE) == ::overlay::Side::Src ? TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_SRC_##name##_REG_OFFSET \
@@ -51,18 +51,18 @@ constexpr uint32_t kNumRegWords = 12;
 template <overlay::AddrGen G, overlay::Side S>
 void snapshot_regs(volatile tt_l1_ptr uint32_t* out) {
     uint64_t r[kNumRegWords];
-    r[0] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, BANK_CURRENT));
-    r[1] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, BANK_BASE));
-    r[2] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, BANK_SIZE));
-    r[3] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, BANK_SKIP));
-    r[4] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, INNER_STRIDE));
-    r[5] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, INNER_END));
-    r[6] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, INNER_ADDRESS));
-    r[7] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, OUTER_STRIDE));
-    r[8] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, OUTER_END));
-    r[9] = overlay::read_reg_fenced<G>(PROBE_AG_REG(S, OUTER_ADDRESS));
+    r[0] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, BANK_CURRENT));
+    r[1] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, BANK_BASE));
+    r[2] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, BANK_SIZE));
+    r[3] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, BANK_SKIP));
+    r[4] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, INNER_STRIDE));
+    r[5] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, INNER_END));
+    r[6] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, INNER_ADDRESS));
+    r[7] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, OUTER_STRIDE));
+    r[8] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, OUTER_END));
+    r[9] = overlay::read_reg_separated<G>(PROBE_AG_REG(S, OUTER_ADDRESS));
     TT_ROCC_ADDRESS_GEN_MISC_reg_u misc;
-    misc.val = overlay::read_reg_fenced<G>(TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);
+    misc.val = overlay::read_reg_separated<G>(TT_ROCC_ACCEL_TT_ROCC_CPU0_ADDRESS_GEN_R_MISC_REG_OFFSET);
     r[10] = misc.f.bank_offset;
     r[11] = S == overlay::Side::Src ? misc.f.src_bank_order : misc.f.dst_bank_order;
     for (uint32_t i = 0; i < kNumRegWords; ++i) {

@@ -16,6 +16,8 @@
 //   1  the 3 reads back to back (3 outstanding), then one fence
 //   2  each read's result used (a register move, which waits for it) before the next read; no fence
 //   3  as 2, then one fence
+//   4  a rocc_nop (a no-result RoCC instruction) after each read, and after each of the pops that follow the restore:
+//      the hardware workaround for AIHWE-6506
 // Finding (emu-quasar-2x3): mode 1 hangs at stage 0, and so does any sequence with two reads in flight; what matters
 // is that a read's response arrives before the next read issues, not where the fence is.
 // No NoC transaction is issued. A hang shows up as the kernel never writing its report (the test times out).
@@ -84,6 +86,10 @@ void kernel_main() {
     overlay::AddrgenPosition saved{};
     if constexpr (fence_mode == 0) {
         overlay::save_position_addrgen<overlay::ADDRGEN_1, kSide>(saved);  // a fence after each read
+    } else if constexpr (fence_mode == 4) {
+        saved.bank_current = overlay::read_reg_separated<overlay::ADDRGEN_1>(REPRO_AG_REG(BANK_CURRENT));
+        saved.inner_address = overlay::read_reg_separated<overlay::ADDRGEN_1>(REPRO_AG_REG(INNER_ADDRESS));
+        saved.outer_address = overlay::read_reg_separated<overlay::ADDRGEN_1>(REPRO_AG_REG(OUTER_ADDRESS));
     } else if constexpr (fence_mode == 1) {
         saved.bank_current = overlay::read_reg_addrgen<overlay::ADDRGEN_1>(REPRO_AG_REG(BANK_CURRENT));
         saved.inner_address = overlay::read_reg_addrgen<overlay::ADDRGEN_1>(REPRO_AG_REG(INNER_ADDRESS));
@@ -117,6 +123,9 @@ void kernel_main() {
         if constexpr (stage >= 2) {
             for (uint32_t i = 0; i < 3; ++i) {
                 pops[i] = overlay::pop_addrgen<overlay::ADDRGEN_0, kSide>(1);
+                if constexpr (fence_mode == 4) {
+                    overlay::rocc_nop();  // these results stay unused until the report: keep the pops apart
+                }
             }
         }
         overlay::reset_addrgen<overlay::ADDRGEN_0>();
