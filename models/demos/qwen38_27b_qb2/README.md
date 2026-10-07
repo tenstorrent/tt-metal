@@ -6,6 +6,20 @@ serving.
 
 ## Experimental Galaxy bring-up
 
+**2026-10-07 07:32 UTC:** the eight-replica concurrency gate passes on
+`10.228.203.98`. All 32 devices ran eight independent TP4 models; all 80 measured
+128-token sequences matched across 40 isolated windows and five concurrent
+windows. The largest median TPOT increase was 0.00584%, below the unchanged 3%
+limit. Aggregate decode was 288.164 tokens/s for eight B1 replicas at a 63-token
+prompt; per-replica TPOT was 25.742–27.762 ms. Prefill and history readback are
+outside these measurements. This does not establish long-context Galaxy
+throughput, HTTP performance or GPQA accuracy. Receipts and model-source hashes
+are in `galaxy-evidence/eight-replicas-v3/`; hashes match the implementation.
+
+The persistent serving-v7 queue has advanced to profile-v4, then bounded
+attention-v3 and GDN-candidate-v2 diagnostics before baseline serving/API/GPQA.
+Experimental optimizations remain isolated; no long-context speedup is claimed.
+
 The TP4 validator also accepts a `(1, 4)` submesh of a Blackhole Galaxy. The
 Galaxy default is `Topology.Linear`; QB2 keeps its qualified ring default.
 Fabric setup, decoder collectives, embedding gather and sampler use the same
@@ -58,8 +72,8 @@ outputs across two runs. Receipts and source hashes are in
 The decoded answer is coherent through its first EOS. This fixed-length probe
 intentionally continues after EOS, so its trailing output is not a serving EOS
 test. These are short-context B1 results; they do not establish long-context,
-high-batch, eight-replica or reference-evaluation performance. The eight-replica
-test has been launched as a separate persistent job and is not yet qualified.
+high-batch, eight-replica or reference-evaluation performance. The separate
+eight-replica result is recorded above.
 
 `demo/build_galaxy_fabric_tests.sh` successfully built `test_tt_fabric` in a
 separate build tree. `demo/run_galaxy_fabric_tests.sh` queues the upstream torus
@@ -83,8 +97,8 @@ needed the `name.` prefix. The corrected argument is
 a measured link failure. The following safe runner reset the Galaxy and began
 the TP4 sweep. Corrected fabric and eight-replica jobs are queued behind that
 sweep as `qwen38-fabric-torus-neighbors-v2-20261006.service` and
-`qwen38-metal-galaxy-eight-replicas-v2-20261006.service`. Neither gate is passed
-yet. Raw failure/host-test receipts are retained in `galaxy-evidence/`.
+`qwen38-metal-galaxy-eight-replicas-v2-20261006.service`. Neither gate had passed
+at that point. Raw failure/host-test receipts are retained in `galaxy-evidence/`.
 
 The v2 eight-replica run completed all isolated and concurrent windows with
 identical tokens. Its original serial completion observations failed the 3%
@@ -94,7 +108,7 @@ gate: faster replicas measured about 25.74 ms when observed first, then about
 receipt; it is not relabeled as passing. The timing harness now records each
 completion inside its own waiter, with CPU regressions that require independent
 waits and preserve the faster timestamp even when its future is joined last.
-The unchanged 3% per-replica gate requires a new hardware run.
+The v3 hardware run above passes the unchanged 3% per-replica gate.
 
 The v2 layer profiler exercised all six reduced-model cases but failed when
 closing the parent mesh while its profiled child still held a command queue.
