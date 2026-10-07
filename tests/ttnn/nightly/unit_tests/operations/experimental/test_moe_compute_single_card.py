@@ -162,6 +162,8 @@ def _run_moe_compute_single_card_test(
     matmul_xfail_on_bh=False,
     activation_limit=None,
     weight_initializer=None,
+    math_fidelity=ttnn.MathFidelity.LoFi,
+    fp32_dest_acc_en=False,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -423,6 +425,8 @@ def _run_moe_compute_single_card_test(
             activation_type=activation_type,
             compute_only=compute_only,
             activation_limit=activation_limit,
+            math_fidelity=math_fidelity,
+            fp32_dest_acc_en=fp32_dest_acc_en,
         )
 
     def check_structured_combine(tt_combine_output):
@@ -1097,3 +1101,80 @@ def test_moe_compute_clamped_silu_limit_is_program_cache_key(mesh_device, mesh_s
         cache_entries.append(mesh_device.num_program_cache_entries())
     assert cache_entries[1] == cache_entries[0] + 1, "changing the clamp must compile exactly one new MoE program"
     assert cache_entries[2] == cache_entries[1], "returning to the original clamp must hit its cached program"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize("tokens", [1, 4])
+@pytest.mark.parametrize(
+    "activation_type",
+    [
+        MoEActivationFunction.SILU,
+        MoEActivationFunction.SWIGLU,
+        MoEActivationFunction.GELU,
+        MoEActivationFunction.CLAMPED_SILU,
+    ],
+)
+def test_moe_compute_fp32_dest_activations(mesh_device, mesh_shape, tokens, activation_type):
+    """HiFi4 with FP32 DEST: every activation's packer SFPU path on four FP32 DEST tiles, exact weights."""
+    hidden_size = 768
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=2,
+        tokens_per_device=tokens,
+        selected_experts_k=2,
+        N=max(384, 32 * ring_n),
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=activation_type,
+        activation_limit=10.0 if activation_type == MoEActivationFunction.CLAMPED_SILU else None,
+        compute_only=False,
+        weight_initializer=_clamp_boundary_weights,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_precision_is_program_cache_key(mesh_device, mesh_shape):
+    """Fidelity and DEST format each select their own cached program."""
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    hidden_size = 768
+    ring_n = effective_matmul_ring_size(mesh_device)
+    modes = [
+        (ttnn.MathFidelity.LoFi, False),
+        (ttnn.MathFidelity.HiFi4, False),
+        (ttnn.MathFidelity.HiFi4, True),
+        (ttnn.MathFidelity.LoFi, True),
+        (ttnn.MathFidelity.LoFi, False),
+    ]
+    cache_entries = []
+    for fidelity, fp32_dest in modes:
+        _run_moe_compute_single_card_test(
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            experts_per_device=2,
+            tokens_per_device=4,
+            selected_experts_k=2,
+            N=max(384, 32 * ring_n),
+            hidden_size=hidden_size,
+            output_height_shard_dim=4,
+            output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+            dtype=ttnn.bfloat16,
+            activation_type=MoEActivationFunction.CLAMPED_SILU,
+            activation_limit=10.0,
+            compute_only=False,
+            weight_initializer=_clamp_boundary_weights,
+            math_fidelity=fidelity,
+            fp32_dest_acc_en=fp32_dest,
+        )
+        ttnn.synchronize_device(mesh_device)
+        cache_entries.append(mesh_device.num_program_cache_entries())
+    assert cache_entries[1:4] == [cache_entries[0] + n for n in (1, 2, 3)], cache_entries
+    assert cache_entries[4] == cache_entries[3], "returning to default precision must hit its cached program"

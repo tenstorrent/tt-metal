@@ -430,7 +430,9 @@ std::vector<ttnn::Tensor> moe_compute(
     const bool compute_only,
     const std::optional<uint32_t>& bh_ring_size,
     const std::optional<uint32_t>& num_shared_experts_per_device,
-    const std::optional<float>& activation_limit) {
+    const std::optional<float>& activation_limit,
+    const tt::tt_metal::MathFidelity math_fidelity,
+    const bool fp32_dest_acc_en) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
     using Activation = ttnn::experimental::prim::detail::MoEActivationFunction;
 
@@ -601,7 +603,9 @@ std::vector<ttnn::Tensor> moe_compute(
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
             .activation_type = resolved_activation,
-            .activation_limit = activation_limit.value_or(0.0f)},
+            .activation_limit = activation_limit.value_or(0.0f),
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

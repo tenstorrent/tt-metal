@@ -120,6 +120,10 @@ void bind_moe_compute(nb::module_& mod) {
           every other activation; a finite positive ``L`` giving
           ``silu(min(gate, L)) * clamp(up, -L, L)`` (no additive up bias). Part of the program cache key.
 
+        - ``math_fidelity`` (default ``LoFi``) and ``fp32_dest_acc_en`` (default ``False``): compute
+          settings of the expert matmuls and the activation. ``math_approx_mode`` stays enabled and
+          ``dst_full_sync_en`` disabled. Both are part of the program cache key.
+
         - ``compute_only`` (default ``False``): When ``True``, run only the expert
           matmuls and skip the A2A combine. The op then returns **5** tensors (the
           matmul output is the final output, slot 4) instead of 6, and all combine-path
@@ -247,7 +251,9 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
         nb::arg("num_shared_experts_per_device") = nb::none(),
-        nb::arg("activation_limit") = nb::none());
+        nb::arg("activation_limit") = nb::none(),
+        nb::arg("math_fidelity") = tt::tt_metal::MathFidelity::LoFi,
+        nb::arg("fp32_dest_acc_en") = false);
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {

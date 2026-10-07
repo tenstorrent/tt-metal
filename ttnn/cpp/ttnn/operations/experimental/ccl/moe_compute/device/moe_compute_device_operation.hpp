@@ -59,7 +59,9 @@ std::vector<Tensor> moe_compute(
     bool compute_only = false,
     const std::optional<uint32_t>& bh_ring_size = std::nullopt,
     const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt,
-    const std::optional<float>& activation_limit = std::nullopt);
+    const std::optional<float>& activation_limit = std::nullopt,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+    bool fp32_dest_acc_en = false);
 
 using ttnn::experimental::prim::get_moe_combine_cores;
 using ttnn::experimental::prim::get_moe_worker_mcast_bounding_box;

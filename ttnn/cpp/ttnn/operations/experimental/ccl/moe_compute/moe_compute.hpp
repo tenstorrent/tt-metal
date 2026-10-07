@@ -8,6 +8,7 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "ttnn/types.hpp"
 #include "device/kernels/moe_ring_common.h"
@@ -36,7 +37,9 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type = std::nullopt,
     bool compute_only = false,
     const std::optional<uint32_t>& num_shared_experts_per_device = std::nullopt,
-    const std::optional<float>& activation_limit = std::nullopt);
+    const std::optional<float>& activation_limit = std::nullopt,
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::LoFi,
+    bool fp32_dest_acc_en = false);
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     ttnn::MeshDevice* mesh_device,
