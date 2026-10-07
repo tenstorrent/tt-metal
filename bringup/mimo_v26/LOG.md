@@ -1487,3 +1487,14 @@
 - claim: 48-LAYER FULL MODEL decode step (test_decode_timing_u, 4x8 host 30, MIMO_EXPERT_OP=unified (precise numerics), router fast, ag_sum column reduce, dead=spread32): step median U=1 71.0 ms, U=8 90.1, U=32 106.2 (breakdown ffn_moe 51.7/66.3/76.3 ms, attn 15.1/17.4/24.1). Same model with expert op mm (the layer.py default!) and spread: 191/194/201 ms; unified+spread: 105/107/114 ms. At 48 layers: unified instead of mm = 0.55x step time, spread32 on top = 0.68x at U=1 (71 vs 105 ms), 0.93x at U=32. layer.py EXPERT_OP default is still mm: set MIMO_EXPERT_OP=unified. Per-layer MoE table (3 real layers, traced, spread -> spread32, ms): U=1 1.741->0.847, 2 1.739->1.088, 4 1.740->1.349, 8 1.742->1.558, 16 1.751->1.671, 32 1.740->1.717
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_P_model_spread32_h30_5bde994f8e0.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
+
+## E261007-1433-8ff
+- date: 2026-10-07T14:33:57
+- commit: df0495c0790
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: COORDINATOR at df0495c0790: layer.py defaults now MIMO_EXPERT_OP=unified (was mm: the slow path; all earlier decode runs passed unified through --env) and MIMO_DEAD=spread32 (sentinel hangs deep traces, E261007-1432-926; spread32 = balanced dead-slot routing, 1000/1000 deep-trace replays at U=1,32). RISK: the unified op's numerics fix (fp32 DEST/partials, HiFi3, bf16 act, E261007-0745-795) and the dispatch knob exist only in the private relink library artifacts/integ_73c014eb46d/lib (LD_LIBRARY_PATH); the shared build_Release still has the old op (outputs ~1.5-2.4% too small): a run without LD_LIBRARY_PATH silently uses the old numerics. TODO: add a runtime guard (check the loaded _ttnncpp.so path via /proc/self/maps) and/or rebuild the shared build once when no job runs from it; to be done in the re-gate pass. Measured 48-layer step by MoE agent (E261007-1432-327, host .30, spread32 + unified + fast router + all_gather+sum): U=1 71.0 ms, U=8 90.1, U=32 106.2 vs spread+unified 105/107/114 and spread+mm 191/194/201.
+- evidence: -
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py
