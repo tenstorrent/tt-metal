@@ -20,24 +20,23 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     model.mesh_device = object()
     model.hf_config = SimpleNamespace(layer_types=("sliding_attention", "full_attention"))
     model.tt_kv_cache = [None, None]
-    model._rope_prefill_positions = None
-    model.rope_caches_2d = {}
     model._prefill_metadata_external = True
     model.prefill_metadata = object()
-    model._packed_global_rope_trans_mat = None
     model._prefill_trace_mode = True
     model._prefill_trace_controller = (
         SimpleNamespace(layer_ack=lambda idx: events.append(("ack", idx))) if ack_mode == "segmented_trace" else None
     )
     model.mesh_config = SimpleNamespace(cp_degree=8, tp_degree=1)
     model.ccl_manager = None
-    model._get_rope_mats = lambda idx, **kwargs: (idx, idx)
+    model.lookup_packed_rope = lambda layer_type: layer_type
 
     def layer(idx):
         def forward(x, **kwargs):
             assert kwargs["prefill_metadata"] is model.prefill_metadata
             assert kwargs["chunk_start_idx"] == 8192
-            assert kwargs["rope_mats"] == (idx, idx)
+            layer_type = model.hf_config.layer_types[idx]
+            packed_key = "packed_global_rope" if layer_type == "full_attention" else "packed_sliding_rope"
+            assert kwargs[packed_key] == layer_type
             events.append(("write", idx))
             return x
 

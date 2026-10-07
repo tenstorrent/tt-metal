@@ -123,7 +123,6 @@ class Gemma4Attention:
     def __call__(
         self,
         hidden_states,
-        rope_mats,
         prefill_metadata,
         chunk_start_idx=0,
         packed_global_rope=None,
@@ -220,8 +219,6 @@ class Gemma4Attention:
             packed_kv = pack_global_kv_device(
                 tt_v,
                 self.weights.k_norm_rotary_weight,
-                rope_mats[0],
-                rope_mats[1],
                 canonical_k=tt_k,
                 packed_rope_mats=packed_global_rope,
                 value_is_packed=True,

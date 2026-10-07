@@ -9,11 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import torch
 
 from models.demos.gemma4_d_p.config import GALAXY_MESH_SHAPES, MeshConfig
 from models.demos.gemma4_d_p.tt.common import create_tt_model
-from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 
 
 @pytest.mark.parametrize("shape", GALAXY_MESH_SHAPES)
@@ -43,20 +41,6 @@ def test_invalid_chunk_geometry_fails_before_weight_loading(chunk_size, max_seq_
         create_tt_model(
             MeshConfig(SimpleNamespace(shape=(8, 4))), max_seq_len=max_seq_len, prefill_chunk_size=chunk_size
         )
-
-
-@pytest.mark.parametrize("cp,chunk_size", [(8, 8192), (4, 4096), (8, 16384), (8, 32768)])
-def test_rope_shards_follow_chunk_positions(cp, chunk_size):
-    max_seq_len = 32768
-    order = _cp_chunk_major_row_order(max_seq_len, cp, chunk_size).reshape(cp, -1)
-    local_chunk = chunk_size // cp
-    for rank in range(cp):
-        for chunk in range(max_seq_len // chunk_size):
-            start = chunk * chunk_size + rank * local_chunk
-            torch.testing.assert_close(
-                order[rank, chunk * local_chunk : (chunk + 1) * local_chunk],
-                torch.arange(start, start + local_chunk),
-            )
 
 
 def test_imports_do_not_depend_on_original_gemma4():

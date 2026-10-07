@@ -175,40 +175,11 @@ def packed_rope_columns(layer_type: str, head_dim: int) -> tuple[torch.Tensor, .
     return (sliding_kv_indices(head_dim),)
 
 
-def _pack_rope_device(layer_type, cos_cache, sin_cache, memory_config):
-    """(cos, sin) gathered into each of packed_rope_columns' orders, in that order."""
-    return tuple(
-        _gather_columns(table, columns, memory_config)
-        for columns in packed_rope_columns(layer_type, int(cos_cache.shape[-1]))
-        for table in (cos_cache, sin_cache)
-    )
-
-
-def pack_sliding_rope_device(
-    cos_cache: ttnn.Tensor,
-    sin_cache: ttnn.Tensor,
-    *,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Prepare adjacent-pair RoPE lanes once for all sliding layers."""
-    return _pack_rope_device("sliding_attention", cos_cache, sin_cache, memory_config)
-
-
-def pack_global_rope_device(
-    cos_cache: ttnn.Tensor,
-    sin_cache: ttnn.Tensor,
-    *,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """Prepare packed-Q and active-K RoPE lanes once for all global layers."""
-    return _pack_rope_device("full_attention", cos_cache, sin_cache, memory_config)
-
-
 def pack_global_kv_device(
     value: ttnn.Tensor,
     k_norm_rotary_weight: ttnn.Tensor,
-    cos_cache: ttnn.Tensor,
-    sin_cache: ttnn.Tensor,
+    cos_cache: ttnn.Tensor | None = None,
+    sin_cache: ttnn.Tensor | None = None,
     *,
     canonical_k: ttnn.Tensor | None = None,
     packed_rope_mats: tuple[ttnn.Tensor, ...] | None = None,
@@ -219,7 +190,8 @@ def pack_global_kv_device(
 
     When no legacy canonical K cache is needed, only the active 128 K channels
     receive gamma and RoPE. canonical_k is accepted during the transition for
-    paths that still maintain the separate paged cache.
+    paths that still maintain the separate paged cache. cos_cache and sin_cache
+    are read only when packed_rope_mats is None.
     """
     rotary, _, value_order = global_kv_indices()
     if canonical_k is not None:

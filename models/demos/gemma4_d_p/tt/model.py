@@ -7,11 +7,7 @@ import torch
 
 import ttnn
 from models.common.tensor_utils import get_rot_transformation_mat
-from models.demos.gemma4_d_p.tt.attention.global_kv_cache import (
-    pack_global_rope_device,
-    pack_sliding_rope_device,
-    packed_rope_columns,
-)
+from models.demos.gemma4_d_p.tt.attention.global_kv_cache import packed_rope_columns
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity, ring_sdpa_chunk_sizes
 from models.demos.gemma4_d_p.tt.ccl import ccl_allgather, ccl_partition_rows
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
@@ -20,137 +16,39 @@ from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
-def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
-    """Row permutation putting each CP rank's positions in chunk order.
+def create_packed_rope_tables(mesh_device, hf_config, max_seq_len):
+    """Replicated RoPE tables per layer type, for looking up a chunk's positions inside a trace.
 
-    Multi-chunk CP prefill has a problem the single-chunk case hides. For chunk ``n``
-    rank ``r`` owns global positions ``[n*C + r*L, +L)`` with ``L = C/cp``. If the
-    RoPE cache is sharded by position, rank ``r`` holds ``[r*max/cp, ...)``, so the
-    local index it needs is ``n*C - r*(C - L)`` — rank-dependent, and the model
-    slices with a mesh-wide scalar that cannot vary per device.
-
-    Permuting fixes it. Lay row ``m`` out as::
-
-        m = r*(max_seq_len/cp) + n*L + j   holding global position   n*C + r*L + j
-
-    so that a contiguous shard across the CP axis hands rank ``r`` exactly its own
-    positions, ordered by chunk. The slice for chunk ``n`` is then ``[n*L, +L)`` on
-    every rank — a uniform scalar, which is ``chunk_start_idx // cp``.
-
-    Returns the index array to gather rows by, or None when there is nothing to do.
+    Each table's columns are already in one of the packed RoPE lane orders (packed_rope_columns), so a chunk looks
+    them up with ttnn.embedding instead of gathering columns per chunk. Global: Q cos, Q sin, K cos, K sin. Sliding:
+    cos, sin. Row-major so that embedding reads only the requested positions.
     """
-    if cp <= 1 or not chunk_size:
-        return None
-    slab = chunk_size // cp
-    if slab == 0 or max_seq_len % chunk_size != 0 or chunk_size % cp != 0:
-        return None
-    num_chunks = max_seq_len // chunk_size
-    order = torch.empty(max_seq_len, dtype=torch.long)
-    for rank in range(cp):
-        for chunk in range(num_chunks):
-            local_base = rank * (max_seq_len // cp) + chunk * slab
-            global_base = chunk * chunk_size + rank * slab
-            order[local_base : local_base + slab] = torch.arange(global_base, global_base + slab)
-    return order
-
-
-def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=None, packed=False):
-    """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup.
-
-    The third dict, filled only with packed, holds replicated 2D tables whose columns are already in the packed
-    RoPE lane orders (packed_rope_columns), per layer type in pack_*_rope_device output order, so a traced chunk
-    looks them up with ttnn.embedding instead of gathering columns out of the canonical tables.
-    """
-    mesh_device = mesh_config.device
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
-    is_mesh = hasattr(mesh_device, "shape")
-    replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-    cp = mesh_config.cp_degree if (is_mesh and mesh_config is not None) else 1
-    row_order = None
-    if cp > 1:
-        assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
-        shard_dims = (-2, None) if mesh_config.cp_axis == 0 else (None, -2)
-        prefill_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
-        # Multi-chunk needs the rows reordered so one scalar slice serves every rank;
-        # single-chunk (max_seq_len == chunk) is already correct without it.
-        row_order = _cp_chunk_major_row_order(max_seq_len, cp, prefill_chunk_size)
-    else:
-        prefill_mapper = replicate
-
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     rope = Gemma4TextRotaryEmbedding(hf_config)
     # The rotary module reads only x's device and dtype.
     x_dummy = torch.empty(1, 1, 1)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
-    caches_4d = {}
-    caches_2d = {}
-    caches_2d_packed = {}
+    tables_by_type = {}
     for layer_type in set(hf_config.layer_types):
-        cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
-        # cos, sin: [1, max_seq_len, head_dim]
-        # Cast to bfloat16 on host so from_torch's requested dtype matches the
-        # source: a dtype conversion inside from_torch queries tile metadata on
-        # the row-major host intermediate and emits the #18536 warning.
-        cos = cos.to(torch.bfloat16)
-        sin = sin.to(torch.bfloat16)
-
-        # 4D for prefill: [1, 1, max_seq_len, head_dim].
-        # Sharded along positions under CP (see docstring), replicated otherwise.
-        cos_prefill, sin_prefill = cos, sin
-        if row_order is not None:
-            cos_prefill = cos[:, row_order, :]
-            sin_prefill = sin[:, row_order, :]
-        cos_4d = ttnn.from_torch(
-            cos_prefill.unsqueeze(0),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=prefill_mapper,
+        # cos, sin: [1, max_seq_len, head_dim]. Cast to bfloat16 on host so from_torch's requested dtype matches the
+        # source: a dtype conversion inside from_torch queries tile metadata on the row-major host intermediate and
+        # emits the #18536 warning.
+        cos, sin = (t.to(torch.bfloat16).squeeze(0) for t in rope(x_dummy, pos_ids, layer_type=layer_type))
+        tables_by_type[layer_type] = tuple(
+            ttnn.from_torch(
+                table[:, columns].contiguous(),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=replicate,
+            )
+            for columns in packed_rope_columns(layer_type, int(cos.shape[-1]))
+            for table in (cos, sin)
         )
-        sin_4d = ttnn.from_torch(
-            sin_prefill.unsqueeze(0),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=prefill_mapper,
-        )
-        caches_4d[layer_type] = (cos_4d, sin_4d)
-
-        # Replicated 2D tables support per-rank position lookup inside traces.
-        # Row-major weights let embedding gather only the requested positions.
-        cos_2d = ttnn.from_torch(
-            cos.squeeze(0),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
-        )
-        sin_2d = ttnn.from_torch(
-            sin.squeeze(0),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            mesh_mapper=replicate,
-        )
-        caches_2d[layer_type] = (cos_2d, sin_2d)
-
-        if packed:
-            tables = []
-            for columns in packed_rope_columns(layer_type, int(cos.shape[-1])):
-                for table in (cos, sin):
-                    tables.append(
-                        ttnn.from_torch(
-                            table.squeeze(0)[:, columns].contiguous(),
-                            device=mesh_device,
-                            layout=ttnn.ROW_MAJOR_LAYOUT,
-                            dtype=ttnn.bfloat16,
-                            mesh_mapper=replicate,
-                        )
-                    )
-            caches_2d_packed[layer_type] = tuple(tables)
-
-    return caches_4d, caches_2d, caches_2d_packed
+    return tables_by_type
 
 
 def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len, *, tp_degree):
@@ -159,13 +57,16 @@ def prefill_chunk_geometry_error(prefill_chunk_size, cp_degree, max_seq_len, *, 
         return "sequence and chunk lengths must be positive"
     if max_seq_len % prefill_chunk_size:
         return "prefill chunks must divide max_seq_len"
-    # The residual is sequence-parallel over TP between layers: each TP device keeps 1/TP of the slab's rows.
+    # Each chunk is split across CP, then across TP.
+    # Each device keeps chunk_size / (CP * TP) token rows,
+    # which must be a multiple of 32 so each shard contains whole tiles.
     if prefill_chunk_size % (cp_degree * tp_degree * ttnn.TILE_SIZE):
         return (
             f"prefill chunk {prefill_chunk_size} must be a multiple of CP x TP x {ttnn.TILE_SIZE} = "
             f"{cp_degree * tp_degree * ttnn.TILE_SIZE} for the sequence-parallel residual"
         )
-    # Sliding layers step through the per-rank slab in whole K chunks (the op accepts k 128 only).
+    # Sliding layers step through the per-rank slab in whole K chunks. The chunked sliding SDPA accepts only a
+    # 128-token K chunk (ring_joint_sdpa validation), so a slab that is not a multiple of it cannot run.
     slab = prefill_chunk_size // cp_degree
     sliding_k_chunk = ring_sdpa_chunk_sizes(slab, sliding=True)[1]
     if slab % sliding_k_chunk:
@@ -215,17 +116,14 @@ class Gemma4Model:
         self.embed_scale = hf_config.hidden_size**0.5
         self.ccl_manager = ccl_manager
         self._rope_prefill_positions = None
-        self._packed_global_rope_trans_mat = None
-
-        if mesh_config.cp_degree > 1:
-            self._packed_global_rope_trans_mat = ttnn.from_torch(
-                get_rot_transformation_mat(),
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            )
+        self._packed_global_rope_trans_mat = ttnn.from_torch(
+            get_rot_transformation_mat(),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self.prefill_metadata = PrefillMetadata(mesh_config)
@@ -242,19 +140,9 @@ class Gemma4Model:
         # RoPE caches per layer type (sliding vs global)
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
-        if hf_text_config is not None:
-            self.rope_caches, self.rope_caches_2d, self.rope_caches_2d_packed = create_rope_caches(
-                self.mesh_config,
-                hf_text_config,
-                max_seq_len,
-                prefill_chunk_size=prefill_chunk_size,
-                packed=self._packed_global_rope_trans_mat is not None,
-            )
-        else:
-            # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
-            self.rope_caches = {}
-            self.rope_caches_2d = {}
-            self.rope_caches_2d_packed = {}
+        self.packed_rope_tables = (
+            create_packed_rope_tables(mesh_device, hf_text_config, max_seq_len) if hf_text_config is not None else {}
+        )
 
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
@@ -312,13 +200,19 @@ class Gemma4Model:
 
         # Skip final norm
 
-    def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):
-        """Slice chunk-major RoPE caches using a CP-local row offset."""
-        cos, sin = self.rope_caches[self.hf_config.layer_types[layer_idx]]
-        if seq_len is not None:
-            cos = cos[:, :, start_pos : start_pos + seq_len, :]
-            sin = sin[:, :, start_pos : start_pos + seq_len, :]
-        return cos, sin
+    def lookup_packed_rope(self, layer_type):
+        """This chunk's packed RoPE lanes for layer_type, looked up at the staged positions, with the
+        transformation matrix last (the order the attention layer unpacks)."""
+        if self._rope_prefill_positions is None:
+            raise RuntimeError("prefill needs the chunk's RoPE positions: call set_prefill_rope_positions first")
+        if layer_type not in self.packed_rope_tables:
+            raise RuntimeError(f"no RoPE tables for {layer_type}: the model was built without _hf_text_config")
+        rope_tensors = []
+        for table in self.packed_rope_tables[layer_type]:
+            values = ttnn.embedding(self._rope_prefill_positions, table, layout=ttnn.TILE_LAYOUT)
+            rope_tensors.append(ttnn.unsqueeze_to_4D(values))
+        rope_tensors.append(self._packed_global_rope_trans_mat)
+        return tuple(rope_tensors)
 
     def set_prefill_trace_controller(self, controller):
         """Attach the segmented trace controller used for per-layer migration acks."""
@@ -343,8 +237,6 @@ class Gemma4Model:
         ``transform_and_embed_prefill_inputs_device`` returns them. The caller owns
         trace staging. Migration acknowledgements follow each layer's KV writes.
         """
-        tp = self.mesh_config.tp_degree if self.mesh_config is not None else 1
-        seq_len = hidden_states.shape[2] * tp
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
@@ -352,47 +244,16 @@ class Gemma4Model:
         if not self._prefill_metadata_external:
             self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
-        gathered_rope = {}
-        packed_rope_by_type = {}
-        if self._rope_prefill_positions is not None:
-            for layer_type in set(self.hf_config.layer_types[: len(self.layers)]):
-                if layer_type in self.rope_caches_2d_packed:
-                    # Packed lanes straight from pre-permuted tables: the same values as gathering columns out of
-                    # the canonical lookups, without the per-chunk column gathers. The packed attention paths read
-                    # only these, so the canonical lookups are skipped.
-                    packed_rope_by_type[layer_type] = (
-                        *(
-                            ttnn.unsqueeze_to_4D(
-                                ttnn.embedding(self._rope_prefill_positions, table, layout=ttnn.TILE_LAYOUT)
-                            )
-                            for table in self.rope_caches_2d_packed[layer_type]
-                        ),
-                        self._packed_global_rope_trans_mat,
-                    )
-                    gathered_rope[layer_type] = (None, None)
-                    continue
-                cos, sin = self.rope_caches_2d[layer_type]
-                gathered_rope[layer_type] = (
-                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, cos, layout=ttnn.TILE_LAYOUT)),
-                    ttnn.unsqueeze_to_4D(ttnn.embedding(self._rope_prefill_positions, sin, layout=ttnn.TILE_LAYOUT)),
-                )
-
+        # Each layer type's RoPE lanes are looked up once per chunk and shared by all its layers.
+        packed_rope_by_type = {
+            layer_type: self.lookup_packed_rope(layer_type)
+            for layer_type in set(self.hf_config.layer_types[: len(self.layers)])
+        }
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
-            if gathered_rope:
-                layer_rope = gathered_rope[layer_type]
-            else:
-                layer_rope = self._get_rope_mats(
-                    i, seq_len=seq_len, start_pos=chunk_start_idx // self.mesh_config.cp_degree
-                )
-            if layer_type not in packed_rope_by_type and self._packed_global_rope_trans_mat is not None:
-                pack_rope = pack_global_rope_device if layer_type == "full_attention" else pack_sliding_rope_device
-                packed_rope_by_type[layer_type] = (*pack_rope(*layer_rope), self._packed_global_rope_trans_mat)
-            packed_rope = packed_rope_by_type.get(layer_type)
-
+            packed_rope = packed_rope_by_type[layer_type]
             hidden_states = layer(
                 hidden_states,
-                rope_mats=layer_rope,
                 prefill_metadata=self.prefill_metadata,
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,

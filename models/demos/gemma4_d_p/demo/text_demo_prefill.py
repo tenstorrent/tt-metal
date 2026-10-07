@@ -448,7 +448,6 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
     from models.demos.gemma4_d_p.scripts.layer_perf_report import write_manifest
-    from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
 
     mesh_config = _mesh_config(mesh_device)
@@ -536,32 +535,26 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     def _make_forward(lt):
         """Build (prepare, forward) for one layer type.
 
-        prepare runs the once-per-chunk inputs of the model: the token embedding, the RoPE
-        lookups and their packing. forward runs the layer on them. They are traced separately so the measured trace
+        prepare runs the once-per-chunk inputs of the model: the token embedding and the packed RoPE
+        lookups. forward runs the layer on them. They are traced separately so the measured trace
         holds only the layer; in the model the prepare ops run once per chunk, not once per layer."""
         idx = layer_idxs[lt]
         layer = model.layers[idx]
         assert layer.self_attn.ring_kv_cache is not None, f"layer {idx} has no ring cache"
         model_layer_type = model_layer_types[lt]
-        assert model_layer_type in model.rope_caches_2d, (
-            f"model has no 2D RoPE cache for {lt} (built without _hf_text_config?) — "
+        assert model_layer_type in model.packed_rope_tables, (
+            f"model has no RoPE tables for {lt} (built without _hf_text_config?) — "
             f"per-chunk RoPE would be wrong, refusing to measure"
         )
-        cos_2d, sin_2d = model.rope_caches_2d[model_layer_type]
-        pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
         def prepare():
             embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
-            cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
-            sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
-            packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
-            return embeds, (cos, sin), packed_rope
+            return embeds, model.lookup_packed_rope(model_layer_type)
 
         def forward(inputs, chunk_start):
-            embeds, rope_mats, packed_rope = inputs
+            embeds, packed_rope = inputs
             return layer(
                 hidden_states=embeds,
-                rope_mats=rope_mats,
                 prefill_metadata=model.prefill_metadata,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,

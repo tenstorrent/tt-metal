@@ -106,7 +106,6 @@ class Gemma4DecoderLayer:
     def __call__(
         self,
         hidden_states,
-        rope_mats,
         prefill_metadata,
         chunk_start_idx=0,
         packed_global_rope=None,
@@ -121,7 +120,6 @@ class Gemma4DecoderLayer:
         normed = self._gather_rows(normed)
         attn_output = self.self_attn(
             normed,
-            rope_mats=rope_mats,
             prefill_metadata=prefill_metadata,
             chunk_start_idx=chunk_start_idx,
             packed_global_rope=packed_global_rope,
