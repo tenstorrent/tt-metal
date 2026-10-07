@@ -65,6 +65,10 @@ void reset_state(std::uint32_t& counter)
     host_signal::write(host_signal::BRISC_COUNTER_SLOT, counter);
 }
 
+#ifndef LLK_BP_MASK
+#define LLK_BP_MASK 4
+#endif
+
 int main()
 {
     disable_branch_prediction();
@@ -72,7 +76,7 @@ int main()
     {
         volatile std::uint32_t* cfg = ckernel::get_cfg_pointer();
         cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] = (cfg[DISABLE_RISC_BP_Disable_trisc_ADDR32] & ~DISABLE_RISC_BP_Disable_trisc_MASK) |
-                                                    (4u << DISABLE_RISC_BP_Disable_trisc_SHAMT);
+                                                    (static_cast<std::uint32_t>(LLK_BP_MASK) << DISABLE_RISC_BP_Disable_trisc_SHAMT);
     }
 
     std::uint32_t counter = 0;
