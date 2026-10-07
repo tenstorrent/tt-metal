@@ -81,6 +81,8 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(enable);
         cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
         TTI_STALLWAIT(dest_acc_stall, p_stall::TRISC_CFG);
+        // The writes above have run before UNPACK and PACK are released.
+        tensix_sync();
 
         mailbox_write(ThreadId::UnpackThreadId, fp32_dest_acc::MATH_DONE);
         mailbox_write(ThreadId::PackThreadId, fp32_dest_acc::MATH_DONE);
