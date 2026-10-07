@@ -114,6 +114,32 @@ def test_chain_dump(mesh_device):
                 fo, fr = dev["ffn_out"].reshape(-1, H), d["ffn_out"].float().reshape(-1, H)
                 res["ffn_out_pcc_set_matched_tokens"] = round(pcc(fo[same], fr[same]), 5)
             rec("teacher_forced_prefill", **res)
+            # FFN-only teacher forcing: dump ffn_in -> device router + experts (isolates the FFN from upstream attention noise)
+            xin = model.upload_rows(row_major(d["ffn_in"]))
+            fo = lyr.ffn(xin)
+            fdev = rows_users(model.rows_to_host(fo))
+            r2 = {"layer": L}
+            fl = per_user(d["ffn_out"].float(), f["ffn_out"].float())
+            r2["ffn_out_vs_bf16"] = round(min(per_user(fdev, d["ffn_out"].float())), 5)
+            r2["ffn_out_vs_f32"] = round(min(per_user(fdev, f["ffn_out"].float())), 5)
+            r2["floor"] = round(min(fl), 5)
+            if L > 0:
+                idx_dev = torch.stack(
+                    [
+                        ttnn.to_torch(ttnn.get_device_tensors(lyr.last_route[1])[r * 8]).reshape(UPR * S, 8).long()
+                        for r in range(ROWS)
+                    ]
+                ).reshape(-1, 8)
+                same = (idx_dev.sort(-1).values == d["routing_idx"].reshape(-1, 8).sort(-1).values).all(-1)
+                gap = d["route_gap"].reshape(-1)
+                r2["routing_on_dump_ffn_in"] = dict(
+                    set_match=round(float(same.float().mean()), 5),
+                    flips=int((~same).sum()),
+                    flips_gap_lt_0p01=int(((~same) & (gap < 0.01)).sum()),
+                )
+            rec("teacher_forced_ffn_only", **r2)
+            ttnn.deallocate(fo)
+            ttnn.deallocate(xin)
             for k in taps:
                 ttnn.deallocate(taps[k])
             ttnn.deallocate(h2)
