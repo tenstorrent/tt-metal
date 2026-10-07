@@ -127,6 +127,11 @@ class WanPipelineConfig:
     # "agmm" (default) or "mmrs": how the D-fractured projections (to_out, cross-attention to_q)
     # are computed; see WanAttention. Per variant, like the SDPA chunk overrides.
     small_n_projection: str = "agmm"
+    # Flow shift handed to the UniPC scheduler at construction. 12.0 is the value the Wan2.2
+    # 14B experts are tuned with on this stack (their checkpoint says 3.0); `None` means "use
+    # the checkpoint's own `scheduler_config.json` value", which the TI2V-5B needs (5.0; the
+    # 14B's 12.0 visibly softens it, notes section 8). Per-call `flow_shift` still overrides.
+    flow_shift: float | None = 12.0
 
     height: int
     width: int
@@ -156,6 +161,7 @@ class WanPipelineConfig:
         sdpa_t_fracture_w_only: bool | None = None,
         sdpa_chunk_size_overrides: dict | None = None,
         small_n_projection: str = "agmm",
+        flow_shift: float | None = 12.0,
         height: int = 480,
         width: int = 832,
         num_frames: int = 81,
@@ -205,6 +211,7 @@ class WanPipelineConfig:
             ),
             sdpa_chunk_size_overrides=sdpa_chunk_size_overrides,
             small_n_projection=small_n_projection,
+            flow_shift=flow_shift,
             height=height,
             width=width,
             num_frames=num_frames,
@@ -241,7 +248,8 @@ class WanPipeline(PipelineAPIMixin):
             HuggingFace Hub repo ID to load model weights from.
         scheduler (`SchedulerMixin`, *optional*):
             Scheduler to use for denoising; it also selects the solver family. Defaults to
-            `UniPCMultistepScheduler` loaded from the checkpoint.
+            `UniPCMultistepScheduler` loaded from the checkpoint with `config.flow_shift`
+            (12.0 for the 14B experts; `None` keeps the checkpoint's own value, as the TI2V-5B does).
         boundary_ratio (`float`, *optional*, defaults to `0.875`):
             Ratio of total timesteps used as the boundary for switching between the two transformers in two-stage
             denoising. `transformer` handles timesteps >= boundary_timestep and `transformer_2` handles timesteps <
@@ -443,10 +451,15 @@ class WanPipeline(PipelineAPIMixin):
         if self.transformer_2 is not None:
             self.transformer_states.append(TransformerState(self.transformer_2, self._checkpoint_2, guidance_scale=3.0))
 
-        self._solver = solver_for_scheduler(
-            scheduler
-            or UniPCMultistepScheduler.from_pretrained(self.checkpoint_name, subfolder="scheduler", flow_shift=12.0)
-        )
+        if scheduler is None:
+            # `flow_shift=None` keeps the checkpoint's own scheduler_config value (5.0 for the
+            # TI2V-5B); a float pins it (12.0 for the 14B experts, see WanPipelineConfig).
+            scheduler_kwargs = {} if config.flow_shift is None else {"flow_shift": config.flow_shift}
+            scheduler = UniPCMultistepScheduler.from_pretrained(
+                self.checkpoint_name, subfolder="scheduler", **scheduler_kwargs
+            )
+        self._solver = solver_for_scheduler(scheduler)
+        logger.info(f"scheduler: {type(scheduler).__name__}, flow_shift={scheduler.config.flow_shift}")
 
         # How the per-step denoise trace is executed. Defaults are the gated production path:
         # blocking `execute_trace` on command queue 0 with every input update on that queue.
