@@ -763,6 +763,8 @@ class LTXVideoDecoder(Module):
     #: This decoder can convert and gather YUV 4:2:0 on device (``output_type="yuv"``), which the
     #: mp4 export path prefers. DiffVAE cannot, so the pipeline checks before asking.
     supports_yuv = True
+    #: ``forward`` takes ``defer_yuv``; the pipeline passes it only when this is set.
+    supports_defer_yuv = True
 
     def __init__(
         self,
