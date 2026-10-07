@@ -188,8 +188,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     // expression the layernorm_distributed factories use.
     // L1 buffers (sharded / L1-resident tensors) are allocated downward from the top of L1 and a program
     // whose circular buffers reach into them fails at enqueue ("Statically allocated circular buffers ...
-    // clash with L1 buffers"). Keep a fixed headroom below the top for them: the vocoder's resblock conv
-    // clashed with a tensor 39 KB below the top once the prefetch was allowed to grow into that span.
+    // clash with L1 buffers"). Keep a fixed headroom below the top for them.
     constexpr uint32_t L1_TENSOR_HEADROOM = 128 * 1024;
     const auto* budget_device = input_tensor.device();
     const uint32_t l1_cb_span = static_cast<uint32_t>(
@@ -198,9 +197,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     const uint32_t l1_usable_for_cbs = l1_cb_span > L1_TENSOR_HEADROOM ? l1_cb_span - L1_TENSOR_HEADROOM : 0;
 
     // Wormhole's sub_h scaling multiplies vol2col_tiled and, with the fp32 operand split, the x_hi/x_lo
-    // CBs by out_subblock_h. The H3 audio blockings were swept on Blackhole (sub_h = 1, 72 KB more L1),
-    // and the vocoder's conv_pre at sub_h = 2 overran Wormhole L1 by 11 KB. Shrink sub_h toward 1 until
-    // the static CBs fit; the prefetch shard below is budgeted from whatever is left.
+    // CBs by out_subblock_h; blockings swept on Blackhole's larger L1 can overrun Wormhole's. Shrink sub_h
+    // toward 1 until the static CBs fit; the prefetch shard below is budgeted from whatever is left.
     const bool operand_split_for_budget = config.enable_fp32_operand_split;
     auto static_cb_bytes_for = [&](uint32_t sub_h) -> uint32_t {
         uint32_t bytes = vol2col_rm_pages * padded_patch_size_bytes +   // vol2col_rm
@@ -459,9 +457,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     // L1 pre-fetch buffer for kernels > 1x1x1 with no dilation.
     // Gathers the spatial receptive field from DRAM once per spatial block, then vol2col reads from L1.
-    // Budget: the span circular buffers are placed in, minus the other CBs, capped at 500 KB. The span's
-    // base is read from the allocator rather than approximated as hal::get_max_worker_l1_unreserved_size()
-    // minus a fixed 200 KB stand-in for the kernel-config ring buffer (69 KB on Wormhole).
+    // Budget: the CB span minus the other CBs, capped at L1_PREFETCH_HARD_CAP; the span's base is the allocator's.
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
 
     uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm

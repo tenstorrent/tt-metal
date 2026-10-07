@@ -205,11 +205,9 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         # The source table `forward` gathers rows from, `[text | cond video | cond audio | audio | video]`
-        # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`),
-        # not rebuilt by concat every step: on 12 GB chips the per-step 880 MB table could not find
-        # 73 MB contiguous per bank once a few requests had fragmented DRAM. Allocated on the first
-        # request, when DRAM is still contiguous, and never freed (it is not a weight, so eviction
-        # leaves it alone). The static prefix is written once per request, the rest every step.
+        # at the arena caps, is one persistent ROW_MAJOR buffer written in place (`slice_write`), not rebuilt
+        # by concat every step: a fragmented heap cannot supply a table-sized block each step. Allocated on
+        # the first request, never freed (eviction skips non-weights). Static prefix written once per request.
         self._source_table: ttnn.Tensor | None = None
         self._static_prefix_rows = 0
         self._pending_prefix: list[ttnn.Tensor] | None = None

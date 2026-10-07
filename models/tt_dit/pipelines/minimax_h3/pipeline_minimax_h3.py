@@ -710,8 +710,8 @@ class MiniMaxH3Pipeline:
             self._transformer.register_coresident_exclusions(self._text_encoder, *self._vae.modules)
             for module in self._vae.modules:
                 module.register_coresident_exclusions(self._text_encoder, self._transformer)
-            # The video VAE decoder needs most of a 12 GB chip; the ref2va image/video reference encoders
-            # must not stay resident across the decode. They reload on demand via `MiniMaxH3Vae._ensure_loaded`.
+            # The video VAE decoder needs most of DRAM, so the ref2va reference encoders yield to it and reload
+            # on demand via `MiniMaxH3Vae._ensure_loaded`.
             self._vae.decoder.register_coresident_exclusions(
                 *(module for module in self._vae.modules if module is not self._vae.decoder)
             )
@@ -1106,10 +1106,8 @@ class MiniMaxH3Pipeline:
         Every call runs the encoder; with the default co-residency the weights are already on
         device, so this costs the ~2.8 s forward, not the 50 GB reload.
         """
-        # The conditioner gathers at the request's presentation length, and its CCL manager caches a
-        # pair per distinct shape for the life of the process (0.4 GB/device after a handful of
-        # requests, resident through the DiT and the VAE decode). The returned taps are fresh tensors,
-        # not persistent buffers, so the pairs can go the moment the encode is done.
+        # The conditioner's CCL manager caches a ping-pong pair per presentation length for the life of the
+        # process; the returned taps are fresh tensors, so the pairs can go the moment the encode is done.
         with self.encoder_ccl_manager.transient_ping_pong_buffers():
             return self._encode_prompt_device(prompt, keyframes=keyframes, references=references)
 
@@ -1599,10 +1597,9 @@ class MiniMaxH3Pipeline:
     def _register_audio_module_residency(self, module: Module) -> None:
         """Non-coresident presets: the audio VAE halves yield to the DiT and the video VAE decoder.
 
-        Both are only needed outside the denoise and the video decode (the encoder before, the
-        decoder after), and on a 12 GB chip the ~1.1 GB they hold is what the bucketed DiT's top
-        rung is missing. They never evict anything themselves: whatever is resident when they
-        reload (text encoder, video VAE decoder) has room for them.
+        Both are only needed outside the denoise and the video decode (the encoder before, the decoder
+        after), and the DRAM they hold is what the bucketed DiT's top rung is missing. They never evict
+        anything themselves: whatever is resident when they reload has room for them.
         """
         if self.coresident:
             return
@@ -2485,11 +2482,9 @@ class MiniMaxH3Pipeline:
     def _audio_ccl_transient(self):
         """Scope that frees the audio VAE's CCL ping-pong pairs on exit, on untraced non-persistent presets.
 
-        The batch-sharded audio decoder gathers through `audio_ccl_manager`, whose cache is keyed by shape
-        and never evicts: the 12-length decode warm alone left 842 small pairs (1.14 GB/device, ~95 MB/bank)
-        resident on the WH 4x8, outliving the decoder's own eviction and costing the DiT's top rung its
-        last 36 MB/bank. The reference audio encoder shares the manager and sees a fresh length per
-        request. Traced presets keep the pairs their captures replay.
+        The audio decoder gathers through `audio_ccl_manager`, whose cache is keyed by shape and never
+        evicts, so the pairs outlive the decoder's own eviction and starve the DiT's top rung. The reference
+        audio encoder shares the manager. Traced presets keep the pairs their captures replay.
         """
         if self.audio_ccl_manager is None or self.use_persistent_ccl_buffers or self.trace_audio:
             return nullcontext()
@@ -2776,10 +2771,9 @@ class MiniMaxH3Pipeline:
                 device=self.mesh_device,
             )
 
-        # The refiner / projection pass runs its collectives outside the step loop's transient scope
-        # below, so on untraced non-persistent presets its cap-sized all-gather pairs stayed cached for
-        # the life of the process (3.3 GB/device at the Blackhole caps) and starved the VAE decoder on
-        # 12 GB chips. Free them here; traced presets keep the pairs a capture replays.
+        # The refiner / projection pass runs its collectives outside the step loop's transient scope below;
+        # on untraced non-persistent presets its cap-sized all-gather pairs would stay cached for the life of
+        # the process and starve the VAE decoder. Free them here; traced presets keep what a capture replays.
         static_transient = (
             self.ccl_manager.transient_ping_pong_buffers()
             if not (self.use_persistent_ccl_buffers or self.trace_denoise)
@@ -2800,10 +2794,9 @@ class MiniMaxH3Pipeline:
                     dram_probe.report(f"after OOM in prepare_static_sources, rung {rung}")
                 raise
             ttnn.synchronize_device(self.mesh_device)
-        # The refiner has consumed the prompt (its rows now live in the source table) and nothing reads
-        # `prompt_embeds` after this point, but as a caller's local it would stay allocated through the
-        # whole denoise and decode: a cap-sized block (168 MB/device at a 16384-token presentation)
-        # pinned in the middle of the heap exactly where the DiT's pairs and activations need to fit.
+        # The refiner has consumed the prompt (its rows now live in the source table); nothing reads
+        # `prompt_embeds` after this point, but as a caller's local it would stay pinned in the middle of
+        # the heap through the whole denoise and decode, where the DiT's pairs and activations need to fit.
         ttnn.deallocate(prompt_device)
         dram_probe.report(f"after prepare_static_sources, rung {rung}")
 
