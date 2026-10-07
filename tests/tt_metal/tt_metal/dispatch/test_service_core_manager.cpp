@@ -36,6 +36,7 @@
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -399,7 +400,7 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1BufferOnClaimedCore) {
 // claim lookup rather than an incidental layout difference.
 TEST_F(ServiceCoreFdFixture, ServiceCoreShardedL1MeshBufferOnClaimedCore) {
     auto& mesh_device = this->devices_[0];
-    const auto devices = mesh_device->get_devices();
+    const auto devices = mesh_device->impl().get_devices();
     auto& svc = MetalContext::instance().get_service_core_manager();
 
     // One coordinate for the whole mesh: MeshBuffer applies a single shard spec on every device, so

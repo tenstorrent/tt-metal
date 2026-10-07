@@ -1058,7 +1058,7 @@ TEST_F(DispatchContextFixture, UnitMeshSessionDoesNotThrowTrackerError) {
     ASSERT_NE(unit->get_parent_mesh(), nullptr);
     // Documents the cause: the parent view exists and has local devices, but was never initialized.
     EXPECT_FALSE(unit->get_parent_mesh()->is_initialized());
-    EXPECT_FALSE(unit->get_parent_mesh()->get_view().get_devices().empty());
+    EXPECT_FALSE(unit->get_parent_mesh()->get_device_ids().empty());
 
     std::string error;
     try {

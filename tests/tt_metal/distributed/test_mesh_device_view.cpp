@@ -236,7 +236,7 @@ TEST_F(MeshDeviceView2x4Test, ViewGetFabricNodeId) {
 TEST_F(MeshDeviceView2x4Test, ViewGetDevices) {
     const auto& view = mesh_device_->get_view();
 
-    auto all_devices = view.get_devices();
+    auto all_devices = view.impl().get_devices();
     EXPECT_THAT(all_devices, SizeIs(8));
 
     // Verify all devices are unique
@@ -397,14 +397,14 @@ TEST_F(MeshDeviceView2x4Test, ViewIterator) {
     const auto& view = mesh_device_->get_view();
 
     std::vector<IDevice*> iterated_devices;
-    for (auto device : view) {
+    for (auto device : view.impl()) {
         iterated_devices.push_back(*device);
     }
 
     EXPECT_THAT(iterated_devices, SizeIs(8));
 
     // Should match get_devices()
-    auto all_devices = view.get_devices();
+    auto all_devices = view.impl().get_devices();
     EXPECT_EQ(iterated_devices, all_devices);
 }
 
@@ -437,7 +437,7 @@ TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
     EXPECT_ANY_THROW((void)view_1d.get_fabric_node_ids_on_column(0));
     EXPECT_ANY_THROW((void)view_1d.get_line_coordinates());
     EXPECT_ANY_THROW((void)view_1d.get_ring_coordinates());
-    EXPECT_ANY_THROW((void)view_1d.get_line_devices());
+    EXPECT_ANY_THROW((void)view_1d.impl().get_line_devices());
     EXPECT_ANY_THROW((void)view_1d.get_ring_devices());
     EXPECT_ANY_THROW((void)view_1d.get_line_fabric_node_ids());
     EXPECT_ANY_THROW((void)view_1d.get_ring_fabric_node_ids());

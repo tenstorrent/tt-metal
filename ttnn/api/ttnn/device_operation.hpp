@@ -659,7 +659,7 @@ void prepare(
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);
-    TT_FATAL(!mesh_device->get_view().get_devices().empty(), "Cannot prepare an operation for an inactive MeshDevice");
+    TT_FATAL(!mesh_device->get_device_ids().empty(), "Cannot prepare an operation for an inactive MeshDevice");
     detail::place_output_tensors<device_operation_t>(
         operation_attributes, tensor_args, input_tensors, mesh_device, tensor_return_value);
     detail::prepare_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(

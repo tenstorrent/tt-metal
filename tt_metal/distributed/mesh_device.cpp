@@ -376,7 +376,7 @@ MeshDeviceImpl::MeshDeviceImpl(
     dispatch_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
-    local_devices_ = view_->get_devices();
+    local_devices_ = view_->impl().get_devices();
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
@@ -779,7 +779,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         allocator_config.l1_bank_remap);
 
     // TODO #20966: Remove these calls
-    if (!submesh->pimpl_->get_view().get_devices().empty()) {
+    if (!submesh->pimpl_->get_device_ids().empty()) {
         for (auto* device : submesh->pimpl_->get_devices()) {
             dynamic_cast<Device*>(device)->set_mesh_device(submesh);
         }
@@ -787,7 +787,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
 
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
-    if (!submesh->pimpl_->get_view().get_devices().empty()) {
+    if (!submesh->pimpl_->get_device_ids().empty()) {
         log_trace(
             LogMetal,
             "Submesh {} instantiated with {} devices",
@@ -1020,7 +1020,7 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     auto new_view = std::make_unique<MeshDeviceView>(
         std::make_unique<MeshDeviceViewImpl>(new_shape, new_device_order, new_fabric_node_ids));
     view_ = std::move(new_view);
-    local_devices_ = view_->get_devices();
+    local_devices_ = view_->impl().get_devices();
     local_devices_by_range_.clear();
     establish_device_property_caches();
 }

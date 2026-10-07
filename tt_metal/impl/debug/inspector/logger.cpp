@@ -7,6 +7,7 @@
 #include "impl/debug/inspector/types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_device_view_impl.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <iomanip>
@@ -343,7 +344,7 @@ void Logger::log_mesh_device_created(const MeshDeviceData& mesh_device_data) noe
         if (mesh_device) {
             mesh_devices_ostream << "    devices: [";
             bool first = true;
-            for (const auto& device : mesh_device->get_view().get_devices()) {
+            for (const auto& device : mesh_device->get_view().impl().get_devices()) {
                 if (!first) {
                     mesh_devices_ostream << ", ";
                 }

@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "distributed/mesh_device_impl.hpp"
 
 /*
  * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)
@@ -2064,7 +2065,7 @@ protected:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // Identify the MMIO device in the mesh
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (cluster.get_associated_mmio_device(dev->id()) == dev->id()) {
                 mmio_device_ = dev;
                 break;
@@ -2076,7 +2077,7 @@ protected:
         }
 
         // Next, identify a remote device associated with the MMIO device
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (dev != mmio_device_ && (cluster.get_associated_mmio_device(dev->id()) == mmio_device_->id())) {
                 remote_device_ = dev;
                 break;
@@ -2700,7 +2701,7 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
-        this->device_ = this->mesh_device_->get_devices()[0];
+        this->device_ = this->mesh_device_->impl().get_devices()[0];
         if (detail::sd_cq_kernel_tests_should_skip(*this->mesh_device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }

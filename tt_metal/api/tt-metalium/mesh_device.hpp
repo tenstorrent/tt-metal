@@ -226,6 +226,9 @@ public:
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
     // Returns the devices in the mesh in row-major order.
+    [[deprecated(
+        "Deprecated, retrieving physical devices can fail in distributed contexts. Iterate over MeshCoordinates or use "
+        "get_device_ids instead. This will be removed after 2026-11-13.")]]
     std::vector<IDevice*> get_devices() const;
     [[deprecated(
         "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
@@ -245,6 +248,7 @@ public:
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     size_t num_rows() const;
     size_t num_cols() const;
+    [[deprecated("Deprecated, use get_device(const MeshCoordinate&) instead. This will be removed after 2026-11-13.")]]
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
 
     // Returns true if the coordinate is local to this mesh device.
