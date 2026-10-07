@@ -92,8 +92,30 @@ def main():
             fvr = fv.reshape(ROWS, U, blk, -1)
             ident = bool(torch.equal(fvr, fseq))
             pcs = [pcc(fvr[r, u, t], fseq[r, u, t]) for r in range(ROWS) for u in range(U) for t in range(blk)]
+            sl = lambda l, t: slice(l * 4096, (l + 1) * 4096)
+            per_layer = [
+                round(
+                    min(
+                        pcc(fvr[r, u, t, sl(l, t)], fseq[r, u, t, sl(l, t)])
+                        for r in range(ROWS)
+                        for u in range(U)
+                        for t in range(blk)
+                    ),
+                    5,
+                )
+                for l in range(NL)
+            ]
+            per_t0 = [
+                round(
+                    min(pcc(fvr[r, u, 0, sl(l, 0)], fseq[r, u, 0, sl(l, 0)]) for r in range(ROWS) for u in range(U)), 5
+                )
+                for l in range(NL)
+            ]
             rec(
                 "verify_vs_sequential",
+                verify_repeat_bit_identical=verify_repeat_equal,
+                per_layer_pcc_min=per_layer,
+                per_layer_pcc_min_t0=per_t0,
                 U=U,
                 B=n,
                 virtual_rows=U * blk,
