@@ -27,6 +27,7 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from ....utils.tracing import traced_function
 from .attention_ltx import LTXAttention
+from .audio_replicate_ltx import ReplicatedAudioIslands
 from .quant_config import LtxQuantProfile
 
 # gen#0 self-warms the DiT via a prep_run=True capture instead of the warmup denoise. Off by default:
@@ -299,6 +300,9 @@ class LTXTransformerBlock(Module):
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
             )
+            # Set by replicate_audio_on_device; held outside the module tree so the weight cache is unchanged.
+            self._audio_islands = None
+            self._audio_table_full = None
             if cross_attention_adaln:
                 self.audio_prompt_scale_shift_table = Parameter(
                     total_shape=[2, 1, 1, audio_dim],
@@ -402,6 +406,14 @@ class LTXTransformerBlock(Module):
             ff_out = ffn(normed, compute_kernel_config=self.ff_compute_kernel_config)
             return ttnn.addcmul(x_1BND, ff_out, gate_ff)
 
+    def replicate_audio_on_device(self) -> None:
+        """Post-load hook for LTX_AUDIO_REPLICATE: build the replicated audio self-attn/FFN islands."""
+        if not self.has_audio or self.parallel_config.tensor_parallel.factor <= 1:
+            return
+        islands = ReplicatedAudioIslands(self)
+        object.__setattr__(self, "_audio_islands", islands)
+        object.__setattr__(self, "_audio_table_full", islands._gather(self.audio_scale_shift_table.data, dim=3))
+
     def forward(
         self,
         video_1BND: ttnn.Tensor,
@@ -436,6 +448,8 @@ class LTXTransformerBlock(Module):
         video_padding_mask: ttnn.Tensor | None = None,
         video_kv_logical_n: int | None = None,
         adaln_pre: dict[str, list[ttnn.Tensor]] | None = None,
+        audio_temb_full: ttnn.Tensor | None = None,
+        audio_rope_full: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # adaln_pre: this block's table+temb slices, already added once per step for all blocks
         # (keys "v", "pv", "a", "pa", "av", "ava"; see _adaln_pre_stacks).
@@ -508,19 +522,39 @@ class LTXTransformerBlock(Module):
         if self.cross_attention_adaln:
             a_shift_ca, a_scale_ca_p1, a_gate_ca = a_chunks[6], a_chunks[7], a_chunks[8]
 
+        islands = self._audio_islands
+        if islands is not None:
+            a_full = ttnn.chunk(self._audio_table_full + audio_temb_full, self.adaln_coeff, dim=0)
+
         # Audio self-attention
-        audio_normed = _norm_adaln(self.audio_norm1, audio_1BND, a_shift_sa, a_scale_sa_p1, fuse=self._fuse_norm_adaln)
-        audio_1BND = self.audio_attn1(
-            spatial_1BND=audio_normed,
-            N=audio_N,
-            rope_cos=audio_rope_cos,
-            rope_sin=audio_rope_sin,
-            trans_mat=trans_mat,
-            addcmul_residual=audio_1BND,
-            addcmul_gate=a_gate_sa,
-            skip_qk=skip_self_attn,
-            attn_mask=audio_attn_mask,
-        )
+        if islands is not None:
+            audio_1BND = islands.self_attn(
+                audio_1BND,
+                a_full[0],
+                a_full[1],
+                a_full[2],
+                N=audio_N,
+                rope_cos=audio_rope_full[0],
+                rope_sin=audio_rope_full[1],
+                trans_mat=trans_mat,
+                attn_mask=audio_attn_mask,
+                skip_qk=skip_self_attn,
+            )
+        else:
+            audio_normed = _norm_adaln(
+                self.audio_norm1, audio_1BND, a_shift_sa, a_scale_sa_p1, fuse=self._fuse_norm_adaln
+            )
+            audio_1BND = self.audio_attn1(
+                spatial_1BND=audio_normed,
+                N=audio_N,
+                rope_cos=audio_rope_cos,
+                rope_sin=audio_rope_sin,
+                trans_mat=trans_mat,
+                addcmul_residual=audio_1BND,
+                addcmul_gate=a_gate_sa,
+                skip_qk=skip_self_attn,
+                attn_mask=audio_attn_mask,
+            )
 
         # Audio text cross-attention
         if self.cross_attention_adaln:
@@ -628,9 +662,12 @@ class LTXTransformerBlock(Module):
         video_1BND = self._modulated_ffn(self.ffn, self.norm3, video_1BND, v_shift_ff, v_scale_ff_p1, v_gate_ff)
 
         # Audio feed forward
-        audio_1BND = self._modulated_ffn(
-            self.audio_ff, self.audio_norm3, audio_1BND, a_shift_ff, a_scale_ff_p1, a_gate_ff
-        )
+        if islands is not None:
+            audio_1BND = islands.ffn(audio_1BND, a_full[3], a_full[4], a_full[5])
+        else:
+            audio_1BND = self._modulated_ffn(
+                self.audio_ff, self.audio_norm3, audio_1BND, a_shift_ff, a_scale_ff_p1, a_gate_ff
+            )
 
         return video_1BND, audio_1BND
 
@@ -879,6 +916,14 @@ class LTXTransformerModel(Module):
                 if attn is not None:
                     attn.fold_gate_on_device()
 
+    def replicate_audio_on_device(self) -> None:
+        """Post-load hook for LTX_AUDIO_REPLICATE; must run before fold_gates_on_device releases the gates."""
+        for block in self.transformer_blocks:
+            block.replicate_audio_on_device()
+
+    def _audio_islands_active(self) -> bool:
+        return bool(self.transformer_blocks) and getattr(self.transformer_blocks[0], "_audio_islands", None) is not None
+
     _ADALN_TABLES = (
         ("v", "scale_shift_table"),
         ("pv", "prompt_scale_shift_table"),
@@ -1108,10 +1153,14 @@ class LTXTransformerModel(Module):
         av_ca_video_temb = None
         av_ca_audio_temb = None
         audio_emb_ts = None
+        audio_mod_full = None
+        audio_rope_full = None
 
         if self.has_audio:
             audio_modulation, audio_emb_ts = self.audio_adaln_single(timestep)
             audio_mod_CB1D = ttnn.reshape(audio_modulation, (1, B, adaln_coeff, self.audio_inner_dim))
+            if self._audio_islands_active():
+                audio_mod_full = ttnn.permute(audio_mod_CB1D, (2, 1, 0, 3))
             if self.parallel_config.tensor_parallel.factor > 1:
                 audio_mod_CB1D = ttnn.mesh_partition(
                     audio_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
@@ -1165,6 +1214,11 @@ class LTXTransformerModel(Module):
             }
         )
 
+        if self.has_audio and self._audio_islands_active():
+            # The islands run every head on every chip, so their RoPE tables carry all heads.
+            gather = self.transformer_blocks[0]._audio_islands._gather
+            audio_rope_full = (gather(audio_rope_cos, dim=1), gather(audio_rope_sin, dim=1))
+
         # Transformer blocks
         for block_idx, block in enumerate(self.transformer_blocks):
             if block_idx in _prune:
@@ -1206,6 +1260,8 @@ class LTXTransformerModel(Module):
                 video_padding_mask=video_padding_mask,
                 video_kv_logical_n=video_kv_logical_n,
                 adaln_pre=adaln_pre,
+                audio_temb_full=audio_mod_full,
+                audio_rope_full=audio_rope_full,
             )
             if self.has_audio:
                 video_1BND, audio_1BND = result

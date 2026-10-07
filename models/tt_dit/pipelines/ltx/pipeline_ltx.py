@@ -32,6 +32,7 @@ import ttnn
 from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from ...models.transformers.ltx.attention_ltx import LTX_FUSE_GATE_ON_DEVICE
+from ...models.transformers.ltx.audio_replicate_ltx import audio_replicate_enabled
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -1119,13 +1120,18 @@ class LTXPipeline:
         # half-written cache is served back silently instead of missing and rebuilding.
         sources = [self.checkpoint_name, *(s.path for s in state.lora_specs)]
         post_load_hook = getattr(self, "_transformer_post_load_hook", None)
-        if LTX_FUSE_GATE_ON_DEVICE:
+        replicate_audio = audio_replicate_enabled()
+        if LTX_FUSE_GATE_ON_DEVICE or replicate_audio:
             quant_hook = post_load_hook
 
             def post_load_hook(model):
                 if quant_hook is not None:
                     quant_hook(model)
-                model.fold_gates_on_device()
+                # Replication reads the gate shards that folding releases, so it goes first.
+                if replicate_audio:
+                    model.replicate_audio_on_device()
+                if LTX_FUSE_GATE_ON_DEVICE:
+                    model.fold_gates_on_device()
 
         cache_module.load_model(
             state.model,
