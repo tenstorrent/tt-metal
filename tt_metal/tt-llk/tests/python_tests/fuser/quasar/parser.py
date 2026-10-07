@@ -308,6 +308,7 @@ UNARY_SFPU_OPS = {
     MathOperation.GreaterThanZero,
     MathOperation.LessThanEqualZero,
     MathOperation.GreaterThanEqualZero,
+    MathOperation.Signbit,
     MathOperation.Hardsigmoid,
     MathOperation.Celu,
     MathOperation.Elu,
