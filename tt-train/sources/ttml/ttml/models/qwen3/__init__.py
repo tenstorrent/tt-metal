@@ -150,6 +150,7 @@ class Qwen3(AbstractModuleBase):
         mask: ttml.autograd.Tensor,
         past_key_values=None,
         new_tokens: Optional[int] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
         **kwargs,
     ) -> ttml.autograd.Tensor:
         TILE_SIZE = 32
@@ -181,7 +182,9 @@ class Qwen3(AbstractModuleBase):
         out = self._snapshot(out, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
 
         position_offset = 0
-        if past_key_values is not None:
+        if position_ids is not None:
+            position_offset = position_ids
+        elif past_key_values is not None:
             position_offset = past_key_values.get_seq_length()
 
         for i, block in enumerate(self.blocks):
