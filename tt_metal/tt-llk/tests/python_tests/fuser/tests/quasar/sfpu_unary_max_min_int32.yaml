@@ -1,14 +1,5 @@
-# Int32 unary max/min against a scalar (UnaryMaxInt32 / UnaryMinInt32) on Quasar. The fuser cannot
-# set the scalar, so the kernel runs with the dispatcher default 1000 (INT_MAXMIN_SCALAR,
-# sfpu_operations_quasar.h). Points 0, 1, 998-1002 (ties and neighbours of the scalar), 2**16, 2**30
-# and INT_MAX; ranges below and above the scalar, mid-range and next to INT_MAX.
-# Int32 must be unpacked straight to Dest and needs a 32-bit Dest. The harness stores Int32 in L1 as
-# sign-magnitude while the kernel's default Dest encoding is two's complement (tt-metal's Int32), so
-# only non-negative inputs are checked; negative inputs and negative scalars, and the
-# SIGN_MAGNITUDE_FORMAT path, are covered by test_unary_max_min_scalar_quasar.
-#
-# Uses only existing fuser features: stimuli are finite intervals and points (no INT_MIN). Special
-# points sit outside the random ranges, so each is drawn about as often as a unit of range.
+# Int32 unary max/min at the default scalar 1000. Non-negative inputs only: the fuser stages Int32 as
+# sign-magnitude, while the kernel defaults to two's complement (see test_unary_max_min_scalar_quasar).
 
 dest_acc: true
 
