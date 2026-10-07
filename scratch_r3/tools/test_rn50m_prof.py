@@ -22,6 +22,17 @@ CASES = [
     ("vgg_d4_conv2", 1, 64, 64, 256, 256, 3, 1, 1, 64, 512, "bf16", "bf16", "rm", True, False),
 ]
 DT = {"bf16": ttnn.bfloat16, "bfp8": ttnn.bfloat8_b}
+_CAP = []
+if _os.environ.get("CONV_OUT") or _os.environ.get("V12_OUT"):  # bit runs: keep each conv2d output as raw bits
+    _conv2d = ttnn.conv2d
+
+    def _hook(*args, **kwargs):
+        r = _conv2d(*args, **kwargs)
+        out = r[0] if isinstance(r, (list, tuple)) else r
+        _CAP.append(ttnn.to_torch(out).contiguous())
+        return r
+
+    ttnn.conv2d = _hook
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -64,3 +75,9 @@ def test_rn50m_prof(device, torch_tensor_map, case):
         enable_weights_double_buffer=dout == "bfp8",
         sharded_cfg=sharded_cfg,
     )
+    d = _os.environ.get("CONV_OUT") or _os.environ.get("V12_OUT")
+    if d and _CAP:
+        import torch
+
+        t = _CAP[-1]
+        torch.save(t.view(torch.int16) if t.dtype == torch.bfloat16 else t.view(torch.int32), _os.path.join(d, f"conv_{case[0]}.pt"))
