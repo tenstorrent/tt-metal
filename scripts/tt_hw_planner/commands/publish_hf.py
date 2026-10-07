@@ -198,6 +198,10 @@ def _write_tt_model_yaml(
         f"  tt_metal: {checkout}",
         "  code:",
         "    - models/common",
+        # The vLLM adapter subclasses a base generator from models/tt_transformers/tt/generator_vllm
+        # (initialize_vllm_model etc.), so that package MUST be in the image or the import fails at
+        # serve time and the engine dies with AttributeError.
+        "    - models/tt_transformers",
         f"    - models/demos/{slug}",
         '  ubuntu: "22.04"',
         '  python: "3.12"',
