@@ -310,16 +310,21 @@ inline void calculate_sfpu_binary_div_fp32_rows(
 // rounding), ordered so that no instruction reads a multiply-add result on the next cycle (the second step's first
 // multiply-add runs on every lane into L5, which only the predicated second one reads). The rounding is #58207's
 // (ldjurovicTT) store form: bits + 0x7fff + lsb with the lsb from two shifts and no mask, since the store to a 16-bit
-// Float16_b DEST keeps only the high half. Load macro 0 issues the store.
+// Float16_b DEST keeps only the high half. Load macro 0 issues the rounding's last add and the store.
 template <int ITERATIONS>
 inline void calculate_sfpu_binary_div_bf16_rows(
     const std::uint32_t in0, const std::uint32_t in1, const std::uint32_t out) {
-    // Macro 0: the out row loaded into dead L3, the store of L0 on the next cycle.
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x80 | (0 << 3) | 3) << 8);
+    // Macro 0 loads the out row into dead L3, which the lsb's shifts then overwrite; three instructions later template
+    // 0 writes L3 + L0 (the lsb plus bits + 0x7fff) to L16, and a cycle after that L16 is stored.
+    constexpr std::uint32_t add_l3_l0 = TT_OP_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, add_l3_l0 & 0xffff);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, add_l3_l0 >> 16);
+    TTI_SFPCONFIG(0, 0, 0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0x40 | (3 << 3) | 4);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, (0x40 | (4 << 3) | 3) << 8);
     TTI_SFPCONFIG(0, 4, 0);
-    TTI_SFPCONFIG(0x010, 8, 1);
-    load_replay_buf<Exec>(0, 22, [in0, in1, out] {
+    TTI_SFPCONFIG(0x110, 8, 1);
+    load_replay_buf<Exec>(0, 21, [in0, in1, out] {
         TT_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::DEFAULT, ADDR_MOD_7, in1);
         TTI_SFPARECIP(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);                           // r
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG12, p_sfpu::LREG4, 2);  // t = in1 * r - 2
@@ -336,17 +341,16 @@ inline void calculate_sfpu_binary_div_bf16_rows(
         TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
         TTI_SFPSETSGN(0, p_sfpu::LREG13, p_sfpu::LREG0, 0);  // copysgn(Prgm1 = inf, in0)
         TTI_SFPENCC(3, 0, 0, 10);
-        TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG1, 5);
-        TTI_SFPSHFT(0xFE1, p_sfpu::LREG1, p_sfpu::LREG1, 5);  // lsb = (bits << 15) >> 31
-        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, 4);
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
         TT_SFPLOADMACRO(
             (0 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_7, out | (p_sfpu::LREG3 >> 2));
+        TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG3, 5);
+        TTI_SFPSHFT(0xFE1, p_sfpu::LREG3, p_sfpu::LREG3, 5);  // lsb = (bits << 15) >> 31
+        TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, 4);      // bits + 0x7fff; macro 0 adds the lsb
         TTI_INCRWC(0, 2, 0, 0);
     });
 #pragma GCC unroll 8
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(0, 22);
+        lltt::replay(0, 21);
     }
 }
 
