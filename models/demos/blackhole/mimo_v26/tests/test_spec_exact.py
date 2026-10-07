@@ -95,6 +95,37 @@ def test_spec_exact(mesh_device):
     for (r_, u_), (t_, _) in ft.items():
         ids[r_, u_] = t_
     gen.prefill = lambda prompts_, S=None: (ids, None)
+    if MODE == "gap":
+        # target logit gap at the first divergence between the spec stream and the plain stream (REF json has plain + spec): teacher-force the PLAIN stream, keep logits
+        ref = json.load(open(REF))
+        pl, sp = ref["plain"], ref["spec"]
+        g2 = ChunkedGenerator(model, max_pos, pf, trace=False, keep_logits=True, U=U, eos=eos)
+        g2.prefill = lambda prompts_, S=None: (ids, None)
+        teach = [t_ + [0] * (NEW - len(t_)) for t_ in pl]
+        rr = g2.generate(prompts, NEW, S=maxlen, teacher=teach)
+        res_gap = []
+        for i, (a, b) in enumerate(zip(pl, sp)):
+            n_ = min(len(a), len(b))
+            d_ = next((k for k in range(n_) if a[k] != b[k]), None)
+            if d_ is None:
+                continue
+            lg = rr["step_logits"][i][d_ - 1].float()  # logits that produced token index d_ (decode step d_-1)
+            top = torch.topk(lg, 3)
+            res_gap.append(
+                dict(
+                    user=i,
+                    idx=d_,
+                    plain_tok=a[d_],
+                    spec_tok=b[d_],
+                    top3=top.indices.tolist(),
+                    top3_logits=[round(float(x), 3) for x in top.values],
+                    gap_top1_top2=round(float(top.values[0] - top.values[1]), 4),
+                    spec_tok_rank=int((lg > lg[b[d_]]).sum()),
+                    gap_to_spec_tok=round(float(top.values[0] - lg[b[d_]]), 4),
+                )
+            )
+        rec("divergence_gaps", gaps=res_gap)
+        return
     plain, plain2 = None, None
     if MODE in ("plain", "both"):
         r = gen.generate(prompts, NEW, S=maxlen)
