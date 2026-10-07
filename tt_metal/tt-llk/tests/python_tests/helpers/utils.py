@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import os
 import shlex
 import subprocess
@@ -578,7 +577,7 @@ def mxfp_local_step(
     # E8M0 = floor(log2(block_max)) - elem_exp_max_unbiased, and the element
     # format's max unbiased exponent is floor(log2(element_max_normal))
     # (15 for E5M2's 57344, 8 for E4M3's 448, 2 for E2M1's 6.0).
-    elem_exp_max_unbiased = math.floor(math.log2(element_max_normal))
+    elem_exp_max_unbiased = int(floor_log2(torch.tensor(element_max_normal)))
     scale_exp = torch.zeros_like(block_max)
     scale_exp[has_nonzero] = floor_log2(block_max[has_nonzero]) - elem_exp_max_unbiased
     block_min_ulp = (

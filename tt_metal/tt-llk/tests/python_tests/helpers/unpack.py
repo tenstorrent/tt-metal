@@ -238,9 +238,7 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
     Two register-level effects are applied, both shared with the other MX
     formats via ``_apply_gasket_range``:
 
-      - **Block scale 0xFF NaNs the whole block**, zeros included. (This used
-        to zero the block here; the hardware NaNs it, as ``unpack_mxfp4``
-        already did.)
+      - **Block scale 0xFF NaNs the whole block**, zeros included.
       - **No subnormals.** The gasket lands the result in an 8-bit-exponent
         register, so a decoded value saturates to +/-Inf at unbiased exponent
         >= 128 and flushes to +/-0 at <= -127.
@@ -328,10 +326,6 @@ def unpack_mxfp8r(
     """
     Unpack MXFP8R format (E5M2 variant) to bfloat16 tensor.
 
-    A 0xFF block scale NaNs the whole block, and values outside the register's
-    exponent range saturate to +/-Inf or flush to +/-0 rather than becoming
-    subnormal -- see :func:`_unpack_mxfp8`.
-
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
         num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
@@ -358,10 +352,6 @@ def unpack_mxfp8p(
 ):
     """
     Unpack MXFP8P format (E4M3 variant) to bfloat16 tensor.
-
-    A 0xFF block scale NaNs the whole block, and values outside the register's
-    exponent range saturate to +/-Inf or flush to +/-0 rather than becoming
-    subnormal -- see :func:`_unpack_mxfp8`.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
@@ -401,10 +391,6 @@ def unpack_mxfp4(
     Per Tensix hardware documentation:
       - Block exp = 0xFF (255): NaN block, all elements become NaN
       - Block exp = 0x00 (0): neutral-ish scale for zeros
-
-    The register has no subnormals, so a decoded value saturates to +/-Inf at
-    unbiased exponent >= 128 and flushes to +/-0 at <= -127 -- the same rule
-    MXFP8 uses, applied through the shared ``_apply_gasket_range``.
 
     Args:
         packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
@@ -468,9 +454,29 @@ def unpack_mxfp4(
         * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
     )
 
-    # Same range rule as MXFP8 -- the gasket treats both identically once the
-    # element is decoded, so the clamp is shared rather than recomputed from
-    # block_exp + element_exp, which misses subnormal elements.
+    # The range clamp belongs to the destination, not to this format: every MX
+    # format is decoded into the same 8-bit-exponent register, so once an
+    # element is a value it no longer matters that it was fp4. MXFP8 and MxInt
+    # share this helper for that reason.
+    #
+    # Deciding what to clamp needs each datum's exponent, and there are two ways
+    # to get it. Summing block_exp + element_exp is the tempting one: a decoded
+    # value is literally element * 2^block_exp, both fields were just parsed out
+    # of the bytes above, and it costs no extra work. That is what this function
+    # used to do.
+    #
+    # It is wrong for a subnormal element. A subnormal is written 0.M * 2^e
+    # instead of 1.M * 2^e, and the hardware normalises it -- shifting the
+    # mantissa left until the leading 1 is in place and lowering the exponent by
+    # one per shift. The stored exponent field never shows that shift. E2M1's
+    # field 0 encodes 0.0 and 0.5, and 0.5's real exponent is -1, not the 0 the
+    # field suggests; E4M3 has 3 mantissa bits, so there it can be off by 3.
+    # Summing the fields therefore reads a subnormal as up to 8x larger than it
+    # is, and the flush misses values the device zeroes.
+    #
+    # Reading the exponent off the decoded value avoids this for free: by then
+    # the normalisation has already happened, so there is no shift left to
+    # forget.
     scaled_blocks = _apply_gasket_range(scaled_blocks, nan_blocks)
 
     return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)

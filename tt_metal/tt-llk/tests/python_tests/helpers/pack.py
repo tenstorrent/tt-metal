@@ -357,15 +357,6 @@ def _pad_to_l1_alignment(data: list[int]) -> list[int]:
 def _mx_shared_exponents(blocks, elem_exp_max_unbiased):
     """Derive one E8M0 block scale per 32-datum block, as the Tensix packer does.
 
-    Mirrors ``tt_t6_com_elem_to_mx_convert.sv`` (``mxfmt_exponent_s0``), whose
-    MXFP branch computes
-
-        E8M0 = max_exp_final - max_normal_exp_8b + 127
-
-    with ``max_exp_final`` the largest *input* biased exponent in the block and
-    ``max_normal_exp_8b - 127`` the element format's unbiased max exponent
-    (15 for E5M2, 8 for E4M3, 2 for E2M1). That is the OCP MX rule
-
         E8M0 = floor(log2(amax)) - elem_exp_max_unbiased + 127
 
     i.e. the *floor* of log2(amax) — never a ceiling. A block whose amax has a
@@ -383,8 +374,7 @@ def _mx_shared_exponents(blocks, elem_exp_max_unbiased):
     Returns:
         (num_blocks,) int32 array of E8M0 scale codes
     """
-    # Inf/NaN datums are excluded from the max-exponent tree in RTL
-    # (special_exp_flush), so amax is taken over finite datums only.
+    # amax is taken over finite datums only.
     finite_blocks = np.where(np.isfinite(blocks), blocks, 0.0)
     max_abs_values = np.max(np.abs(finite_blocks), axis=1)
     # amax = mantissa * 2^exp with mantissa in [0.5, 1), so floor(log2) = exp - 1
@@ -427,16 +417,6 @@ def _pack_mxfp8(
     - SrcS slice (8×16): 4 scales + pad to 16 B + 128 FP8 (aligned) → 144 B per slice.
 
     Element count must be a multiple of MX_FORMAT_BLOCK_SIZE (32).
-
-    ml_dtypes converts the FP8 elements; the E8M0 scale comes from
-    :func:`_mx_shared_exponents`.
-
-    The shared scale is ``floor(log2(amax)) - elem_exp_max_unbiased``, a floor
-    rather than a round, so the block's largest datum can need a significand
-    the element format cannot hold and is clamped to its max normal -- 1.99
-    packs and reads back as 1.75. Inf saturates the same way rather than
-    surviving as Inf, and a block of all NaN is encoded by the reserved 0xFF
-    scale instead.
 
     Args:
         tensor: Input tensor (first face_r_dim * FACE_C_DIM * num_faces elements used)
@@ -562,11 +542,6 @@ def pack_mxfp8r(
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
         Scale count = (face_r_dim * 16 * num_faces) // 32 (one per OCP 32-datum block).
-
-    The shared scale is a floor, so the largest datum in a block saturates to
-    the element format's max normal rather than rounding up to it, and Inf
-    saturates there too; an all-NaN block takes the reserved 0xFF scale. See
-    :func:`_pack_mxfp8`.
     """
     assert tensor.numel() <= MAX_TILE_ELEMENTS, (
         f"pack_mxfp8r handles at most one tile ({MAX_TILE_ELEMENTS} elements), "
@@ -618,11 +593,6 @@ def pack_mxfp8p(
     Returns:
         List of packed bytes in FULLY SEPARATED layout: [all_scales][all_elements]
         Scale count = (face_r_dim * 16 * num_faces) // 32 (one per OCP 32-datum block).
-
-    The shared scale is a floor, so the largest datum in a block saturates to
-    the element format's max normal rather than rounding up to it, and Inf
-    saturates there too; an all-NaN block takes the reserved 0xFF scale. See
-    :func:`_pack_mxfp8`.
     """
     assert tensor.numel() <= MAX_TILE_ELEMENTS, (
         f"pack_mxfp8p handles at most one tile ({MAX_TILE_ELEMENTS} elements), "
@@ -850,8 +820,20 @@ def _mxint_block_scale_and_quantize(
     blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
 
     # Block scale: the same derivation every MX format uses, including the
-    # special 0xFF/0xFE blocks. MxInt post-scaling values land in [1, 2), so
-    # elem_exp_max_unbiased is 0.
+    # reserved 0xFF/0xFE blocks.
+    #
+    # elem_exp_max_unbiased is the binade the element format tops out in, and
+    # for MxInt that is 0. An MxInt element is an integer read with an implicit
+    # fixed scale, so its largest magnitude is just under 2 -- 127/64 for
+    # MxInt8, 7/4 for MxInt4, 1 for MxInt2 -- where a float element reaches
+    # 2**2, 2**8 or 2**15. The shared exponent therefore comes out as amax's
+    # own binade, which lands amax in [1, 2): the range the implicit scale is
+    # built to cover. Elements below amax land proportionally lower.
+    #
+    # blocks_raw, not blocks: the all-NaN test behind the 0xFF scale has to see
+    # the NaNs that were zeroed above, or an all-NaN block scales as 0x7F and
+    # reads back zeros. The 0xFE test is unaffected either way, since only NaN
+    # was zeroed and an Inf still reaches it.
     scales_e8m0_array = _mx_shared_exponents(blocks_raw, elem_exp_max_unbiased=0)
 
     scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
