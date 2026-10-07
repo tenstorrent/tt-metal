@@ -14,6 +14,7 @@ other-op time, op-to-op gaps, and the DRAM-bandwidth floor
 
 import argparse
 import csv
+import json
 from collections import Counter, defaultdict
 
 CCL = ("AllGather", "ReduceScatter", "AllReduce", "all_gather", "reduce_scatter", "all_reduce", "Ccl", "CCL")
@@ -30,7 +31,8 @@ def category(op_code):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("csv")
+    ap.add_argument("csv", help="ops_perf_results CSV (Tracy report) or the raw cpp_device_perf_report CSV")
+    ap.add_argument("--ops-json", default=None, help="roofline_ops_<batch>.json from the test: names the raw device rows by order")
     ap.add_argument("--steps", type=int, required=True)
     ap.add_argument("--params-b", type=float, required=True, help="parameters in billions")
     ap.add_argument("--chips", type=int, required=True, help="tensor-parallel chips")
@@ -41,7 +43,24 @@ def main():
 
     rows = list(csv.DictReader(open(args.csv)))
     cols = rows[0].keys()
-    code_col = next(c for c in cols if c.strip() == "OP CODE")
+    code_col = next((c for c in cols if c.strip() == "OP CODE"), None)
+    if code_col is None:
+        # Raw device report: no names. Take the LAST steps*ops_per_step rows of the
+        # device (the signposted steps run last) and name them from the captured
+        # op sequence, cyclically.
+        dev_col0 = next(c for c in cols if c.strip() == "DEVICE ID")
+        assert args.ops_json, "raw device CSV needs --ops-json"
+        seq = [o["parent"] or o["name"] for o in json.load(open(args.ops_json))["ops"]]
+        dev_rows = [r for r in rows if str(r[dev_col0]).strip() == str(args.device)]
+        gc = next(c for c in cols if c.strip() == "GLOBAL CALL COUNT")
+        dev_rows.sort(key=lambda r: int(r[gc]))
+        n_take = args.steps * len(seq)
+        tail = dev_rows[-n_take:]
+        print(f"raw device rows on device {args.device}: {len(dev_rows)}; ops/step captured: {len(seq)}; using the last {len(tail)} rows")
+        for i, r in enumerate(tail):
+            r["OP CODE"] = seq[i % len(seq)]
+        rows = tail
+        code_col = "OP CODE"
     dur_col = next(c for c in cols if "DEVICE FW DURATION" in c)
     gap_col = next((c for c in cols if "OP TO OP LATENCY" in c), None)
     dev_col = next((c for c in cols if c.strip() == "DEVICE ID"), None)
