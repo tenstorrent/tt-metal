@@ -68,10 +68,10 @@ std::uint32_t window_rows(const MaxReduceWithIndicesConfig& config) { return con
 
 // The index format pool uses: UInt16, or UInt32 for inputs with H*W > 65535.
 //
-// Quasar has no integer index format that works here yet: it has no typed UInt16 / UInt32 DFB
-// formats, Int16 fails the JIT's rule that a bf16 program's inputs share an exponent class,
-// RawUInt16 unpacks as zeros, and Int32 has to unpack straight to Dest, which is kernel-wide on
-// Quasar and lands every copy_tile on Dest tile 0. So on Quasar the index tile uses a float format
+// Quasar has no integer index format that works here yet (#59630): it has no typed UInt16 / UInt32
+// DFB formats, Int16 fails the JIT's rule that a bf16 program's inputs share an exponent class,
+// RawUInt16 unpacks as zeros, and Int32 hangs through SrcA and loses the values through Dest, where
+// unpacking is kernel-wide on Quasar. So on Quasar the index tile uses a float format
 // of the same width; the kernel only moves index bits (SFPLOAD/SFPSTORE as UINT16 / INT32), and
 // every index code here is an integer that the float format holds exactly.
 tt::DataFormat index_format(tt::ARCH arch, bool wide) {

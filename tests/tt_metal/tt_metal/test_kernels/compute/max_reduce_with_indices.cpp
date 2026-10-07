@@ -61,7 +61,7 @@ void kernel_main() {
     tile_regs_wait();
 
     // Likewise a pack_init per output: on Quasar, pack_reconfig_data_format alone leaves the packer
-    // writing to the previous output's buffer.
+    // writing to the previous output's buffer (#59629; compute_mpwi still switches outputs that way).
     pack_reconfig_data_format(values_out.get_id());
     pack_init(values_out.get_id());
     pack_tile(values_dst, values_out.get_id());
