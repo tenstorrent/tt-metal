@@ -51,13 +51,8 @@ ALWI void identity_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  */
 // clang-format on
 ALWI void identity_tile_uint32(uint32_t idst) {
-#ifdef ARCH_BLACKHOLE
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX, 32 /*ITERATIONS*/), idst, VectorMode::None));
-#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_identity_uint, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC));
-#endif
 }
 
 }  // namespace ckernel

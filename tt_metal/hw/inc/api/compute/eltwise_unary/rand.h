@@ -34,12 +34,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void rand_tile(uint32_t idst, uint32_t from, uint32_t scale) {
-#ifdef ARCH_BLACKHOLE
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX, 32 /* ITERATIONS */), idst, VectorMode::None, from, scale));
-#else
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, rand, (APPROX), idst, VectorMode::RC, from, scale));
-#endif
 }
 
 /**
