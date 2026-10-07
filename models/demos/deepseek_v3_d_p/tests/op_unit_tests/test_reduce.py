@@ -39,19 +39,13 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 REDUCE_MESH_PARAMS = [
     pytest.param(
-        (4, 1),
-        torus_y_device_params(),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
-        id="torus-y-4x1",
-    ),
-    pytest.param(
         (4, 2),
         fabric2d_device_params(),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
     ),
-    # Blackhole accepts 32-device meshes only, so neither shape above runs on the galaxy and every row
-    # there skips -- rc=0, which reads as coverage. This row is the only one that executes there, and
+    # Blackhole accepts 32-device meshes only, so the 4x2 row above does not run on the galaxy and
+    # skips there -- rc=0, which reads as coverage. This row is the only one that executes there, and
     # so the only one covering mistral_small_4 (or any model) on Blackhole.
     pytest.param(
         (8, 4),
@@ -90,7 +84,6 @@ def run_reduce(
     seq_len,
     emb_dim,
     topk,
-    use_weights,
 ):
     """Run the TTNN reduce module in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, topk) shape axis."""
@@ -105,7 +98,7 @@ def run_reduce(
 
     torch.manual_seed(42)
 
-    signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-{'weighted' if use_weights else 'unweighted'}")
+    signpost(f"reduce-{mesh_device.shape}-seq{seq_len}-weighted")
 
     num_links = 1
 
@@ -130,20 +123,18 @@ def run_reduce(
 
     num_routed_experts = 64
 
-    # Create random gate weights for weighted reduce (if enabled)
-    torch_gate_weights = None
-    if use_weights:
-        _, torch_gate_weights, _ = initialize_test_inputs(
-            dispatch_group_size=dispatch_group_size,
-            seq_len_per_chip=seq_len,
-            emb_dim=emb_dim,
-            num_routed_experts=num_routed_experts,
-            num_experts_per_tok=topk,
-            max_dispatched_tokens_per_expert=1000,
-            validate=False,
-            skip_x_initialization=True,
-        )
-        logger.debug(f"Created gate weights: {torch_gate_weights.shape}")
+    # Create random gate weights for weighted reduce
+    _, torch_gate_weights, _ = initialize_test_inputs(
+        dispatch_group_size=dispatch_group_size,
+        seq_len_per_chip=seq_len,
+        emb_dim=emb_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=topk,
+        max_dispatched_tokens_per_expert=1000,
+        validate=False,
+        skip_x_initialization=True,
+    )
+    logger.debug(f"Created gate weights: {torch_gate_weights.shape}")
 
     # Create indices and dispatch table for the reduce kernel.
     # Use a dispatch table where ALL experts are valid (no -1 entries) so
@@ -179,17 +170,15 @@ def run_reduce(
     )
     logger.debug(f"{tt_combine_output.shape=}")
 
-    # Convert gate weights to TTNN tensor with same sharding as combine_output (if enabled)
-    tt_gate_weights = None
-    if use_weights:
-        tt_gate_weights = ttnn.from_torch(
-            torch_gate_weights,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-        )
-        logger.debug(f"{tt_gate_weights.shape=}")
+    # Convert gate weights to TTNN tensor with same sharding as combine_output
+    tt_gate_weights = ttnn.from_torch(
+        torch_gate_weights,
+        mesh_mapper=mesh_mapper,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+    )
+    logger.debug(f"{tt_gate_weights.shape=}")
 
     # Convert indices and dispatch table to TTNN tensors
     indices_mapper = ttnn.ShardTensor2dMesh(
@@ -245,35 +234,34 @@ def run_reduce(
     assert pcc > threshold, f"PCC {pcc:.6f} below threshold {threshold}"
 
 
-def _ci_unweighted_reduce(**params):
-    """CI keeps only the weighted reduce; the unweighted path is a strict subset of it."""
-    if not (params["is_ci_env"] or params["is_ci_v2_env"]):
-        return False
-    return not params["use_weights"]
-
-
 # Model-independent sanity shape — small seq/emb that exercises the reduce kernel without
 # tying to any model's dimensions. Kept in a single test so it is not duplicated per model.
-@pytest.mark.uncollect_if(pred=_ci_unweighted_reduce)
-@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
     "seq_len, emb_dim, topk",
     [(32, 2048, 8)],
     ids=["generic"],
 )
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
-def test_ttnn_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_weights):
-    run_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_weights)
+def test_ttnn_reduce(mesh_device, device_params, seq_len, emb_dim, topk):
+    run_reduce(mesh_device, device_params, seq_len, emb_dim, topk)
 
 
-@pytest.mark.uncollect_if(pred=_ci_unweighted_reduce)
-@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params", REDUCE_MESH_PARAMS[:1], indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (4, 1),
+            torus_y_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="torus-y-4x1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-def test_ttnn_reduce_single_expert(mesh_device, device_params, use_weights):
-    """Top-k=1 remains on the original single-axis mesh, migrated to TorusY."""
-    run_reduce(mesh_device, device_params, seq_len=32, emb_dim=1024, topk=1, use_weights=use_weights)
+def test_ttnn_reduce_single_expert(mesh_device, device_params):
+    """Top-k=1 cannot be sharded across the 4x2 mesh's two dispatch groups, so it keeps the single-axis
+    4x1 TorusY mesh."""
+    run_reduce(mesh_device, device_params, seq_len=32, emb_dim=1024, topk=1)
 
 
 # Per-model reduce shapes as (id_prefix, config, extended_model). Each model uses seq_len 640 and
@@ -288,7 +276,7 @@ REDUCE_MODELS = [
     ("dsv4_flash", DeepSeekV4FlashConfig, True),
     ("gptoss_120b", GptOss120BConfig, True),
     # Mistral-Small-4-119B: emb_dim 4096, topk 4. Top-4 is the smallest topk here that the mesh-4x2
-    # mapper can still shard across the two dispatch groups (2 each) — top-1 needs the linear-4
+    # mapper can still shard across the two dispatch groups (2 each) — top-1 needs the 4x1
     # mesh, which is why it has its own test above.
     ("mistral4", MistralSmall4Config, True),
 ]
@@ -304,9 +292,7 @@ def reduce_shape_params():
     return params
 
 
-@pytest.mark.uncollect_if(pred=_ci_unweighted_reduce)
-@pytest.mark.parametrize("use_weights", [True, False], ids=["weighted", "unweighted"])
 @pytest.mark.parametrize("seq_len, emb_dim, topk", reduce_shape_params())
 @pytest.mark.parametrize("mesh_device, device_params", REDUCE_MESH_PARAMS, indirect=["mesh_device", "device_params"])
-def test_ttnn_reduce_models(mesh_device, device_params, seq_len, emb_dim, topk, use_weights):
-    run_reduce(mesh_device, device_params, seq_len, emb_dim, topk, use_weights)
+def test_ttnn_reduce_models(mesh_device, device_params, seq_len, emb_dim, topk):
+    run_reduce(mesh_device, device_params, seq_len, emb_dim, topk)
