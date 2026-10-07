@@ -27,6 +27,7 @@
 
 #include "tests/tt_metal/tt_metal/api/metal2_host_api/test_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental::test {
 namespace {
@@ -68,7 +69,7 @@ protected:
         if (IsSkipped()) {
             return;
         }
-        const auto arch = mesh_device_->get_devices().at(0)->arch();
+        const auto arch = mesh_device_->arch();
         if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Command-list tests require Wormhole B0 or Blackhole hardware";
         }
@@ -85,7 +86,7 @@ protected:
         if (IsSkipped()) {
             return;
         }
-        const auto arch = mesh_device_->get_devices().at(0)->arch();
+        const auto arch = mesh_device_->arch();
         if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Command-list tests require Wormhole B0 or Blackhole hardware";
         }
@@ -102,7 +103,7 @@ protected:
         if (IsSkipped()) {
             return;
         }
-        const auto arch = mesh_device_->get_devices().at(0)->arch();
+        const auto arch = mesh_device_->arch();
         if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
             GTEST_SKIP() << "Command-list tests require Wormhole B0 or Blackhole hardware";
         }
@@ -165,7 +166,7 @@ MeshWorkload make_l1_write_workload(
     return workload;
 }
 
-IDevice* device(const std::shared_ptr<MeshDevice>& mesh_device) { return mesh_device->get_devices().at(0); }
+auto* device(const std::shared_ptr<MeshDevice>& mesh_device) { return mesh_device->impl().get_devices().at(0); }
 
 IDevice* device(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& device_coord) {
     return mesh_device->get_device(device_coord);

@@ -26,7 +26,7 @@ namespace tt::tt_metal::distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     // Short-circuit for inactive MeshDevices (no-op)
-    if (mesh_cq.device()->get_view().get_devices().empty()) {
+    if (mesh_cq.device()->get_device_ids().empty()) {
         return;
     }
 

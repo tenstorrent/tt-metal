@@ -7,6 +7,7 @@
 #include "dfb_test_common.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -545,7 +546,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     // kernel is TRISC-only and can't carry tensor bindings.
     program.impl().compile(&this->device());
     program.impl().finalize_dataflow_buffer_configs();
-    program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+    program.impl().allocate_dataflow_buffers(this->device().impl().get_devices()[0]);
 
     std::vector<std::vector<uint32_t>> inputs(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
