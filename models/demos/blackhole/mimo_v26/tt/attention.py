@@ -353,7 +353,7 @@ class MiMoAttention:
         self.decode_set(io, positions)
         return io["cur"], io["idx"]
 
-    def decode(self, x, cur_pos, rope_idx, block=1):
+    def decode(self, x, cur_pos, rope_idx, block=1, upd=None):
         """x: [1,1,B,4096] bf16 TILE per device, B = decode slots per mesh row (1..32). Returns [1,1,B,4096]."""
         B = x.shape[2]
         pt_dec, kv_mem, att_mem = self._dec_state(B, block)
@@ -381,11 +381,27 @@ class MiMoAttention:
         kr = self._rope(k, cos, sin)
         for t in (q, k, cos, sin, cosq, sinq):
             ttnn.deallocate(t)
-        kr = ttnn.to_memory_config(kr, kv_mem)
-        v = ttnn.to_memory_config(v, kv_mem)
         extra = {"cache_position_modulo": self.ring_blocks * BLOCK} if self.ring_blocks else {}
-        ttnn.experimental.paged_update_cache(self.k_cache, kr, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra)
-        ttnn.experimental.paged_update_cache(self.v_cache, v, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra)
+        if block > 1 and upd is not None:
+            # verify: the `block` virtual users of one real user write rows of the SAME cache tiles; one batched update would read-modify-write the same tiles
+            # concurrently, so write token t of all real users in separate calls (upd[t] = int32 [U] positions pos_u + t), in order, before any attention read.
+            U = B // block
+            pt_u, kv_mem_u, _ = self._dec_state(U, 1)
+            for t in range(block):
+                for cache, src in ((self.k_cache, kr), (self.v_cache, v)):
+                    st = ttnn.slice(src, [0, t, 0, 0], [1, B, src.shape[2], src.shape[3]], [1, block, 1, 1])
+                    st = ttnn.to_memory_config(st, kv_mem_u)
+                    ttnn.experimental.paged_update_cache(cache, st, update_idxs_tensor=upd[t], page_table=pt_u, **extra)
+                    ttnn.deallocate(st)
+        else:
+            kr = ttnn.to_memory_config(kr, kv_mem)
+            v = ttnn.to_memory_config(v, kv_mem)
+            ttnn.experimental.paged_update_cache(
+                self.k_cache, kr, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra
+            )
+            ttnn.experimental.paged_update_cache(
+                self.v_cache, v, update_idxs_tensor=cur_pos, page_table=pt_dec, **extra
+            )
         ttnn.deallocate(kr)
         ttnn.deallocate(v)
         kw = dict(
