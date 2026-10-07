@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_router_gpt.py -k deterministic
+ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/csa_compressor/device/kernels/compute_csa_compressor.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true|models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_csa_compressor.py -k single_device

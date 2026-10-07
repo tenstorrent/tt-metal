@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_all.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
+ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/compute/prod_nc.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true

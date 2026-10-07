@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/device/kernels/compute/recurrent_chunk_scan.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/experimental/rgb_to_yuv/device/kernels/compute/yuv_compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

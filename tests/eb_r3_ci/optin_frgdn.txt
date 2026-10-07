@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/compute/fused_recurrent_gated_delta_rule.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
