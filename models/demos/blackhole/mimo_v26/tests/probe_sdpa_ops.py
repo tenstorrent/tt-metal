@@ -671,6 +671,227 @@ def g_pre_perf(dev):
         run_case("pre_perf_chunked_64kcache", f, S=2048, start=start, Lc=Lc)
 
 
+def g_edge(dev):
+    """Sliding-window boundary and determinism, with a needle: exactly one key (position j0) is attractive to q and carries a huge V.
+    Rows/users whose window contains j0 produce a large output, others a small one. Window must contain exactly 128 keys incl self.
+    """
+    nh = 8
+    g = torch.Generator().manual_seed(7)
+    c = torch.randn(DQK, generator=g)
+    c = c / c.norm() * 60.0  # q.k = 60*|k|/... large positive for the needle
+    j0 = 1000
+
+    def build(L):
+        K = (torch.randn(1, 1, L, DQK, generator=g) * 0.2).bfloat16()
+        V = (torch.randn(1, 1, L, DV, generator=g) * 0.2).bfloat16()
+        K[0, 0, j0] = (c / 5.0).bfloat16()
+        V[0, 0, j0] = 50.0
+        return K, V
+
+    # decode: users with pos = j0 + d, d in [-1, 0, 126, 127, 128, 129]
+    ds = [-1, 0, 126, 127, 128, 129]
+    L = 2048
+    K, V = build(L)
+    B = len(ds)
+    Kb, Vb = K.expand(B, 1, L, DQK).contiguous(), V.expand(B, 1, L, DV).contiguous()
+    q = c.reshape(1, 1, DQK).expand(B, nh, DQK).contiguous().bfloat16()
+    pos = [j0 + d for d in ds]
+    pk, pt = make_paged(Kb)
+    pv, _ = make_paged(Vb)
+    pv192, _ = make_paged(pad_last(Vb, DQK))
+    tq = tt(dev, q.reshape(1, B, nh, DQK))
+    tpt = tt(dev, pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    tpos = tt(dev, torch.tensor(pos, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    sink = torch.full((nh,), 1.0).bfloat16()
+    s = torch.zeros(32, 32)
+    s[:nh, 0] = sink.float() / SCALE
+    ts = tt(dev, s.bfloat16())
+    ref = ref_decode(q, Kb, Vb, torch.tensor(pos), sink=sink, window=WINDOW, nkv=1)
+    ref_mag = ref.abs().amax(dim=(1, 2))
+
+    def f():
+        res = {"d": ds, "ref_absmax": [round(float(x), 2) for x in ref_mag]}
+        kw = dict(
+            cur_pos_tensor=tpos,
+            scale=SCALE,
+            sliding_window_size=WINDOW,
+            attention_sink=ts,
+            program_config=dec_cfg(dev),
+            compute_kernel_config=HIFI4(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        o = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            tq, tt(dev, pk), tt(dev, pv192), page_table_tensor=tpt, **kw
+        )
+        h = ttnn.to_torch(o)[0, :, :nh, :DV].float()
+        res["dev_absmax_pad192"] = [round(float(x), 2) for x in h.abs().amax(dim=(1, 2))]
+        res["pcc_pad192"] = round(pcc(ref, h), 5)
+        o = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            tq, tt(dev, pk), tt(dev, pv), head_dim_v=DV, page_table_tensor=tpt, **kw
+        )
+        h = ttnn.to_torch(o)[0, :, :nh, :DV].float()
+        res["dev_absmax_mla128"] = [round(float(x), 2) for x in h.abs().amax(dim=(1, 2))]
+        res["pcc_mla128"] = round(pcc(ref, h), 5)
+        return res
+
+    run_case("edge_decode_window", f)
+
+    # prefill self + chunked: rows i = j0 + d
+    S = 2048
+    Kp, Vp = build(S)
+    qp = c.reshape(1, 1, 1, DQK).expand(1, nh, S, DQK).contiguous().bfloat16()
+    sinkp = torch.full((nh,), 1.0).bfloat16()
+    rows = [j0 - 1, j0, j0 + 126, j0 + 127, j0 + 128, j0 + 129]
+
+    def f2():
+        res = {"rows": rows}
+        refp = ref_prefill(qp[:, :, :1400], Kp[:, :, :1400], Vp[:, :, :1400], sink=sinkp, window=WINDOW)
+        res["ref_absmax"] = [round(float(refp[0, :, r].abs().max()), 2) for r in rows]
+        o = ttnn.transformer.scaled_dot_product_attention(
+            tt(dev, qp),
+            tt(dev, Kp),
+            tt(dev, pad_last(Vp, DQK)),
+            is_causal=True,
+            scale=SCALE,
+            sliding_window_size=WINDOW,
+            attention_sink=sink_tt(dev, sinkp, "scale"),
+            program_config=pre_cfg(dev),
+            compute_kernel_config=HIFI2(),
+        )
+        h = ttnn.to_torch(o)[..., :DV].float()
+        res["dev_self_absmax"] = [round(float(h[0, :, r].abs().max()), 2) for r in rows]
+        res["pcc_self_rows<1400"] = round(pcc(refp, h[:, :, :1400]), 5)
+        return res
+
+    run_case("edge_prefill_self_window", f2)
+
+    def f3():
+        # chunked: cache 8192, q chunk 2048 at start 4096, needle at 4096+200
+        Lc, start = 8192, 4096
+        jn = start + 200
+        Kc = (torch.randn(1, 1, Lc, DQK, generator=g) * 0.2).bfloat16()
+        Vc = (torch.randn(1, 1, Lc, DV, generator=g) * 0.2).bfloat16()
+        Kc[0, 0, jn] = (c / 5.0).bfloat16()
+        Vc[0, 0, jn] = 50.0
+        pk, pt = make_paged(Kc)
+        pv192, _ = make_paged(pad_last(Vc, DQK))
+        rr = [jn - 1, jn, jn + 127, jn + 128]
+        o = ttnn.transformer.chunked_scaled_dot_product_attention(
+            tt(dev, qp),
+            tt(dev, pk),
+            tt(dev, pv192),
+            tt(dev, pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+            start,
+            program_config=pre_cfg(dev),
+            compute_kernel_config=HIFI2(),
+            sliding_window_size=WINDOW,
+            attention_sink=sink_tt(dev, sinkp, "scale"),
+        )
+        h = ttnn.to_torch(o)[..., :DV].float()
+        refc = ref_prefill(
+            qp[:, :, : (jn + 140 - start)],
+            Kc[:, :, : jn + 140],
+            Vc[:, :, : jn + 140],
+            q_start=start,
+            sink=sinkp,
+            window=WINDOW,
+        )
+        return {
+            "rows_abs": rr,
+            "dev_absmax": [round(float(h[0, :, r - start].abs().max()), 2) for r in rr],
+            "ref_absmax": [round(float(refc[0, :, r - start].abs().max()), 2) for r in rr],
+        }
+
+    run_case("edge_prefill_chunked_window", f3)
+
+    # determinism: 5 repeats bit-identical
+    def f4():
+        c2 = DecodeCase(dev, 32, 8, 1, 2048, [5, 127, 128, 129, 1000, 2047, 300, 64] * 4, True)
+        outs = {"pad192": [], "mla128": []}
+        for _ in range(5):
+            outs["pad192"].append(ttnn.to_torch(c2.op_pad()))
+            outs["mla128"].append(ttnn.to_torch(c2.op_mla()))
+        return {k: all(torch.equal(v[0], x) for x in v[1:]) for k, v in outs.items()}
+
+    run_case("determinism_decode_5x", f4)
+
+    def f5():
+        q_, k_, v_, sk_ = pf_inputs(2048, 8, 1, seed=11, Sk=8192)
+        pk, pt = make_paged(k_)
+        pv192, _ = make_paged(pad_last(v_, DQK))
+        a = [tt(dev, q_), tt(dev, pk), tt(dev, pv192), tt(dev, pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)]
+        ts_ = sink_tt(dev, sk_, "scale")
+        outs = [
+            ttnn.to_torch(
+                ttnn.transformer.chunked_scaled_dot_product_attention(
+                    *a,
+                    4096,
+                    program_config=pre_cfg(dev),
+                    compute_kernel_config=HIFI2(),
+                    sliding_window_size=WINDOW,
+                    attention_sink=ts_,
+                )
+            )
+            for _ in range(5)
+        ]
+        ga = [
+            ttnn.to_torch(
+                ttnn.transformer.chunked_scaled_dot_product_attention(
+                    *a, 4096, program_config=pre_cfg(dev), compute_kernel_config=HIFI2()
+                )
+            )
+            for _ in range(5)
+        ]
+        return {"swa": all(torch.equal(outs[0], x) for x in outs[1:]), "ga": all(torch.equal(ga[0], x) for x in ga[1:])}
+
+    run_case("determinism_chunked_5x", f5)
+
+
+def g_pre_long(dev):
+    """chunked prefill correctness and tile-size perf at a 64k cache, chunk 2048 at start 61440"""
+    Lc, start, S = 65536, 61440, 2048
+    q, k, v, sk = pf_inputs(S, 8, 1, seed=5, Sk=Lc)
+    pk, pt = make_paged(k)
+    pv192, _ = make_paged(pad_last(v, DQK))
+    tq, tk, tv, tpt = tt(dev, q), tt(dev, pk), tt(dev, pv192), tt(dev, pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    ts = sink_tt(dev, sk, "scale")
+    for swa in (False, True):
+
+        def f():
+            ref = ref_prefill(
+                q,
+                k[:, :, : start + S],
+                v[:, :, : start + S],
+                q_start=start,
+                sink=sk if swa else None,
+                window=WINDOW if swa else None,
+            )
+            kw = dict(sliding_window_size=WINDOW, attention_sink=ts) if swa else {}
+            res = {}
+            for qc, kc in ((256, 256), (512, 512)):
+                try:
+                    cfg = pre_cfg(dev, qc, kc)
+                    o = ttnn.transformer.chunked_scaled_dot_product_attention(
+                        tq, tk, tv, tpt, start, program_config=cfg, compute_kernel_config=HIFI2(), **kw
+                    )
+                    res[f"pcc_q{qc}k{kc}"] = round(pcc(ref, ttnn.to_torch(o)[..., :DV].float()), 6)
+                    res[f"ms_q{qc}k{kc}"] = round(
+                        bench(
+                            dev,
+                            lambda: ttnn.transformer.chunked_scaled_dot_product_attention(
+                                tq, tk, tv, tpt, start, program_config=cfg, compute_kernel_config=HIFI2(), **kw
+                            ),
+                            10,
+                        ),
+                        3,
+                    )
+                except Exception as e:  # noqa
+                    res[f"err_q{qc}k{kc}"] = err(e)
+            return res
+
+        run_case("pre_long_chunked", f, swa=swa, Lc=Lc, start=start)
+
+
 def g_pre_dbg(dev):
     """bisect which kwarg the chunked op binding rejects"""
     Lc, start, S = 8192, 4096, 2048
@@ -704,6 +925,9 @@ def g_pre_dbg(dev):
             return {"shape": list(o.shape)}
 
         run_case("pre_dbg", f, variant=name)
+
+    edge = (g_edge,)
+    pre_long = (g_pre_long,)
 
 
 GROUPS = dict(
