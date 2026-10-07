@@ -11,6 +11,8 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/link_health.hpp>
@@ -154,6 +156,36 @@ TEST_F(FactoryDescriptorControlPlaneFixture, RefreshAgainstUnchangedLiveIsStable
     EXPECT_EQ(control_plane.get_link_health()->fsd_expected_count(), before);
     EXPECT_TRUE(control_plane.get_downed_links().empty());
     EXPECT_FALSE(control_plane.fsd_rerouting_active());
+}
+
+// Each deleted cable is two directed records. With one mesh per host, the same-host cable is intramesh
+// and the cross-host cable is intermesh, and nothing else should be missing. Driven only against the
+// pod whose mock has both of those cables deleted; a healthy descriptor fails this test.
+TEST_F(FactoryDescriptorControlPlaneFixture, AMissingSameHostAndCrossHostCableAreBothReported) {
+    const auto& control_plane = control_plane_without_factory_descriptor();
+    ASSERT_TRUE(control_plane.has_factory_descriptor());
+    const auto* link_health = control_plane.get_link_health();
+    ASSERT_NE(link_health, nullptr);
+
+    EXPECT_GE(link_health->get_downed_intramesh_links().size(), 2u);
+    EXPECT_GE(link_health->get_downed_intermesh_links().size(), 2u);
+    EXPECT_EQ(
+        link_health->get_downed_links().size(),
+        link_health->get_downed_intramesh_links().size() + link_health->get_downed_intermesh_links().size());
+    EXPECT_TRUE(control_plane.fsd_rerouting_active());
+}
+
+// Driven against a live cluster and a factory descriptor that name no host in common. The host filter
+// rejects that during ingest, and every rank then fails together, before the mapper runs.
+TEST_F(FactoryDescriptorControlPlaneFixture, AnIncompatibleDescriptorFailsAtIngest) {
+    try {
+        control_plane_without_factory_descriptor();
+        FAIL() << "a descriptor that shares no host with the live cluster must fail during ingest";
+    } catch (const std::exception& e) {
+        const std::string what = e.what();
+        EXPECT_NE(what.find("Factory System Descriptor host filter"), std::string::npos) << what;
+        EXPECT_NE(what.find("local_ok_min=0"), std::string::npos) << what;
+    }
 }
 
 }  // namespace
