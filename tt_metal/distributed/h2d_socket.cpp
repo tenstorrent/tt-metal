@@ -86,7 +86,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     TT_FATAL(
         page_size >= connector_state_offset_ + sizeof(HDSocketConnectorState),
         "System page size too small to host HDSocketConnectorState.");
-    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, page_size));
+    shm_ = std::make_unique<NamedShm>(NamedShm::create_for_device(shm_name, page_size));
     void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
@@ -124,7 +124,7 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     // only [data | bytes_acked], so the device never touches the state struct.
     connector_state_offset_ = align(host_buffer_size_bytes, alignof(HDSocketConnectorState));
     size_t alloc_size = align(connector_state_offset_ + sizeof(HDSocketConnectorState), page_size);
-    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+    shm_ = std::make_unique<NamedShm>(NamedShm::create_for_device(shm_name, alloc_size));
     void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,

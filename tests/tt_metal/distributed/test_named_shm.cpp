@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <internal/disaggregation/layer_completion_queue.hpp>
 #include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include <cstdlib>
 #include <filesystem>
@@ -42,7 +43,7 @@ private:
 TEST(NamedShmHost, PosixRoundTripWithoutHugepages) {
     SocketHugepageEnv env(nullptr);
     const auto name = generate_shm_name("test");
-    auto owner = NamedShm::create(name, 36864);
+    auto owner = NamedShm::create_for_device(name, 36864);
     auto peer = NamedShm::open(owner.name(), owner.size());
     EXPECT_EQ(owner.name(), name);
     EXPECT_EQ(owner.size(), 36864);
@@ -53,10 +54,24 @@ TEST(NamedShmHost, PosixRoundTripWithoutHugepages) {
     EXPECT_THROW(NamedShm::open(name, 36864), std::exception);
 }
 
+TEST(NamedShmHost, HostOnlyCompletionQueueIgnoresHugepageOption) {
+    SocketHugepageEnv env("/nonexistent/socket/hugepages");
+    const auto name = generate_shm_name("test_completion");
+    using tt::tt_metal::internal::LayerCompletionMessage;
+    using tt::tt_metal::internal::LayerCompletionQueue;
+    auto owner = LayerCompletionQueue::create(name);
+    auto peer = LayerCompletionQueue::connect(name, 100);
+    ASSERT_TRUE(peer->try_push(LayerCompletionMessage{.seq = 7, .layer_idx = 59}));
+    LayerCompletionMessage message;
+    ASSERT_TRUE(owner->try_pop(message));
+    EXPECT_EQ(message.seq, 7);
+    EXPECT_EQ(message.layer_idx, 59);
+}
+
 TEST(NamedShmHost, SmallRegionDoesNotNeedHugepageMount) {
     SocketHugepageEnv env("/nonexistent/socket/hugepages");
     const auto name = generate_shm_name("test");
-    auto owner = NamedShm::create(name, 4096);
+    auto owner = NamedShm::create_for_device(name, 4096);
     EXPECT_EQ(owner.name(), name);
     EXPECT_EQ(owner.size(), 4096);
     owner.unlink();
@@ -66,7 +81,7 @@ TEST(NamedShmHost, RejectsOrdinaryFilesystemAndRemovesNewBacking) {
     SocketHugepageEnv env("/tmp");
     const auto name = generate_shm_name("test");
     const auto file = std::filesystem::path("/tmp") / name.substr(1);
-    EXPECT_THROW(NamedShm::create(name, 36864), std::exception);
+    EXPECT_THROW(NamedShm::create_for_device(name, 36864), std::exception);
     EXPECT_FALSE(std::filesystem::exists(file));
 }
 
@@ -87,12 +102,12 @@ TEST(NamedShmHost, HugepageCrossProcessAndSizeValidation) {
         GTEST_SKIP() << "Set TT_TEST_SOCKET_HUGEPAGE_DIR to a writable hugetlbfs mount with free pages";
     }
     SocketHugepageEnv env(dir);
-    auto owner = NamedShm::create(generate_shm_name("test"), 36864);
+    auto owner = NamedShm::create_for_device(generate_shm_name("test"), 36864);
     const auto name = owner.name();
     EXPECT_GT(owner.size(), 36864);
     EXPECT_EQ(static_cast<char*>(owner.ptr())[owner.size() - 1], 0);
     EXPECT_THROW(NamedShm::open(name, 4096), std::exception);
-    EXPECT_THROW(NamedShm::create(generate_shm_name("test"), owner.size() + 1), std::exception);
+    EXPECT_THROW(NamedShm::create_for_device(generate_shm_name("test"), owner.size() + 1), std::exception);
     const pid_t pid = fork();
     ASSERT_NE(pid, -1);
     if (pid == 0) {
