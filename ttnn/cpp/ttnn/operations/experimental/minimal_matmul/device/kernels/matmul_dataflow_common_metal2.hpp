@@ -211,10 +211,10 @@ void write_block_sync(
  * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
  * of data movement and compute improves overall throughput.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorTypeA, typename TensorAccessorTypeB>
 void read_ternary_blocks_sync(
-    const TensorAccessorType& ternary_a_accessor,
-    const TensorAccessorType& ternary_b_accessor,
+    const TensorAccessorTypeA& ternary_a_accessor,
+    const TensorAccessorTypeB& ternary_b_accessor,
     const TensorShape2D& shape,
     DataflowBuffer& dfb_ternary_a,
     DataflowBuffer& dfb_ternary_b,
