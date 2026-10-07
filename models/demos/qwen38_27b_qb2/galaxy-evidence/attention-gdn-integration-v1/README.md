@@ -62,8 +62,11 @@ scan, batch splitting, concatenation and state copy with identical inputs.
 | 32 | 400.91 | 1290.30 | 3.22x |
 | 64 | 656.02 | 2488.18 | 3.79x |
 
-The candidate regresses B1. The native control fails the strict per-head 0.5%
-relative-RMS gate at every batch, so this is a timing comparison with the
+The candidate regresses B1. The native control passes the first two eager
+steps, then fails the strict per-head 0.5% relative-RMS gate after 64 traced
+updates at every batch (worst-head output error 7.20–8.43%). The candidate's
+worst-head output error remains below 0.10% after the same updates. This is
+a timing comparison with the
 existing implementation, not a claim that both paths passed the same accuracy
 qualification. All native metrics, including failures, are retained. The
 candidate gate was not relaxed. Native-control accuracy does not prove the
@@ -88,3 +91,14 @@ Run the bounded tests through `demo/run_model_decode_attention.sh` and
 `demo/run_gdn_model_adapter.sh`, giving a task root and a new output directory.
 Set `QWEN_GDN_NATIVE_CONTROL=1` for the latter to collect the native comparison.
 The wrappers use the shared device lock and the existing safe pytest runner.
+
+## Full-model evaluation queued
+
+The exact persistent launcher, systemd command receipt and frozen source
+manifest are included alongside this README. The source manifest pins Metal
+commit `e663e4d6d18edd09af8f48b828e9ca4e3ebbac72`. The service
+`qwen38-accurate-decode-qualification-v1-20261007.service` starts new eight-replica
+G0, then API checks and full GPQA at the unchanged 32K output budget and 89.2%
+gate, conditional on G0 passing. It has an eight-hour outer deadline. Source
+verification passed and model loading started; no new G0 or GPQA result is
+claimed. The GDN candidate is excluded from this attention-only comparison.

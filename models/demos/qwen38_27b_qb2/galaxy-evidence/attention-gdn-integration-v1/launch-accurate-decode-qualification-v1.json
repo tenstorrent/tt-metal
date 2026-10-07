@@ -1,0 +1,21 @@
+{
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-accurate-decode-qualification-v1-20261007",
+    "--property=Type=exec",
+    "--property=RuntimeMaxSec=28800",
+    "--property=TimeoutStopSec=240",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=256G",
+    "--property=CPUQuota=3200%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/accurate-decode-qualification-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/accurate-decode-qualification-v1.log",
+    "/bin/bash",
+    "/home/ttuser/qwen38-artifacts-20261007/run-accurate-decode-qualification-v1.sh"
+  ],
+  "returncode": 0,
+  "stdout": "",
+  "stderr": "Running as unit: qwen38-accurate-decode-qualification-v1-20261007.service\n",
+  "created_at": 1791389019.68581
+}
