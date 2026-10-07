@@ -1785,3 +1785,14 @@
 - paths: models/demos/blackhole/mimo_v26/tests/test_gsm8k_decode.py, models/demos/blackhole/mimo_v26/tests/harness.py, models/demos/blackhole/mimo_v26/tests/decode_common.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
 - supersedes: E261007-1505-aa2
 - data: {"runs":2,"bit_identical":1,"hosts_identical":2,"n":128,"correct":110}
+
+## E261007-1642-f74
+- date: 2026-10-07T16:42:46
+- commit: b1a54e1a53f
+- branch: ssinghal/mimo-regate
+- host: 44,47,30,40
+- track: handoff
+- status: verified
+- claim: regate handoff: branch ssinghal/mimo-regate, measured commit b1a54e1a53f (harness guard 26f6086a01c + test_prefill_scale real TTFT b1a54e1a53f on top of 448d1005cde); 12/13 required gates re-measured PASS (first_token, spec_exact, hosted_oracle untouched); gsm8k passes by one (110/128); prefill replay-only throughput regressed 21959 -> 16905 tok/s (not investigated). Repro: launch.py --host H --commit b1a54e1a53f --env MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL --env LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/mimo/artifacts/integ_73c014eb46d/lib ... see regate_* logs in /mnt/tt-data/ssinghal/mimo-logs
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/regate_gsm_h47_b1a54e1a53f.log
+- paths: models/demos/blackhole/mimo_v26/tests/harness.py
