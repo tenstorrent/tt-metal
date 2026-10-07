@@ -15,10 +15,8 @@ void bind_chronological_selections(nb::module_& mod) {
     layout.attr("OUTGOING_HISTORY") = outgoing_history;
     layout.attr("PREDECESSOR_HISTORY") = predecessor_history;
     layout.attr("FINAL_HISTORY") = final_history;
-    layout.attr("LOCAL_ENTRY_STATE") = local_entry_state;
     layout.attr("FINAL_STATE") = final_state;
-    layout.def("affine_transform", &affine_transform);
-    layout.def("local_final_history", &local_final_history);
+    layout.attr("LOCAL_FINAL_HISTORY") = local_final_history;
 
     ttnn::bind_function<"chronological_selections", "ttnn.experimental.kda.">(
         mod,
@@ -49,13 +47,12 @@ void bind_chronological_selections(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: Interleaved UINT32 row-major DRAM table of shape
-                ``[8 + 2 * SP_size, 8]`` per device. This private representation
-                contains three history-index records, paired start/exclusive-end
-                bounds for local entry and final state, and one bounds pair per
-                chronological affine-transform step, followed by a local final-history
-                record selecting the last three valid local rows (a placeholder on
-                empty ranks). Consumers must use the shared
-                ``_selection_layout`` definitions rather than hard-coded offsets.
+                ``[6, 8]`` per device. This private representation contains three
+                history-index records, paired start/exclusive-end bounds for the
+                final state, and a local final-history record selecting the last
+                three valid local rows (a placeholder on empty ranks). Consumers
+                must use the shared ``_selection_layout`` definitions rather than
+                hard-coded offsets.
         )doc",
         &ttnn::experimental::kda::chronological_selections,
         nb::arg("actual_start").noconvert(),

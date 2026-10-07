@@ -101,7 +101,7 @@ int main() {
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",
             core,
             ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .math_approx_mode = false,
             });
 
