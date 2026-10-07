@@ -47,8 +47,7 @@ _TIMING_SAMPLES = 5
 _PCC_THRESHOLD = 0.9995
 _PERF_SKU = "bh_loudbox"
 _PERF_MARGIN = 0.03
-# LoudBox targets (120-core P150b). SP2xTP4 is the CI-gated synthetic layout; all three are
-# local five-sample medians scaled by CI/local main (9.498/9.543 ms SP2xTP4 synthetic).
+# LoudBox targets.
 _PERF_REFERENCE_MS = {
     "SP1xTP8": 8.617,
     "SP2xTP4": 8.758,
