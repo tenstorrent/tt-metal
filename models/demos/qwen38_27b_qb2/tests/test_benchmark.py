@@ -58,6 +58,23 @@ def test_special_token_only_response_preserves_usage_and_has_no_text_timing():
     assert summary["aggregate_output_tokens_per_s"] == 0.5
 
 
+def test_decode_timing_includes_suppressed_tokens_until_stream_finish(monkeypatch):
+    # Fixed-length ignore_eos runs may continue generating special tokens after
+    # the final visible text. Timing only visible chunks inflates throughput.
+    ticks = iter([0.0, 1.0, 2.0, 5.0, 6.0])
+    monkeypatch.setattr(benchmark, "time", SimpleNamespace(perf_counter=lambda: next(ticks)))
+    row = run_stream(
+        [
+            {"choices": [{"delta": {"content": "A"}}]},
+            {"choices": [{"delta": {"content": "B"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "length"}]},
+            {"choices": [], "usage": {"prompt_tokens": 20, "completion_tokens": 9}},
+        ]
+    )
+    assert row["decode_tokens_per_s"] == 2
+    assert row["elapsed_s"] == 6 and row["ttft_ms"] == 1000
+
+
 def test_truncated_stream_without_usage_fails(expect_error):
     with expect_error(RuntimeError, "Incomplete stream"):
         run_stream([{"choices": [{"delta": {"content": "Answer: (B)"}, "finish_reason": "stop"}]}])
@@ -118,6 +135,7 @@ def gpqa_args(output_dir, *, prepare_only=False):
         output_dir=output_dir,
         mode="gpqa",
         server_capacity=16,
+        data_parallel_size=1,
         performance_input_lengths=(128,),
         prepare_only=prepare_only,
         base_url="http://test",
@@ -292,6 +310,24 @@ def test_gpqa_rejects_concurrency_above_capacity_before_dataset_access(tmp_path)
     args.server_capacity = 1
     assert benchmark.run(args) == 1
     assert not (tmp_path / "protocol.json").exists()
+
+
+def test_galaxy_protocol_keeps_per_replica_and_total_capacity_distinct(monkeypatch, tmp_path):
+    args = gpqa_args(tmp_path, prepare_only=True)
+    args.data_parallel_size = 8
+    args.gpqa_concurrency = 128
+    args.gpqa_count = 198
+    cases = [{"id": i, "doc": {}, "prompt": "Synthetic question"} for i in range(198)]
+    monkeypatch.setattr(benchmark, "load_gpqa", lambda count, csv_path: (None, cases))
+    assert benchmark.run(args) == 0
+    protocol = json.loads((tmp_path / "protocol.json").read_text())
+    assert protocol["server_capacity"] == 16
+    assert protocol["data_parallel_size"] == 8
+    assert protocol["total_server_capacity"] == protocol["gpqa"]["concurrency"] == 128
+    assert protocol["performance"]["shapes"] == [[128, 128, 128]]
+    args.gpqa_concurrency = 129
+    assert benchmark.run(args) == 1
+    assert json.loads((tmp_path / "protocol.json").read_text()) == protocol
 
 
 def test_gpqa_stream_failure_keeps_completed_rows_and_marks_interruption(monkeypatch, tmp_path, expect_error):

@@ -74,7 +74,7 @@ def load_gpqa(count=GPQA_COUNT, csv_path=None):
 
 async def complete(client, payload, *, chat):
     """TTFT starts at submission and includes queueing; decode includes reasoning tokens."""
-    first = last = usage = finish = None
+    first = finish_at = usage = finish = None
     text, reasoning = [], []
     start = time.perf_counter()
     endpoint = "/v1/chat/completions" if chat else "/v1/completions"
@@ -93,15 +93,16 @@ async def complete(client, payload, *, chat):
                 delta = choice.get("delta", {})
                 content = delta.get("content") if chat else choice.get("text")
                 thought = delta.get("reasoning") or delta.get("reasoning_content")
+                stamp = time.perf_counter() if content or thought or choice.get("finish_reason") else None
                 if content or thought:
-                    last = time.perf_counter()
-                    first = last if first is None else first
+                    first = stamp if first is None else first
                     if content:
                         text.append(content)
                     if thought:
                         reasoning.append(thought)
                 if choice.get("finish_reason"):
                     finish = choice["finish_reason"]
+                    finish_at = stamp
     if usage is None or finish is None:
         raise RuntimeError("Incomplete stream: expected usage and a finish reason")
     tokens = usage["completion_tokens"]
@@ -113,7 +114,9 @@ async def complete(client, payload, *, chat):
         "elapsed_s": time.perf_counter() - start,
         "ttft_ms": 1000 * (first - start) if first is not None else None,
         "decode_tokens_per_s": (
-            (tokens - 1) / (last - first) if tokens > 1 and first is not None and last > first else None
+            (tokens - 1) / (finish_at - first)
+            if tokens > 1 and first is not None and finish_at is not None and finish_at > first
+            else None
         ),
     }
 
@@ -249,14 +252,15 @@ def performance_shapes(server_capacity, input_lengths):
     return [(length, server_capacity) for length in input_lengths]
 
 
-async def run_performance(client, output_dir, server_capacity, input_lengths):
+async def run_performance(client, output_dir, server_capacity, input_lengths, *, data_parallel_size=1):
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(os.environ["MODEL_WEIGHTS_DIR"], local_files_only=True)
     passage = "The scientific method tests explanations against observations. Describe an experiment and its controls. "
     source = tokenizer.encode(passage, add_special_tokens=False)
     rows, summaries, inputs = [], [], []
-    for length, batch in performance_shapes(server_capacity, input_lengths):
+    total_capacity = server_capacity * data_parallel_size
+    for length, batch in performance_shapes(total_capacity, input_lengths):
         prompt = (source * (length // len(source) + 1))[:length]
         prompt_sha256 = hashlib.sha256(json.dumps(prompt).encode()).hexdigest()
         inputs.append({"input_tokens": length, "concurrency": batch, "prompt": prompt, "sha256": prompt_sha256})
@@ -281,6 +285,8 @@ async def run_performance(client, output_dir, server_capacity, input_lengths):
                 case_rows.append(
                     {
                         "server_capacity": server_capacity,
+                        "data_parallel_size": data_parallel_size,
+                        "total_server_capacity": total_capacity,
                         "input_tokens": length,
                         "batch": batch,
                         "prompt_sha256": prompt_sha256,
@@ -293,6 +299,8 @@ async def run_performance(client, output_dir, server_capacity, input_lengths):
         summaries.append(
             {
                 "server_capacity": server_capacity,
+                "data_parallel_size": data_parallel_size,
+                "total_server_capacity": total_capacity,
                 "prompt_sha256": prompt_sha256,
                 "input_tokens": length,
                 "output_tokens": 128,
@@ -309,6 +317,10 @@ async def run_performance(client, output_dir, server_capacity, input_lengths):
 
 
 async def main(args):
+    replicas = args.data_parallel_size
+    if replicas not in (1, 8) or args.server_capacity not in (1, 8, 16):
+        raise ValueError("Expected one or eight replicas with per-replica capacity 1, 8, or 16")
+    total_capacity = replicas * args.server_capacity
     gpqa = dict(
         count=args.gpqa_count,
         concurrency=args.gpqa_concurrency,
@@ -316,7 +328,7 @@ async def main(args):
         threshold=args.gpqa_threshold,
     )
     validate_gpqa_settings(**gpqa)
-    if args.mode != "performance" and gpqa["concurrency"] > args.server_capacity:
+    if args.mode != "performance" and gpqa["concurrency"] > total_capacity:
         raise ValueError("GPQA concurrency exceeds the declared server capacity")
     if args.mode != "performance" and (args.output_dir / "gpqa-responses.jsonl").exists():
         raise FileExistsError("Use a fresh output directory for another measured GPQA run")
@@ -334,6 +346,8 @@ async def main(args):
     protocol = {
         "model": MODEL,
         "server_capacity": args.server_capacity,
+        "data_parallel_size": replicas,
+        "total_server_capacity": total_capacity,
         "checkpoint_revision": MODEL_REVISION,
         "dataset_revision": DATASET_REVISION,
         "dataset_source": {"transport": "validated_local_csv", **local_dataset}
@@ -361,7 +375,7 @@ async def main(args):
         "performance": {
             "shapes": [
                 [length, 128, batch]
-                for length, batch in performance_shapes(args.server_capacity, args.performance_input_lengths)
+                for length, batch in performance_shapes(total_capacity, args.performance_input_lengths)
             ],
             "warmup": "one burst per shape",
             "repeats": 2,
@@ -375,13 +389,18 @@ async def main(args):
     if args.prepare_only:
         return
     summary = dict(protocol)
-    async with httpx.AsyncClient(base_url=args.base_url, timeout=7200) as client:
+    limits = httpx.Limits(max_connections=max(16, total_capacity), max_keepalive_connections=total_capacity)
+    async with httpx.AsyncClient(base_url=args.base_url, timeout=7200, limits=limits) as client:
         if args.mode != "performance":
             summary["gpqa_result"] = await run_gpqa(client, args.output_dir, task, cases, **gpqa)
             (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if args.mode != "gpqa":
             summary["performance_results"] = await run_performance(
-                client, args.output_dir, args.server_capacity, args.performance_input_lengths
+                client,
+                args.output_dir,
+                args.server_capacity,
+                args.performance_input_lengths,
+                data_parallel_size=replicas,
             )
     (args.output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     if "gpqa_result" in summary and not summary["gpqa_result"]["passed"]:
@@ -412,8 +431,9 @@ if __name__ == "__main__":
         type=int,
         choices=(1, 8, 16),
         default=16,
-        help="The server max-num-seqs setting; capacity 1 selects only serial performance shapes.",
+        help="Per-replica max-num-seqs; multiply by --data-parallel-size for total endpoint capacity.",
     )
+    parser.add_argument("--data-parallel-size", type=int, choices=(1, 8), default=1)
     parser.add_argument("--performance-input-lengths", type=int, nargs="+", choices=(128, 1024), default=(128, 1024))
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--gpqa-count", type=int, default=GPQA_COUNT, help="Use 198 for the full Diamond dataset")
@@ -422,6 +442,6 @@ if __name__ == "__main__":
     parser.add_argument("--gpqa-threshold", type=float, default=GPQA_THRESHOLD)
     parser.add_argument("--gpqa-csv", type=Path, help="Existing authorized CSV cache; must match the pinned Hub blob")
     args = parser.parse_args()
-    if args.server_capacity < args.gpqa_concurrency and args.mode != "performance":
-        parser.error("GPQA concurrency must not exceed --server-capacity")
+    if args.server_capacity * args.data_parallel_size < args.gpqa_concurrency and args.mode != "performance":
+        parser.error("GPQA concurrency must not exceed --server-capacity times --data-parallel-size")
     raise SystemExit(run(args))

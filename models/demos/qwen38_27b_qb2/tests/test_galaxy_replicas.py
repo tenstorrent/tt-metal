@@ -20,6 +20,7 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
+from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.tests.galaxy_prompt import qualification_prompt
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 from models.demos.qwen38_27b_qb2.tt.model import checkpoint_path
@@ -75,6 +76,7 @@ def test_concurrent_galaxy_replicas():
     output_tokens, repeats = 128, 5
     output = Path(os.environ["QWEN_GALAXY_RECEIPT"])
     prompt = qualification_prompt(AutoTokenizer.from_pretrained(checkpoint_path(), local_files_only=True))
+    source_sha256 = model_source_hashes(Path(__file__).resolve().parents[1])
     torch.set_num_threads(8)
     assert ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
     configure_fabric(topology=ttnn.Topology.Linear)
@@ -96,6 +98,7 @@ def test_concurrent_galaxy_replicas():
         passed=False,
         prompt_tokens=prompt,
         loaded=[],
+        source_sha256=source_sha256,
     )
     try:
         for i in range(count):

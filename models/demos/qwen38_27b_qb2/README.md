@@ -115,9 +115,9 @@ after the first replica/fabric attempts. Results are under
 `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
 the artifact entrypoint and updates after each completed cell. Five host tests
 validate the metric accounting and reject cold captures as warm measurements.
-The first thirteen cells are measured and preserved in
+The first nineteen cells are measured and preserved in
 [`galaxy-evidence/perf-sweep-tp4-v1/index.html`](galaxy-evidence/perf-sweep-tp4-v1/index.html)
-(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; 14 cells remain and
+(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; eight cells remain and
 the host job continues. At ISL 128, C=1/2/4/8/16 measured
 38.79/31.08/24.85/20.48/12.15 tokens/s/user, with aggregate decode throughput
 38.79/62.16/99.39/163.84/194.40 tokens/s. This baseline has substantial batch
@@ -130,6 +130,8 @@ which explains the near-linear TTFT growth with concurrency. The code also
 splits B16 GDN into two scan launches, pads single-token decode to a 32-row
 chunk, and copies the resulting recurrent state back. These are profiling
 targets; source inspection does not establish their measured cost.
+At 55K, C1 measures 30.57 tokens/s/user and 9.65 s TTFT; C8 measures
+16.33 tokens/s/user (130.64 aggregate) and 78.14 s TTFT.
 
 Initialize with `--replicas 8`
 for the follow-up: throughput is measured on all eight replicas rather than
@@ -153,6 +155,63 @@ queue time; the test itself allows thirty minutes. This reduced eager trace is
 for operation attribution. Its host time includes profiling and Python dispatch
 and must not be presented as full-model traced TPOT. P0 still needs measured
 operation totals reconciled with full-model TPOT and TP8 collective costs.
+
+### Persistent eight-engine serving and reference evaluation
+
+`demo/run_galaxy_serving.sh TASK_ROOT NEW_RESULTS G0_RECEIPT` waits for an
+optional `QWEN_WAIT_FOR_UNIT`, requires that predecessor to succeed, and checks
+the completed eight-replica G0 receipt before acquiring the shared device lock.
+The actual model Python and precision hashes must match qualification. The
+launcher uses the already-prepared `serving_env` and `eval_env`; it neither
+installs packages nor changes the preserved native build.
+
+The pinned plugin's serialized standard-DP placement fields carry the exact
+qualified chip groups into eight independent TP4 workers. They are an internal
+contract of plugin `b7e4292e4193cba20abe9c7c68ce489201b2e36b`, not a generic
+cross-version interface. Actual worker log bindings must match all eight
+groups. Each engine has `max_num_seqs=16`, for 128 total slots. The configuration
+uses the existing CI optimization knobs (compact MLP/attention/RoPE, batched
+prefill, decode buckets), Linear fabric, FP32 recurrence and a 1,050,592-token KV
+pool per replica. This differs from the initial native baseline; reference
+accuracy and live performance for these Galaxy settings remain unqualified.
+
+The supervisor binds `127.0.0.1:8000`, waits up to 90 minutes for readiness,
+then checks health, model listing, streaming/nonstreaming greedy agreement,
+multiturn chat history and a 128-request burst. It runs all 198 GPQA-D questions
+at concurrency 128 with a 32,768-token budget and the recorded 0.892 threshold.
+The evaluator distinguishes per-engine capacity from endpoint capacity and has
+128 HTTP connections rather than silently queueing behind httpx's default 100.
+The four-hour evaluation deadline includes warmup. A completed below-threshold
+score remains a failure and is retained for diagnosis.
+
+After GPQA completes, the same resident engines run a whole-Galaxy HTTP sweep
+at total concurrency 8/16/32/64/128 across the input lengths above. Its graph
+shows median client decode speed, **aggregate end-to-end throughput**, and TTFT.
+Independent engines overlap prefill and decode, so this graph does not invent a
+global decode-only phase or multiply TP4 speed into a measured Galaxy number.
+Client decode timing ends at stream completion, including any suppressed
+special-token tail. This fixes a measurement bug that could otherwise inflate
+fixed-length throughput by stopping at the final visible text.
+
+The persistent job is `qwen38-galaxy-serving-v1-20261006.service`, queued behind
+`qwen38-layer-profile-v1-20261006.service`. It has a 48-hour enclosing deadline
+including queue time, a 256 GiB host-memory limit and a 32-core CPU quota. It
+keeps the endpoint resident after the evaluations and sweep. Stop this owned
+job with `systemctl --user stop qwen38-galaxy-serving-v1-20261006.service`;
+weights and caches remain. The next device job resets a pessimistic dirty
+marker through the normal safe-runner path.
+
+Receipts are under `TASK_ROOT/galaxy-serving-v1/`: `deployment.json`,
+`server.log`, `api.json`, `gpqa/`, and `http-sweep/`. Connect after readiness
+using `ssh -L 8000:127.0.0.1:8000 ttuser@10.228.203.98`; the served model is
+`Qwen/Qwen3.8-27B` at `/v1/chat/completions`.
+
+All 41 launch, benchmark, mocked-HTTP and real-plugin host tests pass, including
+the actual vLLM argument parser. The full DP8 dataset preparation preserves the
+same 198 input hashes as the earlier preparation. Evidence is in
+`galaxy-evidence/serving-launch-host.xml` and
+`galaxy-evidence/gpqa-full-dp8-prepared-v1/`. These are preparation receipts;
+no live eight-engine API or GPQA score is claimed yet.
 
 ## Capacity
 

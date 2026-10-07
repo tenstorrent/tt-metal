@@ -102,9 +102,20 @@ def render(report, directory):
     completed = [row for row in report["cells"] if row["status"] == "completed"]
     supported = sum(row["status"] != "capacity_guard" for row in report["cells"])
     colors = dict(zip(CONCURRENCIES, ("#2563eb", "#0d9488", "#a16207", "#9333ea", "#e11d48")))
+    http = report.get("measurement_mode") == "http"
     metrics = (
-        ("tokens_per_second_per_user", "Decode speed", "tokens/s/user", False),
-        ("aggregate_decode_tokens_per_second", "Aggregate decode throughput", "tokens/s", False),
+        (
+            "tokens_per_second_per_user",
+            "Median client decode speed" if http else "Decode speed",
+            "tokens/s/user",
+            False,
+        ),
+        (
+            "aggregate_e2e_tokens_per_second" if http else "aggregate_decode_tokens_per_second",
+            "Aggregate end-to-end throughput" if http else "Aggregate decode throughput",
+            "tokens/s",
+            False,
+        ),
         ("ttft_p50_s", "Time to first token", "seconds (log scale)", True),
     )
     with plt.rc_context({"font.size": 10, "axes.spines.top": False, "axes.spines.right": False}):
@@ -163,13 +174,17 @@ def render(report, directory):
         for extension in ("png", "svg", "pdf"):
             figure.savefig(directory / f"sweep.{extension}", dpi=160)
         plt.close(figure)
-    fields = (
-        ["input_tokens", "concurrency", "batch_per_replica", "status"]
-        + [m[0] for m in metrics]
-        + ["aggregate_e2e_tokens_per_second", "ttft_p90_s", "tpot_ms", "reason"]
+    svg_path = directory / "sweep.svg"
+    svg_path.write_text("\n".join(line.rstrip() for line in svg_path.read_text().splitlines()) + "\n")
+    fields = list(
+        dict.fromkeys(
+            ["input_tokens", "concurrency", "batch_per_replica", "status"]
+            + [m[0] for m in metrics]
+            + ["aggregate_e2e_tokens_per_second", "ttft_p90_s", "tpot_ms", "reason"]
+        )
     )
     with (directory / "sweep.csv").open("w") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         for row in report["cells"]:
             flat = {**row, **row.get("summary", {})}
@@ -207,7 +222,7 @@ status: <b>{html.escape(report['state'])}</b> · updated {html.escape(report.get
 <p><small>{html.escape(report['capacity_note'])} Near-256K uses 262,016 input tokens to leave room for 128 output tokens.
 No predicted values are drawn as measurements. Lines connect completed measured points only.</small></p>
 <button onclick="document.getElementById('results').hidden=!document.getElementById('results').hidden">Show / hide data table</button>
-<table id="results"><thead><tr><th>ISL</th><th>Concurrency</th><th>Status</th><th>Tokens/s/user</th><th>Decode tokens/s</th><th>p50 TTFT (s)</th></tr></thead>
+<table id="results"><thead><tr><th>ISL</th><th>Concurrency</th><th>Status</th><th>Tokens/s/user</th><th>{'End-to-end' if http else 'Decode'} tokens/s</th><th>p50 TTFT (s)</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table></html>"""
     (directory / "index.html").write_text(document + "\n")
 
