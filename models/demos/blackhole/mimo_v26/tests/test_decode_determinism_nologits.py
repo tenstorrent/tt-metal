@@ -38,17 +38,22 @@ def main():
             ta = ta or r["tokens"]
             runs.append((m, r))
         res = {}
-        for i in range(1, len(runs)):
-            a, b = runs[0][1], runs[i][1]
-            bad = [
-                (u, k) for u in range(N) for k, (x, y) in enumerate(zip(a["step_best"][u], b["step_best"][u])) if x != y
-            ]
-            res[f"run0({runs[0][0]})_vs_run{i}({runs[i][0]})"] = dict(
-                n_bad_user_steps=len(bad),
-                n_bad_users=len({u for u, _ in bad}),
-                first=min(bad, key=lambda t: t[1]) if bad else None,
-                tokens_equal=a["tokens"] == b["tokens"],
-            )
+        for i in range(len(runs)):
+            for j in range(i + 1, len(runs)):
+                a, b = runs[i][1], runs[j][1]
+                bad = [
+                    (u, k)
+                    for u in range(N)
+                    for k, (x, y) in enumerate(zip(a["step_best"][u], b["step_best"][u]))
+                    if x != y
+                ]
+                res[f"run{i}({runs[i][0]})_vs_run{j}({runs[j][0]})"] = dict(
+                    n_bad_user_steps=len(bad),
+                    bad_users=sorted({u for u, _ in bad}),
+                    bad_rows=sorted({u % 4 for u, _ in bad}),
+                    first=min(bad, key=lambda t: t[1]) if bad else None,
+                    tokens_equal=a["tokens"] == b["tokens"],
+                )
         line = json.dumps(dict(case="determinism_nologits", layers=NL, n=N, steps=STEPS, modes=mode, res=res))
         print("DEC_RESULT " + line, flush=True)
         open(OUT, "a").write(line + "\n")
