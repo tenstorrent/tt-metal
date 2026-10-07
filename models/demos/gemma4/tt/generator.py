@@ -25,6 +25,7 @@ from models.demos.gemma4.tt.generator_trace import (
 )
 from models.demos.gemma4.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4.tt.vision.multimodal_embedder import Gemma4MultimodalEmbedder
+from models.demos.gemma4.tt.vision.unified_embedder import Gemma4UnifiedVisionEmbedder, has_unified_vision_weights
 from models.demos.gemma4.tt.vision.vision_model_config import VisionModelArgs
 from models.demos.gemma4.tt.vision.vision_tower import VisionTower
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -1882,7 +1883,11 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         self.embed_vision = embed_vision
         self.image_token_id = image_token_id
         self.pad_token_id = pad_token_id
-        self.is_multimodal = vision_tower is not None and embed_vision is not None
+        # The SigLIP path needs tower + projector; the unified (encoder-free)
+        # embedder projects straight to text space and carries no projector.
+        self.is_multimodal = vision_tower is not None and (
+            embed_vision is not None or getattr(vision_tower, "projects_to_text", False)
+        )
 
     def _mock_tokens(self, batch_size, seq_len, kv_cache, model_id):
         """Warmup tokens with *unique* per-user page-table rows.
@@ -2233,30 +2238,40 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             os.environ.setdefault("HF_MODEL", model_path)
             # Share the text model's mesh/CCL setup so the vision tower's TP
             # all-reduces reuse the same semaphores and link/topology tuning.
-            vision_args = VisionModelArgs(
-                mesh_device,
-                dummy_weights=True,
-                max_batch_size=1,
-                max_seq_len=8192,
-                mesh_config=model.mesh_config,
-                ccl_manager=model.ccl_manager,
-            )
-            vision_state_dict = _build_vision_state_dict(state_dict, vision_args)
-            vision_tower = VisionTower(
-                args=vision_args,
-                dtype=vision_dtype,
-                state_dict=vision_state_dict,
-                tt_ccl=TT_CCL(mesh_device),
-                weight_cache_path=vision_args.weight_cache_path(vision_dtype),
-            )
-            embed_vision = Gemma4MultimodalEmbedder.from_state_dict(
-                mesh_device=mesh_device,
-                state_dict=state_dict,
-                vision_args=vision_args,
-                text_hidden_size=model.hidden_size,
-                dtype=ttnn.bfloat16,
-                weight_cache_path=vision_args.weight_cache_path(ttnn.bfloat16),
-            )
+            if has_unified_vision_weights(state_dict):
+                # 12B "unified": no SigLIP tower; raw patches project straight to text space.
+                vision_tower = Gemma4UnifiedVisionEmbedder(
+                    mesh_device,
+                    state_dict,
+                    text_hidden_size=model.hidden_size,
+                    weight_cache_path=model_args.weight_cache_path(ttnn.bfloat16),
+                )
+                embed_vision = None
+            else:
+                vision_args = VisionModelArgs(
+                    mesh_device,
+                    dummy_weights=True,
+                    max_batch_size=1,
+                    max_seq_len=8192,
+                    mesh_config=model.mesh_config,
+                    ccl_manager=model.ccl_manager,
+                )
+                vision_state_dict = _build_vision_state_dict(state_dict, vision_args)
+                vision_tower = VisionTower(
+                    args=vision_args,
+                    dtype=vision_dtype,
+                    state_dict=vision_state_dict,
+                    tt_ccl=TT_CCL(mesh_device),
+                    weight_cache_path=vision_args.weight_cache_path(vision_dtype),
+                )
+                embed_vision = Gemma4MultimodalEmbedder.from_state_dict(
+                    mesh_device=mesh_device,
+                    state_dict=state_dict,
+                    vision_args=vision_args,
+                    text_hidden_size=model.hidden_size,
+                    dtype=ttnn.bfloat16,
+                    weight_cache_path=vision_args.weight_cache_path(ttnn.bfloat16),
+                )
 
         generator = cls(
             [model],
@@ -2295,16 +2310,20 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         """
         if not self.is_multimodal:
             raise RuntimeError("encode_vision requires from_pretrained(..., multimodal=True).")
-        num_patches = image_position_ids.shape[1]
-        seq_len = _vision_encoder_seq_len(num_patches)
         start_time = time.time()
-        pooled_tt, mask = self.vision_tower(pixel_values, image_position_ids, seq_len)
-        # On-device projection (scale-free RMSNorm + Linear) -> text embedding space.
-        projected_tt = self.embed_vision(pooled_tt)  # [1, batch, output_length, text_hidden]
+        if getattr(self.vision_tower, "projects_to_text", False):
+            # Unified (encoder-free) embedder: patches -> text space in one module.
+            projected_tt, mask = self.vision_tower(pixel_values, image_position_ids)
+        else:
+            num_patches = image_position_ids.shape[1]
+            seq_len = _vision_encoder_seq_len(num_patches)
+            pooled_tt, mask = self.vision_tower(pixel_values, image_position_ids, seq_len)
+            # On-device projection (scale-free RMSNorm + Linear) -> text embedding space.
+            projected_tt = self.embed_vision(pooled_tt)  # [1, batch, output_length, text_hidden]
+            if hasattr(pooled_tt, "deallocate"):
+                pooled_tt.deallocate(True)
         model_time = time.time() - start_time
         logger.info(f"vision_model time {model_time}")
-        if hasattr(pooled_tt, "deallocate"):
-            pooled_tt.deallocate(True)
 
         # Strip padded soft tokens with an on-device gather. ``mask`` is host metadata
         # (small bool tensor); only the integer valid indices touch the host. The 4D
