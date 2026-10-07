@@ -1129,7 +1129,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool sections_activations =
         !(has_operand_activations || has_post_activations) ||
         (!(has_operand_activations && has_post_activations) &&
-         a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
+         (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED || eb_r3_env("EB_R3_SECTIONS_ANY")));
     const bool bcast_sections = bh_fpu_op && sections_activations && a_sharded &&
                                 !eb_r3_env("EB_R3_NO_BCAST_CHUNK") &&
                                 !(eb_r3_env("EB_R3_NO_BCAST_ACT") && (has_operand_activations || has_post_activations)) &&

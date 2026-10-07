@@ -133,3 +133,50 @@ def test_nat(device, op, mem, kind, d, act):
         ttnn.deallocate(t)
     tol = 0.3 if d == "bfp8" else 0.1
     assert torch.allclose(got, ref, rtol=0.1, atol=tol), float((got - ref).abs().max())
+
+
+NAT2_MEMS = ["bs64_t80", "bs16_t64", "bs16_n2_t128", "ws16_t32", "ws32_t4"]
+NAT2 = [(op, m, k, act) for op in ("add", "mul") for m in NAT2_MEMS for k in ("col", "scalar") for act in ("relu", "gelu", "silu")]
+NAT2 += [(op, m, k, None) for op in ("rsub", "add_arelu", "mul_asilu", "logical_and") for m in NAT2_MEMS for k in ("col", "scalar")]
+NAT2 += [(op, m, k, "fp32") for op in ("add", "mul") for m in ("bs64_t80", "ws16_t32") for k in ("col", "scalar")]
+
+
+@pytest.mark.parametrize("op, mem, kind, act", NAT2, ids=["-".join(str(x) for x in c) for c in NAT2])
+def test_nat2(device, op, mem, kind, act):
+    """#58726: native routing for a block or width sharded a with a column or scalar b, with fused activations and a Float32
+    output, against the current routing."""
+    shape, mc = _mem(mem)
+    _seed("nat2", op, mem, kind, act)
+    a = torch.rand(shape, dtype=torch.bfloat16) * 2 - 1
+    b_shape = {"col": (shape[0], 1, shape[2], 1), "scalar": (1, 1, 1, 1)}[kind]
+    b = torch.rand(b_shape, dtype=torch.bfloat16) * 2 - 1
+    ta = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    tb = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    kw = dict(memory_config=mc)
+    if act in ("relu", "gelu", "silu"):
+        kw["activations"] = [U({"relu": ttnn.UnaryOpType.RELU, "gelu": ttnn.UnaryOpType.GELU, "silu": ttnn.UnaryOpType.SILU}[act])]
+    if act == "fp32":
+        kw["dtype"] = ttnn.float32
+    fn = {
+        "add": lambda: ttnn.add(ta, tb, **kw),
+        "mul": lambda: ttnn.multiply(ta, tb, fast_and_approximate_mode=True, **kw),
+        "rsub": lambda: ttnn.rsub(ta, tb, **kw),
+        "add_arelu": lambda: ttnn.add(ta, tb, input_tensor_a_activations=[U(ttnn.UnaryOpType.RELU)], **kw),
+        "mul_asilu": lambda: ttnn.multiply(ta, tb, input_tensor_a_activations=[U(ttnn.UnaryOpType.SILU)], fast_and_approximate_mode=True, **kw),
+        "logical_and": lambda: ttnn.logical_and(ta, tb, **kw),
+    }[op]
+    for _ in range(3):
+        out = fn()
+    af, bf = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+    ref = {"add": lambda: af + bf, "mul": lambda: af * bf, "rsub": lambda: bf - af, "add_arelu": lambda: torch.relu(af) + bf,
+           "mul_asilu": lambda: torch.nn.functional.silu(af) * bf, "logical_and": lambda: torch.logical_and(af, bf).float()}[op]()
+    if act == "relu":
+        ref = torch.relu(ref)
+    elif act == "gelu":
+        ref = torch.nn.functional.gelu(ref)
+    elif act == "silu":
+        ref = torch.nn.functional.silu(ref)
+    got = ttnn.to_torch(out).float()
+    for t in (ta, tb, out):
+        ttnn.deallocate(t)
+    assert torch.allclose(got, ref, rtol=0.05, atol=0.06), float((got - ref).abs().max())
