@@ -141,13 +141,34 @@ FORCE_INLINE void apply_signal(const volatile FrameTrailer* t) {
 // The whole ordering contract in one place: the bytes land, the barrier retires the read,
 // and only then does anything -- credit or signal -- advertise them.
 FORCE_INLINE void land_one() {
-    pull(g_ring + (g_rx.read_ptr - g_rx.fifo_addr), g_landing, g_page_size);
+    const uint64_t src = g_ring + (g_rx.read_ptr - g_rx.fifo_addr);
+    const uint32_t tail = g_page_size - kFrameTrailerBytes;
+
+    // Trailer first, because it names where the payload belongs: reading 64 B twice beats
+    // staging the whole page and copying it across L1 afterwards.
+    pull(src + tail, g_landing + tail, kFrameTrailerBytes);
+    noc_async_read_barrier();
+    const volatile FrameTrailer* const t = reinterpret_cast<const volatile FrameTrailer*>(g_landing + tail);
+
+    // Symmetric L1: the offset resolves against the base the host gave every participant, so
+    // it names the same word here the sender meant. Bounded before use, as sig_off is.
+    const uint32_t off = tt_uva_offset(static_cast<tt_uva_t>(t->dst));
+    const uint32_t len = t->length;
+    const bool addressable = len <= tail && off <= g_sig_span && len <= g_sig_span - off;
+    // Unaddressable lands in the staging buffer instead, which is where it went before any
+    // of this: no worse, and the signal below still says a frame arrived.
+    // Clamped there, not trusted: length came off the wire, and the H2H harvest does not
+    // check it. tail is all the landing page holds ahead of the trailer read above, so a
+    // stale or corrupt length can neither overwrite that trailer nor run on into L1.
+    // Addressable already implies len <= tail, so this changes nothing on that path.
+    const uint32_t bytes = len <= tail ? len : tail;
+    pull(src, addressable ? g_rx_l1_base + off : g_landing, bytes);
     noc_async_read_barrier();
 
     socket_pop_pages(g_rx, 1);
     socket_notify_sender(g_rx);
 
-    apply_signal(reinterpret_cast<const volatile FrameTrailer*>(g_landing + g_page_size - kFrameTrailerBytes));
+    apply_signal(t);
 }
 
 // Lands one frame if one is waiting. The bounded wait is what keeps a stop flag reachable:
