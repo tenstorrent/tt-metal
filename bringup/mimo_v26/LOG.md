@@ -855,3 +855,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_s2048b1_ch2048_afd3e45361a.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
 - data: {"s2048_hidden_l5":0.99972,"step_ms_6L_2048":55.7,"handoff_min":0.99959}
+
+## E261007-0533-cdf
+- date: 2026-10-07T05:33:20
+- commit: a43e4229c9f
+- branch: ssinghal/mimo-asm
+- host: 35,43,47
+- track: asm
+- status: verified
+- claim: Traced chunked prefill L0..L5 (unified bf16 experts) vs dumps, more cases at a43e4229c9f: (1) RAGGED MULTI-USER ROWS: s128b16 truncated to lengths 128/100/64/33 per slot (4 users per mesh row, 4 steps CH=128, pad tokens cyclic): hidden after L5 at all real positions PCC min 0.9996 (per user 0.9996-0.99977), logits PCC 0.9997 top1 15/16, KV GA K min 0.99959 V 0.99908 (SWA KV compared only where the dump ring covers the truncated positions), replay bit-identical; decode hand-off skipped (ragged lengths need per-row decode positions). (2) SEVERAL CHUNKS PER USER: s2048b1 with CH=512 (4 chunks): hidden L5 0.99972, logits 0.99945, KV K min 0.99974 V 0.9993, hand-off decode min 0.99986, step 20.0-20.9 ms (512 tok/row); (3) s8192b1 CH=2048 (4 chunks, GA reads the growing paged cache): hidden L5 0.99977, logits 0.99962 top1 1/1, KV K 0.99977 V 0.9993, hand-off decode min 0.99983, step 55.9-58.2 ms per 2048-token chunk (6 layers, row 0 busy, others on scratch). All replays bit-identical.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_s8192_ch2048_a43e4229c9f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
+- data: {"ragged_hidden_min":0.9996,"s8192_hidden":0.99977}
