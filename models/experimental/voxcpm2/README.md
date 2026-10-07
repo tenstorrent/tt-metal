@@ -73,12 +73,18 @@ CUDA reference with `uv sync --locked --extra reference` from this model directo
 network access is available. Build/install TTNN from this fork into the model
 venv before device replay, using the repository's build instructions. TTNN is an
 external built dependency, not an unrelated model's shared Python environment.
-Dependencies are now locked in `uv.lock`, with Torch/Torchaudio 2.8.0 and the
+Dependencies are locked in `uv.lock`, with Torch/Torchaudio 2.10.0 and the
 pinned official source. The `tt-runtime` extra declares Python dependencies
-needed by the tested TTNN wheel. The tested remote environment used its own venv
+needed by the tested TTNN wheel. The original qualification used its own venv
 with Torch 2.8.0+cpu and the installed TTNN 0.65.1rc17.dev6333+h3.3 wheel; it did
 not use CUDA or another model's shared Python environment. This checks the model
 code against that installed runtime, not a fresh build of this fork revision.
+
+PyTorch 2.10.0 is also qualified with fresh CUDA reference captures and the same
+TTNN wheel: 16/16 component replay cases passed PCC >= 0.99, and all 30 configured
+TT tests passed. CUDA used Torch/Torchaudio 2.10.0+cu128; TT used Torch 2.10.0+cpu.
+No model computation changed. See the [upgrade results](validation/RESULTS.md#pytorch-210-compatibility--2026-10-07).
+The original table above remains the historical PyTorch 2.8 qualification.
 
 For a separate TT host, create the model environment with
 `uv sync --locked --extra tt-runtime` from this directory, then install the
@@ -87,7 +93,11 @@ TTNN wheel built for that host/Python using
 [repository build instructions](../../../INSTALLING.md) to produce a compatible
 wheel and kernel-source setup. Use the model venv directly for replay after
 installing this external runtime; a later `uv sync` can remove packages not in
-the lock. The CUDA reference extra is unnecessary for TT replay.
+the lock. The CUDA reference extra is unnecessary for TT replay. The installed
+TTNN wheel declares NumPy < 2; its Torch 2.10.0 CPU compatibility environment
+uses NumPy 1.26.4 and passes `uv pip check`. Retain the runtime wheel's dependency
+constraints when installing it rather than forcing the CUDA environment's NumPy
+version onto the TT host.
 
 Run commands from the fork root with the model environment. To prepare the
 pinned checkpoint after installing the reference extra:

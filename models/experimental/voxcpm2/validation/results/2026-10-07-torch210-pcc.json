@@ -1,0 +1,271 @@
+{
+  "date": "2026-10-07",
+  "scope": "PyTorch 2.10 compatibility: native CUDA synthesis and TT component replay, not integrated TT synthesis",
+  "implementation_revision": "6c2f371a3d82c1bf633819060a00f8e619d43f4f",
+  "model_code_changed": false,
+  "checkpoint_revision": "32279effe8c19989596f05d353d1447f51d9e915",
+  "official_source_revision": "f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629",
+  "cuda": {
+    "torch_runtime": "2.10.0+cu128",
+    "versions": {
+      "torch": "2.10.0",
+      "numpy": "2.5.3",
+      "transformers": "5.18.0",
+      "soundfile": "0.14.0",
+      "safetensors": "0.8.0"
+    },
+    "device": {
+      "device": "cuda:2",
+      "device_name": "NVIDIA RTX A6000",
+      "capability": [
+        8,
+        6
+      ],
+      "runtime": "12.8",
+      "uuid": "75ff33de-3366-d7fc-88a2-be025af94bed",
+      "cudnn": 91002
+    },
+    "text_only_seconds": 4.0,
+    "reference_conditioned_seconds": 3.68,
+    "generation": {
+      "target_text": "The quick brown fox jumps over the lazy dog.",
+      "prompt_text": "",
+      "prompt_wav_path": "",
+      "reference_wav_path": "",
+      "min_len": 2,
+      "max_len": 32,
+      "inference_timesteps": 10,
+      "cfg_value": 2.0,
+      "retry_badcase": false,
+      "trim_silence_vad": false,
+      "seed": 42
+    },
+    "capture_manifest_sha256": "72a5bbbc9deb2b2f517bde44309bbdf978986d759a4625d6a29f49f98004d782",
+    "voice_capture_manifest_sha256": "971ea6c97fe5601f21442b1bb3e6a3a981b04c2c52767f0fd79b863f0fde3393"
+  },
+  "tt": {
+    "torch": "2.10.0+cpu",
+    "numpy": "1.26.4",
+    "ttnn": "0.65.1rc17.dev6333+h3.3",
+    "device": "Blackhole p150b physical card 5, BDF 0000:c1:00.0, logical ID 0",
+    "dtype": "bfloat16",
+    "math_fidelity": "HiFi4",
+    "fp32_dest_acc": true,
+    "l1_small_size": 262144,
+    "fresh_fork_build": false,
+    "pip_check": "passed"
+  },
+  "tests": {
+    "host": {
+      "run": 30,
+      "passed": 29,
+      "skipped_device": 1
+    },
+    "configured_tt": {
+      "run": 30,
+      "passed": 30,
+      "skipped": 0
+    },
+    "component_replays": {
+      "run": 16,
+      "passed": 16,
+      "min_pcc_threshold": 0.99
+    }
+  },
+  "results": [
+    {
+      "component": "audio_vae.decode",
+      "event": "audio_vae.decode/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9997834928962883,
+        "relative_rms": 0.07641065981427052,
+        "max_abs": 0.06344479322433472,
+        "reason": null
+      }
+    },
+    {
+      "component": "audio_vae.encode",
+      "event": "audio_vae.encode/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9995423656871958,
+        "relative_rms": 0.03045737478204955,
+        "max_abs": 0.45991083979606634,
+        "reason": null
+      }
+    },
+    {
+      "component": "base_lm.forward",
+      "event": "base_lm.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999093016953912,
+        "relative_rms": 0.013469685310683736,
+        "max_abs": 0.9999999999999964,
+        "reason": null
+      }
+    },
+    {
+      "component": "enc_to_lm_proj.forward",
+      "event": "enc_to_lm_proj.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999995945466793,
+        "relative_rms": 0.0009032459646733638,
+        "max_abs": 0.01562500000000014,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999565655780498,
+        "relative_rms": 0.009956832844698386,
+        "max_abs": 0.039062499999999944,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000004",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999424722024803,
+        "relative_rms": 0.01113820896623918,
+        "max_abs": 0.04687499999999978,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000008",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999536135923873,
+        "relative_rms": 0.009677254827993437,
+        "max_abs": 0.05468750000000001,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_encoder.forward",
+      "event": "feat_encoder.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999826253880254,
+        "relative_rms": 0.00598295047726805,
+        "max_abs": 0.062499999999999986,
+        "reason": null
+      }
+    },
+    {
+      "component": "fsq_layer.forward",
+      "event": "fsq_layer.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999812872513536,
+        "relative_rms": 0.00615557382782692,
+        "max_abs": 0.03125000000000022,
+        "reason": null
+      }
+    },
+    {
+      "component": "fusion_concat_proj.forward",
+      "event": "fusion_concat_proj.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999995768133987,
+        "relative_rms": 0.0009200443137143469,
+        "max_abs": 0.12500000000000056,
+        "reason": null
+      }
+    },
+    {
+      "component": "lm_to_dit_proj.forward",
+      "event": "lm_to_dit_proj.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999993970180302,
+        "relative_rms": 0.0011050814926000727,
+        "max_abs": 0.03124999999999989,
+        "reason": null
+      }
+    },
+    {
+      "component": "res_to_dit_proj.forward",
+      "event": "res_to_dit_proj.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999993743053852,
+        "relative_rms": 0.0011195206754256836,
+        "max_abs": 0.0312500000000002,
+        "reason": null
+      }
+    },
+    {
+      "component": "residual_lm.forward",
+      "event": "residual_lm.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.999966047702125,
+        "relative_rms": 0.008422619696999041,
+        "max_abs": 0.2500000000000029,
+        "reason": null
+      }
+    },
+    {
+      "component": "stop_actn.forward",
+      "event": "stop_actn.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999999594317688,
+        "relative_rms": 0.0002843929542146668,
+        "max_abs": 0.003906249999999986,
+        "reason": null
+      }
+    },
+    {
+      "component": "stop_head.forward",
+      "event": "stop_head.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 1.0,
+        "relative_rms": 0.0,
+        "max_abs": 0.0,
+        "reason": null
+      }
+    },
+    {
+      "component": "stop_proj.forward",
+      "event": "stop_proj.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.99999949543227,
+        "relative_rms": 0.0009184520632163894,
+        "max_abs": 0.03125000000000097,
+        "reason": null
+      }
+    }
+  ],
+  "cross_version_cuda_waveform": {
+    "old_torch": "2.8.0+cu128",
+    "new_torch": "2.10.0+cu128",
+    "sample_rate": 48000,
+    "seconds": 4.0,
+    "metrics": {
+      "passed": false,
+      "pcc": 0.6321182492103964,
+      "relative_rms": 0.8622851483719179,
+      "max_abs": 1.0445976853370667,
+      "reason": "numerical threshold failed"
+    }
+  },
+  "limitations": [
+    "Native same-seed 2.8 versus 2.10 waveform is not sample-identical; fresh 2.10 oracle used for TT qualification",
+    "Selected component events only; not all AR/denoising steps",
+    "No fresh current-main TTNN build or end-to-end TT generation qualification"
+  ]
+}
