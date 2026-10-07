@@ -114,7 +114,7 @@ for L, calls in rows.items():
         print(f"   {k:48s} mean {v[0]:8.3f} max {v[1]:8.3f} ms  ({v[2]} calls)")
     if show_ops:
         print("   -- top ops")
-        for k, v in sorted(byop.items(), key=lambda x: -x[1][0])[:25]:
+        for k, v in sorted(byop.items(), key=lambda x: -x[1][0])[: int(__import__("os").environ.get("TOPN", "25"))]:
             print(f"      {v[0]:8.3f} {v[1]:8.3f} ms x{v[2]:3d} {k}")
 
 if "--json" in sys.argv:
