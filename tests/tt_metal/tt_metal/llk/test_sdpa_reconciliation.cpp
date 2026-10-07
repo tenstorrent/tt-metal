@@ -365,11 +365,11 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
     };
     auto k_value = [](std::uint32_t round, std::uint32_t token, std::uint32_t dim) {
         if constexpr (test_correction_fidelity) {
-            // Uniform scores within a chunk remove LoFi matmul approximation
-            // from the reference. The second chunk raises the scaled max by
-            // 3.25; the third keeps it fixed while exercising the next QK/OV.
+            // Uniform scores and exactly representable Q/K avoid LoFi operand
+            // truncation. The second chunk raises the scaled max by 2.5; the
+            // third keeps it fixed while exercising the next QK/OV.
             return static_cast<float>(dim % 4) / 4.0f + static_cast<float>(round) / 4.0f +
-                   (token < chunk_tiles * 32 ? 0.0f : 6.5f);
+                   (token < chunk_tiles * 32 ? 0.0f : 5.0f);
         }
         // This exactly representable chunk bias changes the running maximum
         // for some query rows, exercising the previous-output correction too.
@@ -380,8 +380,8 @@ void run_sdpa_merged_kv(distributed::MeshDevice& mesh, std::uint32_t layout, boo
         if constexpr (test_correction_fidelity) {
             // Exactly LoFi-representable V keeps the correction observable:
             // chunk 1 contributes nothing, so it cannot hide an incorrect
-            // rescaling of chunk 0. Powers of two also keep the first partial
-            // O exactly BF16-representable. Chunk 2 adds a small contribution.
+            // rescaling of chunk 0. Powers of two give proportional partial
+            // outputs with low SrcA mantissa bits. Chunk 2 adds a small contribution.
             const auto chunk_index = token / (chunk_tiles * 32);
             if (chunk_index == 0) {
                 return static_cast<float>(8u << ((dim + round) % 4));
@@ -555,9 +555,10 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkMergedKvAndDefaultLayouts) {
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkCorrectionFidelityOverride) {
     // QK and OV remain LoFi; only the previous-output correction uses HiFi4.
-    // exp(-3.25) is about 0.03877, so O + O * (corr - 1) nearly cancels.
-    // The first chunk's approximate exp leaves low mantissa bits in O: HiFi4
-    // retains them, while LoFi truncates the product's copy of O to four fraction bits.
+    // BF16(exp(-2.5)) is 21/256, and corr - 1 is exactly representable too.
+    // This isolates fidelity from extra coefficient rounding in O + O * (corr - 1).
+    // BF16 accumulation leaves low mantissa bits in O: HiFi4 retains them,
+    // while LoFi truncates the product's copy of O to four fraction bits.
     // That cancellation error exceeds the existing 3% attention checks.
     // Three chunks and three invocations exercise restoration after both the
     // override and the no-max-change correction, across both DST sync modes.
