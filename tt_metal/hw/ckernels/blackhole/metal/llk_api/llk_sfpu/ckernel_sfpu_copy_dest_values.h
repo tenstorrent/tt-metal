@@ -20,6 +20,7 @@ void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const ui
     constexpr InstrModLoadStore instr_mod_index = GetSfpLoadStoreInstrMod<DATA_FORMAT>();
     // size of each tile in Dest is 64 rows
     constexpr uint dst_tile_size = 64;
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // For some reason using __builtin_rvtt_sfp{load,store} here
         // results in test failures.  The compiler unrolls this loop
@@ -37,6 +38,7 @@ void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const ui
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 [[deprecated("Use copy_dest_value<DataFormat, APPROXIMATION_MODE, ITERATIONS> instead")]]
 void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const uint /* unused */) {
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
         constexpr uint dst_tile_size_sfpi = 32;

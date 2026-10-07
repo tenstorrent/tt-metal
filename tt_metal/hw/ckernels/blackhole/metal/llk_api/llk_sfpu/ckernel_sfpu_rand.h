@@ -107,8 +107,15 @@ inline void rand_row() {
     TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
 }
 
-template <bool NORMALIZE_PER_ROW>
+inline void rand_face_start() {
+    rand_prng<p_sfpu::LREG0>();
+    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+    begin_mix_uint32_mul24();
+}
+
+template <bool NORMALIZE_PER_ROW, int ITERATIONS>
 inline void rand_rows() {
+    static_assert(ITERATIONS % 8 == 0, "rand runs whole faces of eight rows");
     constexpr std::uint32_t row_instruction_count = NORMALIZE_PER_ROW ? 17 : 16;
 
     // One row fits in the 32-entry replay buffer. Record and execute it once,
@@ -119,9 +126,18 @@ inline void rand_rows() {
     for (int d = 1; d < 8; d++) {
         TTI_REPLAY(0, row_instruction_count, 0, 0);
     }
+    // Each later face starts from a fresh draw, as one call per face does.
+#pragma GCC unroll 0
+    for (int face = 8; face < ITERATIONS; face += 8) {
+        rand_face_start();
+#pragma GCC unroll 8
+        for (int d = 0; d < 8; d++) {
+            TTI_REPLAY(0, row_instruction_count, 0, 0);
+        }
+    }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void rand(std::uint32_t from, std::uint32_t scale) {
     constexpr std::uint32_t exponent_shift = 23;
     constexpr std::uint32_t exponent_mask = 0xFF;
@@ -146,14 +162,12 @@ inline void rand(std::uint32_t from, std::uint32_t scale) {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, from >> 16);
 
     make_lane_salt();
-    rand_prng<p_sfpu::LREG0>();
-    TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-    begin_mix_uint32_mul24();
+    rand_face_start();
 
     if (normalize_per_row) {
-        rand_rows<true>();
+        rand_rows<true, ITERATIONS>();
     } else {
-        rand_rows<false>();
+        rand_rows<false, ITERATIONS>();
     }
 }
 }  // namespace ckernel::sfpu

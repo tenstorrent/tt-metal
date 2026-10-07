@@ -40,6 +40,17 @@ ALWI void mask_tile_init() {
 // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
     if (data_format == DataFormat::Float16_b || data_format == DataFormat::Float16) {
+#ifdef ARCH_BLACKHOLE
+        MATH(SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_mask,
+            (true /* APPROXIMATE */, 32 /* ITERATIONS */),
+            idst_data,
+            idst2_mask,
+            idst_data,
+            VectorMode::None));
+#else
         MATH(SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -49,7 +60,19 @@ ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_for
             idst2_mask,
             idst_data,
             VectorMode::RC));
+#endif
     } else if (data_format == DataFormat::Int32) {
+#ifdef ARCH_BLACKHOLE
+        MATH(SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_int_mask,
+            (true /* APPROXIMATE */, 32 /* ITERATIONS */),
+            idst_data,
+            idst2_mask,
+            idst_data,
+            VectorMode::None));
+#else
         MATH(SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
@@ -59,10 +82,22 @@ ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_for
             idst2_mask,
             idst_data,
             VectorMode::RC));
+#endif
     }
 }
 
 ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_mask_posinf,
+        (true /* APPROXIMATE */, 32 /* ITERATIONS */),
+        idst_data,
+        idst2_mask,
+        idst_data,
+        VectorMode::None));
+#else
     MATH(SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -72,6 +107,7 @@ ALWI void mask_posinf_tile(uint32_t idst_data, uint32_t idst2_mask) {
         idst2_mask,
         idst_data,
         VectorMode::RC));
+#endif
 }
 
 }  // namespace ckernel

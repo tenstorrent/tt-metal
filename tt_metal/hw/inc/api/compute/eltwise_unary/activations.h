@@ -70,8 +70,13 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 */
 // clang-format on
 ALWI void softsign_tile(uint32_t idst) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 32 /* ITERATIONS */), idst, VectorMode::None));
+#else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+#endif
 }
 
 /**
@@ -127,6 +132,16 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  */
  // clang-format on
 ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
+#ifdef ARCH_BLACKHOLE
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_softshrink,
+        (APPROX, 32 /* ITERATIONS */),
+        idst,
+        VectorMode::None,
+        param0));
+#else
      MATH(SFPU_UNARY_CALL(
          DST_SYNC_MODE,
          DST_ACCUM_MODE,
@@ -135,6 +150,7 @@ ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
          idst,
          VectorMode::RC,
          param0));
+#endif
 }
 
 /**

@@ -50,6 +50,20 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void situ_glu_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+#ifdef ARCH_BLACKHOLE
+    if (vector_mode == VectorMode::RC) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_situ_glu,
+            (DST_ACCUM_MODE, 32 /* ITERATIONS */, sfpu::SituGluConfigKimi),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::None)));
+        return;
+    }
+#endif
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -72,6 +86,20 @@ ALWI void situ_glu_tile_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfp
  * stalls configuration writes, wait for the SFPU before packing, and keep the math thread off the SFPU meanwhile.
  */
 ALWI void situ_glu_tile_pack(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
+#ifdef ARCH_BLACKHOLE
+    if (vector_mode == VectorMode::RC) {
+        PACK((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_situ_glu,
+            (DST_ACCUM_MODE, 32 /* ITERATIONS */, sfpu::SituGluConfigKimi),
+            idst0,
+            idst1,
+            odst,
+            VectorMode::None)));
+        return;
+    }
+#endif
     PACK((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
