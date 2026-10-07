@@ -186,7 +186,7 @@
   category: kernel_lib
 
 - name: ttnn nightly eltwise tests group 1
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -v -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 75
@@ -200,7 +200,7 @@
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 2
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2 -v -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 45
@@ -214,7 +214,7 @@
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 3
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3 -v -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 45
@@ -228,7 +228,7 @@
   category: eltwise
 
 - name: ttnn nightly eltwise tests group 4
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4 -v -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 55
