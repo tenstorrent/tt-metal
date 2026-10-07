@@ -1057,3 +1057,87 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps48_4_65536_4_8192_4_65536_990094ad6bc.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
 - data: {"two_isl_same_process_ok":1}
+
+## E261007-0604-261
+- date: 2026-10-07T06:04:53
+- commit: 463ad8a432f
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: correctness
+- status: verified
+- claim: layer_pcc.dense: layer 0 (dense SwiGLU, global attention) WHOLE layer on device, teacher forced: dump h_in (mimo-prefill-s128b16, B=16 S=128) -> attention + FFN together -> h_out PCC vs the track-0 bf16 CPU dump, min over 16 users = 0.99998 (bf16-vs-fp32 dump floor 1.0). Real bfp8 weights. NOTE: this is device-vs-dump on the dump's inputs (not the device-captured-input oracle run by the ref agent).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_chain_463ad8a432f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tests/test_chain_dump.py
+- data: {"pcc":0.99998,"layer_type":"dense","layer":0}
+
+## E261007-0604-070
+- date: 2026-10-07T06:04:53
+- commit: 463ad8a432f
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: correctness
+- status: verified
+- claim: layer_pcc.swa_moe: layers 1..4 (SWA attention + MoE) WHOLE layer on device, teacher forced from the dump h_in (s128b16), unified bf16 experts, exact router: h_out PCC vs bf16 CPU dump, min over 16 users and over L1..L4 = 0.99991 (per layer L1 0.99992, L2 0.99991, L3 0.99995, L4 0.99995; floors 0.99994-0.99995). Router set match vs dump in-layer is 0.72-0.96 (near-tie flips from device attention noise), h_out is insensitive to it. Device-vs-dump on dump inputs, not the ref agent's device-input oracle run.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_chain_463ad8a432f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tests/test_chain_dump.py
+- data: {"pcc":0.99991,"layer_type":"swa_moe","layers":[1,2,3,4]}
+
+## E261007-0604-b44
+- date: 2026-10-07T06:04:53
+- commit: 463ad8a432f
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: correctness
+- status: verified
+- claim: layer_pcc.global_moe: layer 5 (global attention + MoE) WHOLE layer on device, teacher forced from the dump h_in (s128b16): h_out PCC vs bf16 CPU dump min over 16 users = 0.9999 (floor 0.99994). Only one global MoE layer has a dump (L5; L11.. are checked by the ref agent on device-captured inputs). Device-vs-dump on dump inputs.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_chain_463ad8a432f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tests/test_chain_dump.py
+- data: {"pcc":0.9999,"layer_type":"global_moe","layer":5}
+
+## E261007-0604-a7e
+- date: 2026-10-07T06:04:53
+- commit: 463ad8a432f
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: correctness
+- status: verified
+- claim: chain_prefix_pcc: L0..L5 free-running chain on device (device embedding of the dump tokens, each layer fed the previous DEVICE output) h_out PCC after layer 1..6 vs the bf16 CPU dump, min over 16 users: 0.99998, 0.99989, 0.99984, 0.99984, 0.99986, 0.99973 (vs fp32 dump 0.99998, 0.99989, 0.99985, 0.99985, 0.99986, 0.99973; bf16-vs-fp32 floor >= 0.99994). Max drop per layer 0.00009.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_chain_463ad8a432f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tests/test_chain_dump.py
+- data: {"pcc_curve":[0.99998,0.99989,0.99984,0.99984,0.99986,0.99973]}
+
+## E261007-0604-364
+- date: 2026-10-07T06:04:54
+- commit: 463ad8a432f
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: correctness
+- status: verified
+- claim: prefill_phase: traced chunked prefill L0..L5 (6 layers, unified bf16 experts) vs CPU dumps, worst over s128b16 (CH128), s512b4 (CH256), s2048b1 (CH512), s8192b1 (CH2048): layer_pcc_min = hidden after L5 at every real position, min over users = 0.99931 (s512b4; s128b16 0.99974, s2048b1 0.99972, s8192b1 0.99977); kv_pcc_min = min over L0..L5 of K (post-RoPE) and V[:128] cache contents read back from the paged pool vs dump state = 0.9991 (GA L5 V in s128b16; K min 0.99953). Logs: asm_gate_pf_<dump>_463ad8a432f.jsonl.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_pf_s128b16_463ad8a432f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
+- data: {"layer_pcc_min":0.99931,"kv_pcc_min":0.9991}
+
+## E261007-0604-642
+- date: 2026-10-07T06:04:54
+- commit: 463ad8a432f
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: correctness
+- status: verified
+- claim: first_token: 6-LAYER TRUNCATED MODEL comparison (no CPU reference exists for 48 layers): device last-token logits after L0..L5 + final norm + lm_head vs CPU norm+lm_head on the dump h_out of L5, top-1 agreement 21/22 over s128b16 16/16, s512b4 3/4 (near-tie, logits PCC 0.99817), s2048b1 1/1, s8192b1 1/1 (logits PCC min 0.99817). This is NOT a 48-layer first-token comparison and should probably not count for the 48-layer gate without the coordinator's decision.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_pf_s128b16_463ad8a432f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
+- data: {"agree":21,"n":22}
+
+## E261007-0604-8da
+- date: 2026-10-07T06:04:54
+- commit: 463ad8a432f
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: correctness
+- status: verified
+- claim: decode_phase: one-step decode from a prefill-written state at the LAYER level: for each of L0..L5, teacher-forced dump dec_in (3 steps) through that layer's decode path reading the paged KV pool written by the traced chunked prefill, vs the dump dec_out; min PCC over layers, steps and the four dumps (s128b16 CH128, s512b4, s2048b1, s8192b1) = 0.98713 (L5 step 2 of s128b16, 4 live tokens per row with near-tie routing; all others >= 0.9989). Prefilled state is the device's chunked prefill, not a CPU-prefilled state.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_pf_s128b16_463ad8a432f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
+- data: {"pcc":0.98713}

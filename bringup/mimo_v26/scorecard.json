@@ -8,7 +8,7 @@
       "threshold": 0.99,
       "layer_type": "dense",
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0604-261"],
       "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
     },
     {
@@ -17,7 +17,7 @@
       "threshold": 0.99,
       "layer_type": "swa_moe",
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0604-070"],
       "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
     },
     {
@@ -26,7 +26,7 @@
       "threshold": 0.99,
       "layer_type": "global_moe",
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0604-b44"],
       "note": "teacher-forced: CPU oracle fed the captured REAL hidden state of the device run, one layer at a time"
     },
     {
@@ -35,7 +35,7 @@
       "min_final": 0.97,
       "max_drop_per_layer": 0.01,
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0604-a7e"],
       "note": "short chained prefix: first 4-8 layers or one of each layer type (NOT the full model)"
     },
     {
@@ -44,7 +44,7 @@
       "min_layer_pcc": 0.99,
       "min_kv_pcc": 0.99,
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0604-364"],
       "note": "layer outputs + KV cache contents after prefill vs CPU oracle"
     },
     {
@@ -52,7 +52,7 @@
       "kind": "decode_check",
       "threshold": 0.98,
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0604-8da"],
       "note": "one decode step starting from a reference-prefilled state"
     },
     {
@@ -60,7 +60,7 @@
       "kind": "first_token",
       "min_frac": 0.9,
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0604-642"],
       "note": "sanity: argmax of the first generated token vs reference on real prompts"
     },
     {
