@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import diffusers
 import torch
+from diffusers.configuration_utils import FrozenDict
+from diffusers.models.transformers.transformer_qwenimage import QwenEmbedRope
 
 import ttnn
 
@@ -224,22 +226,17 @@ def _chunk_time3d(t: ttnn.Tensor, count: int) -> list[ttnn.Tensor]:
 
 
 class QwenImageCheckpoint:
-    """A QwenImage checkpoint: fetches weights and builds loaded transformers."""
+    """A QwenImage checkpoint: fetches weights and builds loaded transformers.
+
+    Reads only ``config.json`` in ``__init__``; the torch weights are loaded on a cache miss only.
+    """
 
     def __init__(self, name: str) -> None:
         self._name = name
-        torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
-            name,
-            subfolder="transformer",
-            torch_dtype=torch.bfloat16,
-        )
-        torch_transformer.eval()
-        self._config = torch_transformer.config
-        self._state_dict = torch_transformer.state_dict()
+        self._config = FrozenDict(diffusers.QwenImageTransformer2DModel.load_config(name, subfolder="transformer"))
 
-        # The torch pos embedding is reused on CPU at call time; keep the reference.
-        self.pos_embed = torch_transformer.pos_embed
-        self.patch_size: int = self._config.patch_size
+        self.pos_embed = QwenEmbedRope(theta=10000, axes_dim=list(self._config["axes_dims_rope"]), scale_rope=True)
+        self.patch_size: int = self._config["patch_size"]
 
     def rope_tables(
         self,
@@ -280,53 +277,49 @@ class QwenImageCheckpoint:
         parallel_config: DiTParallelConfig,
         is_fsdp: bool,
     ) -> QwenImageTransformer:
-        """Construct a ``QwenImageTransformer`` for this checkpoint (weights NOT loaded).
-
-        Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
-        """
+        """Construct a ``QwenImageTransformer`` for this checkpoint and load its weights."""
         device = ccl_manager.mesh_device
         c = self._config
 
-        if c.num_attention_heads % parallel_config.tensor_parallel.factor != 0:
+        if c["num_attention_heads"] % parallel_config.tensor_parallel.factor != 0:
             padding_config = PaddingConfig.from_tensor_parallel_factor(
-                c.num_attention_heads,
-                c.attention_head_dim,
+                c["num_attention_heads"],
+                c["attention_head_dim"],
                 parallel_config.tensor_parallel.factor,
             )
         else:
             padding_config = None
 
-        return QwenImageTransformer(
-            patch_size=c.patch_size,
-            in_channels=c.in_channels,
-            num_layers=c.num_layers,
-            attention_head_dim=c.attention_head_dim,
-            num_attention_heads=c.num_attention_heads,
-            joint_attention_dim=c.joint_attention_dim,
-            out_channels=c.out_channels,
+        model = QwenImageTransformer(
+            patch_size=c["patch_size"],
+            in_channels=c["in_channels"],
+            num_layers=c["num_layers"],
+            attention_head_dim=c["attention_head_dim"],
+            num_attention_heads=c["num_attention_heads"],
+            joint_attention_dim=c["joint_attention_dim"],
+            out_channels=c["out_channels"],
             device=device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
             is_fsdp=is_fsdp,
         )
-
-    def load(
-        self,
-        model: QwenImageTransformer,
-        *,
-        mesh_device: ttnn.MeshDevice,
-        parallel_config: DiTParallelConfig,
-        is_fsdp: bool,
-    ) -> None:
-        """Load (or reload) weights for a previously-built transformer."""
         cache.load_model(
             tt_model=model,
-            get_torch_state_dict=lambda: self._state_dict,
+            get_torch_state_dict=self._load_state_dict,
             model_name=self._name,
             subfolder="transformer",
             parallel_config=parallel_config,
-            mesh_shape=tuple(mesh_device.shape),
-            mesh_device=mesh_device,
+            mesh_shape=tuple(device.shape),
+            mesh_device=device,
             is_fsdp=is_fsdp,
         )
+        return model
+
+    def _load_state_dict(self) -> dict[str, torch.Tensor]:
+        torch_transformer = diffusers.QwenImageTransformer2DModel.from_pretrained(
+            self._name,
+            subfolder="transformer",
+            torch_dtype=torch.bfloat16,
+        )
+        return torch_transformer.state_dict()

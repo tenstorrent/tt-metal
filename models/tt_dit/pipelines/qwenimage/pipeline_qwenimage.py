@@ -223,15 +223,10 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         logger.info("creating transformers...")
         self._checkpoint = QwenImageCheckpoint(config.checkpoint_name)
-        self._transformers = []
-        for m in self._ccl_managers:
-            transformer = self._checkpoint.build(
-                ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False
-            )
-            self._checkpoint.load(
-                transformer, mesh_device=m.mesh_device, parallel_config=config.dit_parallel_config, is_fsdp=False
-            )
-            self._transformers.append(transformer)
+        self._transformers = [
+            self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
+            for m in self._ccl_managers
+        ]
 
         logger.info("creating VAE decoder...")
         self._vae = WanVaeDecoder2DAdapter(
