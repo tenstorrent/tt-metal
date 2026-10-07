@@ -609,7 +609,7 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         // log_init seeds the vConstFloatPrgm0-2 constants calculate_log reads; the
         // fp32/bf16 sets differ by dest-accum mode, so the flag must be forwarded.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(log_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>);
-        ckernel::sfpu::log2_bf16_tile_init<OPERATION == SfpuType::log_with_base && !is_fp32_dest_acc_en>();
+        ckernel::sfpu::log2_bf16_tile_init<OPERATION == SfpuType::log_with_base && !is_fp32_dest_acc_en && !FAST_MODE && ITERATIONS == 32>();
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
@@ -623,7 +623,12 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
+#ifdef ARCH_WORMHOLE
+        constexpr bool round_to_bf16 = !APPROX_MODE && !is_fp32_dest_acc_en;
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, round_to_bf16>);
+#else
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
+#endif
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
