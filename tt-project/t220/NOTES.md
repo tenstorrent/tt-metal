@@ -27,3 +27,12 @@ Tray-2 incident 2026-10-07 19:49 UTC (bridge-reset chips 8-15, broker job 417/41
 - Wait: `bash tt-project/t220/probe_ready.sh` (0 = blx03 or blx01 clear of holds/resets for 30 min).
 - Next: blx03 clear -> `tt-project/harness/templates/blx03-runner/blx03-enqueue.sh tt-project/t220/spec-fill.txt`.
   Only blx01 clear -> needs a /var/tmp/fasth3/t220 build + cache there first (not done).
+
+## 2026-10-07 21:50 UTC (attempt 1, standard run 2)
+- blx03 clear since its 21:07 UTC power-cycle (broker 450-453); ltx-host 454 ran clean. probe_ready=0.
+- Enqueued spec-fill.txt then spec-time.txt on the blx03 runner. First submit failed (no ENV, broker looked for
+  python_env under WORKDIR); added ENV=~/fasth3/runner/env.yaml (run220.sh overrides its TT_METAL_HOME/cache).
+- t220-fill-r1 = broker job 455, started 21:47:51 UTC. t220-time-r1 queued behind it.
+- Wait: `ssh g14blx03 'bash ~/fasth3/runner/probe.sh t220-time-r1'`. Fill may hit 600 s: if fill status=failed
+  with a pytest timeout, the time job continues filling; if time also times out, enqueue t220-time-r2.
+- Results: blx03 /var/tmp/fasth3/t220/out_time/run.log (E2E_WALL_S lines + LTX timing tables), videos there.

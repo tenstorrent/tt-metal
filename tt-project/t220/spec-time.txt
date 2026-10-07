@@ -1,0 +1,7 @@
+ID=t220-time-r1
+TASK=t220
+CONFIG=ltx23-medium-bf8-1080p145-time5
+TIMEOUT=600
+WORKDIR=/var/tmp/fasth3/t220
+ENV=/home/smarton/fasth3/runner/env.yaml
+CMD=env T220_TAG=time T220_SEEDS=1,2,3,4 T220_PYTEST_S=570 bash /var/tmp/fasth3/t220/run220.sh
