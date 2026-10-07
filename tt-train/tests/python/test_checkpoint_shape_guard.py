@@ -29,6 +29,7 @@ import ttml
 import ttnn
 from ttml import checkpointing
 from ttml.checkpointing import CheckpointShapeError
+from ttml.sharding import ReplicaMismatchError
 from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, RowParallelLinear
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
@@ -90,7 +91,8 @@ def _trained_tp():
 
 
 def _gathered_shape(tensor) -> tuple:
-    return tuple(ttml.Sharding.from_tensor(tensor).gather(tensor).shape)
+    """The shape the tensor gathers to by its label, trusting the label (forged labels are gathered here too)."""
+    return tuple(ttml.Sharding.from_tensor(tensor).gather(tensor, verify_replicas=False).shape)
 
 
 def _sharded_param_name(params) -> str:
@@ -185,6 +187,9 @@ def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_
     refuse, name the leaf, both shapes and the layout, and leave no file behind. Restoring the label makes the same
     save succeed (positive control: the guard is not simply rejecting every TP checkpoint).
 
+    The moment's copies differ, so the replica check refuses it first, by name; the shape cross-check is then
+    exercised with ``verify_replicas=False``, as the second line.
+
     Negative control: before the guard, ``save_checkpoint`` wrote the file with the (1, 1, DIM/2, DIM)-or-similar
     record silently, so the ``expect_error`` here would have failed with "did not raise"."""
     params, opt = _trained_tp()
@@ -198,8 +203,12 @@ def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_
     assert forged_shape != param_shape, "precondition: the forged label must make the moment gather to a shard"
 
     path = str(tmp_path / "forged.ckpt")
-    with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] gathers to") as excinfo:
+    with expect_error(ReplicaMismatchError, rf"optimizer/exp_avg\[{name}\] is labelled .* differs"):
         checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
+    _assert_nothing_written(path)
+
+    with expect_error(CheckpointShapeError, rf"optimizer/exp_avg\[{name}\] gathers to") as excinfo:
+        checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt, verify_replicas=False)
     message = str(excinfo.value)
     for fragment in (str(forged_shape), str(param_shape), f"model[{name}]", "Replicate", "Nothing was written"):
         assert fragment in message, f"missing {fragment!r} in:\n{message}"
@@ -209,6 +218,90 @@ def test_save_rejects_state_whose_label_does_not_describe_its_data(tp_mesh, tmp_
     assert _gathered_shape(moment) == param_shape
     checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
     assert os.path.exists(path) and not os.path.exists(path + ".tmp")
+
+
+def test_save_rejects_param_whose_replicate_label_hides_different_data(tp_mesh, tmp_path, expect_error):
+    """A parameter's own wrong label has no tensor to be cross-checked against: a sharded parameter relabelled
+    ``Replicate`` gathers to one device's shard, and with its optimizer saved alongside, the shape cross-check would
+    blame the (correct) moments. The replica check reads both copies, finds they differ and refuses the parameter
+    itself, by name, before anything is written. Restoring the label makes the same save succeed.
+
+    Negative control: with ``verify_replicas=False`` (the gather before this check) the file is written and its
+    record for the parameter holds one device's shard."""
+    params, opt = _trained_tp()
+    name = _sharded_param_name(params)
+    full = _gathered_shape(params[name])
+    original = _forge_replicate(params[name])
+
+    path = str(tmp_path / "forged_param.ckpt")
+    with expect_error(ReplicaMismatchError, rf"model\[{name}\] is labelled .* differs from copy 0") as excinfo:
+        checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
+    for fragment in ("Replicate", "Nothing was written"):
+        assert fragment in str(excinfo.value), str(excinfo.value)
+    _assert_nothing_written(path)
+
+    unchecked = str(tmp_path / "unchecked.ckpt")
+    checkpointing.save_checkpoint(unchecked, header={}, model_params=params, verify_replicas=False)
+    header, *records = _stream_records(unchecked)
+    record = records[_record_keys(header["manifest"]).index(("model", name))]
+    assert tuple(record.shape) != full, "negative control: the label-trusting gather saves one shard"
+
+    params[name].get_value(NATIVE).update_tensor_topology(original)
+    checkpointing.save_checkpoint(path, header={}, model_params=params, optimizer=opt)
+    assert os.path.exists(path) and not os.path.exists(path + ".tmp")
+
+
+def test_save_rejects_collapsed_replicate_label_over_different_data(tp_mesh, tmp_path, expect_error):
+    """The default mappers' collapsed 1-D label (``[2] / (Replicate,)``) goes through the same check: a tensor whose
+    two devices hold different halves under that label is refused; a truly replicated tensor under the same label
+    (the default ``replicate_tensor_to_mesh_mapper``) saves.
+
+    Negative control: before this check the first save wrote the first device's half silently."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    wide = np.random.default_rng(3).standard_normal((1, 1, 32, 64), dtype=np.float32)
+    halves = ttml.autograd.Tensor.from_numpy(
+        wide, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3)
+    )
+    assert len(ttml.Sharding.from_tensor(halves).dist_shape) == 1, "precondition: a collapsed 1-D label"
+    _forge_replicate(halves)
+    params = ttml.NamedParameters()
+    params["halves"] = halves
+
+    path = str(tmp_path / "collapsed.ckpt")
+    with expect_error(ReplicaMismatchError, r"model\[halves\] is labelled \[Replicate\] over mesh \[2\]"):
+        checkpointing.save_checkpoint(path, header={}, model_params=params)
+    _assert_nothing_written(path)
+
+    same = ttml.autograd.Tensor.from_numpy(
+        wide[..., :32],
+        ttnn.Layout.TILE,
+        ttnn.DataType.BFLOAT16,
+        ttml.core.distributed.replicate_tensor_to_mesh_mapper(device),
+    )
+    replicated = ttml.NamedParameters()
+    replicated["same"] = same
+    checkpointing.save_checkpoint(path, header={}, model_params=replicated)
+    _, record = _stream_records(path)
+    assert tuple(record.shape) == (1, 1, 32, 32)
+
+
+def test_save_keeps_nd_replicated_tensor(tp_mesh, tmp_path):
+    """A tensor replicated under an N-D label (``[1, 2] / (Replicate, Replicate)``, what an explicit N-D mapper makes)
+    saves at its own shape with the replica check on and off. The check stacks one axis's copies on a tensor dim, and
+    the composer needs a distinct dim per mesh axis ("dims must be unique"), so the other ``Replicate`` axis must not
+    reuse it."""
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate() for _ in tp_mesh.shape]))
+    data = np.random.default_rng(4).standard_normal((1, 1, 32, 32), dtype=np.float32)
+    t = ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+    assert len(ttml.Sharding.from_tensor(t).dist_shape) == 2, "precondition: an N-D label"
+    params = ttml.NamedParameters()
+    params["nd"] = t
+    for verify in (True, False):
+        path = str(tmp_path / f"nd_{verify}.ckpt")
+        checkpointing.save_checkpoint(path, header={}, model_params=params, verify_replicas=verify)
+        _, record = _stream_records(path)
+        assert tuple(record.shape) == (1, 1, 32, 32), (verify, record.shape)
 
 
 def test_save_rejects_param_not_at_expected_shape(tp_mesh, tmp_path, expect_error):

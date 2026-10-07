@@ -20,7 +20,7 @@ from tqdm import tqdm
 import ttnn
 import ttml
 
-from .sharding import Sharding
+from .sharding import ReplicaMismatchError, Sharding
 
 FORMAT_VERSION = 1
 
@@ -267,6 +267,7 @@ def save_checkpoint(
     model_params=None,
     optimizer=None,
     expected_shapes: dict[str, tuple] | None = None,
+    verify_replicas: bool = True,
     display_progress: bool = False,
 ) -> None:
     """Write `header` (opaque) plus `model_params` and/or the `optimizer`'s state to `path`.
@@ -284,12 +285,18 @@ def save_checkpoint(
     included, removes the `.tmp`.
 
     `expected_shapes` maps parameter name -> full (gathered) shape and is held against the matching model params
-    and optimizer leaves. It is the only check that also catches a parameter whose own label is wrong (both the
-    parameter and its moments gathering to the same wrong shape). TEST-FACING for now: trainers cannot populate it
+    and optimizer leaves. It is the only check that catches a parameter labelled `Shard` over identical copies
+    (it gathers too wide, and its moments with it); `verify_replicas` covers the opposite mistake. TEST-FACING for now: trainers cannot populate it
     yet, because the global shape of a sharded parameter is not retained on the `Parameter` (only TP-aware
     modules know it, FSDP stores none, and lazy init discards it at materialize); a follow-up keeps it there.
     Names in `expected_shapes` that no tensor of this checkpoint carries raise `ValueError` before anything is
     gathered or written, so a check cannot pass vacuously.
+
+    `verify_replicas` (default on) byte-compares every copy a tensor's label calls a replica before one copy is
+    saved, for model parameters and optimizer state alike, and raises `ReplicaMismatchError` naming the tensor if
+    they differ: a `Replicate` label over data that differs would otherwise be saved as one device's copy. This is
+    the check that covers a parameter whose own label is wrong in that direction. It reads every copy, so each
+    tensor briefly takes its replicated size in host memory; `False` restores the label-trusting gather.
     """
     manifest = {}
     records = []  # (group, path, name, tensor) in stream order
@@ -322,7 +329,15 @@ def save_checkpoint(
             for group, sub_path, name, tensor in _progress(
                 records, total=len(records), desc="Saving checkpoint", enabled=display_progress
             ):
-                data = Sharding.from_tensor(tensor).gather(tensor)  # gather one at a time; freed after dump
+                try:
+                    # Gather one at a time; freed after dump.
+                    data = Sharding.from_tensor(tensor).gather(tensor, verify_replicas=verify_replicas)
+                except ReplicaMismatchError as e:
+                    leaf = _leaf_label((group, *sub_path), name)
+                    raise ReplicaMismatchError(
+                        f"checkpointing: {leaf} is {e}. Nothing was written. Fix the label where the tensor was "
+                        "produced (the op that relabelled it), not the checkpoint."
+                    ) from e
                 if not _check_gathered_shape(
                     group, sub_path, name, tensor, tuple(data.shape), model_shapes, expected_shapes
                 ):
