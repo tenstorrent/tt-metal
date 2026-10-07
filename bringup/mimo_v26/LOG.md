@@ -1465,3 +1465,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_X1_timing4_sentinel.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/layer.py
 - data: {"sentinel_ffn_ms_4layers":3.3,"spread_ffn_ms_4layers":6.5}
+
+## E261007-1432-926
+- date: 2026-10-07T14:32:13
+- commit: 934cec81c76
+- branch: ssinghal/mimo-moe
+- host: 30,43,47,48
+- track: moe
+- status: verified
+- claim: SENTINEL HANG localised and WORKED AROUND. MoE-only deep trace (48 chained MiMoMoEDecode, U=1): sentinel hangs (first replay or within <=300 replays), spread passes 500/500; also hangs with dead slots routed to one fixed expert; NOT fixed by sparse_mcast off, all_reduce vs all_gather+sum, expert op mm, holding all freed MoE buffers during capture, row-axis barrier gathers after counts/dispatch/combine. Triage: devices 7 and 14 never finish combine (reader_combine.cpp:254 noc_async_write_barrier after the counter multicast to the untilizer cores; untilizers wait at reader_untilize.cpp:129), other devices wait at the combine exit handshake (writer_combine.cpp:381). Depth/imbalance dependent: 24 layers U=32 and the decode agent's 24-layer smoke did not hang on my runs. WORKAROUND dead=spread32 (new default of MiMoMoEDecode): dead/pad slots round-robin over ONE expert per chip (32 experts, 1/8 of the weights, weight 0): 48 layers 1000/1000 replays OK at U=1 (0.836 ms/layer) and U=32 (1.688), 500/500 at U=8 (1.538). Live outputs bit-identical to spread at U=1,2,4,8,16,32 (real L1/L5/L16), 5 eager runs identical, trace==eager
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_P_deep_u1_h47_5bde994f8e0.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
