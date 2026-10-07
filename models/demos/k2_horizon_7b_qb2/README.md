@@ -33,10 +33,9 @@ whose `<think>` segments need the `k2_horizon` reasoning and tool-call parsers t
 - **Prefill in 8192-token chunks**, so causal work balances across the grid; output tokens are
   identical to 4096-token chunks.
 - **Sampling.** Requests inside the device sampler's domain (`top_k` in 1..32, no penalties or
-  logit controls) sample on device; the model-card settings (temperature 1.0, top-p 0.95, no
-  top-k) use the model's numerically equivalent host sampler (`tt/host_sampling.py`) when the
-  server starts with `K2_VLLM_ALLOW_HOST_SAMPLING=1`; otherwise such requests are rejected at
-  admission instead of failing inside the engine.
+  logit controls) sample on device; the plugin routes the rest — including the model-card
+  settings (temperature 1.0, top-p 0.95, no top-k) — to the model's numerically equivalent host
+  sampler (`tt/host_sampling.py`). `K2_VLLM_FORCE_HOST_SAMPLING=1` sends every request there.
 
 ## Run
 

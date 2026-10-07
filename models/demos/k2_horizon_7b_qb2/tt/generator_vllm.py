@@ -64,23 +64,21 @@ class K2HorizonForCausalLM:
         self.generator = K2Generator(mesh_device, override_num_layers=num_layers)
         self.mesh = mesh_device
         self.max_batch_size = max_batch_size
-        self.allow_host_sampling = os.environ.get("K2_VLLM_ALLOW_HOST_SAMPLING", "0") == "1"
+        # Requests the device sampler cannot serve (top_k outside 1..32, penalties, logit
+        # controls) are routed to host sampling by the plugin; the model's own host sampler
+        # keeps seeded results identical to the device path. K2_VLLM_FORCE_HOST_SAMPLING=1
+        # sends every request there (shared-test mode).
         self.force_host_sampling = os.environ.get("K2_VLLM_FORCE_HOST_SAMPLING", "0") == "1"
-        if self.force_host_sampling and not self.allow_host_sampling:
-            raise ValueError("Forced shared-test host sampling also requires K2_VLLM_ALLOW_HOST_SAMPLING=1")
-        self.host_sampler = None
-        if self.allow_host_sampling:
-            from .host_sampling import K2HostSampler
+        from .host_sampling import K2HostSampler
 
-            self.host_sampler = K2HostSampler(max_workers=8)
+        self.host_sampler = K2HostSampler(max_workers=8)
         self.mode = None
         self.host_fallback_calls = 0
         self.decode_table_width = None
         self.decode_batch = max_batch_size
         self.audit_path = os.environ.get("K2_VLLM_AUDIT_PATH")
         logger.info("K2 precision policy: %s", self.generator.model.precision_config)
-        logger.info("K2 explicit shared-test host compatibility: %s", self.allow_host_sampling)
-        logger.info("K2 explicit shared-test forced host sampling: %s", self.force_host_sampling)
+        logger.info("K2 forced host sampling (shared-test mode): %s", self.force_host_sampling)
         self.benchmark_phase = PhaseRecorder.from_adapter(self)
 
     def _audit(self, event, **fields):
@@ -137,11 +135,9 @@ class K2HorizonForCausalLM:
 
     def _sampling(self, params, positions):
         if params is None:
-            if not self.allow_host_sampling:
-                raise RuntimeError("Host sampling requires explicit K2_VLLM_ALLOW_HOST_SAMPLING=1")
             self.host_fallback_calls += 1
             if self.host_fallback_calls == 1:
-                logger.info("K2 explicit host compatibility path requested by shared vLLM sampler")
+                logger.info("K2 host sampling path first used (plugin returned logits request)")
             return "host"
         self.generator.configure_sampling_batch(
             top_k=params.top_k,

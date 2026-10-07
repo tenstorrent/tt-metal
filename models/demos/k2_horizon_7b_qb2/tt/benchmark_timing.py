@@ -215,7 +215,6 @@ def runtime_identity(adapter):
         "padded_vocab": model.padded_vocab,
         "tp": 4,
         "dp": 1,
-        "allow_host_sampling": adapter.allow_host_sampling,
         "force_host_sampling": adapter.force_host_sampling,
         "accurate_attention": _accurate_attention_identity(model),
         "host_sampler": (
