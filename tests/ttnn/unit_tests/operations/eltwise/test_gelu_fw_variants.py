@@ -295,7 +295,7 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
 def test_gelu_tanh_fast_param_matches_tanh(device):
     """GELU_TANH with param 1 (x / (1 + exp(-2u))) through the generic unary path, over every finite BF16 input,
     against variant=Tanh: <= 1 BF16 ULP where |GELU| >= 1e-3. In the negative tail the accurate path cancels
-    (1 + tanh(u) with tanh(u) ~ -1) and the fast one does not, so there require a small absolute difference."""
+    (1 + tanh(u) with tanh(u) ~ -1) and the fast one does not, so require only a small absolute difference there."""
     input_bf16, finite = _all_inputs(torch.bfloat16)
     tt_input = ttnn.from_torch(input_bf16, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -304,9 +304,11 @@ def test_gelu_tanh_fast_param_matches_tanh(device):
     assert not torch.equal(tanh, fast), "param 1 produced the accurate kernel's bits: the param was not forwarded"
 
     core = finite & (tanh.float().abs() >= 1e-3)
-    assert ulp_distance(fast[core], tanh[core]).max() <= 1
+    max_ulp = ulp_distance(fast[core], tanh[core]).max().item()
+    assert max_ulp <= 1, f"fast GELU_TANH is {max_ulp} BF16 ULP from variant=Tanh where |GELU| >= 1e-3"
     tail = finite & ~core
-    assert (fast[tail].float() - tanh[tail].float()).abs().max() <= 1e-5
+    tail_err = (fast[tail].float() - tanh[tail].float()).abs().max().item()
+    assert tail_err <= 1e-5, f"fast GELU_TANH differs from variant=Tanh by {tail_err} where |GELU| < 1e-3"
 
 
 def test_gelu_tanh_fast_param_inf_nan_and_saturation(device):

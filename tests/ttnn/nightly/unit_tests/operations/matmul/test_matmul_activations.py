@@ -1115,9 +1115,11 @@ def test_matmul_1d_gather_with_activations(
     )
 
 
+# Any non-zero param selects the fast form; 0.5 checks the fused path normalizes the param rather than truncating it.
+@pytest.mark.parametrize("fast_param", [1.0, 0.5], ids=["param1", "param0.5"])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_dest", "fp32_dest"])
-def test_matmul_gelu_tanh_fast_matches_accurate(device, fp32_dest_acc_en, function_level_defaults):
-    """GELU_TANH with param 1 (fast) against the accurate GELU_TANH; both runs share the same matmul.
+def test_matmul_gelu_tanh_fast_matches_accurate(device, fp32_dest_acc_en, fast_param, function_level_defaults):
+    """GELU_TANH with a non-zero param (fast) against the accurate GELU_TANH; both runs share the same matmul.
 
     The accurate path computes 0.5 * x * (1 + tanh(u)), which cancels for x below about -4 (tanh(u) is within a
     few FP32 ULP of -1): at x = -5.16 it returns -1.54e-7 for a true -7.77e-8. The fast path, x / (1 + exp(-2u)),
@@ -1162,7 +1164,8 @@ def test_matmul_gelu_tanh_fast_matches_accurate(device, fp32_dest_acc_en, functi
         return tt2torch_tensor(out).bfloat16()
 
     accurate = run(ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH))
-    fast = run(ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0))
+    fast = run(ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, fast_param))
+    assert not torch.equal(accurate, fast), f"param {fast_param} produced the accurate kernel's bits"
 
     # BF16 ULP distance where the accurate path is trustworthy (|GELU| >= 1e-3).
     big = accurate.float().abs() >= 1e-3
@@ -1170,7 +1173,8 @@ def test_matmul_gelu_tanh_fast_matches_accurate(device, fp32_dest_acc_en, functi
     assert big.float().mean() > 0.5, "test inputs should mostly land outside the tail"
     assert ulps.max().item() <= 1, f"fast GELU_TANH is {ulps.max().item()} BF16 ULP from accurate"
     # In the tail both are tiny: one BF16 ULP at 1e-3 is ~4e-6.
-    assert (accurate.float() - fast.float()).abs()[~big].max().item() <= 1e-5
+    tail_err = (accurate.float() - fast.float()).abs()[~big].max().item()
+    assert tail_err <= 1e-5, f"fast GELU_TANH differs from accurate by {tail_err} in the tail (|GELU| < 1e-3)"
     # And the fast result is close to torch.
     ref = torch.nn.functional.gelu(in0.float() @ in1.float(), approximate="tanh")
     assert_with_pcc(ref, fast.float(), 0.9999)
