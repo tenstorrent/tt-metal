@@ -56,7 +56,11 @@ def test_moe_real_layer(mesh_device):
     weights = build_expert_weights(md, lambda e: W[e])
     print(f"RESULT bfp8 weights on device in {time.time() - t0:.0f}s", flush=True)
     cf = int(os.environ.get("MIMO_UM_CF", "4"))
-    um = MiMoPrefillMoE(md, weights, ckc=make_ckc("hifi2"), expert_op="unified", cf=cf)
+    op = os.environ.get("MIMO_UM_OP", "unified")
+    fid = os.environ.get("MIMO_UM_FID", "hifi2")
+    f32 = os.environ.get("MIMO_UM_FP32ACC", "0") == "1"
+    print(f"RESULT config: op={op} fidelity={fid} fp32_dest_acc={f32}", flush=True)
+    um = MiMoPrefillMoE(md, weights, ckc=make_ckc(fid, fp32acc=f32, packer_l1_acc=(op != "fused")), expert_op=op, cf=cf)
 
     # skew from the real routing (all 2048 tokens)
     idx_all = a["routing_idx"]
@@ -137,7 +141,10 @@ def test_moe_real_layer(mesh_device):
         ),
         flush=True,
     )
-    torch.save({"outA": outA.bfloat16()}, f"/mnt/tt-data/ssinghal/mimo-logs/moe_real_layer{LAYER}_outA.pt")
+    torch.save(
+        {"outA": outA.bfloat16()},
+        f"/mnt/tt-data/ssinghal/mimo-logs/moe_real_layer{LAYER}_{op}_{fid}_{int(f32)}_outA.pt",
+    )
     # (B) device exact router
     gw, gb = load_gate(LAYER)
     gate = MiMoGate(md, gw.to(torch.bfloat16), gb, bias_shift=0.0, batch_per_device=None)
