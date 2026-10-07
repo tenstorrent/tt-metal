@@ -47,12 +47,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const volatile FormatConfig& formats = params.formats;
 #endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+    const Operand& buffer_A      = params.buffer_A;
+    const Operand& buffer_Res    = params.buffer_Res;
+#endif
 
     llk_sfpu_srcs_unary_init(
-        L1_ADDRESS(params.buffer_A[0]),
+        L1_ADDRESS(buffer_A[0]),
         static_cast<DataFormat>(formats.unpack_S_src),
         static_cast<DataFormat>(formats.unpack_S_dst),
-        L1_ADDRESS(params.buffer_Res[0]),
+        L1_ADDRESS(buffer_Res[0]),
         static_cast<DataFormat>(formats.pack_S_src),
         static_cast<DataFormat>(formats.pack_S_dst),
         IMPLIED_MATH_FORMAT);
@@ -64,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         [&](auto layout)
         {
             using Layout = decltype(layout);
-            llk_sfpu_srcs_unary(params.TILE_CNT, srcs_format, [](int, int, int) { calculate_square_srcs<Layout::layout>(); });
+            llk_sfpu_srcs_unary(TILE_CNT, srcs_format, [](int, int, int) { calculate_square_srcs<Layout::layout>(); });
         });
 
     wait_sfpu_idle();

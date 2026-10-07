@@ -86,7 +86,7 @@ def global_semaphores(inspector_data, id_mapping, run_checks) -> list[tuple[int,
 
 
 def program_rows(location: OnChipCoordinate, dispatcher_data: DispatcherData, by_kernel) -> list[SemaphoreRow]:
-    core = dispatcher_data.get_cached_core_data(location, location.noc_block.risc_names[0])
+    core = dispatcher_data.get_cached_core_data(location.noc_block.all_riscs[0].risc_location)
     if core.go_message == "DONE" or core.mailboxes is None:
         return []
     kernel_config = core.mailboxes.launch[core.launch_msg_rd_ptr].kernel_config
