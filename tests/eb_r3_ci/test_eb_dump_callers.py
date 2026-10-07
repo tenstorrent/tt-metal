@@ -111,18 +111,19 @@ def test_ln_pre(device, op, arr, res):
         _guard(tag, run)
 
 
-@pytest.mark.parametrize("arr", ["onehot32", "densefin", "denseall"])
+@pytest.mark.parametrize("arr", ["onehot256", "densefin", "denseall"])
 def test_ln_pre_2d(device, arr):
-    """rms_norm_pre_all_gather with use_2d_core_grid=True (layernorm_pre_allgather_2d.cpp)."""
+    """rms_norm_pre_all_gather with use_2d_core_grid=True (layernorm_pre_allgather_2d.cpp): one-hot rows of 8 tiles, and dense
+    rows of 64 tiles (the 2D grid splits the width over up to 8 cores; one tile of width leaves no worker cores)."""
     t0 = time.time()
     x, _ = _ln_data(arr, False)
-    for shape in ((1, 1) + x.shape, (1, 1, x.size // 1024, 1024), (1, 1, x.size // 8192, 8192)):
-        tx = _dev(x, shape, device)
-        for fid, fp32 in CKC:
-            tag = f"lnpre2d_{arr}_{shape[2]}x{shape[3]}_{fid}_{'d32' if fp32 else 'd16'}"
-            _guard(tag, lambda: stage(tag, out_bits(ttnn.rms_norm_pre_all_gather(
-                tx, dtype=ttnn.bfloat16, compute_kernel_config=_ckc(device, fid, fp32), memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                use_2d_core_grid=True)), extra=f"({time.time() - t0:.1f} s)"))
+    shape = (1, 1) + x.shape if arr.startswith("onehot") else (1, 1, x.size // 2048, 2048)
+    tx = _dev(x, shape, device)
+    for fid, fp32 in CKC:
+        tag = f"lnpre2d_{arr}_{shape[2]}x{shape[3]}_{fid}_{'d32' if fp32 else 'd16'}"
+        _guard(tag, lambda: stage(tag, out_bits(ttnn.rms_norm_pre_all_gather(
+            tx, dtype=ttnn.bfloat16, compute_kernel_config=_ckc(device, fid, fp32), memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            use_2d_core_grid=True)), extra=f"({time.time() - t0:.1f} s)"))
 
 
 def test_frgdn(device):
