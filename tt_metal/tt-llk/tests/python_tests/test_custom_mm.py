@@ -42,6 +42,8 @@ Blackhole only: these LLKs live only in the Blackhole tree and cannot run on WH/
 This test writes a correct-by-construction golden; runtime pass/fail is a BH-card check.
 """
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
@@ -57,6 +59,7 @@ from helpers.test_variant_parameters import (
     CUSTOM_MM_CALLS,
     IN_FACE_DIMS,
     NUM_FACES,
+    TemplateParameter,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
@@ -64,6 +67,17 @@ from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
 from helpers.utils import passed_test
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
+
+
+@dataclass
+class CUSTOM_MM_SPLIT(TemplateParameter):
+    """split_acc: the second K half of every K tile accumulates in rows 8 and 24, and the last call adds it back."""
+
+    custom_mm_split_acc: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_SPLIT_ACC = {str(self.custom_mm_split_acc).lower()};"
+
 
 # in0 (A/SrcB) row count. The header restricts this to {1,2,4,8}; 8 is the largest and
 # exercises both faces at full height, 1/2/4 cover the narrow-M cases.
@@ -117,7 +131,9 @@ class CustomMMStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
+def _run_custom_mm(
+    M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS(), split_acc=False
+):
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
     in0_format = formats.input_format
@@ -191,6 +207,7 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             calls,
+            CUSTOM_MM_SPLIT(custom_mm_split_acc=split_acc),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -234,7 +251,9 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
         active_golden = golden.abs()
         active_golden = active_golden[active_golden > 0]
         mean_active = active_golden.mean().item() if active_golden.numel() else 0.0
-        custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * kt * mean_active)
+        # split_acc's finalize adds the two bf16 partials: one more rounding step.
+        steps = kt + 1 if split_acc else kt
+        custom_atol = max(FLOAT16B_DEFAULT_ATOL, ACC_ATOL_PER_KT * steps * mean_active)
 
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
@@ -271,6 +290,18 @@ def _dest_acc_for(formats):
 )
 def test_custom_mm(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats))
+
+
+@blackhole_only
+@parametrize(
+    formats=CUSTOM_MM_FORMATS,
+    M=list(SUPPORTED_M),
+    kt=[1, 2, 4],
+    ct=CT_DIMS,
+)
+def test_custom_mm_split_acc(formats, M, kt, ct):
+    """split_acc with the finalize, which merges the two K halves of every output tile."""
+    _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats), split_acc=True)
 
 
 ODD_K_CASES = [

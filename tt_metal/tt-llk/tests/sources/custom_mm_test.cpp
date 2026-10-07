@@ -28,10 +28,10 @@
 //
 // So the header restricts M to {1,2,4,8} rows: only those DEST rows are defined. The math
 // LLK (_llk_math_custom_mm_) runs one MVMUL walk per k-tile, accumulating A*B into DEST;
-// with split_acc=false / finalize=false there is NO finalization pass (finalize must be
-// false when split_acc is false -- custom_mm.h arg table, line 138), so DEST holds the
-// plain accumulated product. The result is packed as ct_dim output tiles; inside each tile
-// the two 16-col faces (M x 16, row-major) sit contiguously, then pad out to a full tile.
+// with split_acc (CUSTOM_MM_SPLIT_ACC) the second K half of every k-tile goes to the tile's rows
+// 8 and 24 and the last call's finalize adds it back, so DEST holds the accumulated product
+// either way. The result is packed as ct_dim output tiles; inside each tile the two 16-col
+// faces (M x 16, row-major) sit contiguously, then pad out to a full tile.
 //
 // The Python golden is exactly torch A[M,K] @ B[K,N] (MatmulGolden, LoFi), and it asserts
 // ONLY the M defined rows of each output tile against that product (the rest of each 32-row
@@ -143,7 +143,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    // split_acc=false, dense_packing=true, transpose=false. operandB_face_r_dim = in0 M.
+    // dense_packing=true, transpose=false. operandB_face_r_dim = in0 M.
     // dense_packing MUST be true: the pack thread reads the ct output tiles with the
     // dense-packing W-stride (consecutive tiles 32 DEST rows apart), so the math must lay
     // them out 32 rows apart too (ADDR_MOD_2 DEST incr = 32, not 64). With dense_packing
@@ -151,12 +151,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // wrong DEST offset -- tile 0 is correct but every later tile is corrupt. Matches the
     // proven compressed sibling (matmul_custom_compressed_test.cpp), which passes
     // dense_packing=true for the identical pack setup.
-    _llk_math_custom_mm_init_<false /* transpose */, false /* split_acc */, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    // finalize MUST be false when split_acc is false (custom_mm.h arg table): with no split
-    // accumulation there are no partials to merge, and the DEST already holds A*B.
+    // finalize only with split_acc, on the last call (custom_mm.h arg table).
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
         if constexpr (num_calls > 1)
@@ -167,7 +166,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // writes. Without the delay math keeps up with the unpacker and the boundary is never contended.
             ckernel::wait(2000);
         }
-        _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        if (CUSTOM_MM_SPLIT_ACC && call == num_calls - 1)
+        {
+            _llk_math_custom_mm_<true /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        }
+        else
+        {
+            _llk_math_custom_mm_<false /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
+        }
     }
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
