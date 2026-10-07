@@ -23,17 +23,19 @@ from models.experimental.bevformer.tt.tt_ms_deformable_attention import multi_sc
 
 
 def tsa_grid_bias(reference_points, num_heads, num_points, dtype):
-    """``2 * ref - 1`` for the folded offset Linear, one copy per (head, point):
-    ``(bs * 2, num_query, 1, 2)`` reference points in [0, 1] -> ``(bs * 2, num_query, num_heads * num_points * 2)``.
-    Shared by every layer of a frame."""
+    """``2 * ref - 1`` for the folded offset Linear, in its queue-major channel order:
+    ``(bs * 2, num_query, 1, 2)`` reference points in [0, 1], the previous BEV's then the current
+    queries' per sample -> ``(bs, num_query, 2 * num_heads * num_points * 2)``, each map's point
+    repeated over its (head, point) channels. Shared by every layer of a frame."""
     rows, num_query = reference_points.shape[0], reference_points.shape[1]
     ref = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
     if ref.dtype != dtype:
         ref = ttnn.typecast(ref, dtype)
-    ref = ttnn.reshape(ref, (rows, num_query, 1, 2))
+    ref = ttnn.reshape(ref, (rows // 2, 2, num_query, 2))
     ref = ttnn.sub(ttnn.mul(ref, 2.0), 1.0)
-    ref = ttnn.repeat(ref, ttnn.Shape((1, 1, num_heads * num_points, 1)))
-    return ttnn.reshape(ref, (rows, num_query, num_heads * num_points * 2))
+    ref = ttnn.reshape(ttnn.permute(ref, (0, 2, 1, 3)), (rows // 2, num_query, 2, 1, 2))
+    ref = ttnn.repeat(ref, ttnn.Shape((1, 1, 1, num_heads * num_points, 1)))
+    return ttnn.reshape(ref, (rows // 2, num_query, 2 * num_heads * num_points * 2))
 
 
 class TTTemporalSelfAttention:
@@ -107,25 +109,32 @@ class TTTemporalSelfAttention:
         query = ttnn.concat([value[:bs], ttnn.add(query, query_pos)], dim=-1)
 
         value = ttnn.linear(value, self.params.value_proj.weight, bias=self.params.value_proj.bias)
-        value = ttnn.reshape(value, (bs * queue, num_query, self.num_heads, embed_dims // self.num_heads))
+        # To ROW_MAJOR before splitting the heads: in TILE the (num_heads, head_dim) tail pads 8 -> 32.
+        value = ttnn.reshape(
+            ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT),
+            (bs * queue, num_query, self.num_heads, embed_dims // self.num_heads),
+        )
 
-        # Queue-major channels: (bs, nq, queue * rest) -> (bs * queue, nq, rest).
-        def split_queue(tensor):
-            width = tensor.shape[-1] // queue
-            tensor = ttnn.reshape(tensor, (bs, num_query, queue, width))
-            return ttnn.reshape(ttnn.permute(tensor, (0, 2, 1, 3)), (bs * queue, num_query, width))
+        # Queue-major channels split in ROW_MAJOR, where the queue axis never lands in a tiled
+        # dimension: (bs, nq, queue * heads * rest) -> (bs * queue * heads, nq, rest).
+        def split_queue_heads(tensor):
+            width = tensor.shape[-1] // (queue * self.num_heads)
+            tensor = ttnn.reshape(tensor, (bs, num_query, queue, self.num_heads, width))
+            return ttnn.reshape(ttnn.permute(tensor, (0, 2, 3, 1, 4)), (bs * queue * self.num_heads, num_query, width))
 
         offsets = ttnn.linear(
             query, self.sampling_offsets_weight, bias=self.sampling_offsets_bias, dtype=self.grid_dtype
         )
-        grids = ttnn.add(ttnn.to_layout(split_queue(offsets), ttnn.ROW_MAJOR_LAYOUT), grid_bias)
-        grids = ttnn.reshape(grids, (bs * queue, num_query, self.num_heads, 1, self.num_points, 2))
+        grids = ttnn.add(ttnn.to_layout(offsets, ttnn.ROW_MAJOR_LAYOUT), grid_bias)
+        # One BEV level: the core's (level, bs * queue * head, query, point * xy).
+        grids = ttnn.unsqueeze(split_queue_heads(grids), 0)
 
+        # The weights stay TILE: the core multiplies and sums them with the sampled values in TILE.
         weights = ttnn.linear(query, self.params.attention_weights.weight, bias=self.params.attention_weights.bias)
         weights = ttnn.softmax(ttnn.reshape(weights, (bs, num_query, queue * self.num_heads, self.num_points)), dim=-1)
+        weights = ttnn.reshape(weights, (bs, num_query, queue, self.num_heads * self.num_points))
         weights = ttnn.reshape(
-            split_queue(ttnn.reshape(weights, (bs, num_query, -1))),
-            (bs * queue, num_query, self.num_heads, 1, self.num_points),
+            ttnn.permute(weights, (0, 2, 1, 3)), (bs * queue, num_query, self.num_heads, 1, self.num_points)
         )
 
         output = multi_scale_deformable_attn_ttnn(

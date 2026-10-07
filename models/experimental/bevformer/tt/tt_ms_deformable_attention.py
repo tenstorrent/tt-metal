@@ -58,14 +58,17 @@ def multi_scale_deformable_attn_ttnn(
 
     Args:
         value (ttnn.Tensor): The value has shape
-            (bs, num_keys, num_heads, embed_dims//num_heads)
+            (bs, num_keys, num_heads, embed_dims//num_heads), ROW_MAJOR
         value_spatial_shapes (torch.Tensor): Spatial shape of
             each feature map, has shape (num_levels, 2),
             last dimension 2 represent (h, w)
         sampling_grids (ttnn.Tensor): The location of sampling points, already
             normalized to [-1, 1] for grid_sample and in ROW_MAJOR layout, has shape
-            (bs, num_queries, num_heads, num_levels, num_points, 2),
-            the last dimension 2 represent (x, y).
+            (num_levels, bs * num_heads, num_queries, num_points * 2), each point's (x, y) in
+            turn: heads already on the batch, as grid_sample takes them, and each level a
+            contiguous block. Rows of 2 * num_points stay wide through every move; the split
+            into rows of (x, y), slow in ROW_MAJOR, happens once per level, right before
+            grid_sample.
         attention_weights (ttnn.Tensor): The weight of sampling points used
             when calculate the attention, has shape
             (bs, num_queries, num_heads, num_levels, num_points),
@@ -78,7 +81,8 @@ def multi_scale_deformable_attn_ttnn(
     """
 
     bs, num_keys, num_heads, head_dim = value.shape
-    _, num_queries, num_heads, num_levels, num_points, _ = sampling_grids.shape
+    num_levels, _, num_queries, point_coords = sampling_grids.shape
+    num_points = point_coords // 2
 
     if use_signpost:
         signpost(header=f"multi_scale_deformable_attn_ttnn Start, q:{num_queries}, k:{num_keys}")
@@ -86,20 +90,17 @@ def multi_scale_deformable_attn_ttnn(
     if ENABLE_LOGGING:
         logger.info("MSDA Start")
 
-    # Split value into a list of tensors for each level
-    value_list = ttnn.split(value, [H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
-
+    value = ttnn.to_layout(value, layout=ttnn.ROW_MAJOR_LAYOUT)
     sampling_value_list = []
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
+    start = 0
+    for level, (H_, W_) in enumerate(value_spatial_shapes.tolist()):
         # [bs, H_*W_, num_heads, head_dim] -> [bs*num_heads, H_, W_, head_dim]
-        value_l_ = ttnn.to_layout(value_list[level], layout=ttnn.ROW_MAJOR_LAYOUT)
+        value_l_ = value if num_levels == 1 else value[:, start : start + H_ * W_]
+        start += H_ * W_
         value_l_ = ttnn.permute(value_l_, (0, 2, 1, 3))  # Move heads to dimension 1
         value_l_ = ttnn.reshape(value_l_, (bs * num_heads, H_, W_, head_dim))
 
-        sampling_grid_l_ = sampling_grids[:, :, :, level, :, :]  # [bs, num_queries, num_heads, num_points, 2]
-        sampling_grid_l_ = ttnn.permute(
-            sampling_grid_l_, (0, 2, 1, 3, 4)
-        )  # [bs, num_heads, num_queries, num_points, 2]
+        sampling_grid_l_ = sampling_grids if num_levels == 1 else sampling_grids[level : level + 1]
         sampling_grid_l_ = ttnn.reshape(
             sampling_grid_l_, (bs * num_heads, num_queries * num_points, 1, 2)
         )  # [N, H_out, W_out, 2] = [bs*num_heads, num_queries*num_points, 1, 2]
@@ -260,9 +261,13 @@ class TTMSDeformableAttention:
         ``2 * (ref + off) - 1 == (2 * ref - 1) + 2 * off``. The offset half lives here, the
         reference half in :meth:`grid_bias_for`, which leaves one add at runtime.
 
-        One ``(1, out)`` row scales weight and bias alike, because the Linear emits
-        channels ordered (head, level, point, xy) and preprocessing stores the weight as
-        ``(in, out)`` with the bias as ``(1, out)``.
+        The Linear's output channels are also reordered here from the checkpoint's (head, level,
+        point, xy) to (level, head, point, xy): each level is then a contiguous block, and the
+        grid reaches the core's ``(level, bs * head, query, point * xy)`` layout with one
+        permute of wide rows.
+
+        One ``(1, out)`` row scales weight and bias alike, because preprocessing stores the
+        weight as ``(in, out)`` with the bias as ``(1, out)``.
         """
         sampling_offsets = getattr(self.params, "sampling_offsets", None)
         if sampling_offsets is None:
@@ -280,15 +285,23 @@ class TTMSDeformableAttention:
         if out_features != expected:
             raise ValueError(f"sampling_offsets width {out_features} != {expected}")
 
-        scale = torch.ones(self.num_heads, self.num_levels, self.num_points, 2, dtype=torch.float32)
+        scale = torch.ones(self.num_levels, self.num_heads, self.num_points, 2, dtype=torch.float32)
         for level, (h, w) in enumerate(spatial_shapes.tolist()):
-            scale[:, level, :, 0] = 2.0 / float(w)
-            scale[:, level, :, 1] = 2.0 / float(h)
+            scale[level, :, :, 0] = 2.0 / float(w)
+            scale[level, :, :, 1] = 2.0 / float(h)
         scale_tt = ttnn.from_torch(
             scale.reshape(1, out_features), device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )
+        level_major = (
+            torch.arange(out_features)
+            .view(self.num_heads, self.num_levels, self.num_points * 2)
+            .permute(1, 0, 2)
+            .reshape(-1)
+        )
 
         def fold(tensor):
+            columns = ttnn.to_torch(tensor)[..., level_major]
+            tensor = ttnn.from_torch(columns, dtype=tensor.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
             folded = ttnn.mul(ttnn.typecast(tensor, ttnn.float32), scale_tt)
             return ttnn.typecast(folded, tensor.dtype) if tensor.dtype != ttnn.float32 else folded
 
@@ -306,11 +319,11 @@ class TTMSDeformableAttention:
     def grid_bias_for(self, reference_points, depth_levels):
         """``2 * ref - 1``, laid out in the ``sampling_offsets`` Linear's channel order.
 
-        The reference half of the fold in :meth:`_fold_grid_scale`. The Linear emits channels
-        ordered (head, level, point, xy) with the points grouped as
+        The reference half of the fold in :meth:`_fold_grid_scale`. The folded Linear emits
+        channels ordered (level, head, point, xy) with the points grouped as
         ``(num_points // depth_levels, depth_levels)``, and a reference point broadcasts over
         everything but the innermost ``(depth_levels, 2)`` block -- so the bias is that flat
-        block repeated once per (head, level, point-group).
+        block repeated once per (level, head, point-group).
 
         ROW_MAJOR throughout, matching the offsets it is added to: the extent-2 coordinate axis
         stays folded into the channel row and never reaches a tiled dimension, where it would
@@ -404,6 +417,8 @@ class TTMSDeformableAttention:
             zeros_like_value = ttnn.zeros_like(value)
             value = ttnn.where(mask, zeros_like_value, value)
 
+        # To ROW_MAJOR before splitting the heads: in TILE the (num_heads, head_dim) tail pads 8 -> 32.
+        value = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT)
         value = ttnn.reshape(value, (bs, num_keys, self.num_heads, self.head_dim))
 
         if ENABLE_LOGGING:
@@ -448,8 +463,13 @@ class TTMSDeformableAttention:
             if grid_bias is None:
                 grid_bias = self.grid_bias_for(reference_points, D)
             sampling_grids = ttnn.add(sampling_offsets, grid_bias)
+            # (bs, query, level, head, point * xy) -> (level, bs * head, query, point * xy).
             sampling_grids = ttnn.reshape(
-                sampling_grids, (bs, num_queries, self.num_heads, self.num_levels, self.num_points, 2)
+                sampling_grids, (bs, num_queries, self.num_levels, self.num_heads, self.num_points * 2)
+            )
+            sampling_grids = ttnn.permute(sampling_grids, (2, 0, 3, 1, 4))
+            sampling_grids = ttnn.reshape(
+                sampling_grids, (self.num_levels, bs * self.num_heads, num_queries, self.num_points * 2)
             )
         else:
             raise ValueError(f"Reference points must have 2 dimensions, got {reference_points.shape[-1]}")
