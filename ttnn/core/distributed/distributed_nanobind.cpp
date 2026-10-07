@@ -529,7 +529,8 @@ void py_module(nb::module_& mod) {
             R"doc(Returns Infinity value for current architecture.)doc")
         .def(
             "worker_core_from_logical_core",
-            &MeshDevice::worker_core_from_logical_core,
+            // MeshDevice also has a per-coordinate overload; pick the coordinate-less one to keep this signature.
+            nb::overload_cast<const CoreCoord&>(&MeshDevice::worker_core_from_logical_core, nb::const_),
             nb::arg("logical_core"),
             R"doc(
                 Convert a logical coordinate to a virtual coordinate for a worker core.
@@ -1628,8 +1629,7 @@ void py_module(nb::module_& mod) {
     m_experimental.def(
         "worker_core_from_logical_core",
         [](MeshDevice& mesh_device, const MeshCoordinate& mesh_coord, const CoreCoord& logical_core) {
-            return tt::tt_metal::experimental::Device::worker_core_from_logical_core(
-                mesh_device, mesh_coord, logical_core);
+            return mesh_device.worker_core_from_logical_core(mesh_coord, logical_core);
         },
         nb::arg("mesh_device"),
         nb::arg("mesh_coord"),
