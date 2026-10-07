@@ -183,10 +183,34 @@ slack_decision() {  # $1 sig(s) as space list, $2 header text, $3 decision json
                 -H 'Content-Type: application/json; charset=utf-8' --data @- https://slack.com/api/chat.postMessage)
   if [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]]; then
     # shellcheck disable=SC2086
-    $FIXLIB mark --state keep --extra "$(jq -nc --arg t "$(jq -r .ts <<<"$resp")" '{slack_ts:$t}')" $sigs_s
+    $FIXLIB mark --state keep --extra "$(jq -nc --arg t "$(jq -r .ts <<<"$resp")" --arg th "$thread" '{slack_ts:$t, decision_thread:$th}')" $sigs_s
   else
     log "  WARN: decision post failed: $resp"
   fi
+}
+
+# An unanswered decision must sit under the CURRENT digest: when the watcher
+# posts a new digest message (status changed), move the question there —
+# delete the old message, post it again with the same buttons.
+refresh_decisions() {
+  local row sig cur old
+  cur=$(jq -r --arg ch "${SLACK_CHANNEL_ID:-}" 'if (._slack.channel // "") == $ch then (._slack.ts // "") else "" end' \
+          "$WATCH_STATE" 2>/dev/null || true)
+  [[ -n "$cur" && "$FIX_SLACK" == "1" && -n "$SLACK_BOT_TOKEN" ]] || return 0
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    sig=$(jq -r .sig <<<"$row"); old=$(jq -r '.r.slack_ts // ""' <<<"$row")
+    if [[ -n "$old" ]]; then
+      jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg ts "$old" '{channel:$ch, ts:$ts}' \
+        | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" -H 'Content-Type: application/json; charset=utf-8' \
+               --data @- https://slack.com/api/chat.delete >/dev/null || true
+    fi
+    log "  moving open decision for $sig under the current digest"
+    slack_decision "$sig" "❓ *autofix — needs your decision*: \`$(jq -r '.r.test | sub(".*::"; "")' <<<"$row")\` ($(jq -r .r.workflow <<<"$row"))
+$(jq -r .r.decision.question <<<"$row")" "$(jq -c .r.decision <<<"$row")"
+  done < <(jq -c --arg cur "$cur" '.sigs | to_entries[]
+             | select(.value.state == "awaiting_decision" and .value.decision_choice == null
+                      and (.value.decision_thread // "") != $cur) | {sig: .key, r: .value}' "$FIX_HOME/ledger.json")
 }
 
 apply_decisions() {
@@ -287,6 +311,7 @@ $lines" >/dev/null
 # merged / closed, or the ledger and digest keep calling it an open draft.
 followup
 apply_decisions
+refresh_decisions
 
 # ======================================================================
 # Phase B — triage every newly analyzed run of every watched pipeline
