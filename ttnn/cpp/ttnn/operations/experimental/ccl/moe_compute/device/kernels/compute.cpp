@@ -612,7 +612,8 @@ void kernel_main() {
                     Cfg::w0_w1_blocks_per_col,
                     w0_w1_tiles_per_block,
                     num_w0_w1_tiles_h,
-                    has_bias>(cb_s2c_in_id, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, in2_base + tile_id);
+                    has_bias>(
+                    cb_s2c_in_id, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, in2_base + tile_id);
             }
             if (prod_pair_tiles != prod_tiles_per_step) {
                 matmul_block_init(
@@ -629,7 +630,12 @@ void kernel_main() {
                     w0_w1_tiles_per_block,
                     num_w0_w1_tiles_h,
                     has_bias>(
-                    cb_s2c_in_id, cb_r2c_w0_w1_id, cb_c2c_ones_tile_id, cb_s2c_in2_id, in0_index, in2_base + prod_pair_tiles);
+                    cb_s2c_in_id,
+                    cb_r2c_w0_w1_id,
+                    cb_c2c_ones_tile_id,
+                    cb_s2c_in2_id,
+                    in0_index,
+                    in2_base + prod_pair_tiles);
                 // Restore the 4-wide matmul for the W2 phase.
                 matmul_block_init(
                     cb_s2c_in_id, cb_r2c_w0_w1_id, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
