@@ -27,3 +27,15 @@
 - Attempt 1's driver failed both submits: tt-device-mcp looked for python_env under $WS/tt-metal. Fix: pass
   `-e /var/tmp/fasth3/t159/env.yaml` (PYTHON_ENV_DIR=/var/tmp/fasth3/t48/python_env, as t185 job 758).
 - Rerun detached as run-dir t186drv2; s1x6 submitted as blx01 job 760 at 05:58:51 UTC; s1x5 follows.
+
+## Results so far (attempt 2, 2026-10-07)
+- No drops. s1x6 = blx01 job 760, s1x5 = job 761. Warm gens (seeds 0-4):
+  - s1x6: 5.209 5.181 5.180 5.175 5.167, mean 5.182 s (-0.489 s vs ref 5.671)
+  - s1x5: 4.939 4.933 4.950 4.914 4.930, mean 4.933 s (-0.738 s)
+- post.sh scoring failed: sbs_*.mp4 sat next to seed*.mp4 and ltx_eval has no reference for them.
+  score.sh moves sbs_* into sbs/ and reruns ltx_eval (PCC/PSNR + VBench). Detached as run 783
+  t186score (state/runs/783/t186score.{log,rc}); per-arm marker data/g15/t186_<label>/SCORE.done.
+- Stills: data/g15/t186_<label>/stills_5seeds_t3s.png (rows = seeds 0-4, ref | cand at t=3 s).
+  First look: same subject/setting, layout drifts from ref (more for s1x5). s1x6 seed0 face smeared at t=3 s.
+  Check more frames (eval_vs_ref_t48_f6b8/seed*_cmp_f*.png) before a verdict.
+- Next: read eval summary for both arms, compare VBench to ref, decide gate, write result.
