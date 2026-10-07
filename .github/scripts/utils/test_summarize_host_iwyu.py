@@ -6,7 +6,7 @@
 
 import unittest
 
-from summarize_host_iwyu import FORWARD_DECLARATION, parse_report, render_markdown
+from summarize_host_iwyu import FORWARD_DECLARATION, parse_report, render_markdown, rewrite_c_headers
 
 # Verbatim (trimmed) iwyu_tool.py output from include-what-you-use 0.24 with
 # --cxx17ns, as run by run_host_iwyu.sh. Two files with advice, one already
@@ -105,6 +105,39 @@ class RenderMarkdownTests(unittest.TestCase):
         self.assertIn("### API headers", markdown)
         self.assertIn("`api-report` artifact", markdown)
         self.assertNotIn("iwyu-host-report", markdown)
+
+
+class RewriteCHeadersTests(unittest.TestCase):
+    def test_recommended_c_headers_become_cxx_headers(self):
+        report = (
+            "a.hpp should add these lines:\n"
+            "#include <stddef.h>                    // for size_t\n"
+            "#include <stdint.h>                    // for uint32_t\n"
+        )
+        self.assertEqual(
+            rewrite_c_headers(report),
+            "a.hpp should add these lines:\n"
+            "#include <cstddef>                     // for size_t\n"
+            "#include <cstdint>                     // for uint32_t\n",
+        )
+
+    def test_only_the_c_compatibility_headers_are_rewritten(self):
+        untouched = (
+            "#include <sys/types.h>  // for ssize_t\n"
+            "#include <unistd.h>  // for read\n"
+            '#include "stdint.h"  // quoted\n'
+            "#include <fmt/base.h>  // for format\n"
+            "#include <cstdint>  // already C++\n"
+        )
+        self.assertEqual(rewrite_c_headers(untouched), untouched)
+
+    def test_removals_name_existing_lines_and_stay_verbatim(self):
+        removal = "- #include <stddef.h>  // lines 10-10\n"
+        self.assertEqual(rewrite_c_headers(removal), removal)
+
+    def test_histogram_counts_the_cxx_spelling(self):
+        report = "a.hpp should add these lines:\n#include <stddef.h>  // for size_t\n\n"
+        self.assertIn("#include <cstddef>", parse_report(rewrite_c_headers(report)).additions)
 
 
 if __name__ == "__main__":

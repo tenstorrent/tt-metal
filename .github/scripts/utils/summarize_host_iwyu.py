@@ -5,6 +5,7 @@
 """Summarise a native include-what-you-use report as Markdown.
 
 Usage: summarize_host_iwyu.py <iwyu.txt> <analyzer exit code> [<title> <artifact name>]
+       summarize_host_iwyu.py --rewrite-c-headers <iwyu.txt>   (rewrites the report in place)
 
 Reads the concatenated iwyu_tool.py output written by run_host_iwyu.sh and
 prints a step-summary table plus a histogram of the headers IWYU asked for most
@@ -39,6 +40,30 @@ class Summary:
     @property
     def recognised(self) -> int:
         return self.files_with_advice + self.clean + self.errors
+
+
+# IWYU 0.24 (the release matching the image's LLVM 20) recommends the C spelling
+# of the C compatibility headers for symbols such as size_t or uint32_t. Applying
+# that verbatim trips clang-tidy's modernize-deprecated-headers, and IWYU's own
+# mapping file cannot override it. IWYU 0.27 recommends the <c*> headers in C++
+# mode (include-what-you-use#1126); drop this once the image runs IWYU >= 0.27.
+# The set is the one modernize-deprecated-headers enforces.
+C_COMPAT_HEADERS = (
+    "assert ctype errno fenv float inttypes limits locale math setjmp signal "
+    "stdarg stddef stdint stdio stdlib string time uchar wchar wctype"
+).split()
+# Only recommendation lines, which start in column 0 ("- #include ..." removals
+# name a line that exists in the source and must stay verbatim).
+C_COMPAT_INCLUDE = re.compile(r"^#include <(%s)\.h>( *)" % "|".join(C_COMPAT_HEADERS), re.M)
+
+
+def rewrite_c_headers(text: str) -> str:
+    def cxx(match: re.Match) -> str:
+        old, new = f"<{match.group(1)}.h>", f"<c{match.group(1)}>"
+        # Keep the "// for ..." comments aligned.
+        return f"#include {new}" + " " * max(len(match.group(2)) + len(old) - len(new), 1)
+
+    return C_COMPAT_INCLUDE.sub(cxx, text)
 
 
 def parse_report(text: str) -> Summary:
@@ -82,6 +107,12 @@ def render_markdown(
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) == 3 and argv[1] == "--rewrite-c-headers":
+        with open(argv[2], errors="replace") as report:
+            text = report.read()
+        with open(argv[2], "w") as report:
+            report.write(rewrite_c_headers(text))
+        return 0
     if len(argv) not in (3, 5):
         print(f"usage: {argv[0]} <iwyu.txt> <analyzer exit code> [<title> <artifact name>]", file=sys.stderr)
         return 2

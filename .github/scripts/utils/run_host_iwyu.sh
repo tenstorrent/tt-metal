@@ -110,6 +110,8 @@ iwyu_tool.py -p "$out" -j "$(nproc)" -- \
 echo "$status" > "$out/iwyu-exit-code.txt"
 echo "IWYU report written to $out/iwyu.txt"
 
+python3 "$script_dir/summarize_host_iwyu.py" --rewrite-c-headers "$out/iwyu.txt"
+
 python3 "$script_dir/summarize_host_iwyu.py" "$out/iwyu.txt" "$status" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
 if [ "$status" -ne 0 ]; then
