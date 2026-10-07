@@ -387,9 +387,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //     per-element values feeding the next matmul, not accumulators, so
     //     1KB/tile (half the bf16 cost) is enough and saves L1.
     // MiMo patch (env switches, default = original bfp8 behaviour):
-    //   MOE_UNI_BF16_INTERMED=1 -> gate/up_intermed, activated and cb_in0_down_full are Float16_b
-    //   MOE_UNI_BF16_X=1        -> cb_in0_x (tilized dispatched activations on the row-major path) is Float16_b
-    //   MOE_UNI_FIDELITY=lofi|hifi2|hifi4 -> compute math fidelity (default LoFi)
+    //   (all switches default ON, =0 restores the original) MOE_UNI_BF16_INTERMED=1 -> gate/up_intermed, activated and
+    //   cb_in0_down_full are Float16_b MOE_UNI_BF16_X=1        -> cb_in0_x (tilized dispatched activations on the
+    //   row-major path) is Float16_b MOE_UNI_FIDELITY=lofi|hifi2|hifi3|hifi4 -> compute math fidelity (default hifi3);
+    //   MOE_UNI_FP32_DEST / MOE_UNI_FP32_PARTIALS fp32 accumulation (default on)
     // bfp8 activations cost real accuracy on layers with outlier channels (MiMo L5: PCC 0.993 vs 0.9999 with bf16).
     const auto env_flag = [](const char* n) {
         const char* v = std::getenv(
