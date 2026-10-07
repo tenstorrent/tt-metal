@@ -3,6 +3,7 @@
 # (TT_METAL_RUNTIME_ROOT): zero_padded_kv_cache (CI's torus-y-8x1 and fabric2d-2x4 cases; its TILE path runs the compute
 # kernel) and ring joint MLA SDPA (CI's 4x2 pcc_check fabric2d selection; CI unset, which the test's uncollect_if keys on),
 # device time A/B with the opt-in, three passes each, and bits.
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 cd /work
 export TT_METAL_RUNTIME_ROOT=/work EB_SHOW_ERR=1
 ZP=models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_zero_padded_kv_cache.py

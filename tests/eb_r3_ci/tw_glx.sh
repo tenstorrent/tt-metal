@@ -2,6 +2,7 @@
 # Round 3 eltwise binary (#58723 review, twin round): Blackhole Galaxy, the strided matmul reduce-scatter with tt_dit's fused
 # addcmul (Wan Galaxy case, broadcast and full gate, both cluster axes): device time A/B with the opt-in, three passes of
 # main optin optin main, then bits.
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 cd /work
 export EB_SHOW_ERR=1 EB_RUN_LIMIT=1500 EB_REPS=3
 for p in 1 2 3; do

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Round 3 eltwise binary: run whole test modules on main's kernels and with opt-in defines, hash every output (eb_bits_plugin),
 # then compare outcomes and bits per test. usage: bits_ab.sh <optin file: "path|define line" per line> <pytest args...>
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 set -uo pipefail
 cd /work
 OPT=$1; shift

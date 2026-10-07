@@ -3,6 +3,7 @@
 # program (tests/eb_r3_ci/twins), on a Blackhole P150 with the JIT reading every header from /work (TT_METAL_RUNTIME_ROOT).
 # Bits per twin family (main, then the opt-in), each family in its own processes; the ELFs of the two kernel caches; then the
 # device time A/B (main optin optin main under the profiler) three passes over the cases that passed on both sides.
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 cd /work
 export TT_METAL_RUNTIME_ROOT=/work EB_SHOW_ERR=1
 TW=tests/eb_r3_ci/twins/test_eb_twins.py

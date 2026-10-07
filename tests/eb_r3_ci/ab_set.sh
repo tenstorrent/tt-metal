@@ -2,6 +2,7 @@
 # Round 3 eltwise binary: device time of a test selection with main's kernels ("main") against the same tests with a set of
 # opt-in defines ("optin"), runs main optin optin main, each under the device profiler with its own kernel cache and profiler
 # directory; every kernel file is restored at the end. usage: ab_set.sh <optin file: "path|define line" per line> <pytest args...>
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 set -uo pipefail
 cd /work
 OPT=$1; shift

@@ -3,6 +3,7 @@
 # (TT_METAL_RUNTIME_ROOT): ring joint SDPA's perf checks (the ring-4 QuietBox entries CI's Galaxy job runs at ring 8) and ring
 # joint MLA at 2x2 (CI unset, which the test's uncollect_if keys on), device time A/B with the opt-in and bits; then
 # reduce_to_root's traced replay timed by the test's own BenchmarkProfiler, main against the opt-in without the profiler.
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 cd /work
 export TT_METAL_RUNTIME_ROOT=/work EB_SHOW_ERR=1
 RJ=tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py

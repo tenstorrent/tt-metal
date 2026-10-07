@@ -2,6 +2,7 @@
 # Round 3 eltwise binary: a test's own BenchmarkProfiler timings (eb_bench_plugin), main's kernels against an opt-in, without
 # the profiler: <passes> rounds of main optin optin main, each a fresh process with its own kernel cache.
 # usage: bench_ab.sh <optin file: "path|define line" per line> <passes> <pytest args...>
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 set -uo pipefail
 cd /work
 OPT=$1; PASSES=$2; shift 2
