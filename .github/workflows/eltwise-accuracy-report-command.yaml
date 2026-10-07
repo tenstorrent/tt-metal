@@ -77,9 +77,10 @@ jobs:
               echo "::error::ops= takes comma-separated op names, got '$ops'"; exit 1; }
           fi
 
-          since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          # Unique per request: two asks on one pull request must not bind to each other's run.
+          request="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           if ! gh workflow run accuracy-command.yml --repo "$ORACLE" \
-                 -f pr="$PR" ${ops:+-f ops="$ops"}
+                 -f pr="$PR" -f request="$request" ${ops:+-f ops="$ops"}
           then
             # Comment first, fail after: the asker and the maintainer both need to know.
             echo "started=false" >> "$GITHUB_OUTPUT"
@@ -88,15 +89,14 @@ jobs:
           echo "started=true" >> "$GITHUB_OUTPUT"
           workflow="$GITHUB_SERVER_URL/$ORACLE/actions/workflows/accuracy-command.yml"
 
-          # `gh workflow run` returns no id, so match the oracle's `run-name`; `displayTitle`
-          # errors on older `gh`. Newer than `since`, or a repeat links the previous run.
+          # `gh workflow run` returns no id, so match the `run-name` the oracle builds from
+          # `request`. On `name`: `displayTitle` errors on older `gh`.
           for _ in 1 2 3 4 5 6; do
             sleep 5
             id=$(gh run list --repo "$ORACLE" --workflow accuracy-command.yml \
-              --limit 20 --json databaseId,createdAt,name 2>/dev/null \
-              | jq -r --arg name "eltwise-accuracy-report for tt-metal#$PR" --arg since "$since" \
-                '[.[] | select(.name == $name and .createdAt >= $since)]
-                 | sort_by(.createdAt) | last | .databaseId // empty' || true)
+              --limit 20 --json databaseId,name 2>/dev/null \
+              | jq -r --arg name "eltwise-accuracy-report for tt-metal#$PR [$request]" \
+                'first(.[] | select(.name == $name) | .databaseId) // empty' || true)
             [ -z "$id" ] || break
           done
           # Started either way; with no id the link is coarser and the answer step is skipped.
@@ -129,12 +129,12 @@ jobs:
           echo "comment=${url##*issuecomment-}" >> "$GITHUB_OUTPUT"
           [ "$STARTED" = true ]
 
-      # Posted with tt-metal's own token, so it reads as `github-actions[bot]`.
+      # Posted with the automatic `GITHUB_TOKEN`, so it reads as `github-actions[bot]`.
       - name: Answer when it finishes
         if: steps.start.outputs.id != '' && steps.ack.outputs.comment != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          # Only to read the oracle's run and its artifact; it cannot write here.
+          # The one secret: reads the oracle's run and artifact, cannot write to tt-metal.
           ORACLE_TOKEN: ${{ secrets.ACCURACY_REPORT_DISPATCH_TOKEN }}
           RUN: ${{ steps.start.outputs.id }}
           COMMENT: ${{ steps.ack.outputs.comment }}
