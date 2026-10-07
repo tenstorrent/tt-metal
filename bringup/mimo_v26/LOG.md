@@ -650,3 +650,25 @@
 - claim: mm path timing hint (paired alternating one process, host-timed, N=512/row incl dispatch+combine): mm 30 ms vs unified 2.3-2.8 ms per layer (13x slower: extract/FFN run on max_per_expert=2048 padded rows for each of 8 experts; real counts are ~64 avg). N=64/row decode-sized (32 slots padded to 64, ragged live 32/20/7/1): mm 7.8 ms vs unified 2.1 ms, mm PCC 0.99989-0.99998 vs unified 0.9917-0.9997 at L5. Decode-sized finding: dead pad tokens routed to a fixed expert set overflowed max_buf (worst chip load 1280 of 1248 at N=64 cf=4) -> pad tokens must be spread/masked (padding_config) or cf raised. Weights: one DRAM-interleaved bfp8 per-expert copy (analytic 214 MB/chip/layer, ~10 GB at 47 layers) works for mm, loop, unified and fused ops, so prefill and decode via these ops can share it; moe_compute ring layout still needs the C++ patch
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_C_L5_decode_a9f8e9910cd.log
 - paths: models/demos/blackhole/mimo_v26
+
+## E261007-0430-3d4
+- date: 2026-10-07T04:30:34
+- commit: 6be783ac580
+- branch: ssinghal/mimo-moe
+- host: 35
+- track: moe
+- status: verified
+- claim: A-perf C++ patch (commit 1260bf4b1f6, private relink build via bringup/mimo_v26/tools/priv_relink.py: recompiles only the op unity TU with the shared build's flags, relinks a private _ttnncpp.so, 20 s; shared build untouched; kernels JIT from worktree): env switches in unified_routed_expert_moe MOE_UNI_BF16_X (cb_in0_x Float16_b), MOE_UNI_BF16_INTERMED (gate/up/activated/down_full Float16_b), MOE_UNI_BF16_OUT (expert output tensor bf16), MOE_UNI_FIDELITY (default LoFi). Default (no env) bit-unchanged: L5 unified 0.99491-0.99312-0.99153-0.99324 as before. L5 real weights/tokens 4x8 PCC vs bf16 dump, dump routing: default 0.9915-0.9949; X only 0.9943-0.9967 (LoFi) / 0.9939-0.9965 (HiFi2, fidelity irrelevant); all three bf16 (LoFi) 0.99946-0.99959; all bf16 + HiFi2 0.99953-0.99970. With exact router 0.9994-0.9996. L1 0.99994 (exact router 0.99979-0.99991). 5 runs bit-identical, no dropped tokens. Gate >=0.999 met at unified-op speed: paired one process N=512/row host-timed unified(all-bf16) 2.3 ms (L5) / 2.8 ms (L1) vs mm 30 ms; default-bfp8 unified earlier 2.3/2.8 ms (separate process, hint) -> no measurable slowdown. N=2048/row L5: same PCC, worst load 3264 rows, max_buf 8416 (cf1) .. 32992 (cf4, 258 MB bf16 dispatch buffer per chip). Artifact: /mnt/tt-data/ssinghal/mimo/artifacts/moe_A_1260bf4b1f6/lib/_ttnncpp.so (run with LD_LIBRARY_PATH=<dir>/lib)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_D_L5_bf16uni_h35_6be783ac580.log
+- paths: models/demos/blackhole/mimo_v26, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+
+## E261007-0430-08b
+- date: 2026-10-07T04:30:35
+- commit: 6be783ac580
+- branch: ssinghal/mimo-moe
+- host: 35
+- track: moe
+- status: verified
+- claim: Decode-sized (32 slots/row padded to 64 tokens, ragged live 32/20/7/1, L5 real weights, all-bf16 unified): PCC vs bf16 dump live tokens 0.99949-0.99995 (mm 0.99989-0.99998), 5 runs identical. Dead pad slots now routed round-robin over all experts (spread_pad_routing in tt/moe_prefill.py): worst chip load 256 rows vs max_buf 1248 (cf4) / 480 (cf1); the test asserts on capacity overflow. Timing hint N=64/row host-timed paired: unified 1.9 ms, mm 5.0 ms per layer
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_D_L5_decode_bf16uni_h35_6be783ac580.log
+- paths: models/demos/blackhole/mimo_v26, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
