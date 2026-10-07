@@ -59,8 +59,12 @@ void kernel_main() {
     cb_reserve_back(cb_out, num_tiles_v);
     cb_reserve_back(cb_stats, num_tiles_stats);
     tile_regs_acquire();
-    for (std::uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        compute_sdpa_chunk<
+    // A second score buffer after the first, where it fits: the next chunk's Q K^T overlaps this chunk's exponentials.
+    constexpr std::uint32_t mm1_alt_dst_offset = mm1_dst_offset + packed_tile_size * chunk_size;
+    constexpr bool pipelined =
+        num_chunks > 1 && mm1_alt_dst_offset + packed_tile_size * chunk_size <= DEST_REGISTER_HALF_SIZE;
+    if constexpr (pipelined) {
+        compute_sdpa_chunks_pipelined<
             chunk_size,
             num_tiles_k,
             num_tiles_v,
@@ -74,17 +78,43 @@ void kernel_main() {
             output_granularity>(
             cb_q,
             cb_k,
-            cb_k,  // cb_v: single-CB MLA layout (separate_v=false reads V from cb_k)
-            0,     // cb_mask
+            cb_k,
             cb_out,
             mm1_dst_offset,
+            mm1_alt_dst_offset,
             mm2_dst_offset,
             max_dst_offset,
             sum_dst_offset,
             corr_exp_dst_offset,
-            chunk == 0,
-            chunk == num_chunks - 1,
-            false /* mask_last_chunk */);
+            num_chunks);
+    } else {
+        for (std::uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+            compute_sdpa_chunk<
+                chunk_size,
+                num_tiles_k,
+                num_tiles_v,
+                scale_fp32,
+                transpose_k,
+                transpose_v,
+                packed_tile_size,
+                exp_approx_mode,
+                /*qk_signal_granularity=*/chunk_size,
+                /*exp_signal_granularity=*/chunk_size,
+                output_granularity>(
+                cb_q,
+                cb_k,
+                cb_k,  // cb_v: single-CB MLA layout (separate_v=false reads V from cb_k)
+                0,     // cb_mask
+                cb_out,
+                mm1_dst_offset,
+                mm2_dst_offset,
+                max_dst_offset,
+                sum_dst_offset,
+                corr_exp_dst_offset,
+                chunk == 0,
+                chunk == num_chunks - 1,
+                false /* mask_last_chunk */);
+        }
     }
 
     // Sem is incremented once per output_granularity tiles since sem can only go up to 15

@@ -465,6 +465,136 @@ void compute_sdpa_chunk(
     }
 }
 
+// compute_sdpa_chunk over num_chunks chunks of one head, with the scores of chunk c in DEST at mm1_dst_offset for even
+// c and mm1_dst_offset_alt for odd c: chunk c + 1's Q K^T runs before chunk c's P V, so the FPU computes the next
+// scores while the pack thread's SFPU takes this chunk's exponentials. cb_k (and cb_v with separate_v) must hold two
+// chunks. No mask and no OV trim; callers that need them use compute_sdpa_chunk.
+template <
+    std::uint32_t chunk_size,
+    std::uint32_t num_tiles_k,
+    std::uint32_t num_tiles_v,
+    std::uint32_t scale_fp32,
+    bool transpose_k,
+    bool transpose_v,
+    std::uint32_t packed_tile_size,
+    bool exp_approx_mode = false,
+    std::uint32_t qk_signal_granularity = 1,
+    std::uint32_t exp_signal_granularity = 1,
+    std::uint32_t output_granularity = 1,
+    bool mm_pack_init = true,
+    bool separate_v = false>
+void compute_sdpa_chunks_pipelined(
+    std::uint32_t cb_q,
+    std::uint32_t cb_k,
+    std::uint32_t cb_v,
+    std::uint32_t cb_out,
+    std::uint32_t mm1_dst_offset,
+    std::uint32_t mm1_dst_offset_alt,
+    std::uint32_t mm2_dst_offset,
+    std::uint32_t max_dst_offset,
+    std::uint32_t sum_dst_offset,
+    std::uint32_t corr_exp_dst_offset,
+    std::uint32_t num_chunks) {
+    constexpr std::uint16_t scale_bf16 = scale_fp32 >> 16;
+    constexpr std::uint32_t k_chunk_tiles = num_tiles_k * chunk_size;
+    constexpr std::uint32_t v_chunk_tiles = num_tiles_v * chunk_size;
+    static_assert(
+        DST_ACCUM_MODE == false, "compute_sdpa_chunks_pipelined: FP32 destination accumulation mode is not supported");
+    static_assert(num_tiles_v % output_granularity == 0, "num_tiles_v must be divisible by output_granularity");
+    static_assert(chunk_size % qk_signal_granularity == 0, "chunk_size must be divisible by qk_signal_granularity");
+    static_assert(chunk_size % exp_signal_granularity == 0, "chunk_size must be divisible by exp_signal_granularity");
+    static_assert(chunk_size >= 2 && chunk_size % 2 == 0, "chunk_size (the OV matmul's kt_dim) must be even and >= 2");
+    static_assert(
+        num_tiles_k >= 2 && num_tiles_k % 2 == 0, "num_tiles_k (the QK matmul's kt_dim) must be even and >= 2");
+    // A chunk's subtraction posts and token are outstanding with the next chunk's Q K^T posts.
+    static_assert(
+        chunk_size / exp_signal_granularity + 1 + chunk_size / qk_signal_granularity <= 15,
+        "compute_sdpa_chunks_pipelined: outstanding FPU->SFPU posts must fit the 4-bit semaphore");
+    static_assert(num_tiles_v / output_granularity <= 15, "num_tiles_v / output_granularity must fit the semaphore");
+    constexpr std::uint32_t in1_k_stride = separate_v ? num_tiles_v : num_tiles_k;
+
+    auto scores = [&](std::uint32_t chunk) { return (chunk & 1) ? mm1_dst_offset_alt : mm1_dst_offset; };
+    auto qk = [&](std::uint32_t chunk) {
+        sdpa_custom_mm_block_init_short<transpose_k, mm_pack_init>(cb_q, cb_k, cb_out, chunk_size);
+        // chunk's K tiles follow the previous chunk's, which stays at the front until its P V is done
+        [[maybe_unused]] const std::uint32_t k_index = chunk == 0 ? 0 : k_chunk_tiles;
+        cb_wait_front(cb_k, k_index + k_chunk_tiles);
+        sdpa_custom_mm_block<transpose_k, qk_signal_granularity>(
+            cb_q, cb_k, 0, 0, k_index, scores(chunk), num_tiles_k, chunk_size, false);
+    };
+    auto max_sub_corr = [&](std::uint32_t chunk) {
+        const bool first = chunk == 0;
+        PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
+        PACK((llk_math_sfpu_sdpa_reduce_max_row<
+              false,
+              DST_ACCUM_MODE,
+              DataFormat::Float16_b,
+              chunk_size,
+              false,
+              qk_signal_granularity>(scores(chunk), max_dst_offset, !first)));
+        sdpa_sub_bcast_col_srca_srcb_reuse_tiles_init<chunk_size>(cb_q);
+        MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
+        sdpa_bcast_col_srca_srcb_reuse_preamble(max_dst_offset);
+        sdpa_sub_bcast_col_srca_srcb_reuse_tiles<chunk_size, false, exp_signal_granularity>(scores(chunk));
+        if (!first) {
+            PACK((non_approx_exp_mul_prev<exp_approx_mode, scale_bf16>(sum_dst_offset, corr_exp_dst_offset)));
+            PACK((t6_semaphore_post<p_stall::WAIT_SFPU>(SFPU_FPU)));
+#ifdef TRISC_MATH
+            constexpr bool skip_addrmod = !is_high_fidelity(MATH_FIDELITY);
+#else
+            constexpr bool skip_addrmod = false;
+#endif
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles_init<num_tiles_v, skip_addrmod>(cb_q);
+            MATH((t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU)));
+            sdpa_bcast_col_srca_srcb_reuse_preamble(corr_exp_dst_offset);
+            sdpa_mul_bcast_col_srca_srcb_reuse_tiles<num_tiles_v, true, 1>(mm2_dst_offset);
+            MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+            MATH((t6_semaphore_get<p_stall::NONE>(SFPU_FPU)));
+        } else {
+            MATH((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
+        }
+    };
+
+    MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
+    qk(0);
+    max_sub_corr(0);
+    for (std::uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        const bool last = chunk + 1 == num_chunks;
+        for (std::uint32_t i = 0; i < chunk_size; i++) {
+            if (i % exp_signal_granularity == 0) {
+                PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
+            }
+            PACK((fast_approx_exp(scores(chunk) + i * packed_tile_size)));
+            if (i % exp_signal_granularity == exp_signal_granularity - 1) {
+                PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
+                PACK((t6_semaphore_post<p_stall::NONE>(SFPU_FPU)));
+            }
+        }
+        if (!last) {
+            qk(chunk + 1);
+        }
+        if constexpr (separate_v) {
+            cb_wait_front(cb_v, v_chunk_tiles);
+        }
+        [[maybe_unused]] const std::uint32_t ov_cb = separate_v ? cb_v : cb_k;
+        sdpa_custom_mm_reuse_dest_srcb_block_init_short<false>(
+            cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+        sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
+            cb_q, ov_cb, 0, 0, scores(chunk), mm2_dst_offset, transpose_v, chunk_size, num_tiles_v, in1_k_stride, last);
+        PACK((ckernel::sfpu::_init_sdpa_reduce_sum_row_8x32_replay_buffers_()));
+        PACK((llk_math_sfpu_sdpa_reduce_sum_row<false, DST_ACCUM_MODE, DataFormat::Float16_b, chunk_size, true>(
+            scores(chunk), sum_dst_offset, chunk != 0)));
+        PACK((llk_math_sdpa_sfpu_signal_chunk_done()));
+        cb_pop_front(cb_k, k_chunk_tiles);
+        if constexpr (separate_v) {
+            cb_pop_front(cb_v, v_chunk_tiles);
+        }
+        if (!last) {
+            max_sub_corr(chunk + 1);
+        }
+    }
+}
+
 template <
     std::uint32_t num_tiles_v,
     bool exp_approx_mode,
