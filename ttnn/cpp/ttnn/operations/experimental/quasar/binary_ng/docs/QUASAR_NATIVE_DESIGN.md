@@ -394,7 +394,7 @@ Four mechanical constraints, each of which breaks the build or the op if missed:
    holds 8 files, so whether the copy lands in it depends on its position in `sources.cmake` — land it
    elsewhere and the ODR bug is latent (the link error is unconditional, so it still fails, just worse).
    Kernels need no `sources.cmake` entry: they are globbed (`quasar/CMakeLists.txt:19`
-   `file(GLOB_RECURSE kernels */device/kernels*/*)`), though with no `CONFIGURE_DEPENDS`, so a new
+   `file(GLOB_RECURSE kernels */device/kernels*/*.cpp */device/kernels*/*.hpp ...)`, extension-qualified), though with no `CONFIGURE_DEPENDS`, so a new
    `kernels_qsr/` needs an explicit re-configure before the install `FILE_SET` sees it.
 
 ### 3.2 The gate — `matches_quasar_native_slice`
