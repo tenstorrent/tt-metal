@@ -418,6 +418,20 @@ def _sanity(job, repo):
     return inputs
 
 
+def _sanity_debug(job, repo):
+    """sanity-tests-debug.yaml has its own dispatch inputs: the debug mode comes
+    from the job name ("… with LLK asserts" / "… with watcher"), the SKU picks
+    the device family or the simulator."""
+    sku = (re.search(r"\[([a-z0-9_]+)\]\s*$", job) or [None, ""])[1]
+    return {
+        "enable-llk-asserts": "true" if "LLK asserts" in job else "false",
+        "enable-watcher": "true" if "with watcher" in job else "false",
+        "run-ttsim-tests": "true" if sku.startswith("sim_") else "false",
+        "run-wormhole-tests": "true" if sku.startswith("wh_") else "false",
+        "run-blackhole-tests": "true" if sku.startswith("bh_") else "false",
+    }
+
+
 def _l2(job, repo):
     return {"run_wormhole": "true" if "wormhole" in job or "wh_" in job else "false",
             "run_blackhole": "true" if "blackhole" in job or "bh_" in job else "false",
@@ -432,7 +446,7 @@ RESOLVERS = {
     "blaze-models-prefill-tests.yaml": _blaze,
     "blackhole-e2e-tests.yaml": _bh_e2e,
     "sanity-tests.yaml": _sanity,
-    "sanity-tests-debug.yaml": _sanity,
+    "sanity-tests-debug.yaml": _sanity_debug,
     "tt-metal-l2-nightly.yaml": _l2,
     "t3000-tests.yaml": _t3k,
 }
