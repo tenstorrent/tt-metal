@@ -135,6 +135,13 @@ repos:
       types: [file]
       files: ^(tt_metal|ttnn|tt_stl|tt-train|tests)/.*\.(c|cc|cpp|cxx|h|hpp|inl)$
       pass_filenames: true
+    - id: check-bool-from-arithmetic-tests
+      name: Run the bool-from-arithmetic checker's tests when it or they change
+      entry: pytest -q -p no:cacheprovider --noconftest scripts/test_check_bool_from_arithmetic.py
+      language: python
+      additional_dependencies: ["pytest==8.3.5"]
+      files: ^scripts/(test_)?check_bool_from_arithmetic\.py$
+      pass_filenames: false
 - repo: local
   hooks:
     - id: validate-golden-csv-columns

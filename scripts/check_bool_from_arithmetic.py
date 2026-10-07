@@ -10,12 +10,15 @@ every tile count, size or index collapses to 1. No compiler covers this: GCC's
 ``-Wint-in-bool-context`` fires only for ``*`` and the host build disables it; neither GCC nor Clang
 warns for ``/`` or ``%``.
 
-Flagged: a declaration of a ``bool`` (``const`` / ``constexpr`` / ``static`` allowed; ``= init``,
-``{init}`` or a default argument) whose initializer's top-level operator, after stripping enclosing
-parentheses, is a binary ``*``, ``/`` or ``%``. Anything else at the top level -- a call, a
-comparison, a logical, bitwise, additive or shift operator, a ternary -- makes the declaration out of
-scope. The check prefers missing a case to flagging correct code, so anything it cannot parse
-unambiguously (for example a ``<`` that may be a comparison) is skipped.
+Flagged: a declaration of a ``bool`` (``const`` / ``constexpr`` / ``static`` allowed before or, for
+cv-qualifiers, after ``bool``; ``= init``, ``{init}`` or a default argument) whose initializer's
+top-level operator, after stripping enclosing parentheses, is a binary ``*``, ``/`` or ``%``. Anything
+else at the top level -- a call, a comparison, a logical, bitwise, additive or shift operator, a
+ternary -- makes the declaration out of scope. The check prefers missing a case to flagging correct
+code, so anything it cannot parse unambiguously (for example a ``<`` that may be a comparison) is
+skipped. Direct-initialization ``bool x(a / b);`` is not checked: textually it is a function
+declaration (``bool f(T* p);``), so accepting it would flag every such declaration with a pointer
+parameter.
 
 Only files passed on the command line are checked, so a commit is blocked only by what it touches.
 An optional ``--baseline`` file grandfathers known sites, one ``<repo-relative-path>\t<source line>``
@@ -30,7 +33,8 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DECL = re.compile(
-    r"\b(?:(?:const|constexpr|static|inline|volatile|thread_local)\s+)*bool\s+([A-Za-z_]\w*)\s*(=(?!=)|\{)"
+    r"\b(?:(?:const|constexpr|static|inline|volatile|thread_local)\s+)*bool\s+(?:(?:const|volatile)\s+)*"
+    r"([A-Za-z_]\w*)\s*(=(?!=)|\{)"
 )
 RAW_START = re.compile(r'(?:u8|[uUL])?R"([^ ()\\\t\n]{0,16})\(')
 # A `'` right after a number literal is a digit separator, not a character literal.

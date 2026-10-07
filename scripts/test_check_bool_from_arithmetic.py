@@ -41,6 +41,9 @@ def run(tmp_path, body, capsys, baseline=None, name="f.cpp"):
         "bool x = v[i] % n;",
         "bool x = a * *p;",
         "void f(bool x = a / 2);",
+        "bool const x = a / b;",
+        "static bool const x = a * b;",
+        "bool volatile x{a % n};",
     ],
 )
 def test_flagged(tmp_path, capsys, decl):
@@ -77,6 +80,9 @@ def test_flagged(tmp_path, capsys, decl):
         "bool x = true;",
         "bool operator==(const T& o) const { return a / b == o.a; }",
         "bool x, y = a;",
+        "bool x(a / b);",  # direct-initialization: documented gap, reads as a function declaration
+        "bool f(int* p, int n);",
+        "bool const& x = a / b;",
     ],
 )
 def test_clean(tmp_path, capsys, decl):
