@@ -298,8 +298,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     std::uint32_t unit_dims[MAX_UNITS_PER_ROW];
     std::uint32_t units_per_row = decompose_row(BLOCK_CT_DIM, unit_dims);
 
-    constexpr bool pack_free_runs = (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE);
-
     const std::uint32_t total_tiles = BLOCK_CT_DIM;
     const std::uint32_t tile_bytes  = GET_L1_HEADERLESS_TILE_SIZE(formats.pack_dst) << 4;
 
@@ -370,6 +368,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }
+            else if (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+            {
+                // No math handshake: pack runs without waiting for math or closing the dest section.
+                std::uint32_t prev_udim = unit_dims[0];
+
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    _llk_pack_fast_tilize_row_begin_(L1_ADDRESS(buffer_Res[0]));
+
+                    for (std::uint32_t u = 0; u < units_per_row; u++)
+                    {
+                        std::uint32_t udim = unit_dims[u];
+
+                        if (udim != prev_udim)
+                        {
+                            _llk_pack_fast_tilize_reinit_unit_dim_(formats.pack_dst, udim);
+                            prev_udim = udim;
+                        }
+
+                        _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
+                    }
+
+                    _llk_pack_fast_tilize_row_end_();
+                }
+            }
             else
             {
                 // Row-scoped pack: program destination once per row, stream chunks.
@@ -389,15 +412,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             prev_udim = udim;
                         }
 
-                        if constexpr (!pack_free_runs)
-                        {
-                            _llk_packer_wait_for_math_done_();
-                        }
+                        _llk_packer_wait_for_math_done_();
                         _llk_pack_fast_tilize_row_chunk_(0 /* tile_index */, udim, 4 /* num_faces */);
-                        if constexpr (!pack_free_runs)
-                        {
-                            _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-                        }
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                     }
 
                     _llk_pack_fast_tilize_row_end_();
@@ -406,7 +423,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("UNINIT")
-            if constexpr (pack_free_runs)
+            if (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
                 TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
             }

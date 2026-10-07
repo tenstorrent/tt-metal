@@ -85,15 +85,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
             }
         }
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                if constexpr (unpack_to_dest)
+                {
+                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                }
+            }
+        }
         else if (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-                if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                {
-                    _llk_unpack_dest_dvalid_section_done_<dest_sync>();
-                }
             }
         }
         PROFILER_SYNC();

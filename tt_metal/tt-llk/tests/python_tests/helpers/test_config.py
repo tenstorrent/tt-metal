@@ -1671,7 +1671,7 @@ class TestConfig:
         if in_runtimes:
             return [
                 "#define LLK_PERF_RUN_TYPE_CONSTEXPR 0",
-                "#define LLK_BIND_PERF_RUN_TYPE(params) const PerfRunType PERF_RUN_TYPE = params.PERF_RUN_TYPE",
+                "#define LLK_BIND_PERF_RUN_TYPE(params) [[maybe_unused]] const PerfRunType PERF_RUN_TYPE = params.PERF_RUN_TYPE",
             ]
         return [
             "#define LLK_PERF_RUN_TYPE_CONSTEXPR 0",

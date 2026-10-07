@@ -112,6 +112,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
             }
         }
+        else if (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; block++)
+                {
+                    _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, tensor_shape_A);
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                    }
+                }
+            }
+        }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -119,10 +133,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
                     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, tensor_shape_A);
-                    if constexpr (unpack_to_dest && (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION))
-                    {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
-                    }
                 }
             }
         }

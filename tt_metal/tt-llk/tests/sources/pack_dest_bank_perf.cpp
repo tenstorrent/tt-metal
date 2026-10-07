@@ -71,7 +71,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (int loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            for (int loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
@@ -158,7 +158,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (int loop = 0; loop < LOOP_FACTOR; ++loop)
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
