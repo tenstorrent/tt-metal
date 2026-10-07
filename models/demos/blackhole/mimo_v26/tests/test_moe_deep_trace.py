@@ -20,6 +20,8 @@ from models.demos.blackhole.mimo_v26.tt.moe_prefill import (
     TOPK,
     MiMoPrefillMoE,
     build_expert_weights,
+    hold_begin,
+    hold_end,
     make_ckc,
 )
 from models.demos.blackhole.mimo_v26.tt.moe_weights import load_layer_experts
