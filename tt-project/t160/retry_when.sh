@@ -1,4 +1,6 @@
 #!/bin/bash
-# Exit 0 when t160 can go on: prep failed (needs a fix), or copy + prep done and a dit node qualifies.
-rc=$(cat /home/smarton/fasth3/tt-metal/tt-project/state/runs/648/t160-copy.rc 2>/dev/null) || exit 1; [ "$rc" = 0 ] || exit 0
-exec ssh -o BatchMode=yes -o ConnectTimeout=10 exabox-login 'F=/data/smarton/fasth3; grep -q "PREP_RC=[1-9]" $F/prep.log 2>/dev/null && exit 0; grep -q "PREP_RC=0" $F/prep.log 2>/dev/null || exit 1; bash $F/qualify.sh >/dev/null'
+# exits 0 when the weight copy ended (ok or not) or the exabox build job 127515 ended non-zero; 1 otherwise.
+/home/smarton/fasth3/tt-metal/tt-project/harness/bin/ttp detach --check /home/smarton/fasth3/tt-metal/tt-project/state/runs/724/t160-pcopy.rc >/dev/null 2>&1 && exit 0
+timeout 40 ssh -o BatchMode=yes -o ConnectTimeout=15 exabox-login \
+  'f=/data/smarton/fasth3/t160/job-127515.rc; [ -e $f ] && ! grep -q "JOB_RC=0 " $f' && exit 0
+exit 1
