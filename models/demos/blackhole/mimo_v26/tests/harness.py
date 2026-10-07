@@ -9,6 +9,30 @@ import ttnn
 
 OUT = os.environ.get("ATTN_OUT", "/tmp/attn_mesh.jsonl")
 
+ALLOWED_LIB_ROOT = "/mnt/tt-data/ssinghal/mimo/artifacts/"
+
+
+def assert_integ_lib():
+    """Refuse to run on the shared build_Release ttnn library (it has the old, biased unified-op numerics). Reads /proc/self/maps: every mapped
+    libttnncpp*/_ttnncpp* .so must live under ALLOWED_LIB_ROOT (pass LD_LIBRARY_PATH=<artifacts>/integ_*/lib). MIMO_ALLOW_SHARED_LIB=1 overrides.
+    """
+    if os.environ.get("MIMO_ALLOW_SHARED_LIB") == "1":
+        return
+    libs = set()
+    with open("/proc/self/maps") as f:
+        for line in f:
+            parts = line.split(None, 5)
+            if len(parts) == 6:
+                path = parts[5].strip()
+                if "ttnncpp" in os.path.basename(path):
+                    libs.add(os.path.realpath(path))
+    bad = sorted(p for p in libs if not p.startswith(ALLOWED_LIB_ROOT))
+    if not libs or bad:
+        raise RuntimeError(
+            f"refusing to run: ttnn library {bad or 'not found in /proc/self/maps'} is not under {ALLOWED_LIB_ROOT} "
+            "(shared build has old numerics). Set LD_LIBRARY_PATH to the artifacts/integ_*/lib dir, or MIMO_ALLOW_SHARED_LIB=1 to override."
+        )
+
 
 def rec(case, **kw):
     kw["case"] = case
@@ -19,6 +43,7 @@ def rec(case, **kw):
 
 
 def open_mesh(trace_mb=256):
+    assert_integ_lib()
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), trace_region_size=trace_mb * 1024 * 1024)
 
@@ -30,6 +55,7 @@ def open_mesh_full(trace_mb=int(os.environ.get("ATTN_TRACE_MB", "512"))):
         int(os.environ.get("ATTN_STACK_S", "900")), repeat=True
     )  # python stacks of a stuck run into the log
     """mesh for the full model tests (same params as the smoke fixtures: FABRIC_1D_RING, l1_small 16384)"""
+    assert_integ_lib()
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=16384, trace_region_size=trace_mb * 1024 * 1024)
 
