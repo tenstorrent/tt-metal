@@ -44,6 +44,13 @@ def run(tmp_path, body, capsys, baseline=None, name="f.cpp"):
         "bool const x = a / b;",
         "static bool const x = a * b;",
         "bool volatile x{a % n};",
+        "bool x, y = a / b;",
+        "bool x = true, y = a / b;",
+        "bool x = a / b, y = true;",
+        "bool x{true}, y{a / b};",
+        "bool x = c ? a : b, y = a / b;",
+        "bool x = f(a, b), y = a % b;",
+        "const bool x, y, z = a * b;",
     ],
 )
 def test_flagged(tmp_path, capsys, decl):
@@ -80,6 +87,10 @@ def test_flagged(tmp_path, capsys, decl):
         "bool x = true;",
         "bool operator==(const T& o) const { return a / b == o.a; }",
         "bool x, y = a;",
+        "bool x, y = a / b + c, z = true;",
+        "void f(bool x, int y = a / b);",  # the second parameter is not a bool
+        "void f(bool x = true, int y = a / b);",
+        "bool x, *p = &q, y = true;",
         "bool x(a / b);",  # direct-initialization: documented gap, reads as a function declaration
         "bool f(int* p, int n);",
         "bool const& x = a / b;",
@@ -89,6 +100,18 @@ def test_clean(tmp_path, capsys, decl):
     code, out = run(tmp_path, f"void g() {{\n    {decl}\n}}\n", capsys)
     assert code == 0, out
     assert out == ""
+
+
+def test_multi_declaration_reports_the_declarator_line(tmp_path, capsys):
+    body = """
+    bool first = false, second = false,
+        third = n / 32;
+    template <bool B, int N = a / b> struct S;
+    """
+    code, out = run(tmp_path, body, capsys)
+    assert code == 1
+    assert out.count("multiplicative expression") == 1
+    assert ":3: " in out and "third = n / 32;" in out
 
 
 def test_preprocessor_and_raw_string_are_ignored(tmp_path, capsys):

@@ -12,7 +12,8 @@ warns for ``/`` or ``%``.
 
 Flagged: a declaration of a ``bool`` (``const`` / ``constexpr`` / ``static`` allowed before or, for
 cv-qualifiers, after ``bool``; ``= init``, ``{init}`` or a default argument) whose initializer's
-top-level operator, after stripping enclosing parentheses, is a binary ``*``, ``/`` or ``%``. Anything
+top-level operator, after stripping enclosing parentheses, is a binary ``*``, ``/`` or ``%``. Every
+declarator of a multi-declaration is checked (``bool a, b = x / y;`` flags ``b``). Anything
 else at the top level -- a call, a comparison, a logical, bitwise, additive or shift operator, a
 ternary -- makes the declaration out of scope. The check prefers missing a case to flagging correct
 code, so anything it cannot parse unambiguously (for example a ``<`` that may be a comparison) is
@@ -34,8 +35,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DECL = re.compile(
     r"\b(?:(?:const|constexpr|static|inline|volatile|thread_local)\s+)*bool\s+(?:(?:const|volatile)\s+)*"
-    r"([A-Za-z_]\w*)\s*(=(?!=)|\{)"
+    r"(?=[A-Za-z_])"
 )
+NAME = re.compile(r"([A-Za-z_]\w*)\s*")
 RAW_START = re.compile(r'(?:u8|[uUL])?R"([^ ()\\\t\n]{0,16})\(')
 # A `'` right after a number literal is a digit separator, not a character literal.
 NUMBER_BEFORE = re.compile(r"(?<![\w.])\d[\w.']*$")
@@ -155,7 +157,8 @@ def tokens(text):
 
 
 def initializer(code, start, brace):
-    """The initializer text from start to its top-level end, or None if it is not one expression.
+    """The initializer text from start to its top-level end, as (text, index of the terminator), or
+    None if it is not one expression.
 
     `= init` ends at `;`, `,` or the `)` closing a parameter list; `{init}` ends at its `}` and must
     hold a single element.
@@ -167,13 +170,50 @@ def initializer(code, start, brace):
             depth += 1
         elif c in CLOSE:
             if depth == 0:
-                return code[start:i] if c == ("}" if brace else ")") else None
+                return (code[start:i], i) if c == ("}" if brace else ")") else None
             depth -= 1
         elif depth == 0 and c == ";":
-            return None if brace else code[start:i]
+            return None if brace else (code[start:i], i)
         elif depth == 0 and c == ",":
-            return None if brace else code[start:i]
+            return None if brace else (code[start:i], i)
     return None
+
+
+def declarators(code, pos):
+    """Yield (name offset, initializer text or None) for each declarator of the declaration at pos.
+
+    `bool a = 1, b{2}, c;` yields a, b and c. The walk follows top-level commas only while the next
+    declarator is a bare name followed by `=`, `{`, `,`, `;` or `)`, so a parameter list
+    (`void f(bool a, int b = x / y)`) or a template parameter list stops after the bool.
+    """
+    while True:
+        m = NAME.match(code, pos)
+        if not m:
+            return
+        name_at, pos = m.start(1), m.end()
+        c = code[pos : pos + 1]
+        expr = None
+        if c == "=" and code[pos + 1 : pos + 2] != "=":
+            found = initializer(code, pos + 1, False)
+            if found is None:
+                return
+            expr, pos = found
+        elif c == "{":
+            found = initializer(code, pos + 1, True)
+            if found is None:
+                return
+            expr, pos = found
+            pos += 1
+            while pos < len(code) and code[pos].isspace():
+                pos += 1
+        elif c not in (",", ";", ")"):
+            return
+        yield name_at, expr
+        if code[pos : pos + 1] != ",":
+            return
+        pos += 1
+        while pos < len(code) and code[pos].isspace():
+            pos += 1
 
 
 def _skip_template_args(toks, i):
@@ -277,12 +317,10 @@ def scan(path):
     code = blank_noncode(src)
     lines = src.split("\n")
     for m in DECL.finditer(code):
-        expr = initializer(code, m.end(), m.group(2) == "{")
-        if expr is None:
-            continue
-        if top_level_is_multiplicative(expr):
-            line_no = code.count("\n", 0, m.start()) + 1
-            yield line_no, lines[line_no - 1].strip()
+        for name_at, expr in declarators(code, m.end()):
+            if expr is not None and top_level_is_multiplicative(expr):
+                line_no = code.count("\n", 0, name_at) + 1
+                yield line_no, lines[line_no - 1].strip()
 
 
 def load_baseline(path):
