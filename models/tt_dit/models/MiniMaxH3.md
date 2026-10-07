@@ -417,10 +417,7 @@ repeating.
 
 **Always warm up before quoting a number.** A first call reports ~1.4x the total (denoise 104.7 s
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
-rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in
-the 50-block stack is keyed on the padded packed length, so warming a different one warms nothing.
-`run_warm_generation` asserts the warm and measured lengths agree; for t2va the hazard is
-masked only by luck, since 1 and 39 tokens both round up to 37888.
+rows by design. Construction runs `warmup()`, which warms every component with synthetic inputs.
 
 ## Precision
 

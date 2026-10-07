@@ -43,6 +43,7 @@ from ....layers.module import Module
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.tensor import local_device_to_torch
+from ....utils.tracing import StateTensor
 from ..vocoder_ltx import Vocoder
 from .blockings_minimax_h3_audio import register_h3_audio_blockings
 
@@ -103,6 +104,8 @@ class MiniMaxH3AudioDecoder(Module):
                     f"mesh axis {batch_shard_axis} has length {mesh_shape[batch_shard_axis]}; nothing to shard"
                 )
         self._pad_masks: dict = {}
+        # Persistent per-length input so trace replays reuse the captured address.
+        self._tt_input: dict[int, StateTensor] = {}
 
         # H3's audio channel schedule differs from LTX's at both ends, so every conv misses
         # _FP32_BLOCKINGS. Seed stubs before any conv is built; see that module for why stubs.
@@ -188,8 +191,10 @@ class MiniMaxH3AudioDecoder(Module):
         projected_dev = self.dec_in_proj(x_dev)
         if t_pad:
             projected_dev = ttnn.multiply(projected_dev, self._pad_row_mask(x.shape[1], t_pad))
+        tt_input = self._tt_input.setdefault(latents_BCT.shape[-1], StateTensor())
+        tt_input.update(projected_dev, traced=traced)
         return self.decoder.forward_device_BTC(
-            projected_dev,
+            tt_input.value,
             t_pad=t_pad,
             traced=traced,
             trace_key=tuple(latents_BCT.shape),

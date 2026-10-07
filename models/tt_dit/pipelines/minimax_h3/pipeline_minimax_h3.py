@@ -46,13 +46,12 @@ import json
 import os
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import NamedTuple
 
-import numpy as np
 import torch
 import tqdm
 from loguru import logger
@@ -92,7 +91,6 @@ from .packing import (
     MINIMAX_H3_AUDIO_LATENTS_PER_SECOND,
     MINIMAX_H3_FPS,
     MINIMAX_H3_KEYFRAME_NOISE_AUG,
-    MINIMAX_H3_MAX_DURATION,
     MINIMAX_H3_TEXT_TAG,
     MINIMAX_H3_VIDEO_TAG,
     MiniMaxH3PackedSequence,
@@ -111,7 +109,6 @@ from .packing import (
     video_latent_num_frames,
 )
 from .packing_ref2va import (
-    MINIMAX_H3_MAX_REFERENCE_IMAGES,
     MiniMaxH3PreparedReference,
     MiniMaxH3Reference,
     build_ref2va_packed_sequence,
@@ -133,7 +130,14 @@ from .policy import (
     served_reference_image_sizes,
     validate_request,
 )
-from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
+from .references import (
+    MINIMAX_H3_AUDIO_HOP,
+    MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS,
+    encode_references,
+    prepare_references,
+    reference_condition_shapes,
+    split_condition_blocks,
+)
 from .scheduler import MiniMaxH3Scheduler
 from .weights_minimax_h3 import resolve_weights_dir
 
@@ -711,7 +715,7 @@ class MiniMaxH3Pipeline:
         self._prepare_audio_decoder()
 
         if warmup:
-            self._warmup_on_init()
+            self.warmup()
 
     # ------------------------------------------------------------------ construction
 
@@ -1427,7 +1431,7 @@ class MiniMaxH3Pipeline:
         )
 
     def _select_bucket(self, seq_len: int) -> int:
-        """The rung this request pads to: `warmup`'s forced rung, else the smallest that fits."""
+        """The rung this request pads to: the rung `_warm_denoise_bucket` forces, else the smallest that fits."""
         if self._force_bucket is not None:
             rung = self._force_bucket
             if rung not in self.bucket_ladder:
@@ -1754,8 +1758,7 @@ class MiniMaxH3Pipeline:
             aspect_ratio=aspect_ratio,
             height=height,
             width=width,
-            # Warmup's forced runs shrink num_frames below the served range to fit the smaller rungs.
-            num_frames=num_frames if self._force_bucket is None else None,
+            num_frames=num_frames,
         )
 
         if references is not None:
@@ -2092,136 +2095,85 @@ class MiniMaxH3Pipeline:
             video_format="yuv420" if yuv else "rgb_float",
         )
 
-    @staticmethod
-    def _warmup_image(size: int = 512) -> Image.Image:
-        y, x = np.mgrid[0:size, 0:size].astype(np.uint8)
-        return Image.fromarray(np.stack([x, y, x ^ y], axis=-1), "RGB")
-
-    def _warmup_audio(self, seconds: float = 1.0) -> tuple[torch.Tensor, int]:
-        rate = self.audio_sampling_rate
-        return torch.zeros(MINIMAX_H3_AUDIO_CHANNELS, int(seconds * rate), dtype=torch.float32), rate
-
-    def _warmup_video(self, num_frames: int, size: int = 256) -> np.ndarray:
-        return np.zeros((num_frames, size, size, 3), dtype=np.uint8)
-
-    def _warmup_on_init(self) -> None:
-        """Compile and (when tracing) capture every module a served request touches, per task: the
-        keyframe encoder for t2va/fl2va, and the image, video and audio encoders for ref2va."""
-        height, width = resolve_canvas_size(16, 9)
-        num_frames = get_num_frames(5)
-        if self.task != "ref2va":
-            rung_requests = {
-                max(self.bucket_ladder): dict(
-                    image=self._warmup_image(),
-                    last_image=self._warmup_image(),
-                    num_frames=num_frames,
-                    height=height,
-                    width=width,
-                )
-            }
-            self.warmup(
-                image=self._warmup_image(),
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                rung_requests=rung_requests,
-            )
-            return
-
-        full_frames = get_num_frames(MINIMAX_H3_MAX_DURATION)
-        mid_frames = get_num_frames(10)
-        waveform, sample_rate = self._warmup_audio(MINIMAX_H3_MAX_DURATION)
-        ladder = sorted(self.bucket_ladder, reverse=True)
-        video_audio = MiniMaxH3Reference(
-            video=self._warmup_video(full_frames),
-            fps=float(MINIMAX_H3_FPS),
-            audio=waveform,
-            sample_rate=sample_rate,
-        )
-        rung_requests = {
-            ladder[0]: dict(
-                references=[MiniMaxH3Reference(image=self._warmup_image()), video_audio],
-                num_frames=full_frames,
-                height=height,
-                width=width,
-            )
-        }
-        if len(ladder) > 1:
-            images = [MiniMaxH3Reference(image=self._warmup_image()) for _ in range(MINIMAX_H3_MAX_REFERENCE_IMAGES)]
-            rung_requests[ladder[1]] = dict(
-                references=images,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-            )
-        if len(ladder) > 2:
-            rung_requests[ladder[2]] = dict(
-                references=[MiniMaxH3Reference(video=self._warmup_video(mid_frames), fps=float(MINIMAX_H3_FPS))],
-                num_frames=mid_frames,
-                height=height,
-                width=width,
-            )
-        self.warmup(
-            references=[MiniMaxH3Reference(image=self._warmup_image())],
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            rung_requests=rung_requests,
-        )
-
-    def warmup(
-        self,
-        *,
-        prompt: str = "warmup",
-        image: Image.Image | None = None,
-        last_image: Image.Image | None = None,
-        references: Sequence[MiniMaxH3Reference] | None = None,
-        num_frames: int | None = 124,
-        height: int | None = None,
-        width: int | None = None,
-        aspect_ratio: tuple[int, int] = (16, 9),
-        rung_requests: Mapping[int, dict] | None = None,
-    ) -> None:
-        """
-        Buffer allocation and, when tracing, trace capture. Only a bucketed pipeline has a bounded
-        set of programs to compile, so a non-bucketed one has nothing to warm.
-        """
+    def warmup(self) -> None:
         if not self.bucket_denoise:
             return
-        generation_kwargs = dict(
-            image=image,
-            last_image=last_image,
-            references=references,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            aspect_ratio=aspect_ratio,
-        )
-        overrides = dict(rung_requests or {})
-        # Warmup generations decode audio untraced so every program is compiled before any trace
-        # is captured; `_capture_audio` is the only place audio traces are taken.
-        trace_audio = self.trace_audio
-        self.trace_audio = False
         self._log_generation = False
         try:
-            if self.vae_output_type == "yuv420":
-                self._warm_vae_decode()
-            self._warm_audio_decode()
-            self._warm_prompt_encoder()
-            fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
-            self._capture_traces(prompt, fitted, overrides, trace_audio)
+            self._warm_encoders()
+            self._warm_decoders()
+            self._warm_denoise_buckets()
+            self._capture_traces()
         finally:
-            self.trace_audio = trace_audio
             self._log_generation = True
 
-    def _warm_denoise_buckets(
-        self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
-    ) -> dict[int, dict]:
-        """Bind each rung's buffers. Returns the request that fit each rung, for `_capture_denoise`."""
-        fitted: dict[int, dict] = {}
-        shrunk = generation_kwargs
-        host = _is_host_rank()
+    def _warm_encoders(self) -> None:
+        self._warm_prompt_encoder()
+        self._warm_vae_encode()
+        if self.task == "ref2va":
+            self._warm_audio_encode()
+
+    def _warm_decoders(self) -> None:
+        if self.vae_output_type == "yuv420":
+            self._warm_vae_decode()
+        self._warm_audio_decode()
+
+    def _synthetic_layout(self) -> tuple[MiniMaxH3PackedSequence, list[tuple[str, int]] | None]:
+        ratio = self.vae_config.spatial_compression_ratio
+        latent_height, latent_width = (side // ratio for side in resolve_canvas_size(16, 9))
+        tags = torch.full((32,), MINIMAX_H3_TEXT_TAG, dtype=torch.long)
+        if self.task != "ref2va":
+            return build_packed_sequence(tags, 1, latent_height, latent_width, 4, self.patch_size, ("first",)), None
+        reference = MiniMaxH3PreparedReference(
+            kind="video",
+            has_audio=True,
+            num_latent_frames=1,
+            latent_height=latent_height,
+            latent_width=latent_width,
+            num_audio_latents=4,
+        )
+        layout = build_ref2va_packed_sequence(tags, [reference], 1, latent_height, latent_width, 4, self.patch_size)
+        # `split_condition_blocks` order: a reference's soundtrack rows precede its video rows.
+        return layout, [("audio", reference.num_audio_rows), ("video", reference.num_video_rows)]
+
+    def _warm_denoise_bucket(self, rung: int) -> None:
+        """One denoise of zeros padded to `rung`; programs key on the rung and caps, not the content."""
+        layout, condition_spec = self._synthetic_layout()
+        _, patch_h, patch_w = self.patch_size
+        video_rows = torch.zeros(layout.video_indices.shape[0], self.vae_config.latent_channels * patch_h * patch_w)
+        audio_rows = torch.zeros(layout.audio_indices.shape[0], self.audio_config["latent_channels"])
+        scheduler = MiniMaxH3Scheduler(shift=VIDEO_SHIFT)
+        audio_scheduler = MiniMaxH3Scheduler(shift=AUDIO_SHIFT)
+        scheduler.set_timesteps(2)
+        audio_scheduler.set_timesteps(2)
+        # At the cap so `prepare_static_sources` skips the pad; `_warm_prompt_pad` covers it.
+        embeds = ttnn.zeros(
+            (1, self.arena_caps.prompt, self.transformer_config["text_dim"]),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+        )
+        transformer = self._prepare_transformer()
+        self._force_bucket = rung
+        try:
+            self._denoise(
+                transformer,
+                layout,
+                embeds,
+                video_rows,
+                audio_rows,
+                scheduler,
+                audio_scheduler,
+                condition_spec=condition_spec,
+            )
+        finally:
+            self._force_bucket = None
+            ttnn.deallocate(embeds)
+
+    def _warm_denoise_buckets(self) -> None:
         bind_rungs = sorted(self.bucket_ladder, reverse=True)
+        before = self.mesh_device.num_program_cache_entries()
+        host = _is_host_rank()
         if host:
             _tqdm_spacer()
         for rung in tqdm.tqdm(
@@ -2232,29 +2184,19 @@ class MiniMaxH3Pipeline:
             bar_format=_TQDM_BAR_FORMAT,
         ):
             bucket = self._buckets.get(rung)
-            shrink = rung not in overrides
-            request = overrides.get(rung, shrunk)
             if bucket is None or not bucket.warm:
-                request = self._run_forced_fit(rung, prompt, request, shrink=shrink)
-                if request is None:
-                    continue
-                if shrink:
-                    shrunk = request
-            fitted[rung] = request
-        return fitted
+                self._warm_denoise_bucket(rung)
+        self._host_log(f"denoise buckets warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
-    def _capture_traces(
-        self, prompt: str, fitted: Mapping[int, dict], overrides: Mapping[int, dict], trace_audio: bool
-    ) -> None:
-        """Capture every trace a served request replays, after all programs are compiled."""
-        self._capture_denoise(prompt, fitted, overrides)
-        self._capture_audio(trace_audio)
+    def _capture_traces(self) -> None:
+        """Audio last: each rung's first denoise visit releases every live trace."""
+        self._capture_denoise()
+        self._capture_audio()
 
-    def _capture_denoise(self, prompt: str, fitted: Mapping[int, dict], overrides: Mapping[int, dict]) -> None:
-        """Capture each fitted rung's denoise trace by replaying the request that fit it."""
+    def _capture_denoise(self) -> None:
         if not self.trace_denoise:
             return
-        capture_rungs = sorted(fitted, reverse=True)
+        capture_rungs = sorted(self.bucket_ladder, reverse=True)
         host = _is_host_rank()
         if host:
             _tqdm_spacer()
@@ -2266,32 +2208,25 @@ class MiniMaxH3Pipeline:
             bar_format=_TQDM_BAR_FORMAT,
         ):
             if not self._rung_captured(rung):
-                self._run_forced_fit(rung, prompt, fitted[rung], shrink=rung not in overrides)
+                self._warm_denoise_bucket(rung)
 
-    def _run_forced(self, rung: int, prompt: str, generation_kwargs: dict) -> None:
-        """One short generation padded to `rung` regardless of its natural rung -- warmup's ladder walk."""
-        self._force_bucket = rung
-        try:
-            self(prompt, num_inference_steps=2, **generation_kwargs)
-        finally:
-            self._force_bucket = None
+    def _warm_vae_encode(self) -> None:
+        """Programs key on the tile shape, so one tile covers every encode. uint8: the VAE takes raw pixels."""
+        tile = self._vae.tile_size
+        before = self.mesh_device.num_program_cache_entries()
+        self._vae.encode_clip(torch.zeros(1, 3, 1, tile, tile, dtype=torch.uint8))
+        if self.task == "ref2va":
+            self._vae.encode(torch.zeros(1, 3, self.vae_config.clip_length, tile, tile, dtype=torch.uint8))
+        self._host_log(f"VAE encode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
-    def _run_forced_fit(self, rung: int, prompt: str, generation_kwargs: dict, *, shrink: bool) -> dict | None:
-        """`_run_forced`; with `shrink`, halve `num_frames` until the request fits `rung`. Returns the
-        kwargs that ran, or None when even the shortest video does not fit.
-        """
-        kwargs = dict(generation_kwargs)
-        while True:
-            try:
-                self._run_forced(rung, prompt, kwargs)
-                return kwargs
-            except ValueError as error:
-                if not shrink or "smaller than the packed length" not in str(error):
-                    raise
-                frames = kwargs.get("num_frames") or 124
-                if frames <= 5:
-                    return None
-                kwargs["num_frames"] = max(5, frames // 2)
+    def _warm_audio_encode(self) -> None:
+        """`encode_references` pads every soundtrack to one length."""
+        encoder = self._prepare_audio_encoder()
+        before = self.mesh_device.num_program_cache_entries()
+        encoder(
+            torch.zeros(MINIMAX_H3_AUDIO_CHANNELS, 1, MINIMAX_H3_MAX_REFERENCE_AUDIO_LATENTS * MINIMAX_H3_AUDIO_HOP)
+        )
+        self._host_log(f"audio encode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
     def _filler_prompt(self, num_tokens: int) -> str:
         """A prompt of exactly `num_tokens` tokens: only length keys the encoder's programs, so any
@@ -2436,9 +2371,9 @@ class MiniMaxH3Pipeline:
             decoder(latents)
         self._host_log(f"audio decode warmed: +{self.mesh_device.num_program_cache_entries() - before} programs")
 
-    def _capture_audio(self, trace_audio: bool) -> None:
+    def _capture_audio(self) -> None:
         """Capture the audio decode trace at every served length, keyed on the shape `_decode_audio` serves."""
-        if not trace_audio:
+        if not self.trace_audio:
             return
         decoder = self._prepare_audio_decoder()
         inputs = self._audio_warm_inputs()
@@ -2516,7 +2451,7 @@ class MiniMaxH3Pipeline:
         `lengths`, strictly before trace capture.
 
         `prepare_static_sources` pads before the token refiner and the pad program is keyed on its
-        input length, which the warmup generations do not visit exhaustively. `spec` is a real
+        input length, which the denoise warm does not visit (it runs at the cap). `spec` is a real
         encoder output's, so the warmed programs are the served ones; a length at the cap is not
         padded.
         """
