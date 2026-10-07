@@ -159,6 +159,9 @@ inline constexpr bool unpack_AB_tile_dvalid = src_dvalid == SrcDvalid::PerTile;
 template <BroadcastType BType>
 inline bool unpack_AB_tile_1x2_shape(const ckernel::TensorShape tensor_shape)
 {
+#if defined(EB_CI_NO_1X2)
+    return false;
+#endif
     return tensor_shape.num_faces_r_dim == 1 && tensor_shape.num_faces_c_dim == 2 && (tensor_shape.face_r_dim < FACE_R_DIM || BType == BroadcastType::COL);
 }
 

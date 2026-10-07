@@ -1,0 +1,2 @@
+tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode[b=8-nh=8-nkv=1-s=32768-d=128-grid_size=(8, 6)-single_iter=True-cur_pos_tensor=False-kv_bfp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sdpa_decode.py::test_sdpa_decode_paged_attention[paged_64-llama3.1-a-kv_bfp8_q_bf16]

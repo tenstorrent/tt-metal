@@ -1,0 +1,1 @@
+models/demos/deepseek_v3_b1/micro_ops/sdpa_reduce_to_all/kernels/sdpa_reduce_kernel.cpp|#define SDPA_BCAST_COL_REUSE_PER_TILE_HANDOFF true
