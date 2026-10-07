@@ -42,6 +42,8 @@ Blackhole only: these LLKs live only in the Blackhole tree and cannot run on WH/
 This test writes a correct-by-construction golden; runtime pass/fail is a BH-card check.
 """
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from conftest import blackhole_only, skip_for_quasar, skip_for_wormhole
@@ -57,6 +59,7 @@ from helpers.test_variant_parameters import (
     CUSTOM_MM_CALLS,
     IN_FACE_DIMS,
     NUM_FACES,
+    TemplateParameter,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
@@ -83,6 +86,16 @@ _BFP_UNPACKERS = {
     DataFormat.Bfp8_b: unpack_bfp8_b,
     DataFormat.Bfp4_b: unpack_bfp4_b,
 }
+
+
+@dataclass
+class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
+    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_tile_init does."""
+
+    preserve: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG = {str(self.preserve).lower()};"
 
 
 class CustomMMStimuliConfig(StimuliConfig):
@@ -115,7 +128,21 @@ class CustomMMStimuliConfig(StimuliConfig):
         write_to_device(location, self.buf_b_addr, self.packed_b)
 
 
-def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
+def _run_custom_mm(
+    M,
+    kt,
+    ct,
+    formats,
+    dest_acc,
+    calls=CUSTOM_MM_CALLS(),
+    preserve_zero_flag=False,
+    operands=None,
+):
+    """Run custom_mm and check it against the golden; return the (M, N) result.
+
+    ``operands`` optionally supplies ``(A, B, golden_A)``; ``golden_A`` is the A the golden multiplies,
+    for operands the device is expected to change on the way in (flushed denormals).
+    """
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
     in0_format = formats.input_format
@@ -124,9 +151,13 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
     in0_packer = _PACKERS[in0_format]
     in1_packer = _PACKERS[in1_format]
 
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.float32)
-    torch_b = torch.randn((K, N), dtype=torch.float32)
+    if operands is None:
+        torch.manual_seed(0)
+        torch_a = torch.randn((M, K), dtype=torch.float32)
+        torch_b = torch.randn((K, N), dtype=torch.float32)
+        golden_a = torch_a
+    else:
+        torch_a, torch_b, golden_a = operands
 
     # in0 (A -> SrcB): kt*2 faces of [M, 16], column-face order along K, contiguous.
     packed_a = b""
@@ -169,7 +200,7 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
     # get_golden_generator) so the compile-producer's dummy generator does not break the
     # narrow-M reshape.
     golden = MatmulGolden()(
-        torch_a,
+        golden_a,
         golden_b,
         out_format,
         MathFidelity.LoFi,
@@ -189,6 +220,7 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             calls,
+            CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -237,6 +269,7 @@ def _run_custom_mm(M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS()):
     assert passed_test(
         golden, res_tensor, out_format, custom_atol=custom_atol, print_pcc=True
     ), f"custom_mm matmul failed for M={M} kt={kt} ct={ct} formats={formats}"
+    return res_tensor
 
 
 # LoFi-only per the header ("fidelity: LoFi only"). Float16_b (16-bit dest) and Float32
@@ -342,3 +375,45 @@ def test_custom_mm_multi_call(M, kt, ct, num_calls, in1_format):
     _run_custom_mm(
         M, kt, ct, formats, DestAccumulation.No, CUSTOM_MM_CALLS(num_calls=num_calls)
     )
+
+
+# Smallest positive bf16 denormal, 2^-133.
+BF16_DENORMAL_MIN = 2.0**-133
+
+
+@blackhole_only
+@pytest.mark.parametrize("ct", [1, 2])
+def test_custom_mm_flushes_denormal_srcb_after_keep_flag(ct):
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B ~ 2^100 they
+    give nonzero products if kept, so those rows must come out exactly 0. Rows 4-7 are normal and check the
+    rest of the product.
+    """
+    M, kt = 8, 2
+    K, N = kt * DEFAULT_TILE_R_DIM, ct * DEFAULT_TILE_C_DIM
+    denormal_rows = 4
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.float32) * 2.0**-100
+    torch_a[:denormal_rows] = (
+        BF16_DENORMAL_MIN * torch.randint(1, 128, (denormal_rows, K)).float()
+    )
+    torch_b = torch.randn((K, N), dtype=torch.float32) * 2.0**100
+    golden_a = torch_a.clone()
+    golden_a[:denormal_rows] = 0.0
+
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+    res = _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        DestAccumulation.No,
+        preserve_zero_flag=True,
+        operands=(torch_a, torch_b, golden_a),
+    )
+    kept = res[:denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"

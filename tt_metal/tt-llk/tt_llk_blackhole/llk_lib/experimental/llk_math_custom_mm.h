@@ -169,6 +169,9 @@ inline void _llk_math_custom_mm_init_(const std::uint32_t operandB_face_r_dim, c
     custom_mm_configure_mop<split_acc>(operandB_face_r_dim, ct_dim);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; MVMUL needs the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
 template <bool finalize = true>
