@@ -1048,6 +1048,189 @@ def run_rms_fuse_impl_deepseek(
     mesh_device.reset_sub_device_stall_group()
 
 
+def run_rms_fuse_cache_hit_deepseek(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    input_shard_grid,
+    output_shard_grid,
+    output_shard_width,
+    all_gather_topology,
+    fused_add,
+    inplace=False,
+    input_dtype=ttnn.bfloat16,
+    residual_dtype=ttnn.bfloat16,
+    epsilon=1e-05,
+):
+    """Two fused_rms_minimal calls with the same spec on fresh allocations must share one cached program.
+
+    Both calls' tensors stay alive, so the second call cannot be handed the first call's addresses. The second
+    call uses different data, a different GlobalSemaphore (excluded from the program hash and re-applied on every
+    cache hit) and its own stats tensor (backs a circular buffer and is the all-gather destination). A stale input,
+    residual, gamma or output binding shows up as a PCC failure against the second call's own golden; a stale stats
+    binding leaves the second stats tensor untouched.
+    """
+    ccl_sub_device_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 7))})
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
+    mesh_device.load_sub_device_manager(sub_device_manager)
+    mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+    torch.manual_seed(1234)
+
+    num_cores = input_shard_grid.num_cores()
+    total_cores = num_cores * num_devices
+    padded_dim_per_core = int(math.ceil(elements_per_batch / total_cores / 32) * 32)
+    padded_dim = padded_dim_per_core * total_cores
+    size_per_device = padded_dim // num_devices
+    input_shape = (1, 1, 32, padded_dim)
+    mesh_shape = list(ttnn.MeshShape(num_devices, 1))
+
+    input_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=input_shard_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    if inplace:
+        output_memory_config = input_memory_config
+    else:
+        output_memory_config = ttnn.create_sharded_memory_config(
+            shape=(32, output_shard_width),
+            core_grid=output_shard_grid if output_shard_grid is not None else input_shard_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    layer_norm_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(4, 8),
+        subblock_w=1,
+        block_h=1,
+        block_w=(size_per_device // num_cores) // 32,
+        inplace=inplace,
+    )
+    # Single-core stats sharding so stats.padded_shape[-1] = num_devices * TILE_WIDTH (see run_rms_fuse_impl_deepseek).
+    ag_memory_config = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    ag_shape = [1, 1, 32, num_devices]
+    stats_sentinel = -7.0
+
+    def make_call():
+        call = {
+            "input_torch": torch.randn(input_shape),
+            "residual_torch": torch.randn(input_shape),
+            "gamma_torch": torch.randn((1, 1, 1, input_shape[3])),
+        }
+        call["input"] = ttnn.as_tensor(
+            call["input_torch"],
+            dtype=input_dtype,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(3, None), mesh_shape=mesh_shape),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=input_memory_config,
+        )
+        call["residual"] = (
+            ttnn.as_tensor(
+                call["residual_torch"],
+                dtype=residual_dtype,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(3, None), mesh_shape=mesh_shape),
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=input_memory_config,
+            )
+            if fused_add
+            else None
+        )
+        call["gamma"] = ttnn.as_tensor(
+            call["gamma_torch"].reshape([1, 1, padded_dim // 32, 32]),
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device=mesh_device, dims=(2, None), mesh_shape=mesh_shape),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        call["stats"] = ttnn.from_torch(
+            torch.full(ag_shape, stats_sentinel, dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ag_memory_config,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=mesh_shape),
+        )
+        call["semaphore"] = ttnn.create_global_semaphore(mesh_device, input_shard_grid, 0)
+        return call
+
+    def dispatch(call):
+        call["output"] = ttnn.fused_rms_minimal(
+            call["input"],
+            layer_norm_config,
+            0,
+            mesh_device,
+            call["semaphore"],
+            topology=all_gather_topology,
+            memory_config=output_memory_config,
+            epsilon=epsilon,
+            weight=call["gamma"],
+            residual_input_tensor=call["residual"],
+            stats=call["stats"],
+        )
+        ttnn.synchronize_device(mesh_device)
+
+    def to_torch(tensor):
+        return ttnn.to_torch(
+            tensor,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=(num_devices, 1)),
+        )[0].unsqueeze(0)
+
+    def check_against_own_golden(call, label):
+        ref_res_add = call["input_torch"]
+        if fused_add:
+            ref_res_add = call["input_torch"] + call["residual_torch"]
+            passing, output = comp_pcc(to_torch(call["residual"]), ref_res_add, 0.9999)
+            logger.info(f"{label} residual: {output}")
+            assert passing, f"{label}: residual add result mismatch"
+        ref_lnorm = get_torch_rms(ref_res_add, [3], call["gamma_torch"], epsilon)
+        passing, output = comp_pcc(to_torch(call["output"]), ref_lnorm, 0.999)
+        logger.info(f"{label} output: {output}")
+        assert passing, f"{label}: output mismatch"
+
+    try:
+        # Every tensor is allocated up front so no helper program runs between the two op dispatches.
+        call_miss = make_call()
+        call_hit = make_call()
+
+        mesh_device.enable_program_cache()
+        mesh_device.clear_program_cache()
+        entries_before = mesh_device.num_program_cache_entries()
+
+        dispatch(call_miss)
+        entries_after_miss = mesh_device.num_program_cache_entries()
+        assert entries_after_miss > entries_before, "first fused_rms_minimal call did not add a program cache entry"
+
+        dispatch(call_hit)
+        entries_after_hit = mesh_device.num_program_cache_entries()
+        assert (
+            entries_after_hit == entries_after_miss
+        ), f"second call with the same spec added cache entries ({entries_after_miss} -> {entries_after_hit})"
+
+        check_against_own_golden(call_miss, "miss")
+        check_against_own_golden(call_hit, "hit")
+
+        stats_hit = ttnn.to_torch(
+            call_hit["stats"],
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 0), mesh_shape=(num_devices, 1)),
+        )
+        assert not torch.all(stats_hit == stats_sentinel), "cache hit did not write the second call's stats tensor"
+    finally:
+        mesh_device.reset_sub_device_stall_group()
+
+
 def run_rms_fuse_impl(
     mesh_device,
     num_devices,

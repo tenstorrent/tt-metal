@@ -272,6 +272,9 @@ ttsl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
 
+    // The caller-supplied semaphore is excluded from the key so per-call semaphores share one program;
+    // RMSAllGatherProgramFactory::override_runtime_arguments re-applies its address on every cache hit.
+    // sub_device_id is keyed through the worker core range set it resolves to.
     auto subdevice_id = args.sub_device_id;
     auto* mesh_device = tensor_args.input.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));

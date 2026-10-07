@@ -19,6 +19,7 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
 from tests.ttnn.unit_tests.operations.ccl.fusion_subtests.rms_test import (
+    run_rms_fuse_cache_hit_deepseek,
     run_rms_fuse_impl_deepseek,
     run_rms_trace,
     run_rms_trace_qwen,
@@ -1050,6 +1051,59 @@ def test_rms_fuse_n300(
         atol_threshold=atol_threshold,
         rtol_threshold=rtol_threshold,
         compute_kernel_config=compute_kernel_config,
+    )
+
+
+@skip_for_blackhole("This is a wormhole test")
+@pytest.mark.skipif(is_6u(), reason="This test is for N300 (2-chip WH)")
+@pytest.mark.parametrize(
+    "num_devices, elements_per_batch, input_shard_grid",
+    [(2, 2048, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}))],
+)
+@pytest.mark.parametrize(
+    "output_shard_grid, output_shard_width, inplace",
+    [
+        pytest.param(None, 32, False, id="no_reshard"),
+        pytest.param(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+            64,
+            False,
+            id="reshard",
+        ),
+        pytest.param(None, 32, True, id="inplace"),
+    ],
+)
+@pytest.mark.parametrize("fused_add", [True, False])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 1), id="2x1_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+def test_rms_fuse_n300_program_cache(
+    mesh_device,
+    num_devices,
+    elements_per_batch,
+    input_shard_grid,
+    output_shard_grid,
+    output_shard_width,
+    inplace,
+    fused_add,
+    topology,
+):
+    if mesh_device.get_num_devices() != 2:
+        pytest.skip("Not N300 - this test targets 2-chip Wormhole")
+    run_rms_fuse_cache_hit_deepseek(
+        mesh_device,
+        num_devices,
+        elements_per_batch,
+        input_shard_grid,
+        output_shard_grid,
+        output_shard_width,
+        topology,
+        fused_add,
+        inplace=inplace,
     )
 
 

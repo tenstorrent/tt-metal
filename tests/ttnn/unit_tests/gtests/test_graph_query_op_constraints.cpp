@@ -1295,7 +1295,7 @@ TYPED_TEST(DistributedTensorOpIfTest, BroadcastWithShardedTopology) {
 TYPED_TEST(DistributedTensorOpIfTest, FusedRmsMinimalWithShardedTopology) {
     // rms_allgather_program_factory slices stats_cores_vec by ring_size, which
     // requires a physical core layout matching the number of devices.  Mock
-    // devices don't satisfy this, causing a heap-buffer-overflow in create_at().
+    // devices don't satisfy this, causing a heap-buffer-overflow in build_rms_allgather_program_descriptor().
     if (tt::tt_metal::experimental::is_mock_mode_registered()) {
         GTEST_SKIP() << "fused_rms_minimal requires real hardware (mock core layout is insufficient)";
     }

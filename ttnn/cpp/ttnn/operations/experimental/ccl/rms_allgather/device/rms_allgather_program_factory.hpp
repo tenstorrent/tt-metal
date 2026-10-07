@@ -4,6 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "rms_allgather_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -11,45 +17,36 @@
 
 namespace ttnn::experimental::prim {
 
-struct RMSAllGatherSharedVariables {
-    std::vector<tt::tt_metal::KernelHandle> writer_kernel_ids;
-    tt::tt_metal::KernelHandle writer_mcast_sender_kernels_id{};
-    tt::tt_metal::KernelHandle writer_mcast_receiver_kernels_id{};
-    uint32_t num_none_all_to_all_workers = 0;
-    tt::tt_metal::CBHandle pre_cb_in0{};
-    tt::tt_metal::CBHandle cb_in1{};
-    tt::tt_metal::CBHandle cb_add_out{};
-    tt::tt_metal::CBHandle cb_in0{};
-    tt::tt_metal::CBHandle cb_stats{};
-    tt::tt_metal::CBHandle cb_output{};
-    tt::tt_metal::CBHandle cb_output_reshard{};
-    std::vector<tt::tt_metal::CoreCoord> cores;
-};
+// Kernel indices follow the push order in the per-coordinate descriptor builder, and the writer arg slot
+// follows the writer runtime-arg layout; override_runtime_arguments() re-applies the semaphore address there.
+namespace rms_allgather_dynamic {
+inline constexpr uint32_t kWriterAllToAllKernelIdx = 0;
+// Present only when the shard grid has workers outside the all-to-all set.
+inline constexpr uint32_t kWriterNotAllToAllKernelIdx = 1;
+// Writer layout: [0]=offset of post args, [1..4]=mcast rect, [5]=scaler, [6]=core id, [7]=out_ready_sem,
+// [8]=out_ready_sem wait value, [9]=stats address (Buffer* binding).
+inline constexpr uint32_t kWriterSemaphoreArg = 7;
+inline constexpr uint32_t kWriterStatsAddrArg = 9;
+// Offset of the gamma address (Buffer* binding) from the start of the post args.
+inline constexpr uint32_t kWriterPostGammaAddrOffset = 2;
+}  // namespace rms_allgather_dynamic
 
-struct RMSAllGatherMeshWorkloadFactory {
-    using shared_variables_t = RMSAllGatherSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+struct RMSAllGatherProgramFactory {
+    // One ProgramDescriptor per coordinate: device index and fabric neighbors depend on the coordinate.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const RMSAllGatherParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const RMSAllGatherInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
+    // Tensor addresses are refreshed through Buffer* / CB bindings. This re-applies only the caller-supplied
+    // GlobalSemaphore address, which RMSAllGatherDeviceOperation::compute_program_hash excludes from the key.
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const RMSAllGatherParams& operation_attributes,
         const RMSAllGatherInputs& tensor_args,
-        Tensor& tensor_return_value);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const RMSAllGatherParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const RMSAllGatherInputs& tensor_args,
-        Tensor& tensor_return_value);
+        Tensor& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim
