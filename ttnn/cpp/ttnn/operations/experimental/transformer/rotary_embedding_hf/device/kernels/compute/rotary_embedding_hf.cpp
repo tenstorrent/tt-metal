@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
 #include <cstdint>
 
 #include "api/compute/common.h"
