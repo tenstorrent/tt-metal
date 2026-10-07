@@ -102,6 +102,40 @@ def main():
             return v, i
 
         capture("head", head, dict(kind="head"))
+        if E("PROF_STAGES", "1") == "1":
+            # stage traces of one SWA+MoE layer (L1) and one global+MoE layer (L5): attention part and the MoE stages (MiMoMoEDecode.forward(upto=k)) so ops can be named by difference
+            for L in [int(v) for v in E("PROF_STAGE_LAYERS", "1,5").split(",")]:
+                lyr = model.layers[L]
+                hh = embed()
+                for l2 in range(L):
+                    h2 = model.layers[l2].decode(hh, dec.pos["cur"], dec.pos["idx"], live=live)
+                    ttnn.deallocate(hh)
+                    hh = h2
+                hin = ttnn.clone(hh)
+
+                def attn_part():
+                    xn = lyr.rms(hin, lyr.w_in)
+                    a = lyr.attn.decode(xn, dec.pos["cur"], dec.pos["idx"])
+                    return ttnn.add(hin, a, dtype=ttnn.bfloat16)
+
+                h1 = attn_part()
+                capture(f"stage_L{L}_attn", attn_part, dict(kind="stage", layer=L, part="norm_in+attention+residual"))
+                fn = lyr.rms(h1, lyr.w_post)
+                fn = ttnn.clone(fn)
+                capture(
+                    f"stage_L{L}_norm2", lambda: lyr.rms(h1, lyr.w_post), dict(kind="stage", layer=L, part="post norm")
+                )
+                lyr.moe_decode(fn, live)  # builds moe_dec
+                for k in (0, 1, 2, 3, 4, 5, 99):
+
+                    def moe_part(k=k):
+                        o = lyr.moe_dec.forward(fn, live, upto=k)
+                        return o if not isinstance(o, tuple) else o[0]
+
+                    try:
+                        capture(f"stage_L{L}_moe_upto{k}", moe_part, dict(kind="stage", layer=L, part=f"moe upto {k}"))
+                    except Exception as e:  # noqa
+                        print("PROF_STAGE_FAIL", L, k, str(e)[:200], flush=True)
         os.makedirs(out_dir, exist_ok=True)
         json.dump(segs, open(os.path.join(out_dir, "segments.json"), "w"), indent=1)
     finally:
