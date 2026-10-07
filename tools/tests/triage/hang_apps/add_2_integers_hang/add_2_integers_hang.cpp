@@ -132,6 +132,7 @@ int main() {
         .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "out")},
         .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
+        .runtime_arg_schema = {.common_runtime_arg_names = {"incremented_semaphore"}},
         .hw_config = writer_dm_config,
     };
 
@@ -149,10 +150,11 @@ int main() {
         .hw_config = compute_hw_config,
     };
 
-    // Read by dump_semaphores: the writer kernel bumps the program semaphore twice, nothing touches the global one.
-    // The program semaphore starts at zero, which is all Quasar allows; a non-zero initial value is also
-    // deprecated on every architecture. The global semaphore has no such limit, so it starts at 3.
+    // Read by dump_semaphores: the writer kernel bumps the program semaphore twice and incremented_semaphore once,
+    // nothing touches global_semaphore. The program semaphore starts at zero, which is all Quasar allows; a non-zero
+    // initial value is also deprecated on every architecture. Global semaphores have no such limit.
     auto global_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(node), 3);
+    auto incremented_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(node), 5);
 
     experimental::ProgramSpec spec{
         .name = "add_2_integers_hang",
@@ -171,12 +173,16 @@ int main() {
     distributed::MeshWorkload workload = experimental::MakeMeshWorkloadFromSpec(*mesh_device, spec);
     Program& program = workload.get_programs().begin()->second;
 
-    // Bind the tensors the kernels operate on. None of the three kernels declares runtime args of its own: the
-    // reader and writer get their addresses from these tensor arguments, and the compute kernel needs none.
+    // Bind the tensors the kernels operate on. The reader and writer get their buffer addresses from these tensor
+    // arguments and the compute kernel needs none; the writer's one runtime arg is the GlobalSemaphore it bumps.
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = READER},
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = WRITER},
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .common_runtime_arg_values =
+                {{"incremented_semaphore", static_cast<uint32_t>(incremented_semaphore.address())}},
+        },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     params.tensor_args = {

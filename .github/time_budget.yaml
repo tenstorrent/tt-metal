@@ -354,6 +354,7 @@ models:
     bh_loudbox: 200
     bh_quietbox_2: 90
     bh_sc1: 20
+    bh_galaxy: 13
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 215
@@ -419,8 +420,8 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 1750
-    bh_sc1_high_power: 388
+    bh_sc1: 1836
+    bh_sc1_high_power: 483
     bh_sc4: 60
     wh_n150: 500
     wh_n150_civ2: 300
@@ -454,7 +455,7 @@ models:
     wh_galaxy_perf: 430
     bh_quietbox_2: 310
     wh_llmbox: 342
-    bh_loudbox: 290
+    bh_loudbox: 320
     bh_galaxy: 65
     wh_n150: 65
 umd:
@@ -471,7 +472,8 @@ syseng:
     wh_n150_civ2: 34
     wh_n300_civ2: 36
     bh_p100: 20
-    bh_p150b_civ2: 20
+    bh_p150b_civ2: 30
+    bh_p300: 10
 
 gtm:
   e2e:

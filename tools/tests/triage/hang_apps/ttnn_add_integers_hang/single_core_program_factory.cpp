@@ -33,7 +33,9 @@ constexpr auto KERNEL_DIR = "tools/tests/triage/hang_apps/add_2_integers_hang/ke
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::create_program_artifacts(
-    const operation_attributes_t&, const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     // Bind the MeshTensors reachable from tensor_args / tensor_return_value: the adapter matches
     // TensorArguments to those by pointer identity, so a copy would be rejected.
     const auto& src0 = tensor_args.input_tensor_a.mesh_tensor();
@@ -74,6 +76,7 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
         .dfb_bindings = {ConsumerOf(OUT_DFB, "out")},
         .semaphore_bindings = {{.semaphore_spec_name = PROGRAM_SEM, .accessor_name = "program_sem"}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_T, .accessor_name = "out"}},
+        .runtime_arg_schema = {.common_runtime_arg_names = {"incremented_semaphore"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
@@ -103,10 +106,18 @@ ttnn::device_operation::ProgramArtifacts AddIntegersHangOperation::SingleCore::c
         .work_units = {{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = NodeCoord{0, 0}}},
     };
 
-    // None of the three kernels declares runtime args of its own: the reader and writer get their
-    // addresses from the tensor arguments, and the compute kernel needs none. The framework applies
-    // these run args for us; the factory must not call SetProgramRunArgs itself.
+    // The reader and writer get their buffer addresses from the tensor arguments and the compute kernel
+    // needs none; the writer's one runtime arg is the GlobalSemaphore it bumps, same as in
+    // add_2_integers_hang. Kernels without runtime args may be left out. The framework applies these
+    // run args for us; the factory must not call SetProgramRunArgs itself.
     ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER,
+            .common_runtime_arg_values =
+                {{"incremented_semaphore", operation_attributes.incremented_semaphore_address}},
+        },
+    };
     run_args.tensor_args = {
         {IN0_T, ProgramRunArgs::TensorArgument{src0}},
         {IN1_T, ProgramRunArgs::TensorArgument{src1}},

@@ -5,7 +5,10 @@
 
 """
 Usage:
-    dump_semaphores
+    dump_semaphores [--include-global-unchanged]
+
+Options:
+    --include-global-unchanged   Also show global semaphores whose Value equals Initial.
 
 Description:
     Semaphore values on Tensix and Ethernet cores, one row per semaphore per core.
@@ -19,6 +22,10 @@ Description:
     Initial is the value the host last wrote: at launch for a program semaphore, at creation or the
     latest reset_semaphore_value for a global one, N/A if it never wrote one. A kernel resetting a
     semaphore on device is not reflected.
+
+    Without --include-global-unchanged, global rows still at Initial (idle or never signaled) are
+    left out, since models can declare ~100 GlobalSemaphores per core. A global semaphore missing
+    from a core it covers is therefore at Initial. Program rows are always shown.
 
     Both lists come from Inspector, which records each program's semaphores and every live
     GlobalSemaphore.
@@ -97,29 +104,36 @@ def program_rows(location: OnChipCoordinate, dispatcher_data: DispatcherData, by
     return rows
 
 
-def global_rows(location: OnChipCoordinate, semaphores) -> list[SemaphoreRow]:
+def global_rows(location: OnChipCoordinate, semaphores, include_unchanged: bool) -> list[SemaphoreRow]:
     (x, y), core_type = location.to("logical")
     if core_type != "tensix":
         return []  # GlobalSemaphores live on worker cores
     rows = []
     for address, core_ranges, device_ids, initial in semaphores:
         if location.device.id in device_ids and covers(core_ranges, x, y):
-            rows.append(SemaphoreRow("global", None, address, read_word_from_device(location, address), initial))
+            value = read_word_from_device(location, address)
+            if include_unchanged or value != initial:
+                rows.append(SemaphoreRow("global", None, address, value, initial))
     return rows
 
 
-def read_core(location: OnChipCoordinate, dispatcher_data: DispatcherData, by_kernel, globals_) -> list | None:
-    return program_rows(location, dispatcher_data, by_kernel) + global_rows(location, globals_) or None
+def read_core(
+    location: OnChipCoordinate, dispatcher_data: DispatcherData, by_kernel, globals_, include_unchanged: bool
+) -> list | None:
+    return (
+        program_rows(location, dispatcher_data, by_kernel) + global_rows(location, globals_, include_unchanged) or None
+    )
 
 
 def run(args, context: Context):
+    include_unchanged: bool = args["--include-global-unchanged"]
     run_checks = get_run_checks(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     inspector_data = get_inspector_data(args, context)
     by_kernel = program_semaphores_by_kernel(inspector_data)
     globals_ = global_semaphores(inspector_data, get_metal_device_id_mapping(args, context), run_checks)
     return run_checks.run_per_block_check(
-        lambda location: read_core(location, dispatcher_data, by_kernel, globals_),
+        lambda location: read_core(location, dispatcher_data, by_kernel, globals_, include_unchanged),
         block_filter=["tensix", "active_eth", "idle_eth"],
     )
 

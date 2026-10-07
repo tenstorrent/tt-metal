@@ -48,9 +48,12 @@ int main() {
     // Read by dump_semaphores, same as in add_2_integers_hang.
     auto global_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), ttnn::CoreRange({0, 0}, {0, 0}), 3);
+    auto incremented_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device.get(), ttnn::CoreRange({0, 0}, {0, 0}), 5);
 
     try {
-        ttnn::Tensor result = triage_hang_apps::add_integers_hang(a, b);
+        ttnn::Tensor result = triage_hang_apps::add_integers_hang(
+            a, b, static_cast<uint32_t>(ttnn::global_semaphore::get_global_semaphore_address(incremented_semaphore)));
         // Force the dispatch to actually complete (which it won't — the kernel hangs).
         // Reading back will block until the op finishes or times out.
         std::cout << "Number of elements: " << result.to_vector<bfloat16>().size() << std::endl;

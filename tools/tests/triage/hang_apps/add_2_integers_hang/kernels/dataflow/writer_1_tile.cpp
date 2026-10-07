@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
@@ -20,12 +21,15 @@ void kernel_main() {
     // Address of the output tensor, supplied as a ProgramRunArgs tensor argument.
     const auto out = TensorAccessor(tensor::out);
 
-    // dump_semaphores expects the program semaphore at its initial value plus these two increments. They
-    // have to come first: the compute kernel hangs before it produces a tile, so nothing after the wait
-    // below ever runs.
+    // dump_semaphores expects the program semaphore at its initial value plus these two increments, and the
+    // GlobalSemaphore the host passes at its initial 5 plus one. They have to come first: the compute kernel hangs
+    // before it produces a tile, so nothing after the wait below ever runs.
     Semaphore program_sem(sem::program_sem);
     program_sem.up(1);
     program_sem.up(1);
+    // Metal 2.0 cannot bind a GlobalSemaphore yet, so it arrives as a plain address and is bumped with a NoC atomic.
+    noc_semaphore_inc(get_noc_addr(get_arg(args::incremented_semaphore)), 1);
+    noc_async_atomic_barrier();
 
     Noc noc;
 
