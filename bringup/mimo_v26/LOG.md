@@ -1972,3 +1972,14 @@
 - paths: models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
 - supersedes: E261007-1703-80a
 - data: {"verify_ms_u1":105.2,"round_ms_u1":130,"tok_s_user_u1":33.9,"plain_tok_s_user_u1":13.6,"verify_ms_u4":126.6,"round_ms_u4":168.5,"tok_s_user_u4":25.7,"plain_tok_s_user_u4":10.8,"accepted_u1":4.40,"accepted_u4":4.33}
+
+## E261007-1828-600
+- date: 2026-10-07T18:28:08
+- commit: 5f97b02ffbf
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER REQUIREMENT 2026-10-07: no host work during the inference pass; end to end must be device-resident. Definition adopted: inside a decode step / spec round the host only enqueues trace replays (non-blocking execute_trace); NO copy_host_to_device per step, NO host-side compute (mask/index building, accept logic, position increments), NO blocking readback per step; tokens are fed back on device (argmax -> next embedding), positions/masks/EOS/dead flags updated on device, spec accept + ring append + position update on device; the host reads generated tokens back only in bulk or asynchronously (every N steps, pipelined behind the next enqueue) and uploads only the prompt and static tables at setup. Current host work measured: plain decode 3.4 ms/step (input copies 1.0-1.3 + candidate readback 1.9-2.3, E261007-1632-433); spec round: set_round 5.4/12.1 ms, append host ~8/20 ms (E261007-1806-8f6). Assigned: decode agent (plain decode), spec agent (spec round), prefill chunk inputs after.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
