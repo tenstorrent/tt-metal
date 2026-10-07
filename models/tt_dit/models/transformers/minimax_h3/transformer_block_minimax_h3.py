@@ -282,6 +282,7 @@ class MiniMaxH3TransformerBlock(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        tables: list[ttnn.Tensor] | None = None,
         onehot: ttnn.Tensor | None = None,
         tilerow: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
     ) -> ttnn.Tensor:
@@ -292,12 +293,15 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
+        tables: this step's six modulation tables (the transformer's schedule cache); projected from `temb` here
+            when absent.
         onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
             pair from `tilerow_tables`; without the pair the norms take the per-token gather.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """
-        tables = self._modulation_tables(temb)
+        if tables is None:
+            tables = self._modulation_tables(temb)
 
         if onehot is None:
             onehot = self._onehot(self._gather_indices(adaln_indices), tables[0].shape[0])

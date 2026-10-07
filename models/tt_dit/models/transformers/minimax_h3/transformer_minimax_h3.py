@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -205,6 +208,13 @@ class MiniMaxH3Transformer3DModel(Module):
         self._temb_state = StateTensor()
         self._timestep_idx_state: dict[int, StateTensor] = {}
         self._eye_states: dict[int, StateTensor] = {}
+        # Opt-in adaLN schedule cache: one slot per denoise step holding every block's six modulation tables,
+        # reserved by `reserve_adaln_cache` before any trace is captured and refilled in place on a miss.
+        self._adaln_cache_enabled = os.environ.get("MINIMAX_H3_ADALN_CACHE") == "1"
+        self._adaln_cache_slots: list[list[list[ttnn.Tensor]]] = []
+        self._adaln_cache_keys: list[tuple | None] = []
+        self.adaln_cache_hits = 0
+        self.adaln_cache_misses = 0
         self._static_source_state = StateTensor()
         self._prompt_windows_state = StateTensor()
         self.parallel_config = parallel_config
@@ -373,6 +383,8 @@ class MiniMaxH3Transformer3DModel(Module):
         logical_n: ttnn.Tensor,
         pad_to: int,
         traced: bool = False,
+        timestep_key: tuple | None = None,
+        adaln_cache_slot: int | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -392,6 +404,8 @@ class MiniMaxH3Transformer3DModel(Module):
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
         pad_to: the padded packed length; keys the trace together with the presence of the tile-row map (one
             capture per `(pad_to, map present)`).
+        timestep_key / adaln_cache_slot: the step's hashable timestep vector and its index in the schedule, for the
+            adaLN schedule cache (`MINIMAX_H3_ADALN_CACHE=1`, eager path only; traced steps ignore both).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
 
@@ -447,6 +461,9 @@ class MiniMaxH3Transformer3DModel(Module):
         eye_state = self._eye_states.setdefault(rows, StateTensor())
         eye_state.update(torch.eye(rows), traced=traced, dtype=ttnn.bfloat16, device=self.mesh_device)
 
+        tables = None
+        if not traced and timestep_key is not None and adaln_cache_slot is not None:
+            tables = self.modulation_tables(temb, timestep_key, adaln_cache_slot)
         hidden = self.run_blocks(
             hidden,
             logical_n,
@@ -454,6 +471,7 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_idx,
             rope_cos,
             rope_sin,
+            tables=tables,
             eye=eye_state.value,
             adaln_tile_map=adaln_tile_map,
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
@@ -494,13 +512,14 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_indices: ttnn.Tensor,
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
+        tables: list[list[ttnn.Tensor]] | None = None,
         eye: ttnn.Tensor | None = None,
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-        for block in self.transformer_blocks:
+        for i, block in enumerate(self.transformer_blocks):
             hidden = block(
                 hidden,
                 logical_n,
@@ -508,6 +527,7 @@ class MiniMaxH3Transformer3DModel(Module):
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
+                tables=tables[i] if tables is not None else None,
                 onehot=onehot,
                 tilerow=tilerow,
             )
@@ -515,6 +535,66 @@ class MiniMaxH3Transformer3DModel(Module):
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])
         return hidden
+
+    # ------------------------------------------------------------------ adaLN schedule cache
+
+    @property
+    def adaln_cache_active(self) -> bool:
+        return self._adaln_cache_enabled and bool(self._adaln_cache_slots)
+
+    def reserve_adaln_cache(self, num_steps: int, num_timesteps: int) -> None:
+        """Allocate `num_steps` slots of every block's six modulation tables for a `num_timesteps`-slot schedule.
+
+        Must run before any trace is captured on the device: a trace replays into the memory its capture-time
+        intermediates occupied, so a table allocated after the capture could be overwritten by the replay. The
+        slots never move afterwards; a miss refills one in place. A device-memory failure switches the cache off
+        with a warning. No-op when the cache is off or already reserved.
+        """
+        if not self._adaln_cache_enabled or self._adaln_cache_slots:
+            return
+        timestep = from_torch(torch.zeros(1, 1, num_timesteps, 1), device=self.mesh_device, dtype=ttnn.float32)
+        temb = self.time_embedder(self.time_proj(timestep))
+        try:
+            first = [block._modulation_tables(temb) for block in self.transformer_blocks]
+            rest = [[[ttnn.empty_like(t) for t in tables] for tables in first] for _ in range(num_steps - 1)]
+        except RuntimeError as exc:
+            logger.warning(f"adaLN schedule cache disabled, its slots could not be reserved: {str(exc)[:120]}")
+            self._adaln_cache_enabled = False
+            return
+        self._adaln_cache_slots = [first, *rest]
+        self._adaln_cache_keys = [None] * num_steps
+        shape = first[0][0].shape
+        logger.info(
+            f"adaLN schedule cache: {num_steps} slots x {len(first)} blocks x {len(first[0])} tables of "
+            f"[{shape[0]}, {shape[1]}] bf16 reserved"
+        )
+
+    def modulation_tables(
+        self, temb: ttnn.Tensor, timestep_key: tuple, slot: int
+    ) -> list[list[ttnn.Tensor]] | None:
+        """Every block's tables for the step in cache slot `slot`, refilled in place when the slot holds another
+        timestep vector. None when the cache is off, the slot lies beyond the reserved schedule or the schedule
+        has a different slot count than the reservation; the blocks then project per step."""
+        if not self._adaln_cache_enabled or slot >= len(self._adaln_cache_slots):
+            return None
+        cached = self._adaln_cache_slots[slot]
+        if cached[0][0].shape[0] != temb.shape[2] * MODALITY_NUM:
+            return None
+        if self._adaln_cache_keys[slot] == timestep_key:
+            self.adaln_cache_hits += 1
+            return cached
+        self._adaln_cache_keys[slot] = None
+        for block, tables in zip(self.transformer_blocks, cached):
+            for fresh, table in zip(block._modulation_tables(temb), tables):
+                ttnn.copy(fresh, table)
+                ttnn.deallocate(fresh)
+        self._adaln_cache_keys[slot] = timestep_key
+        self.adaln_cache_misses += 1
+        return cached
+
+    def invalidate_adaln_cache(self) -> None:
+        """Forget every cached timestep vector; the slots stay allocated and refill on the next steps."""
+        self._adaln_cache_keys = [None] * len(self._adaln_cache_keys)
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""

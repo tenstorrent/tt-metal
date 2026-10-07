@@ -150,6 +150,8 @@ MINIMAX_H3_PIXEL_STD = _MINIMAX_H3_PIXEL_STD
 # clean -- posterior mean, no fp16 round trip, no noise augmentation -- unlike the visual
 # conditioning rows, which sit at max(t, 0.999). See `references.py`.
 MINIMAX_H3_AUDIO_CONDITION_TIMESTEP = 1.0
+# `num_inference_steps` default, and the schedule length the adaLN cache reserves slots for at warm-up.
+DEFAULT_NUM_INFERENCE_STEPS = 50
 
 # Read from the two scheduler_config.json files, which hold nothing else.
 VIDEO_SHIFT = 12.0
@@ -1736,7 +1738,7 @@ class MiniMaxH3Pipeline:
         height: int | None = None,
         width: int | None = None,
         reference_resize_mode: str = "match",
-        num_inference_steps: int = 50,
+        num_inference_steps: int = DEFAULT_NUM_INFERENCE_STEPS,
         seed: int = 0,
         on_event: PipelineEventCallback | None = None,
     ) -> MiniMaxH3Output:
@@ -2212,6 +2214,9 @@ class MiniMaxH3Pipeline:
                 self._warm_vae_decode()
             self._warm_audio_decode()
             self._warm_prompt_encoder()
+            # The adaLN cache's slots must exist before any trace is captured (a replay writes wherever its
+            # capture-time intermediates lived), so they are reserved here, sized for the default schedule.
+            self._prepare_transformer().reserve_adaln_cache(DEFAULT_NUM_INFERENCE_STEPS, len(self.adaln_slot_roles))
             fitted = self._warm_denoise_buckets(prompt, generation_kwargs, overrides)
             self._capture_traces(prompt, fitted, overrides, trace_audio)
         finally:
@@ -2771,7 +2776,9 @@ class MiniMaxH3Pipeline:
                 levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
 
-        upload_levels(step_levels(0))
+        levels = step_levels(0)
+        upload_levels(levels)
+        cache_hits, cache_misses = transformer.adaln_cache_hits, transformer.adaln_cache_misses
         if _is_host_rank():
             _tqdm_spacer()
         # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
@@ -2806,6 +2813,8 @@ class MiniMaxH3Pipeline:
                     logical_n=self._tt_logical_n.value,
                     pad_to=rung,
                     traced=traced,
+                    timestep_key=None if traced else tuple(levels.reshape(-1).tolist()),
+                    adaln_cache_slot=None if traced else i,
                     **tilerow_kwargs,
                 )
 
@@ -2814,7 +2823,8 @@ class MiniMaxH3Pipeline:
                 ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_audio.value, audio_velocity)
                 if i + 1 < len(timesteps):
-                    upload_levels(step_levels(i + 1))
+                    levels = step_levels(i + 1)
+                    upload_levels(levels)
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
@@ -2832,6 +2842,11 @@ class MiniMaxH3Pipeline:
                 f"first step {t_first:.1f}s | steady {t_steady:.1f}s over {steady_steps} steps "
                 f"({t_steady / steady_steps * 1000:.0f} ms/step)"
             )
+            if transformer.adaln_cache_active:
+                self._log(
+                    f"adaLN schedule cache: {transformer.adaln_cache_hits - cache_hits} hits, "
+                    f"{transformer.adaln_cache_misses - cache_misses} misses"
+                )
 
             ttnn.synchronize_device(self.mesh_device)
         if ttnn.using_distributed_env():
