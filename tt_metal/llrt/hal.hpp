@@ -533,7 +533,12 @@ public:
     float get_inf() const { return inf_; }
 
     // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
-    uint32_t get_num_dataflow_buffers() const { return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS; }
+    uint32_t get_num_dataflow_buffers() const {
+        if (arch_ == tt::ARCH::WORMHOLE_B0) {
+            return 32;
+        }
+        return arch_ == tt::ARCH::BLACKHOLE ? BLACKHOLE_NUM_CIRCULAR_BUFFERS : NUM_CIRCULAR_BUFFERS;
+    }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }
 
