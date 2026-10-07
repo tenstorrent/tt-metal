@@ -1581,3 +1581,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_T_ab_h30_9390e86b264.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_allreduce_ab.py
 - data: {"u1_delta_ms":1.053,"u8_delta_ms":0.938,"u32_delta_ms":0.152}
+
+## E261007-1512-81c
+- date: 2026-10-07T15:12:05
+- commit: 9b48d653b51
+- branch: ssinghal/mimo-race
+- host: 43
+- track: correctness
+- status: verified
+- claim: SCALE/ALPHA of the column reduce variants vs the exact fp32 sum of the 8 per-column bf16 partials (4x8, R=32 rows, D=4096, normal(0,0.5) with 64 massive channels): ag_sum (default compute config) alpha 1.00010, rel L2 0.17%; ag_sum with fp32 cfg identical (same); all_gather+fp32 typecast+sum alpha 0.999995 rel 0.17% (the 0.17% is the bf16 output rounding); ttnn.all_reduce alpha 1.00126 (+0.13% systematic) rel 0.30%. So the workaround is not low-biased and is closer to exact than the old all_reduce. Full-model paired A/B (same state, ag_sum vs rs64): alpha(ag/rs) of ffn_out L1 0.99918/0.99924 (U=32/U=1), L5 0.99782/0.99367, L16 0.99904/0.99446, L30 0.9958/0.99301, final hidden 0.99638/0.99357: consistent with the old path's +0.13% per layer compounding, not with a low bias in ag_sum; PCC L1 0.999996, L5 0.9991-0.9997, L16 0.9991-0.9994, final 0.9993-0.9995 (E261007-1506-59b + race_T2_ab_h43). No oracle-based alpha table was re-run (no decode oracle dumps for L6+ on this path)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_U_colnum_h43_9b48d653b51.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_colreduce_numerics.py
+- data: {"alpha_ag_sum":1.0001,"alpha_all_reduce":1.00126}
