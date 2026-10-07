@@ -49,6 +49,7 @@ class MiMoDecoderLayer:
         cf=4,
         wdtype=ttnn.bfloat8_b,
         build_only=False,
+        page_table=None,
     ):
         self.mesh, self.L, self.users, self.max_pos = mesh, L, users, max_pos
         self.swa = Ld.is_swa(L)
@@ -88,11 +89,16 @@ class MiMoDecoderLayer:
         hw = convert_weights(self.cfg, qkv[:nq], qkv[nq : nq + nk], qkv[nq + nk :], o_w, sink)
         nb = ring_blocks if self.swa else max_pos // BLOCK
         g = torch.Generator().manual_seed(seed + L)
-        pt = torch.randperm(users * nb, generator=g).reshape(users, nb).to(torch.int32)
+        pt = (
+            page_table
+            if page_table is not None
+            else torch.randperm(users * nb, generator=g).reshape(users, nb).to(torch.int32)
+        )
         self.attn = MiMoAttention(
             mesh, self.cfg, hw, pt, max_pos, ring_blocks=ring_blocks if self.swa else 0, users=users, wdtype=wdtype
         )
         self.io = {}
+        self.check_cap = True
 
     # ------------------------------------------------------------------ weights
     def _dense_weights(self, ck, wc):
@@ -179,7 +185,7 @@ class MiMoDecoderLayer:
         N = x.shape[2]
         wts, idx = route if route is not None else self.gate.route(x, ROUTER_MODE)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, N, HIDDEN])
-        if os.environ.get("MIMO_CHECK_CAP", "1") == "1":
+        if self.check_cap and os.environ.get("MIMO_CHECK_CAP", "1") == "1":
             self.check_capacity(idx, N)
         part = self.moe.forward(x_rm, wts, idx)
         ttnn.deallocate(x_rm)
@@ -231,6 +237,22 @@ class MiMoDecoderLayer:
         h2 = ttnn.add(h1, f, dtype=ttnn.bfloat16)
         if taps is not None:
             taps.update(attn_in=xn, attn_out=a, ffn_in=fn, ffn_out=f, h1=h1)
+        else:
+            for t in (xn, a, fn, f, h1):
+                ttnn.deallocate(t)
+        return h2
+
+    def chunk(self, h, io, taps=None):
+        """One prefill chunk of ONE user per mesh row (trace friendly): h [1,1,S,4096]; io = the shared per-kind io dict of tt/prefill.py (row-sharded device
+        tensors). No host sync. Returns h_out [1,1,S,4096]."""
+        xn = self.rms(h, self.w_in)
+        a = self.attn.prefill_chunk(xn, io)
+        h1 = ttnn.add(h, a, dtype=ttnn.bfloat16)
+        fn = self.rms(h1, self.w_post)
+        f = self.ffn(fn)
+        h2 = ttnn.add(h1, f, dtype=ttnn.bfloat16)
+        if taps is not None:
+            taps.update(attn_out=a, ffn_out=f, h1=h1)
         else:
             for t in (xn, a, fn, f, h1):
                 ttnn.deallocate(t)

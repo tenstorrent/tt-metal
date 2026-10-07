@@ -10,6 +10,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.mimo_v26.reference.loader import Ckpt
+from models.demos.blackhole.mimo_v26.reference.loader import is_swa as Ld_is_swa
 from models.demos.blackhole.mimo_v26.tt import weights as W
 from models.demos.blackhole.mimo_v26.tt.layer import EPS, MiMoDecoderLayer, _k_norm
 
@@ -20,7 +21,9 @@ class MiMoModel:
     def __init__(
         self, mesh, n_layers=48, max_pos=512, users=32, ring_blocks=10, ck=None, wc=None, expert_op=None, log=print
     ):
-        self.mesh, self.n_layers, self.users = mesh, n_layers, users
+        if layout is not None:
+            max_pos, ring_blocks, users = layout.max_pos, layout.ring_blocks, 32
+        self.mesh, self.n_layers, self.users, self.layout = mesh, n_layers, users, layout
         self.ck = ck or Ckpt()
         self.wc = wc or W.WeightCache(mesh)
         rep = W.rep_mapper(mesh)
@@ -57,7 +60,15 @@ class MiMoModel:
             t0 = time.time()
             self.layers.append(
                 MiMoDecoderLayer(
-                    mesh, L, self.ck, self.wc, max_pos, users=users, ring_blocks=ring_blocks, expert_op=expert_op
+                    mesh,
+                    L,
+                    self.ck,
+                    self.wc,
+                    max_pos,
+                    users=users,
+                    ring_blocks=ring_blocks,
+                    expert_op=expert_op,
+                    page_table=(None if layout is None else layout.tables()["swa" if Ld_is_swa(L) else "ga"]),
                 )
             )
             log(f"MODEL layer {L} built in {time.time() - t0:.1f}s cache={self.wc.stats}")
