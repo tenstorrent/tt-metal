@@ -356,7 +356,9 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
     shards_vector.reserve(mesh_shape.mesh_size());
     // Two shards backed by the same HostBuffer object hold the same bytes by construction (the fully replicated
-    // mapper path aliases one buffer), so they share one copy without a compare, whatever the label says.
+    // mapper path aliases one buffer), so they share one copy without a compare, whatever the label says. The
+    // lookup is by address and a hit counts only when the length matches too: a borrowed-span HostBuffer can view
+    // any prefix of an allocation, so two views can start at the same address and differ in length.
     std::unordered_map<const std::byte*, size_t> buffer_to_index;
 
     // Every populated local shard has to be reachable through the label, or it is left out of the file. Remote
@@ -407,8 +409,11 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
         const auto* buffer_address = buffer->view_bytes().data();
         const std::size_t buffer_size = buffer->view_bytes().size();
 
+        // Same address and same length: the same bytes. A same-address view of another length is not an alias and
+        // falls through to the group checks (a size mismatch inside one group, a separate copy across groups).
         std::optional<size_t> buffer_index;
-        if (auto it = buffer_to_index.find(buffer_address); it != buffer_to_index.end()) {
+        if (auto it = buffer_to_index.find(buffer_address);
+            it != buffer_to_index.end() && buffers[it->second].buffer.view_bytes().size() == buffer_size) {
             buffer_index = it->second;
         }
         if (auto& group = dedup_groups[replica_group_key(topology, dist_coord)]; group.has_value()) {
