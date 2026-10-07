@@ -10,7 +10,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 
-#include "impl/context/metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -32,7 +32,7 @@ using test_helpers::ProgramSpecTestGen1;
 // Resolve one semaphore's scope from a spec the way BuildProgramFromSpec does: census the binders
 // against each kernel's node set, then resolve. Placement is derived from the work units, which is
 // what CollectSpecData does for kernel_node_set.
-SemScope ResolveScopeFor(const ProgramSpec& spec, const char* semaphore_name) {
+SemScope ResolveScopeFor(MetalEnvImpl& env, const ProgramSpec& spec, const char* semaphore_name) {
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
     for (const auto& work_unit : spec.work_units) {
         const NodeRangeSet nodes = to_node_range_set(work_unit.target_nodes);
@@ -41,10 +41,9 @@ SemScope ResolveScopeFor(const ProgramSpec& spec, const char* semaphore_name) {
         }
     }
     const sem_solver::SemaphoreBinderCensus census = sem_solver::CollectSemaphoreBinders(spec, kernel_node_set);
-    // Resolve against the (mock-configured) context Hal, mirroring BuildProgramFromSpec; configure_mock_mode
-    // in each test fixture sets that context's arch.
-    return sem_solver::ResolveSemaphoreScopes(spec, census, tt::tt_metal::MetalContext::instance().hal())
-        .at(SemaphoreSpecName{semaphore_name});
+    // Resolve against the mesh device's env, mirroring BuildProgramFromSpec; configure_mock_mode
+    // in each test fixture sets that env's arch.
+    return sem_solver::ResolveSemaphoreScopes(spec, census, env).at(SemaphoreSpecName{semaphore_name});
 }
 
 // The headline rule: a Blackhole semaphore with a compute binder gets the atomic mechanism.
@@ -53,7 +52,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_ComputeBoundSemaphoreResolvesToComputeAtomi
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
 
-    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
+    EXPECT_EQ(ResolveScopeFor(mesh_device_->impl().metal_env(), spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
 }
 
 // No compute binder, no atomics: DM-only bindings keep the pre-existing non-atomic path, so
@@ -62,7 +61,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_DMOnlyBoundSemaphoreResolvesToLocalNonatomi
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     BindSemaphoreToKernels(spec, "dm_sem", {"dm_kernel"});
 
-    EXPECT_EQ(ResolveScopeFor(spec, "dm_sem"), SemScope::LOCAL_NONATOMIC);
+    EXPECT_EQ(ResolveScopeFor(mesh_device_->impl().metal_env(), spec, "dm_sem"), SemScope::LOCAL_NONATOMIC);
 }
 
 // Wormhole is Gen1 too, but has no compute semaphore implementation, so COMPUTE_ATOMIC stays
@@ -72,7 +71,7 @@ TEST_F(ProgramSpecTestGen1, CPU_WormholeComputeBoundSemaphoreDoesNotResolveToCom
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
 
-    EXPECT_EQ(ResolveScopeFor(spec, "compute_sem"), SemScope::LOCAL_NONATOMIC);
+    EXPECT_EQ(ResolveScopeFor(mesh_device_->impl().metal_env(), spec, "compute_sem"), SemScope::LOCAL_NONATOMIC);
 }
 
 }  // namespace

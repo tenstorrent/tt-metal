@@ -1115,6 +1115,21 @@ def _stable_topk_golden(input, k, largest):
     return values, order
 
 
+@pytest.mark.parametrize("logit_scale", (1.0, 4.0, 8.0))
+def test_topk_stable_single_row_sigmoid_ties(logit_scale, device):
+    """Single-row, non-pow2 W, k > 64: the PanSegformerHead box selection (300 queries x 3 classes)."""
+    torch.manual_seed(0)
+    # bf16 sigmoid saturates near 1.0, so the top 100 holds long runs of exact ties.
+    input = torch.sigmoid(torch.randn(1, 900) * logit_scale).to(torch.bfloat16)
+    golden_values, order = _stable_topk_golden(input, 100, largest=True)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(ttnn_input, 100, dim=-1, largest=True, sorted=True, stable=True)
+
+    assert_equal(golden_values, ttnn.to_torch(ttnn_values))
+    assert_equal(order, ttnn.to_torch(ttnn_indices).to(torch.int64))
+
+
 @pytest.mark.parametrize("W, k", ((8192, 32),))  # multi-core band, 32-bit index CBs
 @pytest.mark.parametrize("index_dtype", (ttnn.uint32, ttnn.int32))
 @pytest.mark.parametrize("largest", (True, False))
