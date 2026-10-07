@@ -420,15 +420,11 @@ class Attention(LightweightModule):
             self.prefetcher.register_callback(register_weights)
 
     def _needs_head_rearrangement(self):
-        return (
-            self.args.device_name in ("T3K", "TG")
-            and hasattr(self.args, "base_model_name")
-            and self.args.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B")
-        )
+        return getattr(self.args, "unpadded_n_kv_heads", self.n_kv_heads) != self.n_kv_heads
 
     def _head_rearrangement_params(self):
-        original_n_heads = 28
-        original_n_kv_heads = 4
+        original_n_heads = self.args.unpadded_n_heads
+        original_n_kv_heads = self.args.unpadded_n_kv_heads
         gqa_ratio = original_n_heads // original_n_kv_heads
         heads_per_device = self.n_heads // self.num_devices_per_group
         devices_per_kv_group = self.num_devices_per_group // original_n_kv_heads

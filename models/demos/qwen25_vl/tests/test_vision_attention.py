@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-import os
 
 import pytest
 import torch
@@ -10,7 +9,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transformer_preprocess
-from models.demos.qwen25_vl.tt.model_config import ModelArgs, VisionModelArgs
+from models.demos.qwen25_vl.tt.model_config import ModelArgs, VisionModelArgs, qwen25_vl_mesh_shape
 from models.demos.qwen25_vl.tt.vision_attention import VisionAttention
 from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
@@ -23,11 +22,7 @@ from models.tt_transformers.tt.load_checkpoints import (
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [qwen25_vl_mesh_shape()],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)

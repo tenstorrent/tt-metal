@@ -145,7 +145,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         ), "Reference model and visual model must be provided for vLLM"
 
         self._decode_iteration = 0
-        self._rope_delta_cache = {}
 
         super().__init__(*args, **kwargs)
 
@@ -321,54 +320,8 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             f"({avg_ttft*1000:.2f}ms/user) @ {prefill_tok_s:.1f} tok/s"
         )
 
-        # Cache M-RoPE deltas keyed by the user's first page-table entry.
-        # The page key is stable between prefill (sequential indices 0..N-1)
-        # and decode (user may sit at any global batch slot).
-        if rope_deltas is not None and page_table is not None:
-            flat_deltas = rope_deltas.flatten()
-            for idx in range(len(flat_deltas)):
-                page_key = int(page_table[idx, 0].item())
-                self._rope_delta_cache[page_key] = flat_deltas[idx].item()
-
         self._decode_iteration = 0
         return logits, rope_deltas
-
-    def _apply_cached_rope_deltas(self, page_table, start_pos):
-        """Apply cached M-RoPE deltas to each model instance's rope_setup
-        using the decode batch's page_table to identify users.
-
-        Only runs when the page_table **contents** change (new prefill / user
-        eviction), which is the only time the base generator re-reads
-        host-side rope_deltas (reset_inputs=True).  On trace-replay steps
-        the device already holds the correct values.
-
-        The previous version compared ``id(page_table)``, but under V1
-        async-scheduling vLLM rebuilds the page_table tensor each step
-        even when values are unchanged, so the identity check never
-        hit and this ran fully every decode step.  Compare against the
-        user-identifying slice (first column) as a tuple instead — that
-        is stable across steps when no block has been freshly allocated
-        and is cheap to hash.
-        """
-        if not self._rope_delta_cache or page_table is None:
-            return
-
-        page_keys = tuple(page_table[:, 0].tolist())
-        if getattr(self, "_prev_page_keys", None) == page_keys:
-            return
-        self._prev_page_keys = page_keys
-
-        max_bsz = self._ttt_generator.model_args[0].max_batch_size
-        dp = self._ttt_generator.data_parallel
-        cache = self._rope_delta_cache
-        for model_id in range(dp):
-            start = model_id * max_bsz
-            end = start + max_bsz
-            deltas = self._ttt_generator.model[model_id].rope_setup.rope_deltas
-            for local_slot, page_key in enumerate(page_keys[start:end]):
-                delta = cache.get(page_key)
-                if delta is not None:
-                    deltas[local_slot] = delta
 
     def decode_forward(self, *args, **kwargs):
         rope_deltas_list: list = kwargs.pop(
@@ -384,10 +337,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             # mapping. RoPE deltas are persistent per-slot model state and must
             # move before decode uses them, including during host sampling.
             super().remap_rope_deltas(slot_remap)
-        else:
-            # Fallback for callers that provide neither: recover each slot's
-            # delta from the page-table key recorded at prefill.
-            self._apply_cached_rope_deltas(kwargs.get("page_table", None), kwargs.get("start_pos", None))
         if slot_remap is not None:
             # RoPE consumes the mapping above, while the shared generator must
             # independently move dormant/on-device sampling RNG state.
