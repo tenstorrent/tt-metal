@@ -60,8 +60,8 @@
       "kind": "first_token",
       "min_frac": 0.9,
       "required": true,
-      "evidence": ["E261007-0604-642"],
-      "note": "sanity: argmax of the first generated token vs reference on real prompts"
+      "evidence": [],
+      "note": "sanity: argmax of the first generated token vs reference on real prompts. Needs a 48-layer reference (none on CPU by policy): E261007-0604-642 (6-layer truncated model vs CPU, 21/22) deliberately NOT wired, it is not a 48-layer comparison"
     },
     {
       "id": "gsm8k",
