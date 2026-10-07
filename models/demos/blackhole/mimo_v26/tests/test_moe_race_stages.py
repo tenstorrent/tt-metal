@@ -206,7 +206,23 @@ def staged(d, x, mask, taps):
     )
     ttnn.deallocate(comb)
     tap("part", summed)
-    o = ttnn.all_reduce(summed, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ar = os.environ.get("MIMO_AR", "default")
+    if ar == "ag_sum":
+        g = ttnn.all_gather(summed, dim=0, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        o = ttnn.sum(g, dim=0, keepdim=True)
+        ttnn.deallocate(g)
+    elif ar == "links1":
+        o = ttnn.all_reduce(summed, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, num_links=1)
+    elif ar == "linear":
+        o = ttnn.all_reduce(
+            summed, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG, topology=ttnn.Topology.Linear
+        )
+    elif ar == "rs_ag":
+        r_ = ttnn.reduce_scatter(summed, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        o = ttnn.all_gather(r_, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(r_)
+    else:
+        o = ttnn.all_reduce(summed, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(summed)
     o2 = ttnn.slice(o, [0, 0, 0, 0], [1, 1, B, HIDDEN])
     ttnn.deallocate(o)
