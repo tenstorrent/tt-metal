@@ -215,3 +215,36 @@ def _staged(dec, tt_x, tt_scores, tt_indices, upto=99):
         til, ii, dec.expert_state.tt_expert_mapping, **dec.config.reduce.model_dump(), scores_tensor=tt_scores
     )
     return red[0]
+
+
+# ----------------------------------------------------------------------------- DRAM headroom / automatic fallback
+RING_MB_PER_BANK_PER_LAYER = (
+    27.0  # measured: 1268 MB per bank for 47 layers (ring copy ~214 MB per chip = 27 MB per bank per layer)
+)
+_DECISION = {}
+
+
+def free_dram_gib_per_chip(mesh):
+    mv = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+    return mv.total_bytes_free_per_bank * mv.num_banks / 2**30
+
+
+def ring_enabled(mesh, layers_to_build=None, min_headroom_gib=1.0, log=print):
+    """Decide ONCE per process whether the ring copy may be built: ring only if the free DRAM per chip now, minus the ring copy of all layers still to build, leaves >= min_headroom_gib
+    (MIMO_RING_MIN_HEADROOM_GIB overrides, MIMO_RING_FORCE=1 skips the check); otherwise False (caller falls back to the unified decode MoE) and a line is logged. The check must run
+    AFTER the KV pool / prefill buffers are allocated (first decode call), layers_to_build defaults to MIMO_RING_LAYERS (47).
+    """
+    key = id(mesh)
+    if key in _DECISION:
+        return _DECISION[key]
+    n = int(layers_to_build or os.environ.get("MIMO_RING_LAYERS", "47"))
+    need = n * RING_MB_PER_BANK_PER_LAYER * 8 / 1024
+    free = free_dram_gib_per_chip(mesh)
+    margin = float(os.environ.get("MIMO_RING_MIN_HEADROOM_GIB", min_headroom_gib))
+    ok = os.environ.get("MIMO_RING_FORCE", "0") == "1" or free - need >= margin
+    log(
+        f"[moe_ring] free DRAM {free:.2f} GiB per chip, ring copy of {n} layers needs {need:.2f} GiB, headroom after {free - need:.2f} GiB "
+        f"(min {margin:.2f}): {'RING decode MoE enabled' if ok else 'NOT enough room -> falling back to the unified decode MoE'}"
+    )
+    _DECISION[key] = ok
+    return ok
