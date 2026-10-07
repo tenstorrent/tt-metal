@@ -97,18 +97,10 @@ inline std::vector<uint32_t> divisors_desc(uint32_t n) {
     return large;
 }
 
-// Tiles held in the destination register for one subblock. Smaller tiles don't raise this: validation's
-// tile-area dest count admits more of them, but subblocks above 8 tiles of 16-row tiles compute wrong values.
-inline uint32_t max_subblock_area(const MatmulDesc& p, Family family) {
-    uint32_t area = p.dst_full_sync_en ? 16 : 8;
-    if (p.fp32_dest_acc_en) {
-        area /= 2;
-        // The reuse factory caps fp32-accumulating subblocks at 4 even with full-sync dest
-        if (family == Family::Reuse) {
-            area = std::min(area, 4u);
-        }
-    }
-    return area;
-}
+// Tiles held in the destination register for one subblock: 8, or 4 with fp32 accumulation. Smaller tiles don't
+// raise this: validation's tile-area dest count admits more of them, but subblocks above 8 tiles of 16-row tiles
+// compute wrong values. Neither does full-sync dest: the factories compute wrong values above these limits with it
+// too (1D always, 2D on some shapes), although validation admits twice the area.
+inline uint32_t max_subblock_area(const MatmulDesc& p, Family /*family*/) { return p.fp32_dest_acc_en ? 4 : 8; }
 
 }  // namespace ttnn::operations::matmul::auto_config::detail

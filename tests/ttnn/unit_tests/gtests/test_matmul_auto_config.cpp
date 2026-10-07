@@ -371,6 +371,39 @@ TEST(MatmulAutoConfig, SubblockShape) {
     EXPECT_EQ(chosen->blocking.out_subblock_w, 8u);
 }
 
+// Full-sync dest doesn't raise the subblock limit: the factories compute wrong values above 8 tiles (4 with fp32
+// accumulation) with it, although validation admits twice the area. No candidate goes above it, and check() rejects
+// a config that does.
+TEST(MatmulAutoConfig, FullSyncDestKeepsSubblockLimit) {
+    for (const auto& arch : kArchs) {
+        const auto hw = HardwareDesc::for_arch(arch.arch, arch.grid, kL1Budget);
+        for (const auto& s : shapes()) {
+            for (bool fp32_acc : {false, true}) {
+                auto p = make_matmul(s.batch_a, s.batch_b, s.M, s.K, s.N, tt::DataFormat::Float16_b, fp32_acc);
+                p.dst_full_sync_en = true;
+                const uint32_t limit = fp32_acc ? 4 : 8;
+                for (const auto& c : candidates(p, hw)) {
+                    EXPECT_LE(c.blocking.out_subblock_h * c.blocking.out_subblock_w, limit)
+                        << arch.name << " M=" << s.M << " K=" << s.K << " N=" << s.N << " fp32=" << fp32_acc;
+                }
+            }
+        }
+    }
+    const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
+    auto p = make_matmul(1, 1, 1024, 2048, 1024);
+    p.dst_full_sync_en = true;
+    const auto chosen = choose(p, hw);
+    ASSERT_TRUE(chosen.has_value());
+    // The whole output block as one subblock: within what validation admits with full-sync dest, above the limit
+    auto whole = *chosen;
+    whole.blocking.out_subblock_h = whole.blocking.out_block_h;
+    whole.blocking.out_subblock_w = whole.blocking.out_block_w;
+    const uint32_t area = whole.blocking.out_subblock_h * whole.blocking.out_subblock_w;
+    ASSERT_GT(area, 8u);
+    ASSERT_LE(area, 16u);
+    EXPECT_NE(check_config(p, hw, to_program_config(p, whole)).find("DST capacity"), std::string::npos);
+}
+
 // 1D in0-mcast splits a wide output block into subblock-wide blocks (not into 1-tile ones)
 TEST(MatmulAutoConfig, OneDOutputBlockSplit) {
     const auto hw = HardwareDesc::for_arch(tt::ARCH::WORMHOLE_B0, CoreCoord(8, 8), kL1Budget);
