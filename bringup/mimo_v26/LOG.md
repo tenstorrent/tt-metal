@@ -476,3 +476,14 @@
 - claim: USER DECISION 2026-10-07: keep expert activations bf16 (layer-5 MoE PCC 0.9915-0.9949 with the unified op's internal bfp8 activations, E261007-0251-c0a / -559). Weights stay bfp8. Next: bf16-activation expert path with existing ops, no C++; any C++ patch still needs separate approval.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0326-160
+- date: 2026-10-07T03:26:38
+- commit: 4e7bca60e3d
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER DECISION 2026-10-07 (/goal): agents may build C++ autonomously; use any free host on the cluster, skip hosts that are busy or bad; aim is end-to-end prefill + decode + spec decode on MiMo-V2.6-Flash. Coordinator reading: C++ builds go in PRIVATE build dirs per worktree (never the shared build_Release, never the DeepSeek repo); still NOT authorised: bfp4/fp8-KV, pushing, deleting data, touching or killing foreign jobs, gate weakening.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
