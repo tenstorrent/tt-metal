@@ -1,0 +1,3 @@
+# per-face against per-tile dest-reuse forms on 16x32, 16x16, 8x32 and 32x32 tiles (the per-tile side of 8x32 is the whole-tile
+# program for 8-row faces), with the LoFi against HiFi4 controls
+default|default|||tests/eb_r3_ci/test_eb_dump_reuse_t.py
