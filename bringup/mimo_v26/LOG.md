@@ -1983,3 +1983,46 @@
 - claim: USER REQUIREMENT 2026-10-07: no host work during the inference pass; end to end must be device-resident. Definition adopted: inside a decode step / spec round the host only enqueues trace replays (non-blocking execute_trace); NO copy_host_to_device per step, NO host-side compute (mask/index building, accept logic, position increments), NO blocking readback per step; tokens are fed back on device (argmax -> next embedding), positions/masks/EOS/dead flags updated on device, spec accept + ring append + position update on device; the host reads generated tokens back only in bulk or asynchronously (every N steps, pipelined behind the next enqueue) and uploads only the prompt and static tables at setup. Current host work measured: plain decode 3.4 ms/step (input copies 1.0-1.3 + candidate readback 1.9-2.3, E261007-1632-433); spec round: set_round 5.4/12.1 ms, append host ~8/20 ms (E261007-1806-8f6). Assigned: decode agent (plain decode), spec agent (spec round), prefill chunk inputs after.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+## E261007-1732-537
+- date: 2026-10-07T17:32:56
+- commit: 929092ec570
+- branch: ssinghal/mimo-moe
+- host: 30,40,43,48
+- track: moe
+- status: verified
+- claim: RING decode MoE (tt/moe_ring.py: MiMoRingMoEDecode + RingExpertWeights; library artifacts/moe_C_29b0e1519bb, defaults MOE_COMPUTE_BFP8_WEIGHTS=1 FP32_ACC=1 FIDELITY=HiFi3) vs the gated unified decode MoE on REAL layers 1/5/16, 4x8, T tokens per mesh row 1,2,4,8,16,32 (T=8U verify path included), 75% live (dead slots with weight-0 balanced routing): ring vs unified alpha 0.994-1.0003, rel L2 0.0046-0.0064, PCC >= 0.99999; vs dump ffn_out ring rel/alpha equal to or better than unified (L5 T=8: ring alpha 1.0030 rel 0.0076 PCC 0.99998 vs unified 1.0029/0.0074; L16 device-capture dump is biased: ring alpha 1.0108 rel 0.0112 vs unified 1.0167/0.0174). 5 eager runs identical and trace==eager for both. ALTERNATING traced time ms/layer (host-timed, 3 rounds, incl. mask/dead routing and the column all_gather) unified -> ring: T=1 0.842 -> 0.416; 2 1.083 -> 0.615; 4 1.241 -> 0.789; 8 1.450 -> 0.964; 16 1.608 -> 1.153; 32 1.693 -> 1.188 (saves 0.43-0.51 ms/layer = 20-24 ms/token at 47 layers). DRAM: the ring copy costs ~53 MB per bank (~214 MB/chip) per layer next to the unified copy (free per bank 4027 -> 3866 MB after both copies of 3 layers). Ring weights cache build (NFS /mnt/tt-data/ssinghal/mimo-wcache/ring_L<L>): ~33 s/layer warm-up for the first three, ~60 s/layer in the full build
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_R_ringlayers_h30_29b0e1519bb.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1732-aee
+- date: 2026-10-07T17:32:56
+- commit: 929092ec570
+- branch: ssinghal/mimo-moe
+- host: 30,40,43,48
+- track: moe
+- status: verified
+- claim: RING decode MoE hang/race gates (real layers 1,5,16 reused, shared ring buffers+semaphores as in the model, one trace): 48-layer deep trace 1000 replays NO hang at T=1 (0.409 ms/layer), T=8 live 6 (0.958), T=32 live 24 (1.181); bitwise glitch stress (every layer output of every replay vs the first replay, per mesh row): T=8 6 layers x 3000 = 18000 layer-calls 0 glitches, T=32 6 x 6000 = 36000 calls 0 glitches, T=1 (zero-token chips: 4 tokens x 8 experts) 36000 calls 0 glitches (the unified path glitches 2-5 per 18000 calls). So the ring path (all_to_all_dispatch_metadata + moe_compute + fast_reduce + reduce_scatter + all_gather) shows neither the sentinel hang nor the unified/all_reduce glitch in this MoE-only context
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_S_stress6_t32_h48_d2d2e6a1a5b.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1859-72d
+- date: 2026-10-07T18:59:20
+- commit: d6df7a1f3ad
+- branch: ssinghal/mimo-moe
+- host: 30,43,44
+- track: moe
+- status: verified
+- claim: RING decode MoE in the FULL 48-layer model (MIMO_MOE_DECODE=ring, expert op unified for prefill, router fast, library artifacts/moe_C_29b0e1519bb, ring weights from the NFS cache, test_decode_timing_u, execute_trace replay step ms, U=32,1,8,32 order, paired runs on hosts 30 (ring) / 43 (unified), same session conditions): step median unified -> ring: U=1 71.2 -> 47.9 ms (-33%), U=8 90.0 -> 66.3 (-26%), U=32 105.8 -> 86.9 (-18%); ffn_moe part 51.7/66.3/76.3 -> 28.95/44.45/59.55 ms (attention 15.1/17.4/24.0 unchanged). DRAM per bank after model build at U=32: unified copy only free 2399 MB, with the ring copy too free 1131 MB (ring copy = 1268 MB/bank = 10.15 GiB per chip at 47 layers, measured, no KV at 64k in this test)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_W_model_ring_h30_d6df7a1f3ad.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1859-613
+- date: 2026-10-07T18:59:20
+- commit: d6df7a1f3ad
+- branch: ssinghal/mimo-moe
+- host: 30,43,44
+- track: moe
+- status: verified
+- claim: RING decode MoE GSM8K GATE (full 48-layer model, greedy non-thinking, n=128, max_new 512, B=128 users (U=32), traced decode, prefill unified op, MIMO_MOE_DECODE=ring, router fast, library moe_C_29b0e1519bb): run a (host 30) 110/128 = 85.9% (Wilson 78.9-90.9), run b (host 44) 110/128; gate >= 109 PASS; all 128 completions TOKEN-IDENTICAL between the two runs on different hosts (two-run determinism); steady decode median 75.8 / 74.6 ms per step (mixed U as users finish), 1688 tok/s total
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_X_gsm_ring_a_h30_d6df7a1f3ad.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
