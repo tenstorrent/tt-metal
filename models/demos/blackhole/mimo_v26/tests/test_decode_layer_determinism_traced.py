@@ -115,7 +115,7 @@ def main():
         os.environ["MIMO_CHECK_CAP"] = "0"
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
         fwd()
-        fl = None if NOCMP else cmp()
+        fl = None  # compare ops run eagerly after each replay (compare ops captured inside the trace hung the first replay)
         ttnn.end_trace_capture(mesh, tid, cq_id=0)
         ttnn.synchronize_device(mesh)
         taps_dev = list(taps_all)
@@ -143,7 +143,7 @@ def main():
         for rep in range(R):
             ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
             if not NOCMP:
-                check(rep, fl, "trace")
+                check(rep, cmp(), "trace")
             if rep % 100 == 0:
                 print("DEC_PROGRESS trace", rep, round(time.time() - t0), flush=True)
         for rep in range(RE):  # eager steps compared with the same reference
