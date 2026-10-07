@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 
+#include <algorithm>
 #include <mutex>
 
 namespace ttnn::operations::unary {
@@ -91,6 +92,90 @@ DramHeightRotate get_dram_height_rotate(
         .shard_pages = shard_pages,
         .num_shards = num_shards,
         .last_shard_pages = static_cast<uint32_t>(total_pages - (uint64_t{num_shards} - 1) * shard_pages)};
+}
+
+namespace {
+
+// Ops whose compute per tile is below the ~1.1 us of DRAM time per tile (in + out, 110 cores, ~400 GB/s),
+// so their time is set by data movement and by slow cores. Measured single-op chains only; anything not
+// listed keeps the static split.
+bool is_work_queue_op(const EltwiseUnaryWithParam& op) {
+    switch (op.type()) {
+        case UnaryOpType::IDENTITY:
+        case UnaryOpType::RELU:
+        case UnaryOpType::RELU6:
+        case UnaryOpType::RELU_MAX:
+        case UnaryOpType::RELU_MIN:
+        case UnaryOpType::LEAKY_RELU:
+        case UnaryOpType::THRESHOLD:
+        case UnaryOpType::HARDTANH:
+        case UnaryOpType::HARDSHRINK:
+        case UnaryOpType::HARDSIGMOID:
+        case UnaryOpType::HARDMISH:
+        case UnaryOpType::HARDSWISH:
+        case UnaryOpType::SOFTSHRINK:
+        case UnaryOpType::SOFTSIGN:
+        case UnaryOpType::SOFTCAP:
+        case UnaryOpType::TANH:
+        case UnaryOpType::TANHSHRINK:
+        case UnaryOpType::SILU:
+        case UnaryOpType::SOFTPLUS:
+        case UnaryOpType::SIGMOID: return true;
+        // Only the fast LUT variant; the accurate one is compute-bound.
+        case UnaryOpType::GELU: return op.get_param_if<float>(0).value_or(0.0f) == 1.0f;
+        default: return false;
+    }
+}
+
+// Ops whose compute per tile exceeds the DRAM time per tile: the SFPU sets their time, and on small tensors
+// a read burst only delays the first tiles.
+bool is_compute_bound_op(const EltwiseUnaryWithParam& op) {
+    switch (op.type()) {
+        case UnaryOpType::ELU:
+        case UnaryOpType::CELU:
+        case UnaryOpType::SELU:
+        case UnaryOpType::MISH:
+        case UnaryOpType::LOGSIGMOID:
+        case UnaryOpType::GELU_TANH:
+        case UnaryOpType::LOGIT:
+        case UnaryOpType::XIELU: return true;
+        case UnaryOpType::GELU: return op.get_param_if<float>(0).value_or(0.0f) != 1.0f;
+        default: return false;
+    }
+}
+
+}  // namespace
+
+DramHeightPlan get_dram_height_plan(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const tt::tt_metal::TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    uint32_t num_cores) {
+    if (!get_dram_height_rotate(input_spec, output_spec).enabled || num_cores == 0 || op_chain.empty()) {
+        return {};
+    }
+    // Below ~512 pages per core there is little to balance and the queue only adds hand-off cost.
+    constexpr uint32_t kMinPagesPerCoreForQueue = 512;
+    // Fixed chunks of about 1/150 of a core's share: 32 pages at 1 GiB, 127 at 4 GiB on 110 cores. Smaller
+    // chunks overload the scheduler on large tensors; larger ones leave a tail.
+    constexpr uint32_t kChunksPerCore = 150;
+    const auto& tile = input_spec.tile();
+    const uint64_t total_pages = input_spec.padded_shape().volume() / tile.get_tile_hw();
+    const uint64_t pages_per_core = total_pages / num_cores;
+    const bool bf16 = input_spec.data_type() == DataType::BFLOAT16 && output_spec.data_type() == DataType::BFLOAT16;
+    // The scheduler keeps one word of state per worker on the writer's stack (unary_work_queue.hpp).
+    constexpr uint32_t kMaxQueueWorkers = 144;
+    if (op_chain.size() == 1 && bf16 && is_work_queue_op(op_chain[0]) && num_cores <= kMaxQueueWorkers &&
+        pages_per_core >= kMinPagesPerCoreForQueue) {
+        const uint64_t chunk = (pages_per_core + kChunksPerCore / 2) / kChunksPerCore;
+        return {
+            .flow = DramHeightFlow::WorkQueue,
+            .chunk_pages = static_cast<uint32_t>(std::clamp<uint64_t>(chunk, 8, 256))};
+    }
+    if (op_chain.size() == 1 && is_compute_bound_op(op_chain[0]) && pages_per_core < kMinPagesPerCoreForQueue) {
+        return {.flow = DramHeightFlow::StaticOnePage};
+    }
+    return {.flow = DramHeightFlow::StaticBurst};
 }
 
 std::optional<UnaryShardSpecs> get_shard_specs(
@@ -248,9 +333,7 @@ tt::tt_metal::ShardSpec generate_output_shard_spec(
         compute_grid_size,
         padded_out_shape,
         memory_layout,
-        {.is_tile = is_tile,
-         .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR,
-         .caller_tag = "Unary"});
+        {.is_tile = is_tile, .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR, .caller_tag = "Unary"});
     // Shrink only when we produced an RM synth; typecast means the OUTPUT element size drives the page.
     if (!is_tile) {
         spec = *ttnn::operations::data_movement::common::shrink_shard_for_rm_page_alignment(

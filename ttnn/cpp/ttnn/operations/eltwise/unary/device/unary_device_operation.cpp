@@ -363,7 +363,13 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         distribution_key(input_tensor.tensor_spec(), &input_tensor),
         distribution_key(output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr),
         src_shard_vol,
-        dst_shard_vol);
+        dst_shard_vol,
+        // DRAM height-sharded: the flow (static, one page per barrier, or work queue) sets defines, CBs and
+        // semaphores, and depends on pages per core, which the terms above do not pin down. Its chunk size is
+        // a runtime arg.
+        get_dram_height_plan(
+            attributes.op_chain, input_tensor.tensor_spec(), output_spec, attributes.worker_grid.num_cores())
+            .flow);
 }
 
 bool UnaryDeviceOperation::skip_launch(

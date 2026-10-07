@@ -6,7 +6,9 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include <optional>
+#include <vector>
 
 namespace ttnn::operations::unary {
 
@@ -41,6 +43,26 @@ struct DramHeightRotate {
 
 DramHeightRotate get_dram_height_rotate(
     const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+
+/** How a DRAM height-sharded (SHARD_ROTATE) unary op moves its pages. Measured on Blackhole p100a, bf16:
+ * - StaticBurst: v1. Each core gets an even share of pages, read up to 8 per barrier.
+ * - StaticOnePage: same split, one page per barrier. For compute-bound ops on small tensors, where a burst
+ *   only delays the first tiles (mish_fast: 95.6 -> 88.8 us at 7 168 tiles).
+ * - WorkQueue: cores pull fixed-size chunks from a scheduler that runs inside one core's writer, so
+ *   cores that DRAM serves quickly take more of the work (silu: 36.0 -> 21.5 ms at 2 093 056 tiles).
+ * The choice depends on the shape, so it is part of the program hash. */
+enum class DramHeightFlow : uint8_t { None, StaticBurst, StaticOnePage, WorkQueue };
+
+struct DramHeightPlan {
+    DramHeightFlow flow = DramHeightFlow::None;
+    uint32_t chunk_pages = 0;  // WorkQueue only
+};
+
+DramHeightPlan get_dram_height_plan(
+    const std::vector<EltwiseUnaryWithParam>& op_chain,
+    const tt::tt_metal::TensorSpec& input_spec,
+    const tt::tt_metal::TensorSpec& output_spec,
+    uint32_t num_cores);
 
 tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
