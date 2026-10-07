@@ -18,59 +18,64 @@ using namespace tt::tt_fabric;
 using namespace tt::tt_fabric::mesh::experimental;
 
 // Helper function to handle directional fanout logic
-template <OperationType operation_type, ApiVariant api_variant, typename DstAccT, typename ScatterAccT>
+// The address generator is constructed inside the live operation branch so the
+// dead variant's addrgen path is never instantiated (NCRISC code size).
+template <OperationType operation_type, ApiVariant api_variant, typename TaArgsT>
 inline void send_directional_fanout(
     uint16_t hops,
     WorkerToFabricEdmSender* sender,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     const MeshMcastRange& ranges,
     uint32_t src_l1_addr,
-    const DstAccT& dst_acc,
-    const ScatterAccT& scatter_acc,
+    const TaArgsT& ta_args,
+    uint32_t dst_base,
+    uint32_t src_aligned_page_size,
     uint32_t i,
     uint64_t sem_noc) {
     if (hops > 0) {
         if constexpr (operation_type == OperationType::BasicWrite) {
+            const auto acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
             if constexpr (api_variant == ApiVariant::Basic) {
-                fabric_multicast_noc_unicast_write(sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i);
+                fabric_multicast_noc_unicast_write(sender, packet_header, 0, 0, ranges, src_l1_addr, acc, i);
             } else {  // WithState or SetState
-                fabric_multicast_noc_unicast_write_with_state(
-                    sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i);
+                fabric_multicast_noc_unicast_write_with_state(sender, packet_header, 0, 0, ranges, src_l1_addr, acc, i);
             }
         } else if constexpr (operation_type == OperationType::Scatter) {
-            // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
+            // Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient, see NOTE below)
+            const auto acc = TensorAccessor(ta_args, dst_base, src_aligned_page_size);
             if constexpr (api_variant == ApiVariant::Basic) {
-                fabric_multicast_noc_scatter_write(
-                    sender, packet_header, 0, 0, ranges, src_l1_addr, scatter_acc, i, i + 1);
+                fabric_multicast_noc_scatter_write(sender, packet_header, 0, 0, ranges, src_l1_addr, acc, i, i + 1);
             } else {  // WithState or SetState
                 fabric_multicast_noc_scatter_write_with_state(
-                    sender, packet_header, 0, 0, ranges, src_l1_addr, scatter_acc, i, i + 1);
+                    sender, packet_header, 0, 0, ranges, src_l1_addr, acc, i, i + 1);
             }
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            const auto acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
             if constexpr (api_variant == ApiVariant::Basic) {
                 fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    sender, packet_header, 0, 0, ranges, src_l1_addr, dst_acc, i, sem_noc, 1);
+                    sender, packet_header, 0, 0, ranges, src_l1_addr, acc, i, sem_noc, 1);
             } else {  // WithState or SetState
                 fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
-                    sender, packet_header, src_l1_addr, dst_acc, i, sem_noc, 1);
+                    sender, packet_header, src_l1_addr, acc, i, sem_noc, 1);
             }
         }
     }
 }
 
 // Helper function to send completion atomic increment for a direction
+// NOTE: no route encode here. The route on this header was already encoded by the
+// setup/loop sends above with identical ranges (same header, same extents), and the
+// encoder output depends only on those — re-encoding would just rewrite identical
+// bytes. Only the NOC command needs to change. This also keeps 4 copies of the route
+// encoder out of the binary (NCRISC code size).
+// Precondition: at least one send on this header happened before completion, which
+// holds whenever TOTAL_PAGES >= 1 and hops > 0 (the same guard as below).
 inline void send_completion_atomic_inc(
     uint16_t hops,
     WorkerToFabricEdmSender& sender,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint16_t e_hops_for_route,
-    uint16_t w_hops_for_route,
-    uint16_t n_hops_for_route,
-    uint16_t s_hops_for_route,
     uint64_t sem_noc_final) {
     if (hops > 0) {
-        fabric_set_mcast_route(
-            packet_header, 0, 0, e_hops_for_route, w_hops_for_route, n_hops_for_route, s_hops_for_route);
         packet_header->to_noc_unicast_atomic_inc(
             NocUnicastAtomicIncCommandHeader(sem_noc_final, /*inc=*/1, /*width_bits=*/32));
         sender.wait_for_empty_write_slot();
@@ -79,23 +84,29 @@ inline void send_completion_atomic_inc(
 }
 
 // Helper function for SetState pre-loop setup for a direction
-template <OperationType operation_type, typename DstAccT, typename ScatterAccT>
+// The address generator is constructed inside the live operation branch so the
+// dead variant's addrgen path is never instantiated (NCRISC code size).
+template <OperationType operation_type, typename TaArgsT>
 inline void setup_set_state_for_direction(
     uint16_t hops,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     const MeshMcastRange& ranges,
-    const DstAccT& dst_acc,
-    const ScatterAccT& scatter_acc,
+    const TaArgsT& ta_args,
+    uint32_t dst_base,
+    uint32_t src_aligned_page_size,
     uint64_t sem_noc) {
     if (hops > 0) {
         if constexpr (operation_type == OperationType::BasicWrite) {
-            fabric_multicast_noc_unicast_write_set_state(packet_header, 0, 0, ranges, dst_acc, 0);
+            const auto acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
+            fabric_multicast_noc_unicast_write_set_state(packet_header, 0, 0, ranges, acc, 0);
         } else if constexpr (operation_type == OperationType::Scatter) {
-            // Use scatter_acc with SRC_ALIGNED_PAGE_SIZE to match CB stride
-            fabric_multicast_noc_scatter_write_set_state(packet_header, 0, 0, ranges, scatter_acc, 0, 1);
+            // Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient, see NOTE below)
+            const auto acc = TensorAccessor(ta_args, dst_base, src_aligned_page_size);
+            fabric_multicast_noc_scatter_write_set_state(packet_header, 0, 0, ranges, acc, 0, 1);
         } else if constexpr (operation_type == OperationType::FusedAtomicInc) {
+            const auto acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
             fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
-                packet_header, 0, 0, ranges, dst_acc, 0, sem_noc, 1);
+                packet_header, 0, 0, ranges, acc, 0, sem_noc, 1);
         }
     }
 }
@@ -198,19 +209,19 @@ void kernel_main() {
         senderS.open<true>();
     }
 
-    // For non-scatter: Use ALIGNED_PAGE_SIZE (dst) for address calculation
-    const auto dst_acc = TensorAccessor(ta_args, /*bank_base=*/dst_base);
-    // For scatter: Use SRC_ALIGNED_PAGE_SIZE to match CB stride (less BW efficient)
-    // NOTE: The scatter addrgen overload derives both the payload size and destination addresses
-    // from the same TensorAccessor page size. The CB is configured with SRC_ALIGNED_PAGE_SIZE
-    // stride, so we override the page size here to match. This is a workaround — using a page
-    // size larger than the destination buffer's aligned page size will write past the allocated
-    // page slots when src alignment > dst alignment (e.g. DRAM src → L1 dst with non-power-of-2
-    // page sizes). The proper fix is to decouple the CB stride from the destination page size in
-    // the scatter API.
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
+    // NOTE: no TensorAccessor is constructed here. Each helper builds only the
+    // accessor its operation needs (destination spacing for BasicWrite/FusedAtomicInc,
+    // SRC_ALIGNED_PAGE_SIZE source stride for Scatter) inside the live if constexpr
+    // branch, so the dead variant's addrgen path is never instantiated (NCRISC size).
+    // Scatter page-size rationale: the scatter addrgen overload derives both the payload
+    // size and destination addresses from the same TensorAccessor page size. The CB is
+    // configured with SRC_ALIGNED_PAGE_SIZE stride, so we override the page size here to
+    // match. This is a workaround — using a page size larger than the destination buffer's
+    // aligned page size will write past the allocated page slots when src alignment > dst
+    // alignment (e.g. DRAM src → L1 dst with non-power-of-2 page sizes). The proper fix is
+    // to decouple the CB stride from the destination page size in the scatter API.
+    // The page_size argument overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.
-    const auto scatter_acc = TensorAccessor(ta_args, dst_base, SRC_ALIGNED_PAGE_SIZE);
 
     // FusedAtomicInc: compute semaphore NOC address before loop
     uint64_t sem_noc = 0;
@@ -250,21 +261,21 @@ void kernel_main() {
         // Initialize all header fields for each direction
         MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
         setup_set_state_for_direction<operation_type>(
-            w_hops, left_packet_header, ranges_w, dst_acc, scatter_acc, sem_noc);
+            w_hops, left_packet_header, ranges_w, ta_args, dst_base, SRC_ALIGNED_PAGE_SIZE, sem_noc);
 
         MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
         setup_set_state_for_direction<operation_type>(
-            e_hops, right_packet_header, ranges_e, dst_acc, scatter_acc, sem_noc);
+            e_hops, right_packet_header, ranges_e, ta_args, dst_base, SRC_ALIGNED_PAGE_SIZE, sem_noc);
 
         MeshMcastRange ranges_n{
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
         setup_set_state_for_direction<operation_type>(
-            n_hops, north_packet_header, ranges_n, dst_acc, scatter_acc, sem_noc);
+            n_hops, north_packet_header, ranges_n, ta_args, dst_base, SRC_ALIGNED_PAGE_SIZE, sem_noc);
 
         MeshMcastRange ranges_s{
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
         setup_set_state_for_direction<operation_type>(
-            s_hops, south_packet_header, ranges_s, dst_acc, scatter_acc, sem_noc);
+            s_hops, south_packet_header, ranges_s, ta_args, dst_base, SRC_ALIGNED_PAGE_SIZE, sem_noc);
     }
 
     // Main loop - process pages
@@ -278,24 +289,60 @@ void kernel_main() {
         // --- Branch 1: direct WEST fanout (left) ---
         MeshMcastRange ranges_w{0, static_cast<uint8_t>(w_hops), 0, 0};
         send_directional_fanout<operation_type, api_variant>(
-            w_hops, &senderW, left_packet_header, ranges_w, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
+            w_hops,
+            &senderW,
+            left_packet_header,
+            ranges_w,
+            src_l1_addr,
+            ta_args,
+            dst_base,
+            SRC_ALIGNED_PAGE_SIZE,
+            i,
+            sem_noc);
 
         // --- Branch 2: direct EAST fanout (right) ---
         MeshMcastRange ranges_e{static_cast<uint8_t>(e_hops), 0, 0, 0};
         send_directional_fanout<operation_type, api_variant>(
-            e_hops, &senderE, right_packet_header, ranges_e, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
+            e_hops,
+            &senderE,
+            right_packet_header,
+            ranges_e,
+            src_l1_addr,
+            ta_args,
+            dst_base,
+            SRC_ALIGNED_PAGE_SIZE,
+            i,
+            sem_noc);
 
         // --- Branch 3: NORTH trunk ---
         MeshMcastRange ranges_n{
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), static_cast<uint8_t>(n_hops), 0};
         send_directional_fanout<operation_type, api_variant>(
-            n_hops, &senderN, north_packet_header, ranges_n, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
+            n_hops,
+            &senderN,
+            north_packet_header,
+            ranges_n,
+            src_l1_addr,
+            ta_args,
+            dst_base,
+            SRC_ALIGNED_PAGE_SIZE,
+            i,
+            sem_noc);
 
         // --- Branch 4: SOUTH trunk ---
         MeshMcastRange ranges_s{
             static_cast<uint8_t>(e_hops), static_cast<uint8_t>(w_hops), 0, static_cast<uint8_t>(s_hops)};
         send_directional_fanout<operation_type, api_variant>(
-            s_hops, &senderS, south_packet_header, ranges_s, src_l1_addr, dst_acc, scatter_acc, i, sem_noc);
+            s_hops,
+            &senderS,
+            south_packet_header,
+            ranges_s,
+            src_l1_addr,
+            ta_args,
+            dst_base,
+            SRC_ALIGNED_PAGE_SIZE,
+            i,
+            sem_noc);
 
         cb_pop_front(CB_ID, cb_wait_count);
     }
@@ -309,10 +356,10 @@ void kernel_main() {
         const uint64_t sem_noc_final = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
         // Send a completion per active branch so every sub-tree gets the semaphore bump.
-        send_completion_atomic_inc(w_hops, senderW, left_packet_header, 0, w_hops, 0, 0, sem_noc_final);
-        send_completion_atomic_inc(e_hops, senderE, right_packet_header, e_hops, 0, 0, 0, sem_noc_final);
-        send_completion_atomic_inc(n_hops, senderN, north_packet_header, e_hops, w_hops, n_hops, 0, sem_noc_final);
-        send_completion_atomic_inc(s_hops, senderS, south_packet_header, e_hops, w_hops, 0, s_hops, sem_noc_final);
+        send_completion_atomic_inc(w_hops, senderW, left_packet_header, sem_noc_final);
+        send_completion_atomic_inc(e_hops, senderE, right_packet_header, sem_noc_final);
+        send_completion_atomic_inc(n_hops, senderN, north_packet_header, sem_noc_final);
+        send_completion_atomic_inc(s_hops, senderS, south_packet_header, sem_noc_final);
     }
 
     if (hasW) {
