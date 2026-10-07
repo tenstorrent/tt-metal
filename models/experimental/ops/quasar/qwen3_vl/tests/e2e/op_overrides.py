@@ -124,6 +124,24 @@ def _untilize_single_core(original, args, kwargs):
     return original(*args, **{**kwargs, "use_multicore": False})
 
 
+def _on_quasar(args, kwargs):
+    import ttnn
+
+    x = next((a for a in [*args, *kwargs.values()] if isinstance(a, ttnn.Tensor)), None)
+    return x is not None and x.device().arch() == ttnn.device.Arch.QUASAR
+
+
+def _to_experimental_quasar(name):
+    """Call the stop-gap Quasar port of a base op (ttnn.experimental.quasar.<name>) with the same arguments."""
+
+    def rewrite(original, args, kwargs):
+        import ttnn
+
+        return getattr(ttnn.experimental.quasar, name)(*args, **kwargs)
+
+    return rewrite
+
+
 def _largest_divisor(n, at_most):
     return next(d for d in range(min(n, at_most), 0, -1) if n % d == 0)
 
@@ -162,6 +180,15 @@ WORKAROUNDS = [
         remove_when="untilize's L1 check accounts for allocated L1 buffers or splits wide rows",
         applies=_small_grid_wide_untilize,
         rewrite=_untilize_single_core,
+    ),
+    Workaround(
+        name="quasar_experimental_add",
+        target="ttnn.add",
+        reason="base binary_ng builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
+        "ttnn.experimental.quasar.add runs (QUASAR_GAPS Q7)",
+        remove_when="base ttnn.add (binary_ng) is ported to Quasar",
+        applies=_on_quasar,
+        rewrite=_to_experimental_quasar("add"),
     ),
 ]
 
