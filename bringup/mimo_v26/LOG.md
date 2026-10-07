@@ -1347,3 +1347,38 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_B_detail_sentinel_h40_360444d8e45.log
 - paths: models/demos/blackhole/mimo_v26/tests/test_moe_race_stages.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
 - data: {"events_sentinel":22,"events_spread":10,"calls_per_run":18000,"pre_allreduce_diffs":0}
+
+## E261007-1046-caa
+- date: 2026-10-07T10:46:40
+- commit: ae9dc9337e8
+- branch: ssinghal/mimo-asm
+- host: 47
+- track: prefill
+- status: verified
+- claim: ctx64k_prefill_decode (MILESTONE 1 check): 48 layers, 4x8, host .47, unified bf16 experts (lib integ_d72e22e2fbf), exact router, enable_thinking=false chat frame, real text = Frankenstein (Project Gutenberg, context_cache file, 101982 tokens; users take windows starting at body token b*2400 so they overlap but differ) + 'quote and summarise' question, ISL 65000 per user, chunked traced prefill (tt/prefill.py, CH 2048, paged pool max_pos 67584) then the traced Generator/Decoder (32-slot decode), 1100 new tokens. B=4 (1 user per mesh row): prefill 37.4 s (32 steps), decode step 0 28833 ms (trace capture+compile, separate), steady 143.23 ms median over 1094 steps (p10-p90 142.88-143.60, unpaired, host-timed replay+candidate readback, dedicated process, trace on), free DRAM after 1807.7 MB/bank (14.1 GiB/chip, 3 GiB trace region configured); B=16 (4 per row): prefill 91.3 s (128 steps), step0 17449 ms, steady 143.34 ms (143.02-143.67), free DRAM after 1613.2 MB/bank (12.6 GiB/chip). No OOM, no hang. First tokens: 8420 ('Here') for 19/20 users, 28715 ('Based') for one: sane. Generated text READ for all 20 users: coherent Frankenstein summaries followed by verbatim quotes, 806-1100 tokens each (users finishing earlier ended with EOS), texts saved /mnt/tt-data/ssinghal/mimo-logs/asm_ctx64k_b4_ae9dc9337e8_texts.json and ..._b16_..._texts.json. Logits finiteness is inferred from argmax tokens/text (Decoder keeps no logits). NOTE ae9dc9337e8 -> 5199ce2a696 differs only by a PF_VERBOSE print in tt/prefill.py (not in --paths).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ctx64k_b16_ae9dc9337e8.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- data: {"ctx64k_ok":1,"step_ms_64k_b4":143.23,"step_ms_64k_b16":143.34}
+
+## E261007-1046-cbd
+- date: 2026-10-07T10:46:52
+- commit: 5199ce2a696
+- branch: ssinghal/mimo-asm
+- host: 48,30
+- track: prefill
+- status: verified
+- claim: NEEDLE-IN-A-HAYSTACK (passkey) at ISL 65000 / 32000 / 16000, 48 layers, unified bf16 experts, enable_thinking=false chat frame, haystack = Frankenstein (Project Gutenberg public domain, first N body tokens of the context_cache file: 101982 tokens, long enough, no repetition needed), needle sentence ' The pass key is K. Remember it. K is the pass key. ' inserted at depth d% of the haystack tokens, question 'What is the pass key mentioned in the text above? Answer with the number only.', greedy 24 tokens, chunked traced prefill + traced decode. Depths 10/50/90/70 percent, each TWICE (identical prompt on two different mesh rows, 8 users = 2 per row): 65000: 8/8 retrieved (keys 64191, 20955, 67718, 89336), repeats agree; 32000: 8/8 (31191, 77954, 34718, 56336); 16000: 8/8 (15191, 61954, 18718, 40336). A separate ragged run (B=6: depths 10/50/90 x2, rows 2-3 with one user) at 65000 also 6/6. Prefill 54.2 s for 64 steps at 65000 (2 users/row), 32.4 s at 32000, 28.8 s at 16000 (64 users-chunks at 16000 differ), decode step 0 14-18 s (trace compile). Correct answers are the full number (substring match of the key in the decoded text; first 60 chars stored in the jsonl). HANGS (stop-condition bookkeeping): (1) host .35 hung three times inside ttnn.execute_trace of the prefill trace (needle runs a, d at prefill step 51 of 64 and e at step 0; after a first board reset the previous run also logged 'Timed out waiting for active ethernet core 22-25'); the same configs ran on .30 and .48, so .35 is suspect (not added to bad_hosts.txt, coordinator decides). (2) REPRODUCED ON TWO HOSTS (.48, .30): running two ISLs in ONE process through prefill-trace -> decode-trace -> second prefill replay -> decode trace replay HANGS in the second case's first decode replay (decode.py execute_trace, stack saved); the 64k->8k->64k prefill-only run (E261007-0557-332) is fine, so the combination 'traced chunked prefill replay after a decode trace was captured' is the trigger; workaround used: one ISL per process. Killed hung pids with SIGABRT (stack) and reset the boards (hangwatch / tt-smi -glx_reset under the lock). No long-context retrieval failure observed.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_needle_f_5199ce2a696.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/test_ctx64k.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/prefill.py
+- data: {"needle_hits":24,"needle_of":24,"isls":[65000,32000,16000],"depths":[10,50,70,90]}
+
+## E261007-1057-ec7
+- date: 2026-10-07T10:57:36
+- commit: 37c8f06e7db
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: COORDINATOR: (1) host .35 added to bad_hosts.txt as SUSPECT after 3 prefill-trace hangs and an ethernet-core timeout seen by the prefill agent (E261007-1046-*); same configs fine on .30/.48; no reset by me. (2) After merge 408f8a19033 (decode path changed layer.py/model.py/prefill.py) the scorecard shows 1/16 PASS because earlier evidence is STALE by the paths rule: a full re-gate at the final integration tip is planned after the small-U and race work merge. (3) Open bug: with a decode trace captured, a second ISL's prefill replay followed by decode replay hangs in the first decode replay (reproduced on .48 and .30, stack saved by the prefill agent): relevant to reconfigure(U); workaround one ISL per process.
+- evidence: -
+- paths: models/common/bringup_kit/bad_hosts.txt
