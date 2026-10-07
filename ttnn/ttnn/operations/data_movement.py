@@ -666,18 +666,30 @@ def _broadcast_quantization_arg(arg, input_tensor, axis):
     return arg.reshape(broadcast_shape)
 
 
-def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, **__):
+def _quantized_output_dtype(dtype, output_tensor):
     import torch
 
-    # q = round(x / scale + zero_point); per-channel args broadcast along `axis`.
+    if dtype is not None:
+        return ttnn.ttnn_dtype_to_torch_dtype(dtype)
+    if output_tensor is not None:
+        if isinstance(output_tensor, torch.Tensor):
+            return output_tensor.dtype
+        return ttnn.ttnn_dtype_to_torch_dtype(output_tensor.dtype)
+    return torch.int32
+
+
+def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, output_tensor=None, **__):
+    import torch
+
+    # q = round(x / scale) + zero_point; per-channel args broadcast along `axis`.
     scale = _broadcast_quantization_arg(scale, input_tensor, axis)
     zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
-    output = torch.round(torch.div(input_tensor, scale) + zero_point)
-    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
-    if torch_dtype in (torch.int8, torch.uint8):
-        # Narrow quantized outputs saturate on device, while a direct Torch cast would wrap.
-        output = torch.clamp(output, torch.iinfo(torch_dtype).min, torch.iinfo(torch_dtype).max)
-    return output.to(torch_dtype)
+    output = torch.round(torch.div(input_tensor, scale)) + zero_point
+    torch_dtype = _quantized_output_dtype(dtype, output_tensor)
+    if torch_dtype in (torch.int32, torch.uint8) and isinstance(zero_point, torch.Tensor):
+        return output.to(torch_dtype)
+    q_min, q_max = (0, 255) if torch_dtype == torch.uint8 else (-128, 127)
+    return torch.clamp(output, q_min, q_max).to(torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.quantize, golden_function=_golden_function_quantize)
@@ -698,21 +710,30 @@ ttnn.attach_golden_function(ttnn.dequantize, golden_function=_golden_function_de
 
 
 def _golden_function_requantize(
-    input_tensor, in_scale, in_zero_point, out_scale, out_zero_point, *_, axis=None, dtype=None, **__
+    input_tensor,
+    in_scale,
+    in_zero_point,
+    out_scale,
+    out_zero_point,
+    *_,
+    axis=None,
+    dtype=None,
+    output_tensor=None,
+    **__,
 ):
     import torch
 
-    # q' = round((x - in_zero_point) * in_scale / out_scale + out_zero_point).
+    # q = round((x - in_zero_point) * in_scale / out_scale) + out_zero_point.
     in_scale = _broadcast_quantization_arg(in_scale, input_tensor, axis)
     in_zero_point = _broadcast_quantization_arg(in_zero_point, input_tensor, axis)
     out_scale = _broadcast_quantization_arg(out_scale, input_tensor, axis)
     out_zero_point = _broadcast_quantization_arg(out_zero_point, input_tensor, axis)
-    output = torch.round((input_tensor - in_zero_point) * (in_scale / out_scale) + out_zero_point)
-    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
-    if torch_dtype == torch.int8:
-        # The int8 requantize path saturates through quantize; the uint8 path narrows by typecast instead.
-        output = torch.clamp(output, -128, 127)
-    return output.to(torch_dtype)
+    output = torch.round((input_tensor - in_zero_point) * (in_scale / out_scale)) + out_zero_point
+    torch_dtype = _quantized_output_dtype(dtype, output_tensor)
+    if torch_dtype in (torch.int32, torch.uint8) and isinstance(out_zero_point, torch.Tensor):
+        return output.to(torch_dtype)
+    q_min, q_max = (0, 255) if torch_dtype == torch.uint8 else (-128, 127)
+    return torch.clamp(output, q_min, q_max).to(torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.requantize, golden_function=_golden_function_requantize)
