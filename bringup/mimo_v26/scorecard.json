@@ -66,11 +66,11 @@
   {
    "id": "gsm8k",
    "kind": "gsm8k",
-   "min_n": 64,
-   "min_correct": 55,
+   "min_n": 128,
+   "min_correct": 109,
    "required": true,
    "evidence": [],
-   "note": "REQUIRED. closed-loop greedy decode, full model; catches compounding error beyond the CPU prefix. set n/min_correct per model; PROVISIONAL threshold (n=64,min 55) copied from template: set from reference/hosted accuracy once known, log the decision"
+   "note": "REQUIRED. USER-SET 2026-10-07: >=85% (109/128) on gsm8k_128_nothink.json (enable_thinking=false), closed-loop greedy decode, full 48-layer model; catches compounding error beyond the CPU prefix. 85% is the user's number, not a published one for this model."
   },
   {
    "id": "determinism",
