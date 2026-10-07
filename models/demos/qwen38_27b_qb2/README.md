@@ -115,9 +115,9 @@ after the first replica/fabric attempts. Results are under
 `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
 the artifact entrypoint and updates after each completed cell. Five host tests
 validate the metric accounting and reject cold captures as warm measurements.
-The first twenty-three cells are measured and preserved in
+The first twenty-four cells are measured and preserved in
 [`galaxy-evidence/perf-sweep-tp4-v1/index.html`](galaxy-evidence/perf-sweep-tp4-v1/index.html)
-(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; four cells remain and
+(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; three cells remain and
 the host job continues. At ISL 128, C=1/2/4/8/16 measured
 38.79/31.08/24.85/20.48/12.15 tokens/s/user, with aggregate decode throughput
 38.79/62.16/99.39/163.84/194.40 tokens/s. This baseline has substantial batch
@@ -132,8 +132,9 @@ chunk, and copies the resulting recurrent state back. These are profiling
 targets; source inspection does not establish their measured cost.
 At 55K, C1 measures 30.57 tokens/s/user and 9.65 s TTFT; C8 measures
 16.33 tokens/s/user (130.64 aggregate) and 78.14 s TTFT.
-At 128K, C1/C2/C4 measure 31.87/26.12/19.19 tokens/s/user;
-C4 delivers 76.76 aggregate with 113.14 s TTFT.
+At 128K, C1/C2/C4/C8 measure 31.87/26.12/19.19/13.75 tokens/s/user;
+C4 delivers 76.76 aggregate with 113.14 s TTFT and C8 delivers 109.99 aggregate
+with 226.45 s TTFT. The remaining points are near-256K, C1/C2/C4.
 
 Initialize with `--replicas 8`
 for the follow-up: throughput is measured on all eight replicas rather than
@@ -188,6 +189,31 @@ chunks at unchanged precision. Do not simply delete the divisibility guard:
 the paged reader reads whole chunks through the page table, so a partial last
 chunk needs valid mapped backing even though causal attention masks its tail.
 
+### Attention chunk experiment
+
+`demo/run_long_context_attention.sh TASK_ROOT NEW_RESULTS` runs the independent
+TP4 experiment after the profile. Seven geometries cover 8K B1/B16, 55K B1,
+128K B1/B8 and near-256K B1/B4. It tests chunks 32/64/128/256/512 on identical
+512-aligned cache extents. Query/KV formats and local head geometry match Qwen
+(BF16/BFP8, six Q heads, one KV head, head dimension 256). The synthetic inputs
+are replicated on four chips; every rank is checked. These are attention-op
+measurements, not checkpoint-backed full-layer or full-model qualification.
+
+Random physical page mapping, independent per-user positions and large future
+value sentinels exercise causal masking. The FP32 CPU reference reads the actual
+quantized device cache. Each user/rank must reach PCC >=0.999 and normalized RMS
+error <=0.02. Timing uses five warm samples of 100 trace replays, excluding
+reference calculation and readback. This is traced wall cost including dispatch,
+not pure device-kernel time. A repeated baseline flags >3% timing drift; fast
+but inaccurate candidates cannot win. Nothing is automatically promoted into
+the model or serving policy.
+
+Four host tests pass, recorded in `galaxy-evidence/attention-tuning-host.xml`.
+The persistent job is `qwen38-attention-tuning-v1-20261006.service`, waiting for
+profile-v2, with an eight-hour enclosing deadline, 128 GiB host-memory limit,
+eight-core quota and thirty-minute test timeout. Results will be saved to
+`TASK_ROOT/attention-tuning-v1/attention.json`. Hardware results remain pending.
+
 ### Persistent eight-engine serving and reference evaluation
 
 `demo/run_galaxy_serving.sh TASK_ROOT NEW_RESULTS G0_RECEIPT` waits for an
@@ -225,15 +251,15 @@ Client decode timing ends at stream completion, including any suppressed
 special-token tail. This fixes a measurement bug that could otherwise inflate
 fixed-length throughput by stopping at the final visible text.
 
-The persistent job is `qwen38-galaxy-serving-v2-20261006.service`, queued behind
-`qwen38-layer-profile-v2-20261006.service`. It has a 48-hour enclosing deadline
+The persistent job is `qwen38-galaxy-serving-v3-20261006.service`, queued behind
+`qwen38-attention-tuning-v1-20261006.service`, which follows profile-v2. It has a 48-hour enclosing deadline
 including queue time, a 256 GiB host-memory limit and a 32-core CPU quota. It
 keeps the endpoint resident after the evaluations and sweep. Stop this owned
-job with `systemctl --user stop qwen38-galaxy-serving-v2-20261006.service`;
+job with `systemctl --user stop qwen38-galaxy-serving-v3-20261006.service`;
 weights and caches remain. The next device job resets a pessimistic dirty
 marker through the normal safe-runner path.
 
-Receipts are under `TASK_ROOT/galaxy-serving-v2/`: `deployment.json`,
+Receipts are under `TASK_ROOT/galaxy-serving-v3/`: `deployment.json`,
 `server.log`, `api.json`, `gpqa/`, and `http-sweep/`. Connect after readiness
 using `ssh -L 8000:127.0.0.1:8000 ttuser@10.228.203.98`; the served model is
 `Qwen/Qwen3.8-27B` at `/v1/chat/completions`.
