@@ -7,153 +7,143 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_nll_loss import (
+    run_moreh_nll_loss_backward,
+    run_moreh_nll_loss_regression,
+)
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_nll_loss_unreduced import (
+    get_torch_tensors as get_unreduced_torch_tensors,
+    get_tt_backward_tensors,
+    run_moreh_nll_loss_unreduced,
+)
 from tests.ttnn.unit_tests.operations.test_utils import get_compute_kernel_options, to_torch, to_ttnn
 
 pytestmark = pytest.mark.use_module_device
 
-INPUT_SHAPE = [5, 10]
-IGNORE_INDEX = 1
-# (N, C, W) with W past one tile and one face: the 3d readers' multi-face path (regression #51278).
-RANK_3_SHAPE = [2, 10, 33]
-RANK_4_SHAPE = [2, 3, 5, 4]
+# "mean" runs step1 (per-target weights for the divisor), then step2 (the loss); "sum" runs step2 only. Both then
+# reduce with moreh_sum. step2 has a reader per input rank (2d, 3d, 4d); [2, 10, 33] has W past one tile and one
+# face, the 3d reader's multi-face path (#51278).
+SHAPES = [[5, 10], [2, 10, 33], [2, 3, 5, 4]]
+SHAPE_IDS = ["rank_2", "rank_3", "rank_4"]
 
 
-def get_torch_tensors(input_shape, ignored_target=None):
-    torch_input = torch.rand(input_shape, requires_grad=True)
-    torch_target = torch.randint(0, input_shape[1], input_shape[:1] + input_shape[2:])
-    if ignored_target is not None:
-        # Every other target is ignored, so both paths run and a "mean" divisor stays non-zero.
-        torch_target.view(-1)[::2] = ignored_target
-    torch_weight = torch.rand(input_shape[1])
-    return torch_input, torch_target, torch_weight
-
-
-def run_moreh_nll_loss_test(
-    input_shape, device, reduction="mean", none_weight=False, ignore_index=IGNORE_INDEX, has_ignored=False
-):
-    torch_input, torch_target, torch_weight = get_torch_tensors(input_shape, ignore_index if has_ignored else None)
+def run_moreh_nll_loss_unreduced_backward_test(shape, device, none_weight=False, fp32_dest_acc_en=False):
+    # Not nightly run_moreh_nll_loss_unreduced_backward: it pre-fills input_grad with the expected gradient, so a
+    # kernel that writes nothing still passes. Same steps, but input_grad starts as the input values.
+    torch_input, torch_target, torch_weight, _ = get_unreduced_torch_tensors(shape, torch.float32)
     if none_weight:
         torch_weight = None
-    nll_loss = torch.nn.NLLLoss(weight=torch_weight, ignore_index=ignore_index, reduction=reduction)
-    torch_loss = nll_loss(torch_input, torch_target).detach()
-    if reduction != "none":
-        torch_loss = torch_loss.reshape(1)
-
-    # "mean" is the only reduction that runs both the step1 (divisor) and step2 (loss) device ops.
-    tt_loss = ttnn.moreh_nll_loss(
-        to_ttnn(torch_input.detach(), device=device),
-        to_ttnn(torch_target, device=device, dtype=ttnn.int32),
-        reduction,
-        weight_tensor=to_ttnn(torch_weight, device=device),
-        divisor_tensor=to_ttnn(torch.zeros(1), device=device) if reduction == "mean" else None,
-        output_tensor=to_ttnn(torch.zeros(torch_loss.shape), device=device),
-        ignore_index=ignore_index,
-        compute_kernel_config=get_compute_kernel_options(False),
-    )
-
-    passing, output_pcc = comp_allclose_and_pcc(
-        torch_loss, to_torch(tt_loss, shape=torch_loss.shape), pcc=0.999, rtol=0.05, atol=0.05
-    )
-    assert passing, output_pcc
-
-
-def run_moreh_nll_loss_backward_test(input_shape, device, reduction_mean=True, none_weight=False, has_ignored=False):
-    torch_input, torch_target, torch_weight = get_torch_tensors(input_shape, IGNORE_INDEX if has_ignored else None)
-    if none_weight:
-        torch_weight = None
-    nll_loss = torch.nn.NLLLoss(
-        weight=torch_weight, ignore_index=IGNORE_INDEX, reduction="mean" if reduction_mean else "sum"
-    )
-    torch_loss = nll_loss(torch_input, torch_target)
+    torch_loss = torch.nn.NLLLoss(weight=torch_weight, ignore_index=1, reduction="none")(torch_input, torch_target)
     torch_output_grad = torch.randn_like(torch_loss)
     torch_loss.backward(torch_output_grad)
 
-    tt_target = to_ttnn(torch_target, device=device, dtype=ttnn.int32)
-    tt_weight = to_ttnn(torch_weight, device=device)
-    tt_divisor = None
-    if reduction_mean:
-        tt_divisor = to_ttnn(torch.zeros(1), device=device)
-        # The forward fills tt_divisor, which the mean-reduction backward reads.
-        ttnn.moreh_nll_loss(
-            to_ttnn(torch_input.detach(), device=device),
-            tt_target,
-            "mean",
-            weight_tensor=tt_weight,
-            divisor_tensor=tt_divisor,
-            output_tensor=to_ttnn(torch.zeros(1), device=device),
-            ignore_index=IGNORE_INDEX,
-            compute_kernel_config=get_compute_kernel_options(False),
-        )
-    tt_input_grad = ttnn.moreh_nll_loss_backward(
-        tt_target,
-        to_ttnn(torch_output_grad, device=device),
-        reduction_mean=reduction_mean,
-        weight_tensor=tt_weight,
-        input_grad_tensor=to_ttnn(torch_input.detach(), device=device),
-        divisor_tensor=tt_divisor,
-        ignore_index=IGNORE_INDEX,
-        compute_kernel_config=get_compute_kernel_options(False),
+    tt_target, tt_weight, tt_output_grad, tt_input_grad = get_tt_backward_tensors(
+        torch_target, torch_weight, torch_output_grad, torch_input.detach(), device, ttnn.bfloat16
     )
-
-    passing, output_pcc = comp_allclose_and_pcc(
-        torch_input.grad, to_torch(tt_input_grad, shape=input_shape), pcc=0.999, rtol=0.05, atol=0.05
-    )
-    assert passing, output_pcc
-
-
-def run_moreh_nll_loss_unreduced_backward_test(input_shape, device, none_weight=False):
-    torch_input, torch_target, torch_weight = get_torch_tensors(input_shape)
-    if none_weight:
-        torch_weight = None
-    nll_loss = torch.nn.NLLLoss(weight=torch_weight, ignore_index=IGNORE_INDEX, reduction="none")
-    torch_loss = nll_loss(torch_input, torch_target)
-    torch_output_grad = torch.randn_like(torch_loss)
-    torch_loss.backward(torch_output_grad)
-
     tt_input_grad = ttnn.moreh_nll_loss_unreduced_backward(
-        to_ttnn(torch_target, device=device, dtype=ttnn.int32),
-        to_ttnn(torch_output_grad, device=device),
-        weight_tensor=to_ttnn(torch_weight, device=device),
-        input_grad_tensor=to_ttnn(torch_input.detach(), device=device),
-        ignore_index=IGNORE_INDEX,
-        compute_kernel_config=get_compute_kernel_options(False),
+        tt_target,
+        tt_output_grad,
+        weight_tensor=tt_weight,
+        input_grad_tensor=tt_input_grad,
+        ignore_index=1,
+        compute_kernel_config=get_compute_kernel_options(fp32_dest_acc_en),
     )
 
     passing, output_pcc = comp_allclose_and_pcc(
-        torch_input.grad, to_torch(tt_input_grad, shape=input_shape), pcc=0.999, rtol=0.05, atol=0.05
+        torch_input.grad, to_torch(tt_input_grad, shape=shape), pcc=0.999, rtol=0.05, atol=0.05
     )
     assert passing, output_pcc
 
 
 @pytest.mark.merge_gate
-def test_moreh_nll_loss(device):
+@pytest.mark.parametrize("reduction", ["mean", "sum"])
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+def test_moreh_nll_loss(shape, reduction, device):
     torch.manual_seed(0)
-    run_moreh_nll_loss_test(INPUT_SHAPE, device)
+    run_moreh_nll_loss_regression(shape, -100, reduction, False, device, compute_kernel_options=False)
+
+
+@pytest.mark.merge_gate
+def test_moreh_nll_loss_unreduced(device):
+    torch.manual_seed(0)
+    # "none" runs step2 alone and returns a loss per target.
+    run_moreh_nll_loss_unreduced(
+        [2, 3, 5, 4], 1, False, device, torch_dtype=torch.float32, compute_kernel_options=False
+    )
 
 
 @pytest.mark.merge_gate
 @pytest.mark.parametrize(
-    "input_shape, reduction, none_weight, ignore_index, has_ignored",
+    "shape, reduction, none_weight, ignore_index, has_ignored, fp32_dest_acc_en",
     [
-        (INPUT_SHAPE, "sum", False, IGNORE_INDEX, False),
-        (INPUT_SHAPE, "none", False, IGNORE_INDEX, False),
-        (INPUT_SHAPE, "mean", True, IGNORE_INDEX, False),
-        (INPUT_SHAPE, "mean", False, IGNORE_INDEX, True),
-        (INPUT_SHAPE, "mean", False, -100, True),
-        (RANK_3_SHAPE, "mean", False, IGNORE_INDEX, False),
-        (RANK_4_SHAPE, "mean", False, IGNORE_INDEX, False),
+        ([5, 10], "mean", True, -100, False, False),
+        # Every other target is ignored, so the ignored and the valid path run in the same launch.
+        ([5, 10], "mean", False, 1, True, False),
+        ([5, 10], "mean", False, -100, True, False),
+        # W = 2048 spans many faces and pages: the 3d reader used to write past the CB page here (#51278).
+        ([2, 10, 2048], "sum", False, -100, False, False),
+        ([5, 10], "mean", False, -100, False, True),
+        # 32768 classes: the weight vector (1024 tiles) doesn't fit in L1, so step1 uses its large reader.
+        ([4, 32768], "mean", False, -100, False, False),
     ],
-    ids=["sum", "none", "no_weight", "ignored_targets", "negative_ignore_index", "rank_3", "rank_4"],
+    ids=["no_weight", "ignored_targets", "negative_ignore_index", "rank_3_wide", "fp32_dest_acc", "step1_large"],
 )
-def test_moreh_nll_loss_corner_cases(input_shape, reduction, none_weight, ignore_index, has_ignored, device):
+def test_moreh_nll_loss_corner_cases(
+    shape, reduction, none_weight, ignore_index, has_ignored, fp32_dest_acc_en, device
+):
     torch.manual_seed(0)
-    run_moreh_nll_loss_test(
-        input_shape,
+    run_moreh_nll_loss_regression(
+        shape,
+        ignore_index,
+        reduction,
+        none_weight,
         device,
-        reduction=reduction,
-        none_weight=none_weight,
-        ignore_index=ignore_index,
         has_ignored=has_ignored,
+        compute_kernel_options=fp32_dest_acc_en,
+    )
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize("reduction_mean", [True, False], ids=["mean", "sum"])
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+def test_moreh_nll_loss_backward(shape, reduction_mean, device):
+    torch.manual_seed(0)
+    run_moreh_nll_loss_backward(shape, -100, reduction_mean, False, device, compute_kernel_options=False)
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize(
+    "shape, ignore_index, none_weight, fp32_dest_acc_en",
+    [
+        ([5, 10], -100, True, False),
+        # 66 targets over 10 classes: some equal ignore_index (all 66 missing class 1 has ~0.1% odds, and the
+        # seed fixes the draw).
+        ([2, 10, 33], 1, False, False),
+        ([5, 10], -100, False, True),
+    ],
+    ids=["no_weight", "ignored_targets", "fp32_dest_acc"],
+)
+def test_moreh_nll_loss_backward_corner_cases(shape, ignore_index, none_weight, fp32_dest_acc_en, device):
+    torch.manual_seed(0)
+    run_moreh_nll_loss_backward(shape, ignore_index, True, none_weight, device, compute_kernel_options=fp32_dest_acc_en)
+
+
+@pytest.mark.merge_gate
+@pytest.mark.parametrize(
+    "shape, none_weight, fp32_dest_acc_en",
+    [
+        (SHAPES[0], False, False),
+        (SHAPES[1], False, False),
+        (SHAPES[2], False, False),
+        (SHAPES[0], True, False),
+        (SHAPES[0], False, True),
+    ],
+    ids=SHAPE_IDS + ["no_weight", "fp32_dest_acc"],
+)
+def test_moreh_nll_loss_unreduced_backward(shape, none_weight, fp32_dest_acc_en, device):
+    torch.manual_seed(0)
+    run_moreh_nll_loss_unreduced_backward_test(
+        shape, device, none_weight=none_weight, fp32_dest_acc_en=fp32_dest_acc_en
     )
 
 
@@ -162,53 +152,26 @@ def test_moreh_nll_loss_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_nll_loss_test(INPUT_SHAPE, device)
+    run_moreh_nll_loss_regression([5, 10], -100, "mean", False, device, compute_kernel_options=False)
     num_program_cache_entries = device.num_program_cache_entries()
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
     # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = to_ttnn(torch.zeros(INPUT_SHAPE), device=device)
-    run_moreh_nll_loss_test(INPUT_SHAPE, device)
+    tt_placeholder = to_ttnn(torch.zeros([5, 10]), device=device)
+    run_moreh_nll_loss_regression([5, 10], -100, "mean", False, device, compute_kernel_options=False)
     assert device.num_program_cache_entries() == num_program_cache_entries
 
 
 @pytest.mark.merge_gate
-def test_moreh_nll_loss_backward(device):
+def test_moreh_nll_loss_backward_program_cache(device):
     torch.manual_seed(0)
-    run_moreh_nll_loss_backward_test(INPUT_SHAPE, device)
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "input_shape, reduction_mean, none_weight, has_ignored",
-    [
-        (INPUT_SHAPE, False, False, False),
-        (INPUT_SHAPE, True, True, False),
-        (INPUT_SHAPE, True, False, True),
-        (RANK_3_SHAPE, True, False, False),
-    ],
-    ids=["sum", "no_weight", "ignored_targets", "rank_3"],
-)
-def test_moreh_nll_loss_backward_corner_cases(input_shape, reduction_mean, none_weight, has_ignored, device):
-    torch.manual_seed(0)
-    run_moreh_nll_loss_backward_test(
-        input_shape, device, reduction_mean=reduction_mean, none_weight=none_weight, has_ignored=has_ignored
-    )
-
-
-@pytest.mark.merge_gate
-def test_moreh_nll_loss_unreduced_backward(device):
-    torch.manual_seed(0)
-    run_moreh_nll_loss_unreduced_backward_test(INPUT_SHAPE, device)
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "input_shape, none_weight",
-    [
-        (INPUT_SHAPE, True),
-        (RANK_3_SHAPE, False),
-    ],
-    ids=["no_weight", "rank_3"],
-)
-def test_moreh_nll_loss_unreduced_backward_corner_cases(input_shape, none_weight, device):
-    torch.manual_seed(0)
-    run_moreh_nll_loss_unreduced_backward_test(input_shape, device, none_weight=none_weight)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
+    device.clear_program_cache()
+    run_moreh_nll_loss_backward([5, 10], -100, True, False, device, compute_kernel_options=False)
+    num_program_cache_entries = device.num_program_cache_entries()
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
+    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
+    tt_placeholder = to_ttnn(torch.zeros([5, 10]), device=device)
+    run_moreh_nll_loss_backward([5, 10], -100, True, False, device, compute_kernel_options=False)
+    assert device.num_program_cache_entries() == num_program_cache_entries

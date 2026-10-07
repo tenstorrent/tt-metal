@@ -7,20 +7,53 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_arange import run_moreh_arange
 
 pytestmark = pytest.mark.use_module_device
 
 
-def run_moreh_arange_test(start, end, step, device, dtype=ttnn.bfloat16, untilize_out=False, provide_output=False):
-    torch_dtype = torch.int32 if dtype == ttnn.int32 else torch.bfloat16
-    expected = torch.arange(start=start, end=end, step=step).to(torch_dtype)
-    layout = ttnn.ROW_MAJOR_LAYOUT if untilize_out else ttnn.TILE_LAYOUT
-    tt_output = (
-        ttnn.from_torch(torch.zeros([1, len(expected)]), device=device, dtype=dtype, layout=layout)
-        if provide_output
-        else None
+@pytest.mark.merge_gate
+@pytest.mark.parametrize(
+    "start_end_step, dtype, tilized",
+    [
+        # Every length leaves the last tile partly filled.
+        ([10.9, -13, -0.3], "bfloat16", True),
+        ([-100, 320, 1], "int32", True),
+        ([2.3, 15.3, 0.5], "float32", True),
+        # Row-major output uses a separate writer kernel, which clamps the partial last chunk.
+        ([10.9, -13, -0.3], "bfloat16", False),
+        ([-100, 320, 1], "int32", False),
+        ([2.3, 15.3, 0.5], "float32", False),
+        # 149 tiles: more than any device's core count, so cores write several tiles each.
+        ([0, 4763, 1], "int32", True),
+        ([0, 4763, 1], "int32", False),
+    ],
+    ids=[
+        "bfloat16",
+        "int32",
+        "float32",
+        "bfloat16_row_major",
+        "int32_row_major",
+        "float32_row_major",
+        "multi_tile_per_core",
+        "multi_tile_per_core_row_major",
+    ],
+)
+def test_moreh_arange(start_end_step, dtype, tilized, device):
+    torch.manual_seed(0)
+    run_moreh_arange(start_end_step, False, dtype, tilized, device)
+
+
+@pytest.mark.merge_gate
+def test_moreh_arange_provided_output(device):
+    torch.manual_seed(0)
+    # Not the nightly helper: it fills the provided output with torch.empty, which can already hold the
+    # expected values. Zeros make an output the op never writes fail.
+    expected = torch.arange(10.9, -13, -0.3).to(torch.bfloat16)
+    tt_output = ttnn.from_torch(
+        torch.zeros([1, len(expected)]), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
-    tt_output = ttnn.moreh_arange(start, end, step, device, output=tt_output, untilize_out=untilize_out, dtype=dtype)
+    ttnn.moreh_arange(10.9, -13, -0.3, device, output=tt_output, untilize_out=False, dtype=ttnn.bfloat16)
     actual = ttnn.to_torch(tt_output).reshape(expected.shape)
 
     passing, output_pcc = comp_allclose_and_pcc(expected, actual, rtol=0.1, atol=0.1)
@@ -28,42 +61,15 @@ def run_moreh_arange_test(start, end, step, device, dtype=ttnn.bfloat16, untiliz
 
 
 @pytest.mark.merge_gate
-def test_moreh_arange(device):
-    torch.manual_seed(0)
-    # Negative fractional step; the 80 outputs span three tiles, the last one partly filled.
-    run_moreh_arange_test(10.9, -13, -0.3, device)
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "start, end, step, dtype, untilize_out",
-    [
-        (2.3, 15.3, 0.5, ttnn.bfloat16, False),
-        (-100, 32 * 10, 1, ttnn.int32, False),
-        # Row-major output uses a separate writer kernel.
-        (10.9, -13, -0.3, ttnn.bfloat16, True),
-    ],
-    ids=["positive_step", "int32", "row_major"],
-)
-def test_moreh_arange_corner_cases(start, end, step, dtype, untilize_out, device):
-    torch.manual_seed(0)
-    run_moreh_arange_test(start, end, step, device, dtype=dtype, untilize_out=untilize_out)
-
-
-@pytest.mark.merge_gate
-def test_moreh_arange_provided_output(device):
-    torch.manual_seed(0)
-    run_moreh_arange_test(10.9, -13, -0.3, device, provide_output=True)
-
-
-@pytest.mark.merge_gate
 def test_moreh_arange_program_cache(device):
     torch.manual_seed(0)
     # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
     device.clear_program_cache()
-    run_moreh_arange_test(10.9, -13, -0.3, device)
+    run_moreh_arange([10.9, -13, -0.3], False, "bfloat16", True, device)
     num_program_cache_entries = device.num_program_cache_entries()
+    # Without this, the equality below would also pass for an op that never caches a program.
+    assert num_program_cache_entries > 0
     # Holding this tensor moves the next allocations, so the cache hit must update the output address.
-    tt_placeholder = ttnn.from_torch(torch.zeros([1, 80]), device=device, layout=ttnn.TILE_LAYOUT)
-    run_moreh_arange_test(10.9, -13, -0.3, device)
+    tt_placeholder = ttnn.from_torch(torch.zeros([1, 80]), device=device)
+    run_moreh_arange([10.9, -13, -0.3], False, "bfloat16", True, device)
     assert device.num_program_cache_entries() == num_program_cache_entries

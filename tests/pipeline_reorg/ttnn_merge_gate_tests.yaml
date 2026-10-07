@@ -185,10 +185,10 @@
   owner_id: U084B1CES7M # Borys Bradel
 
 # Moreh op coverage: every program factory plus small corner cases. Selection lives in the test files, as
-# @pytest.mark.merge_gate. Left out, they are being replaced by a ttnn op (#58420): moreh_cumsum
-# and moreh_cumsum_backward, moreh_dot, moreh_dot_backward, moreh_bmm and moreh_bmm_backward (#58422);
-# moreh_sum, moreh_mean, moreh_group_norm (#58424); moreh_matmul, moreh_linear (#58427). For each of
-# these the forward and the backward are both left out.
+# @pytest.mark.merge_gate. Left out, they are being replaced by a ttnn op (#58420): moreh_cumsum,
+# moreh_dot, moreh_dot_backward and moreh_bmm (#58422); moreh_sum, moreh_mean, moreh_group_norm (#58424);
+# moreh_matmul, moreh_linear (#58427). Their other backward ops stay covered until they are removed, except
+# moreh_cumsum_backward, which only calls ttnn.cumsum.
 - name: "ttnn moreh ops"
   cmd: >-
     pytest --timeout 60 -xv -m merge_gate
