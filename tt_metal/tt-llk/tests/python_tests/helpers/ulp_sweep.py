@@ -18,6 +18,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from fractions import Fraction
 from functools import lru_cache
 from typing import Dict, List, Optional, Set, Tuple, Union
 
@@ -154,6 +155,33 @@ def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor
     padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
     received = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
     return received.reshape(src.shape)
+
+
+def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch.Tensor:
+    """*src* as the golden should see it: with its zeros made +0.0 where the unpack
+    drops the sign, so the golden is computed on what the kernel receives.
+
+    The walk's one data zero is -0.0, and the kernel is handed +0.0 -- except on the
+    unpack-to-dest path, which keeps it (``negative_zero_delivered``, the same rule the
+    edge tests use rather than a second copy of it). Otherwise an op whose finite answer
+    depends on the sign of zero reads one lane as a whole-cell error that is the
+    unpack's, not the op's: ``signbit`` answers 1.0 against 0.0, 16129 bf16 steps. (A
+    pole's ``-inf`` against ``+inf``, ``rsqrt(-0)``, was never a failure here: the
+    singularity exclusion drops it.) The dedicated signed-zero tests in
+    test_eltwise_unary_sfpu.py hold that path to account.
+
+    Not for a block-float input: the golden quantizes that itself, and in the
+    shared-exponent-0 block the zero lane sits in, the forced hidden bit turns it into
+    -2**-127 as -0.0 and +2**-127 (~6e-39) as +0.0 -- neither of them zero, so
+    canonicalizing moved Ceil/Sqrt/Log/Rsqrt's Bfp8_b cells rather than fixing them.
+    """
+    from helpers.sfpu_domains import negative_zero_delivered
+
+    if stimuli_format_for(input_format) != input_format or negative_zero_delivered(
+        input_format, dest_acc
+    ):
+        return src
+    return torch.where(src == 0, torch.zeros_like(src), src)
 
 
 def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
@@ -381,6 +409,31 @@ def _known_lanes() -> Dict:
         high=65504.0,
         why="inf where the answer is x itself, in the top four fp16 values, on a 16-bit Dest",
     )
+    # The same top-of-fp16 window for an op that answers 65408 finite: #58607's lanes
+    # start one fp16 step above it, at 65440.
+    above_65408 = {**top_of_fp16, "low": 65440.0}
+
+    def store_saturates(at: float, **fields):
+        """#57215: the Float16 store saturates a value just past 65504 to 65504 rather
+        than to an infinity, on a 32-bit Dest packed to Float16, where the golden's fp16
+        rounding answers inf. Only at the one input *at* whose exact answer rounds past
+        fp16's range (2**16 for Reciprocal and SqrtCustom, 65535 for Tanhshrink, which
+        fp16 rounds to inf as it does anything from 65520). The bounds are on the input
+        as received, so on Bfp8_b they also name every bf16
+        value the block quantizer maps onto *at* -- the quantization preimage, not a
+        wider defect -- without spelling it out."""
+        return (
+            KnownNonfiniteLanes(
+                issue="#57215",
+                inputs=(DataFormat.Float16_b, DataFormat.Bfp8_b),
+                output=DataFormat.Float16,
+                dest=DestAccumulation.Yes,
+                low=at,
+                high=at,
+                **fields,
+            ),
+        )
+
     _KNOWN_NONFINITE_LANES.update(
         {
             MathOperation.Celu: (KnownNonfiniteLanes(**top_of_fp16),),
@@ -388,10 +441,9 @@ def _known_lanes() -> Dict:
             MathOperation.Gelu: (
                 KnownNonfiniteLanes(**top_of_fp16, approx=ApproximationMode.No),
             ),
+            MathOperation.GeluTanh: (KnownNonfiniteLanes(**top_of_fp16),),
             # Silu answers 65408 itself; #58607 lists only the three lanes above it.
-            MathOperation.Silu: (
-                KnownNonfiniteLanes(**{**top_of_fp16, "low": 65440.0}),
-            ),
+            MathOperation.Silu: (KnownNonfiniteLanes(**above_65408),),
             MathOperation.Square: (
                 KnownNonfiniteLanes(
                     **{
@@ -403,26 +455,38 @@ def _known_lanes() -> Dict:
                     }
                 ),
             ),
-            # #57215: the Float16 store saturates a value just past 65504 to 65504 rather
-            # than to an infinity. 1/x at |x| = 2**-16 is 2**16, past fp16's range, and
-            # the approximate reciprocal falls just short of it, into (65504, 2**16),
-            # where the store saturates instead of carrying it to inf. Only that input:
-            # a step or two under it the answer agrees with the golden (measured), and a
-            # step above, 1/x is ~65028, a finite answer an inf must not be excused on.
-            # Bfp8_b needs no wider bounds: its 2**-16 block hands the kernel exactly
-            # 2**-16 for all four of 0x377E..0x3781, and the bounds are on that value.
-            MathOperation.Reciprocal: (
+            # Not in #58607's first table; recorded there since (issuecomment-5999436777):
+            # +-65440..65504, and 65408 answers finite as it does for Silu.
+            MathOperation.Tanhshrink: (
                 KnownNonfiniteLanes(
-                    issue="#57215",
-                    inputs=(DataFormat.Bfp8_b, DataFormat.Float16_b),
-                    output=DataFormat.Float16,
-                    approx=ApproximationMode.Yes,
-                    dest=DestAccumulation.Yes,
-                    low=2.0**-16,
-                    high=2.0**-16,
-                    magnitude=True,
-                    why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
+                    **{
+                        **above_65408,
+                        "magnitude": True,
+                        "why": "inf where the answer is x - tanh(x), in the top fp16 values, on a 16-bit Dest",
+                    }
                 ),
+                # x - tanh(x) at |x| = 2**16 is 65535, which fp16 rounds to inf.
+                *store_saturates(
+                    at=2.0**16,
+                    magnitude=True,
+                    why="+-65504 where x - tanh(x) is just past fp16's range and the store saturates instead of overflowing",
+                ),
+            ),
+            # sqrt(x) for x at 2**32 is 2**16.
+            MathOperation.SqrtCustom: store_saturates(
+                at=2.0**32,
+                why="65504 where sqrt(x) is just past fp16's range and the store saturates instead of overflowing",
+            ),
+            # 1/x is 2**16 at |x| = 2**-16 and ~65793-66052 a step or two under it: past
+            # fp16's range, which the store overflows to inf as the golden does. The
+            # approximate reciprocal falls a fraction of a percent short, into
+            # (65504, 2**16), where the store saturates instead -- hence approx=Yes; the
+            # exact kernel agrees with the golden on these lanes.
+            MathOperation.Reciprocal: store_saturates(
+                at=2.0**-16,
+                approx=ApproximationMode.Yes,
+                magnitude=True,
+                why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
             ),
         }
     )
@@ -782,7 +846,8 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
     """What the table should say for a measured worst lane on *out_fmt*.
 
     ``("ulp", budget)`` while a step budget is still *stronger* than the tolerance it
-    replaces, and ``("tolerance", measured)`` once it is not. The bound is the table's
+    replaces, and ``("tolerance", budget)`` once it is not -- the budget either way, so
+    the row's comment can name the number that actually crossed the line. The bound is the table's
     own ``usable_budget_ceiling``: ~419,430 steps for fp32, 51 for fp16, 6 for bf16, 25
     for Bfp8_b. Decided per cell and before collapsing, because it depends on the output
     format and collapsing may drop it.
@@ -807,9 +872,15 @@ def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
         # Bfp8_b output from random mixed-magnitude blocks (the table's Bfp8_b note) and
         # 393 from the sorted sweep. Enrolling the second would hide the first.
         return ("block", measured)
-    budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
+    # In exact arithmetic: `100 * 1.1` is 110.00000000000001 in binary floating point,
+    # so a float ceil wrote 111, one step past the rule. And from `str`: `Fraction(1.1)`
+    # is the binary double, which gives 12 for a measured 10 where the rule says 11.
+    budget = math.ceil(Fraction(measured) * Fraction(str(EMIT_HEADROOM)))
     if budget > usable_budget_ceiling(DataFormat[out_fmt]):
-        return ("tolerance", measured)
+        # The *budget* is what crosses the line, not the measurement: with 1.1x headroom
+        # a measured 6 becomes a budget of 7, past bf16's 6.4. Writing "max 6 ULP, past
+        # this output's usable ceiling" then made a checkable claim that is false.
+        return ("tolerance", budget)
     return ("ulp", budget)
 
 
@@ -873,16 +944,86 @@ def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
     return rows
 
 
+#: The run identity, stated once on the op's key line rather than on each of the ~2,000
+#: rows in the table (a quarter of the file). Rows this run did not supersede keep their own suffix,
+#: or are given one by :func:`_stamp_kept`.
+_MEASURED_BY = "measured by: {suffix}, except where a row says otherwise"
+
+#: A previous run's clause, built from :data:`_MEASURED_BY` so the wording lives in one
+#: place: stripped so a re-emit replaces it instead of appending, and its ``run`` group
+#: is the run it names.
+_MEASURED_BY_RE = re.compile(
+    r";?\s*" + re.escape(_MEASURED_BY).replace(re.escape("{suffix}"), r"(?P<run>.*?)")
+)
+
+
+def _split_key_line(key_line: str) -> Tuple[str, str, str]:
+    """An op's key line as ``(head, header, run)``: the ``Op:`` part, its header comment
+    without the ``measured by:`` clause, and the run that clause names ("" if none)."""
+    head, _, comment = key_line.rstrip("\n").partition("#")
+    clause = _MEASURED_BY_RE.search(comment)
+    header = _MEASURED_BY_RE.sub("", comment).strip().rstrip(";").strip()
+    return head, header, clause.group("run") if clause else ""
+
+
+#: A run identity names its date; a row without one relied on its key line for it.
+_DATED = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+#: The notes :func:`_render` writes, whole. Only such a note is an earlier emit's figure
+#: and can be credited to the outgoing run; a hand-written note that merely starts the
+#: same way -- Frac's `max 384 ULP, 40 variants / 737k lanes, ...` from a sample -- is
+#: not.
+_EMITTED_NOTE = re.compile(
+    r"max \d+ ULP(, budget would be \d+ > \d+-step ceiling|, block-quantized, so "
+    r"tolerance)?|not measurable: .+"
+)
+
+
+def _stamp_kept(kept: List[str], key_line: str) -> List[str]:
+    """*kept* with each row that names no run of its own stamped with the one it had.
+
+    ``_render`` replaces the key line's ``measured by:`` clause with this run's, and a
+    row this run did not supersede would then be credited to it -- a pair-narrowed
+    re-emit, or a sampled ``{out: Float32, max_ulp: 0}`` under an exhaustive clause the
+    sweep cannot produce. So before the clause goes, it goes onto those rows: a row
+    whose note is one ``_render`` writes (``max 1 ULP``, from an earlier emit) gets the
+    outgoing clause's run, and a bare row -- hand-authored, never emitted -- the key
+    line's own header comment, which is the provenance it was written against.
+
+    Left alone: a row whose note is hand-written (``see the Bfp8_b note above``, a
+    sample's figures), since no run on the key line measured it and crediting one would
+    be a guess, and an ``arch:`` row, which a run on this arch never measures.
+    """
+    _, header, outgoing = _split_key_line(key_line)
+    stamped = []
+    for row in kept:
+        body, _, note = row.rstrip("\n").partition("#")
+        note = note.strip()
+        if note:
+            emitted = _EMITTED_NOTE.fullmatch(note)
+            origin = (outgoing or header) if emitted else ""
+        else:
+            origin = header or outgoing
+        if _DATED.search(note) or not origin or "arch" in _row_fields(row):
+            stamped.append(row)
+            continue
+        stamped.append(f"{body.rstrip()}  # {note + ', ' if note else ''}{origin}\n")
+    return stamped
+
+
 def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
     """One op's block: each row with its verdict, and the measurement behind it.
 
-    *key_line* is passed through verbatim. Several ops carry their measurement as a
-    header comment on that line -- `Fill:  # 0 ULP, 115 variants` -- and it is the
-    provenance for every row of theirs this sweep does not reach. Rewriting the key as
-    a bare `Fill:` dropped it, and the guard that every budget names its measurement
-    then failed on rows that had one all along.
+    The run identity is appended to *key_line*, which keeps whatever it already said:
+    a header comment such as `Fill:  # 0 ULP, 115 variants` is the provenance for every
+    row this sweep does not reach. Each row still carries its own number, which is what
+    the provenance audit reads.
     """
-    out = [key_line]
+    from helpers.sfpu_accuracy_budget import usable_budget_ceiling
+
+    head, existing, _ = _split_key_line(key_line)
+    measured_by = _MEASURED_BY.format(suffix=suffix)
+    out = [f"{head.rstrip()}  # {existing + '; ' if existing else ''}{measured_by}\n"]
     for row in rows:
         metric, value = row["verdict"]
         body = ", ".join(
@@ -898,10 +1039,13 @@ def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
         if metric == "unmeasurable":
             note = f"not measurable: {value}"
         elif metric == "tolerance":
-            note += ", past this output's usable ceiling, so tolerance"
+            # Just the two numbers: the reason is in the table header, and this pair
+            # keeps the claim checkable against `usable_budget_ceiling`.
+            ceiling = usable_budget_ceiling(DataFormat[row["out"]])
+            note += f", budget would be {value} > {ceiling:.0f}-step ceiling"
         elif metric == "block":
-            note += ", but a sorted sweep flatters a block format, so tolerance"
-        out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")
+            note += ", block-quantized, so tolerance"
+        out.append(f"  - {{{pairs}}}  # {note}\n")
     return out
 
 
@@ -1055,7 +1199,9 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
                 written.add(name)
                 i = j
                 continue
-            kept = [l for l in rows if not _replaceable(l, emitted_cells)]
+            kept = _stamp_kept(
+                [l for l in rows if not _replaceable(l, emitted_cells)], line
+            )
             out.extend(_render(line, _collapse(_decide(MEASURED[name])), suffix))
             # Rows this run did not supersede -- a format it does not reach, an
             # arch-keyed entry, a floor `_render` cannot re-derive -- are the
@@ -1076,8 +1222,9 @@ def write_table(path, suffix: str) -> Tuple[int, List[str]]:
         raise UnplacedMeasurements(
             f"{path.name}: measured {', '.join(missing)} but found no key line to "
             "write into, so those were not written; every other op was. Add the op's "
-            "block to the table first -- the key line is passed through verbatim so a "
-            "header comment survives, and cannot be generated here.",
+            "block to the table first -- the emitter keeps a key line's name and comment "
+            "and only adds or replaces its `measured by:` clause, so it cannot be "
+            "generated here.",
             written=len(written) - len(kept_verbatim),
             kept=kept_verbatim,
             missing=missing,

@@ -8,7 +8,6 @@ worth pinning is about what it must *not* touch. The table's rows are contracts,
 regeneration that quietly drops one weakens a gate with nothing to notice.
 """
 
-import math
 import re
 
 import pytest
@@ -24,6 +23,7 @@ from helpers.ulp_sweep import (
     export_measured,
     finish_emit,
     flushed_inputs,
+    golden_input,
     known_nonfinite_lanes,
     measurable_mask,
     merge_measured,
@@ -93,6 +93,10 @@ def _rows(path):
     ]
 
 
+def _key_line(path, op):
+    return next(l for l in path.read_text().splitlines() if l.startswith(f"{op}:"))
+
+
 def test_only_the_cells_this_run_measured_are_replaced(table):
     """`MEASURED`, not the static SWEEP_FORMATS cross-product. A `-k` run, an interrupt
     or a driver skip must leave every cell it did not measure alone rather than render a
@@ -102,11 +106,113 @@ def test_only_the_cells_this_run_measured_are_replaced(table):
 
     rows = _rows(table)
     assert "{in: Float16, out: Float16, max_ulp: 6}" in rows[0]  # 5 * 1.1, rounded up
-    assert "max 5 ULP, today" in rows[0]
+    assert "max 5 ULP" in rows[0]
+    # The run identity is on the op's key line, once, not repeated on every row.
+    key_line = _key_line(table, "Gelu")
+    assert "measured by: today, except where a row says otherwise" in key_line
+    assert "header provenance, ungeneratable" in key_line  # and what it already said
+    assert "today" not in rows[0]
     assert not any("max_ulp: 7" in row for row in rows)  # the superseded cell is gone
-    # The same op's other (in, out) cell, and the op this run never measured: untouched.
+    # The same op's other (in, out) cell: kept.
     assert any("{in: Float16_b, out: Float32, max_ulp: 9}" in row for row in rows)
+    # The op this run never measured: untouched, key line and row alike.
+    assert _key_line(table, "Log1p") == "Log1p:"
     assert "{in: Float16, out: Float16_b, metric: tolerance}" in rows[-1]
+
+
+def test_a_second_regeneration_replaces_the_run_identity(table):
+    """The key line carries which sweep the rows below came from, so a re-emit has to
+    replace it. Appending would accumulate one stale run identity per regeneration, and
+    the oldest would read as current."""
+    record("Gelu", _CELL, 5)
+    write_table(table, "sweep A, wormhole, 2026-09-23")
+    MEASURED.clear()
+    record("Gelu", _CELL, 5)
+    write_table(table, "sweep B, wormhole, 2026-09-24")
+
+    key_line = _key_line(table, "Gelu")
+    assert key_line.count("measured by:") == 1
+    assert "sweep B, wormhole, 2026-09-24" in key_line
+    assert "sweep A" not in key_line
+    assert "header provenance, ungeneratable" in key_line  # and the original survives
+
+
+def test_a_row_a_narrower_re_emit_did_not_supersede_keeps_its_own_run(table):
+    """Emit one `(in, out)` pair, then a different one. The second run replaces the key
+    line's clause with its own, so the first pair's rows -- which named no run, the key
+    line did -- would be credited to a sweep that never measured them. They take the
+    outgoing identity with them instead; a bare, hand-authored row takes the key line's
+    header, which is what it was written against."""
+    table.write_text(
+        "Gelu:  # 0 ULP, 16 variants, 2026-09-18\n" "  - {out: Float32, max_ulp: 0}\n",
+        encoding="utf-8",
+    )
+    _record_full_grid("Gelu", "Float16", "Float16", 5)
+    write_table(table, "sweep A, wormhole, 2026-09-23")
+    MEASURED.clear()
+    _record_full_grid("Gelu", "Float16_b", "Float16_b", 1)
+    write_table(table, "sweep B, wormhole, 2026-09-24")
+
+    assert "measured by: sweep B, wormhole, 2026-09-24" in _key_line(table, "Gelu")
+    rows = _rows(table)
+    first = next(r for r in rows if "in: Float16, out: Float16," in r)
+    assert first.endswith("# max 5 ULP, sweep A, wormhole, 2026-09-23")
+    bare = next(r for r in rows if r.startswith("- {out: Float32"))
+    assert bare.endswith("# 0 ULP, 16 variants, 2026-09-18")
+    second = next(r for r in rows if "in: Float16_b, out: Float16_b" in r)
+    assert "2026" not in second  # this run's rows name it through the key line
+
+
+def test_a_re_emit_credits_no_run_with_a_hand_written_note_or_an_arch_row(table):
+    """Only a note `_render` writes is an earlier emit's figure. A hand-written one --
+    "fp32 output, not swept", or Frac's sampled `max 384 ULP, 40 variants / ...`, which
+    starts like an emitted note -- names no run on the key line, and an `arch:` row is
+    one no Wormhole run measured; crediting either to the outgoing clause made the
+    provenance audit read a sample as exhaustive."""
+    table.write_text(
+        "Gelu:\n"
+        "  - {in: Float16_b, out: Float32, max_ulp: 9}  # fp32 output, not swept\n"
+        "  - {out: Float16, metric: tolerance}  # max 384 ULP, 40 variants / 737k lanes\n"
+        "  - {in: Float16_b, out: Float16_b, arch: BLACKHOLE, max_ulp: 44}  # bh\n",
+        encoding="utf-8",
+    )
+    for in_fmt, run in (
+        ("Float16", "sweep A, wormhole, 2026-09-23"),
+        ("Float16_b", "sweep B, wormhole, 2026-09-24"),
+    ):
+        MEASURED.clear()
+        _record_full_grid("Gelu", in_fmt, in_fmt, 1)
+        write_table(table, run)
+    rows = _rows(table)
+    assert any(r.endswith("# fp32 output, not swept") for r in rows)
+    assert any(r.endswith("# max 384 ULP, 40 variants / 737k lanes") for r in rows)
+    assert any(r.endswith("max_ulp: 44}  # bh") for r in rows)
+    # And the first run's emitted rows still go with it.
+    first = next(r for r in rows if "in: Float16, out: Float16," in r)
+    assert first.endswith("# max 1 ULP, sweep A, wormhole, 2026-09-23")
+
+
+def test_a_demotion_names_the_budget_that_crossed_the_line(table):
+    """`_verdict` hands back the *budget* on a demotion, so the note's "budget would be
+    N > C-step ceiling" is checkable. Handing back the measurement read "budget would
+    be 100" for a budget of 110 -- a claim the ceiling check cannot confirm."""
+    from helpers.ulp_sweep import _verdict
+
+    assert _verdict(100, "Float16_b") == ("tolerance", 110)
+    _record_full_grid("Gelu", "Float16_b", "Float16_b", 100)
+    _record_full_grid("Gelu", "Float16_b", "Bfp8_b", 3)
+    write_table(table, "today")
+    rows = _rows(table)
+    assert any(
+        "Float16_b, out: Float16_b, metric: tolerance}  # max 100 ULP, budget would be "
+        "110 > 6-step ceiling" in r
+        for r in rows
+    )
+    assert any(
+        "out: Bfp8_b, metric: tolerance}  # max 3 ULP, block-quantized, so tolerance"
+        in r
+        for r in rows
+    )
 
 
 def test_a_row_for_another_architecture_survives_a_regeneration(table):
@@ -176,7 +282,8 @@ def test_a_pinned_declared_tolerance_on_an_unmeasured_cell_does_not_block_the_op
 
 
 def test_a_measurement_with_nowhere_to_go_is_refused_after_writing_the_rest(table):
-    """The key line is passed through verbatim so a header comment survives, so a new
+    """The emitter keeps a key line's name and header comment and only adds or replaces
+    its `measured by:` clause -- it never writes a key line -- so a new
     op's block has to be hand-authored first. Dropping the measurement in silence is
     what left 17 ops' sampled rows in place looking measured.
 
@@ -216,11 +323,18 @@ def test_an_incomplete_grid_is_refused_rather_than_collapsed(table):
         write_table(table, "today")
 
 
-def test_the_emitted_budget_uses_the_declared_headroom():
-    """The factor was hardcoded beside the constant, so tuning it did nothing."""
+def test_the_emitted_budget_uses_the_declared_headroom(monkeypatch):
+    """The factor was hardcoded beside the constant, so tuning it did nothing. The exact
+    figures pin the arithmetic; the retune is what ties `_verdict` to the constant, which
+    the literals alone do not -- a `_verdict` hard-coding 11/10 passes them."""
+    from helpers import ulp_sweep
     from helpers.ulp_sweep import _verdict
 
-    assert _verdict(100, "Float32") == ("ulp", math.ceil(100 * EMIT_HEADROOM))
+    assert _verdict(100, "Float32") == ("ulp", 110)  # exactly 1.1x, not float-rounded
+    assert _verdict(10, "Float32") == ("ulp", 11)
+    assert EMIT_HEADROOM == 1.1  # the two figures above are written against it
+    monkeypatch.setattr(ulp_sweep, "EMIT_HEADROOM", 1.5)
+    assert _verdict(10, "Float32") == ("ulp", 15)
     # Zero is exact and stays exact: the sweep saw every value.
     assert _verdict(0, "Float32") == ("ulp", 0)
     # A block float never enrols from a sorted sweep, however small the reading.
@@ -428,6 +542,34 @@ def test_a_block_float_input_the_quantizer_flushes_is_the_flush_not_the_op():
 def _bf16_run(first: int, last: int) -> torch.Tensor:
     """The bf16 values ``first..last`` by bit pattern, in the sweep's sorted order."""
     return torch.arange(first, last + 1, dtype=torch.int16).view(torch.bfloat16)
+
+
+@pytest.mark.parametrize(
+    "fmt, dest_acc, keeps_sign",
+    [
+        # The unpack drops the sign of -0.0, so the golden is handed +0.0 too.
+        (DataFormat.Float16_b, DestAccumulation.No, False),
+        (DataFormat.Float16_b, DestAccumulation.Yes, False),
+        (DataFormat.Float16, DestAccumulation.Yes, False),
+        # Unpack-to-dest keeps it: a 32-bit input at dest_acc=Yes.
+        (DataFormat.Float32, DestAccumulation.Yes, True),
+        (DataFormat.Float32, DestAccumulation.No, False),
+        # The block quantizer models a block float's zero lane itself.
+        (DataFormat.Bfp8_b, DestAccumulation.No, True),
+    ],
+    ids=lambda v: getattr(v, "name", str(v)),
+)
+def test_the_golden_sees_the_zero_the_kernel_receives(fmt, dest_acc, keeps_sign):
+    """`signbit(-0.0)` is 1.0 against the kernel's 0.0 wherever the unpack drops the
+    sign: 16129 bf16 steps on one lane that is the unpack's, not the op's. Only the
+    zero moves; every other value reaches the golden as generated."""
+    dtype = torch.float32 if fmt.is_32_bit() else torch.bfloat16
+    src = torch.tensor([-0.0, 0.0, -1.5, 2.0**-100], dtype=dtype)
+    received = golden_input(src, fmt, dest_acc)
+    assert bool(torch.signbit(received[0])) is keeps_sign
+    assert not torch.signbit(received[1])
+    assert torch.equal(received, src)  # -0.0 == 0.0: the values themselves are kept
+    assert torch.equal(received[2:], src[2:])
 
 
 def test_a_block_float_lane_is_judged_where_the_quantizer_puts_it():

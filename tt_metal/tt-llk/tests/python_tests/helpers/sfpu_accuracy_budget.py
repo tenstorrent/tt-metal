@@ -23,13 +23,16 @@ ULP -- which is how the block floats keep their block-aware lattice compares.
 **Numbers are measured, not guessed**, and every unkeyed number came from
 :data:`MEASURED_ARCH`; a ULP row binds elsewhere only if its own key names that
 architecture. A step budget is enrolled from the exhaustive sweep
-(``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing; the rows it does
-not reach keep the declared tolerance, or a sampled measurement no gate reads yet.
+(``test_unary_sfpu_ulp.py --ulp-emit``), not declared against nothing. The rows it does
+not reach keep the declared tolerance, or a sampled measurement: the binary and ternary
+drivers gate theirs, as do the unary signbit, isinf/isnan and threshold sweeps, which
+measured on their own stimuli; any other sampled unary row is read by no gate yet.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, fields
 from enum import Enum
 from itertools import product
@@ -41,11 +44,40 @@ import yaml
 from .chip_architecture import ChipArchitecture
 from .format_config import DataFormat, InputOutputFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
-from .ulp import MANTISSA_BITS_FOR_ULP, MAX_MEANINGFUL_ULP, has_ulp_gate, ulp_dtype
+from .ulp import (  # FLUSH_SUBNORMAL_OUTPUTS re-exported: the step gates read it here
+    FLUSH_SUBNORMAL_OUTPUTS,
+    MANTISSA_BITS_FOR_ULP,
+    MAX_MEANINGFUL_ULP,
+    has_ulp_gate,
+    ulp_dtype,
+)
 
 #: The architecture every unkeyed budget was measured on. Anywhere else an op resolves
 #: to the tolerance metric until the sweep has been re-run there.
 MEASURED_ARCH = ChipArchitecture.WORMHOLE
+
+#: The variant :func:`accuracy_contract` was last asked about and nothing has consumed
+#: yet, as ``(test_id, op, input_format, output_format, approx_mode, dest_acc, arch)``.
+#: *arch* is the one the contract was resolved for, so a reading names which
+#: architecture's budget it belongs to and the promotion check reads that, not whatever
+#: chip the process happens to target. Read
+#: only by the ``--ulp-measure`` recorder, which tags each reading with it: a driver
+#: resolves its contract immediately before it compares, and the test id alone cannot
+#: name the variant (the per-op sweeps put the op in the function, not the parameters).
+#:
+#: Two lookups in one test with no comparison between them make the association
+#: ambiguous, and :data:`PENDING_AMBIGUOUS` tells the recorder to drop that reading
+#: rather than file it under the wrong variant. A query left over from a *previous* test
+#: is only stale -- the exhaustive sweep resolves and then skips every tolerance cell --
+#: so it is replaced, and so is the flag: flagging it dropped every reading that
+#: followed a skip, and so did a flag left behind by an ambiguous test that skipped.
+LAST_QUERY: Optional[Tuple[Any, ...]] = None
+PENDING_AMBIGUOUS: bool = False
+
+
+def _current_test() -> str:
+    """The test a query was made in, so a stale one cannot cross a test boundary."""
+    return os.environ.get("PYTEST_CURRENT_TEST", "").rsplit(" (", 1)[0]
 
 
 class Metric(Enum):
@@ -119,21 +151,35 @@ class AccuracyContract:
     def tolerance_kwargs(self) -> Dict[str, Any]:
         """The contract as ``passed_test`` arguments for a *tolerance-only* caller.
 
-        The functional drivers gate on tolerance and PCC. A step budget is measured by
-        the exhaustive sweep over every value the format has, so it is far wider than
-        the few thousand values a driver samples warrant, and feeding it back would
-        loosen the driver's gate rather than tighten it. An op on the ULP metric
-        therefore keeps today's per-format tolerance here.
+        The unary functional driver gates on tolerance and PCC. A unary step budget is
+        measured by the exhaustive sweep over every value the format has, so it is far
+        wider than the few thousand values that driver samples warrant, and feeding it
+        back would loosen its gate rather than tighten it. An op on the ULP metric
+        therefore keeps today's per-format tolerance here. The binary and ternary
+        drivers, and the unary signbit, isinf/isnan and threshold sweeps
+        (``gate_on_step_budget``), take :meth:`passed_test_kwargs` instead: their rows
+        were measured over their own stimuli.
         """
         if self.metric is Metric.ULP:
             return {}
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
-    def passed_test_kwargs(self) -> Dict[str, Any]:
+    def passed_test_kwargs(
+        self, flush_subnormals: Optional[bool] = None
+    ) -> Dict[str, Any]:
         """The contract as ``passed_test`` keyword arguments, whichever metric it is on,
-        so a call site is one ``**`` expansion and switching metrics is a table edit."""
+        so a call site is one ``**`` expansion and switching metrics is a table edit.
+
+        *flush_subnormals* means what it means to ``passed_test``: ``None`` keeps the
+        metric's per-dtype default, ``True``/``False`` override it for the ULP arm. It
+        only changes anything on an fp16 output, where the golden keeps IEEE fp16
+        subnormals the pack does not reproduce. The tolerance arm has no such notion, so
+        it is dropped there rather than passed on for ``passed_test`` to refuse."""
         if self.metric is Metric.ULP:
-            return {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            kwargs = {"max_ulp": self.max_ulp, "near_zero_atol": self.near_zero_atol}
+            if flush_subnormals is not None:
+                kwargs["flush_subnormals"] = flush_subnormals
+            return kwargs
         return {"custom_atol": self.atol, "custom_rtol": self.rtol}
 
 
@@ -403,6 +449,10 @@ def accuracy_contract(
     required, unlike the other dimensions: it is the one where the numbers explicitly do
     not transfer, so defaulting it would resolve an unknown chip straight against the
     :data:`MEASURED_ARCH` table.
+
+    Not a pure lookup: every call also publishes the variant as :data:`LAST_QUERY` for
+    the ``--ulp-measure`` recorder, and a second call in the same test marks it
+    ambiguous, dropping that test's reading. Resolve once, right before the comparison.
     """
     # Built before the enrolment fallback, so a miswired driver -- a string arch, a bool
     # dest_acc -- fails on every op, not only once its op is enrolled.
@@ -413,6 +463,23 @@ def accuracy_contract(
         dest_acc=dest_acc,
         arch=arch,
     )
+
+    # Tag the variant for --ulp-measure; LAST_QUERY explains the rules.
+    global LAST_QUERY, PENDING_AMBIGUOUS
+    here = _current_test()
+    # Recomputed, never only set: an ambiguous test that skips before comparing would
+    # otherwise hand its flag to the next test and drop that test's reading.
+    PENDING_AMBIGUOUS = LAST_QUERY is not None and LAST_QUERY[0] == here
+    LAST_QUERY = (
+        here,
+        op.name,
+        input_format,
+        output_format,
+        approx_mode,
+        dest_acc,
+        arch,
+    )
+
     table = _SFPU_ACCURACY_BUDGET.get(op)
     if table is None:
         return TOLERANCE_CONTRACT
@@ -438,7 +505,7 @@ def accuracy_contract(
     return resolve_contract(tolerance_rows, query, label=op.name)
 
 
-def assert_within_contract_tolerance(
+def assert_against_contract(
     op: MathOperation,
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
@@ -447,16 +514,16 @@ def assert_within_contract_tolerance(
     *,
     approx_mode: Optional[ApproximationMode] = None,
 ) -> None:
-    """Resolve *op*'s declared contract for the variant that ran, and gate on its
-    tolerance arm only: a resolved step budget is not enforced here (see below).
+    """Resolve *op*'s declared contract for the variant that ran, and gate on it.
 
     The binary and ternary drivers' shared last line, so that the resolution and the
-    caveat below are written once. The numbers live beside the op in the registry, and
+    caveats below are written once. The numbers live beside the op in the registry, and
     an unenrolled op resolves to today's per-format tolerance unchanged; enrolment is a
     table edit rather than a driver edit.
 
-    Tolerance arm only (``tolerance_kwargs``): a step budget is measured by the
-    exhaustive unary sweep, which is the one caller that gates on ``max_ulp``.
+    The whole contract, step budget included: every binary and ternary row was measured
+    over those drivers' own sweeps, so unlike a unary budget from the exhaustive sweep
+    it describes the stimuli it gates. Ranked under :data:`FLUSH_SUBNORMAL_OUTPUTS`.
 
     *approx_mode* is left unset for a kernel that compiles no ``APPROX_MODE`` -- naming
     one would claim a measurement taken for a mode that path does not select. Where the
@@ -478,7 +545,7 @@ def assert_within_contract_tolerance(
         golden_tensor,
         res_tensor,
         formats.output_format,
-        **contract.tolerance_kwargs(),
+        **contract.passed_test_kwargs(flush_subnormals=FLUSH_SUBNORMAL_OUTPUTS),
     ):
         raise AssertionError("Assert against golden failed")
 
@@ -494,8 +561,10 @@ def usable_budget_ceiling(output_format: DataFormat) -> float:
     ``MAX_MEANINGFUL_ULP`` is the wrong bound: ``2**mantissa_bits`` is roughly 100%
     relative error, so it admits budgets that gate nothing -- and since ``passed_test``
     returns on the ULP verdict and skips both ``isclose`` and PCC, such a budget *is* the
-    whole gate. Measured, approximate tanh on an fp32 output reached 2,949,120 steps,
-    about 35% relative error, on an op bounded in (-1, 1).
+    whole gate. Measured, approximate tanh on an fp32 output reaches 655,360 steps, about
+    7.8% relative error, on an op bounded in (-1, 1) -- and that is *after* #57179 traded
+    the 3-segment SFPLUT for a 6-entry table; the same measurement was 2,949,120 steps,
+    about 35%, before it. A bound that admits either is not a gate.
 
     The real bound is the ``rtol`` half of the ``isclose`` this replaces, itself a step
     budget at large magnitude: about 419,430 steps for fp32, 51 for fp16, 6 for bf16.

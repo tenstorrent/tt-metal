@@ -3,9 +3,12 @@
 Every SFPU op declares how closely its output must match its golden, in
 `python_tests/helpers/sfpu_accuracy_budget.yaml`. For most ops that declaration is a
 tolerance. For the ops enrolled here it is a **step budget**: "every element is within
-N representable values of the reference", checked against *every distinct finite value
-of the input format* -- `±inf` and NaN are never fed, and `-0.0` is the same value as
-`+0.0`.
+N representable values of the reference". Most unary budgets come from the exhaustive
+sweep, which checks an op against *every distinct finite value of the input format* --
+`±inf` and NaN are never fed, and `-0.0` is the same value as `+0.0`. The exceptions are
+the `Signbit`, isinf/isnan and threshold-family rows, measured on their functional
+drivers' hand-built stimuli (`MEASURED_ON_SWEEP`; see "Float32" below). The isinf/isnan
+sweep feeds `±inf` and NaN on purpose.
 
 This document is how you add an op to that second group.
 
@@ -62,10 +65,16 @@ is the format's.
 A budget keyed on a format the sweep does not drive is declared but never measured, so
 it holds only as far as whatever sampled it. `Float32` is the one that bites: it has
 2^32 values and one device run holds 2^16, so it cannot be enumerated the way the
-16-bit formats are. **No gate reads a `Float32` row yet** -- the sweep does not drive
-it, and the functional drivers take only the tolerance arm of a contract -- so those
-rows are a record of a sampled measurement until #57520 sweeps a strided `Float32`
-input.
+16-bit formats are. **The default unary path reads no unary `Float32` row** -- the sweep
+does not drive it, and the unary functional driver takes only the tolerance arm of a
+contract -- so for most ops those rows are a record of a sampled measurement until
+#57520 sweeps a strided `Float32` input. The exceptions gate on the whole contract,
+`Float32` included: the binary and ternary drivers, whose own sweeps measured their
+rows, and the unary signbit, isinf/isnan and threshold sweeps, whose hand-built stimuli
+are what those predicates' rows were measured on (`MEASURED_ON_SWEEP` in
+`test_sfpu_accuracy_budget.py`). The isinf/isnan and threshold predicates have no
+registered domain, so those sweeps are their only gate; `Signbit`, `ReluMin` and
+`ReluMax` are driven by the exhaustive sweep on its 16-bit cells as well.
 
 On Wormhole and Blackhole an exponent-B input (`Float16_b`, `Bfp8_b`) packed to `Float16`
 needs a 32-bit Dest, so the sweep runs those cells with `dest_acc=Yes` only: asked for
@@ -128,8 +137,10 @@ or the sweep has nothing to feed it.
 
 ### 2. Give it a block in the table
 
-The emitter passes an op's key line through verbatim, so a *new* op needs one by hand
-first. Add the name and one placeholder row (a key with no rows fails to load):
+The emitter keeps an op's key line -- its name and any header comment -- and only adds
+or replaces the `measured by:` clause on it; it never writes a key line itself. So a
+*new* op needs one by hand first. Add the name and one placeholder row (a key with no
+rows fails to load):
 
 ```yaml
 MyOp:
@@ -150,22 +161,21 @@ writes nothing.
 ### 4. Read what it wrote
 
 ```yaml
-MyOp:
-  - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP, exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23
-  - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, past this output's usable ceiling, so tolerance, exhaustive ...
-  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, but a sorted sweep flatters a block format, so tolerance, exhaustive ...
+MyOp:  # measured by: exhaustive Float16_b/Float16/Bfp8_b sweep, wormhole, 2026-09-23, except where a row says otherwise
+  - {in: Float16_b, out: Float16_b, max_ulp: 2}  # max 1 ULP
+  - {in: Float16, out: Float16_b, metric: tolerance}  # max 14337 ULP, budget would be 15771 > 6-step ceiling
+  - {in: Float16_b, out: Bfp8_b, metric: tolerance}  # max 393 ULP, block-quantized, so tolerance
 ```
 
 Four verdicts:
 
 - **`max_ulp: N`** — enrolled. `N` is the measurement plus 1.1x headroom, rounded up
   (a measured 1 becomes 2), except that a measured 0 stays 0.
-- **`metric: tolerance`, "past this output's usable ceiling"** — past
+- **`metric: tolerance`, "budget would be N > C-step ceiling"** — past
   `usable_budget_ceiling`, so a step budget would no longer be *tighter* than the
   tolerance it replaces. The op keeps tolerance + PCC on that cell and the number is
   recorded so nobody re-derives it.
-- **`metric: tolerance`, "a sorted sweep flatters a block format"** — a block float
-  output. The sweep
+- **`metric: tolerance`, "block-quantized"** — a block float output. The sweep
   enumerates a format in value order, so sixteen adjacent values share a `Bfp8_b` block
   and the exponent fits all of them: the best case for quantization, not a
   representative one. `Abs` reads **15,616 steps** there from random mixed-magnitude
@@ -202,8 +212,8 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
   authoring error, not a tie-break, and the loader refuses them.
 - **A row holds for the configuration it was measured in.** Every exhaustive row was
   measured with `FAST_MODE(No)` and `CLAMP_NEGATIVE(True)` compiled in, and the key has
-  no axis for either. The functional drivers build `Sqrt`/`Rsqrt` at `FastMode.Yes` and
-  take only a row's tolerance arm, which those flags do not move.
+  no axis for either. The unary functional driver builds `Sqrt`/`Rsqrt` at
+  `FastMode.Yes` and takes only a row's tolerance arm, which those flags do not move.
 - **An exhaustive budget is the emitter's number.** `test_no_step_budget_exceeds_the_measurement_it_records`
   holds every row the sweep wrote to exactly `_verdict`'s budget for the measurement
   beside it, so widening one by hand has to falsify its comment. A sampled row may sit up
@@ -214,13 +224,11 @@ pytest test_sfpu_accuracy_budget.py test_ulp_sweep.py -q
 - **Budgets do not transfer between architectures.** Every unkeyed number was measured
   on Wormhole. Off it, an op falls back to tolerance unless a row names that `arch`
   itself. Re-measure before trusting any of it on Blackhole.
-- **An exact op may not carry a wide budget.** Sign-bit ops, copies and integer results
-  are the flakiness canaries: if one fails, the golden or the datapath moved.
-  `test_an_exact_op_never_carries_a_wide_budget` holds their budgets, and
-  `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` holds the cells demoted to
-  tolerance to an explicit list, each with its measurement. Both cover only those ops
-  (`EXACT_BY_CONSTRUCTION`); from #57024 they hold predicates, signs and constant fills
-  too.
+- **An exact op may not carry a wide budget.** Sign-bit ops, copies, integer results,
+  predicates and constant fills are the flakiness canaries: if one fails, the golden or
+  the datapath moved. `test_an_exact_op_never_carries_a_wide_budget` holds their
+  budgets, and `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` holds the cells
+  demoted to tolerance to an explicit list, each with its measurement.
 - **`Bfp8_b` charges for block quantization.** A budget there is denominated in bfloat16
   steps, two to one `Bfp8_b` step, and does not forgive the shared exponent. No cell
   with a `Bfp8_b` output is gated by steps: the sweep records its measurement and the
