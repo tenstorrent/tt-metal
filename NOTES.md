@@ -51,3 +51,6 @@ Box: blx01 (g15blx01), everything under /var/tmp/fasth3/t170 (nothing under blx0
   Look at data/g15/t170/fast5/vbench/seed*_cmp_f072.png vs baseline5. If fast5 VBench ~= baseline5 and no visual
   regression: also flip LTX_FUSE_GATE_ON_DEVICE / LTX_FUSE_NORM_ADALN defaults (code commit), else exact_shard only.
 - Write RESULTS.md (tables, recommendation, video paths + still, drop log), land code on ttp/t48 via a -land branch.
+- 2026-10-07 light wake: fast5 scored BATCH FAIL vs ref_dv145 (PCC 0.874 mean, worst 0.674; PSNR 22.2 dB, worst 18.1);
+  VBench subj 0.888 (= baseline5). blx01 res/summary_configs5b.md missing (check driver_fast res dir for fast5 timing).
+  Needs judgment: view data/g15/t170/fast5/vbench/seed*_cmp_f*.png, decide gate/adaln defaults.
