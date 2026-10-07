@@ -17,6 +17,7 @@ step against the DRAM-bandwidth floor.
     python models/demos/gemma4/tests/unit/decode_roofline_report.py <ops_perf_results.csv> --steps 10
 """
 
+import json
 import os
 
 import pytest
@@ -37,6 +38,31 @@ from models.tt_transformers.tt.common import PagedAttentionConfig
 PREFILL_LEN = 128
 WARM_STEPS = 4
 N_STEPS = int(os.environ.get("GEMMA4_ROOFLINE_STEPS", "10"))
+# Eager by default: the device profiler records each op of an eager step with its
+# host op record (name, type), which the split needs. Traced replays are not
+# attributed per op by the Tracy post-processing on this build, so the measured
+# step wall time (TPOT from the benchmarks) is used for the gap estimate instead.
+TRACED = os.environ.get("GEMMA4_ROOFLINE_TRACE", "0") == "1"
+
+
+def _device_ops_in_order(captured):
+    """``ttnn::prim::*`` (device-launching) ops of a graph capture, in execution
+    order, each with the top-level ttnn op that issued it."""
+    nodes = {n["counter"]: n for n in captured}
+    starts = [n for n in captured if n["node_type"] == "function_start"]
+    ops = []
+    stack = []  # (counter, name)
+    for n in captured:
+        if n["node_type"] == "function_start":
+            name = n["params"].get("name", "?")
+            parent = stack[0][1] if stack else None
+            stack.append((n["counter"], name))
+            if name.startswith("ttnn::prim::") or name.startswith("tt::tt_metal::") or "::prim::" in name:
+                ops.append({"name": name, "parent": parent})
+        elif n["node_type"] == "function_end" and stack:
+            stack.pop()
+    del nodes, starts
+    return ops
 
 
 def _signpost(name):
@@ -100,7 +126,7 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
             current_pos,
             page_table=page_table,
             kv_cache=tt_kv_cache,
-            enable_trace=True,
+            enable_trace=TRACED,
             reload_inputs=True,
             reload_page_table=False,
             reload_sampling_params=False,
@@ -114,6 +140,24 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
         current_pos += 1
     ttnn.synchronize_device(mesh_device)
 
+    # Op names in execution order for ONE step (graph capture, normal run mode):
+    # the device profiler rows carry no names on this build, and the Tracy
+    # post-processing asserts on traced/eager mixes, so the report joins the
+    # device rows of the signposted steps with this sequence by order.
+    ops_json = os.path.join(
+        os.environ.get("TT_METAL_HOME", "."), "generated", "profiler", f"roofline_ops_{batch_size}.json"
+    )
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    tok = step(tok)
+    current_pos += 1
+    ttnn.synchronize_device(mesh_device)
+    captured = ttnn.graph.end_graph_capture()
+    ops = _device_ops_in_order(captured)
+    os.makedirs(os.path.dirname(ops_json), exist_ok=True)
+    with open(ops_json, "w") as f:
+        json.dump({"batch_size": batch_size, "ops": ops}, f)
+    logger.info(f"captured {len(ops)} device ops for one decode step -> {ops_json}")
+
     _signpost("start")
     for _ in range(N_STEPS):
         tok = step(tok)
@@ -124,4 +168,4 @@ def test_decode_roofline(mesh_device, model_path, batch_size):
         ttnn.ReadDeviceProfiler(mesh_device)
     except Exception:  # profiler off: nothing to flush
         pass
-    logger.info(f"{os.path.basename(model_path)} batch={batch_size}: {N_STEPS} traced decode steps between signposts")
+    logger.info(f"{os.path.basename(model_path)} batch={batch_size}: {N_STEPS} {'traced' if TRACED else 'eager'} decode steps between signposts")
