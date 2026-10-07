@@ -44,6 +44,13 @@ class MiMoMoEDecode:
         sidx, sw = spread_pad_routing(1, SLOTS)
         if dead == "sentinel":
             sidx, sw = torch.full_like(sidx, 256), torch.zeros_like(sw)
+        elif dead == "spread32":
+            # balanced but cheap: dead slots round-robin over ONE expert per chip (local slot 0 of every (row, col): ids col*32 + row*8) = 32 experts = 1/8 of the weights,
+            # every chip still receives dead-slot tokens every layer (experiment: balanced fabric traffic like "spread", expert weight traffic like a small U)
+            ids = torch.tensor([c * 32 + r * 8 for c in range(8) for r in range(4)])
+            slot = torch.arange(SLOTS).unsqueeze(1) * TOPK + torch.arange(TOPK).unsqueeze(0)
+            sidx = ids[slot % 32].reshape(1, SLOTS, TOPK)
+            sw = torch.zeros_like(sw)
         self.sp_idx = ttnn.from_torch(
             sidx.reshape(1, 1, SLOTS, TOPK).bfloat16(),
             device=mesh,
