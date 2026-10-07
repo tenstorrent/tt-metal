@@ -65,7 +65,7 @@ def test_moe_prefill_4x8(mesh_device):
     t0 = time.time()
     weights = build_expert_weights(md, w_of)
     print(f"RESULT weights built {time.time() - t0:.1f}s ({NUM_ROUTED} experts, bfp8)", flush=True)
-    um = MiMoPrefillMoE(md, weights, ckc=make_ckc(fid), expert_op=op, cf=cf)
+    um = MiMoPrefillMoE(md, weights, ckc=make_ckc(fid, packer_l1_acc=(op != "fused")), expert_op=op, cf=cf)
 
     x = torch.randn(ROWS, N, HIDDEN).bfloat16()
     gw = torch.randn(NUM_ROUTED, HIDDEN) * 0.02

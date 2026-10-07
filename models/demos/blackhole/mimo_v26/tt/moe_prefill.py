@@ -34,10 +34,10 @@ def global_expert(row, col, local):
     )
 
 
-def make_ckc(fidelity="hifi2", fp32acc=False):
+def make_ckc(fidelity="hifi2", fp32acc=False, packer_l1_acc=True):
     fid = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2, "hifi4": ttnn.MathFidelity.HiFi4}[fidelity]
     return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=fp32acc, packer_l1_acc=True
+        math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=fp32acc, packer_l1_acc=packer_l1_acc
     )
 
 
