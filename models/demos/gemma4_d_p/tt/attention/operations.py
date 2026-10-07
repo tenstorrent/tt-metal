@@ -40,6 +40,12 @@ def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
 # Rows per device from which the projections are FPU-bound, so one fidelity pass saves time.
 _LOFI_PROJECTION_MIN_ROWS = 512
 
+# Most tile rows for which a projection feeding the reduce-scatter writes its output width-sharded: chunk 4096 at CP8.
+_MAX_SHARDED_OUTPUT_M_TILES = 16
+
+# Most tile rows whose QKV projection output goes to L1: chunk 8192 at CP8.
+_MAX_L1_QKV_M_TILES = 32
+
 
 def projection_math_fidelity(rows):
     return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
@@ -71,10 +77,6 @@ def projection_matmul_configs(hidden_states, weight, max_m_tiles=None):
     return program_config, compute_kernel_config
 
 
-# Most tile rows for which a projection feeding the reduce-scatter writes its output width-sharded: chunk 4096 at CP8.
-_MAX_SHARDED_OUTPUT_M_TILES = 16
-
-
 def apply_attn_projection(hidden_states, weight, memory_config=None, into_reduce_scatter=False):
     """hidden_states @ weight for an attention projection, written interleaved (DRAM unless memory_config says
     otherwise). A short-M activation is read width-sharded from L1.
@@ -99,10 +101,6 @@ def apply_attn_projection(hidden_states, weight, memory_config=None, into_reduce
     if x is not hidden_states:
         x.deallocate(True)
     return out
-
-
-# Most tile rows whose QKV projection output goes to L1: chunk 8192 at CP8.
-_MAX_L1_QKV_M_TILES = 32
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
