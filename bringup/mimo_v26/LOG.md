@@ -188,3 +188,62 @@
 - claim: Fixed per coordinator: tt-lab-ops sec.0 now says TT_METAL_CACHE defaults to /mnt/tt-data/ssinghal/tt-metal-cache/kit (shared, --cache-dir overrides) to match launch.py (text changed, tool unchanged). Merge of ssinghal/mimo into the attn branch had LOG.md and bringup_kit/.gitignore conflicts (both sides kept). Also learned: the black pre-commit hook reformats files so scripted multi-line text replacements on a file committed once fail silently (my ragged-test edit only half applied and produced a wrong PCC for ragged users; caught because the per-chunk and per-user numbers disagreed): re-read a file after the first commit before patching it.
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_B2_ga.log
 - paths: .claude/skills/tt-lab-ops/SKILL.md
+
+## E261007-0247-7eb
+- date: 2026-10-07T02:47:47
+- commit: ce276b7d346
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: attn
+- status: verified
+- claim: REAL-WEIGHT REAL-ACTIVATION GATE vs track-0 bf16 dump (mimo-prefill-s128b16, B=16 S=128, 4 users/row on the 4x8 mesh, real L1 SWA + L5 GA weights via rank-blocked loader, bfp8 weights, teacher-forced dump attn_in as input): prefill attn_out PCC min 0.99973 (L1, per-row min 0.99973..0.99975) and 0.99997 (L5) vs bf16 dump, 0.99971 / 0.99997 vs the fp32 dump (bf16-dump-vs-fp32-dump floor 0.99996 / 0.99999); KV cache contents vs dump after device prefill: K PCC min 0.99999 (both), V (first 128 dims, 0.707 scaled) 0.99988 (L1) / 0.99996 (L5), V pad dims exactly 0, all 8 columns and 4 rows; 3 decode steps (dump dec_in -> host RMSNorm -> device decode, reference = track-0 attention() with dump KV as past, because the dump holds only the whole-layer dec_out) PCC min 0.99998 (L1) / 0.99996 (L5), columns identical. Gate >= 0.999 PASS for L1 and L5.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_I1_dump.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"L1_prefill_pcc":0.99973,"L5_prefill_pcc":0.99997,"L1_k_pcc":0.99999,"L5_k_pcc":0.99999,"L1_v_pcc":0.99988,"L5_v_pcc":0.99996,"L1_decode_pcc":0.99998,"L5_decode_pcc":0.99996}
+
+## E261007-0247-1dc
+- date: 2026-10-07T02:47:47
+- commit: ce276b7d346
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: attn
+- status: verified
+- claim: Trace variant (chunk_start_idx_tensor, paged_fill_cache with device page-table slice, embedding-based RoPE, trace-captured chunk and decode, per-replay inputs via copy_host_to_device_tensor), random weights real shapes, 4x8 mesh: ragged prefill (chunk 1024, 2 users/row) PCC min 0.99955 (SWA) / 0.99961 (GA), decode 0.99945 / 0.99946; replays bit-identical for prefill chunk and decode, both layer types. Same at 8 users/row ragged (4096..1024 tokens, J3): prefill 0.99955/0.9996, decode 0.99942/0.99939; and 32 users/row decode (J2, chunk 256, lengths 256..1024): prefill 0.99955/0.99962, decode 0.9994/0.99937; all replays bit-identical, columns identical. Evidence also attn_J2_many32.jsonl, attn_J3_u8.jsonl.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_J1_trace_ragged.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"trace_prefill_swa":0.99955,"trace_prefill_ga":0.99961,"trace_decode_swa":0.99945,"trace_decode_ga":0.99946,"u8_decode_min":0.99939,"u32_decode_min":0.99937}
+
+## E261007-0247-b41
+- date: 2026-10-07T02:47:47
+- commit: ce276b7d346
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: attn
+- status: verified
+- claim: Real layer-1 (SWA) / layer-5 (GA) weights (rank-blocked qkv dequant) with real text tokens (repo docs, 12.3k tokens) through the real embedding and input_layernorm, 4x8 mesh, traced, 3x1024 prefill + 2 decode steps vs torch fp32 HF-semantics reference: prefill PCC min 0.99998 (SWA) / 0.99988 (GA), decode 0.99996 / 0.99987, replays bit-identical. NOT a layout proof (device and torch use the same deinterleaved weights): see the separate layout-statistics entry.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_J4_real.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"swa_prefill":0.99998,"ga_prefill":0.99988,"swa_decode":0.99996,"ga_decode":0.99987}
+
+## E261007-0247-b0d
+- date: 2026-10-07T02:47:47
+- commit: ce276b7d346
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: attn
+- status: verified
+- claim: 64k context on the 4x8 mesh, chunks of 2048 (traced), three users with TWO context lengths in one process (64k, 32k, 64k), sampled-row torch reference: GA prefill PCC per row 0.9999 (min chunk 0.99956) for both 64k users and 0.99989..0.9999 for 32k; chunk time (wall, blocking, replay only) GA first chunk 2.24 ms, median 9.2 ms, last (start 63488) 15.7 ms, 0.29 s per 64k per layer (x9 global layers = 2.6 s per user per row, attention only); SWA flat 2.15 ms/chunk, 0.07 s per 64k. DRAM allocated per bank after build 200.6 MB (GA, 32 slots x 65792 positions K+V bf16) / 19.5 MB (SWA ring), 204.7 MB after the first prefill (trace + io) and UNCHANGED after the 32k and second 64k users (no leak across context lengths); free ~3806 MB/bank. Decode at positions 65536 / 32768 / 65536 (slots 0..2, other slots at 0): PCC min 0.99933 (GA) / 0.9995 (SWA), replay bit-identical; traced decode 32 slots/row 1.93 ms (GA, only 3 slots long) / 0.72 ms (SWA) per layer. bf16 RoPE tables are sufficient at 64k (no PCC loss).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_J5_long64k.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"ga_prefill64k_pcc":0.9999,"ga_chunk_ms_last":15.7,"ga_prefill64k_s_per_layer":0.29,"ga_dram_alloc_mb_per_bank":204.7,"ga_decode64k_pcc":0.99933,"swa_decode64k_pcc":0.9995}
+
+## E261007-0247-bfa
+- date: 2026-10-07T02:47:48
+- commit: ce276b7d346
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: attn
+- status: inferred
+- claim: qkv row-layout statistics on real tokens (CPU, 512 tokens, embedding+input_layernorm of layers 1 and 5, attention-structure measure): rank-blocked deinterleaved layout gives structured attention (mean max-prob 0.015/0.014, entropy 0.04/0.11 nats below uniform, max-head mass on offsets 0-3 0.043/0.031) while reading the rows as contiguous Q|K|V gives exactly uniform attention (max-prob 0.009/0.005, entropy = uniform). Consistent with the rank-blocked layout but weak evidence on its own (embedding inputs, not layer inputs); track 0 proved it against the HF forward (coordinator message), which supersedes this.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_H2_layout.log
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py
