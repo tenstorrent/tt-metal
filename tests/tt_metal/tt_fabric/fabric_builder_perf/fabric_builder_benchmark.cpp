@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Opens the full mesh twice in one process, first with an empty kernel cache (cold) and then with
+// Opens the full mesh once with an empty kernel cache (cold) and then --hot-repetitions times with
 // the cache the first open left behind (hot). Each open runs inside a Tracy zone so the fabric
 // builder zones can be attributed to a phase. Results are written as JSON for
 // test_fabric_builder_perf.py, which performs validation and golden comparison.
@@ -44,6 +44,7 @@ constexpr auto TRACY_CONNECT_TIMEOUT = std::chrono::seconds(60);
 struct BenchmarkArgs {
     fs::path output;
     FabricConfig fabric_config;
+    uint32_t hot_repetitions;
 };
 
 // Arg parsing.
@@ -52,19 +53,23 @@ BenchmarkArgs parse_args(int argc, char** argv) {
     TT_FATAL(
         test_args::has_command_option(input_args, "--output") &&
             test_args::has_command_option(input_args, "--fabric-config"),
-        "Usage: {} --output FILE --fabric-config NAME",
+        "Usage: {} --output FILE --fabric-config NAME [--hot-repetitions N]",
         argv[0]);
 
     std::string output;
     std::string fabric_config_name;
+    uint32_t hot_repetitions = 0;
     std::tie(output, input_args) = test_args::get_command_option_and_remaining_args(input_args, "--output");
     std::tie(fabric_config_name, input_args) =
         test_args::get_command_option_and_remaining_args(input_args, "--fabric-config");
+    std::tie(hot_repetitions, input_args) =
+        test_args::get_command_option_uint32_and_remaining_args(input_args, "--hot-repetitions", 1);
     test_args::validate_remaining_args(input_args);
 
     const auto fabric_config = enchantum::cast<FabricConfig>(fabric_config_name);
     TT_FATAL(fabric_config.has_value(), "Unknown --fabric-config {}", fabric_config_name);
-    return {output, fabric_config.value()};
+    TT_FATAL(hot_repetitions >= 1, "--hot-repetitions must be at least 1, got {}", hot_repetitions);
+    return {output, fabric_config.value(), hot_repetitions};
 }
 
 // Kernel cache directory that we expect to be empty.
@@ -166,14 +171,18 @@ int main(int argc, char** argv) {
 
     // Run the benchmark
     const PhaseResult cold = run_phase(cache_dir, args.fabric_config, open_cold);
-    const PhaseResult hot = run_phase(cache_dir, args.fabric_config, open_hot);
-
-    // Verify that the number of devices opened is the same for both phases
-    TT_FATAL(
-        cold.num_devices == hot.num_devices,
-        "Cold opened {} devices but hot opened {}",
-        cold.num_devices,
-        hot.num_devices);
+    std::vector<PhaseResult> hot;
+    hot.reserve(args.hot_repetitions);
+    for (uint32_t repetition = 0; repetition < args.hot_repetitions; repetition++) {
+        hot.push_back(run_phase(cache_dir, args.fabric_config, open_hot));
+        // Verify that the number of devices opened is the same for every phase
+        TT_FATAL(
+            cold.num_devices == hot.back().num_devices,
+            "Cold opened {} devices but hot repetition {} opened {}",
+            cold.num_devices,
+            repetition,
+            hot.back().num_devices);
+    }
 
     // Write the results to a json file
     const nlohmann::json context = {
@@ -182,7 +191,11 @@ int main(int argc, char** argv) {
         {"num_devices", cold.num_devices},
         {"fabric_config", std::string(enchantum::to_string(args.fabric_config))},
     };
-    const nlohmann::json phases = {{"cold", to_json(cold)}, {"hot", to_json(hot)}};
+    nlohmann::json hot_phases = nlohmann::json::array();
+    for (const PhaseResult& phase : hot) {
+        hot_phases.push_back(to_json(phase));
+    }
+    const nlohmann::json phases = {{"cold", to_json(cold)}, {"hot", hot_phases}};
     write_results(args.output, {{"context", context}, {"phases", phases}});
     log_info(tt::LogTest, "Wrote fabric builder benchmark results to {}", args.output.string());
     return 0;

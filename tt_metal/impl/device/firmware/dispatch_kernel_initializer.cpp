@@ -17,6 +17,7 @@
 #include "dispatch/topology.hpp"
 
 #include "llrt/hal/generated/dev_msgs.hpp"
+#include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 
 namespace tt::llrt::internal_ {
 void wait_until_cores_done(
@@ -63,6 +64,7 @@ void DispatchKernelInitializer::populate_fd_kernels_only(const std::vector<Devic
 
 void DispatchKernelInitializer::init(
     const std::vector<Device*>& devices, [[maybe_unused]] const std::unordered_set<InitializerKey>& init_done) {
+    TTZoneScopedDN(FABRIC_BUILDER, "DispatchKernelInitializer::init");
     if (!using_fast_dispatch()) {
         return;
     }
@@ -87,6 +89,7 @@ void DispatchKernelInitializer::init(
 }
 
 void DispatchKernelInitializer::configure() {
+    TTZoneScopedDN(FABRIC_BUILDER, "DispatchKernelInitializer::configure");
     if (!using_fast_dispatch()) {
         return;
     }

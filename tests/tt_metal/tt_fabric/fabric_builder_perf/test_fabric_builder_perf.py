@@ -6,9 +6,12 @@
 
 Runs fabric_builder_benchmark under tracy-capture several times, each in a fresh process with an
 empty kernel cache, and extracts the fabric builder zones inside the cold and hot phase markers.
-The median duration of each zone is checked against the golden CSV for this machine.
+Each process opens the mesh once cold and several times hot; a process's hot sample is the median
+of its hot repetitions. The median duration of each zone across processes is checked against the
+golden CSV for this machine.
 
 FABRIC_BUILDER_PERF_ITERATIONS sets the number of benchmark runs (default 5).
+FABRIC_BUILDER_PERF_HOT_REPETITIONS sets the number of hot opens per benchmark run (default 5).
 FABRIC_BUILDER_PERF_UPDATE_GOLDEN=1 writes the median durations to the golden instead of checking them.
 """
 
@@ -30,11 +33,14 @@ ZONES = [
     "ControlPlane::write_routing_tables_to_all_chips",
     "FabricFirmwareInitializer::compile_and_configure_fabric",
     "FabricFirmwareInitializer::configure",
+    "DispatchKernelInitializer::init",
+    "DispatchKernelInitializer::configure",
 ]
 CACHES = ["cold", "hot"]
 PHASE_MARKER = "FabricBuilderBenchmark::{cache}"
 
 DEFAULT_ITERATIONS = 5
+DEFAULT_HOT_REPETITIONS = 5
 DEFAULT_TOLERANCE_PERCENT = 10.0
 # Added to every row's relative tolerance so zones of a few ms don't fail on timer and scheduling jitter.
 ABS_TOLERANCE_MS = 0.5
@@ -44,7 +50,7 @@ TRACY_PORTS = range(8086, 8500)
 
 ZONE_CSV_COLUMNS = ["name", "ns_since_start", "exec_time_ns"]
 GOLDEN_HEADERS = ["fabric_config", "cache", "zone", "golden_ms", "tolerance_percent"]
-SAMPLES_HEADERS = ["fabric_config", "cache", "zone", "iteration", "measured_ms"]
+SAMPLES_HEADERS = ["fabric_config", "cache", "zone", "iteration", "repetition", "measured_ms"]
 SUMMARY_HEADERS = [
     "fabric_config",
     "cache",
@@ -114,6 +120,12 @@ def get_iterations() -> int:
     return iterations
 
 
+def get_hot_repetitions() -> int:
+    repetitions = int(os.environ.get("FABRIC_BUILDER_PERF_HOT_REPETITIONS", DEFAULT_HOT_REPETITIONS))
+    assert repetitions >= 1, f"FABRIC_BUILDER_PERF_HOT_REPETITIONS must be at least 1, got {repetitions}"
+    return repetitions
+
+
 def get_benchmark_env(cache_dir: Path, tracy_port: int) -> dict:
     env = dict(os.environ)
     env.update(
@@ -136,7 +148,7 @@ def find_free_tracy_port() -> int:
 
 
 # Connects to tracy and runs the benchmark binary
-def run_benchmark_under_tracy(tt_metal_home: Path, fabric_config: str, run_dir: Path) -> None:
+def run_benchmark_under_tracy(tt_metal_home: Path, fabric_config: str, hot_repetitions: int, run_dir: Path) -> None:
     capture_tool = get_tracy_tool(tt_metal_home, "tracy-capture")
     benchmark_binary = get_benchmark_binary(tt_metal_home)
     assert capture_tool.exists(), f"Tracy capture tool not found: {capture_tool}"
@@ -152,6 +164,8 @@ def run_benchmark_under_tracy(tt_metal_home: Path, fabric_config: str, run_dir: 
         str(run_dir / "results.json"),
         "--fabric-config",
         fabric_config,
+        "--hot-repetitions",
+        str(hot_repetitions),
     ]
 
     with capture_log.open("w") as capture_out:
@@ -210,62 +224,80 @@ def find_single_zone(zones: list[Zone], name: str, within: Zone | None = None) -
     return matches[0]
 
 
-def extract_durations_ms(zones: list[Zone]) -> dict[tuple[str, str], float]:
+# Returns every repetition's duration of each zone, in the order the phases ran.
+def extract_durations_ms(zones: list[Zone], hot_repetitions: int) -> dict[tuple[str, str], list[float]]:
     durations = {}
     for cache in CACHES:
-        marker = find_single_zone(zones, PHASE_MARKER.format(cache=cache))
+        marker_name = PHASE_MARKER.format(cache=cache)
+        markers = sorted((zone for zone in zones if zone.name == marker_name), key=lambda zone: zone.start_ns)
+        expected_markers = hot_repetitions if cache == "hot" else 1
+        assert len(markers) == expected_markers, f"Expected {expected_markers} '{marker_name}' zones, found {len(markers)}"
         for zone_name in ZONES:
-            durations[(cache, zone_name)] = find_single_zone(zones, zone_name, within=marker).duration_ns / 1e6
+            durations[(cache, zone_name)] = [
+                find_single_zone(zones, zone_name, within=marker).duration_ns / 1e6 for marker in markers
+            ]
     return durations
 
 
 # Cache state validation.
-def validate_cache_state(phases: dict) -> None:
+def validate_cache_state(phases: dict, hot_repetitions: int) -> None:
     cold_before = phases["cold"]["artifacts_before"]
-    hot_before = phases["hot"]["artifacts_before"]
-    hot_after = phases["hot"]["artifacts_after"]
     assert cold_before == 0, f"Cold phase started with {cold_before} cached artifacts"
-    assert hot_before > 0, "Hot phase started with an empty kernel cache"
-    assert hot_after == hot_before, f"Hot phase compiled {hot_after - hot_before} new artifacts; the cache was not hot"
+    assert len(phases["hot"]) == hot_repetitions, f"Expected {hot_repetitions} hot phases, found {len(phases['hot'])}"
+    for repetition, hot in enumerate(phases["hot"]):
+        hot_before = hot["artifacts_before"]
+        hot_after = hot["artifacts_after"]
+        assert hot_before > 0, f"Hot repetition {repetition} started with an empty kernel cache"
+        assert (
+            hot_after == hot_before
+        ), f"Hot repetition {repetition} compiled {hot_after - hot_before} new artifacts; the cache was not hot"
 
 
-# One benchmark process with its own empty kernel cache. Returns the benchmark context and the zone durations.
-def run_iteration(tt_metal_home: Path, fabric_config: str, run_dir: Path) -> tuple[dict, dict[tuple[str, str], float]]:
+# One benchmark process with its own empty kernel cache. Returns the benchmark context and every repetition's
+# zone durations.
+def run_iteration(
+    tt_metal_home: Path, fabric_config: str, hot_repetitions: int, run_dir: Path
+) -> tuple[dict, dict[tuple[str, str], list[float]]]:
     cache_dir = run_dir / "cache"
     cache_dir.mkdir(parents=True)
-    run_benchmark_under_tracy(tt_metal_home, fabric_config, run_dir)
+    run_benchmark_under_tracy(tt_metal_home, fabric_config, hot_repetitions, run_dir)
     results = json.loads((run_dir / "results.json").read_text())
-    validate_cache_state(results["phases"])
-    durations = extract_durations_ms(read_zones(export_zones(tt_metal_home, run_dir)))
+    validate_cache_state(results["phases"], hot_repetitions)
+    durations = extract_durations_ms(read_zones(export_zones(tt_metal_home, run_dir)), hot_repetitions)
     # Only needed while the benchmark runs
     shutil.rmtree(cache_dir)
     return results["context"], durations
 
 
-# Samples across iterations.
-def collect_samples(per_iteration: list[dict[tuple[str, str], float]]) -> dict[tuple[str, str], list[float]]:
-    return {key: [durations[key] for durations in per_iteration] for key in per_iteration[0]}
+# Samples across iterations. Each iteration contributes the median of its repetitions, so the per-process
+# placement effects stay visible across iterations while in-process jitter is averaged out.
+def collect_samples(per_iteration: list[dict[tuple[str, str], list[float]]]) -> dict[tuple[str, str], list[float]]:
+    return {key: [statistics.median(durations[key]) for durations in per_iteration] for key in per_iteration[0]}
 
 
 def get_medians(samples: dict[tuple[str, str], list[float]]) -> dict[tuple[str, str], float]:
     return {key: statistics.median(values) for key, values in samples.items()}
 
 
-def write_samples(case_dir: Path, fabric_config: str, samples: dict[tuple[str, str], list[float]]) -> None:
+def write_samples(
+    case_dir: Path, fabric_config: str, per_iteration: list[dict[tuple[str, str], list[float]]]
+) -> None:
     with (case_dir / "samples.csv").open("w", newline="") as samples_file:
         writer = csv.DictWriter(samples_file, fieldnames=SAMPLES_HEADERS)
         writer.writeheader()
-        for (cache, zone), values in samples.items():
-            for iteration, measured_ms in enumerate(values):
-                writer.writerow(
-                    {
-                        "fabric_config": fabric_config,
-                        "cache": cache,
-                        "zone": zone,
-                        "iteration": iteration,
-                        "measured_ms": f"{measured_ms:.3f}",
-                    }
-                )
+        for (cache, zone) in per_iteration[0]:
+            for iteration, durations in enumerate(per_iteration):
+                for repetition, measured_ms in enumerate(durations[(cache, zone)]):
+                    writer.writerow(
+                        {
+                            "fabric_config": fabric_config,
+                            "cache": cache,
+                            "zone": zone,
+                            "iteration": iteration,
+                            "repetition": repetition,
+                            "measured_ms": f"{measured_ms:.3f}",
+                        }
+                    )
 
 
 # Golden CSV.
@@ -396,6 +428,8 @@ def write_summary(case_dir: Path, summary_name: str, rows: list[dict]) -> str:
     return summary_text
 
 
+# Each iteration is a full cold compile plus the hot opens, so the default pytest timeout only fits a few iterations.
+@pytest.mark.timeout(1800)
 @pytest.mark.parametrize("fabric_config", ["FABRIC_2D"])
 def test_fabric_builder_perf(fabric_config):
     # Setup
@@ -407,16 +441,19 @@ def test_fabric_builder_perf(fabric_config):
     case_dir.mkdir(parents=True)
 
     # Measure, one fresh process and kernel cache per iteration
+    hot_repetitions = get_hot_repetitions()
     contexts = []
     per_iteration = []
     for iteration in range(get_iterations()):
-        context, durations = run_iteration(tt_metal_home, fabric_config, case_dir / f"iteration_{iteration}")
+        context, durations = run_iteration(
+            tt_metal_home, fabric_config, hot_repetitions, case_dir / f"iteration_{iteration}"
+        )
         contexts.append(context)
         per_iteration.append(durations)
     context = contexts[0]
     assert all(other == context for other in contexts), f"Benchmark context changed between iterations: {contexts}"
     samples = collect_samples(per_iteration)
-    write_samples(case_dir, fabric_config, samples)
+    write_samples(case_dir, fabric_config, per_iteration)
 
     # Report
     golden_path = get_golden_path(tt_metal_home, context["arch"], context["cluster_type"])

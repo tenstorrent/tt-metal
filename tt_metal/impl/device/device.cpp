@@ -420,14 +420,18 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         reset_launch_message_rd_ptr_virtual(virtual_core, programmable_core_type);
     };
-    auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
+    auto clear_go_message = [&](const CoreCoord& logical_core, const CoreType& core_type) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint32_t zero = 0;
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
-        cluster.l1_barrier(id_);
+    };
+    auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
+        CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
+        auto programmable_core_type = get_programmable_core_type(virtual_core);
         uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        uint32_t zero = 0;
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
@@ -438,7 +442,14 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         for (uint32_t x = 0; x < logical_grid_size().x; x++) {
             CoreCoord logical_core(x, y);
             reset_launch_message_rd_ptr(logical_core, CoreType::WORKER);
-            reset_go_message_index(logical_core, CoreType::WORKER);
+            clear_go_message(logical_core, CoreType::WORKER);
+        }
+    }
+    // Every go slot must be cleared before any core's go_message_index can point at it.
+    cluster.l1_barrier(id_);
+    for (uint32_t y = 0; y < logical_grid_size().y; y++) {
+        for (uint32_t x = 0; x < logical_grid_size().x; x++) {
+            reset_go_message_index(CoreCoord(x, y), CoreType::WORKER);
         }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
