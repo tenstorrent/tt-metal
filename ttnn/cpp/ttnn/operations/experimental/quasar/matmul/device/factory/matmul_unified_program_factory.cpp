@@ -62,13 +62,6 @@ constexpr uint32_t MAX_DM_THREADS = 6;
 // Most reader threads; auto gives each at least two K chunks.
 constexpr uint32_t MAX_READER_THREADS = 4;
 
-// DM threads and buffer depths of one candidate plan (see UnifiedMatmulPlan).
-struct Buffering {
-    uint32_t num_reader_threads = 1;
-    uint32_t operand_buffer_depth = 1;
-    uint32_t C_buffer_depth = 1;
-};
-
 // True when every sized DFB fits the extent cap and their total fits the L1 budget.
 bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
     const uint64_t dfb_bytes[] = {
@@ -84,8 +77,8 @@ bool dfbs_fit(const UnifiedMatmulPlan& plan, uint64_t l1_budget) {
     return plan.l1_bytes <= l1_budget;
 }
 
-// Completes a candidate plan for one K chunk and buffering: chunking, formats, DFB entry counts and byte totals.
-// Takes the plan by value so the K chunk search can size several candidates.
+// Completes a candidate plan for one K chunk at its operand_buffer_depth and C_buffer_depth: chunking, formats,
+// DFB entry counts and byte totals. Takes the plan by value so the K chunk search can size several candidates.
 UnifiedMatmulPlan size_dfbs(
     UnifiedMatmulPlan plan,
     uint32_t K_chunk_tiles,
@@ -93,13 +86,9 @@ UnifiedMatmulPlan size_dfbs(
     bool packer_l1_acc,
     bool A_borrowable,
     bool B_borrowable,
-    bool C_borrowable,
-    const Buffering& buffering) {
+    bool C_borrowable) {
     plan.K_chunk_tiles = K_chunk_tiles;
     plan.K_chunks_per_C_slice = plan.K_tiles / K_chunk_tiles;
-    plan.num_reader_threads = buffering.num_reader_threads;
-    plan.operand_buffer_depth = buffering.operand_buffer_depth;
-    plan.C_buffer_depth = buffering.C_buffer_depth;
 
     // The packer accumulates partials in L1 only when there are enough K chunks for the reconfig overhead
     // to pay off (the last K chunk spills and reloads either way, so more than two).
@@ -375,77 +364,65 @@ UnifiedMatmulPlan plan_unified_matmul(
                                         plan.num_compute_threads == 1 && config.C_buffer_depth != 2;
 
         // ---- Buffering: DM threads and buffer depths ----
-        // Options for one K chunk, most buffering first. The last is the minimum, which the subblock and K chunk
-        // choices assume, so more reader threads, deeper A and B DFBs and a second C slice in flight only take L1
-        // those choices leave free.
-        const auto buffering_options = [&](uint32_t K_chunk_tiles, bool A_borrowable, bool B_borrowable) {
-            const uint64_t C_slices_per_core = (uint64_t)plan.batch_size * plan.max_C_slices_per_core;
-            const uint64_t K_chunks_per_core = C_slices_per_core * (plan.K_tiles / K_chunk_tiles);
-            const bool operands_copied = !(A_borrowable && K_chunk_tiles == plan.K_tiles) && !B_borrowable;
-            std::vector<uint32_t> C_depths = {1};
-            if (config.C_buffer_depth != 0) {
-                C_depths = {static_cast<uint32_t>(config.C_buffer_depth)};
-            } else if (C_slices_per_core > 1) {
-                C_depths = {2, 1};
-            }
-            std::vector<uint32_t> reader_threads;
-            if (requested_readers != 0) {
-                reader_threads.push_back(static_cast<uint32_t>(requested_readers));
-            } else {
-                for (uint32_t readers = MAX_READER_THREADS; readers > 1; readers /= 2) {
-                    if (is_quasar && operands_copied && readers + plan.num_writer_threads <= MAX_DM_THREADS &&
-                        K_chunks_per_core >= 2ull * readers && (plan.K_tiles / K_chunk_tiles) % readers == 0 &&
-                        config.operand_buffer_depth % readers == 0) {
-                        reader_threads.push_back(readers);
-                    }
-                }
-                reader_threads.push_back(1);
-            }
-            std::vector<Buffering> options;
-            for (uint32_t C_depth : C_depths) {
-                for (uint32_t readers : reader_threads) {
-                    if (config.operand_buffer_depth != 0) {
-                        options.push_back({readers, static_cast<uint32_t>(config.operand_buffer_depth), C_depth});
-                    } else if (readers == 1) {
-                        options.push_back({1, K_chunks_per_core > 1 ? 2u : 1u, C_depth});
-                    } else {
-                        options.push_back({readers, 2 * readers, C_depth});
-                        options.push_back({readers, readers, C_depth});
-                    }
-                }
-            }
-            return options;
-        };
-        // The first buffering option whose DFBs fit, else the minimum (the caller reports it when it does not fit).
-        const auto size_with_buffering = [&](const UnifiedMatmulPlan& unsized,
+        // Sizes the DFBs for one K chunk with the most reader threads and buffering that fit, else the minimum
+        // (the caller reports it when it does not fit); minimum_only takes the minimum directly. The subblock and
+        // K chunk choices assume the minimum, so more reader threads, deeper A and B DFBs and a second C slice in
+        // flight only take L1 those choices leave free.
+        const auto size_with_buffering = [&](UnifiedMatmulPlan candidate,
                                              uint32_t K_chunk_tiles,
                                              bool A_borrowable,
                                              bool B_borrowable,
-                                             bool C_borrowable) {
-            const std::vector<Buffering> options = buffering_options(K_chunk_tiles, A_borrowable, B_borrowable);
-            for (std::size_t i = 0; i + 1 < options.size(); ++i) {
-                UnifiedMatmulPlan candidate = size_dfbs(
-                    unsized,
-                    K_chunk_tiles,
-                    fp32_dest_acc_en,
-                    packer_l1_acc,
-                    A_borrowable,
-                    B_borrowable,
-                    C_borrowable,
-                    options[i]);
-                if (dfbs_fit(candidate, l1_budget)) {
-                    return candidate;
+                                             bool C_borrowable,
+                                             bool minimum_only) {
+            const uint32_t K_chunks_per_C_slice = plan.K_tiles / K_chunk_tiles;
+            const uint64_t C_slices_per_core = (uint64_t)plan.batch_size * plan.max_C_slices_per_core;
+            const uint64_t K_chunks_per_core = C_slices_per_core * K_chunks_per_C_slice;
+            const bool operands_copied = !(A_borrowable && K_chunks_per_C_slice == 1) && !B_borrowable;
+            const auto C_depth_requested = static_cast<uint32_t>(config.C_buffer_depth);
+            const auto depth_requested = static_cast<uint32_t>(config.operand_buffer_depth);
+            const uint32_t most_C_depth = C_depth_requested != 0 ? C_depth_requested : (C_slices_per_core > 1 ? 2 : 1);
+            const uint32_t least_C_depth = C_depth_requested != 0 ? C_depth_requested : 1;
+            const uint32_t most_readers =
+                requested_readers != 0 ? static_cast<uint32_t>(requested_readers) : MAX_READER_THREADS;
+            UnifiedMatmulPlan sized;
+            for (uint32_t C_depth = most_C_depth; C_depth >= least_C_depth; --C_depth) {
+                for (uint32_t readers = most_readers; readers >= 1; readers /= 2) {
+                    // Auto takes several reader threads only on Quasar with copied A and B, a count that divides
+                    // the K chunks and gets each thread at least two, within the DM cores the writer leaves.
+                    const bool readers_allowed =
+                        requested_readers != 0
+                            ? readers == requested_readers
+                            : readers == 1 || (is_quasar && operands_copied &&
+                                               readers + plan.num_writer_threads <= MAX_DM_THREADS &&
+                                               K_chunks_per_core >= 2ull * readers &&
+                                               K_chunks_per_C_slice % readers == 0 && depth_requested % readers == 0);
+                    if (!readers_allowed) {
+                        continue;
+                    }
+                    // Auto depth: two slices per reader thread, else one (a single slice needs no second).
+                    const uint32_t most_depth = depth_requested != 0                       ? depth_requested
+                                                : (readers == 1 && K_chunks_per_core == 1) ? 1
+                                                                                           : 2 * readers;
+                    const uint32_t least_depth = depth_requested != 0 || readers == 1 ? most_depth : readers;
+                    for (uint32_t depth = most_depth; depth >= least_depth; depth -= readers) {
+                        candidate.C_buffer_depth = C_depth;
+                        candidate.num_reader_threads = readers;
+                        candidate.operand_buffer_depth = depth;
+                        sized = size_dfbs(
+                            candidate,
+                            K_chunk_tiles,
+                            fp32_dest_acc_en,
+                            packer_l1_acc,
+                            A_borrowable,
+                            B_borrowable,
+                            C_borrowable);
+                        if (!minimum_only && dfbs_fit(sized, l1_budget)) {
+                            return sized;
+                        }
+                    }
                 }
             }
-            return size_dfbs(
-                unsized,
-                K_chunk_tiles,
-                fp32_dest_acc_en,
-                packer_l1_acc,
-                A_borrowable,
-                B_borrowable,
-                C_borrowable,
-                options.back());
+            return sized;
         };
 
         // ---- Subblock: the C slice's tiles accumulated in DST at once ----
@@ -472,15 +449,13 @@ UnifiedMatmulPlan plan_unified_matmul(
                 return false;
             }
             return dfbs_fit(
-                size_dfbs(
+                size_with_buffering(
                     std::move(candidate),
                     K_chunk_floor,
-                    fp32_dest_acc_en,
-                    packer_l1_acc,
                     /*A_borrowable=*/A_shard_borrowable,
                     /*B_borrowable=*/B_shard_borrowable,
                     /*C_borrowable=*/C_shard_borrowable && C_borrow_kept,
-                    buffering_options(K_chunk_floor, A_shard_borrowable, B_shard_borrowable).back()),
+                    /*minimum_only=*/true),
                 l1_budget);
         };
         if (config.subblock_M_tiles != 0) {
@@ -510,7 +485,7 @@ UnifiedMatmulPlan plan_unified_matmul(
         // ---- K chunk and DFB sizing ----
         if (config.K_chunk_tiles != 0) {
             UnifiedMatmulPlan candidate =
-                size_with_buffering(plan, config.K_chunk_tiles, A_borrowable, B_borrowable, C_borrowable);
+                size_with_buffering(plan, config.K_chunk_tiles, A_borrowable, B_borrowable, C_borrowable, false);
             const bool fits = dfbs_fit(candidate, l1_budget);
             TT_FATAL(
                 fits || !must_fit,
@@ -533,7 +508,7 @@ UnifiedMatmulPlan plan_unified_matmul(
         // in0_block_w == K for height-sharded in0 for the same reason).
         if (A_borrowable) {
             UnifiedMatmulPlan candidate =
-                size_with_buffering(plan, plan.K_tiles, A_borrowable, B_borrowable, C_borrowable);
+                size_with_buffering(plan, plan.K_tiles, A_borrowable, B_borrowable, C_borrowable, false);
             if (candidate.borrow_A && dfbs_fit(candidate, l1_budget)) {
                 return candidate;
             }
@@ -550,7 +525,7 @@ UnifiedMatmulPlan plan_unified_matmul(
                 continue;
             }
             UnifiedMatmulPlan candidate =
-                size_with_buffering(plan, K_chunk_tiles, A_borrowable, B_borrowable, C_borrowable);
+                size_with_buffering(plan, K_chunk_tiles, A_borrowable, B_borrowable, C_borrowable, false);
             if (dfbs_fit(candidate, l1_budget)) {
                 return candidate;
             }
