@@ -2,29 +2,42 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DRAM and L1 budget check for MiniMax-H3 ref2va on a *mock* Wormhole 4x8 galaxy.
+"""Catches MiniMax-H3 ref2va L1 and DRAM failures without a Wormhole galaxy.
 
-Every memory failure the pipeline can hit is raised on the host before dispatch: the allocator's
-"Out of Memory" and the program's static circular-buffer check. With
-``TT_METAL_MOCK_CLUSTER_DESC_PATH`` set, tt-metal keeps those paths and the kernel JIT and turns every
-device read and write into a no-op, so this test replays serving's whole init warmup (the bucket
-ladder walk that binds the DiT's buffers at every rung, then the VAE, audio and prompt-encoder warms
-that compile every remaining program) on a box with no Tenstorrent hardware.
+With TT_METAL_MOCK_CLUSTER_DESC_PATH set, tt-metal opens the cluster descriptor as a mock 4x8 mesh with the
+galaxy's DRAM and L1 geometry, keeps the allocator, the circular-buffer validation and the kernel JIT, and
+turns every device read and write into a no-op. The test builds the ref2va pipeline with serving's defaults
+and runs its full init warmup. Both memory failures the pipeline can hit are raised on the host, so the mock
+reproduces them with silicon's error text:
+  - DRAM out of memory: raised by the allocator when a rung's forced request does not fit; it surfaces in the
+    ladder walk, at the first rung that does not bind.
+  - L1 overflow: raised by the static circular-buffer check when a program's CBs clash with L1 buffers or
+    exceed L1; it surfaces in the walk or in the VAE, audio and prompt-encoder warms that compile the rest.
+Either exception fails the test at once. A pass is the warmup completing. The mock cannot see hangs, timing
+or data-dependent behaviour, and it allocates no kernel-binary DRAM, so its headroom reads about 60 MB per
+device higher than silicon.
 
-It is deliberately mock-only: it skips unless the mock descriptor is set, so it never spends galaxy
-time. Point the descriptor at
-``tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml`` (the
-UMD example 6U descriptor derives a 32x1 system mesh and cannot open 4x8). Weights are still
-required, from ``MINIMAX_H3_MODEL_PATH`` or the HuggingFace cache, and ``TT_DIT_CACHE_DIR`` makes
-the per-rung stage reloads cheap. Set ``MINIMAX_H3_DRAM_PROBE=1`` in the environment to get the
-per-owner DRAM attribution at every checkpoint; the probe reads that variable at import.
+MINIMAX_H3_DRAM_PROBE=1 logs the per-owner DRAM attribution at each checkpoint. A large ccl_ping_pong or
+pipeline.* owner names a leak; a large unattributed total points at transients and fragmentation.
 
-What the mock cannot see: per-program kernel-binary DRAM buffers are not allocated in mock mode, so
-its headroom reads about 60 MB per device higher than silicon for a fully warmed H3, and nothing
-data-dependent or timing-dependent runs. A pass here means every rung's allocations fit the
-allocator and every warmed program's static circular buffers fit L1. The first rung that does not fit
-raises the allocator's "Out of Memory" from the ladder walk; an L1 clash raises from the program that
-hits it. Either ends the test at once.
+Environment:
+  - unset TT_METAL_WATCHER: CI exports it, and on the mock its device reads come back 0 and it aborts at
+    mesh open.
+  - Weights resolve from MINIMAX_H3_MODEL_PATH or $HF_HOME/hub; the resolver reads HF_HOME, not HF_HUB_CACHE.
+    With TT_DIT_ALLOW_HF_DOWNLOAD=1 and HF_HUB_OFFLINE unset it fetches the ref2va set (transformer_ref,
+    text_encoder, vae, audio_vae, about 144 GB); all four are requested here because an explicit directory
+    is checked, not completed.
+  - MINIMAX_H3_REQUIRE_WEIGHTS=1 fails instead of skipping when the weights can neither be found nor fetched.
+  - The test skips unless the mock descriptor is set, so it never takes a galaxy.
+
+CI ("Minimax H3 Ref2VA Memory Test" in tests/pipeline_reorg/models_unit_tests.yaml, wh_n150, tier 1) runs
+from a cold kernel cache every time, and nearly all of the time is kernel JIT on the host CPU:
+  - galaxy host: about 55 min cold, about 10 min warm.
+  - N150 cloud VM: about 2.5 h cold (snapshot download 3 min, construction 7, ladder walk 44, VAE warm 8,
+    audio warm 30, prompt-encoder warm about 40).
+Hence the 3 h pytest marker and the 240 min job timeout. The shared cloud MLPerf NFS the N150 VMs mount at
+/mnt/MLPerf/huggingface has held the snapshot since 2026-10-07; populating a mount needs a dispatch with
+mlperf-read-only=false.
 """
 
 from __future__ import annotations
