@@ -90,6 +90,9 @@ class Model:
         )  # unified prefill MoE (+ ring weights) on, or the logged fallback
         self.B = self.rows * self.U
         self.max_ctx = max_ctx
+        from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap
+
+        moe_overlap.configure(self.B, max_ctx)
         self.layer_ids = list(args.layer_ids)
         self.timing = {}
         ratios = {R.model_args().compress_ratios[L] for L in self.layer_ids}

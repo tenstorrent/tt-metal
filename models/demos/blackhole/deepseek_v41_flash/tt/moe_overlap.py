@@ -20,13 +20,39 @@ TILE = 32
 MAX_M = 512  # rows of the own-token block up to which ``shared`` is bit-identical to prefill_layer.shared_big (tests/test_sd_numerics.py: M = 64..512 equal, 1024+ differs: other auto in0_block_w)
 
 
+_AUTO = {"ok": False, "why": "not configured"}
+AUTO_MAX_B = 32  # bit-identical vs the baseline validated at 4k B=4 / 16 / 32
+AUTO_MAX_CTX = int(
+    os.environ.get("DSV41_MO_AUTO_CTX", "16384")
+)  # the split weights cost ~120 MiB / bank (24 MB / layer / chip): no automatic overlap where the DRAM is tight (long contexts)
+
+
+def configure(batch, max_ctx):
+    """build time (DSV41Model._build): decide the DEFAULT (no DSV41_MO_OVERLAP set): overlap ON when the batch / context are inside the validated, DRAM-safe range"""
+    ok = batch <= AUTO_MAX_B and max_ctx <= AUTO_MAX_CTX
+    _AUTO["ok"] = ok
+    _AUTO["why"] = f"batch {batch} (max {AUTO_MAX_B}), max_ctx {max_ctx} (max {AUTO_MAX_CTX})"
+
+
+def mode():
+    """ "1" overlap on | "prep" split weights only | "0" off.  DSV41_MO_OVERLAP explicit wins; unset = automatic (see ``configure``)"""
+    v = os.environ.get("DSV41_MO_OVERLAP")
+    if v is None:
+        return "1" if _AUTO["ok"] else "0"
+    return v if v in ("1", "prep") else "0"
+
+
+def explicit():
+    return os.environ.get("DSV41_MO_OVERLAP") is not None
+
+
 def enabled():
-    return os.environ.get("DSV41_MO_OVERLAP", "0") == "1"
+    return mode() == "1"
 
 
 def prep_enabled():
     """build-time: split the shared-expert weights (needed by ``enabled()`` runs; DSV41_MO_OVERLAP=prep builds them but leaves the overlap off, for in-process A/B)"""
-    return os.environ.get("DSV41_MO_OVERLAP", "0") in ("1", "prep")
+    return mode() in ("1", "prep")
 
 
 def _divisor_le(n, cap):

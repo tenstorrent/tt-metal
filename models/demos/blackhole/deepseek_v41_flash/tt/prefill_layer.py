@@ -352,7 +352,10 @@ class DSV41PrefillLayer:
         ov = None
         self._sh_pre = None
         if (
-            moe_overlap.enabled() and hasattr(L.shared, "w01") and hh_own.shape[2] <= moe_overlap.MAX_M
+            moe_overlap.enabled()
+            and hasattr(L.shared, "w01")
+            and (moe_overlap.explicit() or hasattr(L.shared, "wg"))
+            and hh_own.shape[2] <= moe_overlap.MAX_M
         ):  # shared expert on a sub-device concurrently with the dispatch (tt/moe_overlap.py)
             ov = moe_overlap.SDOverlap.get(L.mesh_device)
             box = []
