@@ -749,6 +749,32 @@ def test_concat_fp32_last_dim_mantissa_not_truncated(device, width, layout):
     assert_equal(torch_output, ttnn.to_torch(tt_output))
 
 
+@pytest.mark.parametrize("num_cores", [1, 2])
+def test_sharded_concat_height_fp32_mantissa_not_truncated(device, num_cores):
+    """fp32 width concat of HEIGHT_SHARDED tiled inputs must be bitwise exact.
+
+    This path transposes every tile in the compute kernel; unpacking through SrcA would
+    truncate each element to TF32.
+    """
+    shape = (1, 1, 32 * num_cores, 64)
+    numel = shape[2] * shape[3]
+    k = torch.arange(numel, dtype=torch.int64) % 23 + 1
+    torch_a = (1.0 + torch.pow(2.0, -k.to(torch.float64))).to(torch.float32).reshape(shape)
+    torch_b = -torch_a
+    torch_output = torch.cat([torch_a, torch_b], dim=3)
+
+    grid = ttnn.CoreGrid(y=1, x=num_cores)
+    input_mem = ttnn.create_sharded_memory_config(shape, grid, ttnn.ShardStrategy.HEIGHT)
+    tt_a, tt_b = (
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32, memory_config=input_mem)
+        for t in (torch_a, torch_b)
+    )
+    tt_output = ttnn.concat([tt_a, tt_b], dim=3)
+
+    assert tt_output.dtype == ttnn.float32
+    assert_equal(torch_output, ttnn.to_torch(tt_output))
+
+
 def _sharded_grid(num_cores):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
 
