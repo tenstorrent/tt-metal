@@ -39,6 +39,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose.h"
 #include "api/compute/transpose_dest.h"
+#include "api/compute/experimental/add_rsqrt.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
@@ -187,6 +188,20 @@ void kernel_main() {
     CircularBuffer cb_mul_rms_result(mul_rms_result_cb);
     CircularBuffer cb_mul_weight_result(mul_weight_result_cb);
     CircularBuffer cb_add_bias_result(add_bias_result_cb);
+
+    // Weight-first POST: x*w does not depend on the row statistics, so it is computed
+    // right after the local stat is handed to the writer (while the ring gather is in
+    // flight) into the fp32 whole-row intermediate_cb. bf16*bf16 is exact in fp32 DEST
+    // at HiFi4, so the only post-gather work is ONE per-block (x*w)*(1/rms) that writes
+    // straight into the next sub-phase's CB (output_cb when no bias/RoPE follows), and
+    // the first output block is ready one block after the rsqrt. Needs the resident
+    // whole-row input + whole-row intermediate_cb (!streaming, !block_major_post) and a
+    // single whole-row rsqrt (!per_head_norm).
+    constexpr bool weight_first =
+        (has_weight != 0) && (per_head_norm == 0) && (streaming_low_l1 == 0) && (block_major_post == 0);
+    // Sub-phase that follows the 1/rms multiply when weight_first.
+    constexpr uint32_t rms_after_xw_cb = mul_weight_result_cb;
+    CircularBuffer cb_rms_after_xw(rms_after_xw_cb);
 
     // Process the core's tile rows one at a time (chunk size is always 1).
     // per_head_norm produces num_heads_per_device stats per row (one per
@@ -350,6 +365,42 @@ void kernel_main() {
 
         }  // C_PRE
 
+        // -------- WEIGHT-FIRST: x * w -> intermediate_cb (overlaps the ring gather) --------
+        if constexpr (weight_first) {
+            DeviceZoneScopedN("C_XW");
+            reconfig_data_format(input_cb, weight_cb);
+            pack_reconfig_data_format(intermediate_cb);
+            if constexpr (per_token_weight != 0) {
+                mul_init(input_cb, weight_cb);
+            } else {
+                mul_bcast_rows_init(input_cb, weight_cb);
+            }
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                cb_weight.wait_front(col_tile + tiles_in_block);
+                cb_intermediate.reserve_back(block_size);
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    if constexpr (per_token_weight != 0) {
+                        mul_tiles(input_cb, weight_cb, col_tile + i, col_tile + i, i);
+                    } else {
+                        mul_tiles_bcast_rows(input_cb, weight_cb, col_tile + i, col_tile + i, i);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                    pack_tile(i, intermediate_cb);
+                }
+                tile_regs_release();
+                cb_intermediate.push_back(block_size);  // block_size-padded, as sub-phase 1
+            }
+            // Input is no longer needed (POST reads x*w): release it now so the reader
+            // can stream the next row during this row's gather + POST.
+            cb_input.pop_front(num_tile_cols);
+        }
+
         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
         {
             DeviceZoneScopedN("C_AGWAIT");
@@ -428,6 +479,30 @@ void kernel_main() {
                                     "eltwise stats-sum needs even ring_size");
                                 constexpr uint32_t recip_h_full_bits =
                                     __builtin_bit_cast(uint32_t, 1.0f / static_cast<float>(h_full));
+                                // The summed stats live in ROW 0 of DST tile 0 (faces 0/1) before the
+                                // transpose. Finish them THERE: rsqrt(sum * 1/H + eps) on just the
+                                // first 2 SFPU iterations of faces 0 and 1 (VectorMode::R; iterations 0-1 ==
+                                // rows 0-3, even + odd columns) instead of 3 full-tile SFPU passes (mul, add, rsqrt
+                                // over 4 faces x 8 iterations) after the transpose; then transpose_dest moves the
+                                // finished row 0 -> col 0 for the column-broadcast multiply (which only reads col 0).
+                                // Same fp32 math per lane (the scale+eps is one fp32 FMA instead of a rounded mul then
+                                // add).
+                                auto row0_scale_eps_rsqrt_then_transpose = [&]() {
+#if defined(ARCH_BLACKHOLE)
+                                    add_rsqrt_tile_init();
+                                    add_rsqrt_tile<false, VectorMode::R, 2, false, recip_h_full_bits>(0, eps_bits);
+                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                    transpose_dest<true>(0);
+#else
+                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                    transpose_dest<true>(0);
+                                    binop_with_scalar_tile_init();
+                                    mul_unary_tile(0, recip_h_full_bits);
+                                    add_unary_tile(0, eps_bits);
+                                    rsqrt_tile_init();
+                                    rsqrt_tile(0);
+#endif
+                                };
                                 if constexpr (packed_ag_enabled != 0 && col_split > 1) {
                                     // Column split: each of the ring_size gathered tiles holds the
                                     // col_split partial sticks of THIS row from one device in rows
@@ -446,13 +521,7 @@ void kernel_main() {
                                             stats_transposed_gathered_cb, reduce_scalar_sum_cb, d, 0, 0);
                                     }
                                     reduce_uninit();
-                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
-                                    transpose_dest<true>(0);
-                                    binop_with_scalar_tile_init();
-                                    mul_unary_tile(0, recip_h_full_bits);
-                                    add_unary_tile(0, eps_bits);
-                                    rsqrt_tile_init();
-                                    rsqrt_tile(0);
+                                    row0_scale_eps_rsqrt_then_transpose();
                                     tile_regs_commit();
                                     tile_regs_wait();
                                     cb_reduce_result.reserve_back(1);
@@ -480,14 +549,8 @@ void kernel_main() {
                                         add_tiles(
                                             stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
                                     }
-                                    // row-0 sum -> col-0, in place (fp32 DST).
-                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
-                                    transpose_dest<true>(0);
-                                    binop_with_scalar_tile_init();
-                                    mul_unary_tile(0, recip_h_full_bits);
-                                    add_unary_tile(0, eps_bits);
-                                    rsqrt_tile_init();
-                                    rsqrt_tile(0);
+                                    // row-0 sum -> rsqrt(sum/H + eps) -> col-0, in place (fp32 DST).
+                                    row0_scale_eps_rsqrt_then_transpose();
                                     tile_regs_commit();
                                     tile_regs_wait();
                                     cb_reduce_result.reserve_back(1);
@@ -545,7 +608,36 @@ void kernel_main() {
                         // block_major_post fuses mul-rms into the single per-block POST loop
                         // below, so the standalone P_NMUL sub-phase is skipped (and
                         // reduce_result_cb stays resident for that loop to consume).
-                        if constexpr (!block_major_post) {
+                        if constexpr (weight_first) {
+                            // ----- Sub-phase 1': (x*w) * (1/rms) → next sub-phase CB -----
+                            // Per block: read the precomputed fp32 x*w block, scale by the
+                            // per-token 1/rms column, pack to output (or intermediate when
+                            // bias/RoPE follow — the ring pop-before-reserve below makes the
+                            // in-place intermediate -> intermediate handoff safe, as in the
+                            // weight sub-phase).
+                            reconfig_data_format(intermediate_cb, reduce_result_cb);
+                            pack_reconfig_data_format(rms_after_xw_cb);
+                            mul_bcast_cols_init(intermediate_cb, reduce_result_cb);
+                            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                                const uint32_t tiles_in_block =
+                                    (col_tile + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col_tile);
+                                cb_intermediate.wait_front(block_size);
+                                tile_regs_acquire();
+                                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    mul_tiles_bcast_cols(intermediate_cb, reduce_result_cb, i, 0, i);
+                                }
+                                tile_regs_commit();
+                                cb_intermediate.pop_front(block_size);
+                                cb_rms_after_xw.reserve_back(block_size);
+                                tile_regs_wait();
+                                for (uint32_t i = 0; i < tiles_in_block; i++) {
+                                    pack_tile(i, rms_after_xw_cb);
+                                }
+                                tile_regs_release();
+                                cb_rms_after_xw.push_back(block_size);
+                            }
+                            cb_reduce_result.pop_front(1);
+                        } else if constexpr (!block_major_post) {
                             // ----- Sub-phase 1: x * (1/rms) → mul_rms_result_cb -----
                             reconfig_data_format(input_cb, reduce_result_cb);
                             pack_reconfig_data_format(mul_rms_result_cb);
@@ -953,7 +1045,7 @@ void kernel_main() {
                     }
                 }
 
-                if constexpr (has_weight && !block_major_post) {
+                if constexpr (has_weight && !block_major_post && !weight_first) {
                     // ----- Sub-phase 2: (x * 1/rms) * weight → mul_weight_result_cb -----
                     // Broadcast weight (default): weight_cb holds num_tile_cols
                     // row-broadcast tiles pushed once per worker; we use
@@ -1253,7 +1345,7 @@ void kernel_main() {
         // Streaming popped input block-by-block in PRE (num_tile_cols) +
         // P_NMUL (num_tile_cols) = 2*num_tile_cols, matching the reader's two
         // passes. Only the resident path holds the chunk and drains it here.
-        if constexpr (!streaming_low_l1) {
+        if constexpr (!streaming_low_l1 && !weight_first) {  // weight_first popped it after x*w
             cb_input.pop_front(chunk_input_tiles);
         }
         // NOTE: stats_gathered_cb is NOT popped here — the reduce<AVG> with
