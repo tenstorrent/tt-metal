@@ -33,6 +33,7 @@
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
 
+template <bool rhs_copy_init = true>
 ALWI void process_tile(
     tt::CBIndex cb_pre_lhs,
     tt::CBIndex cb_post_lhs,
@@ -107,7 +108,9 @@ ALWI void process_tile(
             copy_tile(cb_left, i, i * 2);
         }
         reconfig_data_format_srca(cb_left, cb_right);
-        copy_init(cb_right);
+        if constexpr (rhs_copy_init) {
+            copy_init(cb_right);
+        }
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_right, i, i * 2 + 1);
 
@@ -167,6 +170,7 @@ void kernel_main() {
 
     // One-time hardware startup: must be the first Compute API call and run exactly once. cb_left
     // inside process_tile is always cb_post_lhs, so configure the pipeline for that here.
+    constexpr bool rhs_copy_init = !same_copy_init<cb_post_lhs, cb_post_rhs>();
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
 
 #ifdef PACK_RELU
@@ -181,7 +185,7 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
+        process_tile<rhs_copy_init>(
             cb_pre_lhs,
             cb_post_lhs,
             cb_pre_rhs,
@@ -193,7 +197,7 @@ void kernel_main() {
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
+        process_tile<rhs_copy_init>(
             cb_pre_lhs,
             cb_post_lhs,
             cb_pre_rhs,

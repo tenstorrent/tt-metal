@@ -29,6 +29,7 @@
 #include "eltwise_utils_sfpu.hpp"
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
+template <bool rhs_copy_init = true>
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
     uint32_t cb_pre_lhs_id,
@@ -55,7 +56,9 @@ FORCE_INLINE void process_sfpu_scalar_tiles(
         copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
     }
     reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-    copy_init(cb_post_rhs.get_cb_id());
+    if constexpr (rhs_copy_init) {
+        copy_init(cb_post_rhs.get_cb_id());
+    }
     for (uint32_t i = 0; i < n; ++i) {
         copy_tile(cb_post_rhs.get_cb_id(), 0, i * 2 + 1);  // Always use scalar at index 0
 #if HAS_ACTIVATIONS(POST)
@@ -104,6 +107,8 @@ void kernel_main() {
         "binary_ng: SFPU SrcA startup operand disagrees with the preprocessing restore reference");
 
     CircularBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
+    constexpr bool rhs_copy_init =
+        !same_copy_init<cb_post_lhs_id, (HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id)>();
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
@@ -121,14 +126,14 @@ void kernel_main() {
     // Process full chunks
     uint32_t full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < full_chunks; ++chunk) {
-        process_sfpu_scalar_tiles(
+        process_sfpu_scalar_tiles<rhs_copy_init>(
             num_tiles_per_cycle, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_scalar_tiles(
+        process_sfpu_scalar_tiles<rhs_copy_init>(
             remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_post_rhs.get_cb_id(), cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 

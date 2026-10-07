@@ -29,6 +29,20 @@
 #define PROCESS_ACTIVATIONS_(op) PROCESS_##op##_ACTIVATIONS
 #define HAS_ACTIVATIONS(op) P_COMPL(IS_EMPTY(PROCESS_ACTIVATIONS(op, 0)))
 
+// A copy init of cb_b programs what the copy init of cb_a did: equal formats and tile geometry (unpack and math only).
+template <uint32_t cb_a, uint32_t cb_b>
+constexpr bool same_copy_init() {
+#if defined(ARCH_BLACKHOLE) && !defined(UCK_CHLKC_PACK)
+    return unpack_src_format[cb_a] == unpack_src_format[cb_b] && unpack_dst_format[cb_a] == unpack_dst_format[cb_b] &&
+           unpack_tile_num_faces[cb_a] == unpack_tile_num_faces[cb_b] &&
+           unpack_tile_face_r_dim[cb_a] == unpack_tile_face_r_dim[cb_b] &&
+           unpack_partial_face[cb_a] == unpack_partial_face[cb_b] && unpack_narrow_tile[cb_a] == unpack_narrow_tile[cb_b] &&
+           unpack_tile_r_dim[cb_a] == unpack_tile_r_dim[cb_b];
+#else
+    return false;
+#endif
+}
+
 // Physical LHS means the tensor in c_0, not necessarily the mathematical LHS.
 // This is a FORMAT reference, not necessarily the buffer supplying the next tile:
 // binary_ng_program_factory gives the LHS broadcast temporary (c_5) the same

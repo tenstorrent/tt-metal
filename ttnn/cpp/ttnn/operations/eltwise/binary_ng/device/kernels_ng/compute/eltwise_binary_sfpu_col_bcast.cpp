@@ -35,6 +35,7 @@
 // still used for the shared preprocess_*_impl helper call sites (see PREPROCESS below).
 #include "api/dataflow/dataflow_buffer.h"
 
+template <bool rhs_copy_init = true>
 ALWI void process_tile(
     tt::CBIndex cb_bcast,
     tt::CBIndex cb_llk_post,
@@ -114,7 +115,9 @@ ALWI void process_tile(
             copy_tile(cb_post_lhs, i, i * 2);
         }
         reconfig_data_format_srca(cb_post_lhs, cb_post_rhs);
-        copy_init(cb_post_rhs);
+        if constexpr (rhs_copy_init) {
+            copy_init(cb_post_rhs);
+        }
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
             copy_tile(cb_post_rhs, i, i * 2 + 1);
 
@@ -177,6 +180,7 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
+    constexpr bool rhs_copy_init = !same_copy_init<cb_post_lhs, cb_post_rhs>();
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
     copy_init(cb_post_lhs);
 #ifdef PACK_RELU
@@ -191,7 +195,7 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
+        process_tile<rhs_copy_init>(
             cb_bcast,
             cb_llk_post,
             cb_pre_lhs,
@@ -205,7 +209,7 @@ void kernel_main() {
     }
 
     if (remaining_iterations > 0) {
-        process_tile(
+        process_tile<rhs_copy_init>(
             cb_bcast,
             cb_llk_post,
             cb_pre_lhs,

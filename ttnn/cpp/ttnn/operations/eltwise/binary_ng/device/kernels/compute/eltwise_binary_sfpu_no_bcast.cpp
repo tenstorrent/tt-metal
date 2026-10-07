@@ -44,7 +44,7 @@ constexpr bool l1_format_is_32bit() {
 }
 #endif
 
-template <bool operand_blocks = false>
+template <bool operand_blocks = false, bool rhs_copy_init = true>
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
     uint32_t cb_pre_lhs_id,
@@ -103,7 +103,9 @@ FORCE_INLINE void process_sfpu_tiles(
             copy_tile(cb_post_lhs.get_cb_id(), i, i * 2);
         }
         reconfig_data_format_srca(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
-        copy_init(cb_post_rhs.get_cb_id());
+        if constexpr (rhs_copy_init) {
+            copy_init(cb_post_rhs.get_cb_id());
+        }
         for (uint32_t i = 0; i < n; ++i) {
             copy_tile(cb_post_rhs.get_cb_id(), i, i * 2 + 1);
 #if HAS_ACTIVATIONS(POST)
@@ -157,6 +159,7 @@ void kernel_main() {
 #else
     constexpr bool operand_blocks = false;
 #endif
+    constexpr bool rhs_copy_init = !same_copy_init<cb_post_lhs_id, cb_post_rhs_id>();
 
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
@@ -171,7 +174,7 @@ void kernel_main() {
     // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
-        process_sfpu_tiles<operand_blocks>(
+        process_sfpu_tiles<operand_blocks, rhs_copy_init>(
             num_tiles_per_cycle,
             cb_pre_lhs_id,
             cb_post_lhs_id,
@@ -183,7 +186,7 @@ void kernel_main() {
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles<operand_blocks>(
+        process_sfpu_tiles<operand_blocks, rhs_copy_init>(
             remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_pre_rhs_id, cb_post_rhs_id, cb_out_id ISCLOSE_RT_ARG_FWD);
     }
 }
