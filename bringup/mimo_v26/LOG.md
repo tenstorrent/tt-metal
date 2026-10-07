@@ -1314,3 +1314,39 @@
 - claim: USER REQUIREMENT 2026-10-07: decode must support users per mesh row U in {1,2,4,8,16,32} (B=4U) like DSV4 branch ssinghal/dsv4p1 (one build, reconfigure per U). Status at ae6a9e0d77a: decode always runs 32 slots/row (flat 123.4 ms/step at B=64 and B=128, E261007-0827-805), not acceptable. Assigned: decode agent = U-parametrised Decoder/Generator + reconfigure + step-time table vs U; prefill agent = 64k decode + needle test; MoE agent = decode race first, then small-U MoE (min 64 tokens/row, empty-expert skipping) per notes/small_u_moe.md.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0836-eb6
+- date: 2026-10-07T08:36:20
+- commit: d59a132dc5e
+- branch: ssinghal/mimo-attn
+- host: 41
+- track: decode
+- status: verified
+- claim: scorecard gsm8k: 113/128 correct (88.3%, Wilson95 81.6-92.8) on gsm8k_128_nothink.json, enable_thinking=false, greedy, max_new 512, 48 layers, new MoE numerics (see E261007-0827-805)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"n":128,"correct":113}
+
+## E261007-0836-f36
+- date: 2026-10-07T08:36:20
+- commit: d59a132dc5e
+- branch: ssinghal/mimo-attn
+- host: 41
+- track: decode
+- status: verified
+- claim: scorecard perf_decode: decode 123.4 ms/token step at B=128 live users (32 slots per mesh row, 4 rows), prompts 35..137 tokens (ISL ~100, S=256 padded) generating up to 512 tokens (context <= 800), 8.1 tok/s/user, 1037 tok/s total; session: dedicated process, trace on, UNPAIRED, host-timed replay + candidate readback, steady steps after step 0 (13.9 s capture)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"decode_ms_tok":123.4,"tok_s_user":8.1,"batch":128}
+
+## E261007-0836-176
+- date: 2026-10-07T08:36:20
+- commit: d59a132dc5e
+- branch: ssinghal/mimo-attn
+- host: 41
+- track: decode
+- status: verified
+- claim: scorecard determinism: FAIL (honest). Two identical n=128 runs in one process are NOT token-identical (first diffs at steps 6..270 for 20+ users, 113 vs 112 correct); cause localized to a rare race in the decode MoE (E261007-0818-033): bit_identical=0
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py
+- data: {"runs":2,"bit_identical":0}

@@ -69,7 +69,7 @@
       "min_n": 128,
       "min_correct": 109,
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0836-eb6"],
       "note": "REQUIRED. USER-SET 2026-10-07: >=85% (109/128) on gsm8k_128_nothink.json (enable_thinking=false), closed-loop greedy decode, full 48-layer model; catches compounding error beyond the CPU prefix. 85% is the user's number, not a published one for this model."
     },
     {
@@ -77,7 +77,7 @@
       "kind": "determinism",
       "min_runs": 2,
       "required": true,
-      "evidence": [],
+      "evidence": ["E261007-0836-176"],
       "note": "REQUIRED. two identical runs, bit-identical outputs"
     },
     {
@@ -128,7 +128,7 @@
         "tok_s_user"
       ],
       "required": true,
-      "evidence": []
+      "evidence": ["E261007-0836-f36"]
     },
     {
       "id": "hosted_oracle",
