@@ -102,8 +102,8 @@ void kernel_main() {
 
 #ifdef GQA_PACK
     // pack_gqa_heads with out_concat_heads: NQH counts packed heads of GQA_PACK query heads x GQA_PACK_SQT row tiles
-    // each; the output is [B, 1, GQA_PACK_SQT, NQH*GQA_PACK*vDH]. Q chunks never span two query heads
-    // (host-validated).
+    // each; the output is [B, 1, GQA_PACK_SQT, NQH*GQA_PACK*vDH]. A Q chunk may run into the next query head of its
+    // group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
     static_assert(out_concat_heads, "GQA_PACK is only defined with out_concat_heads");
     const auto out_tile_shape = TensorTileShape(B, 1, GQA_PACK_SQT, NQH * GQA_PACK * vDHt);
     constexpr uint32_t out_row_stride = NQH * GQA_PACK * vDHt;
@@ -245,7 +245,11 @@ void kernel_main() {
             const uint32_t packed_row = write_offset + out_row_start_tile;
             out_tile_id = out_tile_shape.id_of(
                 nb, 0, packed_row % GQA_PACK_SQT, (nq * GQA_PACK + packed_row / GQA_PACK_SQT) * vDHt);
+            constexpr uint32_t head_rows = GQA_PACK_SQT;
+            const uint32_t first_row_in_head = packed_row % GQA_PACK_SQT;
 #else
+            constexpr uint32_t head_rows = 0;
+            constexpr uint32_t first_row_in_head = 0;
             if constexpr (out_concat_heads) {
                 out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
             } else {
@@ -267,7 +271,9 @@ void kernel_main() {
                     tile_bytes,
                     out_subblock_h,
                     barrier_threshold,
-                    out_row_stride);
+                    out_row_stride,
+                    head_rows,
+                    first_row_in_head);
             } else {
                 write_block(
                     noc,
@@ -279,7 +285,9 @@ void kernel_main() {
                     out_tile_id,
                     tile_bytes,
                     barrier_threshold,
-                    out_row_stride);
+                    out_row_stride,
+                    head_rows,
+                    first_row_in_head);
             }
         }
     }  // close phase

@@ -14,7 +14,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("b, nh, nkv, s, d", [(1, 32, 8, 512, 128), (8, 32, 8, 512, 128), (2, 16, 4, 256, 64)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
-@pytest.mark.parametrize("q_chunk, k_chunk", [(256, 256), (256, 512), (128, 256)])
+# 192 and 160 do not divide S: chunks run into the next query head of the group and the last chunk is padded
+@pytest.mark.parametrize("q_chunk, k_chunk", [(256, 256), (256, 512), (128, 256), (192, 512), (160, 256)])
 @pytest.mark.timeout(300)
 def test_sdpa_pack_gqa_heads(device, b, nh, nkv, s, d, dtype, q_chunk, k_chunk):
     if q_chunk > s or k_chunk > s:
@@ -55,6 +56,39 @@ def test_sdpa_pack_gqa_heads(device, b, nh, nkv, s, d, dtype, q_chunk, k_chunk):
     kr, vr = k.repeat_interleave(g, dim=1), v.repeat_interleave(g, dim=1)
     torch_out = torch.nn.functional.scaled_dot_product_attention(q, kr, vr, is_causal=False)
     assert_with_pcc(torch_out, got.float(), 0.99 if dtype == ttnn.bfloat8_b else 0.999)
+
+
+@pytest.mark.parametrize("b, nh, nkv, s, d", [(1, 32, 8, 512, 128), (2, 16, 4, 256, 64)])
+@pytest.mark.parametrize("q_chunk, k_chunk", [(192, 256), (160, 256)])
+@pytest.mark.timeout(300)
+def test_sdpa_pack_gqa_heads_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk):
+    """fp32_dest_acc_en=True runs the non-streaming kernel, whose writer drains a whole Q chunk with write_block
+    instead of write_block_row_grouped. A q chunk that does not divide S makes the chunk's rows run into the next query
+    head of the group, so write_block must wrap them too."""
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(b, n, s, d) for n in (nh, nkv, nkv))
+    tq, tk, tv = (ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for t in (q, k, v))
+    pc = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        exp_approx_mode=False,
+    )
+    ck = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+    )
+    kwargs = dict(is_causal=False, program_config=pc, compute_kernel_config=ck, pack_gqa_heads=True)
+    out = ttnn.transformer.scaled_dot_product_attention(tq, tk, tv, **kwargs)
+    out_cat = ttnn.transformer.scaled_dot_product_attention(tq, tk, tv, output_concat_heads=True, **kwargs)
+    assert torch.equal(
+        ttnn.to_torch(out_cat), ttnn.to_torch(ttnn.experimental.nlp_concat_heads(out))
+    ), "packed concat layout must be bit-identical to nlp_concat_heads of the packed head-major output"
+
+    g = nh // nkv
+    torch_out = torch.nn.functional.scaled_dot_product_attention(
+        q, k.repeat_interleave(g, dim=1), v.repeat_interleave(g, dim=1), is_causal=False
+    )
+    assert_with_pcc(torch_out, ttnn.to_torch(out).float(), 0.999)
 
 
 def test_sdpa_pack_gqa_heads_rejects_causal_and_mask(device, expect_error):
