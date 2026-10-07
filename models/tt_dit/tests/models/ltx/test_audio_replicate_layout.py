@@ -14,7 +14,11 @@ import pytest
 import torch
 
 from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
-from models.tt_dit.models.transformers.ltx.audio_replicate_ltx import audio_replicate_enabled, qkv_regroup_columns
+from models.tt_dit.models.transformers.ltx.audio_replicate_ltx import (
+    audio_replicate_enabled,
+    qkv_regroup_columns,
+    qkv_split_chunk_sizes,
+)
 
 
 def _prepared_qkv(state, num_heads, head_dim, tp):
@@ -57,3 +61,11 @@ def test_knob_defaults_off(monkeypatch):
     assert not audio_replicate_enabled()
     monkeypatch.setenv("LTX_AUDIO_REPLICATE", "1")
     assert audio_replicate_enabled()
+
+
+@pytest.mark.parametrize("dim", [2048, 4096])
+def test_qkv_split_chunks_fit_minimal_matmul_split(dim):
+    # Unsharded minimal_matmul_split splits N evenly and needs tile-aligned chunks.
+    sizes = qkv_split_chunk_sizes(dim)
+    assert len(set(sizes)) == 1
+    assert sum(sizes) % len(sizes) == 0 and (sum(sizes) // len(sizes)) % 32 == 0

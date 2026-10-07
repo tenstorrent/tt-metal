@@ -29,6 +29,11 @@ def audio_replicate_enabled() -> bool:
     return os.environ.get("LTX_AUDIO_REPLICATE", "0") not in ("0", "", "false", "False")
 
 
+def qkv_split_chunk_sizes(dim: int) -> list[int]:
+    """Chunk widths of the replicated QKV split matmul: equal and tile-aligned, as minimal_matmul_split needs."""
+    return [dim, dim, dim]
+
+
 def qkv_regroup_columns(tp_factor: int, local: int) -> list[list[tuple[int, int]]]:
     """Column ranges of Q, K and V in a TP-gathered QKV weight, in head order.
 
@@ -94,21 +99,22 @@ class ReplicatedAudioIslands:
         qkv_dev = gather_cols(attn.to_qkv.weight)
         cols = [ttnn.concat([ttnn.slice(qkv_dev, [0, a], [dim, b]) for a, b in ranges], dim=-1) for ranges in regroup]
         ttnn.deallocate(qkv_dev)
-        chunk_sizes = [dim, dim, dim]
+        chunk_sizes = qkv_split_chunk_sizes(dim)
         bias_parts = None
         if attn.to_qkv.bias is not None:
             b = host_cols(attn.to_qkv.bias)
             bias_parts = [torch.cat([b[..., a:e] for a, e in ranges], dim=-1) for ranges in regroup]
-        # The gate is num_heads columns: under a tile per device, so it is reassembled on host.
+        # The gate is num_heads columns: under a tile per device, so it is reassembled on host. It gets its
+        # own matmul because unsharded minimal_matmul_split only takes equal chunks.
         self.gated = attn._gate_is_live()
+        self.gate_w = self.gate_b = None
         if self.gated:
             g_w = host_cols(attn.to_gate_logits.weight)
             pad = -g_w.shape[1] % ttnn.TILE_SIZE
-            cols.append(replicate(torch.nn.functional.pad(g_w, (0, pad))))
-            chunk_sizes.append(g_w.shape[1] + pad)
-            if bias_parts is not None:
+            self.gate_w = replicate(torch.nn.functional.pad(g_w, (0, pad)))
+            if attn.to_gate_logits.bias is not None:
                 g_b = host_cols(attn.to_gate_logits.bias)
-                bias_parts.append(torch.nn.functional.pad(g_b, (0, pad)))
+                self.gate_b = replicate(torch.nn.functional.pad(g_b, (0, pad)))
         self.gate_width = self.num_heads
 
         self.to_qkv = ColParallelLinear(
@@ -234,7 +240,9 @@ class ReplicatedAudioIslands:
             spatial = self._sdpa(q, k, v, N, attn_mask)
 
         if self.gated:
-            logits = outs[3]
+            logits = ttnn.linear(
+                normed, self.gate_w, bias=self.gate_b, compute_kernel_config=attn.mm_compute_kernel_config
+            )
             if logits.shape[-1] != self.gate_width:
                 s = logits.shape
                 logits = ttnn.slice(logits, [0, 0, 0, 0], [s[0], s[1], s[2], self.gate_width])
