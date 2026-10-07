@@ -60,8 +60,6 @@ _NonlinearityType = Literal[
 
 _FanMode = Literal["fan_in", "fan_out"]
 
-_FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
-
 # Module-private RNG so weight initialization never touches np.random's global
 # state. Callers that want reproducible init must use manual_seed() below;
 # seeding np.random alone has no effect, mirroring how torch.manual_seed is
@@ -402,7 +400,8 @@ def kaiming_normal(
 #
 # NOTE: Not truly in-place - each function allocates a new temporary tensor
 # via the corresponding factory variant and copies the values into the
-# existing tensor with set_value(). The temporary is freed after the call.
+# existing tensor with assign(), which keeps the tensor's storage dtype. The
+# temporary is freed after the call.
 # ---------------------------------------------------------------------------
 
 
@@ -426,7 +425,7 @@ def uniform_(tensor, a: float = 0.0, b: float = 1.0):
     """Fill tensor in-place with values from uniform distribution [a, b)."""
     inner = _unwrap_tensor(tensor)
     reinit_val = uniform(a, b)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -434,7 +433,7 @@ def normal_(tensor, mean: float = 0.0, std: float = 1.0):
     """Fill tensor in-place with values from normal (Gaussian) distribution."""
     inner = _unwrap_tensor(tensor)
     reinit_val = normal(mean, std)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -442,7 +441,7 @@ def constant_(tensor, val: float):
     """Fill tensor in-place with a constant value."""
     inner = _unwrap_tensor(tensor)
     reinit_val = constant(val)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -450,7 +449,7 @@ def zeros_(tensor):
     """Fill tensor in-place with zeros."""
     inner = _unwrap_tensor(tensor)
     reinit_val = zeros()(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -458,7 +457,7 @@ def ones_(tensor):
     """Fill tensor in-place with ones."""
     inner = _unwrap_tensor(tensor)
     reinit_val = ones()(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -469,7 +468,7 @@ def xavier_uniform_(tensor, gain: float = 1.0):
     """
     inner = _unwrap_tensor(tensor)
     reinit_val = xavier_uniform(gain)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -480,7 +479,7 @@ def xavier_normal_(tensor, gain: float = 1.0):
     """
     inner = _unwrap_tensor(tensor)
     reinit_val = xavier_normal(gain)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -496,7 +495,7 @@ def kaiming_uniform_(
     """
     inner = _unwrap_tensor(tensor)
     reinit_val = kaiming_uniform(a, mode, nonlinearity)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 
@@ -512,7 +511,7 @@ def kaiming_normal_(
     """
     inner = _unwrap_tensor(tensor)
     reinit_val = kaiming_normal(a, mode, nonlinearity)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
+    inner.assign(reinit_val)
     return tensor
 
 

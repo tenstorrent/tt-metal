@@ -31,8 +31,9 @@ The native tensor is the source of truth, and the derived copy is refreshed from
   one, taking a second view of a tensor that is being written, reading the other precision while a view is alive,
   and calling `set_tensor()` while a view is alive.
 - **Copies.** Copies of an `AutocastTensor` share storage and versioning, so a write through one is seen by all of
-  them. `set_tensor()` gives the copy it is called on a new tensor and leaves the others alone. When that copy is the
-  only owner, it resets in place, so references returned earlier by `get_tensor()` stay valid.
+  them; a move shares it the same way. `set_tensor()` gives the copy it is called on a new tensor and leaves the
+  others alone. When that copy is the only owner, it resets in place, so a reference returned earlier by
+  `get_tensor(NATIVE)` follows the new tensor. A reference to the derived copy does not.
 - **Limits.** A write that bypasses `get_value_for_update()`, such as a kernel writing through a `get_value()`
   handle, is not seen. The tensor is driven from one host thread.
 
@@ -70,6 +71,10 @@ a new path in an existing one (for example a config option that changes which te
 - Every other optimizer that updates parameters has a bf16 update only. It rejects an fp32 parameter at
   construction, with an error that names the parameter. `AdamWFullPrecision` keeps its own fp32 master weights for
   bf16 parameters.
+- Stochastic rounding (`AdamWConfig::stochastic_rounding`) applies to bf16 parameters only. An fp32 parameter keeps
+  the low bits that rounding would lose, so it is updated without it.
+- Loading values into an existing tensor keeps its dtype: `Tensor.assign()` (used by the checkpoint and safetensors
+  loaders) and the in-place initializers in `ttml.init` cast the new values to the dtype the tensor is stored in.
 
 ## Why this design
 

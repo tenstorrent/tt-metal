@@ -230,7 +230,7 @@ class FSDPState:
             # then set_grad to the reduced shard. Order matters: set_grad
             # shape-checks against m_value, so m_value must be shard-shape
             # before we install a shard-shape grad.
-            gathered_value = param_tensor.get_value()
+            gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             shard = self._cached_shards.get(id(param_tensor))
             if shard is not None:
                 param_tensor.set_value(shard)
@@ -253,7 +253,8 @@ class FSDPState:
         """
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
-            current = param_tensor.get_value()
+            # NATIVE: gather the shard in the dtype it is stored in, so swapping the gathered value in keeps it.
+            current = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             self._cached_shards[id(param_tensor)] = current
             gathered = ttml.core.distributed.all_gather(current, shard_dim, self.axis_index)
             param_tensor.set_value(gathered)
@@ -292,7 +293,7 @@ class FSDPState:
             shard = self._cached_shards.get(id(param_tensor))
             if shard is None:
                 raise RuntimeError("FSDP: managed parameter has no cached shard. This should never happen.")
-            gathered = param_tensor.get_value()
+            gathered = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             param_tensor.set_value(shard)
             ttnn.deallocate(gathered)
 

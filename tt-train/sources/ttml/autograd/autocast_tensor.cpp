@@ -4,6 +4,8 @@
 
 #include "autocast_tensor.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 #include "core/tt_tensor_utils.hpp"
 
 namespace ttml::autograd {
@@ -32,16 +34,8 @@ bool is_float_dtype(ttnn::DataType dtype) {
     return dtype == ttnn::DataType::FLOAT32 || dtype == ttnn::DataType::BFLOAT16;
 }
 
-const char *precision_name(PreferredPrecision precision) {
-    switch (precision) {
-        case PreferredPrecision::HALF: return "HALF";
-        case PreferredPrecision::FULL: return "FULL";
-        case PreferredPrecision::NATIVE: return "NATIVE";
-    }
-    return "unknown";
-}
-
-void reset_state(detail::AutocastState &state, const ttnn::Tensor &tensor) {
+// Takes the tensor by value: it may be a reference into this state, e.g. set_tensor(get_tensor(FULL)).
+void reset_state(detail::AutocastState &state, ttnn::Tensor tensor) {
     state.native = tensor;
     state.derived = ttnn::Tensor();
     // Non-float tensors (e.g. UINT32 embedding indices) count as FULL and are returned as stored for every
@@ -78,6 +72,14 @@ AutocastTensor::AutocastTensor() : m_state(std::make_shared<detail::AutocastStat
 
 AutocastTensor::AutocastTensor(const ttnn::Tensor &tensor) : m_state(std::make_shared<detail::AutocastState>()) {
     reset_state(*m_state, tensor);
+}
+
+AutocastTensor::AutocastTensor(AutocastTensor &&other) noexcept : m_state(other.m_state) {
+}
+
+AutocastTensor &AutocastTensor::operator=(AutocastTensor &&other) noexcept {
+    m_state = other.m_state;
+    return *this;
 }
 
 void AutocastTensor::set_tensor(const ttnn::Tensor &tensor) {
@@ -118,8 +120,8 @@ const ttnn::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_prec
     TT_FATAL(
         !state.write_in_progress,
         "Reading the {} view while the {} tensor is being written in place would return stale values",
-        precision_name(preferred_precision),
-        precision_name(state.native_precision));
+        enchantum::to_string(preferred_precision),
+        enchantum::to_string(state.native_precision));
 
     const auto dtype =
         preferred_precision == PreferredPrecision::HALF ? ttnn::DataType::BFLOAT16 : ttnn::DataType::FLOAT32;
@@ -127,8 +129,13 @@ const ttnn::Tensor &AutocastTensor::get_tensor(PreferredPrecision preferred_prec
         state.derived = ttnn::typecast(state.native, dtype);
         state.derived_version = native_version();
     } else if (state.derived_version != native_version()) {
-        // Refresh into the existing buffer: no allocation, and the buffer address stays the same.
-        ttnn::typecast(state.native, dtype, std::nullopt, state.derived);
+        if (state.native.storage_type() == ttnn::StorageType::DEVICE) {
+            // Refresh into the existing buffer: no allocation, and the buffer address stays the same.
+            ttnn::typecast(state.native, dtype, std::nullopt, state.derived);
+        } else {
+            // ttnn has no in-place typecast for host tensors.
+            state.derived = ttnn::typecast(state.native, dtype);
+        }
         state.derived_version = native_version();
     }
     return state.derived;
@@ -139,11 +146,15 @@ MutableTensorView AutocastTensor::get_value_for_update(PreferredPrecision precis
     TT_FATAL(
         precision == PreferredPrecision::NATIVE || precision == state.native_precision,
         "In-place updates must target the native precision ({}), got {}",
-        precision_name(state.native_precision),
-        precision_name(precision));
+        enchantum::to_string(state.native_precision),
+        enchantum::to_string(precision));
     TT_FATAL(!state.write_in_progress, "The tensor is already being written in place");
     state.write_in_progress = true;
     return MutableTensorView(m_state);
+}
+
+std::optional<ttnn::Tensor> optional_tensor(const std::optional<MutableTensorView> &view) {
+    return view ? std::optional<ttnn::Tensor>(view->tensor()) : std::nullopt;
 }
 
 }  // namespace ttml::autograd

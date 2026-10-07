@@ -5,6 +5,10 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
@@ -52,7 +56,20 @@ Parameter make_parameter(ttnn::DataType dtype) {
     return {autograd::create_tensor(value, /* requires_grad */ true), core::from_xtensor(g0, device)};
 }
 
-// Fused optimizers update a bf16 parameter in place. A FULL view read before the step must show the
+// The tensors in an optimizer's state, such as its moments or momentum buffers, by "<entry>/<parameter>".
+std::vector<std::pair<std::string, autograd::TensorPtr>> state_tensors(const optimizers::OptimizerBase& optimizer) {
+    std::vector<std::pair<std::string, autograd::TensorPtr>> tensors;
+    for (const auto& [key, value] : optimizer.get_state_dict()) {
+        if (const auto* named = std::get_if<serialization::NamedParameters>(&value)) {
+            for (const auto& [name, tensor] : *named) {
+                tensors.emplace_back(key + "/" + name, tensor);
+            }
+        }
+    }
+    return tensors;
+}
+
+// Fused optimizers update a bf16 parameter and their state in place. A FULL view read before a step must show the
 // updated values afterwards.
 template <typename Optimizer, typename Config>
 void expect_full_view_tracks_fused_step(const Config& config) {
@@ -73,6 +90,23 @@ void expect_full_view_tracks_fused_step(const Config& config) {
     // bf16 -> fp32 is lossless, so the FULL view must equal the stored value exactly.
     const auto full_after = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::FULL));
     EXPECT_TRUE(full_after == native_after) << "the FULL view is stale after an in-place step";
+
+    // The optimizer's state is written in place too. The first step created all of it (SGD allocates its momentum
+    // buffer then), so read each state tensor's FULL view, step again, and check that every view followed.
+    const auto state = state_tensors(optimizer);
+    std::vector<xt::xarray<float>> state_before;
+    for (const auto& [name, tensor] : state) {
+        (void)tensor->get_value(autograd::PreferredPrecision::FULL);
+        state_before.push_back(core::to_xtensor(tensor->get_value(autograd::PreferredPrecision::NATIVE)));
+    }
+    optimizer.step();
+    for (std::size_t i = 0; i < state.size(); ++i) {
+        const auto& [name, tensor] = state[i];
+        const auto native = core::to_xtensor(tensor->get_value(autograd::PreferredPrecision::NATIVE));
+        ASSERT_FALSE(native == state_before[i]) << name << ": the step did not change the state tensor";
+        EXPECT_TRUE(core::to_xtensor(tensor->get_value(autograd::PreferredPrecision::FULL)) == native)
+            << name << ": the FULL view is stale after an in-place step";
+    }
 }
 
 }  // namespace
@@ -275,6 +309,32 @@ TEST_F(AutogradTensorTest, AutocastTensorSetTensorKeepsHeldReferencesValid) {
     EXPECT_TRUE(all_equal(held, 4.0F)) << "a reference returned by get_tensor() no longer follows the tensor";
 }
 
+TEST_F(AutogradTensorTest, AutocastTensorSetTensorFromItsOwnDerivedView) {
+    auto tensor = autograd::AutocastTensor(filled(1.5F, ttnn::DataType::BFLOAT16));
+    tensor.set_tensor(tensor.get_tensor(autograd::PreferredPrecision::FULL));
+    const auto& native = tensor.get_tensor(autograd::PreferredPrecision::NATIVE);
+    EXPECT_EQ(native.dtype(), ttnn::DataType::FLOAT32);
+    EXPECT_TRUE(all_equal(native, 1.5F));
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorMovedFromStaysUsable) {
+    auto original = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::BFLOAT16));
+    auto moved = std::move(original);
+    original.set_tensor(filled(3.0F, ttnn::DataType::BFLOAT16));  // NOLINT(bugprone-use-after-move)
+    EXPECT_TRUE(all_equal(original.get_tensor(autograd::PreferredPrecision::NATIVE), 3.0F));
+    EXPECT_TRUE(all_equal(moved.get_tensor(autograd::PreferredPrecision::NATIVE), 1.0F));
+}
+
+TEST_F(AutogradTensorTest, AutocastTensorRefreshesHostTensor) {
+    auto tensor = autograd::AutocastTensor(filled(1.0F, ttnn::DataType::BFLOAT16).cpu());
+    (void)tensor.get_tensor(autograd::PreferredPrecision::FULL);
+    {
+        // A write that leaves the values as they are: the next read takes the refresh path.
+        auto view = tensor.get_value_for_update();
+    }
+    EXPECT_TRUE(all_equal(tensor.get_tensor(autograd::PreferredPrecision::FULL), 1.0F));
+}
+
 TEST_F(AutogradTensorTest, FullViewTracksFusedAdamWStep) {
     optimizers::AdamWConfig config;
     config.lr = 1e-2F;
@@ -354,4 +414,20 @@ TEST_F(AutogradTensorTest, MasterWeightHalfViewTracksAdamWFullPrecisionStep) {
     const auto expected_half = core::to_xtensor(ttnn::typecast(native, ttnn::DataType::BFLOAT16));
     const auto half_after = core::to_xtensor(master->get_value(autograd::PreferredPrecision::HALF));
     EXPECT_TRUE(half_after == expected_half) << "the bf16 view of the master weight is stale after an in-place step";
+}
+
+// Stochastic rounding applies to bf16 parameters only; an fp32 parameter is updated without it.
+TEST_F(AutogradTensorTest, FusedAdamWWithStochasticRoundingUpdatesFp32Parameter) {
+    auto [theta, grad] = make_parameter(ttnn::DataType::FLOAT32);
+    const auto native_before = core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE));
+
+    theta->set_grad(grad);
+    optimizers::AdamWConfig config;
+    config.lr = 1e-2F;
+    config.stochastic_rounding = true;
+    optimizers::AdamW optimizer(serialization::NamedParameters{{"theta", theta}}, config);
+    optimizer.step();
+
+    EXPECT_FALSE(core::to_xtensor(theta->get_value(autograd::PreferredPrecision::NATIVE)) == native_before)
+        << "the step did not change the stored fp32 value";
 }

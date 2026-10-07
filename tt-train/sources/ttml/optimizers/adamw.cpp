@@ -93,13 +93,17 @@ void AdamW::step() {
         if (m_config.weight_decay_skip_1d && is_effectively_1d(param.tensor())) {
             weight_decay = 0.0F;
         }
+        // Stochastic rounding recovers updates that bf16 storage would lose; an fp32 parameter doesn't lose them,
+        // and the kernel supports it for bf16 parameters only.
+        const bool stochastic_rounding =
+            m_config.stochastic_rounding && param.tensor().dtype() == ttnn::DataType::BFLOAT16;
 
         ttml::metal::adamw(
             param.tensor(),
             gradients,
             exp_avg.tensor(),
             exp_avg_sq.tensor(),
-            max_exp_avg_sq ? std::optional<ttnn::Tensor>(max_exp_avg_sq->tensor()) : std::nullopt,
+            autograd::optional_tensor(max_exp_avg_sq),
             m_config.lr,
             m_config.beta1,
             m_config.beta2,
@@ -107,10 +111,9 @@ void AdamW::step() {
             m_beta2_pow,
             m_config.epsilon,
             weight_decay,
-            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding),
-            m_config.stochastic_rounding
-                ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
-                : std::nullopt);
+            static_cast<ttml::metal::StochasticRounding>(stochastic_rounding),
+            stochastic_rounding ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
+                                : std::nullopt);
     }
 }
 

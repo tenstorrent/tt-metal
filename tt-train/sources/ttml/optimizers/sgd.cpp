@@ -80,7 +80,7 @@ void SGD::step() {
             dampening,
             m_config.weight_decay,
             m_config.nesterov,
-            momentum_buffer ? std::optional<ttnn::Tensor>(momentum_buffer->tensor()) : std::nullopt);
+            autograd::optional_tensor(momentum_buffer));
     }
     m_steps++;
 }

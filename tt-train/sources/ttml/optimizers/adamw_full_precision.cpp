@@ -88,7 +88,7 @@ void AdamWFullPrecision::step() {
             gradients,
             exp_avg.tensor(),
             exp_avg_sq.tensor(),
-            max_exp_avg_sq ? std::optional<ttnn::Tensor>(max_exp_avg_sq->tensor()) : std::nullopt,
+            autograd::optional_tensor(max_exp_avg_sq),
             m_config.lr,
             m_config.beta1,
             m_config.beta2,

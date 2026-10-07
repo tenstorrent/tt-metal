@@ -80,8 +80,9 @@ void RemoteOptimizer::send_gradients() {
 void RemoteOptimizer::receive_weights() {
     auto& socket_manager = autograd::ctx().get_socket_manager();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
-        // The weights are received straight into the parameter's buffer.
-        auto param = tensor_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+        // The weights are received straight into the parameter's buffer, in the dtype it is stored in. That covers
+        // frozen fp32 and non-float tensors too, which the bf16 check skips.
+        auto param = tensor_ptr->get_value_for_update();
         (void)socket_manager.recv(param.tensor(), m_distributed_ctx, m_aggregator_rank);
     }
 }
