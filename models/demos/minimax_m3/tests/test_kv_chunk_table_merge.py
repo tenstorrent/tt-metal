@@ -31,6 +31,21 @@ STAGE_COUNTS = (2, 3)  # layers per stage; global total 5
 NUM_BANKS = 8
 
 
+@pytest.mark.parametrize("alias", [None, "", "   ", "galaxy-prefill", " galaxy-decode "])
+def test_colocated_table_host_identity(monkeypatch, alias):
+    import zlib
+
+    from models.demos.common.prefill.runners import migration
+
+    monkeypatch.setattr(migration.socket, "gethostname", lambda: "physical-galaxy")
+    if alias is None:
+        monkeypatch.delenv("TT_MIGRATION_TABLE_HOST", raising=False)
+    else:
+        monkeypatch.setenv("TT_MIGRATION_TABLE_HOST", alias)
+    name = (alias or "").strip() or "physical-galaxy"
+    assert migration._host_tag_int() == zlib.crc32(name.encode()) & 0x7FFFFFFF
+
+
 def _fnids(mesh_id):
     return [[ttnn.FabricNodeId(ttnn.MeshId(mesh_id), r * COLS + c) for c in range(COLS)] for r in range(SP)]
 
@@ -90,6 +105,36 @@ def _build(tmp_path, stage_layouts, index_k_layers=None):
         stage_layouts=stage_layouts,
         index_k_layers=index_k_layers,
     )
+
+
+def test_single_rank_uses_kvm_hashed_host_identity(tmp_path, monkeypatch):
+    import zlib
+
+    name = "galaxy-prefill"
+    monkeypatch.setenv("TT_MIGRATION_TABLE_HOST", name)
+    cache = _stub_cache(STAGE_COUNTS[0])
+    for i, tensor in enumerate((cache.k, cache.v, cache.index_k)):
+        tensor.buffer_address = lambda i=i: _base(0, i)
+    nodes = _fnids(0)
+    mesh = SimpleNamespace(get_fabric_node_id=lambda coord: nodes[coord[0]][coord[1]])
+    path = tmp_path / "single.pb"
+    build_and_serialize_kv_chunk_table(
+        mesh_device=mesh,
+        kv_cache=cache,
+        seq_len=SEQ_LEN,
+        num_layers=STAGE_COUNTS[0],
+        mesh_shape=(SP, COLS),
+        sp_axis=0,
+        num_users=NUM_USERS,
+        chunk_size=CHUNK_SIZE,
+        num_kv_heads=COLS,
+        head_dim=HEAD_DIM,
+        path=str(path),
+    )
+    # KVM hashes KV_MANAGER_TABLE_HOST into this string before selecting its local table.
+    expected = f"host-{zlib.crc32(name.encode()) & 0x7FFFFFFF:08x}"
+    assert expected.encode() in path.read_bytes()
+    assert name.encode() not in path.read_bytes()
 
 
 @pytest.fixture(scope="module")
