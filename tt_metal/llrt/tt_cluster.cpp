@@ -86,9 +86,11 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
 }  // namespace
 namespace tt {
 
-std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir) {
+std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch) {
+    // Open every chip UMD discovery finds for wh/bh.
+    const bool umd_discovers_topology = simulator_dir.extension() == ".so" && arch != tt::ARCH::QUASAR;
     std::error_code error;  // An unreadable directory counts as no layout, rather than throwing.
-    if (std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
+    if (umd_discovers_topology || std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
         return {};
     }
     return {0};
@@ -457,7 +459,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path()),
+                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path(), this->arch_),
                 .simulator_directory = rtoptions_.get_simulator_path(),
                 .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
