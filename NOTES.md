@@ -9,9 +9,10 @@ PCC/PSNR (from #232 kp1 host-noise decodes, vs ref in blx01 /var/tmp/fasth3/diff
 seed0 0.999957/55.60  seed1 0.999958/55.16  seed2 0.999956/55.08  seed3 0.999957/55.77  seed4 0.999954/55.28 dB
 Timing: kp1 4.494 s vs kp0 4.931 s (#232). Default env (job 868): 4.487 / 4.484 s, key_phase_applies=True.
 
-In flight:
-- blx01 driver /var/tmp/fasth3/t235/drv (job 868 done rc 0); marker drv/driver.marker (md5 def vs t232 kp1 seeds 0,1).
-- g15 VBench: tmp/t235/local.sh detached as t235local (run dir 948); marker data/g15/t235/LOCAL.done, eval in data/g15/t235/eval.
-
-Next: read the marker and the VBench BATCH line (vbench vs vbench_ref), look at eval/seed*_cmp_f*.png;
-if it matches, `ttp push --detach` from ttp/t235-land; then remove blx01 /var/tmp/fasth3/t232 and t235 (ov, ov0, yuv, mp4).
+Result (2026-10-07):
+- Default-env decode (blx01 job 868, rc 0): seeds 0,1 byte-identical (md5) to #232 kp1.
+- VBench (5 seeds, x264 crf12 mp4, vs unoptimized ref): subject 0.8959/0.8959, background 0.9223/0.9222,
+  imaging 0.5489/0.5489, aesthetic 0.6206/0.6202, motion 0.98594/0.98593. mp4-level PSNR 45.98 dB mean.
+- Visuals: eval/seed*_cmp_f{000,072,144}.png, difference panels near black, no seams.
+  Evidence: tt-project/data/g15/t235/{kp1,ref,eval}, eval.log BATCH OK line.
+- Decision: key phase on by default. Landed on ttp/t48-ltx25-integrated via ttp push.
