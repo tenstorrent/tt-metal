@@ -437,6 +437,7 @@ void add_fabric_mux_v2_to_program(
     uint32_t link_idx,
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
+// Experimental and subject to change: these overloads carry no API-stability guarantee.
 // ProgramDescriptor variants of the two functions above, for ops built with ProgramDescriptor /
 // WorkloadDescriptor.
 void add_fabric_mux_v2_to_program(
