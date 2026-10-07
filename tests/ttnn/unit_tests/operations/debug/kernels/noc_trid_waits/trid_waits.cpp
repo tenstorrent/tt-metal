@@ -10,6 +10,8 @@
 // MODE 1: noc_async_write_barrier_with_trid  - NIU_MST_REQS_OUTSTANDING_ID(trid) must be 0.
 // MODE 2: noc_async_write_flushed_with_trid  - NIU_MST_WRITE_REQS_OUTGOING_ID(trid) must be 0.
 // IMPL 0: the API; IMPL 1: the counter poll the API used before it waited on noc_cmd_buf_ready().
+// ISSUE (writes only) 0: noc_async_write_one_packet_with_trid(); 1: ncrisc_noc_fast_write with
+// update_counter=false, so the NOC_CMD_CTRL store is the last thing before the wait.
 //
 // Scratch layout (same L1 address on both cores): [0, 16 KB) local buffer, [16, 32 KB) remote buffer
 // (host-filled with word index i at word i), result words at +32 KB.
@@ -32,6 +34,7 @@ void kernel_main() {
     constexpr uint32_t MODE = get_compile_time_arg_val(1);
     constexpr uint32_t IMPL = get_compile_time_arg_val(2);
     constexpr uint32_t BYTES = get_compile_time_arg_val(3);
+    constexpr uint32_t ISSUE = get_compile_time_arg_val(4);
     const uint32_t base = get_arg_val<uint32_t>(0);
     const uint32_t remote_x = get_arg_val<uint32_t>(1);
     const uint32_t remote_y = get_arg_val<uint32_t>(2);
@@ -68,7 +71,24 @@ void kernel_main() {
                 noc_async_read_barrier();
             }
         } else {
-            noc_async_write_one_packet_with_trid(local, get_noc_addr(remote_x, remote_y, local), BYTES, TRID);
+            if constexpr (ISSUE == 0) {
+                noc_async_write_one_packet_with_trid(local, get_noc_addr(remote_x, remote_y, local), BYTES, TRID);
+            } else {
+                while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
+                ncrisc_noc_fast_write<noc_mode, true /* use_trid */, false /* update_counter */>(
+                    noc_index,
+                    write_cmd_buf,
+                    local,
+                    get_noc_addr(remote_x, remote_y, local),
+                    BYTES,
+                    NOC_UNICAST_WRITE_VC,
+                    false,  // mcast
+                    false,  // linked
+                    1,      // num_dests
+                    true,   // multicast_path_reserve
+                    false,  // posted
+                    TRID);
+            }
             if constexpr (MODE == 1) {
                 if constexpr (IMPL == 0) {
                     noc_async_write_barrier_with_trid(TRID);
@@ -92,7 +112,12 @@ void kernel_main() {
                     early++;
                 }
             }
-            noc_async_write_barrier();
+            if constexpr (ISSUE == 0) {
+                noc_async_write_barrier();
+            } else {
+                // Uncounted writes: the software counters don't include them, so drain by trid.
+                noc_async_write_barrier_with_trid(TRID);
+            }
         }
     }
     result[0] = ITERS;

@@ -25,7 +25,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def run_trid_waits(device, mode, impl, iters=20000, nbytes=4096):
+def run_trid_waits(device, mode, impl, iters=20000, nbytes=4096, uncounted_issue=False):
     """Returns (iterations, early returns) for one wait under test."""
     local, remote = ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0)
     cores = ttnn.CoreRangeSet([ttnn.CoreRange(local, remote)])
@@ -49,7 +49,7 @@ def run_trid_waits(device, mode, impl, iters=20000, nbytes=4096):
         kernel_source=KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(local, local)]),
-        compile_time_args=[iters, MODES[mode], IMPLS[impl], nbytes],
+        compile_time_args=[iters, MODES[mode], IMPLS[impl], nbytes, int(uncounted_issue)],
         runtime_args=runtime_args,
         config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1),
     )
@@ -60,15 +60,35 @@ def run_trid_waits(device, mode, impl, iters=20000, nbytes=4096):
     return iters, early
 
 
-@pytest.mark.parametrize("mode", list(MODES))
-def test_noc_trid_waits_do_not_return_early(device, mode):
-    iters, early = run_trid_waits(device, mode, "api")
+@pytest.mark.parametrize(
+    "mode, uncounted_issue",
+    [
+        ("read_barrier", False),
+        ("write_barrier", False),
+        ("write_barrier", True),
+        ("write_flushed", False),
+        ("write_flushed", True),
+    ],
+)
+def test_noc_trid_waits_do_not_return_early(device, mode, uncounted_issue):
+    iters, early = run_trid_waits(device, mode, "api", uncounted_issue=uncounted_issue)
     assert early == 0, f"{mode}: returned before the transaction finished in {early} of {iters} iterations"
 
 
-def test_unordered_trid_read_barrier_returns_early(device):
-    # The read barrier as it was before this fix: poll NIU_MST_REQS_OUTSTANDING_ID(trid) straight after
-    # issuing. The counter read overtakes the NOC_CMD_CTRL store and the barrier returns before the data
-    # has landed. This also proves the detector works for test_noc_trid_waits_do_not_return_early.
-    iters, early = run_trid_waits(device, "read_barrier", "unordered_poll")
-    assert early > 0, f"the unordered counter poll never returned early in {iters} iterations"
+@pytest.mark.parametrize(
+    "mode, uncounted_issue",
+    [
+        ("read_barrier", False),
+        # The write issue wrapper updates the software counters after writing NOC_CMD_CTRL, which in
+        # practice gives the store time to drain; issuing without counter updates (as manually tracked
+        # trid writes do) puts the counter poll right behind the store, like the read path.
+        ("write_barrier", True),
+        ("write_flushed", True),
+    ],
+)
+def test_unordered_trid_wait_returns_early(device, mode, uncounted_issue):
+    # The waits as they were before this fix: poll the per-trid counter straight after issuing. The
+    # counter read overtakes the NOC_CMD_CTRL store and the wait returns before the transaction is
+    # counted. This also proves the detector works for test_noc_trid_waits_do_not_return_early.
+    iters, early = run_trid_waits(device, mode, "unordered_poll", uncounted_issue=uncounted_issue)
+    assert early > 0, f"{mode}: the unordered counter poll never returned early in {iters} iterations"
