@@ -107,7 +107,7 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_in(dfb_in_id);
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    DataflowBuffer& dfb_xmm = dfb_in;
+    auto& dfb_xmm = dfb_in;
 #else
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 #endif

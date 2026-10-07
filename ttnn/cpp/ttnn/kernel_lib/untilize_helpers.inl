@@ -86,8 +86,8 @@ struct UntilizeDispatchConfig {
         use_block_based_pack_path ? (block_width_tiles / num_sub_blocks) : block_width_tiles;
 };
 
-template <untilize_config::WaitMode wait_mode>
-ALWI void untilize_wait_for_block(DataflowBuffer& in_dfb, const uint32_t tile_count) {
+template <untilize_config::WaitMode wait_mode, typename DFB>
+ALWI void untilize_wait_for_block(DFB& in_dfb, const uint32_t tile_count) {
     if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
         in_dfb.wait_front(tile_count);
     }

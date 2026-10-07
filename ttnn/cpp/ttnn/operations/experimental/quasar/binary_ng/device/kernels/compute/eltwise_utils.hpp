@@ -16,13 +16,9 @@
 // so we can briefly retarget the packer at cb_post and then restore it to cb_out's
 // data format on the way out. SrcA switches from and returns to the physical-LHS
 // format established by startup, not necessarily cb_post's format.
-template <typename ActivationFn>
+template <typename DFBPre, typename DFBPost, typename DFBOut, typename ActivationFn>
 ALWI void preprocess_fpu_impl(
-    DataflowBuffer cb_pre,
-    DataflowBuffer cb_post,
-    DataflowBuffer cb_out,
-    uint32_t per_core_block_size,
-    ActivationFn&& process_activations) {
+    DFBPre cb_pre, DFBPost cb_post, DFBOut cb_out, uint32_t per_core_block_size, ActivationFn&& process_activations) {
     using namespace ckernel;
 
     reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_CB, /*new*/ cb_pre.get_id());

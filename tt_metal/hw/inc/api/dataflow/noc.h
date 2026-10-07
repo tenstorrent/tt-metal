@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/buf_rw_note.h"
+#include "api/dataflow/dfb_access.h"
 #include "internal/debug/noc_zero_guard.h"
 #include "noc_address_backend.h"
 template <typename DSpecT>
@@ -14,7 +15,6 @@ class TensorAccessor;
 struct UnicastEndpoint;
 struct MulticastEndpoint;
 class CircularBuffer;
-class DataflowBuffer;
 
 // Concrete arg struct for the DFB-specific Noc overloads.
 // Defined here so noc.h can use it in async_read/async_write specializations defined in
@@ -838,11 +838,10 @@ public:
      * via its private prepare/commit helpers.
      * Size of the read is not accepted here because the DataflowBuffer provides parameters for the read internally.
      */
-    template <NocOptions opts, typename Src>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_read(
+    template <NocOptions opts, typename Src, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_read(
         const Src& src,
-        DataflowBuffer& dst,
+        DataflowBuffer<Pap, Cap>& dst,
         const src_args_t<Src>& src_args,
         const DataflowBufferArgs& dst_args = {}) const;
 
@@ -854,10 +853,9 @@ public:
      * via its private prepare/commit helpers.
      * Size of the write is not accepted here because the DataflowBuffer provides parameters for the write internally.
      */
-    template <NocOptions opts, typename Dst>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_write(
-        DataflowBuffer& src,
+    template <NocOptions opts, typename Dst, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_write(
+        DataflowBuffer<Pap, Cap>& src,
         const Dst& dst,
         const DataflowBufferArgs& src_args,
         const dst_args_t<Dst>& dst_args) const;

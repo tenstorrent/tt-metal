@@ -11,9 +11,9 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <typename Accessor>
+template <typename Accessor, typename DFB>
 FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
+    Noc& noc, const Accessor& accessor, DFB& buffer, uint32_t page, uint32_t tiles) {
     for (uint32_t tile = 0; tile < tiles; tile++) {
         noc.async_read(
             accessor,
@@ -44,7 +44,7 @@ TT_KERNEL void dataflow(uint32_t head) {
     DataflowBuffer out(dfb::out);
     Noc noc;
 
-    const auto write_state = [&](DataflowBuffer& source, const auto& destination) {
+    const auto write_state = [&](auto& source, const auto& destination) {
         const uint32_t tile_bytes = source.get_entry_size();
         for (uint32_t tile = 0; tile < state_tiles; ++tile) {
             noc.async_write(

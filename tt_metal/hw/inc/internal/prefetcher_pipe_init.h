@@ -237,11 +237,11 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     local.tc_idx = 0;
     if (local.num_tcs_to_rr == 1) {
         local.stride_size = relay_entry_size;  // 1-entry stride in bytes
+        local.jump = local.stride_size;        // plain ring: the DM cursor jump equals the stride
         DFBTCSlot& slot = local.tc_slots[0];
         slot.base_addr = fifo_start_addr;
         slot.limit = fifo_limit_page_aligned;
-        slot.rd_ptr = next_fifo_rd_ptr;
-        slot.wr_ptr = next_fifo_rd_ptr;
+        slot.ptr = next_fifo_rd_ptr;
     } else {
         ASSERT(local.stride_size != 0);
         ASSERT(local.stride_size % relay_entry_size == 0);
@@ -259,8 +259,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
             if (ptr == next_fifo_rd_ptr) {
                 local.tc_idx = t;
             }
-            slot.rd_ptr = ptr;
-            slot.wr_ptr = ptr;
+            slot.ptr = ptr;
         }
     }
 #endif
@@ -338,11 +337,11 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     local.tc_idx = 0;
     if (local.num_tcs_to_rr == 1) {
         local.stride_size = relay_entry_size;
+        local.jump = local.stride_size;  // plain ring: the DM cursor jump equals the stride
         DFBTCSlot& slot = local.tc_slots[0];
         slot.base_addr = iface.fifo_start_addr;
         slot.limit = iface.fifo_limit_page_aligned;
-        slot.rd_ptr = iface.fifo_rd_ptr;
-        slot.wr_ptr = iface.fifo_rd_ptr;
+        slot.ptr = iface.fifo_rd_ptr;
     } else {
         // Snap each TC to the first relay entry it owns at or after the cursor; the TC that owns the
         // cursor's entry takes the next push.
@@ -362,8 +361,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
             if (ptr == iface.fifo_rd_ptr) {
                 local.tc_idx = t;
             }
-            slot.rd_ptr = ptr;
-            slot.wr_ptr = ptr;
+            slot.ptr = ptr;
         }
     }
 #else

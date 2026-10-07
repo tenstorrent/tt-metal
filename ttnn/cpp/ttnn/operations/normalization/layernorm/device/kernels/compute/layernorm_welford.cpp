@@ -101,10 +101,10 @@ void kernel_main() {
     // when there is gamma or beta to fold in, otherwise the output buffer directly.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     constexpr auto dfb_im_or_out = dfb_fusion;
-    DataflowBuffer& dfb_im_or_out_obj = dfb_fusion_obj;
+    auto& dfb_im_or_out_obj = dfb_fusion_obj;
 #else
     constexpr auto dfb_im_or_out = dfb_out;
-    DataflowBuffer& dfb_im_or_out_obj = dfb_out_obj;
+    auto& dfb_im_or_out_obj = dfb_out_obj;
 #endif
 
     //  Either in or in + b if doing fused pre-add
@@ -113,7 +113,7 @@ void kernel_main() {
     DataflowBuffer dfb_x_obj(dfb_x);
 #else
     constexpr auto dfb_x = dfb_in;
-    DataflowBuffer& dfb_x_obj = dfb_in_obj;
+    auto& dfb_x_obj = dfb_in_obj;
 #endif
 
     // Welford-fp32 alias of dfb_x. Shares SRAM with dfb_x but has its own buffer index
@@ -127,7 +127,7 @@ void kernel_main() {
 #else
     constexpr bool welford_fp32_alias = false;
     constexpr auto dfb_x_welford = dfb_x;
-    DataflowBuffer& dfb_x_welford_obj = dfb_x_obj;
+    auto& dfb_x_welford_obj = dfb_x_obj;
 #endif
 
 #ifdef COMPACT_FP32_FINALIZER
@@ -138,8 +138,8 @@ void kernel_main() {
 #else
     constexpr auto dfb_ex_welford = dfb_ex;
     constexpr auto dfb_ex2pe_fp32 = dfb_ex2pe;
-    DataflowBuffer& dfb_ex_welford_obj = dfb_ex_obj;
-    DataflowBuffer& dfb_ex2pe_fp32_obj = dfb_ex2pe_obj;
+    auto& dfb_ex_welford_obj = dfb_ex_obj;
+    auto& dfb_ex2pe_fp32_obj = dfb_ex2pe_obj;
 #endif
 
     constexpr uint32_t dst0 = 0;
@@ -503,10 +503,10 @@ void kernel_main() {
                 // added, and straight to the output otherwise.
 #ifdef FUSE_BETA
                 constexpr auto dfb_outg = dfb_fusion;
-                DataflowBuffer& dfb_outg_obj = dfb_fusion_obj;
+                auto& dfb_outg_obj = dfb_fusion_obj;
 #else
                 constexpr auto dfb_outg = dfb_out;
-                DataflowBuffer& dfb_outg_obj = dfb_out_obj;
+                auto& dfb_outg_obj = dfb_out_obj;
 #endif
                 mul_bcast_rows_init(dfb_fusion, dfb_gamma);
                 if (ncht == 0) {

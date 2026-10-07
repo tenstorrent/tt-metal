@@ -160,7 +160,9 @@ public:
                                                              uint16_t logical_dfb_id,
                                                              bool is_relay,
                                                              uint8_t prefetcher_pipe_id,
-                                                             const std::optional<LLKMetadata>&)>&) const {}
+                                                             const std::optional<LLKMetadata>&,
+                                                             uint8_t pap,
+                                                             uint8_t cap)>&) const {}
     virtual void process_semaphore_binding_handles(
         std::function<
             // NOLINTNEXTLINE(performance-unnecessary-value-param)

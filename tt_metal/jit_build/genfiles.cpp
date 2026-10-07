@@ -130,6 +130,16 @@ bool write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings
     return true;
 }
 
+// DFBBindingToken template argument for a dfb::AccessPattern code (STRIDED 0, ALL 1, BLOCKED 2).
+const char* dfb_access_name(uint8_t code) {
+    switch (code) {
+        case 0: return "dfb::AccessPattern::STRIDED";
+        case 1: return "dfb::AccessPattern::ALL";
+        case 2: return "dfb::AccessPattern::BLOCKED";
+        default: TT_THROW("Unknown DFB access pattern code {}", code);
+    }
+}
+
 /**
  * Emit get_token_if_present() helper for a given binding type.
  *
@@ -218,6 +228,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         bool is_relay;
         uint8_t prefetcher_pipe_id;
         std::optional<LLKMetadata> metadata;
+        uint8_t pap;
+        uint8_t cap;
     };
     vector<DfbEntry> dfb_entries;
     settings.process_dataflow_buffer_binding_handles(
@@ -226,8 +238,10 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             uint16_t id,
             bool is_relay,
             uint8_t prefetcher_pipe_id,
-            const std::optional<LLKMetadata>& metadata) {
-            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata});
+            const std::optional<LLKMetadata>& metadata,
+            uint8_t pap,
+            uint8_t cap) {
+            dfb_entries.push_back({name, id, is_relay, prefetcher_pipe_id, metadata, pap, cap});
         });
     sort(dfb_entries.begin(), dfb_entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
 
@@ -356,7 +370,8 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // the headers that define those token types are omitted, but the empty getter still returns
     // const BindingTokenType*{nullptr} and needs those types in scope.
     if (dfb_entries.empty()) {
-        content << "struct DFBBindingToken;\n";
+        // DFBBindingToken is a template (pattern pair), so it cannot be forward-declared here.
+        content << "#include \"api/dataflow/dfb_binding_token.h\"\n";
     }
     if (scratch_entries.empty()) {
         content << "struct ScratchpadBindingToken;\n";
@@ -374,15 +389,21 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
                 content << ", " << static_cast<uint32_t>(entry.prefetcher_pipe_id);
             }
             content << "};\n";
-        } else if (entry.metadata.has_value()) {
-            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << ", ";
-            content << serialize_llk_metadata(*entry.metadata);
-            content << "};\n";
         } else {
-            content << "constexpr DFBBindingToken " << entry.name << "{" << entry.id << "};\n";
+            // Both sides' access patterns ride on the token so the device DataflowBuffer can
+            // specialize on the pattern pair at compile time; LLK metadata, when the host set it,
+            // rides as the second constructor argument.
+            content << "constexpr DFBBindingToken<" << dfb_access_name(entry.pap) << ", " << dfb_access_name(entry.cap)
+                    << "> " << entry.name << "{" << entry.id;
+            if (entry.metadata.has_value()) {
+                content << ", ";
+                content << serialize_llk_metadata(*entry.metadata);
+            }
+            content << "};\n";
         }
     }
-    emit_programmatic_binding_token_getter(content, dfb_entries, "DFBBindingToken");
+    emit_programmatic_binding_token_getter(
+        content, dfb_entries, "DFBBindingToken<dfb::AccessPattern::UNKNOWN, dfb::AccessPattern::UNKNOWN>");
     content << "}  // namespace dfb\n";
 
     // Emit PrefetcherPipe bindings: one token per accessor, carrying the program slot id.
