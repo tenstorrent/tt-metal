@@ -187,12 +187,44 @@ class MiMoAttention:
             return torch.stack([row[i % self.ring_blocks] for i in range(self.nlog)]).to(torch.int32)
         return row[: self.nlog]
 
-    # ------------------------------------------------------------------ prefill (one chunk of one user per mesh row; same user index on all rows)
-    def prefill_chunk(self, x, chunk_start: int, user: int):
-        """x: [1,1,S,4096] bf16 TILE per device (replicated over columns). Returns [1,1,S,4096] (all-reduced over columns)."""
-        S = x.shape[-2]
-        assert chunk_start % 256 == 0 and S % 256 == 0 and chunk_start + S <= self.max_pos
-        mesh = self.mesh
+    # ------------------------------------------------------------------ host -> persistent device inputs (trace friendly)
+    def _host(self, t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep)
+
+    def _persist(self, t, dtype):
+        return ttnn.from_torch(t, device=self.mesh, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep)
+
+    def prefill_io(self, S: int):
+        """Persistent device tensors a prefill chunk of S tokens reads (update them with prefill_set before each call / trace replay)."""
+        assert S % 256 == 0
+        return dict(
+            S=S,
+            rope_idx=self._persist(torch.zeros(1, S, dtype=torch.int32), ttnn.uint32),
+            fill_pt=self._persist(torch.zeros(1, S // BLOCK, dtype=torch.int32), ttnn.int32),
+            sdpa_pt=self._persist(torch.zeros(1, self.nlog, dtype=torch.int32), ttnn.int32),
+            start=self._persist(torch.zeros(1, dtype=torch.int32), ttnn.int32),
+        )
+
+    def prefill_set(self, io, chunk_start: int, user: int):
+        S = io["S"]
+        assert chunk_start % 256 == 0 and chunk_start + S <= self.max_pos
+        full = self.logical_page_row(user)
+        nb0 = chunk_start // BLOCK
+        host = dict(
+            rope_idx=self._host(
+                torch.arange(chunk_start, chunk_start + S, dtype=torch.int32).reshape(1, S), ttnn.uint32
+            ),
+            fill_pt=self._host(full[nb0 : nb0 + S // BLOCK].reshape(1, -1).to(torch.int32), ttnn.int32),
+            sdpa_pt=self._host(full.reshape(1, -1).to(torch.int32), ttnn.int32),
+            start=self._host(torch.tensor([chunk_start], dtype=torch.int32), ttnn.int32),
+        )
+        for k, h in host.items():
+            ttnn.copy_host_to_device_tensor(h, io[k])
+
+    def prefill_chunk(self, x, io):
+        """x: [1,1,S,4096] bf16 TILE per device (replicated over columns). All position dependent state comes from `io` (device tensors), so the call
+        can be captured in a trace and replayed with prefill_set. Returns [1,1,S,4096] (all-reduced over columns)."""
+        S = io["S"]
         qkv = ttnn.linear(
             x, self.wqkv, dtype=ttnn.bfloat16, compute_kernel_config=_k_mm(), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -200,34 +232,20 @@ class MiMoAttention:
             qkv, num_heads=NQ // TP, num_kv_heads=1, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
-        cos = ttnn.slice(self.cos_tab, [0, 0, chunk_start, 0], [1, 1, chunk_start + S, DQK])
-        sin = ttnn.slice(self.sin_tab, [0, 0, chunk_start, 0], [1, 1, chunk_start + S, DQK])
+        cos = ttnn.reshape(ttnn.embedding(io["rope_idx"], self.cos_tab, layout=ttnn.TILE_LAYOUT), (1, 1, S, DQK))
+        sin = ttnn.reshape(ttnn.embedding(io["rope_idx"], self.sin_tab, layout=ttnn.TILE_LAYOUT), (1, 1, S, DQK))
         qr = self._rope(q, cos, sin)
         kr = self._rope(k, cos, sin)
         for t in (q, k, cos, sin):
             ttnn.deallocate(t)
-        full = self.logical_page_row(user)
-        nb0 = chunk_start // BLOCK
-        fill_pt = ttnn.from_torch(
-            full[nb0 : nb0 + S // BLOCK].reshape(1, -1),
-            device=mesh,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._rep,
-        )
-        ttnn.experimental.paged_fill_cache(self.k_cache, kr, fill_pt, batch_idx=0)
-        ttnn.experimental.paged_fill_cache(self.v_cache, v, fill_pt, batch_idx=0)
+        ttnn.experimental.paged_fill_cache(self.k_cache, kr, io["fill_pt"], batch_idx=0)
+        ttnn.experimental.paged_fill_cache(self.v_cache, v, io["fill_pt"], batch_idx=0)
         ttnn.deallocate(kr)
         ttnn.deallocate(v)
-        sdpa_pt = ttnn.from_torch(
-            full.reshape(1, -1), device=mesh, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep
-        )
-        kw = dict(program_config=self.pre_cfg, compute_kernel_config=_k_hifi2())
+        kw = dict(chunk_start_idx_tensor=io["start"], program_config=self.pre_cfg, compute_kernel_config=_k_hifi2())
         if self.cfg.window:
             kw.update(sliding_window_size=self.cfg.window, attention_sink=self.sink_pre)
-        o = ttnn.transformer.chunked_scaled_dot_product_attention(
-            qr, self.k_cache, self.v_cache, sdpa_pt, chunk_start, **kw
-        )
+        o = ttnn.transformer.chunked_scaled_dot_product_attention(qr, self.k_cache, self.v_cache, io["sdpa_pt"], **kw)
         ttnn.deallocate(qr)
         oc = ttnn.experimental.nlp_concat_heads(o, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1,1,S,8*192]
         ttnn.deallocate(o)
@@ -235,24 +253,25 @@ class MiMoAttention:
             oc, self.wo, dtype=ttnn.bfloat16, compute_kernel_config=_k_mm(), memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(oc)
-        out = self._all_reduce(part)
-        return out
+        return self._all_reduce(part)
 
     # ------------------------------------------------------------------ decode (32 user slots per row)
-    def decode_inputs(self, positions):
-        """positions: list/tensor of 32 ints (same on every row). Returns device tensors (cur_pos int32 RM [32], rope_idx uint32 RM [1,32])."""
+    def decode_io(self):
+        """Persistent decode inputs (cur_pos int32 RM [32], rope_idx uint32 RM [1,32]); refresh with decode_set."""
+        return dict(
+            cur=self._persist(torch.zeros(32, dtype=torch.int32), ttnn.int32),
+            idx=self._persist(torch.zeros(1, 32, dtype=torch.int32), ttnn.uint32),
+        )
+
+    def decode_set(self, io, positions):
         pos = torch.as_tensor(positions, dtype=torch.int32)
-        cur = ttnn.from_torch(
-            pos, device=self.mesh, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._rep
-        )
-        idx = ttnn.from_torch(
-            pos.reshape(1, -1).to(torch.int32),
-            device=self.mesh,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=self._rep,
-        )
-        return cur, idx
+        ttnn.copy_host_to_device_tensor(self._host(pos, ttnn.int32), io["cur"])
+        ttnn.copy_host_to_device_tensor(self._host(pos.reshape(1, -1), ttnn.uint32), io["idx"])
+
+    def decode_inputs(self, positions):
+        io = self.decode_io()
+        self.decode_set(io, positions)
+        return io["cur"], io["idx"]
 
     def decode(self, x, cur_pos, rope_idx):
         """x: [1,1,32,4096] bf16 TILE per device. Returns [1,1,32,4096]."""
