@@ -190,11 +190,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+#if defined(ARCH_BLACKHOLE)
+            if constexpr (unpack_ab_block)
             {
-                for (std::uint32_t i = 0; i < num_total_tiles; ++i)
+                const std::uint32_t block_tiles = INPUT_NUM_TILES_IN_BLOCK;
+                const std::uint32_t stride_a    = num_total_tiles > 1 ? L1_ADDRESS(buffer_A[1]) - L1_ADDRESS(buffer_A[0]) : 0;
+                const std::uint32_t stride_b    = num_total_tiles > 1 ? L1_ADDRESS(buffer_B[1]) - L1_ADDRESS(buffer_B[0]) : 0;
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                 {
-                    _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
+                    for (std::uint32_t block = 0; block < static_cast<std::uint32_t>(INPUT_NUM_BLOCKS); ++block)
+                    {
+                        _llk_unpack_AB_block_<BroadcastType::NONE>(
+                            L1_ADDRESS(buffer_A[block * block_tiles]), L1_ADDRESS(buffer_B[block * block_tiles]), block_tiles, stride_a, stride_b);
+                    }
+                }
+            }
+            else
+#endif
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t i = 0; i < num_total_tiles; ++i)
+                    {
+                        _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
+                    }
                 }
             }
         }

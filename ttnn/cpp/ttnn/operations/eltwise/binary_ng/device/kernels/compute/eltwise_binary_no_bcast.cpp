@@ -5,9 +5,20 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one.
-#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+#ifndef BINARY_NG_BLOCK
+#define BINARY_NG_BLOCK 0
+#endif
+#ifndef BINARY_NG_BLOCK_PACK
+#define BINARY_NG_BLOCK_PACK 0
+#endif
+// Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one, except
+// in the block section (BINARY_NG_BLOCK), whose block unpack takes it for every op.
+#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK)
+#define ELTWISE_BINARY_BLOCK_UNPACK BINARY_NG_BLOCK
 #include "api/compute/eltwise_binary.h"
+#if BINARY_NG_BLOCK_PACK
+#include "api/compute/experimental/pack_block.h"
+#endif
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
@@ -31,6 +42,9 @@ void kernel_main() {
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
 #endif
+#if BINARY_NG_BLOCK_PACK
+    pack_block_contiguous_init(cb_out.get_cb_id());
+#endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
@@ -50,16 +64,30 @@ void kernel_main() {
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
         tile_regs_acquire();
+#if BINARY_NG_BLOCK
+        if constexpr (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL) {
+            mul_block(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
+        } else if constexpr (BINARY_OP_TYPE == EltwiseBinaryType::ELWADD) {
+            add_block(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
+        } else {
+            sub_block(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), 0, 0, 0, n);
+        }
+#else
         for (uint32_t i = 0; i < n; ++i) {
             BINARY_OP(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id(), i, i, i);
             PROCESS_POST_ACTIVATIONS(i);
         }
+#endif
         tile_regs_commit();
 
         tile_regs_wait();
+#if BINARY_NG_BLOCK_PACK
+        pack_block_contiguous(0, cb_out.get_cb_id(), n);
+#else
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, cb_out.get_cb_id());
         }
+#endif
         tile_regs_release();
 
         cb_out.push_back(n);

@@ -947,6 +947,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["ISCLOSE_ATOL_RT_ARG_IDX"] = "4";
     }
 
+    bool fpu_op_without_activations = false;
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1011,6 +1012,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
             });
         }
+
+        fpu_op_without_activations = !is_sfpu_op && std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+                                     lhs_activations.empty() && rhs_activations.empty() && post_activations.empty();
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1377,6 +1381,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
     compute_kernel_defines["SCALAR_IS_LHS"] = operation_attributes.scalar_is_lhs ? "1" : "0";
+
+    // Blackhole, 16 or more tiles per core: a section of the sharded no-broadcast FPU op is unpacked with one call, and packed
+    // with one into bf16 or fp32.
+    const bool block_section = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
+                               !is_where_op && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
+                               num_tiles_per_cycle > 1 && c_num_tiles_per_shard.value_or(0) >= 16;
+    const bool block_pack =
+        block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32);
+    compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
+    compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = block_pack ? "1" : "0";
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = get_kernel_file_path(compute_kernel, is_sfpu_op, is_where_op);

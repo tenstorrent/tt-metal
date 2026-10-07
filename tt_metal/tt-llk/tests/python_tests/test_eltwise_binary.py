@@ -50,6 +50,7 @@ from helpers.test_variant_parameters import (
     REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    UNPACK_AB_BLOCK,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
     generate_input_dim,
@@ -310,6 +311,7 @@ def _run_eltwise_binary_test(
     run_types=None,
     loop_factor=1,
     per_face_handoff=None,
+    unpack_ab_block=False,
 ):
     if per_face_handoff is None:
         # Blackhole: functional variants take the per-tile hand-off; perf variants take it where the opted-in kernels do,
@@ -472,6 +474,7 @@ def _run_eltwise_binary_test(
             REUSE_DEST_TYPE(reuse_dest_type=EltwiseBinaryReuseDestType.NONE),
             ACC_TO_DEST(acc_to_dest),
             PER_FACE_HANDOFF(per_face_handoff),
+            UNPACK_AB_BLOCK(unpack_ab_block),
         ],
         "runtimes": [
             generate_input_dim(
@@ -1003,6 +1006,7 @@ def _run_eltwise_binary_dest_reuse_test(
             REUSE_DEST_TYPE(reuse_dest_type=reuse_dest_type),
             ACC_TO_DEST(False),
             PER_FACE_HANDOFF(per_face_handoff),
+            UNPACK_AB_BLOCK(),
         ],
         "runtimes": [
             generate_input_dim(
@@ -1261,4 +1265,45 @@ def test_eltwise_binary_dest_reuse_row_bcast(
         output_dimensions,
         per_face_handoff=per_face_handoff,
         broadcast_type=BroadcastType.Row,
+    )
+
+
+# The block unpack (_llk_unpack_AB_block_, one call per block of tile pairs) under both hand-offs.
+@blackhole_only
+@parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    formats=lambda dest_acc: _get_valid_formats(dest_acc),
+    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[32, 32]],
+    input_dimensions=[[64, 32], [256, 32], [512, 32]],
+    per_face_handoff=[False, True],
+)
+def test_eltwise_binary_unpack_ab_block(
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    formats,
+    math_op,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    per_face_handoff,
+):
+    _run_eltwise_binary_test(
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        formats,
+        BroadcastType.None_,
+        math_op,
+        math_fidelity,
+        Transpose.No,
+        input_dimensions,
+        tile_dimensions,
+        False,
+        per_face_handoff=per_face_handoff,
+        unpack_ab_block=True,
     )

@@ -128,3 +128,50 @@ inline void llk_unpack_AB(
 
     llk_unpack_AB_impl<BType>(address_a, address_b, bcast_row_idx, unpack_src_format[operandB_id]);
 }
+
+// ntiles consecutive tile pairs from one config context: one context acquire per block instead of per tile.
+inline void llk_unpack_AB_block(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t start_tile_index_a,
+    const std::uint32_t start_tile_index_b,
+    const std::uint32_t ntiles) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+    const std::uint32_t stride_a = get_local_cb_interface(operandA_id).fifo_page_size;
+    const std::uint32_t stride_b = get_local_cb_interface(operandB_id).fifo_page_size;
+    const std::uint32_t address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1 + stride_a * start_tile_index_a;
+    const std::uint32_t address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1 + stride_b * start_tile_index_b;
+
+    LLK_ASSERT(cb_access_within_bounds(operandA_id, start_tile_index_a, ntiles), "Block tile read exceeds CB boundary");
+    LLK_ASSERT(cb_access_within_bounds(operandB_id, start_tile_index_b, ntiles), "Block tile read exceeds CB boundary");
+
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        get_operand_face_r_dim(operandA_id),
+        get_operand_face_r_dim(operandB_id),
+        get_operand_num_faces(operandA_id),
+        get_operand_num_faces(operandB_id)));
+
+    // One execute per tile; the state is identical for every iteration, so it is restated once.
+    SAN_HOOK(execute<OperationUnpackBinary>(
+        StateVal<OperationUnpackBinary::BroadcastType>(to_underlying(BroadcastType::NONE)),
+        StateVal<Operand<Exu::Unpack>::InputFormatA>(unpack_src_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatA>(unpack_dst_format[operandA_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightA>(get_operand_face_r_dim(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesA>(get_operand_num_faces(operandA_id)),
+        StateVal<Operand<Exu::Unpack>::InputFormatB>(unpack_src_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::OutputFormatB>(unpack_dst_format[operandB_id]),
+        StateVal<Operand<Exu::Unpack>::FaceHeightB>(get_operand_face_r_dim(operandB_id)),
+        StateVal<Operand<Exu::Unpack>::NumFacesB>(get_operand_num_faces(operandB_id)),
+        StateDiscard<std::uint32_t>(start_tile_index_a),
+        StateDiscard<std::uint32_t>(start_tile_index_b),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    WAYPOINT("UABW");
+    _llk_unpack_AB_block_<BroadcastType::NONE>(address_a, address_b, ntiles, stride_a, stride_b);
+    WAYPOINT("UABD");
+}

@@ -803,6 +803,23 @@ class PER_FACE_HANDOFF(TemplateParameter):
         return f"constexpr bool per_face_handoff = {str(self.value).lower()};"
 
 
+@dataclass(repr=False)
+class UNPACK_AB_BLOCK(TemplateParameter):
+    """Blackhole eltwise binary: each block of tile pairs is unpacked with one _llk_unpack_AB_block_ call. Not a report
+    column; repr carries it into the variant hash."""
+
+    _unpack_ab_block: InitVar[bool] = False
+
+    def __post_init__(self, _unpack_ab_block: bool):
+        self.value = _unpack_ab_block
+
+    def __repr__(self) -> str:
+        return f"UNPACK_AB_BLOCK({self.value})"
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool unpack_ab_block = {str(self.value).lower()};"
+
+
 @dataclass
 class IMPLIED_MATH_FORMAT(TemplateParameter):
     implied_math_format: ImpliedMathFormat = ImpliedMathFormat.No
