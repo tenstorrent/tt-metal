@@ -61,7 +61,9 @@ def test_moe_deep_trace(mesh_device):
         x = a["ffn_in"].reshape(ROWS, 512, HIDDEN)[:, sel][:, :U].reshape(ROWS, 1, U, HIDDEN).clone()
         x[:, :, LIVE:] = 0
         W = load_layer_experts(L)
-        wts = build_expert_weights(md, lambda e: W[e], nd_sharded=True)
+        wts = build_expert_weights(
+            md, lambda e: W[e], nd_sharded=(E("MIMO_EXPERT_OP", "unified") not in ("mm", "loop"))
+        )
         del W
         gw, gb = load_gate(L)
         gate = MiMoGate(md, gw.to(torch.bfloat16), gb, bias_shift=0.0, batch_per_device=None)
