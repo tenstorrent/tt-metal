@@ -142,6 +142,8 @@ jobs:
         id: measured
         env:
           MEASURE_RESULT: ${{ inputs.measure_result }}
+          ARCH: ${{ inputs.arch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           COMPLETE=true
           IFS=',' read -ra RESULTS <<< "$MEASURE_RESULT"
@@ -149,9 +151,42 @@ jobs:
             R=$(echo "$R" | xargs)
             case "$R" in ""|success|skipped) ;; *) COMPLETE=false ;; esac
           done
-          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
+
+          # measure_result covers every architecture. Look at this run's legs
+          # ("..._<arch> group N/M") to see whether it was this one that failed.
+          REASON=""
           if [ "$COMPLETE" != "true" ]; then
-            echo "::error::The measurement did not complete (${MEASURE_RESULT}), so the gate compares nothing."
+            LEGS=$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
+              --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\"))
+                    | [.name, .conclusion // \"in_progress\",
+                       (if .started_at and .completed_at
+                        then ((.completed_at | fromdate) - (.started_at | fromdate)) / 60 | floor
+                        else \"\" end)] | @tsv") || LEGS=""
+            if [ -z "$LEGS" ]; then
+              REASON="The measurement did not complete (${MEASURE_RESULT}), and no ${ARCH} leg was found in this run."
+            else
+              BAD=$(awk -F'\t' '$2 != "success" && $2 != "skipped"' <<< "$LEGS")
+              if [ -z "$BAD" ] && awk -F'\t' '$2 == "success" { found = 1 } END { exit !found }' <<< "$LEGS"; then
+                COMPLETE=true
+                echo "::notice::Every ${ARCH} leg succeeded, so the gate compares ${ARCH}. A leg of another architecture did not (${MEASURE_RESULT})."
+              else
+                while IFS=$'\t' read -r NAME CONCLUSION MINUTES; do
+                  LINE="${NAME##*/ }: ${CONCLUSION}${MINUTES:+ after ${MINUTES} min}"
+                  # The gate does not run in a cancelled run, so a cancelled leg most likely ran out of time.
+                  if [ "$CONCLUSION" = cancelled ]; then LINE="${LINE}, most likely at its timeout"; fi
+                  REASON="${REASON:+${REASON}; }${LINE}"
+                done <<< "$BAD"
+                REASON="A ${ARCH} measuring leg did not complete: ${REASON}."
+              fi
+            fi
+          fi
+
+          echo "complete=$COMPLETE" >> "$GITHUB_OUTPUT"
+          echo "result=$([ "$COMPLETE" = true ] && echo success || echo failure)" >> "$GITHUB_OUTPUT"
+          echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+          if [ "$COMPLETE" != "true" ]; then
+            echo "::error::${REASON} The gate compares nothing."
           fi
 
       - name: Read the baseline from the warehouse
@@ -398,7 +433,7 @@ jobs:
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
           COMPARISON_FINISHED: ${{ steps.compare.outputs.comparison_finished }}
-          MEASURE_RESULT: ${{ inputs.measure_result }}
+          MEASURE_RESULT: ${{ steps.measured.outputs.result }}
           ARCH: ${{ inputs.arch }}
           RUN_TYPES: ${{ inputs.run_types }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -505,12 +540,14 @@ jobs:
 
       - name: Gate verdict
         if: always()
+        env:
+          MEASURE_REASON: ${{ steps.measured.outputs.reason }}
         run: |
           HAVE_BASELINE=$(cat have_baseline.txt)
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
 
           if [ "${{ steps.measured.outputs.complete }}" != "true" ]; then
-            echo "::error::The measurement did not complete, so the gate compared nothing."
+            echo "::error::${MEASURE_REASON:-The measurement did not complete.} The gate compared nothing."
             echo "This is an infrastructure fault, not a performance result."
             exit 1
           fi
