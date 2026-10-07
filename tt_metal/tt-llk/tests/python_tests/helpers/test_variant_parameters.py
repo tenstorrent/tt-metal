@@ -29,6 +29,7 @@ from .llk_params import (
     MathOperation,
     NarrowTile,
     PerfRunType,
+    ReduceOrder,
     ReducePool,
     SdpaFwOp,
     SdpaOp,
@@ -44,6 +45,7 @@ from .llk_params import (
     VectorMode,
 )
 from .matmul_sweep import validate_tile_dimensions
+from .sfpu_dispatch_constants import RELU_MAX_THRESHOLD
 
 # Base parameter classes
 
@@ -108,6 +110,21 @@ class BROADCAST_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.broadcast_type.value};"
+
+
+@dataclass
+class SFPU_BCAST_DIM(TemplateParameter):
+    """Dest-side SFPU row/col broadcast for ``sfpu_binary_bcast_test.cpp``.
+
+    Distinct from :class:`BROADCAST_TYPE`, which selects unpack-A broadcast on
+    the pairing kernel. ``None_`` is unused by the 3-tile kernel; pairing and
+    add_top_row pass it so every binary-SFPU variant emits the same CSV column.
+    """
+
+    sfpu_bcast_dim: BroadcastType = BroadcastType.None_
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto BCAST_DIM = ckernel::BroadcastType::{self.sfpu_bcast_dim.value};"
 
 
 @dataclass
@@ -329,6 +346,32 @@ class SFPU_RELU_MIN_INT_THRESHOLD(TemplateParameter):
 
 
 @dataclass
+class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
+    """Float threshold for relu_max, emitted as its fp32 bit pattern.
+
+    Emitted as a macro rather than a constexpr for the same reason as
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD`: sfpu_operations.h selects on ``#ifdef``, the
+    header is shared by every unary test, and only the relu_max threshold sweep sets this.
+    Unset means the kernel's fixed 5.0 (RELU_MAX_THRESHOLD on the golden side).
+
+    Takes a Python float and emits its IEEE-754 single bits, which is the encoding
+    ``relu_max_tile`` takes (relu6 passes ``0x40c00000u``), so 0.0, -0.0 and a negative
+    threshold are all expressible.
+
+    The field is ``relu_max_threshold``, not ``threshold``: parameter field names become
+    perf-CSV headers and must be unique across classes (test_perf_header_gate.py), and
+    :class:`SFPU_RELU_MIN_INT_THRESHOLD` already owns ``threshold``. The default is the
+    golden's RELU_MAX_THRESHOLD, so only the C++ fallback in sfpu_operations.h is a copy.
+    """
+
+    relu_max_threshold: float = RELU_MAX_THRESHOLD
+
+    def convert_to_cpp(self) -> str:
+        bits = struct.unpack("<I", struct.pack("<f", self.relu_max_threshold))[0]
+        return f"#define SFPU_RELU_MAX_THRESHOLD {bits:#010x}u"
+
+
+@dataclass
 class SFPU_SHIFT_AMOUNT(TemplateParameter):
     """Shift amount for the *unary* shift ops (LeftShift / RightShift).
 
@@ -441,6 +484,33 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
                 f"constexpr bool UNINIT_RESTORE_MOP = {str(self.restore_mop).lower()};",
                 f"constexpr bool UNINIT_SKIP = {str(self.skip).lower()};",
                 f"constexpr std::uint32_t BLOCK_MOP_NUM_FACES = {self.block_mop_num_faces}u;",
+            ]
+        )
+
+
+@dataclass
+class CUSTOM_MM_CALLS(TemplateParameter):
+    """Split a custom_mm test kernel's K over back-to-back execute calls that accumulate into one DEST.
+
+    ``CUSTOM_MM_NUM_CALLS``  number of execute calls; 1 is the single-call kernel. With more than one,
+                             the unpacker first leaves a non-zero SrcA clear value (a both-bank SrcB
+                             clear only corrupts the SrcA writes it overlaps while unpacker 0's last
+                             SrcA clear value is non-zero, and that value outlives kernels), and math
+                             waits 2000 cycles before each call, so the unpacker reaches the next call
+                             while math still holds the previous call's banks.
+    ``CUSTOM_MM_REARM``      compressed kernel only: leave a -inf SrcA clear value after every call,
+                             as a max-reduce or top-k between calls would. It undoes the end-of-call
+                             stall's clear to 0, which otherwise hides a both-bank clear in the execute.
+    """
+
+    num_calls: int = 1
+    rearm: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t CUSTOM_MM_NUM_CALLS = {self.num_calls}u;",
+                f"constexpr bool CUSTOM_MM_REARM = {str(self.rearm).lower()};",
             ]
         )
 
@@ -774,6 +844,18 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto POOL_TYPE = ckernel::PoolType::{self.reduce_pool_type.value};"
+
+
+@dataclass
+class REDUCE_ORDER(TemplateParameter):
+    """Order of the chained SFPU reduce passes in sfpu_reduce_multidim_test.cpp, all under one
+    shared init_reduce (see ReduceOrder; the kernel names the values REDUCE_ORDER_*).
+    """
+
+    reduce_order: ReduceOrder = ReduceOrder.ColRow
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int REDUCE_ORDER = {self.reduce_order.value};"
 
 
 @dataclass
@@ -1385,6 +1467,42 @@ class ZERO_POINT(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t ZERO_POINT;", "I"
+
+
+@dataclass
+class MAX_POOL_WITH_INDICES(TemplateParameter):
+    """Compile-time knobs of the Quasar max_pool_with_indices SFPU kernel.
+
+    ``max_pool_num_rows`` is the kernel's 9-versus-32 row dispatch selector, ``max_pool_row_major`` picks
+    ``DataLayout::ROW_MAJOR`` over ``DataLayout::TILE``, and ``max_pool_accumulate`` carries the
+    running max across chunks in the Dest tiles above the operands."""
+
+    max_pool_num_rows: int = 9
+    max_pool_row_major: bool = False
+    max_pool_accumulate: bool = False
+
+    def convert_to_cpp(self) -> str:
+        layout = "ROW_MAJOR" if self.max_pool_row_major else "TILE"
+        lines = [
+            f"constexpr int MAX_POOL_NUM_ROWS = {self.max_pool_num_rows};",
+            f"constexpr ckernel::DataLayout MAX_POOL_LAYOUT = ckernel::DataLayout::{layout};",
+            f"constexpr bool MAX_POOL_ACCUMULATE = {str(self.max_pool_accumulate).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class MAX_POOL_CHUNK(RuntimeParameter):
+    """Index of the max_pool_with_indices call in its accumulation chain; chunk 0 seeds
+    the running max, later chunks fold into it. Ignored unless accumulate is set."""
+
+    max_pool_chunk: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t MAX_POOL_CHUNK = {self.max_pool_chunk}u;"
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return "std::uint32_t MAX_POOL_CHUNK;", "I"
 
 
 @dataclass

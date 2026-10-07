@@ -273,7 +273,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -285,7 +287,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             memory_config,
             program_config,
             compute_kernel_config,
-            paged_cache_geometry);
+            paged_cache_geometry,
+            sliding_window_size,
+            attention_sink);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -302,7 +306,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         memory_config,
         program_config,
         compute_kernel_config,
-        paged_cache_geometry);
+        paged_cache_geometry,
+        sliding_window_size,
+        attention_sink);
 }
 
 }  // namespace
@@ -315,7 +321,8 @@ void bind_sdpa(nb::module_& mod) {
 
     const auto* const doc =
         R"doc(
-        Causal scaled dot product attention. This API mimics the PyTorch API of the same name.
+        Causal scaled dot product attention. `is_causal` defaults to `true` and is mutually exclusive
+        with `attn_mask`, so pass `is_causal=False` when supplying a mask.
         The implementation is FlashAttention-2."
 
         Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension.
@@ -337,10 +344,11 @@ void bind_sdpa(nb::module_& mod) {
             cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
             windowed_q_token_offset (int): Defaults to `0`. Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer sequence: Q and the output are indexed locally while `cu_window_seqlens` and K/V stay global, so this locates the slice among the windows. Must be a multiple of TILE_HEIGHT, and `offset + Sq` must not exceed `Sk`. Use it to split the Q dimension across devices under sequence parallelism.
             windowed_q_token_offset_tensor (ttnn.Tensor, optional): Defaults to `None`. Windowed mode only. The per-device form of `windowed_q_token_offset`: a 1-element int32/uint32 ROW_MAJOR on-device tensor holding the same global row index; when provided it overrides the scalar. Every device runs the same cached program, so a scalar cannot differ across a mesh -- shard this tensor on the sequence-parallel mesh axis (e.g. `arange(sp) * local_seq_len`) so each device reads its own shard's origin. The scalar's constraints apply to each device's value (a multiple of TILE_HEIGHT; `offset + Sq <= Sk`) but cannot be validated host-side -- they are the caller's responsibility.
+            output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
 
 
         Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x dh].
+            ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with output_concat_heads).
 
         )doc";
 
@@ -362,7 +370,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("cu_window_seqlens") = nb::none(),
         nb::arg("windowed_q_token_offset") = 0,
-        nb::arg("windowed_q_token_offset_tensor") = nb::none());
+        nb::arg("windowed_q_token_offset_tensor") = nb::none(),
+        nb::arg("output_concat_heads") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
@@ -528,6 +537,10 @@ void bind_sdpa(nb::module_& mod) {
                 layer's view, pass this call's view with both `block_size` and `num_kv_heads`
                 set; Q drives head_dim and the per-block element count must be invariant.
                 Defaults to the cache's declared shape.
+            sliding_window_size (int, optional): Sliding window in absolute positions; each query
+                at absolute position p attends to keys in (p - window, p]. Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): Per-head learned sink logit [1 x nqh x 1 x 1],
+                as for `scaled_dot_product_attention`. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -549,7 +562,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("paged_cache_geometry").noconvert() = nb::none());
+        nb::arg("paged_cache_geometry").noconvert() = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("attention_sink").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two

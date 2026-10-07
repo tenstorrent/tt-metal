@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_llama_sharded_program_factory.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 
@@ -23,7 +24,7 @@ LlamaShardedMeshWorkloadFactory::cached_mesh_workload_t LlamaShardedMeshWorkload
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, output_tensor);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
@@ -246,7 +247,6 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         }
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
             input_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,            // num_tiles_to_read
             input_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -265,8 +265,6 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -276,11 +274,8 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
-            barrier_semaphore.has_value()         // barrier_sem
-                ? barrier_semaphore.value().address()
-                : 0,
-            barrier_core.x,  // barrier_sem_noc0_x
-            barrier_core.y   // barrier_sem_noc0_y
+            barrier_core.x,                       // barrier_sem_noc0_x
+            barrier_core.y                        // barrier_sem_noc0_y
         };
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
@@ -307,12 +302,17 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
+    SetCommonRuntimeArgs(program, worker_sender_reader_kernel_id, {input_tensor.buffer()->address()});
+    SetCommonRuntimeArgs(
+        program,
+        worker_sender_writer_kernel_id,
+        {output_tensor.buffer()->address(), semaphore.address(), barrier_semaphore ? barrier_semaphore->address() : 0});
     return {
         std::move(program),
         shared_variables_t{
-            .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
-            .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
-            .sender_worker_cores = sender_worker_cores}};
+            .reader_args = GetCommonRuntimeArgs(program, worker_sender_reader_kernel_id),
+            .writer_args = GetCommonRuntimeArgs(program, worker_sender_writer_kernel_id),
+        }};
 }
 
 void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
@@ -320,35 +320,17 @@ void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
     const AllGatherAsyncParams& operation_attributes,
     const AllGatherAsyncInputs& tensor_args,
     Tensor& output_tensor) {
-    // Update runtime arguments for each program in the mesh workload
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        const auto& input = tensor_args.input_tensor;
-        const auto& output = output_tensor;
-
-        auto semaphore = operation_attributes.semaphore.at(0);
-        auto barrier_semaphore = operation_attributes.barrier_semaphore;
-
-        log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
-
-        // update senders
-        auto& worker_reader_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
-        auto& worker_writer_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
-        for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader
-            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input.buffer()->address();
-            // writer
-            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[0] = output.buffer()->address();
-            worker_writer_sender_runtime_args[1] = semaphore.address();
-            if (barrier_semaphore.has_value()) {
-                worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();
-            }
-        }
+    const auto input_address = tensor_args.input_tensor.buffer()->address();
+    const auto output_address = output_tensor.buffer()->address();
+    const auto semaphore_address = operation_attributes.semaphore.at(0).address();
+    const auto& barrier = operation_attributes.barrier_semaphore;
+    const auto barrier_address = barrier.has_value() ? barrier->address() : 0;
+    for (const auto& [coordinate_range, shared] : cached_workload.shared_variables) {
+        shared.reader_args.get()[ttnn::ccl::LlamaGatherReaderCommonArgs::input] = input_address;
+        auto& writer = shared.writer_args.get();
+        writer[ttnn::ccl::LlamaGatherWriterCommonArgs::output] = output_address;
+        writer[ttnn::ccl::LlamaGatherWriterCommonArgs::semaphore] = semaphore_address;
+        writer[ttnn::ccl::LlamaGatherWriterCommonArgs::barrier] = barrier_address;
     }
 }
 
