@@ -366,6 +366,13 @@ ALWI void reduce(
     const uint32_t num_batches = input_block_shape.batches;
 
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
+#ifdef ARCH_BLACKHOLE
+    // The SFPU reduce init holds across outputs while no fold init, accumulator reload or post-reduce op runs between.
+    constexpr bool hoist_sfpu_init = is_sfpu && !enable_accumulation && std::is_same_v<PostReduceOp, NoOp>;
+#else
+    constexpr bool hoist_sfpu_init = false;
+#endif
+    bool sfpu_init_live = false;
 
     DataflowBuffer input_dfb(input_dfb_id);
     DataflowBuffer scaler_dfb(scaler_dfb_id);
@@ -505,6 +512,7 @@ ALWI void reduce(
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
                     if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                        sfpu_init_live = false;
                     }
                 }
 
@@ -542,7 +550,10 @@ ALWI void reduce(
 
                 // SFPU intra-tile finalize
                 if constexpr (is_sfpu) {
-                    sfpu_reduce_init<reduce_type, reduce_format>();
+                    if (!hoist_sfpu_init || !sfpu_init_live) {
+                        sfpu_reduce_init<reduce_type, reduce_format>();
+                        sfpu_init_live = true;
+                    }
                     sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
                 }
 
@@ -611,6 +622,7 @@ ALWI void reduce(
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
                     if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                        sfpu_init_live = false;
                     }
                 }
 
@@ -658,7 +670,10 @@ ALWI void reduce(
                 // SFPU intra-tile finalize per output slot
                 if constexpr (is_sfpu) {
                     const uint32_t sfpu_base_dst = get_dst_index(accumulate);
-                    sfpu_reduce_init<reduce_type, reduce_format>();
+                    if (!hoist_sfpu_init || !sfpu_init_live) {
+                        sfpu_reduce_init<reduce_type, reduce_format>();
+                        sfpu_init_live = true;
+                    }
                     for (uint32_t k = 0; k < current_chunk; ++k) {
                         sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
