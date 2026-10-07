@@ -388,7 +388,8 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
     // still running and try to make it exit.
     volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-    go_message_ptr->signal = RUN_MSG_DONE;
+    // Appear done: catch the processed counter up to the GO counter (done == go_count == go_processed).
+    *GET_MAILBOX_ADDRESS_DEV(go_processed) = go_message_ptr->go_count;
 
     // For erisc, we can't hang the kernel/fw, because the core doesn't get restarted when a new
     // kernel is written. In this case we'll do an early exit back to base FW.

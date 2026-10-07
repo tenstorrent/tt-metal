@@ -179,11 +179,20 @@ void send_reset_go_signal(
     const auto& hal = env.get_hal();
     const auto& cluster = env.get_cluster();
     uint64_t go_signal_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
-    auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
+    auto factory = hal.get_dev_msgs_factory(dispatch_core_type);
+    auto reset_msg = factory.create<tt_metal::dev_msgs::go_msg_t>();
 
+    // Read the current GO counter so we can tick it: the worker wakes on go_count != go_processed, resets its
+    // read pointer on the RESET_READ_PTR_FROM_HOST control code, and catches go_processed up. The device is
+    // quiesced here, so one tick suffices. The control code is the full signal byte (go_msg_t word 0).
+    auto cur = factory.create<tt_metal::dev_msgs::go_msg_t>();
+    cluster.read_core(cur.data(), cur.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_addr & ~0x3);
+    reset_msg.view().go_count() = static_cast<uint8_t>(cur.view().go_count() + 1);
     reset_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
+    // Write only word 0 ({signal, go_count}); the done-return address in word 1 is owned by the reconfigure command
+    // and must not be clobbered (a FROM_HOST reset is consumed without a dispatcher notify, so it never needs word 1).
     cluster.write_core_immediate(
-        reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_addr);
+        reset_msg.data(), sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_signal_addr);
     cluster.l1_barrier(chip);
     uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
     uint32_t zero = 0;
@@ -210,7 +219,55 @@ void write_launch_msg_to_core(
     cluster.write_core_immediate(msg.data(), msg.size(), {static_cast<size_t>(chip), core}, launch_addr);
     tt_driver_atomics::sfence();
     if (send_go) {
-        cluster.write_core_immediate(go_msg.data(), go_msg.size(), {static_cast<size_t>(chip), core}, go_addr);
+        // Slow dispatch has no dispatch_s to tick the GO counter, so the host does it: tick go_count so the worker
+        // runs exactly this one program (the control nibble stays NONE, so the worker treats it as a program GO).
+        // First serialize against any outstanding GO tick (e.g. a reset tick flushed by send_reset_go_signal): the
+        // worker wakes on go_count != go_processed and the go-message slot holds a single entry, so overwriting an
+        // unacknowledged reset -- or reading a stale go_processed and colliding this program's tick with the reset's
+        // -- would drop the reset or lose the program GO (an intermittent slow-dispatch hang). Wait for the worker to
+        // quiesce (go_count == go_processed) before ticking, with the normal operation timeout.
+        auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
+        uint64_t go_processed_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::MAILBOX) +
+                                     dev_msgs_factory.offset_of<tt_metal::dev_msgs::mailboxes_t>(
+                                         tt_metal::dev_msgs::mailboxes_t::Field::go_processed);
+        const auto op_timeout = env.get_rtoptions().get_timeout_duration_for_operations();
+        const auto wait_start = std::chrono::steady_clock::now();
+        uint8_t go_count = 0;
+        uint8_t go_processed = 0;
+        do {
+            auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
+            cluster.read_core(
+                core_status.data(), core_status.size(), {static_cast<size_t>(chip), core}, go_addr & ~0x3);
+            go_count = core_status.view().go_count();
+            uint32_t go_processed_word = 0;
+            cluster.read_core(
+                &go_processed_word,
+                sizeof(go_processed_word),
+                {static_cast<size_t>(chip), core},
+                go_processed_addr & ~0x3);
+            go_processed = (go_processed_word >> ((go_processed_addr & 0x3) * 8)) & 0xFF;
+            if (go_count != go_processed && op_timeout.count() > 0.0f &&
+                (std::chrono::steady_clock::now() - wait_start) > op_timeout) {
+                TT_THROW(
+                    "Timed out waiting for core {} on chip {} to acknowledge an outstanding GO tick before a "
+                    "slow-dispatch launch (go_count={}, go_processed={}).",
+                    core,
+                    static_cast<int>(chip),
+                    go_count,
+                    go_processed);
+            }
+        } while (go_count != go_processed);
+
+        // Slow dispatch has no reconfigure command, so the host writes the whole go_msg here: word 0 ({signal,
+        // go_count}) for the program GO, and word 1 (the done-return address master_x/master_y/offset) which the
+        // worker reads to notify completion.
+        auto launch_go = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
+        launch_go.view().signal() = go_msg.signal();
+        launch_go.view().master_x() = go_msg.master_x();
+        launch_go.view().master_y() = go_msg.master_y();
+        launch_go.view().offset() = go_msg.offset();
+        launch_go.view().go_count() = static_cast<uint8_t>(go_processed + 1);
+        cluster.write_core_immediate(launch_go.data(), launch_go.size(), {static_cast<size_t>(chip), core}, go_addr);
     }
 }
 
@@ -329,28 +386,39 @@ bool check_if_riscs_on_specified_core_done(
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
     uint64_t go_msg_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    uint64_t go_processed_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::MAILBOX) +
+                                 dev_msgs_factory.offset_of<tt_metal::dev_msgs::mailboxes_t>(
+                                     tt_metal::dev_msgs::mailboxes_t::Field::go_processed);
+    (void)run_state;  // The GO signal is now a counter; "done" == (go_count == go_processed).
 
-    auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
-        auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
-        cluster.read_core(
-            core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
-        uint8_t run = core_status.view().signal();
-        if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
-            fprintf(
-                stderr,
-                "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
-                run,
-                run_state,
-                tt_metal::dev_msgs::RUN_MSG_DONE);
-            TT_FATAL(
-                run == run_state || run == tt_metal::dev_msgs::RUN_MSG_DONE,
-                "Read unexpected run_mailbox value from core {}",
-                core.str());
-        }
+    // Read go_processed BEFORE go_count. The worker only ever advances go_processed toward go_count, and go_count only
+    // advances, so in this order the go_count we read is >= the go_processed we read: a pair torn across the two reads
+    // can only look "not done" (re-polled), never a spurious "done" or a wrapped-negative gap.
+    // go_processed is a single byte; read the aligned word that contains it and extract.
+    uint32_t go_processed_word = 0;
+    cluster.read_core(
+        &go_processed_word, sizeof(go_processed_word), {static_cast<size_t>(chip_id), core}, go_processed_addr & ~0x3);
+    uint8_t go_processed = (go_processed_word >> ((go_processed_addr & 0x3) * 8)) & 0xFF;
 
-        return run == tt_metal::dev_msgs::RUN_MSG_DONE;
-    };
-    return get_mailbox_is_done(go_msg_addr);
+    auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
+    cluster.read_core(core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
+    uint8_t go_count = core_status.view().go_count();
+
+    // GOs outstanding on this core (mod 256). Dispatch can run ahead of a worker by at most the launch-message ring
+    // depth, and the pre-boot sentinel (go_count 0, go_processed 0xFF) reads as 1 outstanding; a larger gap means the
+    // GO mailbox is corrupt, so fail loudly instead of reading "not done" until the timeout.
+    const uint8_t outstanding = static_cast<uint8_t>(go_count - go_processed);
+    TT_FATAL(
+        outstanding <= tt_metal::dev_msgs::launch_msg_buffer_num_entries,
+        "Device {} core {}: corrupt GO mailbox: go_count={} go_processed={} ({} outstanding exceeds max run-ahead {})",
+        chip_id,
+        core.str(),
+        static_cast<uint32_t>(go_count),
+        static_cast<uint32_t>(go_processed),
+        static_cast<uint32_t>(outstanding),
+        tt_metal::dev_msgs::launch_msg_buffer_num_entries);
+
+    return outstanding == 0;
 }
 
 void print_aerisc_training_status(

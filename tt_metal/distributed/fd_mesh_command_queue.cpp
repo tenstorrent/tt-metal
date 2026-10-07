@@ -51,6 +51,7 @@
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
+#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"  // CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
@@ -528,6 +529,40 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     const uint32_t mcast_launch_msg_wptr =
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].get_mcast_wptr();
     const CoreCoord dispatch_core = this->virtual_program_dispatch_core();
+
+    // CQ-ownership change (or first use): before any go for this sub-device, establish the done-return address
+    // (go_msg_t word 1) and reseed the dispatcher go_count baseline on EVERY device. The per-go path no longer carries
+    // the address, and the unused-sub-grid gos reach devices outside this workload, so all devices need it first.
+    {
+        auto& owner = cq_shared_state_->sub_device_cq_owner[*sub_device_id];
+        if (owner.needs_noc_addr_reconfigure(this->id_)) {
+            const auto& dispatch_mem_map =
+                MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
+            const uint8_t offset = static_cast<uint8_t>(
+                dispatch_mem_map.get_dispatch_message_update_offset(*sub_device_id) +
+                dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
+            const uint8_t multicast_go_offset =
+                mcast_go_signals ? static_cast<uint8_t>(*sub_device_id) : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET;
+            // eth fast dispatch removed: the reconfigure writes go_msg_t word 1 to tensix via mcast only.
+            const uint8_t num_unicast_txns = 0;
+            const uint8_t noc_data_start_index = 0;
+            for (auto* device : mesh_device_->get_devices()) {
+                program_dispatch::set_go_signal_noc_addr_on_dispatch(
+                    device->sysmem_manager(),
+                    static_cast<uint8_t>(this->id_),
+                    static_cast<uint8_t>(*sub_device_id),  // sync_index (go_count_per_sync index)
+                    owner.go_count(),                      // reseed baseline == workers' current go_processed
+                    static_cast<uint8_t>(dispatch_core.x),
+                    static_cast<uint8_t>(dispatch_core.y),
+                    offset,
+                    multicast_go_offset,
+                    num_unicast_txns,
+                    noc_data_start_index);
+            }
+            owner.mark_noc_addr_configured(this->id_);
+        }
+    }
+
     const SubDeviceRecorder sub_device_recorder(mesh_device_, sub_device_id);
 #if defined(TRACY_ENABLE)
     const bool tag_tracy_zones = !tt::tt_metal::getDeviceProfilerState();
@@ -549,7 +584,6 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             program_cmd_seq,
             mcast_launch_msg_wptr,
             expected_num_workers_completed,
-            dispatch_core,
             sub_device_id,
             dispatch_metadata,
             program_binary_status,
@@ -589,6 +623,12 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Increment Launch Message Buffer Write Pointers
     if (mcast_go_signals) {
         cq_shared_state_->worker_launch_message_buffer_state[*sub_device_id].inc_mcast_wptr(1);
+    }
+    // Mirror the dispatcher's per-sub-device go_count: this enqueue issued one program go for sub_device_id (reaching
+    // all devices via the unused-sub-grid gos), so the shared baseline advances once. Keeps the reseed on a future
+    // CQ-ownership change equal to the workers' go_processed.
+    if (mcast_go_signals) {
+        cq_shared_state_->sub_device_cq_owner[*sub_device_id].advance_go_count();
     }
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
@@ -1197,6 +1237,39 @@ void FDMeshCommandQueue::reset_worker_state(
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
+    if (reset_launch_msg_state) {
+        // A sub-device reconfig can mix and match per-core GO state (go_messages[].go_count, go_processed), so
+        // force a host-clear of every worker's GO message slots with the FROM_HOST control code so each
+        // worker starts with a clean go_processed = go_count = 0. Paired with the dispatcher re-baselining
+        // go_count_per_sync to 0 on the reconfig RESET, the subsequent RESET's go_count=1 is then always
+        // detected. The device is quiesced here, so the direct L1 writes are safe.
+        auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+        auto& cluster = context.get_cluster();
+        const auto& hal = context.hal();
+        uint64_t go_msg_addr = hal.get_dev_noc_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
+        // go_msg_t spans two 32-bit words; clear every slot's word 0 (signal/go_count) across the whole array, leaving
+        // word 1 (the done-return address) to be set by the reconfigure command before the reset gos.
+        const uint32_t go_msg_words =
+            hal.get_dev_msgs_factory(HalProgrammableCoreType::TENSIX).size_of<dev_msgs::go_msg_t>() / sizeof(uint32_t);
+        std::vector<uint32_t> from_host_clear(dev_msgs::go_message_num_entries * go_msg_words, 0);
+        for (uint32_t i = 0; i < dev_msgs::go_message_num_entries; ++i) {
+            from_host_clear[i * go_msg_words] =
+                dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;  // word 0: signal, go_count=0
+        }
+        for (auto* device : mesh_device_->get_devices()) {
+            CoreCoord grid = device->compute_with_storage_grid_size();
+            for (uint32_t y = 0; y < grid.y; y++) {
+                for (uint32_t x = 0; x < grid.x; x++) {
+                    CoreCoord virtual_core = device->virtual_core_from_logical_core(CoreCoord{x, y}, CoreType::WORKER);
+                    cluster.write_core(
+                        from_host_clear.data(),
+                        from_host_clear.size() * sizeof(uint32_t),
+                        tt_cxy_pair(device->id(), virtual_core),
+                        go_msg_addr);
+                }
+            }
+        }
+    }
     const auto devices = mesh_device_->get_devices();
     auto cached =
         std::find_if(sub_device_setup_commands_.begin(), sub_device_setup_commands_.end(), [&](const auto& entry) {
@@ -1232,17 +1305,55 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     std::rotate(sub_device_setup_commands_.begin(), cached, std::next(cached));
     cached = sub_device_setup_commands_.begin();
+    const CoreCoord setup_dispatch_core = this->virtual_program_dispatch_core();
+    const auto& setup_dmm = MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
+    // The reset gos (and the done-return address they need) target the currently-active sub-devices, which the
+    // mesh_device accessors below are valid for -- not the num_sub_devices param (the manager being loaded is not yet
+    // active). Mirrors reset_worker_dispatch_state_on_device, which also uses mesh_device->num_sub_devices().
+    const uint32_t active_sub_devices = mesh_device_->num_sub_devices();
     for (size_t i = 0; i < devices.size(); ++i) {
+        // Before the reset gos (which notify the dispatcher via go_msg_t word 1), establish each sub-device's
+        // done-return address on this device. Word 1 is no longer carried by the go, so without this the reset-go
+        // completion notify would target a stale address and the dispatcher would wait forever.
+        if (reset_launch_msg_state) {
+            for (uint32_t sd = 0; sd < active_sub_devices; ++sd) {
+                const SubDeviceId sdid(static_cast<uint8_t>(sd));
+                const uint8_t num_unicast_txns = 0;  // eth fast dispatch removed; tensix mcast only
+                const uint8_t offset = static_cast<uint8_t>(
+                    setup_dmm.get_dispatch_message_update_offset(sd) +
+                    setup_dmm.get_completion_counter_offset(static_cast<uint8_t>(id_)));
+                program_dispatch::set_go_signal_noc_addr_on_dispatch(
+                    devices[i]->sysmem_manager(),
+                    static_cast<uint8_t>(id_),
+                    static_cast<uint8_t>(sd),  // sync_index
+                    0,                         // baseline; the reset go below re-baselines go_count_per_sync to 1
+                    static_cast<uint8_t>(setup_dispatch_core.x),
+                    static_cast<uint8_t>(setup_dispatch_core.y),
+                    offset,
+                    mesh_device_->impl().has_noc_mcast_txns(sdid) ? static_cast<uint8_t>(sd)
+                                                                  : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                    num_unicast_txns,
+                    uint8_t{0});
+            }
+        }
         // Old-manager completion counts remain dynamic. The cached tail still resets GO mailboxes
         // and retains all barriers; batching changes only host submission granularity.
         program_dispatch::reset_worker_dispatch_state_on_device(
             mesh_device_,
             devices[i]->sysmem_manager(),
             id_,
-            this->virtual_program_dispatch_core(),
             expected_num_workers_completed_,
             reset_launch_msg_state,
             cached->device_batches[i]);
+    }
+    // The reset go re-baselined each sub-device's go_count_per_sync to 1 (go_processed catches up to 1), so the shared
+    // host counter follows. Note: we do NOT mark word 1 configured here -- the setup reconfigure above covers only the
+    // sub-device's setup-time worker set (e.g. no active-eth cores yet), so leave the first enqueue to reconfigure with
+    // the workload's actual mcast/unicast targeting before its go.
+    if (reset_launch_msg_state) {
+        for (uint32_t sd = 0; sd < active_sub_devices; ++sd) {
+            cq_shared_state_->sub_device_cq_owner[sd].rebaseline_go_count();
+        }
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -1360,6 +1471,38 @@ void FDMeshCommandQueue::submit_replay_buffer(
         sub_device.take_ownership(sub_device_id, this->id_);
     }
 
+    // Replay notifies the dispatcher via go_msg_t word 1 (both the trace's gos and the REPLAY_TRACE reset go), so on a
+    // CQ-ownership change (or first use) establish the done-return address on every device before the trace runs.
+    {
+        const auto& dispatch_mem_map = MetalContext::instance(mesh_device_->impl().get_context_id()).dispatch_mem_map();
+        for (auto sub_device_id : sub_device_ids) {
+            auto& owner = sub_device_cq_owner[*sub_device_id];
+            if (!owner.needs_noc_addr_reconfigure(this->id_)) {
+                continue;
+            }
+            const auto& desc = worker_descriptors.at(sub_device_id);
+            const bool mcast = desc.num_traced_programs_needing_go_signal_multicast > 0;
+            const uint8_t offset = static_cast<uint8_t>(
+                dispatch_mem_map.get_dispatch_message_update_offset(*sub_device_id) +
+                dispatch_mem_map.get_completion_counter_offset(static_cast<uint8_t>(this->id_)));
+            const uint8_t num_unicast_txns = 0;  // eth fast dispatch removed; tensix mcast only
+            for (auto* device : mesh_device_->get_devices()) {
+                program_dispatch::set_go_signal_noc_addr_on_dispatch(
+                    device->sysmem_manager(),
+                    static_cast<uint8_t>(this->id_),
+                    static_cast<uint8_t>(*sub_device_id),
+                    owner.go_count(),
+                    static_cast<uint8_t>(dispatch_core_.x),
+                    static_cast<uint8_t>(dispatch_core_.y),
+                    offset,
+                    mcast ? static_cast<uint8_t>(*sub_device_id) : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                    num_unicast_txns,
+                    uint8_t{0});
+            }
+            owner.mark_noc_addr_configured(this->id_);
+        }
+    }
+
     auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(extract_context_id(mesh_device_), num_sub_devices);
 
     trace_dispatch::TraceDispatchMetadata dispatch_md(
@@ -1372,7 +1515,7 @@ void FDMeshCommandQueue::submit_replay_buffer(
 
     for (auto* device : mesh_device_->get_devices()) {
         trace_dispatch::issue_trace_commands(
-            mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_, dispatch_core_);
+            mesh_device_, device->sysmem_manager(), dispatch_md, id_, expected_num_workers_completed_);
     }
 
     // The replayed exec buffer bypasses normal host cache tracking, so subsequent program enqueues must start from an
@@ -1384,6 +1527,21 @@ void FDMeshCommandQueue::submit_replay_buffer(
         cq_shared_state_->worker_launch_message_buffer_state,
         config_buffer_mgr_,
         expected_num_workers_completed_);
+
+    // Mirror the dispatcher's per-sub-device go_count for the gos this replay issued: one REPLAY_TRACE reset go plus
+    // the trace's captured program gos. Exactness only affects the reseed baseline on a *subsequent* CQ-ownership
+    // change after a replay (a rare path); the common replay-on-owning-CQ case never reads it.
+    for (auto sub_device_id : sub_device_ids) {
+        const auto& desc = worker_descriptors.at(sub_device_id);
+        auto& owner = sub_device_cq_owner[*sub_device_id];
+        const uint32_t program_gos =
+            desc.num_traced_programs_needing_go_signal_multicast > desc.num_traced_programs_needing_go_signal_unicast
+                ? desc.num_traced_programs_needing_go_signal_multicast
+                : desc.num_traced_programs_needing_go_signal_unicast;
+        for (uint32_t i = 0; i < 1u + program_gos; ++i) {
+            owner.advance_go_count();
+        }
+    }
 }
 
 void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
@@ -1593,7 +1751,6 @@ void FDMeshCommandQueue::record_end() {
                 cached_program_command_sequence,
                 worker_launch_msg_state.get_mcast_wptr(),
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
-                this->virtual_program_dispatch_core(),
                 sub_device_id,
                 ProgramBinaryStatus::Committed,
                 static_cast<uint8_t>(this->id()));
@@ -1709,7 +1866,6 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 mesh_device_,
                 device->sysmem_manager(),
                 id_,
-                this->virtual_program_dispatch_core(),
                 expected_num_workers_completed_,
                 reset_launch_msg_state,
                 /*setup_commands=*/{});
@@ -1725,6 +1881,14 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
                 this->cq_shared_state_->worker_launch_message_buffer_state.begin(),
                 this->cq_shared_state_->worker_launch_message_buffer_state.begin() + num_sub_devices,
                 std::mem_fn(&LaunchMessageRingBufferState::reset));
+            // reset_worker_dispatch_state_on_device's RESET go re-baselined each sub-device's go_count_per_sync to 1
+            // (workers' go_processed catches up to 1). The owner mirror was just rebuilt fresh (go_count_ == 0), so
+            // bring it in sync -- otherwise the next op sees needs_noc_addr_reconfigure and reseeds the dispatcher
+            // counter from a stale baseline of 0 while the workers are already at 1, so its first program/replay go
+            // (go_count == go_processed) is never recognized and the program never runs. Mirrors reset_worker_state.
+            for (uint32_t sd = 0; sd < num_sub_devices; ++sd) {
+                cq_shared_state_->sub_device_cq_owner[sd].rebaseline_go_count();
+            }
         }
         finish();
     }

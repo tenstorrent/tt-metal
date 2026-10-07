@@ -178,6 +178,17 @@ class DispatcherData:
             get_const_value("RUN_MSG_DONE"): "DONE",
             get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
             get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
+            get_const_value("RUN_MSG_REPLAY_TRACE"): "REPLAY_TRACE",
+        }
+        # The GO signal is a counter: the run state is derived like the watcher (watcher_device_reader.cpp) --
+        # a known control code is carried in the go_msg signal byte; otherwise go_count != go_processed => GO, else DONE.
+        self._run_msg_go = get_const_value("RUN_MSG_GO")
+        self._run_msg_done = get_const_value("RUN_MSG_DONE")
+        self._go_msg_known_control_codes = {
+            get_const_value("RUN_MSG_INIT"),
+            get_const_value("RUN_MSG_RESET_READ_PTR"),
+            get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"),
+            get_const_value("RUN_MSG_REPLAY_TRACE"),
         }
         self._launch_msg_buffer_num_entries = get_const_value("launch_msg_buffer_num_entries")
 
@@ -452,7 +463,21 @@ class DispatcherData:
             pass
         try:
             go_message_index = int(mailboxes.go_message_index)
-            go_data = int(mailboxes.go_messages[go_message_index].signal)
+            # GO is a counter now: derive the run state the same way as the watcher (watcher_device_reader.cpp).
+            # The signal byte is only meaningful while a counter delta is pending (go_count != go_processed): the
+            # worker acks a control by catching go_processed up to go_count, but the signal persists in the mailbox,
+            # so a quiesced core is DONE regardless of the (stale) signal. Otherwise a known control code is carried in
+            # the signal byte; any other value (RUN_MSG_GO, garbage) falls through to GO (never a spurious unknown state).
+            go_msg = mailboxes.go_messages[go_message_index]
+            ctrl = int(go_msg.signal)
+            go_count = int(go_msg.go_count)
+            go_processed = int(mailboxes.go_processed)
+            if go_count == go_processed:
+                go_data = self._run_msg_done
+            elif ctrl in self._go_msg_known_control_codes:
+                go_data = ctrl
+            else:
+                go_data = self._run_msg_go
         except TimeoutDeviceRegisterError:
             raise
         except Exception:

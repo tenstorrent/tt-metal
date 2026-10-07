@@ -239,17 +239,17 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-// Publishes RUN_MSG_DONE and tells the dispatcher. worker_completion_group is the FDS group for this
-// launch, or 0 when the launch is on the NOC.
-inline void signal_dispatch_core_done(uint32_t go_message_index, uint32_t worker_completion_group) {
+// Tells the dispatcher this worker reached done: an FDS launch signals over the HW done-wire, a NOC launch
+// notifies over the go-signal return address. worker_completion_group is the FDS group for this launch, or 0
+// when the launch is on the NOC. The caller advances go_processed (the host-facing done marker) first.
+// GO-COUNTER CONVERSION: UNVERIFIED on Quasar HW (FDS not built on Wormhole) -- FDS owner to validate.
+inline void signal_dispatch_core_done(uint32_t worker_completion_group) {
     if (worker_completion_group != 0) {
         DPRINT("DM0-FW: completion FDS\n");
-        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
         signal_worker_completion(worker_completion_group);
     } else {
         DPRINT("DM0-FW: completion NOC\n");
-        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-        const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+        const uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[mailboxes->go_message_index]);
         DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
         notify_dispatch_core_done(dispatch_addr, noc_index);
     }
@@ -315,40 +315,49 @@ extern "C" uint32_t _start1() {
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
+        // init_go_signalling reports firmware-ready via the GO counter (go_processed = go_count) and brings up
+        // the NOC; see worker_go_signalling.h.
         init_go_signalling(mailboxes);
         trigger_sync_register_init();
 
         DeviceProfilerInit();
         while (1) {
             WAYPOINT("GW");
-            uint8_t go_message_signal = RUN_MSG_DONE;
             // kernel_configs.preload is last in the launch message. so other data is
             // valid by the time it's set. All multicast data from the dispatcher is
             // written in order, so it will arrive in order. We also have a barrier
             // before mcasting the launch message (as a hang workaround), which
             // ensures that the unicast data will also have been received.
             DPRINT("DM0-FW: waiting for GO message\n");
-            while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
+            // Wait for new work: the GO counter advanced past what we've processed, or a preloaded launch message.
+            while ((mailboxes->go_messages[mailboxes->go_message_index].go_count == mailboxes->go_processed) &&
                    !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
                      DISPATCH_ENABLE_FLAG_PRELOAD)) {
-                // While the go signal for kernel execution is not sent, check if the worker was signalled
-                // to reset its launch message read pointer.
-                if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
-                    (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
+            }
+            // A new counter tick may be a control event (reset read ptr / replay trace) rather than a program GO.
+            if (mailboxes->go_messages[mailboxes->go_message_index].go_count != mailboxes->go_processed) {
+                uint8_t signal = mailboxes->go_messages[mailboxes->go_message_index].signal;
+                if ((signal == RUN_MSG_RESET_READ_PTR) || (signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                    (signal == RUN_MSG_REPLAY_TRACE)) {
                     // Set the rd_ptr on workers to specified value
                     mailboxes->launch_msg_rd_ptr = 0;
-                    if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                        if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                    uint32_t go_message_index = mailboxes->go_message_index;
+                    if (signal == RUN_MSG_RESET_READ_PTR || signal == RUN_MSG_REPLAY_TRACE) {
+                        if (signal == RUN_MSG_REPLAY_TRACE) {
                             DeviceIncrementTraceCount();
                             DeviceTraceOnlyProfilerInit();
                         }
-                        // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
-                        // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
-                        // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC
-                        // txn is not issued. dispatch_s only puts RUN_MSG_GO on the FDS wire, so this always uses NOC.
-                        signal_dispatch_core_done(mailboxes->go_message_index, /*worker_completion_group=*/0);
+                        // Consume the control: sync go_processed to the bumped go_count (done == go_count ==
+                        // go_processed). Querying the noc_index is safe here: a reset is only seen after a program
+                        // GO, which sets noc_index to a valid value (initialized to 0 so no invalid NOC txn issues).
+                        // dispatch_s puts program GOs on the FDS wire, so a reset always returns over the NOC.
+                        mailboxes->go_processed = mailboxes->go_messages[go_message_index].go_count;
+                        signal_dispatch_core_done(/*worker_completion_group=*/0);
+                    } else {
+                        // RESET_READ_PTR_FROM_HOST: host-driven, no dispatcher notify.
+                        mailboxes->go_processed = mailboxes->go_messages[go_message_index].go_count;
                     }
+                    continue;  // handled a control event; back to waiting (no program to run)
                 }
             }
 
@@ -356,10 +365,14 @@ extern "C" uint32_t _start1() {
 
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
+            // Counter model: a program GO is pending when go_count has outrun go_processed (control signals were
+            // handled + continued above; the FDS interrupt advances go_count for program GOs). The preload path can
+            // reach here with go_count == go_processed, in which case prepare_worker_completion_signal waits for it.
+            const bool have_program_go =
+                mailboxes->go_messages[mailboxes->go_message_index].go_count != mailboxes->go_processed;
             uint32_t worker_completion_group =
-                go_message_signal == RUN_MSG_GO
-                    ? prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/false)
-                    : 0;
+                have_program_go ? prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/false)
+                                : 0;
             {
                 // Only include this iteration in the device profile if the launch message is valid. This is because all
                 // workers get a go signal regardless of whether they're running a kernel or not. We don't want to
@@ -420,7 +433,7 @@ extern "C" uint32_t _start1() {
                 setup_dfb_implicit_sync(dfb_l1_base, num_local_dfbs);
                 WAYPOINT("D");
 
-                if (worker_completion_group == 0 && go_message_signal != RUN_MSG_GO) {
+                if (worker_completion_group == 0 && !have_program_go) {
                     worker_completion_group =
                         prepare_worker_completion_signal(mailboxes, launch_msg_address, /*wait_for_go=*/true);
                 }
@@ -440,8 +453,9 @@ extern "C" uint32_t _start1() {
             }
 
             // Signal host/dispatcher completion after the DM0-FW zone above has finalized, so DM0's markers
-            // are readable when the host wakes on RUN_MSG_DONE.
-            const uint32_t go_message_index = mailboxes->go_message_index;
+            // are readable when the host observes done (go_count == go_processed).
+            // Count this processed program GO (done == go_count == go_processed).
+            mailboxes->go_processed++;
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
@@ -453,11 +467,10 @@ extern "C" uint32_t _start1() {
                 // launch messages in the ring buffer. Must be executed before signalling completion, as after that
                 // the launch message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                signal_dispatch_core_done(go_message_index, worker_completion_group);
+                signal_dispatch_core_done(worker_completion_group);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
-            } else {
-                mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
             }
+            // Non-dispatch mode needs no explicit done publish: the host polls go_processed, already advanced above.
         }
     }
     // Subordinates run this

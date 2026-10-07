@@ -560,4 +560,84 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     distributed::Finish(mesh_device->mesh_command_queue(1));
 }
 
+// A trace replay advances the host's shared per-sub-device GO-count mirror by a computed amount (the replay's reset go
+// plus the traced program gos), and the next CQ to take ownership of the sub-device reseeds the dispatcher's GO counter
+// from that mirror. Replay on one CQ, hand the sub-device to the other CQ (and back), and count how many times every
+// core actually ran: a mirror that is low drops the next GO, leaving the count short. Not covered: a mirror that is
+// high makes the worker run ahead into already-queued launch slots (a spurious done, healed by the next read-pointer
+// reset), so the run count stays exact.
+TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixTestSubDeviceCQOwnershipAfterTraceReplay) {
+    if (this->num_cqs_ != 2) {
+        GTEST_SKIP() << "This test must be run with TT_METAL_GTEST_NUM_HW_CQS=2";
+    }
+    CreateDevice(16384);
+    auto mesh_device = device_;
+
+    const CoreRange worker_range({0, 0}, {2, 2});
+    SubDevice sub_device(std::array{CoreRangeSet(worker_range)});
+    auto sub_device_manager = mesh_device->create_sub_device_manager({sub_device}, k_local_l1_size);
+    mesh_device->load_sub_device_manager(sub_device_manager);
+
+    const uint32_t counter_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> zero = {0};
+        slow_dispatch::WriteToL1(*mesh_device, core, counter_addr, zero);
+    }
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/local_counter_increment.cpp",
+        CoreRangeSet(worker_range),
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt_metal::NOC::RISCV_0_default,
+            .compile_args = {counter_addr}});
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+
+    auto& cq0 = mesh_device->mesh_command_queue(0);
+    auto& cq1 = mesh_device->mesh_command_queue(1);
+    uint32_t expected_runs = 0;
+
+    // Compile and run once on CQ 0, then capture a trace of several launches on CQ 0.
+    distributed::EnqueueMeshWorkload(cq0, workload, false);
+    expected_runs += 1;
+    constexpr uint32_t k_programs_in_trace = 3;
+    auto trace_id = mesh_device->begin_mesh_trace(cq0);
+    for (uint32_t i = 0; i < k_programs_in_trace; i++) {
+        distributed::EnqueueMeshWorkload(cq0, workload, false);
+    }
+    mesh_device->end_mesh_trace(cq0, trace_id);
+
+    // Replay on CQ 0, then hand the sub-device to CQ 1, which reseeds from the mirror the replays advanced.
+    constexpr uint32_t k_replays = 2;
+    for (uint32_t i = 0; i < k_replays; i++) {
+        mesh_device->replay_mesh_trace(cq0, trace_id, false);
+        expected_runs += k_programs_in_trace;
+    }
+    distributed::Finish(cq0);
+    for (uint32_t i = 0; i < 2; i++) {
+        distributed::EnqueueMeshWorkload(cq1, workload, false);
+        expected_runs += 1;
+    }
+    distributed::Finish(cq1);
+
+    // And back: CQ 0 retakes the sub-device through the replay path, then CQ 1 retakes it right after that replay.
+    mesh_device->replay_mesh_trace(cq0, trace_id, false);
+    expected_runs += k_programs_in_trace;
+    distributed::Finish(cq0);
+    distributed::EnqueueMeshWorkload(cq1, workload, false);
+    expected_runs += 1;
+    distributed::Finish(cq1);
+
+    distributed::Synchronize(*mesh_device, std::nullopt);
+    for (const CoreCoord& core : worker_range) {
+        std::vector<uint32_t> counter;
+        slow_dispatch::ReadFromL1(*mesh_device, core, counter_addr, sizeof(uint32_t), counter);
+        EXPECT_EQ(counter[0], expected_runs) << "core " << core.str();
+    }
+    mesh_device->release_mesh_trace(trace_id);
+}
+
 }  // namespace tt::tt_metal

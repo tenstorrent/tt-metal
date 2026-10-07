@@ -28,7 +28,11 @@ FORCE_INLINE void signal_completion_before_hang() {
 #endif
 #else
     const uint32_t go_message_index = *GET_MAILBOX_ADDRESS_DEV(go_message_index);
-    uint64_t dispatch_addr = calculate_dispatch_addr(GET_MAILBOX_ADDRESS_DEV(go_messages[go_message_index]));
+    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[go_message_index]);
+    // GO-counter: advance go_processed to the go we are completing (mirrors FW's done path) before notifying the
+    // dispatcher, so the counter does not stay behind go_count on this core.
+    *GET_MAILBOX_ADDRESS_DEV(go_processed) = go_message_in->go_count;
+    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
     notify_dispatch_core_done(dispatch_addr, noc_index);
 #endif
 }

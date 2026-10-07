@@ -995,7 +995,10 @@ KernelGroup::KernelGroup(
     kernel_config.reload_table_addr() = program.get_reload_table_addr(this->core_ranges);
     kernel_config.local_cb_mask() = local_cb_mask;
     kernel_config.min_remote_cb_start_index() = min_remote_cb_start_index;
+    // Program GO: signal byte is RUN_MSG_GO (what the worker checks to run). go_count is a placeholder -- fast
+    // dispatch overrides it in dispatch_s; slow dispatch ticks it per core at launch time (see LaunchProgram).
     this->go_msg.view().signal() = dev_msgs::RUN_MSG_GO;
+    this->go_msg.view().go_count() = 0;
 }
 
 CoreType KernelGroup::get_core_type() const {

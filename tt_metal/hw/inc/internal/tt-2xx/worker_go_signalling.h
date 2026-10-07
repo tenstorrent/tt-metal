@@ -4,6 +4,11 @@
 
 #pragma once
 
+// GO-COUNTER CONVERSION (UNVERIFIED on Quasar HW): the boolean go_msg_t.signal was replaced by a go_count /
+// go_processed pair (see hostdev/dev_msgs.h and the tt-1xx reference worker in brisc.cc). FDS go-signalling is
+// #ifdef FDS_SIGNALLING (Quasar-only) and is not built on Wormhole, so this conversion could not be compiled or
+// run here -- the FDS owner must build + validate it on Quasar.
+
 #include <cstdint>
 
 #include "internal/firmware_common.h"
@@ -53,7 +58,14 @@ __attribute__((interrupt)) inline void fds_go_interrupt_handler() {
 
     // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
     if (group_id == overlay::fds_signalling::go_group_for_sub_device(mailboxes->go_message_index)) {
-        mailboxes->go_messages[overlay::fds_signalling::sub_device_from_go_group(group_id)].signal = RUN_MSG_GO;
+        // GO-counter: a program GO arrives over the FDS wire (not L1). Mark it a program GO (signal = RUN_MSG_GO)
+        // and advance this sub-device's go_count -- the DM worker loop reads signal to distinguish a program from a
+        // control tick, then drains go_count - go_processed. Set signal before the count so the worker never observes
+        // the new count with a stale signal. The handler is go_count's only writer for program GOs; control signals
+        // write it over the NOC, and the two never overlap (go-signals are serialized).
+        const uint32_t sd = overlay::fds_signalling::sub_device_from_go_group(group_id);
+        mailboxes->go_messages[sd].signal = RUN_MSG_GO;
+        mailboxes->go_messages[sd].go_count++;
     }
 }
 
@@ -110,7 +122,9 @@ inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
     overlay::fds_signalling::worker_config_interrupt_enable(fds_go_interrupt_mask);
     asm volatile("csrrs zero, mie, %0" : : "r"(uint32_t{1} << MACHINE_EXTERNAL_INTERRUPT_OFFSET));
     asm volatile("csrrs zero, mstatus, %0" : : "r"(uint32_t{1} << 3));
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    // GO-counter: report firmware-ready by catching go_processed up to go_count (done == go_count == go_processed),
+    // which clears the host's init sentinel in go_processed.
+    mailboxes->go_processed = mailboxes->go_messages[0].go_count;
 }
 
 // Readies this launch's FDS done: waits for the go if asked, then queues idle on the done wire so the
@@ -125,7 +139,8 @@ inline uint32_t prepare_worker_completion_signal(
     const uint32_t go_message_index = mailboxes->go_message_index;
     if (wait_for_go) {
         WAYPOINT("FGW");
-        while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO);
+        // GO-counter: wait for this slot's go_count to advance past go_processed (the FDS interrupt advances it).
+        while (mailboxes->go_messages[go_message_index].go_count == mailboxes->go_processed);
         WAYPOINT("FGD");
     }
 
@@ -140,7 +155,9 @@ inline void signal_worker_completion(uint32_t worker_completion_group) {
 }
 #else
 inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    // GO-counter: report firmware-ready by catching go_processed up to go_count (done == go_count == go_processed),
+    // which clears the host's init sentinel in go_processed.
+    mailboxes->go_processed = mailboxes->go_messages[0].go_count;
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
 }
 

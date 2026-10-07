@@ -2562,12 +2562,9 @@ public:
         // Num Workers Resolved when the program is enqueued
         device_command_sequence.add_dispatch_go_signal_mcast(
             0,
-            metal_ctx.hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_GO,
-                // Dispatch X/Y resolved when the program is enqueued
-                0,
-                0,
-                metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(sub_device_index)),
+            // go_signal carries only go_msg_t word 0 ({signal, go_count}); go_count is a dispatcher-overridden
+            // placeholder. The done-return address (word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR.
+            metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_GO),
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
             has_multicast_launch_cmds ? sub_device_index : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             dispatcher_for_go_signal);
@@ -2943,7 +2940,6 @@ void update_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     const ProgramDispatchMetadata& dispatch_md,
     ProgramBinaryStatus program_binary_status,
@@ -3097,13 +3093,9 @@ void update_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        dispatch_core.x,
-        dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
+    // Update go signal wait count. go_signal carries only word 0 ({signal, go_count}); the done-return address
+    // (dispatch_core/offset, word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR on CQ-ownership change, not here.
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(0, dev_msgs::RUN_MSG_GO);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -3112,7 +3104,6 @@ void update_traced_program_dispatch_commands(
     ProgramCommandSequence& cached_program_command_sequence,
     uint32_t multicast_cores_launch_message_wptr,
     uint32_t expected_num_workers_completed,
-    CoreCoord dispatch_core,
     SubDeviceId sub_device_id,
     ProgramBinaryStatus program_binary_status,
     uint8_t cq_id) {
@@ -3289,13 +3280,9 @@ void update_traced_program_dispatch_commands(
     for (auto* launch_msg_cmd_ptr : cached_program_command_sequence.launch_msg_write_packed_cmd_ptrs) {
         launch_msg_cmd_ptr->addr = multicast_cores_launch_msg_addr;
     }
-    // Update go signal to reflect potentially modified dispatch core and new wait count
-    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(
-        dev_msgs::RUN_MSG_GO,
-        dispatch_core.x,
-        dispatch_core.y,
-        metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
-            metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id));
+    // Update go signal wait count. go_signal carries only word 0 ({signal, go_count}); the done-return address
+    // (dispatch_core/offset, word 1) is written separately by SET_GO_SIGNAL_NOC_ADDR on CQ-ownership change, not here.
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal = hal.make_go_msg_u32(0, dev_msgs::RUN_MSG_GO);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
 }
 
@@ -3608,7 +3595,6 @@ void reset_worker_dispatch_state_on_device(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& manager,
     uint8_t cq_id,
-    CoreCoord dispatch_core,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
     bool reset_launch_msg_state,
     ttsl::Span<const vector_aligned<uint32_t>> setup_commands) {
@@ -3654,12 +3640,9 @@ void reset_worker_dispatch_state_on_device(
             SubDeviceId sub_device_id(static_cast<uint8_t>(i));
             command_sequence.add_dispatch_go_signal_mcast(
                 expected_num_workers_completed[i],
-                metal_ctx.hal().make_go_msg_u32(
-                    dev_msgs::RUN_MSG_RESET_READ_PTR,
-                    dispatch_core.x,
-                    dispatch_core.y,
-                    metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(i) +
-                        metal_ctx.dispatch_mem_map().get_completion_counter_offset(cq_id)),
+                // go_signal word 0: RESET_READ_PTR control (go_count is a dispatcher-overridden placeholder). The
+                // done-return address (word 1) was already established by SET_GO_SIGNAL_NOC_ADDR at setup.
+                metal_ctx.hal().make_go_msg_u32(0, dev_msgs::RUN_MSG_RESET_READ_PTR),
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(i),
                 mesh_device->impl().has_noc_mcast_txns(sub_device_id) ? i : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
                 dispatcher_for_go_signal);
@@ -3751,6 +3734,43 @@ void set_num_worker_sems_on_dispatch(
     submit_setup_commands(manager, cq_id, commands.data(), commands.size_bytes());
 }
 
+// Emits CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR to one device: writes this sub-device's done-return address (go_msg_t
+// word 1 = {master_x, master_y, offset}) to its workers and reseeds the dispatcher's go_count baseline. Used both at
+// sub-device setup (before the reset gos, which now notify via the split-out word 1) and on CQ-ownership change
+// (before the new owner's first go). Targets workers identically to the go signal.
+void set_go_signal_noc_addr_on_dispatch(
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    uint8_t sync_index,
+    uint8_t go_count,
+    uint8_t master_x,
+    uint8_t master_y,
+    uint8_t offset,
+    uint8_t multicast_go_offset,
+    uint8_t num_unicast_txns,
+    uint8_t noc_data_start_index) {
+    MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
+    tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
+    calculator.add_dispatch_set_go_signal_noc_addr();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+    HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
+    // Must target the same dispatcher that sends the go (its go_count_per_sync is the one reseeded).
+    DispatcherSelect dispatcher_for_go_signal = metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()
+                                                    ? DispatcherSelect::DISPATCH_SUBORDINATE
+                                                    : DispatcherSelect::DISPATCH_MASTER;
+    command_sequence.add_dispatch_set_go_signal_noc_addr(
+        sync_index,
+        go_count,
+        master_x,
+        master_y,
+        offset,
+        multicast_go_offset,
+        num_unicast_txns,
+        noc_data_start_index,
+        dispatcher_for_go_signal);
+    submit_setup_commands(manager, cq_id, command_sequence.data(), command_sequence.size_bytes());
+}
+
 // Wait for number of workers to complete and then reset the counter on the device
 void reset_expected_num_workers_completed_on_device(
     Device* device, SubDeviceId sub_device_id, uint32_t num_expected_workers, uint8_t cq_id) {
@@ -3814,7 +3834,8 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     MetalContext& metal_ctx = MetalContext::instance(device->get_context_id());
     tt::tt_metal::DeviceCommandCalculator calculator(metal_ctx);
     uint32_t go_msg_size = metal_ctx.hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG);
-    calculator.add_dispatch_write_linear<true, true>(go_msg_size);
+    uint32_t single_go_msg_size = go_msg_size / dev_msgs::go_message_num_entries;
+    calculator.add_dispatch_write_linear<true, true>(single_go_msg_size);
     calculator.add_dispatch_wait();
 
     std::vector<std::pair<const void*, uint32_t>> data;
@@ -3860,18 +3881,24 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     CoreCoord virtual_end = device->virtual_core_from_logical_core(all_core_range_logical.end_coord, CoreType::WORKER);
     CoreRange all_core_range_virtual{virtual_start, virtual_end};
 
-    // Write done to all indices on all tensix cores. All cores should already be idle at this point, but they may have
-    // garbage in the GO message entries they aren't using.
-    std::vector<uint32_t> go_data(dev_msgs::go_message_num_entries, dev_msgs::RUN_MSG_DONE);
-    TT_ASSERT(
-        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) %
-            metal_ctx.hal().get_alignment(HalMemType::L1) ==
-        0);
+    // Clear ONLY the "unused" GO message slot (go_message_num_entries - 1), which unassigned cores watch (see
+    // SubDeviceManager::populate_sub_device_data). The active sub-device slots [0..num_sub_devices) are left to
+    // reset_worker_dispatch_state_on_device's RESET go-signal, which syncs each slot's go_count to the dispatcher's
+    // mcast count and the worker's go_processed. Clearing an active slot here would write a fixed go_count that
+    // desyncs it from go_processed (the GO counter has no fixed "idle" value), making the worker phantom-run until
+    // the byte wraps. Tag the clear with RESET_READ_PTR_FROM_HOST so an unassigned worker routes to the control
+    // branch (go_processed = go_count) instead of reading go_count != go_processed as a program GO.
+    constexpr uint32_t unused_go_message_index = dev_msgs::go_message_num_entries - 1;
+    uint32_t unused_go_msg_addr =
+        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG) +
+        unused_go_message_index * single_go_msg_size;
+    std::vector<uint32_t> go_data(1, dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST);
+    TT_ASSERT(unused_go_msg_addr % metal_ctx.hal().get_alignment(HalMemType::L1) == 0);
     command_sequence.add_dispatch_write_linear<true, true>(
         all_core_range_logical.size(),
         device->get_noc_multicast_encoding(noc_index, all_core_range_virtual),
-        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::GO_MSG),
-        go_msg_size,
+        unused_go_msg_addr,
+        single_go_msg_size,
         go_data.data());
     // Wait for previous writes before updating index.
     command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, cq_id);

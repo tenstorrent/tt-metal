@@ -262,18 +262,22 @@ HalProcessorSet Hal::parse_processor_set_spec(std::string_view spec) const {
     return set;
 }
 
-uint32_t Hal::make_go_msg_u32(
-    uint8_t signal, uint8_t master_x, uint8_t master_y, uint8_t dispatch_message_offset) const {
-    uint32_t go_msg_u32_val = 0;
+uint32_t Hal::make_go_msg_u32(uint8_t go_count, uint8_t signal) const {
+    // Builds only go_msg_t word 0 ({signal, go_count}) -- the per-go payload carried in a SEND_GO_SIGNAL command's
+    // go_signal field. The done-return address (word 1: master_x/master_y/offset) is no longer carried per-go; it is
+    // written independently by CQ_DISPATCH_SET_GO_SIGNAL_NOC_ADDR. go_msg_t spans two words, so the view sits on a
+    // 64-bit buffer and we return the low word.
+    uint64_t go_msg_u64_val = 0;
     // We know go_msg_t is the same for all core types, so we can use TENSIX's factory.
     auto go_msg = get_dev_msgs_factory(HalProgrammableCoreType::TENSIX)
-                      .create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u32_val));
-    TT_ASSERT(go_msg.size() == sizeof(uint32_t));
+                      .create_view<dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&go_msg_u64_val));
+    TT_ASSERT(go_msg.size() == sizeof(uint64_t));
+    // `signal` is the run-state control byte (RUN_MSG_GO for a program launch, or a control code). `go_count` seeds
+    // the GO-counter byte; on the dispatcher paths it is a placeholder (dispatch_s, or dispatch_d when dispatch_s is
+    // disabled, overrides it with its running per-target count before sending), so callers pass 0.
     go_msg.signal() = signal;
-    go_msg.master_x() = master_x;
-    go_msg.master_y() = master_y;
-    go_msg.dispatch_message_offset() = dispatch_message_offset;
-    return go_msg_u32_val;
+    go_msg.go_count() = go_count;
+    return static_cast<uint32_t>(go_msg_u64_val);
 }
 
 }  // namespace tt::tt_metal
