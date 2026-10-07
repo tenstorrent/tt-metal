@@ -3061,7 +3061,7 @@ class ModelArgs:
             self.layer_types = ["sliding_attention" if (i % 2 == 0) else "full_attention" for i in range(self.n_layers)]
             self.sliding_window_pattern = [lt == "sliding_attention" for lt in self.layer_types]
 
-        # Command-R7B checkpoints doesn't carry `layer_type` list. Replicate 
+        # Command-R7B checkpoints doesn't carry `layer_type` list. Replicate
         # huggingface Cohere2Config
         if (
             self.model_type is not None
