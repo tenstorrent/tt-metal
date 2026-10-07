@@ -69,3 +69,45 @@ def test_as_tensor_with_cache(tmp_path, device, height, width):
 
     torch_output_tensor = ttnn.to_torch(tensor)
     assert torch.allclose(torch_input_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("height", [7])
+@pytest.mark.parametrize("width", [3])
+def test_as_tensor_with_cache_local_dump(tmp_path, device, height, width):
+    torch_input_tensor = torch.rand((height, width), dtype=torch.float32)
+
+    memory_config = ttnn.L1_MEMORY_CONFIG
+    kwargs = dict(
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+        cache_file_name=tmp_path / "cache_file",
+        cache_dump_mode=ttnn.DumpTensorMode.LOCAL,
+    )
+    ttnn.as_tensor(torch_input_tensor, **kwargs)
+    cached = list(tmp_path.iterdir())
+    assert len(cached) == 1 and cached[0].suffix == ".tensorbin", "the dump should publish one cache file, no temp file"
+
+    # A cache hit ignores the input, so the values must come from the file written above.
+    tensor = ttnn.as_tensor(torch.zeros_like(torch_input_tensor), **kwargs)
+    assert tensor.device() == device
+    assert torch.allclose(torch_input_tensor, ttnn.to_torch(tensor))
+
+
+def test_as_tensor_local_dump_cleans_up_on_failure(tmp_path, monkeypatch):
+    def failing_dump(file_name, tensor, mode):
+        with open(file_name, "wb") as f:
+            f.write(b"partial")
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(ttnn._ttnn.tensor, "dump_tensor_flatbuffer", failing_dump)
+    with pytest.raises(RuntimeError, match="disk full"):
+        ttnn.as_tensor(
+            torch.rand((7, 3), dtype=torch.float32),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            cache_file_name=tmp_path / "cache_file",
+            cache_dump_mode=ttnn.DumpTensorMode.LOCAL,
+        )
+    assert list(tmp_path.iterdir()) == [], "a failed dump must not leave a temp or partial cache file behind"
