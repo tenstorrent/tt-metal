@@ -475,8 +475,6 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveMultiTile) {
              .seed = 53}});
 }
 
-// L_CACHED = false: the solve reads L with the data cache left disabled; the same shapes as the cached multi-tile and
-// exact cases must produce the same X.
 TEST_F(LLKBlackholeSingleCardFixture, TensixTriangleSolveUncachedL) {
     unit_tests::compute::sfpu::triangle_solve::run_cases(
         this->devices_.at(0),

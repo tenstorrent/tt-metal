@@ -66,7 +66,7 @@ void kernel_main() {
 
             tile_regs_acquire();
             copy_tile(cb_rhs, 0 /*in_tile_index*/, DST_RHS);
-            triangle_solve_tile<L_FORMAT, L_NEGATED, DST_ACCUM_MODE, L_CACHED>(cb_l, l_tile_idx, DST_RHS, DST_X);
+            triangle_solve_tile<L_FORMAT, L_NEGATED, L_CACHED>(cb_l, l_tile_idx, DST_RHS, DST_X);
             tile_regs_commit();
 
             tile_regs_wait();
