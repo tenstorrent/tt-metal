@@ -6,8 +6,7 @@ The reference is the op's registered golden, ``ttnn.get_golden_function(ttnn.tra
 (``ttnn/ttnn/operations/transformer_golden.py``): FLA's ``naive_recurrent_gated_delta_rule`` math, the exact form the
 vLLM ``fused_sigmoid_gating_delta_rule_update`` implements, with per-token states for the multi-token verify kernel. The
 golden is checked against FLA naive itself in
-``tests/ttnn/nightly/unit_tests/operations/transformers/test_fused_recurrent_gdn_golden.py``; ``fla_naive_recurrent_gated_delta_rule``
-below still reaches the real FLA function (installed package or ``FLA_REPO``) for an external cross-check.
+``tests/ttnn/unit_tests/operations/transformers/test_fused_recurrent_gdn_golden.py``.
 
 Contract note (must match the device kernels):
   * FLA naive does NOT L2-normalize q/k and does NOT sigmoid beta — those are the layer's job
@@ -17,11 +16,7 @@ Contract note (must match the device kernels):
   * scale defaults to Dk**-0.5, applied to q AFTER the L2-norm (matches gdn/tp.py and FLA).
 """
 
-import os
-import sys
-
 import torch
-
 from ttnn.operations.transformer_golden import recurrent_gated_delta_rule
 
 
@@ -30,28 +25,6 @@ def naive_recurrent_gated_delta_rule(q, k, v, beta, g, scale=None, initial_state
     return recurrent_gated_delta_rule(
         q, k, v, beta, g, scale=scale, initial_state=initial_state, output_final_state=output_final_state
     )
-
-
-def fla_naive_recurrent_gated_delta_rule():
-    """The real fla.ops.gated_delta_rule.naive.naive_recurrent_gated_delta_rule when importable (installed package,
-    then FLA_REPO), else None. The golden is bit-identical to FLA's statements; this is the external cross-check."""
-    try:
-        from fla.ops.gated_delta_rule.naive import naive_recurrent_gated_delta_rule as fla_naive
-
-        return fla_naive
-    except Exception:
-        pass
-    repo = os.environ.get("FLA_REPO")
-    if repo and os.path.isdir(os.path.join(repo, "fla")):
-        if repo not in sys.path:
-            sys.path.insert(0, repo)
-        try:
-            from fla.ops.gated_delta_rule.naive import naive_recurrent_gated_delta_rule as fla_naive
-
-            return fla_naive
-        except Exception:
-            pass
-    return None
 
 
 def naive_recurrent_per_token_state(q, k, v, beta, g, scale=None, initial_state=None):

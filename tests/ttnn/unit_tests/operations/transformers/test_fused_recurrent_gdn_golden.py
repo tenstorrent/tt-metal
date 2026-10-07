@@ -8,7 +8,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.nightly.unit_tests.operations.transformers.gdn_decode_test_utils import (
+from tests.ttnn.unit_tests.operations.transformers.gdn_decode_test_utils import (
     SHAPES,
     chained_decode,
     fla_naive_recurrent_gated_delta_rule,
@@ -33,16 +33,14 @@ def test_fused_recurrent_gdn_has_registered_golden_function():
 @pytest.mark.parametrize("with_state", [True, False])
 def test_golden_matches_fla_naive(shape, B, T, with_state):
     """The op's argument order (q, k, v, g, beta) over FLA naive's (q, k, v, beta, g); q, k pre-normalised on the host
-    as FLA naive expects; GQA expanded on the host for FLA. Bit-identical against the vendored copy (same statements in
-    the same order), close against an installed FLA."""
+    as FLA naive expects; GQA expanded on the host for FLA. Bit-identical: the same statements in the same order."""
     sh = SHAPES[shape]
     x = make_inputs(B, T, sh.num_key_heads, sh.num_value_heads, K, V, seed=1, with_state=with_state)
     o, state = _golden()(
         x["q"], x["k"], x["v"], x["g"], x["beta"], initial_state=x["initial_state"], output_final_state=True
     )
-    fla, source = fla_naive_recurrent_gated_delta_rule()
     groups = sh.num_value_heads // sh.num_key_heads
-    o_ref, state_ref = fla(
+    o_ref, state_ref = fla_naive_recurrent_gated_delta_rule(
         x["q"].repeat_interleave(groups, dim=2),
         x["k"].repeat_interleave(groups, dim=2),
         x["v"],
@@ -52,11 +50,7 @@ def test_golden_matches_fla_naive(shape, B, T, with_state):
         output_final_state=True,
     )
     assert o.shape == (B, T, sh.num_value_heads, V) and state.shape == (B, sh.num_value_heads, K, V)
-    if source == "vendored":
-        assert torch.equal(o, o_ref) and torch.equal(state, state_ref)
-    else:
-        torch.testing.assert_close(o, o_ref)
-        torch.testing.assert_close(state, state_ref)
+    assert torch.equal(o, o_ref) and torch.equal(state, state_ref)
 
 
 def test_golden_in_reference_l2norm_equals_host_l2norm():
