@@ -29,6 +29,10 @@
 
 using namespace dataflow_kernel_lib;
 
+#ifndef MMRS_FINALS_PER_LINK
+#define MMRS_FINALS_PER_LINK 2
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb_act_operand = get_compile_time_arg_val(0);
     constexpr uint32_t cb_partial_handoff = get_compile_time_arg_val(1);
@@ -61,8 +65,9 @@ void kernel_main() {
     constexpr uint32_t order_stride = 4;
     const uint32_t order_idx = arg;
     arg += order_stride * num_blocks;
-    const uint32_t consumers_idx = arg;  // 4L packed NoC coords (x << 16 | y): fwd ports, bwd ports, finals
-    arg += 4 * num_links;
+    constexpr uint32_t num_finals = MMRS_FINALS_PER_LINK * num_links;
+    const uint32_t consumers_idx = arg;  // (2 + F) L packed NoC coords (x << 16 | y): fwd ports, bwd ports, finals
+    arg += 2 * num_links + num_finals;
 
     const auto a_acc = TensorAccessor(a_args, a_addr, a_tile_bytes);
 
@@ -78,7 +83,7 @@ void kernel_main() {
         }
         const uint32_t kind = get_arg_val<uint32_t>(order_idx + order_stride * signalled + 1);
         const uint32_t first = kind == 0 ? 0 : (kind == 1 ? num_links : 2 * num_links);
-        const uint32_t count = kind == 2 ? 2 * num_links : num_links;
+        const uint32_t count = kind == 2 ? num_finals : num_links;
         // A consumer counts ready signals cumulatively from every compute core, so no core may signal its next block
         // before the consumer is done with its current one (else a fast core's next-block signal could stand in for a
         // slow core's missing current-block signal): wait until this kind's consumers have acked every earlier block

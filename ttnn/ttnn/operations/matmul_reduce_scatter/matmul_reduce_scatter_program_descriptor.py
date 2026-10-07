@@ -30,7 +30,11 @@ BF16_TILE_BYTES = 2048
 
 # ---- Blocking knobs (single source of truth; every dependent quantity derives from these) --------------------------
 OPERAND_DEPTH = 2  # streamed operand K-blocks in flight (double buffering)
-HANDOFF_DEPTH = 2  # hand-off slack per compute core, in scatter blocks (slots = HANDOFF_DEPTH * waves)
+# hand-off slack per compute core, in scatter blocks (slots = handoff_depth * waves). The planner raises the depth from
+# this floor toward G (one slot per scatter block: the matmul never waits on slot reuse, i.e. on a relay entry held by
+# upstream arrivals -- Perf 2: FOCUS 166 -> 149 us, MiMo 341 -> 326 us) as far as L1 allows WITHOUT changing the
+# floor-depth plan (regime, K-block, core block, waves): trading K-block for depth measured +15 us (K3 FFN, fp32 DEST).
+HANDOFF_DEPTH_MIN = 2
 BLOCKS_IN_FLIGHT = 1  # scatter blocks per compute pass (lamp L3; >1 is a future knob-turn)
 STREAM_BUDGET = 384 * 1024  # bytes of streamed operand K-blocks per compute core
 K_MIN_RESIDENT = 4  # residency must not force a degenerate K-block
@@ -66,6 +70,18 @@ XPORT_PLACEMENT = os.environ.get("MMRS_XPORT_PLACEMENT", "eth")
 _PERF_DEFINES = ([("KERNEL_PERF_ZONES", "1")] if os.environ.get("MMRS_PERF_ZONES") else []) + [
     (f"MMRS_ABLATE_{x.strip().upper()}", "1") for x in os.environ.get("MMRS_ABLATE", "").split(",") if x.strip()
 ]
+# final cores per link (each owns 1/(F L) of the chip's own block: reads own partial + both arrivals, adds, stores);
+# the transport row holds (2 + F) L cores
+# W line multicast with rotating senders (every core of an n-line reads + multicasts every span-th K-block, rounds
+# offset by the line index so one round's senders form a diagonal); 0 = one fixed injector per line
+# relay ports: the port's BRISC (sender) reads the arrival segments from DRAM scratch (NoC1), its NCRISC only gathers the
+# own partial -- a relay reader otherwise pulls two 14 KB streams per packet on one RISC
+# transport cores' NoCs: 0 = readers (gathers, arrival reads, ack multicast) on NoC0, senders / final writers on NoC1;
+# 1 = swapped (the transport row is the top grid row: NoC1 brings gathers from the compute rows straight up)
+XPORT_NOC_SWAP = int(os.environ.get("MMRS_XPORT_NOC_SWAP", "0"))
+PORT_ARR = int(os.environ.get("MMRS_PORT_ARR", "0"))
+W_ROT = int(os.environ.get("MMRS_W_ROT", "0"))
+FINALS_PER_LINK = int(os.environ.get("MMRS_FINALS_PER_LINK", "2"))
 INC_EVERY = 8  # arrival-counter increment cadence (blackhole-fabric rule 4)
 DEST_TILES_16B = 8  # DEST capacity in 16-bit tiles (half-sync); a 32-bit DEST (fp32_dest_acc_en) holds half
 XPORT_ADD_BLOCK_MAX = DEST_TILES_16B // 2  # transport add: tiles per CB handshake / DEST batch (always fp32 DEST)
@@ -81,6 +97,7 @@ CB_PARTIAL_HANDOFF = 3
 CB_XPORT_PARTIAL = 4
 CB_XPORT_ARRIVAL_A = 5
 CB_XPORT_ARRIVAL_B = 6
+CB_XPORT_ZERO = 7  # one zero tile: the "+ 0" of the three-input final add
 CB_XPORT_SUM = 16
 
 
@@ -133,12 +150,13 @@ class Blocking:
     w_tile_bytes: int
     acc_dtype: object  # cb_partial_accum page format: follows the DEST width (fp32_dest_acc_en)
     acc_tile_bytes: int
+    handoff_depth: int = HANDOFF_DEPTH_MIN  # hand-off slack in scatter blocks (planner: up to G when L1 allows)
 
     @property
     def handoff_slots(self):
-        """cb_partial_handoff slots (one per compute unit): HANDOFF_DEPTH blocks of slack whatever the wave count, so
+        """cb_partial_handoff slots (one per compute unit): handoff_depth blocks of slack whatever the wave count, so
         splitting a block into waves never shrinks how far the matmul may run ahead of a stalled transport."""
-        return HANDOFF_DEPTH * self.waves
+        return self.handoff_depth * self.waves
 
 
 def _factorize(unit_m, unit_n, comp_rows, comp_cols):
@@ -413,7 +431,8 @@ def _plan_placement(mesh_device, num_links, groups=None, links=None):
     receive side). Falls back to the fixed layout [fwd l, bwd l, final (l,0), final (l,1)] per link."""
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
-    n_xport = 4 * num_links
+    F = FINALS_PER_LINK
+    n_xport = (2 + F) * num_links
     t_rows = _cdiv(n_xport, gx)
     if t_rows >= gy:
         raise ValueError("matmul_reduce_scatter: the core grid has no rows left for compute")
@@ -438,12 +457,12 @@ def _plan_placement(mesh_device, num_links, groups=None, links=None):
             free = iter(ttnn.CoreCoord(x, y) for x, y in row_cores if (x, y) not in taken)
             fwd = [c if c is not None else next(free) for c in fwd]
             bwd = [c if c is not None else next(free) for c in bwd]
-            fin = [next(free) for _ in range(2 * num_links)]
+            fin = [next(free) for _ in range(F * num_links)]  # final (l, h) at index l F + h
         else:  # fixed layout (identical on every chip)
             xport = [ttnn.CoreCoord(i % gx, i // gx) for i in range(n_xport)]
-            fwd = [xport[4 * l] for l in range(num_links)]
-            bwd = [xport[4 * l + 1] for l in range(num_links)]
-            fin = [xport[4 * l + 2 + h] for l in range(num_links) for h in range(2)]
+            fwd = [xport[(2 + F) * l] for l in range(num_links)]
+            bwd = [xport[(2 + F) * l + 1] for l in range(num_links)]
+            fin = [xport[(2 + F) * l + 2 + h] for l in range(num_links) for h in range(F)]
         pl.fwd_ports[coord], pl.bwd_ports[coord], pl.finals[coord] = fwd, bwd, fin
     virt = lambda x, y: mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
     pl.vx = [int(virt(x, 0).x) for x in range(gx)]
@@ -514,6 +533,8 @@ def create_mesh_program_descriptor(
     sem_block_ack = sems[4:7]  # one ack counter per consumer kind: fwd ports, bwd ports, finals
     G = blk.G
     L = num_links
+    FL = FINALS_PER_LINK * L  # final cores per chip
+    defs = _PERF_DEFINES + [("MMRS_FINALS_PER_LINK", str(FINALS_PER_LINK))]
     cm, cn = blk.core_m_tiles, blk.core_n_tiles
     block_tiles = cm * cn
     rect = compute_rect(pl, blk)
@@ -558,6 +579,21 @@ def create_mesh_program_descriptor(
     m_on_y = 1 if blk.orientation == "A" else 0
     mcoords = [pl.vy[pl.transport_rows + ml] if m_on_y else pl.vx[ml] for ml in range(blk.m_lines)]
     ncoords = [pl.vx[nl] if m_on_y else pl.vy[pl.transport_rows + nl] for nl in range(blk.n_lines)]
+    # NoC of each operand's injector reads + line multicast (A: NCRISC, W: BRISC); MMRS_A_NOC / MMRS_W_NOC override
+    # "auto": the block-invariant operand (A for scatter_dim=-1, W for -2; loaded during block 0, while the transport is
+    # idle) reads on NoC0, the operand streamed through the whole op reads on NoC1, off the transport's NoC0 traffic
+    a_invariant = blk.scatter_dim == -1
+    a_noc = {"0": NOC0, "1": NOC1}.get(os.environ.get("MMRS_A_NOC", "auto"), NOC0 if a_invariant else NOC1)
+    w_noc = {"0": NOC0, "1": NOC1}.get(os.environ.get("MMRS_W_NOC", "auto"), NOC1 if a_invariant else NOC0)
+    # Line-injector placement (MMRS_INJ): "first" = the first core of every line (A injectors form one grid column or
+    # row, W injectors the other); "diag" = the sender advances one core per line (A: m-line ml injects from n-line
+    # (ml + A_INJ_START) mod n_lines; W: n-line nl from m-line (nl + W_INJ_START) mod m_lines), so no two injectors of
+    # an operand share a grid row or column and their DRAM reads never converge on one NoC row / column.
+    diag = os.environ.get("MMRS_INJ", "diag") == "diag"
+    a_inj_start, w_inj_start = 0, (1 if diag else 0)
+    a_sender_nl = lambda ml: (a_inj_start + ml) % blk.n_lines if diag else 0
+    w_sender_ml = lambda nl: (w_inj_start + nl) % blk.m_lines if diag else 0
+    sender_placement = ttnn.Mcast1DSenderPlacement.Diagonal if diag else ttnn.Mcast1DSenderPlacement.Uniform
     a_line_shape = ttnn.Mcast1DShape.PerRow if blk.orientation == "A" else ttnn.Mcast1DShape.PerColumn
     w_line_shape = ttnn.Mcast1DShape.PerColumn if blk.orientation == "A" else ttnn.Mcast1DShape.PerRow
     # per-chip placement (pl.mode "eth") or one shared layout (keyed None)
@@ -586,20 +622,20 @@ def create_mesh_program_descriptor(
         order_rt, w_order_rt, cum = [], [], [0, 0, 0]  # cumulative acks per consumer kind (each kind acks in order)
         for b, (j, wv) in enumerate(units):
             kind = 2 if j == p else (0 if j in fwd else 1)
-            cum[kind] += 2 * L if kind == 2 else L
+            cum[kind] += FINALS_PER_LINK * L if kind == 2 else L
             a_row = (j * blk.blk_m_tiles if rows_wave else 0) + win[wv].r0
             order_rt += [a_row, kind, cum[kind], int(not (blk.a_resident and b > 0))]
             w_col = (0 if rows_wave else j * blk.blk_n_tiles) + win[wv].c0
             w_order_rt += [w_col, int(not (blk.w_resident and b > 0))]
 
         a_groups = {1: [], 0: []}
-        w_groups = {1: [], 0: []}
+        w_groups = {2: [], 1: [], 0: []}
         rd_rt, wr_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for ml in range(blk.m_lines):
             for nl in range(blk.n_lines):
                 c = compute_core(pl, blk, ml, nl)
-                a_groups[int(nl == 0)].append(c)
-                w_groups[int(ml == 0)].append(c)
+                a_groups[int(nl == a_sender_nl(ml))].append(c)
+                w_groups[2 if W_ROT else int(ml == w_sender_ml(nl))].append(c)
                 row0 = ml * cm
                 col0 = nl * cn
                 rd_rt[c.x][c.y] = (
@@ -614,12 +650,16 @@ def create_mesh_program_descriptor(
                     + order_rt
                     + consumers
                 )
-                wr_rt[c.x][c.y] = [
-                    w_addr,
-                    blk.Nt,
-                    col0,
-                    min(cn, un - col0),
-                ] + w_order_rt
+                wr_rt[c.x][c.y] = (
+                    [
+                        w_addr,
+                        blk.Nt,
+                        col0,
+                        min(cn, un - col0),
+                    ]
+                    + w_order_rt
+                    + ([nl] if W_ROT else [])
+                )
 
         reader_kernels, writer_kernels = [], []
         for sends, cores in a_groups.items():
@@ -630,7 +670,7 @@ def create_mesh_program_descriptor(
                 rt[c.x][c.y] = rd_rt[c.x][c.y]
             reader_kernels.append(
                 ttnn.KernelDescriptor(
-                    defines=_PERF_DEFINES,
+                    defines=defs,
                     kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_reader.cpp"),
                     core_ranges=_cset(cores),
                     compile_time_args=[
@@ -649,7 +689,7 @@ def create_mesh_program_descriptor(
                     ]
                     + a_ct,
                     runtime_args=rt,
-                    config=_dm("RISCV_1", NOC0),
+                    config=_dm("RISCV_1", a_noc),
                 )
             )
         for sends, cores in w_groups.items():
@@ -660,7 +700,7 @@ def create_mesh_program_descriptor(
                 rt[c.x][c.y] = wr_rt[c.x][c.y]
             writer_kernels.append(
                 ttnn.KernelDescriptor(
-                    defines=_PERF_DEFINES,
+                    defines=defs,
                     kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_writer.cpp"),
                     core_ranges=_cset(cores),
                     compile_time_args=[
@@ -676,29 +716,31 @@ def create_mesh_program_descriptor(
                     ]
                     + w_ct,
                     runtime_args=rt,
-                    config=_dm("RISCV_0", NOC1),
+                    config=_dm("RISCV_0", w_noc),
                 )
             )
         mc_a = ttnn.Mcast1D(
             mesh_device,
             rect_set,
             a_line_shape,
-            ttnn.Mcast1DFixedSenderConfig(),
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
+            ttnn.Mcast1DFixedSenderConfig(starting_sender_index=a_inj_start, sender_placement=sender_placement),
+            ttnn.McastConfig(noc=a_noc, handshake=True),
         )
         mc_w = ttnn.Mcast1D(
             mesh_device,
             rect_set,
             w_line_shape,
-            ttnn.Mcast1DFixedSenderConfig(),
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_1, handshake=True),
+            ttnn.Mcast1DRotatingSenderConfig()
+            if W_ROT
+            else ttnn.Mcast1DFixedSenderConfig(starting_sender_index=w_inj_start, sender_placement=sender_placement),
+            ttnn.McastConfig(noc=w_noc, handshake=True),
         )
         mc_a.attach(program, "a", reader_kernels)
         mc_w.attach(program, "w", writer_kernels)
         kernels += reader_kernels + writer_kernels
         kernels.append(
             ttnn.KernelDescriptor(
-                defines=_PERF_DEFINES,
+                defines=defs,
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_compute.cpp"),
                 core_ranges=rect_set,
                 compile_time_args=[
@@ -757,10 +799,7 @@ def create_mesh_program_descriptor(
                     arr_a,
                     arr_b,
                     ack_sem,
-                    x0,
-                    y0,
-                    x1,
-                    y1,
+                    *((x1, y1, x0, y0) if XPORT_NOC_SWAP else (x0, y0, x1, y1)),  # NoC1 multicast: start = max corner
                     blk.m_lines,
                     blk.n_lines,
                     len(entries),
@@ -771,7 +810,7 @@ def create_mesh_program_descriptor(
 
         def xport_reader_kernel(cores, rt, target, has_a, has_b):
             return ttnn.KernelDescriptor(
-                defines=_PERF_DEFINES,
+                defines=defs,
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_xport_reader.cpp"),
                 core_ranges=_cset(cores),
                 compile_time_args=[
@@ -791,13 +830,20 @@ def create_mesh_program_descriptor(
                 ]
                 + scr_ct,
                 runtime_args=rt,
-                config=_dm("RISCV_1", NOC0),
+                config=_dm("RISCV_1", NOC1 if XPORT_NOC_SWAP else NOC0),
             )
 
         def add_kernel(cores, rt, has_a, has_b):
             return ttnn.KernelDescriptor(
-                defines=_PERF_DEFINES,
-                kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_xport_add.cpp"),
+                defines=defs,
+                kernel_source=str(
+                    KERNEL_DIR
+                    / (
+                        "matmul_reduce_scatter_xport_add_raw.cpp"
+                        if os.environ.get("MMRS_XADD_RAW") == "1"
+                        else "matmul_reduce_scatter_xport_add.cpp"
+                    )
+                ),
                 core_ranges=_cset(cores),
                 compile_time_args=[
                     CB_XPORT_PARTIAL,
@@ -808,6 +854,7 @@ def create_mesh_program_descriptor(
                     has_b,
                     xport_add_block,
                     xp.seg_tiles,
+                    CB_XPORT_ZERO,
                 ],
                 runtime_args=rt,
                 # every cross-device addition accumulates in fp32 (requirement, independent of the user's config)
@@ -853,7 +900,7 @@ def create_mesh_program_descriptor(
                 # backward -> slot G), first seg, count, for the downstream finals (the last block: the downstream
                 # chip's own), their per-half counts in the wave (0 / 0 for relay blocks)]
                 snd_entries = []
-                for j in blocks:
+                for j, up in zip(blocks, ups):
                     fin = j == blocks[-1]
                     for wv in range(W):
                         wn = win[wv]
@@ -861,15 +908,16 @@ def create_mesh_program_descriptor(
                             G if (d == "bwd" and j == peer_p) else j,
                             *wn.segs(l, L, xp.segs_per_row),
                             int(fin),
-                            wn.segs(l, 2 * L, xp.segs_per_row)[1] if fin else 0,
-                            wn.segs(l + L, 2 * L, xp.segs_per_row)[1] if fin else 0,
+                            *[wn.segs(l + h * L, FL, xp.segs_per_row)[1] if fin else 0 for h in range(FINALS_PER_LINK)],
                             wn.s0,
                             wn.s1,
+                            j,  # this chip's arrival slot of block j (the relay reader's base_a)
+                            int(bool(up)),
                         ]
                 expect_in = sum(_incs(e[5]) for e in entries if e[3])  # arrival increments upstream sends here
                 rc = virt(peer_opp[l])  # peer chip's opposite-direction port
                 pc = virt(peer_same[l])  # downstream port of the same (direction, link)
-                f0, f1 = virt(peer_finals[2 * l]), virt(peer_finals[2 * l + 1])
+                fins = [virt(peer_finals[FINALS_PER_LINK * l + h]) for h in range(FINALS_PER_LINK)]
                 pn = node(peer)
                 args = [
                     scr_addr,
@@ -886,10 +934,7 @@ def create_mesh_program_descriptor(
                     rc[1],
                     pc[0],
                     pc[1],
-                    f0[0],
-                    f0[1],
-                    f1[0],
-                    f1[1],
+                    *[v for f in fins for v in (f[0], f[1])],
                     int(pn.mesh_id),
                     int(pn.chip_id),
                     len(blocks) * W,
@@ -903,10 +948,10 @@ def create_mesh_program_descriptor(
         has_fa = int(prev is not None and len(sched[groups[prev][0]][0]) > 0)
         has_fb = int(nxt is not None and len(sched[groups[nxt][0]][1]) > 0)
         rd_final, add_final, wr_final = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for i, core in enumerate(finals):  # final (l, h): segments l + h L, stride 2 L
-            first = i // 2 + (i % 2) * L
-            entries = xport_entries([p], [True], lambda j: j, lambda j: G, first, 2 * L)
-            rd_final[core.x][core.y] = xport_reader_rt(2 * L, entries, sem_arr_fwd, sem_arr_bwd, sem_block_ack[2])
+        for i, core in enumerate(finals):  # final (l, h) = index l F + h: segments l + h L, stride F L
+            first = i // FINALS_PER_LINK + (i % FINALS_PER_LINK) * L
+            entries = xport_entries([p], [True], lambda j: j, lambda j: G, first, FL)
+            rd_final[core.x][core.y] = xport_reader_rt(FL, entries, sem_arr_fwd, sem_arr_bwd, sem_block_ack[2])
             add_final[core.x][core.y] = [0, sum(e[5] for e in entries)]
             incs = sum(_incs(e[5]) for e in entries)  # one increment stream per wave (see the port sender)
             # the summed own block leaves the add kernel wave by wave: the writer walks the same windows
@@ -915,7 +960,7 @@ def create_mesh_program_descriptor(
                 out_addr,
                 xp.segs_per_row,
                 blk.blk_n_tiles,
-                2 * L,
+                FL,
                 sem_arr_fwd,
                 incs if has_fa else 0,
                 sem_arr_bwd,
@@ -932,9 +977,11 @@ def create_mesh_program_descriptor(
             cbs.append(_cb(CB_XPORT_ARRIVAL_A, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(arr_a_cores)))
         if has_fb:
             cbs.append(_cb(CB_XPORT_ARRIVAL_B, xport_pages, BF16_TILE_BYTES, ttnn.bfloat16, _cset(finals)))
+        if has_fa and has_fb:
+            cbs.append(_cb(CB_XPORT_ZERO, 1, BF16_TILE_BYTES, ttnn.bfloat16, _cset(finals)))
 
         if relay_ports:
-            kernels.append(xport_reader_kernel(relay_ports, rd_relay, CB_XPORT_PARTIAL, 1, 0))
+            kernels.append(xport_reader_kernel(relay_ports, rd_relay, CB_XPORT_PARTIAL, 0 if PORT_ARR else 1, 0))
             kernels.append(add_kernel(relay_ports, add_relay, 1, 0))
         if end_ports:
             kernels.append(xport_reader_kernel(end_ports, rd_end, CB_XPORT_SUM, 0, 0))
@@ -943,7 +990,7 @@ def create_mesh_program_descriptor(
         if senders:
             kernels.append(
                 ttnn.KernelDescriptor(
-                    defines=_PERF_DEFINES,
+                    defines=defs + ([("MMRS_PORT_ARR_CB", str(CB_XPORT_ARRIVAL_A))] if PORT_ARR else []),
                     kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_port_sender.cpp"),
                     core_ranges=_cset(senders),
                     compile_time_args=[
@@ -956,17 +1003,17 @@ def create_mesh_program_descriptor(
                     ]
                     + scr_ct,
                     runtime_args=snd_rt,
-                    config=_dm("RISCV_0", NOC1),
+                    config=_dm("RISCV_0", NOC0 if XPORT_NOC_SWAP else NOC1),
                 )
             )
         kernels.append(
             ttnn.KernelDescriptor(
-                defines=_PERF_DEFINES,
+                defines=defs,
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_final_writer.cpp"),
                 core_ranges=_cset(finals),
                 compile_time_args=[CB_XPORT_SUM, xp.seg_tiles, xp.xport_group, xp.cap_segs, BF16_TILE_BYTES] + out_ct,
                 runtime_args=wr_final,
-                config=_dm("RISCV_0", NOC1),
+                config=_dm("RISCV_0", NOC0 if XPORT_NOC_SWAP else NOC1),
             )
         )
         program.cbs = cbs

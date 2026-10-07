@@ -45,6 +45,10 @@ inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t c
 #endif
 }
 
+#ifndef MMRS_FINALS_PER_LINK
+#define MMRS_FINALS_PER_LINK 2
+#endif
+
 void kernel_main() {
     constexpr uint32_t cb_xport_sum = get_compile_time_arg_val(0);
     constexpr uint32_t seg_tiles = get_compile_time_arg_val(1);
@@ -71,19 +75,98 @@ void kernel_main() {
     const uint32_t ready_y = get_arg_val<uint32_t>(arg++);
     const uint32_t peer_x = get_arg_val<uint32_t>(arg++);
     const uint32_t peer_y = get_arg_val<uint32_t>(arg++);
-    const uint32_t final_x0 = get_arg_val<uint32_t>(arg++);
-    const uint32_t final_y0 = get_arg_val<uint32_t>(arg++);
-    const uint32_t final_x1 = get_arg_val<uint32_t>(arg++);
-    const uint32_t final_y1 = get_arg_val<uint32_t>(arg++);
+    constexpr uint32_t num_fin = MMRS_FINALS_PER_LINK;  // downstream final cores of this link: (x, y) each
+    const uint32_t finals_idx = arg;
+    arg += 2 * num_fin;
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);  // entries
     // num_blocks x [landing slot at the receiver, first seg, seg count, downstream own block (to the finals),
-    //               its segments owned by final half 0 / half 1 in this wave, wave segment columns s0, s1]
-    constexpr uint32_t entry_stride = 8;
+    //               its segments owned by each of the num_fin finals in this wave, wave segment columns s0, s1,
+    //               this chip's arrival slot of the block, upstream (relay) entry]
+    constexpr uint32_t entry_stride = 8 + num_fin;
     const uint32_t entries_idx = arg;
     arg += entry_stride * num_blocks;
     const auto scr = TensorAccessor(scr_args, scr_addr, seg_bytes);
+
+#ifdef MMRS_PORT_ARR_CB
+    // Arrival pump (relay ports): this BRISC, not the port's reader, reads the upstream chip's relayed segments from
+    // this chip's relay scratch into the arrival CB, on its own NoC, under the same arrival-counter gating the reader
+    // used (segment idx of an entry needs inc_base + idx / inc_every + 1 increments). It never blocks: it is run
+    // whenever the send loop would otherwise wait (fence, sums), so a reader-bound relay gets a second read port.
+    constexpr uint32_t cb_arr = MMRS_PORT_ARR_CB;
+    volatile tt_l1_ptr uint32_t* arr_ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
+    uint32_t pk = 0, pidx = 0, pseg = 0, pinc_base = 0, pbatch = 0, papos = 0, pwptr = 0;
+    bool pseg_set = false;
+    auto pflush = [&]() {
+        if (pbatch > 0) {
+            noc_async_read_barrier();
+            cb_push_back(cb_arr, seg_tiles * pbatch);
+            papos += pbatch;
+            if (papos == cap_segs) {
+                papos = 0;
+            }
+            pbatch = 0;
+        }
+    };
+    auto pump = [&]() {
+        while (pk < num_blocks) {
+            const uint32_t e = entries_idx + entry_stride * pk;
+            const bool up = get_arg_val<uint32_t>(e + 7 + num_fin) != 0;
+            const uint32_t count = get_arg_val<uint32_t>(e + 2);
+            if (!up || pidx == count) {
+                if (up) {
+                    pflush();
+                    pinc_base += (count + inc_every - 1) / inc_every;
+                }
+                ++pk;
+                pidx = 0;
+                pseg_set = false;
+                continue;
+            }
+            if (!pseg_set) {
+                pseg = get_arg_val<uint32_t>(e + 1);
+                pseg_set = true;
+            }
+            if (*arr_ctr < pinc_base + pidx / inc_every + 1) {
+                pflush();
+                return;
+            }
+            if (pbatch == group || papos + pbatch == cap_segs) {
+                pflush();
+            }
+            if (!cb_pages_reservable_at_back(cb_arr, seg_tiles * (pbatch + 1))) {
+                pflush();
+                return;
+            }
+            cb_reserve_back(cb_arr, seg_tiles * (pbatch + 1));
+            if (pbatch == 0) {
+                pwptr = get_write_ptr(cb_arr);
+            }
+            const uint32_t row = pseg / segs_per_row;
+            const uint32_t c0 = (pseg - row * segs_per_row) * seg_tiles;
+            const uint32_t valid = blk_n_tiles - c0 < seg_tiles ? blk_n_tiles - c0 : seg_tiles;
+            const uint32_t base = get_arg_val<uint32_t>(e + 6 + num_fin) * segs_per_block;
+#ifndef MMRS_ABLATE_ARRREADS
+            noc_async_read(scr.get_noc_addr(base + pseg), pwptr + pbatch * seg_bytes, valid * tile_bytes);
+#endif
+            ++pbatch;
+            ++pidx;
+            if (pidx < count) {
+                pseg = mmrs::next_wave_seg(
+                    pseg,
+                    seg_stride,
+                    segs_per_row,
+                    get_arg_val<uint32_t>(e + 4 + num_fin),
+                    get_arg_val<uint32_t>(e + 5 + num_fin));
+            }
+        }
+        pflush();
+    };
+#define MMRS_PUMP() pump()
+#else
+#define MMRS_PUMP() ((void)0)
+#endif
 
     if (num_blocks > 0 || send_ready) {
         auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
@@ -103,13 +186,20 @@ void kernel_main() {
         if (num_blocks > 0) {
             MaybeDeviceZoneScope("snd_fence");
             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
-            noc_semaphore_wait_min(ready, 1);
+            while (*ready < 1) {
+                MMRS_PUMP();
+            }
             noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
             noc_async_atomic_barrier();
         }
         const uint64_t relay_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
-        const uint64_t final_noc0 = get_noc_addr(final_x0, final_y0, final_sem_addr);
-        const uint64_t final_noc1 = get_noc_addr(final_x1, final_y1, final_sem_addr);
+        uint64_t final_noc[num_fin];
+        for (uint32_t f = 0; f < num_fin; ++f) {
+            final_noc[f] = get_noc_addr(
+                get_arg_val<uint32_t>(finals_idx + 2 * f),
+                get_arg_val<uint32_t>(finals_idx + 2 * f + 1),
+                final_sem_addr);
+        }
         uint32_t h = 0, unflushed = 0, rpos = 0;
         for (uint32_t k = 0; k < num_blocks; ++k) {
             MaybeDeviceZoneScope("snd_entry");
@@ -117,11 +207,9 @@ void kernel_main() {
             const uint32_t base = get_arg_val<uint32_t>(e) * segs_per_block;
             const uint32_t count = get_arg_val<uint32_t>(e + 2);
             const bool fin = get_arg_val<uint32_t>(e + 3) != 0;
-            const uint32_t full_f0 = get_arg_val<uint32_t>(e + 4);
-            const uint32_t full_f1 = get_arg_val<uint32_t>(e + 5);
-            uint32_t sent_f0 = 0, sent_f1 = 0;
-            const uint32_t wave_s0 = get_arg_val<uint32_t>(e + 6);
-            const uint32_t wave_s1 = get_arg_val<uint32_t>(e + 7);
+            uint32_t sent_f[num_fin] = {};
+            const uint32_t wave_s0 = get_arg_val<uint32_t>(e + 4 + num_fin);
+            const uint32_t wave_s1 = get_arg_val<uint32_t>(e + 5 + num_fin);
             uint32_t seg = get_arg_val<uint32_t>(e + 1);
             for (uint32_t i = 0; i < count; ++i) {
                 if (i > 0) {
@@ -131,6 +219,11 @@ void kernel_main() {
                 const uint32_t c0 = (seg - row * segs_per_row) * seg_tiles;
                 const uint32_t valid = blk_n_tiles - c0 < seg_tiles ? blk_n_tiles - c0 : seg_tiles;
                 const uint32_t bytes = valid * tile_bytes;
+#ifdef MMRS_PORT_ARR_CB
+                while (!cb_pages_available_at_front(cb_xport_sum, seg_tiles * (unflushed + 1))) {
+                    MMRS_PUMP();
+                }
+#endif
                 cb_wait_front(cb_xport_sum, seg_tiles * (unflushed + 1));
                 const uint32_t src = get_read_ptr(cb_xport_sum) + unflushed * seg_bytes;
                 const uint64_t dst = scr.get_noc_addr(base + seg, 0, 0);
@@ -139,11 +232,10 @@ void kernel_main() {
                 bool inc;
                 uint64_t ctr;
                 if (fin) {
-                    const bool h1 = ((seg / seg_stride) & 1) != 0;  // final core half: seg = l + t L, owner (l, t & 1)
-                    uint32_t& sent = h1 ? sent_f1 : sent_f0;
-                    ++sent;
-                    inc = (sent % inc_every) == 0 || sent == (h1 ? full_f1 : full_f0);
-                    ctr = h1 ? final_noc1 : final_noc0;
+                    const uint32_t hf = (seg / seg_stride) % num_fin;  // seg = l + t L: owner final (l, t mod F)
+                    const uint32_t sent = ++sent_f[hf];
+                    inc = (sent % inc_every) == 0 || sent == get_arg_val<uint32_t>(e + 4 + hf);
+                    ctr = final_noc[hf];
                 } else {
                     inc = ((i + 1) % inc_every) == 0 || i + 1 == count;
                     ctr = relay_noc;
@@ -179,6 +271,11 @@ void kernel_main() {
                 }
             }
         }
+#ifdef MMRS_PORT_ARR_CB
+        while (pk < num_blocks) {  // arrivals of entries with no segment left to send here (never the case for a
+            MMRS_PUMP();           // relay, whose sums need them -- kept for safety)
+        }
+#endif
         MaybeDeviceZoneScope("snd_tail");
         if (unflushed > 0) {  // the tail (an entry may hold no segment of this port, so flush after the walk)
             noc_async_writes_flushed();

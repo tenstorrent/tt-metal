@@ -234,6 +234,11 @@ def _get_plan(
         _pd.WAVES_PIN,
         _pd.WAVES_MAX,
         _pd.K_BLOCKS_MIN,
+        _pd.OPERAND_DEPTH,
+        _pd.FINALS_PER_LINK,
+        _pd.XPORT_CB_BYTES,
+        _pd.XPORT_GROUP_MAX,
+        _pd.INC_EVERY,
     )
     if key in _PLAN_CACHE:
         return _PLAN_CACHE[key][1]
@@ -263,19 +268,35 @@ def _get_plan(
         w_dtype=w_dtype,
         fp32_acc=fp32_acc,
     )
+
     # the hand-off shard depends on the per-core block; the factorization does not depend on L1, so solve once with
     # the full budget to get the block, then re-solve the K-block / regime with the shard taken out
     # (the wave count may change with the budget, and with it the block: re-solve until the shard matches the block)
-    handoff_bytes = lambda b: b.handoff_slots * b.core_m_tiles * b.core_n_tiles * BF16_TILE_BYTES
-    blk = _plan_blocking(**plan_args, l1_cb_budget=l1_free)
-    for _ in range(3):
-        nxt = _plan_blocking(**plan_args, l1_cb_budget=l1_free - handoff_bytes(blk))
-        if handoff_bytes(nxt) <= handoff_bytes(blk):
+    def plan_at_depth(depth):
+        handoff_bytes = lambda b: depth * b.waves * b.core_m_tiles * b.core_n_tiles * BF16_TILE_BYTES
+        blk = _plan_blocking(**plan_args, l1_cb_budget=l1_free)
+        for _ in range(3):
+            nxt = _plan_blocking(**plan_args, l1_cb_budget=l1_free - handoff_bytes(blk))
+            if handoff_bytes(nxt) <= handoff_bytes(blk):
+                nxt.handoff_depth = depth
+                return nxt
             blk = nxt
-            break
-        blk = nxt
-    else:
         raise ValueError("matmul_reduce_scatter: blocking does not converge under the L1 budget")
+
+    # hand-off depth: G (one slot per scatter block, no slot reuse) when that keeps the floor-depth plan, else the
+    # largest depth that does -- never trade residency / K-block / waves for depth (measured slower).
+    # Carve-out: regime R2 (both operands streamed) keeps the floor depth -- measured +18 us (433 -> 451 us, 4 A/B
+    # pairs) on 2048x4096x4096 fp32 (Perf 2): interior chips' ready signals for the relay / final entries land late.
+    blk = plan_at_depth(_pd.HANDOFF_DEPTH_MIN)
+    plan_sig = lambda b: (b.regime, b.k_block_tiles, b.core_m_tiles, b.core_n_tiles, b.waves)
+    for depth in range(G if blk.regime != "R2" else 0, _pd.HANDOFF_DEPTH_MIN, -1):
+        try:
+            cand = plan_at_depth(depth)
+        except ValueError:
+            continue
+        if plan_sig(cand) == plan_sig(blk):
+            blk = cand
+            break
     assert BLOCKS_IN_FLIGHT == 1, "blocks_in_flight > 1 is not built"
     xp = _plan_transport(blk)
 

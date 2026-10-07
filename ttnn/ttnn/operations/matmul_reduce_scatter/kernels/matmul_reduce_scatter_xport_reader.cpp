@@ -160,14 +160,20 @@ void kernel_main() {
             }
             if (up) {
                 if constexpr (has_a) {
-                    noc_semaphore_wait_min(arr_a, inc_base + idx / inc_every + 1);
-#ifndef MMRS_ABLATE_XREADS
+                    {
+                        MaybeDeviceZoneScope("xr_arr_wait_a");
+                        noc_semaphore_wait_min(arr_a, inc_base + idx / inc_every + 1);
+                    }
+#if !defined(MMRS_ABLATE_XREADS) && !defined(MMRS_ABLATE_ARRREADS)
                     noc_async_read(scr.get_noc_addr(base_a + seg), w_a + batch * seg_bytes, bytes);
 #endif
                 }
                 if constexpr (has_b) {
-                    noc_semaphore_wait_min(arr_b, inc_base + idx / inc_every + 1);
-#ifndef MMRS_ABLATE_XREADS
+                    {
+                        MaybeDeviceZoneScope("xr_arr_wait_b");
+                        noc_semaphore_wait_min(arr_b, inc_base + idx / inc_every + 1);
+                    }
+#if !defined(MMRS_ABLATE_XREADS) && !defined(MMRS_ABLATE_ARRREADS)
                     noc_async_read(scr.get_noc_addr(base_b + seg), w_b + batch * seg_bytes, bytes);
 #endif
                 }
@@ -175,7 +181,10 @@ void kernel_main() {
             ++batch;
             const bool entry_end = idx + 1 == count;
             if (batch == group || wpos + batch == cap_segs || (up && apos + batch == cap_segs) || entry_end) {
-                noc_async_read_barrier();
+                {
+                    MaybeDeviceZoneScope("xr_barrier");
+                    noc_async_read_barrier();
+                }
                 cb_push_back(cb_partial_target, seg_pages * batch);
                 if constexpr (has_a) {
                     if (up) {
