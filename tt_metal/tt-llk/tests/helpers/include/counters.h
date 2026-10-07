@@ -646,9 +646,9 @@ struct perf_counter_scoped
             });
         if constexpr (is_single_thread_runtype(RUN_TYPE) && is_measured_thread(RUN_TYPE) && exit_barrier_for(RUN_TYPE))
         {
-            // Let the peers reach their exit barrier before the measured zone opens.
+            // Let the peers finish their init and reach their exit barrier before the measured zone opens (256 was not always enough).
             std::uint32_t settle;
-            asm volatile("li %0, 256\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle));
+            asm volatile("li %0, 32768\n1:\n\taddi %0, %0, -1\n\tbnez %0, 1b" : "=&r"(settle));
         }
         if constexpr (RUN_TYPE == PerfRunType::L1_TO_L1)
         {
