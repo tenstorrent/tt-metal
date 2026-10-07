@@ -441,10 +441,6 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
     // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
     // of active devices. TODO: read this out of YAML instead of the structs above?
     uint32_t total_devices = descriptor_.cluster().number_of_devices();
-    TT_ASSERT(
-        total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 32 or
-            total_devices == 36,
-        "Unexpected target.");
     uint32_t num_devices = device_ids.size();
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
     TT_ASSERT(num_devices <= total_devices);
@@ -459,6 +455,14 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
             remote_devices.insert(id);
         }
     }
+
+    // Direct-MMIO devices each use the single-chip dispatch template, including
+    // partitions of a Blackhole Galaxy. Only remote-device templates depend on
+    // the supported board sizes below.
+    TT_ASSERT(
+        remote_devices.empty() or total_devices == 1 or total_devices == 2 or total_devices == 4 or
+            total_devices == 8 or total_devices == 32 or total_devices == 36,
+        "Unexpected target with remote devices.");
 
     // Helper function to get nodes for single device
     auto populate_single_device = [&]() {

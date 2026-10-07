@@ -436,7 +436,8 @@ def publish_serialized_table_and_wait_ready(*, table_path: str, wait_ready_timeo
 
 
 def _host_tag_int():
-    return zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF
+    host = os.environ.get("TT_MIGRATION_TABLE_HOST", "").strip() or socket.gethostname()
+    return zlib.crc32(host.encode()) & 0x7FFFFFFF
 
 
 def allgather_kv_stage_layouts(mesh_device, stages, mesh_shape):
