@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import os
+
 import torch
 from conftest import blackhole_only
 from helpers.data_format_inference import is_format_combination_outlier
@@ -322,6 +324,7 @@ def _run_eltwise_binary_test(
     loop_factor=1,
     per_face_handoff=None,
     unpack_ab_block=0,
+    extra_templates=(),
 ):
     if per_face_handoff is None:
         # Blackhole: functional variants take the per-tile hand-off; perf variants take it where the opted-in kernels do,
@@ -333,6 +336,8 @@ def _run_eltwise_binary_test(
         )
     # A transposed SrcA is handed over per face on both threads.
     per_face_handoff = per_face_handoff or transpose_srca == Transpose.Yes
+    # CI only (#58723 third review): EB_FORCE_PER_FACE=1 runs every variant on main's per-face program.
+    per_face_handoff = per_face_handoff or os.environ.get("EB_FORCE_PER_FACE") == "1"
     if transpose_srca == Transpose.Yes and broadcast_type == BroadcastType.Scalar:
         pytest.skip("SrcA transpose is not supported with scalar broadcast")
 
@@ -492,6 +497,7 @@ def _run_eltwise_binary_test(
             ACC_TO_DEST(acc_to_dest),
             PER_FACE_HANDOFF(per_face_handoff),
             UNPACK_AB_BLOCK(unpack_ab_block),
+            *extra_templates,
         ],
         "runtimes": [
             generate_input_dim(
