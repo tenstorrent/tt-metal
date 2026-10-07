@@ -106,7 +106,10 @@ class Qwen38Block(AbstractModuleBase):
             self.self_attn = Qwen38GatedAttention(config, layer_idx)
         else:
             self.linear_attn = Qwen38GatedDeltaNet(config, layer_idx)
-        self.recompute_mixer = config.recompute_deltanet and not self.is_full_attention
+        # Whole-block recompute subsumes the mixer-only one; nesting them would
+        # run the mixer forward a third time for no memory benefit.
+        self.recompute_block = getattr(config, "recompute_layers", False)
+        self.recompute_mixer = config.recompute_deltanet and not self.is_full_attention and not self.recompute_block
 
         self.mlp = Qwen38MLP(config, config.hidden_size, config.intermediate_size)
         self.input_layernorm = Qwen38RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -119,6 +122,14 @@ class Qwen38Block(AbstractModuleBase):
         past_key_values=None,
         position_offset: int = 0,
     ):
+        if self.recompute_block:
+            return recompute(
+                lambda h: self._block_forward(h, mask, past_key_values, position_offset),
+                hidden_states,
+            )
+        return self._block_forward(hidden_states, mask, past_key_values, position_offset)
+
+    def _block_forward(self, hidden_states, mask, past_key_values, position_offset):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         if self.is_full_attention:
@@ -166,9 +177,14 @@ class Qwen38Transformer(AbstractModuleBase):
         mask: Optional[ttml.autograd.Tensor] = None,
         past_key_values=None,
         position_offset: int = 0,
+        return_hidden: bool = False,
     ):
+        """Logits, or with ``return_hidden`` the final-normed hidden states, for callers
+        that apply ``lm_head`` themselves (e.g. a token-chunked loss)."""
         hidden_states = self.embed_tokens(input_ids)
         for layer in self.layers:
             hidden_states = layer(hidden_states, mask, past_key_values, position_offset)
         hidden_states = self.norm(hidden_states)
+        if return_hidden:
+            return hidden_states
         return self.lm_head(hidden_states)

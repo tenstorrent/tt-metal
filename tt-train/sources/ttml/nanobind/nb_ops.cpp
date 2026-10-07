@@ -16,6 +16,8 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/depthwise_conv1d_k4/depthwise_conv1d_k4.hpp"
+#include "metal/ops/gated_rmsnorm/gated_rmsnorm.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
 #include "metal/ops/moe_ungroup/moe_ungroup.hpp"
 #include "nb_export_enum.hpp"
@@ -682,6 +684,41 @@ void py_module(nb::module_& m) {
             "output in moe_group's grouped layout; plan/offsets/grouped_scores\n"
             "are direct outputs of moe_group (grouped_scores already encodes\n"
             "scores[plan[i], k_slot] per row). Returns ungrouped [D,B,S,H].");
+        py_metal.def(
+            "depthwise_conv1d_k4",
+            &ttml::metal::depthwise_conv1d_k4,
+            nb::arg("input"),
+            nb::arg("tap0"),
+            nb::arg("tap1"),
+            nb::arg("tap2"),
+            nb::arg("tap3"),
+            nb::arg("anti_causal") = false,
+            nb::arg("silu_grad") = nb::none(),
+            "Depthwise 4-tap conv1d over T of a [1,1,T,C] ROW_MAJOR bf16 input with\n"
+            "[1,1,1,C] TILE taps, returning [1,1,T,C] TILE bf16. Causal:\n"
+            "out[t] = sum_j tap_j * x[t+j-3]; anti_causal: out[t] = sum_j tap_j * x[t+3-j].\n"
+            "With silu_grad, returns silu_grad * silu'(conv(input)) instead.");
+        py_metal.def(
+            "gated_rmsnorm_fw",
+            &ttml::metal::gated_rmsnorm_fw,
+            nb::arg("input"),
+            nb::arg("gate"),
+            nb::arg("gamma"),
+            nb::arg("epsilon") = 1e-6F,
+            "Grouped gated RMSNorm on flat [B,1,T,W] TILE bf16 activations with gamma [1,1,1,group]\n"
+            "(group | W). Per contiguous group of the last dim:\n"
+            "out = x * rsqrt(mean(x^2) + eps) * gamma * silu(gate). Returns [B,1,T,W] TILE bf16.");
+        py_metal.def(
+            "gated_rmsnorm_bw",
+            &ttml::metal::gated_rmsnorm_bw,
+            nb::arg("input"),
+            nb::arg("gate"),
+            nb::arg("gamma"),
+            nb::arg("dL_dout"),
+            nb::arg("epsilon") = 1e-6F,
+            nb::arg("compute_dgamma") = true,
+            "Backward of gated_rmsnorm_fw. Returns [dL_dinput, dL_dgate, dL_dgamma] where dL_dgamma is\n"
+            "[1,1,1,group] (summed over tokens and groups) or None when compute_dgamma is False.");
     }
 }
 

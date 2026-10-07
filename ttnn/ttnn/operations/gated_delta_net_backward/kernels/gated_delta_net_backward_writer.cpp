@@ -93,6 +93,29 @@ static __attribute__((noipa)) void scatter_rows(
     }
 }
 
+// FLAT mode: a [Ct, dn] gradient block of head `h` goes to the token-major
+// [B,T,Hx*D] output as Ct*dn whole pages -- the mirror of the reader's
+// `read_flat_block`.  dq/dk land per VALUE head ([B,T,HV*K]); the caller sums
+// the G copies of each key head.
+template <typename ACC>
+static __attribute__((noipa)) void write_flat_block(
+    const ACC& acc,
+    uint32_t src,
+    uint32_t b,
+    uint32_t tt0,
+    uint32_t hx_dt,
+    uint32_t h,
+    uint32_t dt,
+    uint32_t d0,
+    uint32_t dn) {
+    for (uint32_t r = 0; r < Ct; ++r) {
+        for (uint32_t j = 0; j < dn; ++j) {
+            noc_async_write(
+                src + (r * dn + j) * in_tile, acc.get_noc_addr(flat_page(b, tt0 + r, hx_dt, h, dt, d0 + j)), in_tile);
+        }
+    }
+}
+
 // Scalar scatter of a [C, 1] gradient column into a [B,T,H] output.  The NoC
 // requires (l1_src & 15) == (dram_dst & 15) for a DRAM write, and the element
 // offset of column h is not 16-byte aligned, so each value is first staged at a
@@ -259,10 +282,15 @@ void kernel_main() {
         const uint32_t b = bh / gH;
         const uint32_t h = bh % gH;
         const uint32_t t0 = ci * CHUNK;
+        [[maybe_unused]] const uint32_t tt0 = ci * Ct;
 
         for (uint32_t vb = 0; vb < NVB; ++vb) {
             cb_wait_front(cb_gegr, MAXBLK_G);
-            scatter_rows(dv_acc, get_read_ptr(cb_gegr), b, t0, Vt, vb * Vb, Vb, h);
+            if constexpr (FLAT) {
+                write_flat_block(dv_acc, get_read_ptr(cb_gegr), b, tt0, gH * Vt, h, Vt, vb * Vb, Vb);
+            } else {
+                scatter_rows(dv_acc, get_read_ptr(cb_gegr), b, t0, Vt, vb * Vb, Vb, h);
+            }
             noc_async_write_barrier();
             cb_pop_front(cb_gegr, MAXBLK_G);
         }
@@ -270,7 +298,11 @@ void kernel_main() {
         // Drain order must mirror the compute kernel's push order exactly:
         // dv (per V block), dq, dbeta, dk, dg.
         cb_wait_front(cb_gegr, MAXBLK_G);
-        scatter_rows(dq_acc, get_read_ptr(cb_gegr), b, t0, Kt, 0, Kt, h);
+        if constexpr (FLAT) {
+            write_flat_block(dq_acc, get_read_ptr(cb_gegr), b, tt0, gH * Kt, h, Kt, 0, Kt);
+        } else {
+            scatter_rows(dq_acc, get_read_ptr(cb_gegr), b, t0, Kt, 0, Kt, h);
+        }
         noc_async_write_barrier();
         cb_pop_front(cb_gegr, MAXBLK_G);
 
@@ -279,7 +311,11 @@ void kernel_main() {
         cb_pop_front(cb_gegr, MAXBLK_G);
 
         cb_wait_front(cb_gegr, MAXBLK_G);
-        scatter_rows(dk_acc, get_read_ptr(cb_gegr), b, t0, Kt, 0, Kt, h);
+        if constexpr (FLAT) {
+            write_flat_block(dk_acc, get_read_ptr(cb_gegr), b, tt0, gH * Kt, h, Kt, 0, Kt);
+        } else {
+            scatter_rows(dk_acc, get_read_ptr(cb_gegr), b, t0, Kt, 0, Kt, h);
+        }
         noc_async_write_barrier();
         cb_pop_front(cb_gegr, MAXBLK_G);
 

@@ -68,6 +68,11 @@ class Qwen38Config:
     # "composite": the ttml-op decomposition in delta_rule.py, whose backward
     # comes from the autograd graph.
     delta_rule_impl: str = "fused"
+    # How the depthwise causal conv1d + SiLU runs. "fused": the kda
+    # qkv_causal_conv1d_silu forward and ttml depthwise_conv1d_k4 backward (see
+    # fused_conv.py); it needs batch 1 and frozen taps, and falls back to
+    # "composite" otherwise. "composite": shift_along_dim + broadcast multiplies.
+    conv_impl: str = "fused"
 
     # --- parallelism ---
     # Megatron tensor parallelism. The TP width comes from the mesh axis named
@@ -81,6 +86,11 @@ class Qwen38Config:
     # memory and DeltaNet is 48 of 64 layers, so this is what makes
     # seq_len=1024 fit; see models.qwen38.checkpoint.
     recompute_deltanet: bool = False
+    # Recompute every decoder block (mixer + MLP + norms) in the backward pass,
+    # keeping only each block's input. Costs one extra forward of the whole
+    # stack; needed for long sequences, where even the per-block norm inputs
+    # and residuals no longer fit.
+    recompute_layers: bool = False
 
     # --- training ---
     dropout_prob: float = 0.0

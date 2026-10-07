@@ -34,7 +34,9 @@ from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
 from .autograd_ops import autograd_concat, autograd_slice
 from .delta_rule import chunk_gated_delta_rule
-from .fused_delta_rule import fused_chunk_gated_delta_rule
+from .fused_conv import fused_causal_conv1d_silu
+from .fused_delta_rule import flat_l2_norm, fused_chunk_gated_delta_rule_flat
+from .gated_norm import gated_rmsnorm
 from .parallel import make_column_linear, make_row_linear, make_sharded_parameter, tp_size
 
 __all__ = ["Qwen38GatedDeltaNet", "fold_heads", "unfold_heads", "causal_conv1d_silu"]
@@ -48,7 +50,6 @@ _softplus = ttml.ops.unary.softplus
 _exp = ttml.ops.unary.exp
 _transpose = ttml.ops.unary.transpose
 _shift = ttml.ops.unary.shift_along_dim
-_l2_norm = ttml.ops.unary.l2_norm
 _rmsnorm = ttml.ops.rmsnorm.rmsnorm
 
 
@@ -208,11 +209,14 @@ class Qwen38GatedDeltaNet(AbstractModuleBase):
 
         # --- projections + fused causal conv -------------------------------
         qkv = self.in_proj_qkv(hidden_states)
-        qkv = causal_conv1d_silu(qkv, [p.tensor for p in self.conv_taps], self.conv_kernel)
-
-        q = autograd_slice(qkv, [0, 0, 0, 0], [batch, 1, seq, key_dim])
-        k = autograd_slice(qkv, [0, 0, 0, key_dim], [batch, 1, seq, 2 * key_dim])
-        v = autograd_slice(qkv, [0, 0, 0, 2 * key_dim], [batch, 1, seq, 2 * key_dim + value_dim])
+        taps = [p.tensor for p in self.conv_taps]
+        if self._use_fused_conv(batch, taps):
+            q, k, v = fused_causal_conv1d_silu(qkv, taps, (key_dim, key_dim, value_dim))
+        else:
+            qkv = causal_conv1d_silu(qkv, taps, self.conv_kernel)
+            q = autograd_slice(qkv, [0, 0, 0, 0], [batch, 1, seq, key_dim])
+            k = autograd_slice(qkv, [0, 0, 0, key_dim], [batch, 1, seq, 2 * key_dim])
+            v = autograd_slice(qkv, [0, 0, 0, 2 * key_dim], [batch, 1, seq, 2 * key_dim + value_dim])
 
         # --- gates ---------------------------------------------------------
         beta = _sigmoid(self.in_proj_b(hidden_states))  # [B, 1, T, H_v]
@@ -226,24 +230,42 @@ class Qwen38GatedDeltaNet(AbstractModuleBase):
             out = self._composite_mixer(hidden_states, q, k, v, g, beta)
         return self.out_proj(out)
 
+    def _use_fused_conv(self, batch, taps):
+        return (
+            getattr(self.config, "conv_impl", "fused") == "fused"
+            and batch == 1
+            and self.conv_kernel == 4
+            and not any(t.get_requires_grad() for t in taps)
+        )
+
     def _fused_mixer(self, hidden_states, q, k, v, g, beta):
-        """Delta rule + gated norm on the fused device ops, token-major throughout."""
-        batch, _, seq, _ = [int(d) for d in hidden_states.shape()]
+        """Delta rule + gated norm on the fused device ops, flat token-major throughout.
+
+        ``q, k, v`` stay in the projections' ``[B, 1, T, H * D]`` layout from
+        the conv to the output norm: the per-head L2 norm, the GVA pairing and
+        both fused kernels address heads as column blocks of the flat row, so
+        the head axis is never materialized (in TILE layout that would pad it
+        to 32 rows per token).
+        """
         n_k, n_v = self.num_k_heads, self.num_v_heads
 
-        # L2-normalize before the GVA repeat: it commutes with the repeat and
-        # touches a third of the data.
-        q = _l2_norm(_reshape(q, [batch, seq, n_k, self.head_k_dim]))
-        k = _l2_norm(_reshape(k, [batch, seq, n_k, self.head_k_dim]))
-        q = repeat_interleave_token_major(q, self.gva_repeats)
-        k = repeat_interleave_token_major(k, self.gva_repeats)
-        v = _reshape(v, [batch, seq, n_v, self.head_v_dim])
+        q = flat_l2_norm(q, self.head_k_dim)
+        k = flat_l2_norm(k, self.head_k_dim)
+        out = fused_chunk_gated_delta_rule_flat(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            num_k_heads=n_k,
+            num_v_heads=n_v,
+            key_dim=self.head_k_dim,
+            chunk_size=self.chunk_size,
+        )  # [B, 1, T, H_v * V]
 
-        out = fused_chunk_gated_delta_rule(q, k, v, g, beta, chunk_size=self.chunk_size)  # [B, 1, T*H_v, V]
-
-        gate = _reshape(self.in_proj_z(hidden_states), [batch, 1, seq * n_v, self.head_v_dim])
-        out = _mul(_rmsnorm(out, self.norm_weight.tensor, self.eps), _silu(gate))
-        return _reshape(out, [batch, 1, seq, n_v * self.head_v_dim])
+        gate = self.in_proj_z(hidden_states)  # [B, 1, T, H_v * V]
+        # Per-head RMSNorm over each V-wide column block, * gamma * silu(gate), on the flat layout.
+        return gated_rmsnorm(out, gate, self.norm_weight.tensor, self.eps)  # [B, 1, T, H_v * V]
 
     def _composite_mixer(self, hidden_states, q, k, v, g, beta):
         """Delta rule composed from ttml ops, one head-folded sequence per value head."""

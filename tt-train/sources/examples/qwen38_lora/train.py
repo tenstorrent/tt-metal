@@ -61,6 +61,8 @@ from ttml.common.performance import get_device_peak_tflops_bf16
 from ttml.models.qwen38 import Qwen38Config, Qwen38Transformer
 from ttml.models.qwen38.flops import flops_per_token
 from ttml.models.qwen38.loading import load_from_safetensors
+from ttml.models.qwen38.autograd_ops import autograd_slice
+from ttml.models.qwen38.checkpoint import log_dram, recompute
 from ttml.models.qwen38.lora import apply_lora, build_lora_config, trainable_summary
 
 DEFAULT_MODEL = "/localdev/umales/qwen38-27b"
@@ -89,6 +91,19 @@ def parse_args() -> argparse.Namespace:
         help="recompute the DeltaNet mixer in backward instead of keeping its activations; "
         "frees ~80%% of activation memory for ~10%% more FLOPs, and is what makes seq_len=1024 fit",
     )
+    p.add_argument(
+        "--recompute-layers",
+        action="store_true",
+        help="recompute every decoder block (mixer + MLP) in backward, keeping only block inputs; "
+        "for long sequences",
+    )
+    p.add_argument(
+        "--loss-chunk",
+        type=int,
+        default=0,
+        help="apply lm_head + cross-entropy this many tokens at a time, recomputed in backward, so the "
+        "full [seq x vocab] logits never exist at once (0 = unchunked); must divide seq_len",
+    )
     p.add_argument("--random-init", action="store_true", help="skip the checkpoint; for MFU measurement")
     p.add_argument(
         "--random-data",
@@ -100,6 +115,12 @@ def parse_args() -> argparse.Namespace:
         choices=["fused", "composite"],
         default="fused",
         help="fused: the ttnn forward/backward device ops; composite: the ttml-op decomposition",
+    )
+    p.add_argument(
+        "--conv",
+        choices=["fused", "composite"],
+        default="fused",
+        help="DeltaNet conv1d + SiLU. fused: kda forward + depthwise_conv1d_k4 backward; composite: shift + multiply",
     )
     p.add_argument(
         "--profile",
@@ -157,6 +178,29 @@ class Batcher:
         return window[:, :-1], window[:, 1:]
 
 
+def chunked_vocab_parallel_loss(hidden, targets, lm_head, chunk: int, tp_axis):
+    """Mean vocab-parallel cross-entropy over ``hidden [B, 1, S, H]``, ``chunk`` tokens at a time.
+
+    Each chunk's ``lm_head`` + loss is recomputed in backward, so only one
+    chunk's ``[chunk x vocab/tp]`` logits (and the loss's fp32 exp of them) is
+    ever live. Chunk means are weighted by ``chunk / S``, which equals the
+    unchunked mean.
+    """
+    batch, _, seq, width = [int(d) for d in hidden.shape()]
+    targets_val = targets.get_value()
+    total = None
+    for start in range(0, seq, chunk):
+        h = autograd_slice(hidden, [0, 0, start, 0], [batch, 1, start + chunk, width])
+        t = ttml.autograd.create_tensor(ttnn.slice(targets_val, [0, start], [batch, start + chunk]), False)
+        loss = recompute(
+            lambda x, t=t: ttml.ops.distributed.vocab_parallel_cross_entropy_loss(lm_head(x), t, cluster_axis=tp_axis),
+            h,
+        )
+        loss = ttml.ops.binary.mul(loss, chunk / seq)
+        total = loss if total is None else ttml.ops.binary.add(total, loss)
+    return total
+
+
 def main() -> int:
     args = parse_args()
     np.random.seed(args.seed)
@@ -183,11 +227,13 @@ def main() -> int:
     else:
         raise FileNotFoundError(f"{config_path} not found (pass --random-init to use the built-in 27B config)")
     config.delta_rule_impl = args.delta_rule
+    config.conv_impl = args.conv
     if args.layers:
         config.num_hidden_layers = args.layers
         config.layer_types = config.layer_types[: args.layers]
     config.use_tp = args.tp > 1
     config.recompute_deltanet = args.recompute_deltanet
+    config.recompute_layers = args.recompute_layers
 
     num_full = sum(1 for i in range(config.num_hidden_layers) if config.is_full_attention(i))
     print(
@@ -195,9 +241,11 @@ def main() -> int:
         f"({config.num_hidden_layers - num_full} DeltaNet + {num_full} attention), "
         f"hidden={config.hidden_size} vocab={config.vocab_size}"
     )
-    if args.recompute_deltanet:
+    if args.recompute_layers:
+        print("whole decoder blocks are recomputed in backward")
+    elif args.recompute_deltanet:
         print("DeltaNet mixer activations are recomputed in backward")
-    print(f"delta rule: {config.delta_rule_impl}")
+    print(f"delta rule: {config.delta_rule_impl}, conv: {config.conv_impl}")
 
     if args.random_data:
         tokens = random_tokens(config.vocab_size, 1 << 20, args.seed)
@@ -220,6 +268,7 @@ def main() -> int:
 
     # LoRA must come after loading: it renames parameters under a new root.
     lora_config = build_lora_config(rank=args.rank, alpha=args.alpha, include_mlp=args.include_mlp)
+    base_model = model
     model = apply_lora(model, lora_config)
     summary = trainable_summary(model)
     print(
@@ -247,6 +296,8 @@ def main() -> int:
 
     dp_mapper = mesh.axis_mapper("dp", tdim=0) if args.dp > 1 else None
     tp_axis = mesh.axis_index("tp") if args.tp > 1 else None
+    if args.loss_chunk and (args.tp == 1 or args.seq_len % args.loss_chunk or args.loss_chunk % 32):
+        raise ValueError("--loss-chunk needs --tp > 1 and a multiple of 32 that divides --seq-len")
     # The loss is replicated over TP and sharded over DP, so it needs a composer
     # rather than a single-buffer read-back.
     loss_composer = ttnn.create_mesh_composer(device, ttnn.MeshComposerConfig(list(range(len(mesh.shape)))))
@@ -269,14 +320,22 @@ def main() -> int:
             signpost(f"step {step}")
         t0 = time.perf_counter()
         optimizer.zero_grad()
-        logits = model(inputs, None)
-        if args.tp > 1:
+        log_dram(f"step {step}: start")
+        if args.loss_chunk:
+            hidden = model(inputs, None, return_hidden=True)
+            log_dram(f"step {step}: after forward")
+            loss = chunked_vocab_parallel_loss(hidden, targets, base_model.lm_head, args.loss_chunk, tp_axis)
+            log_dram(f"step {step}: after loss")
+        elif args.tp > 1:
             # Logits stay sharded over the vocab dim; materializing the full
             # 248320-wide tensor would cost ~0.5 GB per 1024 tokens.
-            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(logits, targets, cluster_axis=tp_axis)
+            loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+                model(inputs, None), targets, cluster_axis=tp_axis
+            )
         else:
-            loss = ttml.ops.loss.cross_entropy_loss(logits, targets)
+            loss = ttml.ops.loss.cross_entropy_loss(model(inputs, None), targets)
         loss.backward(False)
+        log_dram(f"step {step}: after backward")
         ctx.reset_graph()
         if args.dp > 1:
             ttml.sync_gradients(model.parameters(), ("dp",))

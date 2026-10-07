@@ -107,16 +107,20 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
     out->set_value(
         ttnn::add(a->get_value(), b->get_value(), std::nullopt, std::nullopt, std::nullopt, none, none, none));
     autograd::GradFunction grad = [a, b, out]() {
-        if (was_broadcasted(a, out->get_grad())) {
-            a->add_grad(unbroadcast_grad(a, out->get_grad()));
-        } else {
-            a->add_grad(out->get_grad());
+        if (a->get_requires_grad()) {
+            if (was_broadcasted(a, out->get_grad())) {
+                a->add_grad(unbroadcast_grad(a, out->get_grad()));
+            } else {
+                a->add_grad(out->get_grad());
+            }
         }
 
-        if (was_broadcasted(b, out->get_grad())) {
-            b->add_grad(unbroadcast_grad(b, out->get_grad()));
-        } else {
-            b->add_grad(out->get_grad());
+        if (b->get_requires_grad()) {
+            if (was_broadcasted(b, out->get_grad())) {
+                b->add_grad(unbroadcast_grad(b, out->get_grad()));
+            } else {
+                b->add_grad(out->get_grad());
+            }
         }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
@@ -129,17 +133,21 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::subtract(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        if (was_broadcasted(a, out->get_grad())) {
-            a->add_grad(unbroadcast_grad(a, out->get_grad()));
-        } else {
-            a->add_grad(out->get_grad());
+        if (a->get_requires_grad()) {
+            if (was_broadcasted(a, out->get_grad())) {
+                a->add_grad(unbroadcast_grad(a, out->get_grad()));
+            } else {
+                a->add_grad(out->get_grad());
+            }
         }
 
-        auto neg_grad = ttnn::neg(out->get_grad());
-        if (was_broadcasted(b, neg_grad)) {
-            b->add_grad(unbroadcast_grad(b, neg_grad));
-        } else {
-            b->add_grad(neg_grad);
+        if (b->get_requires_grad()) {
+            auto neg_grad = ttnn::neg(out->get_grad());
+            if (was_broadcasted(b, neg_grad)) {
+                b->add_grad(unbroadcast_grad(b, neg_grad));
+            } else {
+                b->add_grad(neg_grad);
+            }
         }
     };
 
@@ -156,25 +164,28 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         b->get_value(),
         /* fast_and_approximate_mode*/ true));
     autograd::GradFunction grad = [a, b, out]() {
-        auto a_grad = ttnn::multiply(
-            out->get_grad(),
-            b->get_value(),
-            /* fast_and_approximate_mode*/ true);
-        auto b_grad = ttnn::multiply(
-            out->get_grad(),
-            a->get_value(),
-            /* fast_and_approximate_mode*/ true);
-
-        if (was_broadcasted(a, a_grad)) {
-            a->add_grad(unbroadcast_grad(a, a_grad));
-        } else {
-            a->add_grad(a_grad);
+        if (a->get_requires_grad()) {
+            auto a_grad = ttnn::multiply(
+                out->get_grad(),
+                b->get_value(),
+                /* fast_and_approximate_mode*/ true);
+            if (was_broadcasted(a, a_grad)) {
+                a->add_grad(unbroadcast_grad(a, a_grad));
+            } else {
+                a->add_grad(a_grad);
+            }
         }
 
-        if (was_broadcasted(b, b_grad)) {
-            b->add_grad(unbroadcast_grad(b, b_grad));
-        } else {
-            b->add_grad(b_grad);
+        if (b->get_requires_grad()) {
+            auto b_grad = ttnn::multiply(
+                out->get_grad(),
+                a->get_value(),
+                /* fast_and_approximate_mode*/ true);
+            if (was_broadcasted(b, b_grad)) {
+                b->add_grad(unbroadcast_grad(b, b_grad));
+            } else {
+                b->add_grad(b_grad);
+            }
         }
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));

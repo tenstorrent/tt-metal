@@ -50,10 +50,26 @@ both passes.  That is unnecessary here: the mixer contains no dropout.
 
 from __future__ import annotations
 
+import os
+
+import ttnn
 import ttml
 from ttml.autograd import Function
 
-__all__ = ["RecomputeMixer", "recompute"]
+__all__ = ["RecomputeMixer", "recompute", "log_dram"]
+
+_LOG_DRAM = os.environ.get("QWEN38_LOG_DRAM") == "1"
+
+
+def log_dram(label: str) -> None:
+    """Print per-chip DRAM in use when ``QWEN38_LOG_DRAM=1``."""
+    if not _LOG_DRAM:
+        return
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    view = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+    used = view.total_bytes_allocated_per_bank * view.num_banks / 1e9
+    total = view.total_bytes_per_bank * view.num_banks / 1e9
+    print(f"[dram] {label:<40s} {used:6.2f} / {total:5.2f} GB per chip", flush=True)
 
 
 class RecomputeMixer(Function):
@@ -89,9 +105,12 @@ class RecomputeMixer(Function):
         # into the graph that produced `saved` -- that part is handled by the
         # gradient this function returns.
         detached = ttml.autograd.create_tensor(saved.get_value(), True)
+        log_dram("recompute: before forward")
         recomputed = ctx.mixer(detached)
+        log_dram("recompute: after forward")
         recomputed.set_grad(grad_output)
         recomputed.backward(False)
+        log_dram("recompute: after backward")
         return detached.get_grad()
 
 

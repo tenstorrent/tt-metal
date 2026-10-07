@@ -25,7 +25,12 @@ from models.experimental.gated_attention_gated_deltanet.torch_functional.delta_r
     chunk_gated_delta_rule as torch_chunk_gated_delta_rule,
 )
 from ttml.models.qwen38 import Qwen38Config, Qwen38GatedDeltaNet
-from ttml.models.qwen38.fused_delta_rule import fused_chunk_gated_delta_rule
+from ttml.models.qwen38.fused_delta_rule import (
+    flat_l2_norm,
+    fused_chunk_gated_delta_rule,
+    fused_chunk_gated_delta_rule_flat,
+)
+from ttml.models.qwen38.gated_norm import gated_rmsnorm
 
 
 @pytest.fixture(autouse=True)
@@ -108,6 +113,113 @@ def test_fused_delta_rule_vs_torch(batch, heads, seq, chunk, key_dim, val_dim):
     _assert_pcc(v.get_grad_tensor().to_numpy(), vt.grad.numpy(), "grad v", 0.99)
     _assert_pcc(beta.get_grad_tensor().to_numpy()[:, 0], bt.grad.numpy(), "grad beta", 0.99)
     _assert_pcc(g.get_grad_tensor().to_numpy()[:, 0], gt.grad.numpy(), "grad g", 0.99)
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize(
+    "batch,k_heads,repeats,seq,chunk,key_dim,val_dim",
+    [
+        (1, 4, 3, 256, 64, 128, 128),  # Qwen3.8 per-chip heads at TP=4
+        (1, 4, 3, 256, 32, 128, 128),  # chunk 32: the forward re-normalizes q/k in-kernel
+        (2, 2, 2, 128, 32, 64, 64),
+    ],
+)
+def test_fused_delta_rule_flat_vs_torch(batch, k_heads, repeats, seq, chunk, key_dim, val_dim):
+    """Flat layout: raw [B,1,T,H_k*K] q/k in, [B,1,T,H_v*V] out; L2 norm, GVA pairing and
+    the GVA gradient sum all happen without materializing a head axis."""
+    rng = np.random.RandomState(4321)
+    v_heads = k_heads * repeats
+
+    q_np = rng.randn(batch, 1, seq, k_heads * key_dim).astype(np.float32)
+    k_np = rng.randn(batch, 1, seq, k_heads * key_dim).astype(np.float32)
+    v_np = rng.randn(batch, 1, seq, v_heads * val_dim).astype(np.float32)
+    beta_np = rng.uniform(0.1, 0.9, size=(batch, 1, seq, v_heads)).astype(np.float32)
+    g_np = (-rng.uniform(0.01, 0.4, size=(batch, 1, seq, v_heads))).astype(np.float32)
+
+    q, k, v, beta, g = (_leaf(x) for x in (q_np, k_np, v_np, beta_np, g_np))
+    out = fused_chunk_gated_delta_rule_flat(
+        flat_l2_norm(q, key_dim),
+        flat_l2_norm(k, key_dim),
+        v,
+        g,
+        beta,
+        num_k_heads=k_heads,
+        num_v_heads=v_heads,
+        key_dim=key_dim,
+        chunk_size=chunk,
+    )  # [B, 1, T, H_v * V]
+    out_np = out.to_numpy()
+    w_np = _projection_loss(out)
+
+    # Reference: per-head L2 norm -> GVA repeat -> delta rule, all in torch autograd.
+    tensors = [torch.tensor(x, dtype=torch.float64, requires_grad=True) for x in (q_np, k_np, v_np, beta_np, g_np)]
+    qt, kt, vt, bt, gt = tensors
+
+    def heads(x, n, d):
+        return x.reshape(batch, seq, n, d)
+
+    qn = torch.nn.functional.normalize(heads(qt, k_heads, key_dim), dim=-1, eps=1e-6)
+    kn = torch.nn.functional.normalize(heads(kt, k_heads, key_dim), dim=-1, eps=1e-6)
+    qn = qn.repeat_interleave(repeats, dim=2)
+    kn = kn.repeat_interleave(repeats, dim=2)
+    ref, _ = torch_chunk_gated_delta_rule(
+        q=qn,
+        k=kn,
+        v=heads(vt, v_heads, val_dim),
+        g=gt.reshape(batch, seq, v_heads),
+        beta=bt.reshape(batch, seq, v_heads),
+        chunk_size=chunk,
+        use_qk_l2norm=False,
+    )
+    ref = ref.reshape(batch, 1, seq, v_heads * val_dim)
+    (ref * torch.tensor(w_np, dtype=torch.float64)).mean().backward()
+
+    _assert_pcc(out_np, ref.detach().numpy(), "forward", 0.999)
+    _assert_pcc(q.get_grad_tensor().to_numpy(), qt.grad.numpy(), "grad q", 0.99)
+    _assert_pcc(k.get_grad_tensor().to_numpy(), kt.grad.numpy(), "grad k", 0.99)
+    _assert_pcc(v.get_grad_tensor().to_numpy(), vt.grad.numpy(), "grad v", 0.99)
+    _assert_pcc(beta.get_grad_tensor().to_numpy(), bt.grad.numpy(), "grad beta", 0.99)
+    _assert_pcc(g.get_grad_tensor().to_numpy(), gt.grad.numpy(), "grad g", 0.99)
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize(
+    "batch,seq,heads,head_dim,gamma_requires_grad",
+    [
+        (1, 256, 12, 128, True),  # Qwen3.8 per-chip value heads at TP=4
+        (2, 96, 4, 64, True),
+        (1, 64, 3, 128, False),  # frozen gamma: backward skips dgamma
+    ],
+)
+def test_gated_rmsnorm_vs_torch(batch, seq, heads, head_dim, gamma_requires_grad):
+    """Fused per-head ``rmsnorm(x) * gamma * silu(gate)`` on flat ``[B, 1, T, H*V]`` vs torch."""
+    eps = 1e-6
+    rng = np.random.RandomState(7)
+    x_np = (rng.randn(batch, 1, seq, heads * head_dim) * 2.0).astype(np.float32)
+    gate_np = rng.randn(batch, 1, seq, heads * head_dim).astype(np.float32)
+    gamma_np = (1.0 + 0.3 * rng.randn(1, 1, 1, head_dim)).astype(np.float32)
+
+    def bf16_f64(a):
+        return torch.tensor(a).to(torch.bfloat16).to(torch.float64).requires_grad_(True)
+
+    xt, gt, gam = (bf16_f64(a) for a in (x_np, gate_np, gamma_np))
+    xh = xt.reshape(batch, 1, seq, heads, head_dim)
+    normed = (xh * torch.rsqrt((xh * xh).mean(-1, keepdim=True) + eps)).reshape(batch, 1, seq, heads * head_dim)
+    out_ref = normed * gam.repeat(1, 1, 1, heads) * torch.nn.functional.silu(gt)
+
+    x, gate, gamma = _leaf(x_np), _leaf(gate_np), _leaf(gamma_np)
+    gamma.set_requires_grad(gamma_requires_grad)
+    out = gated_rmsnorm(x, gate, gamma, eps)
+    w_np = _projection_loss(out)
+    (out_ref * torch.tensor(w_np, dtype=torch.float64)).mean().backward()
+
+    _assert_pcc(out.to_numpy(), out_ref.detach().numpy(), "gated rmsnorm out", 0.999)
+    _assert_pcc(x.get_grad_tensor().to_numpy(), xt.grad.numpy(), "grad x", 0.999)
+    _assert_pcc(gate.get_grad_tensor().to_numpy(), gt.grad.numpy(), "grad gate", 0.999)
+    if gamma_requires_grad:
+        _assert_pcc(gamma.get_grad_tensor().to_numpy(), gam.grad.numpy(), "grad gamma", 0.999)
+    else:
+        assert not gamma.is_grad_initialized()
 
 
 # One chip, so the value-head count has to fit the fused ops' 32-head cap.

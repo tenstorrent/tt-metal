@@ -144,13 +144,46 @@ MAX_HEADS = 32
 # ---------------------------------------------------------------------------
 
 
-def validate(q, k, v, g, beta, do, *, dht=None, initial_state=None, chunk_size=64, **_):
+def _flat_geometry(q, k, v, g, beta, do, chunk_size, key_head_dim):
+    """Shape checks for the rank-3 (FLAT) layout; returns (B, T, H, K, V)."""
+    qs, ks, vs = ([int(d) for d in t.shape] for t in (q, k, v))
+    gs, bs, ds = ([int(d) for d in t.shape] for t in (g, beta, do))
+    if not (len(ks) == len(vs) == len(ds) == 3):
+        raise ValueError("gated_delta_net_backward: FLAT mode needs rank-3 q, k, v and do")
+    if len(gs) != 3 or len(bs) != 3:
+        raise ValueError("gated_delta_net_backward: g/beta must be [B,T,H]")
+    B, T, H = gs[0], gs[1], gs[2]
+    if qs[:2] != [B, T] or ks != qs or vs[:2] != [B, T] or ds != vs or bs != gs:
+        raise ValueError(
+            "gated_delta_net_backward: FLAT shapes disagree: " f"q={qs} k={ks} v={vs} do={ds} g={gs} beta={bs}"
+        )
+    if vs[2] % H:
+        raise ValueError(f"gated_delta_net_backward: flat v width {vs[2]} is not a multiple of H={H}")
+    V = vs[2] // H
+    K = int(key_head_dim) if key_head_dim is not None else V
+    if qs[2] % K:
+        raise ValueError(f"gated_delta_net_backward: flat q width {qs[2]} is not a multiple of K={K}")
+    HK = qs[2] // K
+    if HK == 0 or H % HK:
+        raise ValueError(f"gated_delta_net_backward: value heads H={H} must be a multiple of key heads HK={HK}")
+    if T % int(chunk_size):
+        raise ValueError(
+            f"gated_delta_net_backward: FLAT mode moves whole token tiles, so T={T} must be a multiple of "
+            f"chunk_size={chunk_size}"
+        )
+    return B, T, H, K, V
+
+
+def validate(q, k, v, g, beta, do, *, dht=None, initial_state=None, chunk_size=64, key_head_dim=None, **_):
     qs = [int(d) for d in q.shape]
     vs = [int(d) for d in v.shape]
-    if len(qs) != 4 or len(vs) != 4:
-        raise ValueError("gated_delta_net_backward: q/k must be [B,T,H,K] and v/do [B,T,H,V]")
-    B, T, H, K = qs[0], qs[1], qs[2], qs[3]
-    V = vs[3]
+    if len(qs) == 3:
+        B, T, H, K, V = _flat_geometry(q, k, v, g, beta, do, chunk_size, key_head_dim)
+    else:
+        if len(qs) != 4 or len(vs) != 4:
+            raise ValueError("gated_delta_net_backward: q/k must be [B,T,H,K] and v/do [B,T,H,V]")
+        B, T, H, K = qs[0], qs[1], qs[2], qs[3]
+        V = vs[3]
 
     if initial_state is None:
         state_mode = "do_only"
@@ -230,6 +263,7 @@ def gated_delta_net_backward(
     scale: float = None,
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = None,
+    key_head_dim: int = None,
 ):
     """Backward pass (VJP) of the chunked gated delta rule.
 
@@ -245,6 +279,16 @@ def gated_delta_net_backward(
         scale: query scale; defaults to `K ** -0.5`.
         compute_kernel_config: precision knobs (math fidelity, fp32 dest accum).
         memory_config: placement of the outputs; defaults to q's.
+        key_head_dim: `K` in FLAT mode (see below); defaults to `V`.
+
+    FLAT mode -- rank-3, token-major inputs with the heads folded into the last
+    dim: q/k `[B, T, HK*K]`, v/do `[B, T, HV*V]`, g/beta `[B, T, HV]`.  The
+    head count is read off `g`; `HK` may divide `HV` (GVA: value head `i` uses
+    key head `i // (HV/HK)`), so no host-side repeat is needed.  Outputs are
+    dq/dk `[B, T, HV*K]` -- PER VALUE HEAD, the caller sums the `HV/HK` copies
+    of each key head -- dv `[B, T, HV*V]`, dg/dbeta `[B, T, HV]`.  Requires
+    `T % chunk_size == 0`.  This layout moves whole tiles and never pads the
+    head axis to 32, which is what makes it cheap for small head counts.
 
     Returns:
         `(dq, dk, dv, dg, dbeta, dh0)`.  `dh0` is `None` — not a zero tensor —
@@ -260,6 +304,7 @@ def gated_delta_net_backward(
         dht=dht,
         initial_state=initial_state,
         chunk_size=chunk_size,
+        key_head_dim=key_head_dim,
     )
 
     global _LAST_SCRATCH
@@ -276,6 +321,7 @@ def gated_delta_net_backward(
         scale=scale,
         compute_kernel_config=compute_kernel_config,
         memory_config=memory_config,
+        key_head_dim=key_head_dim,
     )
     _LAST_SCRATCH = scratch
     return outputs

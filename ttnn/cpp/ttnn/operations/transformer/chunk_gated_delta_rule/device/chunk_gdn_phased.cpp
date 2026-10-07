@@ -47,7 +47,8 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
         TT_FATAL(qsf.rank() == 3, "qk_flat expects a flat [B,T,Hk*K] q (got rank {})", qsf.rank());
         TT_FATAL(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
-        TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
+        // qk_flat without qk_norm is allowed: the caller then guarantees q/k arrive L2-normalized (and q
+        // pre-scaled), exactly as on the head-major path.  The flat reader itself is Ct-agnostic.
     }
     check(in.g, "g", DataType::FLOAT32);
     check(in.beta, "beta", DataType::FLOAT32);

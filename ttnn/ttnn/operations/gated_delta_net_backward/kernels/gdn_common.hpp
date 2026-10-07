@@ -77,7 +77,16 @@ constexpr uint32_t NUM_CONST_MASKS = get_compile_time_arg_val(47);
 constexpr uint32_t VECA_BLOCKS = get_compile_time_arg_val(48);
 constexpr uint32_t VECB_BLOCKS = get_compile_time_arg_val(49);
 
-constexpr uint32_t CT_ACC_BASE = 50;
+// FLAT mode: rank-3 token-major tensors with the heads folded into the last
+// dim -- q/k [B,T,HK*K], v/do [B,T,HV*V], dq/dk [B,T,HV*K], dv [B,T,HV*V].  A
+// page is [32 tokens x 32 dims] of ONE head, so every block is whole pages and
+// the face-row gather / scatter and the compact scratch are bypassed.  The
+// work item is still a value head `h`; its key head is `h / gG`.
+constexpr uint32_t FLAT = get_compile_time_arg_val(50);
+constexpr uint32_t gHK = get_compile_time_arg_val(51);  // key-head count
+constexpr uint32_t gG = get_compile_time_arg_val(52);   // value heads per key head
+
+constexpr uint32_t CT_ACC_BASE = 53;
 
 // derived
 constexpr uint32_t CHUNK = Ct * 32;  // tokens per chunk
@@ -210,3 +219,9 @@ FORCE_INLINE void copy_row_run(uint32_t dst, uint32_t src) {
 
 // One face-row staging window (the only non-tile-paged buffer in the op).
 constexpr uint32_t GATHER_SLOT_BYTES = GATHER_TOKENS * ROW_SPAN_STRIDE + 64;
+
+// FLAT page index: tile (token-tile `tt`, head `h`, d-tile `j`) of a
+// token-major [B,T,Hx*D] grid whose row holds `hx_dt` tiles (Hx * D/32).
+FORCE_INLINE uint32_t flat_page(uint32_t b, uint32_t tt, uint32_t hx_dt, uint32_t h, uint32_t dt, uint32_t j) {
+    return (b * Tt + tt) * hx_dt + h * dt + j;
+}

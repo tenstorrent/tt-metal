@@ -336,12 +336,44 @@ def _f32_bits(value):
     return struct.unpack("<I", struct.pack("<f", float(value)))[0]
 
 
-def build_program(q, k, v, g, beta, do, *, dht, initial_state, chunk_size, scale, compute_kernel_config, memory_config):
+def build_program(
+    q,
+    k,
+    v,
+    g,
+    beta,
+    do,
+    *,
+    dht,
+    initial_state,
+    chunk_size,
+    scale,
+    compute_kernel_config,
+    memory_config,
+    key_head_dim=None,
+):
     device = q.device()
     qs = [int(d) for d in q.shape]
     vs = [int(d) for d in v.shape]
-    B, T, H, K = qs[0], qs[1], qs[2], qs[3]
-    V = vs[3]
+    # FLAT mode (rank-3 q/k/v/do): token-major tensors with the heads folded
+    # into the last dim -- q/k `[B,T,HK*K]`, v/do `[B,T,HV*V]`.  A page is then
+    # [32 tokens x 32 dims] of ONE head, so every block moves as whole pages
+    # (no face-row gather/scatter, no compact scratch) and the head count is
+    # not padded to a tile.  The work item stays a VALUE head; its key head is
+    # `hv // G` (GVA), and dq/dk come out per value head `[B,T,HV*K]` -- the
+    # caller sums the G copies of each key head.
+    flat = len(qs) == 3
+    if flat:
+        gs = [int(d) for d in g.shape]
+        B, T, H = qs[0], qs[1], gs[2]
+        V = vs[2] // H
+        K = int(key_head_dim) if key_head_dim is not None else V
+        HK = qs[2] // K
+        G = H // HK
+    else:
+        B, T, H, K = qs[0], qs[1], qs[2], qs[3]
+        V = vs[3]
+        HK, G = H, 1
 
     in_dtype = q.dtype
     in_tile = ttnn.tile_size(in_dtype)
@@ -368,9 +400,14 @@ def build_program(q, k, v, g, beta, do, *, dht, initial_state, chunk_size, scale
             ttnn.Shape(list(shape)), dtype, ttnn.TILE_LAYOUT, device, mem if mem is not None else out_mem
         )
 
-    dq = alloc((B, T, H, K))
-    dk = alloc((B, T, H, K))
-    dv = alloc((B, T, H, V))
+    if flat:
+        dq = alloc((B, T, H * K))
+        dk = alloc((B, T, H * K))
+        dv = alloc((B, T, H * V))
+    else:
+        dq = alloc((B, T, H, K))
+        dk = alloc((B, T, H, K))
+        dv = alloc((B, T, H, V))
     dg = alloc((B, T, H))
     dbeta = alloc((B, T, H))
     has_h0 = initial_state is not None
@@ -379,7 +416,11 @@ def build_program(q, k, v, g, beta, do, *, dht, initial_state, chunk_size, scale
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     sc = alloc((smap.f32_tiles * 32, 32), dtype=ttnn.float32, mem=dram)
-    scin = alloc((smap.in_tiles * 32, 32), dtype=in_dtype, mem=dram)
+    # The compact in-dtype scratch only exists to turn the face-row gather into
+    # whole-page reads for stage G; in FLAT mode the inputs already are whole
+    # pages, so stage G re-reads them directly and `scin` is a one-tile dummy
+    # that keeps the accessor layout identical.
+    scin = alloc((32, 32) if flat else (smap.in_tiles * 32, 32), dtype=in_dtype, mem=dram)
 
     # ---------------- work distribution -----------------------------------
     grid = device.compute_with_storage_grid_size()
@@ -487,6 +528,9 @@ def build_program(q, k, v, g, beta, do, *, dht, initial_state, chunk_size, scale
             NUM_CONST_MASKS,  # 47
             NUM_VECA_SLOTS,  # 48
             NUM_VECB_SLOTS,  # 49
+            int(flat),  # 50 FLAT: rank-3 token-major inputs/outputs (see build_program)
+            HK,  # 51 key-head count (== H unless FLAT with GVA)
+            G,  # 52 value heads per key head
         ]
     )
 
@@ -629,5 +673,8 @@ def build_program(q, k, v, g, beta, do, *, dht, initial_state, chunk_size, scale
         "Vb": Vb,
         "NVB": NVB,
         "num_cores": num_cores,
+        "flat": flat,
+        "HK": HK,
+        "G": G,
     }
     return (dq, dk, dv, dg, dbeta, dh0), scratch

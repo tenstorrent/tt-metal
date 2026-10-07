@@ -22,6 +22,12 @@
 // modulo 64 (NOC_DRAM_READ_ALIGNMENT_BYTES), which is why each staging line
 // starts at `stage64 + (src_byte_off & 63)`.  The two 16-element runs are then
 // re-packed into the destination tile's face rows with plain RISC-V stores.
+//
+// FLAT MODE (compile-time `FLAT`, see gdn_common.hpp): the inputs are rank-3
+// token-major [B,T,H*D] grids, so a page is [32 tokens x 32 dims] of one head.
+// Every block is then whole pages (`read_flat_block`), the compact scratch is
+// bypassed, and stage G re-reads the inputs directly.  q/k are read from key
+// head `h / gG` (GVA) so no host-side repeat is needed.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -269,6 +275,38 @@ void gather_gate(
     }
 }
 
+// FLAT mode: a [Ct, dn] block of head `h` out of a token-major [B,T,Hx*D] grid
+// is Ct*dn whole pages -- one NoC read each, packed row-major into the CB in
+// the same (r*dn + j) order the face-row gather produces, so the compute sees
+// byte-identical blocks in both modes.  `block_pages` >= Ct*dn is the CB's
+// uniform push size; the tail is never read by the consumer.
+template <typename ACC>
+static __attribute__((noipa)) void read_flat_block(
+    const ACC& acc,
+    uint32_t cb,
+    uint32_t block_pages,
+    uint32_t b,
+    uint32_t tt0,
+    uint32_t hx_dt,
+    uint32_t h,
+    uint32_t dt,
+    uint32_t d0,
+    uint32_t dn) {
+    constexpr uint32_t tile_bytes = 32 * 32 * ESZ;
+    cb_reserve_back(cb, block_pages);
+    const uint32_t dst = get_write_ptr(cb);
+    for (uint32_t r = 0; r < Ct; ++r) {
+        for (uint32_t j = 0; j < dn; ++j) {
+            noc_async_read(
+                acc.get_noc_addr(flat_page(b, tt0 + r, hx_dt, h, dt, d0 + j)),
+                dst + (r * dn + j) * tile_bytes,
+                tile_bytes);
+        }
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb, block_pages);
+}
+
 // Copy a freshly gathered block out to the head-major compact scratch.
 template <typename ACC>
 void compact_store(const ACC& acc, uint32_t src_base, uint32_t tile_bytes, uint32_t base_tile, uint32_t ntiles) {
@@ -353,14 +391,21 @@ void kernel_main() {
         const uint32_t b = bh / gH;
         const uint32_t h = bh % gH;
         const uint32_t t0 = ci * CHUNK;
+        [[maybe_unused]] const uint32_t tt0 = ci * Ct;
+        [[maybe_unused]] const uint32_t hk = h / gG;
 
-        gather_block(q_acc, cb_qin, in_tile, b, t0, Kt, 0, Kt, h, CtKt);
-        compact_store(scin_acc, get_write_ptr(cb_qin), in_tile, SI_Q + wi * CtKt, CtKt);
-        cb_push_back(cb_qin, CtKt);
+        if constexpr (FLAT) {
+            read_flat_block(q_acc, cb_qin, CtKt, b, tt0, gHK * Kt, hk, Kt, 0, Kt);
+            read_flat_block(k_acc, cb_kin, CtKt, b, tt0, gHK * Kt, hk, Kt, 0, Kt);
+        } else {
+            gather_block(q_acc, cb_qin, in_tile, b, t0, Kt, 0, Kt, h, CtKt);
+            compact_store(scin_acc, get_write_ptr(cb_qin), in_tile, SI_Q + wi * CtKt, CtKt);
+            cb_push_back(cb_qin, CtKt);
 
-        gather_block(k_acc, cb_kin, in_tile, b, t0, Kt, 0, Kt, h, CtKt);
-        compact_store(scin_acc, get_write_ptr(cb_kin), in_tile, SI_K + wi * CtKt, CtKt);
-        cb_push_back(cb_kin, CtKt);
+            gather_block(k_acc, cb_kin, in_tile, b, t0, Kt, 0, Kt, h, CtKt);
+            compact_store(scin_acc, get_write_ptr(cb_kin), in_tile, SI_K + wi * CtKt, CtKt);
+            cb_push_back(cb_kin, CtKt);
+        }
 
         // g and beta column tiles
         cb_reserve_back(cb_gatein, 2 * Ct);
@@ -373,6 +418,11 @@ void kernel_main() {
         cb_push_back(cb_gatein, 2 * Ct);
 
         for (uint32_t vb = 0; vb < NVB; ++vb) {
+            if constexpr (FLAT) {
+                read_flat_block(v_acc, cb_vin, MAXV, b, tt0, gH * Vt, h, Vt, vb * Vb, Vb);
+                read_flat_block(do_acc, cb_doin, CtVb, b, tt0, gH * Vt, h, Vt, vb * Vb, Vb);
+                continue;
+            }
             gather_block(v_acc, cb_vin, in_tile, b, t0, Vt, vb * Vb, Vb, h, MAXV);
             {
                 const uint32_t src = get_write_ptr(cb_vin);
@@ -488,19 +538,31 @@ void kernel_main() {
     // ------------------------------------------------------------------
     for (uint32_t p = 0; p < num_items; ++p) {
         const uint32_t wi = item_start + p;
+        // FLAT: the inputs are already whole pages, so re-read them in place of
+        // the compact scratch (same page count, no scratch round trip).
+        [[maybe_unused]] const uint32_t bh = wi / NC;
+        [[maybe_unused]] const uint32_t ci = wi % NC;
+        [[maybe_unused]] const uint32_t b = bh / gH;
+        [[maybe_unused]] const uint32_t h = bh % gH;
+        [[maybe_unused]] const uint32_t tt0 = ci * Ct;
 
-        cb_reserve_back(cb_qin, CtKt);
-        {
-            const uint32_t dst = get_write_ptr(cb_qin);
-            for (uint32_t i = 0; i < CtKt; ++i) {
-                noc_async_read(scin_acc.get_noc_addr(SI_Q + wi * CtKt + i), dst + i * in_tile, in_tile);
+        if constexpr (FLAT) {
+            read_flat_block(q_acc, cb_qin, CtKt, b, tt0, gHK * Kt, h / gG, Kt, 0, Kt);
+            read_flat_block(k_acc, cb_kin, CtKt, b, tt0, gHK * Kt, h / gG, Kt, 0, Kt);
+        } else {
+            cb_reserve_back(cb_qin, CtKt);
+            {
+                const uint32_t dst = get_write_ptr(cb_qin);
+                for (uint32_t i = 0; i < CtKt; ++i) {
+                    noc_async_read(scin_acc.get_noc_addr(SI_Q + wi * CtKt + i), dst + i * in_tile, in_tile);
+                }
             }
-        }
-        cb_reserve_back(cb_kin, CtKt);
-        {
-            const uint32_t dst = get_write_ptr(cb_kin);
-            for (uint32_t i = 0; i < CtKt; ++i) {
-                noc_async_read(scin_acc.get_noc_addr(SI_K + wi * CtKt + i), dst + i * in_tile, in_tile);
+            cb_reserve_back(cb_kin, CtKt);
+            {
+                const uint32_t dst = get_write_ptr(cb_kin);
+                for (uint32_t i = 0; i < CtKt; ++i) {
+                    noc_async_read(scin_acc.get_noc_addr(SI_K + wi * CtKt + i), dst + i * in_tile, in_tile);
+                }
             }
         }
         cb_reserve_back(cb_load_item, LITEM);
@@ -515,32 +577,39 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-        cb_push_back(cb_qin, CtKt);
-        cb_push_back(cb_kin, CtKt);
+        if constexpr (!FLAT) {
+            cb_push_back(cb_qin, CtKt);
+            cb_push_back(cb_kin, CtKt);
+        }
         cb_push_back(cb_load_item, LITEM);
 
         for (uint32_t vb = 0; vb < NVB; ++vb) {
-            cb_reserve_back(cb_vin, MAXV);
-            {
-                const uint32_t dst = get_write_ptr(cb_vin);
-                for (uint32_t r = 0; r < Ct; ++r) {
-                    for (uint32_t j = 0; j < Vb; ++j) {
-                        noc_async_read(
-                            scin_acc.get_noc_addr(SI_V + wi * CtVt + r * Vt + vb * Vb + j),
-                            dst + (r * Vb + j) * in_tile,
-                            in_tile);
+            if constexpr (FLAT) {
+                read_flat_block(v_acc, cb_vin, MAXV, b, tt0, gH * Vt, h, Vt, vb * Vb, Vb);
+                read_flat_block(do_acc, cb_doin, CtVb, b, tt0, gH * Vt, h, Vt, vb * Vb, Vb);
+            } else {
+                cb_reserve_back(cb_vin, MAXV);
+                {
+                    const uint32_t dst = get_write_ptr(cb_vin);
+                    for (uint32_t r = 0; r < Ct; ++r) {
+                        for (uint32_t j = 0; j < Vb; ++j) {
+                            noc_async_read(
+                                scin_acc.get_noc_addr(SI_V + wi * CtVt + r * Vt + vb * Vb + j),
+                                dst + (r * Vb + j) * in_tile,
+                                in_tile);
+                        }
                     }
                 }
-            }
-            cb_reserve_back(cb_doin, CtVb);
-            {
-                const uint32_t dst = get_write_ptr(cb_doin);
-                for (uint32_t r = 0; r < Ct; ++r) {
-                    for (uint32_t j = 0; j < Vb; ++j) {
-                        noc_async_read(
-                            scin_acc.get_noc_addr(SI_DO + wi * CtVt + r * Vt + vb * Vb + j),
-                            dst + (r * Vb + j) * in_tile,
-                            in_tile);
+                cb_reserve_back(cb_doin, CtVb);
+                {
+                    const uint32_t dst = get_write_ptr(cb_doin);
+                    for (uint32_t r = 0; r < Ct; ++r) {
+                        for (uint32_t j = 0; j < Vb; ++j) {
+                            noc_async_read(
+                                scin_acc.get_noc_addr(SI_DO + wi * CtVt + r * Vt + vb * Vb + j),
+                                dst + (r * Vb + j) * in_tile,
+                                in_tile);
+                        }
                     }
                 }
             }
@@ -556,8 +625,10 @@ void kernel_main() {
                 read_sub(sc_acc, dst, SC_DS + wi * ST_DS, Kt, Vt, vb * Vb, Vb, f32_tile);
             }
             noc_async_read_barrier();
-            cb_push_back(cb_vin, MAXV);
-            cb_push_back(cb_doin, CtVb);
+            if constexpr (!FLAT) {
+                cb_push_back(cb_vin, MAXV);
+                cb_push_back(cb_doin, CtVb);
+            }
             cb_push_back(cb_load_vb, LVB);
         }
     }

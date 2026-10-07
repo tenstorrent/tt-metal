@@ -120,6 +120,16 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # Depthwise 4-tap conv1d (Gated DeltaNet conv backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/depthwise_conv1d_k4/depthwise_conv1d_k4.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/depthwise_conv1d_k4/device/depthwise_conv1d_k4_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/depthwise_conv1d_k4/device/depthwise_conv1d_k4_program_factory.cpp
+    # Grouped gated RMSNorm (Gated DeltaNet output norm) fw + bw
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gated_rmsnorm/gated_rmsnorm.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gated_rmsnorm/device/gated_rmsnorm_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gated_rmsnorm/device/gated_rmsnorm_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gated_rmsnorm/device/gated_rmsnorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/gated_rmsnorm/device/gated_rmsnorm_bw_program_factory.cpp
     # RMSNorm Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp

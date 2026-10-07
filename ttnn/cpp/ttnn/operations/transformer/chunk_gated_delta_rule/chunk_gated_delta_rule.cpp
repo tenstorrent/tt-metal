@@ -204,10 +204,11 @@ GdnResult chunk_gated_delta_rule_impl(
         k = ttnn::repeat_interleave(k, G, 0);
     }
 
-    // OPT-B: flat q/k arrive raw (a flat tensor can't be L2-normed over D on host), so the prep kernel
-    // L2-normalizes q/k over K and folds q's `scale` into that norm. Thus qk_norm is exactly "q/k came
-    // in flat" (Ct==1 only; the in-kernel norm uses cb_supd/cb_stmp, free only at chunk_size==32). When
-    // NOT flat, q/k are already host-normalized, so we fold scale into q here as before.
+    // OPT-B: at chunk_size==32 flat q/k may arrive raw -- the prep kernel L2-normalizes q/k over K and
+    // folds q's `scale` into that norm (the in-kernel norm uses cb_supd/cb_stmp, free only at Ct==1).
+    // At any other chunk size flat q/k MUST already be L2-normalized by the caller (same contract as
+    // the head-major path; a flat tensor can be normed per head on host with a block-diagonal matmul),
+    // and scale is folded into q here as before.  Pre-normalized q/k at C==32 are simply re-normalized.
     const bool qk_norm = flat_qk && (C == 32);
     if (!qk_norm) {
         q = ttnn::multiply(q, scale);
@@ -301,7 +302,7 @@ GdnResult chunk_gated_delta_rule_impl(
         "chunk_gated_delta_rule(output_intermediates=True) needs the phased path (unset QWEN_GDN_PHASED=0)");
     TT_FATAL(!flat_v || phased, "OPT-A flat v is only supported on the phased path (set QWEN_GDN_PHASED=1)");
     TT_FATAL(!flat_v || pad == 0, "OPT-A flat v requires T ({}) to be a multiple of chunk_size ({})", T, C);
-    TT_FATAL(!flat_qk || (phased && qk_norm), "OPT-A flat q/k needs the phased path + in-kernel norm (Ct==1)");
+    TT_FATAL(!flat_qk || phased, "OPT-A flat q/k is only supported on the phased path (set QWEN_GDN_PHASED=1)");
     TT_FATAL(!flat_qk || pad == 0, "OPT-A flat q/k requires T ({}) to be a multiple of chunk_size ({})", T, C);
     if (phased) {
         auto prep = ttnn::prim::chunk_gdn_prep(
