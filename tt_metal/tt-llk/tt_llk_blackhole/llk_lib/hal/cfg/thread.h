@@ -30,6 +30,7 @@ class CfgStateId
 { // Cfg state id for this thread
 public:
     // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
+    // Keep ckernel::cfg_state_id in sync when changing StateID.
     static constexpr Field StateID {RegisterScope::Thread, 16, 0, 0, 0, 1, 1, 0}; // Configuration state context to use for this thread (1b)
 };
 
