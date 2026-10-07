@@ -158,6 +158,13 @@ def _device_slices(tensor: ttml.autograd.Tensor) -> list:
     return [ttnn.to_torch(shard).float().numpy() for shard in ttnn.get_device_tensors(value)]
 
 
+def _assert_identical_across_devices(tensor: ttml.autograd.Tensor, what: str) -> None:
+    """Every device holds the same bytes of ``tensor``; read through ``_device_slices``, so no label is trusted."""
+    slices = _device_slices(tensor)
+    for dev, other in enumerate(slices[1:], start=1):
+        assert np.array_equal(slices[0], other), f"{what}: device {dev} differs from device 0"
+
+
 def _checkpointed_tensors(params, opt):
     yield from ((("model", name), t) for name, t in params.items())
     yield from ((("optimizer", *path, name), m) for path, name, m in _state_tensors(opt.get_state_dict()))
@@ -266,8 +273,10 @@ class TestTP:
         ``set_value`` of a ``ttnn.add``/``subtract`` result), and ttnn derives an output's topology from the union
         of the op's inputs. A gradient carrying a wrong label -- a CCL output that kept a stale ``Shard`` on the
         axis it reduced, say -- must not be able to relabel the parameter or its state, because the checkpointer
-        gathers by that label. Every parameter here is replicated; every gradient has the parameter's per-device
-        shape but is labelled ``Shard(3)`` on the tp axis with the N-D distribution shape ``[1, 2]``.
+        gathers by that label. Every parameter here is replicated; every gradient holds the SAME values on every
+        device (what a reduced CCL output holds) but is labelled ``Shard(3)`` on the tp axis with the N-D
+        distribution shape ``[1, 2]``, so the label is the only thing wrong with it. After each step every device
+        must hold the same parameter and the same state tensors, read without trusting any label.
 
         ``nd``: the parameter carries the N-D label ``[1, 2] / (Replicate, Replicate)``; the union overlays the
         gradient's ``Shard(3)`` on it. ``collapsed_1d``: the parameter carries the default mappers' 1-D label
@@ -314,18 +323,22 @@ class TestTP:
         assert all(layout == before[name] for (_, name), layout in moments_before.items()), moments_before
 
         mislabel = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 3, tp_axis)
+        tp = tp_mesh.axis_size("tp")
         for step in range(2):
             grads = {}
             for name, t in params.items():
                 local_shape = list(t.get_value(NATIVE).shape)
-                wide = local_shape[:-1] + [local_shape[-1] * tp_mesh.axis_size("tp")]  # sharded on dim 3 -> local
+                # One local gradient, repeated along dim 3 so the Shard(3) mapper hands every device the same bytes:
+                # identical data under a sharded label, which is what a CCL output that kept a stale Shard holds.
+                g = rng.standard_normal(local_shape, dtype=np.float32) * 0.01
                 grad = ttml.autograd.Tensor.from_numpy(
-                    rng.standard_normal(wide, dtype=np.float32) * 0.01,
+                    np.concatenate([g] * tp, axis=-1),
                     ttnn.Layout.TILE,
                     ttnn.DataType.BFLOAT16,
                     mislabel,
                 )
                 assert list(grad.get_value(NATIVE).shape) == local_shape
+                _assert_identical_across_devices(grad, f"precondition: gradient of {name}")
                 grad_layout = _layout(grad)
                 assert grad_layout[0][tp_axis] == ("shard", 3), f"precondition: Shard(3) gradient, got {grad_layout}"
                 assert grad_layout != before[name], "precondition: gradient label must differ from the parameter's"
@@ -344,6 +357,12 @@ class TestTP:
             assert (
                 moments_after == moments_before
             ), f"step {step} relabelled optimizer state:\n  before {moments_before}\n  after  {moments_after}"
+            # The Replicate label stays true: identical gradients on every device leave identical parameters and
+            # state on every device.
+            for name, t in params.items():
+                _assert_identical_across_devices(t, f"step {step}: parameter {name}")
+            for path, name, m in _state_tensors(opt.get_state_dict()):
+                _assert_identical_across_devices(m, f"step {step}: state {'/'.join(path)}[{name}]")
 
 
 # --- FSDP -----------------------------------------------------------------------------------------------------
