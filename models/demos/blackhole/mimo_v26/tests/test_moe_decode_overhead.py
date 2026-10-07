@@ -137,7 +137,8 @@ def test_moe_decode_overhead(mesh_device):
         ttnn.end_trace_capture(md, tid, cq_id=0)
         ttnn.execute_trace(md, tid, cq_id=0, blocking=True)
         same = all(bool(torch.equal(to_host(o), e)) for o, e in zip(t_outs, eager32))
-        traces[name] = tid
+        ttnn.release_trace(md, tid)
+        traces[name] = (router, cf)
         for i, L in enumerate(LAYERS):
             print(f"RESULT {name} L{L}: PCC vs dump live per row users=32 {res[32][i]} users=8 {res[8][i]}", flush=True)
         print(f"RESULT {name}: 5 eager runs bit-identical {ident}; trace == eager {same}", flush=True)
@@ -171,12 +172,18 @@ def test_moe_decode_overhead(mesh_device):
             f"RESULT L{L} expert sets fast == exact on live slots: {float((he.sort(-1).values == hf.sort(-1).values).all(-1).float().mean()):.4f}",
             flush=True,
         )
-    # alternating timing
+    # alternating timing: per round and variant capture a fresh trace, replay, release (several live traces at once hung the device in an earlier run)
     names = list(traces)
     tm = {n: [] for n in names}
+    set_users(32)
     for rnd in range(3):
         for n in names:
-            tid = traces[n]
+            configure(*traces[n])
+            run_all()
+            ttnn.synchronize_device(md)
+            tid = ttnn.begin_trace_capture(md, cq_id=0)
+            run_all()
+            ttnn.end_trace_capture(md, tid, cq_id=0)
             for _ in range(5):
                 ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(md)
@@ -185,6 +192,7 @@ def test_moe_decode_overhead(mesh_device):
                 ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
             ttnn.synchronize_device(md)
             tm[n].append((time.time() - t0) / REPLAYS * 1e3 / len(LAYERS))
+            ttnn.release_trace(md, tid)
     for n in names:
         print(
             f"RESULT TIME {n}: {sorted(tm[n])[1]:.3f} ms/layer (median of 3 alternating rounds {['%.3f' % v for v in tm[n]]}); x47 = {sorted(tm[n])[1] * 47:.1f} ms",
