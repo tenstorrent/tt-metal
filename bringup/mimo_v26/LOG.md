@@ -1490,3 +1490,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_P_stages_rs_spread_h48_e54e59555a9.log
 - paths: models/demos/blackhole/mimo_v26/tests/test_moe_race_stages.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py
 - data: {"old_rate_h48":23,"old_calls_h48":72000,"old_rate_h47":8,"old_calls_h47":36000,"new_events":0,"new_calls":72000}
+
+## E261007-1453-b3d
+- date: 2026-10-07T14:53:36
+- commit: 22eff654928
+- branch: ssinghal/mimo-race
+- host: 40
+- track: decode
+- status: verified
+- claim: 48-layer traced decode determinism WITH the all_gather+sum column reduce (MIMO_MOE_AR=ag_sum, MIMO_DEAD=spread default, lib integ_73c014eb46d, host 40, 32 GSM8K users, 5 warm steps, ffn_out+attn_out of all 48 layers bitwise vs replay 0 on live slots of every mesh row/column): 1000 traced replays + 200 eager steps = 0 glitches (DEC_RESULT first=null). Caveat: the OLD all_reduce control also showed 0 glitches on this test in 300 replays (host 48), so this run does not by itself discriminate; the discriminating evidence is the MoE-only stress (0/36000 vs 23/72000). NOT done: paired ms/layer cost of the workaround at U=1,8,32, layer PCC/alpha check, GSM8K token-identity pair
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_K_full48_ag_sum_h40_22eff654928.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py
+- data: {"replays":1000,"eager":200,"glitches":0}
