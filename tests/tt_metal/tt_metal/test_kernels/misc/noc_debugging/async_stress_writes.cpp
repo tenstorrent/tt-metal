@@ -28,7 +28,7 @@ void kernel_main() {
         // Wrap the source within SRC_SLOTS 32B slots so a large NUM_ITERATIONS stays inside the reserved L1 buffer.
         // Each write still gets a distinct device timestamp, so it is still a distinct profiler marker/event.
         uint32_t src = SRC_BASE_ADDR + (i % SRC_SLOTS) * num_bytes;
-        noc_async_write_one_packet(src, dst_noc_addr, num_bytes);
+        noc_async_write(src, dst_noc_addr, num_bytes);
 
 #if WAIT_ITERS > 0
         // After each burst, idle on-device (no NOC events) so the host background poll runs mid-kernel. The volatile

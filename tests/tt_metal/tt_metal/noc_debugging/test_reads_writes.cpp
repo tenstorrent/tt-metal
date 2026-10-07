@@ -1076,6 +1076,10 @@ private:
         // Must cover EVERY device the thread originally covered (profiler_initializer.cpp launches it with all of
         // them): a device left out stops being drained, and later tests running on it see no events at all.
         tt::tt_metal::LaunchIntervalBasedProfilerReadThread(devices_);
+        // Wait until the relaunched thread has completed one read. Without this readiness boundary a cached kernel can
+        // start and finish before the new thread reaches its first poll, making the bounded regression test depend on
+        // JIT compilation latency.
+        psm->signal_debug_dump_read();
     }
 
     std::vector<tt::tt_metal::IDevice*> devices_;
@@ -1138,7 +1142,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingDuringLongKernel) {
 // matters is the event time SPAN: process_accumulated_events_up_to() holds back everything within margin_ticks of the
 // newest event it has seen, so events only become processable once the span exceeds the margin. At the 3000 ms
 // default no short kernel can ever qualify. Shrinking the margin to 60 ms (and the full-read period to 20 ms, so
-// several passes land while the kernel is still running) gets the same coverage from a sub-second kernel.
+// several passes land while the kernel is still running) gets the same coverage from a bounded CI kernel.
 TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
     // Collected here (where the fixture's device list is in scope) because the retuned thread has to be relaunched
     // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
@@ -1167,13 +1171,13 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
             // Relaunching the thread above drains the device once, which can push leftovers from earlier tests.
             noc_debug_state->reset_state();
 
-            // 400 writes in 10 bursts, each burst followed by an on-device idle, giving a sub-second kernel. Reuse a
-            // small source set within every burst so issue detection does not depend on pending-write state surviving
-            // profiler flushes between independently processed batches.
+            // 400 writes in 10 bursts, each burst followed by an on-device idle long enough for a full background
+            // read. Reuse a small source set within every burst so issue detection does not depend on pending-write
+            // state surviving profiler flushes between independently processed batches.
             constexpr uint32_t writes = 400;
             constexpr uint32_t burst = 40;
             constexpr uint32_t source_slots = 8;
-            constexpr uint32_t wait_iters = 8'000'000u;
+            constexpr uint32_t wait_iters = 50'000'000u;
 
             // NO user read: only the background thread drains, processes, reports and discharges.
             run_stress_write_program(
