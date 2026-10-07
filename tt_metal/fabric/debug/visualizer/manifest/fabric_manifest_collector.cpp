@@ -111,6 +111,8 @@ manifest::RouterShape collect_shape(const ManifestRouterInputs& inputs) {
         .channel_trimming_overrides_applied = inputs.erisc_builder.get_channel_trimming_overrides().has_value(),
         .vc0_bubble_flow_control = emitted_flag(named_ct_args_per_risc, "ENABLE_DEADLOCK_AVOIDANCE"),
     };
+    // VC0's first-level acks exist for bubble flow control, so the manifest records the two as one fact.
+    check_named_arg(named_ct_args_per_risc, "ENABLE_FIRST_LEVEL_ACK_VC0", shape.vc0_bubble_flow_control ? 1 : 0);
 
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
         check_named_arg(
@@ -269,6 +271,10 @@ struct ChannelContext {
     const builder::RouterProducerSlots producer_slots;
     const bool is_2d_fabric;
     const bool speedy_vc0;
+    // The router's VC0 senders other than the worker channel are carried by its tensix mux.
+    const bool mux_mode;
+    // The channel trimming profile the builder applied to this router, if any.
+    const std::optional<ChannelTrimmingOverrides>& trimming;
     // The stream register ids the builder assigned, by compile-time argument name.
     const NamedArgs assigned_streams;
 };
@@ -316,10 +322,44 @@ std::vector<uint32_t> collect_serviced_by(
     return serviced_by;
 }
 
-// The worker channel is fed by the local worker. Any other channel is fed by a sibling router once one has connected
-// to it, which makes the channel's connection static. In 2D that sibling is the one whose producer slot the channel
-// is. A 1D router is connected to one sibling, in both directions, so the sibling feeding it is the one it forwards
-// to.
+// Why the channel's step runs or not. An unserviced channel must be off for a reason the manifest knows, which it
+// checks in the order the builder applies them: the kernel's VC gate, then mux mode, then the trimming profile.
+manifest::ChannelStatus collect_status(
+    const ChannelContext& ctx,
+    const char* kind,
+    uint32_t vc,
+    uint32_t channel,
+    const std::vector<uint32_t>& serviced_by,
+    bool carried_by_mux,
+    bool trimmed) {
+    TT_FATAL(
+        serviced_by.size() <= 1,
+        "Fabric manifest: VC{} {} channel {} is serviced by {} ERISCs, which would race on its pointers and counters",
+        vc,
+        kind,
+        channel,
+        serviced_by.size());
+    if (!serviced_by.empty()) {
+        return manifest::ChannelStatus::ACTIVE;
+    }
+    if (!kernel_runs_vc(ctx.inputs, vc)) {
+        return manifest::ChannelStatus::VC_NOT_SERVICED;
+    }
+    if (carried_by_mux) {
+        return manifest::ChannelStatus::MUX;
+    }
+    if (trimmed) {
+        return manifest::ChannelStatus::TRIMMED;
+    }
+    TT_THROW(
+        "Fabric manifest: VC{} {} channel {} is serviced by no ERISC, for a reason the manifest does not know",
+        vc,
+        kind,
+        channel);
+}
+
+// The worker channel is fed by the local worker, or in mux mode by the tensix mux. Any other channel is fed by a
+// sibling router once one has connected to it, which makes the channel's connection static.
 std::optional<manifest::SenderChannelProducer> collect_sender_producer(
     const ChannelContext& ctx, const SenderChannelIndex& index) {
     const auto& erisc_builder = ctx.inputs.erisc_builder;
@@ -335,6 +375,9 @@ std::optional<manifest::SenderChannelProducer> collect_sender_producer(
             "Fabric manifest: VC{} channel {} is the worker channel, but a router connected to it",
             index.vc,
             index.channel);
+        if (ctx.mux_mode && index.vc == 0) {
+            return manifest::LocalTensixMux{};
+        }
         return manifest::LocalWorker{};
     }
     if (!static_connection) {
@@ -403,6 +446,14 @@ manifest::SenderChannel collect_sender_channel(
 
     manifest::SenderChannel sender;
     sender.serviced_by = collect_serviced_by(inputs, index.vc, fmt::format("IS_SENDER_CHANNEL_{}_SERVICED", c));
+    sender.status = collect_status(
+        ctx,
+        "sender",
+        index.vc,
+        index.channel,
+        sender.serviced_by,
+        ctx.mux_mode && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
+        ctx.trimming.has_value() && !ctx.trimming->is_sender_channel_used(c));
     sender.producer = collect_sender_producer(ctx, index);
 
     sender.is_injection_channel = erisc_builder.sender_channel_is_traffic_injection_channel_array.at(c);
@@ -483,6 +534,14 @@ manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, co
 
     manifest::ReceiverChannel receiver;
     receiver.serviced_by = collect_serviced_by(inputs, index.vc, fmt::format("IS_RECEIVER_CHANNEL_{}_SERVICED", c));
+    receiver.status = collect_status(
+        ctx,
+        "receiver",
+        index.vc,
+        index.channel,
+        receiver.serviced_by,
+        /*carried_by_mux=*/false,
+        ctx.trimming.has_value() && !ctx.trimming->is_receiver_channel_data_forwarded(c));
     const bool serviced = !receiver.serviced_by.empty();
     TT_FATAL(
         !serviced || c == kernel_receiver_channel(inputs, index.vc),
@@ -554,6 +613,8 @@ manifest::Channels collect_channels(const ManifestRouterInputs& inputs, const ma
             builder::routing_direction_to_eth_direction(inputs.location.direction), inputs.vc_shape.sender_counts),
         .is_2d_fabric = emitted_flag(inputs.named_ct_args_per_risc, "IS_2D_FABRIC"),
         .speedy_vc0 = emitted_flag(inputs.named_ct_args_per_risc, "ENABLE_SPEEDY_VC0"),
+        .mux_mode = emitted_flag(inputs.named_ct_args_per_risc, "FABRIC_TENSIX_EXTENSION_MUX_MODE"),
+        .trimming = inputs.erisc_builder.get_channel_trimming_overrides(),
         .assigned_streams = NamedArgs(assigned_streams.begin(), assigned_streams.end()),
     };
 

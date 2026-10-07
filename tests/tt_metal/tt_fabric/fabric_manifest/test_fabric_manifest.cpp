@@ -667,20 +667,46 @@ bool expect_serviced_by(const json& serviced_by, uint32_t num_active_eriscs) {
     return !serviced_by.empty();
 }
 
-void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size) {
+// A channel is active exactly when one ERISC runs it. Every VC0 channel is in a VC the kernel runs, only VC0
+// senders other than the worker channel are carried by the mux, and only a router with a trimming profile has
+// trimmed channels. Returns whether the channel is active.
+bool expect_channel_status(
+    const json& channel, const json& shape, bool is_sender, uint32_t vc, uint32_t ch, uint32_t num_active_eriscs) {
+    const bool serviced = expect_serviced_by(channel.at("serviced_by"), num_active_eriscs);
+    EXPECT_LE(channel.at("serviced_by").size(), 1u);
+    const auto status = channel.at("status").get<std::string>();
+    EXPECT_EQ(status == lower_enum_name(manifest::ChannelStatus::ACTIVE), serviced) << status;
+    if (status == lower_enum_name(manifest::ChannelStatus::VC_NOT_SERVICED)) {
+        EXPECT_GE(vc, 1u);
+    } else if (status == lower_enum_name(manifest::ChannelStatus::MUX)) {
+        EXPECT_TRUE(is_sender);
+        EXPECT_EQ(vc, 0u);
+        EXPECT_NE(ch, 0u);
+    } else if (status == lower_enum_name(manifest::ChannelStatus::TRIMMED)) {
+        EXPECT_TRUE(shape.at("channel_trimming_overrides_applied").get<bool>());
+    } else {
+        EXPECT_EQ(status, lower_enum_name(manifest::ChannelStatus::ACTIVE));
+    }
+    return serviced;
+}
+
+// An active channel has slots. In mux mode the VC0 senders the mux carries have none.
+void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, bool active) {
     EXPECT_EQ(keys_of(ring), k_array_region_keys);
     EXPECT_EQ(ring.at("schema"), "packet_ring");
     EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
-    EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
+    if (active) {
+        EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
+    }
     EXPECT_EQ(
         ring.at("size").get<uint32_t>(),
         ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
 }
 
-// A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel, or a
-// different router on the same chip and routing plane, feeding at most one channel per VC; in 1D a router and its
-// producer feed each other. Credits are on the backing the mesh's credit transport names, and only VC0 with bubble
-// flow control gets first-level acks.
+// A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel (the
+// tensix mux on VC0 in mux mode), or a different router on the same chip and routing plane, feeding at most one
+// channel per VC; in 1D a router and its producer feed each other. Nothing feeds a channel the mux carries. Credits
+// are on the backing the mesh's credit transport names, and only VC0 with bubble flow control gets first-level acks.
 void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
     const auto& fabric_context = manifest.at("fabric_context");
     const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
@@ -720,6 +746,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                 EXPECT_EQ(
                     keys_of(sender),
                     (std::set<std::string>{
+                        "status",
                         "serviced_by",
                         "producer",
                         "is_injection_channel",
@@ -729,13 +756,18 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                         "credits",
                         "control_info"}));
 
-                const bool serviced = expect_serviced_by(sender.at("serviced_by"), num_active_eriscs);
+                const bool serviced = expect_channel_status(sender, shape, true, vc, ch, num_active_eriscs);
 
                 const auto& producer = sender.at("producer");
-                const bool worker_fed = producer == "worker";
-                if (worker_fed) {
+                if (sender.at("status") == lower_enum_name(manifest::ChannelStatus::MUX)) {
+                    EXPECT_TRUE(producer.is_null()) << producer;
+                }
+                if (producer == "worker") {
                     EXPECT_EQ(ch, 0u);
                     EXPECT_TRUE(vc == 0 || vc == 2);
+                } else if (producer == "tensix_mux") {
+                    EXPECT_EQ(ch, 0u);
+                    EXPECT_EQ(vc, 0u);
                 } else if (!producer.is_null()) {
                     const auto producer_path = producer.get<std::string>();
                     EXPECT_TRUE(producer_path.starts_with(chip_prefix)) << producer_path;
@@ -764,7 +796,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                 EXPECT_TRUE(cmd_bufs.contains(credit_return.at("cmd_buf").get<std::string>()))
                     << credit_return.at("cmd_buf");
 
-                expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size);
+                expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size, serviced);
                 expect_stream(sender.at("free_slots"), serviced);
 
                 const auto& credits = sender.at("credits");
@@ -845,6 +877,7 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
                 ASSERT_TRUE(receivers.at(vc_key).contains(ch_key));
                 const auto& receiver = receivers.at(vc_key).at(ch_key);
                 std::set<std::string> expected_keys = {
+                    "status",
                     "serviced_by",
                     "forwards_on",
                     "forwarding_disabled",
@@ -858,7 +891,7 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
                 }
                 EXPECT_EQ(keys_of(receiver), expected_keys);
 
-                const bool serviced = expect_serviced_by(receiver.at("serviced_by"), num_active_eriscs);
+                const bool serviced = expect_channel_status(receiver, shape, false, vc, ch, num_active_eriscs);
 
                 const auto& forwards_on = receiver.at("forwards_on");
                 if (!serviced || vc == 2) {
@@ -891,7 +924,7 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
                 EXPECT_LT(local_write_noc.at("noc").get<uint32_t>(), num_nocs);
                 EXPECT_TRUE(cmd_bufs.contains(local_write_noc.at("cmd_buf").get<std::string>()));
 
-                expect_ring_buffer(receiver.at("ring_buffer"), channel_buffer_size);
+                expect_ring_buffer(receiver.at("ring_buffer"), channel_buffer_size, serviced);
                 expect_stream(receiver.at("pkts_sent"), serviced);
                 if (serviced) {
                     const auto stream_id = receiver.at("pkts_sent").at("stream_id").get<uint32_t>();
@@ -946,6 +979,11 @@ TEST(ManifestNames, Spellings) {
     EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::RECEIVER_COMPLETION), "receiver_completion");
 
     EXPECT_EQ(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE), "buf_space_available");
+
+    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::ACTIVE), "active");
+    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::VC_NOT_SERVICED), "vc_not_serviced");
+    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::MUX), "mux");
+    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::TRIMMED), "trimmed");
 
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_CMD_BUF), "wr_cmd_buf");
     EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
