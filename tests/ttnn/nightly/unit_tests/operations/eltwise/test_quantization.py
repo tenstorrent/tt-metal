@@ -686,7 +686,7 @@ def test_requantize_uint8_upper_saturation(device):
     """Test requantize uint8 upper saturation to 255 on the output side"""
     q_in = torch.tensor([[0, 50, 100, 200, 255, 300, 1000]], dtype=torch.int32)
     in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
-    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
+    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale) + out_zp, 0, 255).to(torch.uint8)
 
     q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
     out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
@@ -761,7 +761,7 @@ def test_requantize_int8_output_saturation(device, in_dtype, q_values, in_scale,
     """Test requantize saturating both ends of an int8 or int32 output, from an int32 and an int8 input"""
     q_in = torch.tensor([q_values], dtype=torch.int32 if in_dtype == ttnn.int32 else torch.int8)
     in_zp, out_scale, out_zp = 0, 1.0, 0
-    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale + out_zp), -128, 127)
+    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale) + out_zp, -128, 127)
     expected = expected.to(torch.int8 if out_dtype == ttnn.int8 else torch.int32)
 
     q_in_tt = ttnn.from_torch(q_in, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -829,7 +829,7 @@ def test_requantize_rounds_ties_to_even(device, in_dtype, out_dtype, out_zero_po
     """A scale ratio of 0.5 produces exact ties when q - in_zero_point is odd; ties round to even."""
     q_tr = torch.arange(-128, 128, dtype=torch.int32).repeat(4).reshape(32, 32)
     expected = torch.clamp(
-        torch.round((q_tr.to(torch.float32) - in_zero_point) * 0.5 + out_zero_point), q_min, q_max
+        torch.round((q_tr.to(torch.float32) - in_zero_point) * 0.5) + out_zero_point, q_min, q_max
     ).to(torch.int64)
 
     q_tt = ttnn.from_torch(
