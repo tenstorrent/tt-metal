@@ -1149,6 +1149,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             arch_det, mtype = _detect_arch_and_type(Path(mr))
     if not arch_det and getattr(args, "hf_arch", None):
         arch_det, mtype = args.hf_arch, None
+    _mistral_fallback = False
     if not arch_det:
         # Mistral-format native checkpoints (no HF config.json) -- e.g. Voxtral -- are Mistral
         # causal-LM backbones; detect them so the adapter still scaffolds and the container builds.
@@ -1157,6 +1158,7 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             Path(demo_dir), Path(_mr2) if _mr2 else None, getattr(args, "weights", None)
         )
         if arch_det:
+            _mistral_fallback = True
             print(f"  [publish-hf] no HF config.json; detected mistral-format checkpoint -> {arch_det}")
     # Servability is decided by the architecture: a plugin built-in (stock generator) serves; a novel
     # arch gets a scaffolded stub and is NOT servable until an adapter is written. Drives honest card
@@ -1166,7 +1168,9 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
     servable = True
     if arch_det and not adapter_ready:
         _base_cls, _is_stub_arch = _pick_base_generator(arch_det, mtype)
-        servable = not _is_stub_arch
+        # A mistral-format fallback is an UNVERIFIED backbone guess (no HF config; the real model may
+        # be custom, e.g. a TTS head), so never claim it serves until a real adapter is written.
+        servable = (not _is_stub_arch) and not _mistral_fallback
     if adapter_ready:
         print(f"  [publish-hf] real vLLM adapter detected: {bundle_dir}  (servable — preserved, not scaffolded)")
         if getattr(args, "container", False) and not getattr(args, "vllm_path", None):
@@ -1191,7 +1195,9 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             checkout, extra, arch_det, mtype, getattr(args, "weights", None), slug
         )
         state_note = (
-            "STUB — not servable until an adapter is written" if is_stub else "stock generator — servable as-is"
+            "STUB — not servable until an adapter is written"
+            if (is_stub or _mistral_fallback)
+            else "stock generator — servable as-is"
         )
         print(f"  [publish-hf] vLLM bundle {'created' if created else 'exists'}: {bpath}  ({state_note})")
 
