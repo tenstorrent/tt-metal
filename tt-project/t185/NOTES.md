@@ -30,3 +30,14 @@
 - Detached on g15blx02: run 750 t185drv.{log,rc}; driver log t185/driver.log; marker t185/DRIVER.done.
 - Next on wake: DRIVER.done rc 0 -> read data/g15/t185_s2x2 (run.log E2E_WALL_S gen#1..5,
   eval_vs_ref_t48_f6b8/, sbs stills). rc 86 -> dropped twice on blx01: move to blx03 runner.
+
+## Result (attempt 3, 2026-10-07 ~06:10 UTC)
+- blx01 job 758 (s2x2) exit 0. Warm E2E gen#1-5 (seeds 0-4): 5.014, 4.963, 4.950, 5.009, 4.990 s;
+  mean 4.985 s vs 5.686 s baseline (job 710) = -0.70 s. Cold gen#0 32.5 s.
+- First scoring failed: ltx_eval batch scores every mp4 in --cand-dir and found no ref for sbs_seed*.mp4.
+  Fix: post.sh now writes sbs files to $R/sbs/; `post.sh <label> score` reruns scoring only.
+  Rescoring detached on g15blx02: run 772 t185score.{log,rc}; output data/g15/t185_s2x2/eval_vs_ref_t48_f6b8/.
+- Visual (sbs stills at 3 s, 5 seeds, plus 1:1 crops seeds 0, 2 in sbs/crop/): same composition, pose,
+  faces, lighting; no new artifacts. Candidate is slightly smoother in fine texture (wall grain, seed 2;
+  face, seed 0). Not a visible degradation at normal viewing size -> no second (0.725) job unless metrics say otherwise.
+- Next: read eval_vs_ref_t48_f6b8/summary (PCC/PSNR, VBench cand vs ref), then hand off done.
