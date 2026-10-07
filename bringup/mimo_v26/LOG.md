@@ -843,3 +843,14 @@
 - claim: B decision data: single-card moe_compute (bfp4, compute_only, K=4096 N=2048, 8 experts, top-8) traced: 0.396 / 0.393 / 0.392 ms per call at T=32 / 16 / 8 tokens (independent of T => weight-read bound: 107 MB bfp4 / 0.393 ms = 273 GB/s). The unified op's expert stage on the real 4x8 trace: 0.775 ms for 214 MB bfp8 = 276 GB/s, i.e. the same effective bandwidth. A bfp8 moe_compute would read 2x bytes => ~0.79 ms, no gain over the unified op; only bfp4 would halve it (0.39 ms, NOT authorised). The expert stage of MoE at bfp8 is therefore ~0.775 ms x 47 = 36 ms/token at this bandwidth, above the 26 ms whole-model roofline (which assumed 450 GB/s). Recommendation: do NOT port the bfp8 moe_compute patch (no speed gain); remaining non-expert MoE overhead is 0.75 ms/layer (router 0.29, post_combine_reduce 0.19, combine 0.10, bincount 0.09) = 35 ms/token, the part worth optimising
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_E_mc_timing3_h47_56601b284bb.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/router.py
+
+## E261007-0556-577
+- date: 2026-10-07T05:56:30
+- commit: d0d86174096
+- branch: ssinghal/mimo-moe
+- host: 41
+- track: moe
+- status: verified
+- claim: Measured per-chip DRAM of routed-expert weights on a real 4x8 mesh (host 41, 4 real layers 1-4, free-DRAM probe with 64 MB filler tensors per chip before/after): free DRAM per chip 32576 MB before; 4 layers use 832 MB (+-64 MB) = 208 MB/layer (+-16) for BOTH ND-sharded (unified-op layout) and interleaved layouts (analytic bfp8 204 MB/layer). EXTRAPOLATED to 47 layers (linear): 9.5 GB (+-0.75 GB) = 29% of the 32.6 GB free per chip; weights freed completely afterwards
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_F_dram_h41_d0d86174096.log
+- paths: models/demos/blackhole/mimo_v26/tt/router.py, models/demos/blackhole/mimo_v26/tt/router_select.py, models/demos/blackhole/mimo_v26/tt/router_kernels
