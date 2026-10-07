@@ -6,7 +6,7 @@
 # /tmp/tt-llk-build/merged_coverage.info to code-coverage-<arch>-<split_group>.info,
 # and `coverage: true` both here and on the llk-e2e-impl call.
 
-- name: llk_e2e_wormhole group 1/2
+- name: llk_e2e_blackhole group 1/6
   split_group: 1
   team: llk
   budget_type: e2e
@@ -14,17 +14,19 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-1.xml .
+    mkdir -p perf_data
+    export TT_LLK_DISABLE_ASSERTS=1
+    pytest -q --override-ini=log_cli=false --compile-producer -n 10 -m perf --timeout=600 perf_eltwise_binary_wt.py
+    for pass in 1 2 3; do
+      pytest -q --override-ini=log_cli=false --compile-consumer -m perf --timeout=600 --junitxml=pytest-report-blackhole-1.xml perf_eltwise_binary_wt.py || true
+      find .. ../.. /tmp -name "perf_eltwise_binary_wt*.post.csv" 2>/dev/null | while read -r f; do echo "=== pass $pass $f"; cat "$f"; rm -f "$f"; done
+    done
   skus:
-    wh_n150_civ2:
-      timeout: 38
+    bh_p150b_civ2:
+      timeout: 120
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_e2e_wormhole group 2/2
+- name: llk_e2e_blackhole group 2/6
   split_group: 2
   team: llk
   budget_type: e2e
@@ -32,48 +34,74 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-2.xml .
+    export PYTHONPATH=$PWD:${PYTHONPATH:-} 
+    export EB_SEL='(test_eltwise_binary|test_eltwise_binary_bfp4_b)\[.*tile_dimensions:\[(1|2|4|8|16), 32\]|test_sdpa_bcast_col_srcb_reuse\['
+    pytest -q --override-ini=log_cli=false -p eb_sel_plugin -n auto --dist=worksteal -m "$PYTEST_MARKERS" --timeout=120 --junitxml=pytest-report-blackhole-2.xml test_eltwise_binary.py test_sdpa_bcast_col_srcb_reuse.py
   skus:
-    wh_n150_civ2:
-      timeout: 38
+    bh_p150b_civ2:
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_e2e_blackhole group 1/2
-  split_group: 1
+- name: llk_e2e_blackhole group 3/6
+  split_group: 3
   team: llk
   budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-1.xml .
+    export PYTHONPATH=$PWD:${PYTHONPATH:-} 
+    export EB_SEL='broadcast_type:Column.*tile_dimensions:\[(1|2|4|8|16), 32\]'
+    pytest -q --override-ini=log_cli=false -p eb_sel_plugin -n auto --dist=worksteal -m "$PYTEST_MARKERS" --timeout=120 --junitxml=pytest-report-blackhole-3.xml test_eltwise_binary_broadcast.py
   skus:
     bh_p150b_civ2:
-      timeout: 38
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_e2e_blackhole group 2/2
-  split_group: 2
+- name: llk_e2e_blackhole group 4/6
+  split_group: 4
   team: llk
   budget_type: e2e
   coverage: false
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
-      --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 2 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-2.xml .
+    export PYTHONPATH=$PWD:${PYTHONPATH:-} 
+    export EB_SEL='broadcast_type:Row.*tile_dimensions:\[(1|2|4|8|16), 32\]'
+    pytest -q --override-ini=log_cli=false -p eb_sel_plugin -n auto --dist=worksteal -m "$PYTEST_MARKERS" --timeout=120 --junitxml=pytest-report-blackhole-4.xml test_eltwise_binary_broadcast.py
   skus:
     bh_p150b_civ2:
-      timeout: 38
+      timeout: 90
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_blackhole group 5/6
+  split_group: 5
+  team: llk
+  budget_type: e2e
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    export PYTHONPATH=$PWD:${PYTHONPATH:-} 
+    export EB_SEL='broadcast_type:Scalar.*tile_dimensions:\[(1|2|4|8|16), 32\]'
+    pytest -q --override-ini=log_cli=false -p eb_sel_plugin -n auto --dist=worksteal -m "$PYTEST_MARKERS" --timeout=120 --junitxml=pytest-report-blackhole-5.xml test_eltwise_binary_broadcast.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 90
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_blackhole group 6/6
+  split_group: 6
+  team: llk
+  budget_type: e2e
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    export PYTHONPATH=$PWD:${PYTHONPATH:-} EB_FORCE_PER_FACE=1
+    export EB_SEL='(test_eltwise_binary\[|broadcast_type:Column).*math_op:Elwmul.*tile_dimensions:\[(1|2|4|8|16), 32\]'
+    pytest -q --override-ini=log_cli=false -p eb_sel_plugin -n auto --dist=worksteal -m "$PYTEST_MARKERS" --timeout=120 --junitxml=pytest-report-blackhole-6.xml test_eltwise_binary.py test_eltwise_binary_broadcast.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 90
   owner_id: U09UC143684 # Nemanja Divnic
