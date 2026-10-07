@@ -58,6 +58,13 @@ test. These are short-context B1 results; they do not establish long-context,
 high-batch, eight-replica or reference-evaluation performance. The eight-replica
 test has been launched as a separate persistent job and is not yet qualified.
 
+`demo/build_galaxy_fabric_tests.sh` successfully built `test_tt_fabric` in a
+separate build tree. `demo/run_galaxy_fabric_tests.sh` queues the upstream torus
+neighbor-exchange tests behind the same device lock, with 1000 packets per
+sender and a 15-minute execution limit. The allocated-host job is
+`qwen38-fabric-torus-neighbors-20261006.service`; it is queued behind the replica
+test, so the wraparound links are not yet qualified.
+
 ## Capacity
 
 - Maximum supported context: 262,144 tokens.
