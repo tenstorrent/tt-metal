@@ -21,7 +21,7 @@ import torch.nn.functional as F
 from typing import Optional
 
 
-from ..model_config import DeformableAttentionConfig
+from models.experimental.bevformer.model_config import DeformableAttentionConfig
 
 
 def multi_scale_deformable_attn(

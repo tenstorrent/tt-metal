@@ -26,10 +26,10 @@ from models.experimental.bevformer.model_config import (
     CODE_WL,
     CODE_XY,
     CODE_Z,
+    GRID_DTYPE,
+    SCORE_DTYPE,
 )
 from models.experimental.bevformer.tt.tt_common import layer_norm
-from models.experimental.bevformer.model_config import SCORE_DTYPE
-from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.tt.tt_decoder import TtDetectionTransformerDecoder
 
 # The dtypes of the head's outputs. Class logits: in bfloat16 many of the num_query * num_classes
@@ -78,8 +78,8 @@ class TtBEVFormerHead:
         """``bev_embed`` is ``(bs, bev_h * bev_w, embed_dims)``.
 
         Returns every decoder layer's class logits ``(L, bs, num_query, num_classes)``
-        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``BOX_DTYPE``):
-        ``config/decoder_config.py``'s code layout with cx, cy and cz in metres.
+        (``SCORE_DTYPE``) and box predictions ``(L, bs, num_query, code_size)`` (``GRID_DTYPE``):
+        ``model_config.py``'s box code layout with cx, cy and cz in metres.
         """
         p = self.params
         bs = bev_embed.shape[0]
