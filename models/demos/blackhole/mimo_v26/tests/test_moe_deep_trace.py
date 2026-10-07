@@ -108,9 +108,13 @@ def test_moe_deep_trace(mesh_device):
     print("RESULT eager ok", flush=True)
     for o in outs:
         ttnn.deallocate(o)
+    if E("MIMO_HOLD", "0") == "1":
+        hold_begin()
     tid = ttnn.begin_trace_capture(md, cq_id=0)
     outs = run_all()
     ttnn.end_trace_capture(md, tid, cq_id=0)
+    held = hold_end() if E("MIMO_HOLD", "0") == "1" else None
+    print(f"RESULT held intermediates: {len(held) if held is not None else None}", flush=True)
     print("RESULT trace captured", flush=True)
     t0 = time.time()
     ttnn.execute_trace(md, tid, cq_id=0, blocking=True)

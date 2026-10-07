@@ -18,7 +18,16 @@ import os
 import torch
 
 import ttnn
-from models.demos.blackhole.mimo_v26.tt.moe_prefill import COLS, HIDDEN, ROWS, TOPK, spread_pad_routing
+from models.demos.blackhole.mimo_v26.tt.moe_prefill import (  # noqa: F401
+    COLS,
+    HIDDEN,
+    ROWS,
+    TOPK,
+    free,
+    hold_begin,
+    hold_end,
+    spread_pad_routing,
+)
 
 SLOTS = 64  # masked_bincount needs tokens % 64 == 0: 32 decode slots + 32 pad rows per mesh row
 
@@ -112,15 +121,15 @@ class MiMoMoEDecode:
         ):  # the pre-merge behaviour: all_reduce of the full 64-row partial, then slice (hang repro for the sentinel path)
             full = ttnn.all_reduce(part, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             o = ttnn.slice(full, [0, 0, 0, 0], [1, 1, B, HIDDEN])
-            ttnn.deallocate(full)
+            free(full)
             return o
         x = ttnn.slice(part, [0, 0, 0, 0], [1, 1, B, HIDDEN])
         if mode == "rs":
             return ttnn.all_reduce(x, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         g = ttnn.all_gather(x, dim=0, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x)
+        free(x)
         o = ttnn.sum(g, dim=0, keepdim=True)
-        ttnn.deallocate(g)
+        free(g)
         return o
 
     def forward(self, x, mask, upto=99):
@@ -163,8 +172,8 @@ class MiMoMoEDecode:
             return part
         if self.do_ar:
             o = self._column_reduce(part, B)
-            ttnn.deallocate(part)
+            free(part)
             return o
         o = ttnn.slice(part, [0, 0, 0, 0], [1, 1, B, HIDDEN])
-        ttnn.deallocate(part)
+        free(part)
         return o
