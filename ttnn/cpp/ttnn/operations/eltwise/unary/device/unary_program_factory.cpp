@@ -96,11 +96,12 @@ struct ChainOpState {
     uint32_t reads;  // programmed by the op's init and read by its call
     uint32_t init;   // written by the op's init
     uint32_t call;   // overwritten by the op's call
-    // eltwise_sfpu.cpp's chain forms: the first tile's init, a later tile's init (only the op's own state), the call;
-    // empty: the op's own string
+    // eltwise_sfpu.cpp's chain forms: the first tile's init, a later tile's init (only the op's own state), the call,
+    // and a later tile's init when only the replay buffer was written; empty: the op's own string
     std::string first_init;
     std::string later_init;
     std::string func;
+    std::string replay_init;
 };
 
 // The ops of the chains ttnn and the models build (sigmoid's fast-exp mode, the unary and binary backward chains,
@@ -122,15 +123,9 @@ std::optional<ChainOpState> chain_op_state(const EltwiseUnaryWithParam& op, Data
         case UnaryOpType::MUL_UNARY_SFPU:
         case UnaryOpType::DIV_UNARY_SFPU: return ChainOpState{0, 0, body};
         case UnaryOpType::SQUARE:
-            // The chain form stores through ADDR_MOD_4, which no other op of this kernel programs; the bf16 rounding
-            // reads Prgm0-2.
-            return ChainOpState{
-                (fp32_dest_acc_en ? 0u : kPrgm) | kAddrMod4,
-                kPrgm | kAddrMod4,
-                body,
-                "square_tile_chain_init();",
-                "square_tile_chain_reinit();",
-                "square_tile_chain(0);"};
+            // The chain form rounds without Prgm0-2 and stores through ADDR_MOD_4, which no other op of this kernel
+            // programs.
+            return ChainOpState{kAddrMod4, kAddrMod4, body, "square_tile_chain_init();", "", "square_tile_chain(0);"};
         case UnaryOpType::RSQRT: return ChainOpState{kPrgm, kPrgm, body, "", "rsqrt_tile_chain_reinit();"};
         case UnaryOpType::TANH:
             if (param0.value_or(0.0f) != 0.0f) {
@@ -151,7 +146,14 @@ std::optional<ChainOpState> chain_op_state(const EltwiseUnaryWithParam& op, Data
                                        ? kMacroTemplates01 | kMacroTemplates23 | kMacroSequence0 | kMacroSequence1 |
                                              kMacroSequences23 | kMacroMisc | kReplay | kAddrMod6
                                        : kMacroTemplates01 | kMacroSequence0 | kMacroMisc | kAddrMod6;
-            return ChainOpState{state, state, body, "recip_tile_chain_init();", "recip_tile_chain_reinit();"};
+            return ChainOpState{
+                state,
+                state,
+                body,
+                "recip_tile_chain_init();",
+                "recip_tile_chain_reinit();",
+                "",
+                fp32_dest_acc_en ? "recip_tile_chain_rerecord();" : ""};
         }
         default: return std::nullopt;
     }
@@ -207,8 +209,17 @@ std::map<std::string, std::string> get_chain_init_once_defines(
         if (once[k]) {
             tile += fmt::format("SFPU_OP_CHAIN_FIRST_TILE_ONLY({}) ", first);
         } else if (!states[k].later_init.empty()) {
+            // What of k's state a later tile finds written: by a call, a per-tile init, or an init after k's on tile 0.
+            uint32_t lost = states[k].reads & call_writes;
+            for (size_t j = 0; j < n; j++) {
+                const bool same_init = op_chain[j].type() == op_chain[k].type() && states[j].init == states[k].init;
+                if (j != k && !same_init && (!once[j] || j > k)) {
+                    lost |= states[k].reads & states[j].init;
+                }
+            }
             const std::string later = fmt::format("SFPU_OP_CHAIN_0_LATER_INIT_{}", k);
-            defines[later] = states[k].later_init;
+            defines[later] = (lost & ~kReplay) == 0 && !states[k].replay_init.empty() ? states[k].replay_init
+                                                                                       : states[k].later_init;
             tile += fmt::format("SFPU_OP_CHAIN_FIRST_OR_LATER_TILE({}, {}) ", first, later);
         } else {
             tile += first + " ";

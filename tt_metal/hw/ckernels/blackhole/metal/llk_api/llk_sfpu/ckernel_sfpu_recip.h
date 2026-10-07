@@ -271,12 +271,31 @@ inline void _init_reciprocal_fast_8b_3c_() {
 #endif
 }
 
-inline void _init_reciprocal_fast_24b_5c_() {
+// The replay buffer part of the init, which the ttnn unary chain repeats alone when no other op writes the macros.
+inline void _record_reciprocal_fast_24b_5c_() {
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int e = p_sfpu::LREG0;
     constexpr int t2 = p_sfpu::LREG1;
     constexpr int z = p_sfpu::LREG2;
     constexpr int y = p_sfpu::LREG3;
+    constexpr std::uint32_t prev_offset = -2 & 0x3ff;
+    constexpr std::uint32_t offset = 0;
+
+    load_replay_buf(0, 6, [e, t2, z, y, offset, prev_offset] {
+        TTI_SFPLOADMACRO((0 << 2) | (y & 3), 0, ADDR_MOD_7, offset | (y >> 2));
+        TTI_SFPLOADMACRO((2 << 2) | (t2 & 3), 0, ADDR_MOD_7, prev_offset | (t2 >> 2));
+        TTI_SFPLOADMACRO((1 << 2) | (e & 3), 0, ADDR_MOD_7, offset | (e >> 2));
+        TTI_SFPMAD(p_sfpu::LREG0, y, p_sfpu::LCONST_1, 0, 1);  // SFPMAD_MOD1_NEGATE_VA
+        TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_6, prev_offset | (z >> 2));
+        TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_7, prev_offset | (z >> 2));
+    });
+#endif
+}
+
+inline void _init_reciprocal_fast_24b_5c_() {
+#ifndef DISABLE_SFPLOADMACRO
+    constexpr int t2 = p_sfpu::LREG1;
+    constexpr int z = p_sfpu::LREG2;
 
     // InstructionTemplate[0]
     TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
@@ -343,17 +362,7 @@ inline void _init_reciprocal_fast_24b_5c_() {
     // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
     TTI_SFPCONFIG(0xff0, 8, 1);
 
-    constexpr std::uint32_t prev_offset = -2 & 0x3ff;
-    constexpr std::uint32_t offset = 0;
-
-    load_replay_buf(0, 6, [e, t2, z, y, offset, prev_offset] {
-        TTI_SFPLOADMACRO((0 << 2) | (y & 3), 0, ADDR_MOD_7, offset | (y >> 2));
-        TTI_SFPLOADMACRO((2 << 2) | (t2 & 3), 0, ADDR_MOD_7, prev_offset | (t2 >> 2));
-        TTI_SFPLOADMACRO((1 << 2) | (e & 3), 0, ADDR_MOD_7, offset | (e >> 2));
-        TTI_SFPMAD(p_sfpu::LREG0, y, p_sfpu::LCONST_1, 0, 1);  // SFPMAD_MOD1_NEGATE_VA
-        TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_6, prev_offset | (z >> 2));
-        TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_7, prev_offset | (z >> 2));
-    });
+    _record_reciprocal_fast_24b_5c_();
 #endif
 }
 

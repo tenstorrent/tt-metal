@@ -16,7 +16,7 @@
 
 #if defined(ARCH_BLACKHOLE) && defined(SFPU_OP_CHAIN_0_TILE)
 // The chain forms the program factory emits into SFPU_OP_CHAIN_0_TILE: a later tile's init re-programs only the op's
-// own state, square stores through ADDR_MOD_4 (free on this kernel's math thread), the reciprocal leaves Prgm0.
+// own state, square rounds without Prgm0-2 and stores through ADDR_MOD_4 (free here), the reciprocal leaves Prgm0.
 namespace ckernel {
 #ifdef SFPU_OP_EXP_INCLUDE
 template <bool approx = false>
@@ -29,6 +29,7 @@ ALWI void recip_tile_chain_init() {
     MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE, true, false)));
 }
 ALWI void recip_tile_chain_reinit() { MATH((sfpu::recip_init<APPROX, DST_ACCUM_MODE, false, false>())); }
+ALWI void recip_tile_chain_rerecord() { MATH((sfpu::_record_reciprocal_fast_24b_5c_())); }
 #endif
 #ifdef SFPU_OP_RSQRT_INCLUDE
 ALWI void rsqrt_tile_chain_reinit() { MATH((sfpu::rsqrt_init<APPROX>())); }
@@ -36,15 +37,14 @@ ALWI void rsqrt_tile_chain_reinit() { MATH((sfpu::rsqrt_init<APPROX>())); }
 #ifdef SFPU_OP_COMPUTE_KERNEL_API_INCLUDE
 ALWI void square_tile_chain_init() {
     MATH(llk_math_sfpu_init_once());
-    MATH((sfpu::_square_init_<ADDR_MOD_4, true>()));
+    MATH((sfpu::_square_init_<ADDR_MOD_4, true, false>()));
 }
-ALWI void square_tile_chain_reinit() { MATH((sfpu::_square_init_<ADDR_MOD_4, false>())); }
 ALWI void square_tile_chain(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_square,
-        (APPROX, DST_ACCUM_MODE, 32, ADDR_MOD_4),
+        (APPROX, DST_ACCUM_MODE, 32, ADDR_MOD_4, false),
         idst,
         VectorMode::None));
 }
