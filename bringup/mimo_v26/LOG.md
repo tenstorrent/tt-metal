@@ -112,3 +112,15 @@
 - claim: fp32 independent oracle (ref_layer.py, written from the spec) vs HF MiMoV2DecoderLayer on real tokens (embeddings of 2x128 GSM8K prompts): L0 PCC 1.000000 maxabs 0; L1 (SWA+MoE) PCC 1.000000 rel 1.1e-8; L5 (global+MoE) PCC 1.000000 rel 5e-8; router expert SETS identical on all 256 tokens for L1 and L5. Mask: transformers (5.12.1) create_sliding_window_causal_mask == oracle mask (j<=i, j>i-128: window 128 INCLUDING self; row 200 sees 73..200 = 128 keys); global mask causal. Covered by this equality (same semantics as modeling_mimo_v2.py eager path): sink = raw per-head logit appended after the 192**-0.5 scaling, softmax over [scores, sink], sink column dropped; V*0.707 before cache/attention; RoPE on first 64 of 192 dims, split-half rotate_half, theta 1e7 global / 1e4 SWA; router fp32 sigmoid, selection on score+bias, weights from unbiased score renormalised, scale 1.0, no clamp. NOTE: the checkpoint's modeling file targets transformers 5.3 (calls create_causal_mask(input_embeds=, cache_position=)); this env has 5.12.1 (inputs_embeds, no cache_position) so the harness builds masks itself with the new API.
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_oracle_vs_hf.log
 - paths: models/demos/blackhole/mimo_v26/reference/ref_layer.py, models/demos/blackhole/mimo_v26/reference/hf_layer.py, models/demos/blackhole/mimo_v26/reference/probes/oracle_vs_hf.py
+
+## E261007-0224-c48
+- date: 2026-10-07T02:24:20
+- commit: 0a673da0295
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: dump
+- status: verified
+- claim: FIRST DUMP (MoE agent can use it): /mnt/tt-data/ssinghal/mimo-dumps/mimo-prefill-s128b16/ layers 0-5 (dense L0, SWA-MoE L1-4, global-MoE L5), bf16 chain, S=128 B=16 real GSM8K chat-template tokens (first 128 tokens of chat prompt + gold solution), prompt sha256 d2b8fd683e1e4e09c2f437e1e71b55a011f493d3bbfe57ba01ed40b2049e8f00 (tokens.pt also holds 3 teacher-forced decode tokens/user and texts). Files layer_{L}.pt = {prefill:{h_in,h_out,attn_in,attn_out,ffn_in,ffn_out [16,128,4096] bf16, routing_idx [2048,8] int64, routing_w [2048,8] fp32 (normalised unbiased sigmoid), route_gap [2048] fp32 = (score+bias) 8th-9th margin}, state:{global k [16,4,128,192] post-rope, v [16,4,128,128] already x0.707 | SWA k_ring/v_ring [16,8,128,*] slot p%128}, decode:[3 steps {dec_in,dec_out [16,1,4096], routing_idx, routing_w}], meta}. Layer L+1 h_in = layer L h_out (chain). CPU ~1-2 min/layer incl. weight load. Router near-ties are common: route_gap<0.01 for 85% of L5 tokens, so device-vs-oracle expert-set mismatch must be judged against the bf16-vs-fp32 floor (fp32 dump -f32 dir coming). Repro: nice python -m models.demos.blackhole.mimo_v26.reference.ref_prefill_dump --layers 0-5 --S 128 --B 16 --dtype bf16 --out <dir> (env MIMO_CKPT).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dump_s128b16_bf16_L0-5.log
+- paths: models/demos/blackhole/mimo_v26/reference
+- data: {"S":128,"B":16,"layers":"0-5","dtype":"bf16","sha256":"d2b8fd683e1e4e09c2f437e1e71b55a011f493d3bbfe57ba01ed40b2049e8f00"}
