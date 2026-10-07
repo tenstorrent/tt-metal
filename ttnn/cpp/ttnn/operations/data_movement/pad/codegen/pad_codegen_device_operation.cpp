@@ -23,9 +23,21 @@ void PadCodegenDeviceOperation::validate_on_program_cache_miss(
     const Tensor& input = tensor_args.input;
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Operands to pad need to be on device!");
     TT_FATAL(input.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    const auto& optional_output = tensor_args.optional_output_tensor;
+    if (optional_output.has_value()) {
+        TT_FATAL(optional_output->storage_type() == ttnn::StorageType::DEVICE, "Output of pad needs to be on device!");
+        TT_FATAL(optional_output->buffer() != nullptr, "Output of pad needs to be allocated in a buffer on device!");
+        TT_FATAL(optional_output->device() == input.device(), "Input and output of pad must be on the same device");
+        if (!operation_attributes.fill_partial_tile) {
+            TT_FATAL(
+                optional_output->tensor_spec() ==
+                    ttnn::operations::data_movement::pad_codegen::codegen_output_spec(input, operation_attributes),
+                "Output tensor spec does not match the spec pad builds for this input");
+        }
+    }
     TT_FATAL(
         ttnn::operations::data_movement::pad_codegen::supported_by_codegen(
-            input, operation_attributes.output_mem_config),
+            input, operation_attributes, optional_output),
         "Input is not supported by PadCodegen");
 }
 
@@ -34,11 +46,7 @@ PadCodegenDeviceOperation::spec_return_value_t PadCodegenDeviceOperation::comput
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
     }
-    const auto& input = tensor_args.input;
-    return tt::tt_metal::TensorSpec(
-        operation_attributes.output_logical_shape,
-        tt::tt_metal::TensorLayout(
-            input.dtype(), tt::tt_metal::PageConfig(input.layout()), operation_attributes.output_mem_config));
+    return ttnn::operations::data_movement::pad_codegen::codegen_output_spec(tensor_args.input, operation_attributes);
 }
 
 PadCodegenDeviceOperation::tensor_return_value_t PadCodegenDeviceOperation::create_output_tensors(

@@ -16,7 +16,10 @@
 
 namespace ttnn::prim {
 
+// use_multicore and sub_core_grids are not part of the key: the codegen path always spreads work over the full
+// compute grid, and the routing gate declines any call that asks for anything else.
 struct PadCodegenParams {
+    // 4D logical output shape; N_out/C_out/H_out/W_out mirror it.
     ttnn::Shape output_logical_shape;
     uint32_t N_out{};
     uint32_t C_out{};
@@ -27,11 +30,11 @@ struct PadCodegenParams {
     uint32_t front_h{};
     uint32_t front_w{};
     uint32_t packed_pad_value{};
-    bool use_multicore{};
-    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
-    // RM only; frontier-derived against live L1 headroom.
+    // Page batching of the reader and writer; for ROW_MAJOR it is sized against live L1 headroom.
     uint32_t read_batch{};
     uint32_t write_batch{};
+    // In-place pass that writes the pad value into the unused lanes of the input's partial border tiles.
+    bool fill_partial_tile{};
     tt::tt_metal::MemoryConfig output_mem_config;
 };
 

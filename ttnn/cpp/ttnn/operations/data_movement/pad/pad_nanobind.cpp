@@ -16,6 +16,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include "pad.hpp"
+#include "pad_force.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -73,5 +74,29 @@ void bind_pad(nb::module_& mod) {
             nb::arg("use_multicore") = true,
             nb::arg("memory_config") = nb::none(),
             nb::arg("sub_core_grids") = nb::none()));
+
+    mod.def(
+        "pad_force_native",
+        &pad_force_native,
+        nb::arg("input_tensor"),
+        nb::arg("padding"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("use_multicore") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
+
+    mod.def(
+        "pad_force_codegen",
+        &pad_force_codegen,
+        nb::arg("input_tensor"),
+        nb::arg("padding"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("use_multicore") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>());
 }
 }  // namespace ttnn::operations::data_movement::detail

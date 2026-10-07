@@ -4,15 +4,384 @@
 
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_program_factory.hpp"
 
+#include <algorithm>
+#include <array>
+#include <utility>
+#include <variant>
+#include <vector>
+
 #include <tt_stl/assert.hpp>
+
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/work_split.hpp>
+
+#include "ttnn/operations/data_movement/pad/codegen/pad_codegen_supported.hpp"
+#include "ttnn/tensor/tensor.hpp"
+
+using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-tt::tt_metal::ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
-    const PadCodegenParams& /*operation_attributes*/,
-    const PadCodegenInputs& /*tensor_args*/,
-    Tensor& /*tensor_return_value*/) {
-    TT_THROW("PadCodegenProgramFactory is not implemented yet");
+namespace {
+
+constexpr uint32_t kCbOut = 0;
+constexpr uint32_t kCbPad = 1;
+constexpr uint32_t kCbStage = 2;
+
+// SEQ_PAD, see common/kernels/codegen/sequencers.h.
+constexpr uint32_t kSeqPad = 5;
+
+// The RM reader keys its direct-read admission on DRAM<->L1 address congruence.
+constexpr uint32_t kCongruentFast = 1;
+
+constexpr const char* kSharedKernelDir = "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen";
+
+using RtArgs = std::vector<std::variant<uint32_t, Buffer*>>;
+
+struct CoreSplit {
+    CoreRangeSet all_cores;
+    std::vector<CoreCoord> cores_in_order;
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t work_per_core_1 = 0;
+    uint32_t work_per_core_2 = 0;
+};
+
+// row_wise=false for both the split and the core walk so the per-core ranges line up.
+CoreSplit split_work(const Tensor& input, uint32_t total_work) {
+    const auto grid_size = input.device()->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
+        tt::tt_metal::split_work_to_cores(grid_size, total_work, /*row_wise=*/false);
+    return CoreSplit{
+        .all_cores = all_cores,
+        .cores_in_order = corerange_to_cores(all_cores, num_cores, /*row_wise=*/false),
+        .core_group_1 = core_group_1,
+        .core_group_2 = core_group_2,
+        .work_per_core_1 = work_per_core_1,
+        .work_per_core_2 = work_per_core_2,
+    };
+}
+
+uint32_t work_for_core(const CoreSplit& split, const CoreCoord& core) {
+    if (split.core_group_1.contains(core)) {
+        return split.work_per_core_1;
+    }
+    if (split.core_group_2.contains(core)) {
+        return split.work_per_core_2;
+    }
+    return 0;
+}
+
+CBDescriptor make_cb(
+    const CoreRangeSet& cores, uint32_t index, DataFormat format, uint32_t page_size, uint32_t num_pages) {
+    return CBDescriptor{
+        .total_size = num_pages * page_size,
+        .core_ranges = cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(index),
+            .data_format = format,
+            .page_size = page_size,
+        }}},
+    };
+}
+
+// Elements of one dim that lie before `coord` inside the data window [front, front + extent).
+uint32_t data_before(uint32_t coord, uint32_t front, uint32_t extent) {
+    return std::clamp(coord, front, front + extent) - front;
+}
+
+bool in_window(uint32_t coord, uint32_t front, uint32_t extent) { return coord >= front && coord < front + extent; }
+
+struct Coord4 {
+    uint32_t n, c, h, w;
+};
+
+Coord4 unflatten(uint32_t index, uint32_t C, uint32_t H, uint32_t W) {
+    Coord4 r;
+    r.w = index % W;
+    index /= W;
+    r.h = index % H;
+    index /= H;
+    r.c = index % C;
+    r.n = index / C;
+    return r;
+}
+
+// Input rows/tiles consumed before output position `p`, with all four dims counted in the same unit.
+uint32_t source_index_before(const Coord4& p, const Coord4& front, const Coord4& in, bool has_w_dim) {
+    uint32_t count = data_before(p.n, front.n, in.n) * in.c * in.h * in.w;
+    if (in_window(p.n, front.n, in.n)) {
+        count += data_before(p.c, front.c, in.c) * in.h * in.w;
+        if (in_window(p.c, front.c, in.c)) {
+            count += data_before(p.h, front.h, in.h) * in.w;
+            if (has_w_dim && in_window(p.h, front.h, in.h)) {
+                count += data_before(p.w, front.w, in.w);
+            }
+        }
+    }
+    return count;
+}
+
+ProgramDescriptor build_pad_tiled(
+    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, DataFormat format) {
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
+
+    const auto tile = input.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const uint32_t tile_bytes = operations::data_movement::pad_codegen::tile_page_bytes(input);
+
+    const auto& in_shape = input.logical_shape();
+    const Coord4 in_tiles{in_shape[0], in_shape[1], tt::div_up(in_shape[2], tile_h), tt::div_up(in_shape[3], tile_w)};
+    const Coord4 out_tiles{attrs.N_out, attrs.C_out, tt::div_up(attrs.H_out, tile_h), tt::div_up(attrs.W_out, tile_w)};
+    const Coord4 front_tiles{attrs.front_n, attrs.front_c, attrs.front_h / tile_h, attrs.front_w / tile_w};
+
+    const uint32_t total = out_tiles.n * out_tiles.c * out_tiles.h * out_tiles.w;
+    const CoreSplit split = split_work(input, total);
+
+    ProgramDescriptor desc;
+    const uint32_t depth = operations::data_movement::pad_codegen::cb_depth(attrs.read_batch, attrs.write_batch);
+    desc.cbs.push_back(make_cb(split.all_cores, kCbOut, format, tile_bytes, depth));
+    desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, tile_bytes, 1));
+
+    std::vector<uint32_t> reader_ct_args;
+    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = std::string(kSharedKernelDir) + "/reader_tile_interleaved_unified.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = split.all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.named_compile_time_args = {
+        {"seq_id", kSeqPad},
+        {"cb_id", kCbOut},
+        {"batch", attrs.read_batch},
+        {"src_page_pitch", 0},
+    };
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    std::vector<uint32_t> writer_ct_args = {kCbOut, tile_bytes};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    writer_ct_args.push_back(attrs.write_batch);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = std::string(kSharedKernelDir) + "/writer_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = split.all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    uint32_t start = 0;
+    for (const auto& core : split.cores_in_order) {
+        const uint32_t n = work_for_core(split, core);
+        const Coord4 p = unflatten(start, out_tiles.c, out_tiles.h, out_tiles.w);
+        const uint32_t src_start = source_index_before(p, front_tiles, in_tiles, /*has_w_dim=*/true);
+        reader_desc.emplace_runtime_args(
+            core,
+            RtArgs{
+                src_buffer,
+                n,
+                src_start,
+                p.w,
+                p.h,
+                p.c,
+                p.n,
+                in_tiles.w,
+                in_tiles.h,
+                in_tiles.c,
+                in_tiles.n,
+                out_tiles.w,
+                out_tiles.h,
+                out_tiles.c,
+                out_tiles.n,
+                tile_bytes,
+                attrs.packed_pad_value,
+                kCbPad,
+                front_tiles.w,
+                front_tiles.h,
+                front_tiles.c,
+                front_tiles.n});
+        writer_desc.emplace_runtime_args(core, RtArgs{dst_buffer, n, start});
+        start += n;
+    }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
+}
+
+ProgramDescriptor build_pad_rm(const PadCodegenParams& attrs, const Tensor& input, Tensor& output, DataFormat format) {
+    Buffer* src_buffer = input.buffer();
+    Buffer* dst_buffer = output.buffer();
+
+    const auto sizes = operations::data_movement::pad_codegen::rm_page_sizes(input, attrs);
+    const auto& in_shape = input.logical_shape();
+    const uint32_t elem = input.element_size();
+    const uint32_t back_pad_w_bytes = (attrs.W_out - in_shape[3] - attrs.front_w) * elem;
+    const uint32_t front_pad_w_bytes = attrs.front_w * elem;
+
+    const uint32_t total = attrs.N_out * attrs.C_out * attrs.H_out;
+    const CoreSplit split = split_work(input, total);
+
+    ProgramDescriptor desc;
+    const uint32_t depth = operations::data_movement::pad_codegen::cb_depth(attrs.read_batch, attrs.write_batch);
+    desc.cbs.push_back(make_cb(split.all_cores, kCbOut, format, sizes.out_pitch, depth));
+    desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, sizes.pad_buf, 1));
+    desc.cbs.push_back(make_cb(split.all_cores, kCbStage, format, sizes.stage, 1));
+
+    std::vector<uint32_t> reader_ct_args = {
+        in_shape[2],
+        in_shape[1],
+        in_shape[0],
+        attrs.H_out,
+        attrs.C_out,
+        attrs.N_out,
+        sizes.stick,
+        sizes.stick_out,
+        sizes.out_pitch,
+        back_pad_w_bytes,
+        attrs.packed_pad_value,
+        attrs.read_batch,
+        kCbOut,
+        kCbPad,
+        front_pad_w_bytes,
+        attrs.front_h,
+        attrs.front_c,
+        attrs.front_n,
+        kCbStage};
+    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
+    reader_ct_args.push_back(sizes.stage);
+    reader_ct_args.push_back(tt::tt_metal::hal::get_dram_alignment());
+    reader_ct_args.push_back(kCongruentFast);
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/pad/codegen/kernels/reader_pad_rm_interleaved.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = split.all_cores;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    std::vector<uint32_t> writer_ct_args = {kCbOut, sizes.stick_out};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    writer_ct_args.push_back(attrs.write_batch);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = std::string(kSharedKernelDir) + "/writer_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = split.all_cores;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
+
+    const Coord4 front{attrs.front_n, attrs.front_c, attrs.front_h, attrs.front_w};
+    const Coord4 in_rows{in_shape[0], in_shape[1], in_shape[2], 1};
+    uint32_t start = 0;
+    for (const auto& core : split.cores_in_order) {
+        const uint32_t n = work_for_core(split, core);
+        const Coord4 p = unflatten(start, attrs.C_out, attrs.H_out, 1);
+        const uint32_t src_start = source_index_before(p, front, in_rows, /*has_w_dim=*/false);
+        reader_desc.emplace_runtime_args(core, RtArgs{src_buffer, n, src_start, p.h, p.c, p.n});
+        writer_desc.emplace_runtime_args(core, RtArgs{dst_buffer, n, start});
+        start += n;
+    }
+
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
+}
+
+ProgramDescriptor build_fill_partial_tile(
+    const PadCodegenParams& attrs, const Tensor& input, Tensor& output, DataFormat format) {
+    Buffer* buffer = output.buffer();
+
+    const auto tile = input.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const auto face_shape = tile.get_face_shape();
+    const uint32_t tile_bytes = operations::data_movement::pad_codegen::tile_page_bytes(input);
+    const uint32_t elem = input.element_size();
+    const uint32_t face_bytes = face_shape[0] * face_shape[1] * elem;
+
+    const uint32_t Ht = tt::div_up(attrs.H_out, tile_h);
+    const uint32_t Wt = tt::div_up(attrs.W_out, tile_w);
+    const uint32_t h_mod = attrs.H_out % tile_h;
+    const uint32_t w_mod = attrs.W_out % tile_w;
+    const uint32_t planes = attrs.N_out * attrs.C_out;
+
+    // One task per border tile: {tile id, first invalid row, first invalid col}.
+    std::vector<std::array<uint32_t, 3>> tasks;
+    for (uint32_t plane = 0; plane < planes; ++plane) {
+        const uint32_t base = plane * Ht * Wt;
+        if (h_mod != 0) {
+            for (uint32_t wt = 0; wt < Wt; ++wt) {
+                const uint32_t col_from = (wt == Wt - 1 && w_mod != 0) ? w_mod : tile_w;
+                tasks.push_back({base + (Ht - 1) * Wt + wt, h_mod, col_from});
+            }
+        }
+        if (w_mod != 0) {
+            const uint32_t rows = (h_mod != 0) ? Ht - 1 : Ht;
+            for (uint32_t ht = 0; ht < rows; ++ht) {
+                tasks.push_back({base + ht * Wt + Wt - 1, tile_h, w_mod});
+            }
+        }
+    }
+    TT_FATAL(!tasks.empty(), "fill_partial_tile needs a partial border tile");
+
+    const CoreSplit split = split_work(input, static_cast<uint32_t>(tasks.size()));
+
+    ProgramDescriptor desc;
+    desc.cbs.push_back(make_cb(split.all_cores, kCbOut, format, tile_bytes, 2));
+    desc.cbs.push_back(make_cb(split.all_cores, kCbPad, format, face_bytes, 1));
+
+    std::vector<uint32_t> ct_args = {kCbOut, tile_bytes, elem, attrs.packed_pad_value, kCbPad};
+    TensorAccessorArgs(*buffer).append_to(ct_args);
+
+    KernelDescriptor kernel_desc;
+    kernel_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/pad/codegen/kernels/fill_partial_tile.cpp";
+    kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    kernel_desc.core_ranges = split.all_cores;
+    kernel_desc.compile_time_args = std::move(ct_args);
+    kernel_desc.config = WriterConfigDescriptor{};
+
+    uint32_t start = 0;
+    for (const auto& core : split.cores_in_order) {
+        const uint32_t n = work_for_core(split, core);
+        RtArgs args = {buffer, n};
+        for (uint32_t i = start; i < start + n; ++i) {
+            args.emplace_back(tasks[i][0]);
+            args.emplace_back(tasks[i][1]);
+            args.emplace_back(tasks[i][2]);
+        }
+        kernel_desc.emplace_runtime_args(core, std::move(args));
+        start += n;
+    }
+
+    desc.kernels.push_back(std::move(kernel_desc));
+    return desc;
+}
+
+}  // namespace
+
+ProgramDescriptor PadCodegenProgramFactory::create_descriptor(
+    const PadCodegenParams& operation_attributes, const PadCodegenInputs& tensor_args, Tensor& tensor_return_value) {
+    const Tensor& input = tensor_args.input;
+    TT_FATAL(input.buffer() != nullptr, "PadCodegen input must be allocated on device!");
+    TT_FATAL(tensor_return_value.buffer() != nullptr, "PadCodegen output must be allocated on device!");
+
+    const DataFormat format = datatype_to_dataformat_converter(input.dtype());
+    if (operation_attributes.fill_partial_tile) {
+        return build_fill_partial_tile(operation_attributes, input, tensor_return_value, format);
+    }
+    if (input.layout() == ttnn::TILE_LAYOUT) {
+        return build_pad_tiled(operation_attributes, input, tensor_return_value, format);
+    }
+    return build_pad_rm(operation_attributes, input, tensor_return_value, format);
 }
 
 }  // namespace ttnn::prim

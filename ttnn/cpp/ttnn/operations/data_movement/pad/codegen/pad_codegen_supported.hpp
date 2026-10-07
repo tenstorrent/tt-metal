@@ -4,16 +4,67 @@
 
 #pragma once
 
+#include <cstdint>
+#include <optional>
+#include <span>
+
+#include <tt-metalium/core_coord.hpp>
+
+#include "ttnn/operations/data_movement/pad/codegen/pad_codegen_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement::pad_codegen {
 
-// Correctness gate, shared by the free function's routing, pad_force_codegen and the codegen prim's
-// validation step. Must refuse TILE front padding and sharded input/output.
-bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
+// Bytes of one output page of each kind as the kernels see them. Shared by the gate and the program factory
+// so both size L1 from the same numbers.
+struct RmPageSizes {
+    uint32_t stick{};      // input row
+    uint32_t stick_out{};  // output row
+    uint32_t out_pitch{};  // output CB slot pitch
+    uint32_t pad_buf{};    // pad-constant scratch
+    uint32_t stage{};      // aligned staging read of one input row
+};
+
+RmPageSizes rm_page_sizes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
+
+// Output CB depth in pages for the given batching.
+uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
+
+// Aligned bytes of one TILE page.
+uint32_t tile_page_bytes(const Tensor& input);
+
+// The 32-bit word the kernels replicate into pad regions.
+uint32_t pack_pad_value(tt::tt_metal::DataType dtype, float value);
+
+// Builds the attributes for padding a rank-4 tensor by `front`/`after` elements per dim.
+ttnn::prim::PadCodegenParams make_codegen_params(
+    const Tensor& input,
+    std::span<const uint32_t> front,
+    std::span<const uint32_t> after,
+    float value,
+    const tt::tt_metal::MemoryConfig& output_mem_config);
+
+// Attributes for the in-place pass that fills the unused lanes of a TILE input's partial border tiles.
+ttnn::prim::PadCodegenParams make_fill_partial_tile_params(const Tensor& input, float value);
+
+// True when the input has a partial border tile.
+bool has_partial_tile(const Tensor& input);
+
+// Output spec the codegen path builds; a caller-supplied output must match it.
+tt::tt_metal::TensorSpec codegen_output_spec(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
+
+// Correctness and device-resource gate, shared by the free function's routing, pad_force_codegen and the
+// codegen prim's checks.
+bool supported_by_codegen(
+    const Tensor& input,
+    const ttnn::prim::PadCodegenParams& attrs,
+    const std::optional<Tensor>& optional_output = std::nullopt);
 
 // Perf-demotion gate: correct but not worth the codegen path. Routing-only.
-bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
+bool is_demoted(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
+
+// False when use_multicore or sub_core_grids ask for something the codegen path does not implement.
+bool supported_execution_controls(bool use_multicore, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
 }  // namespace ttnn::operations::data_movement::pad_codegen
