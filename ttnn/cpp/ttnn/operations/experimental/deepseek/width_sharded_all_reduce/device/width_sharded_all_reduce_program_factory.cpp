@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tile.hpp>
@@ -64,7 +65,18 @@ std::shared_ptr<Tensor> make_scratch_tensor(const Tensor& input, uint32_t ring_s
     auto logical = input.logical_shape();
     logical[-2] *= ring_size;
     const ShardSpec scratch_shard{shard.grid, {shard.shape[0] * ring_size, shard.shape[1]}, shard.orientation};
-    const MemoryConfig scratch_memcfg{TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, scratch_shard};
+    // The scratch lives as long as the cached program. In L1_SMALL when it fits there, so like the semaphore it
+    // does not fragment L1: a long-lived L1 buffer caps every later program's circular buffers.
+    const auto& allocator = input.device()->allocator();
+    const uint64_t bytes_per_bank = tt::align(
+        static_cast<uint64_t>(scratch_shard.shape[0]) * scratch_shard.shape[1] * input.element_size(),
+        allocator->get_alignment(BufferType::L1_SMALL));
+    const auto buffer_type =
+        allocator->get_bank_size(BufferType::L1_SMALL) > 0 &&
+                allocator->get_statistics(BufferType::L1_SMALL).largest_free_block_bytes >= bytes_per_bank
+            ? BufferType::L1_SMALL
+            : BufferType::L1;
+    const MemoryConfig scratch_memcfg{TensorMemoryLayout::WIDTH_SHARDED, buffer_type, scratch_shard};
     return std::make_shared<Tensor>(create_device_tensor(
         tt::tt_metal::TensorSpec(logical, TensorLayout(input.dtype(), PageConfig(Layout::ROW_MAJOR), scratch_memcfg)),
         input.device()));
