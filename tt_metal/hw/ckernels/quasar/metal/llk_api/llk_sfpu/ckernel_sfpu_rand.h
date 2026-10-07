@@ -64,13 +64,14 @@ constexpr std::uint32_t PRNG_LFSR_LOCKUP_REPAIR = 0xFFFFFFFE;
 // The seed is a RISC MMIO store to the config register, which reaches the per-lane PRNGs over the seed
 // bus independently of the Tensix instruction FIFO, and the seeder exposes no busy flag to poll. The
 // SFPNOPs queued behind the store keep later PRNG-sampling SFPU instructions from issuing until it has
-// landed. No Quasar document gives a minimum; 1024 is a conservative bound (Blackhole's
-// init_prng_seed uses 600). test_rand_seed_quasar fails if it is too short: a late seed lets the first
-// draws come from the previous run's PRNG state, so the same seed no longer reproduces the same tile.
-constexpr std::uint32_t PRNG_SEED_SETTLE_NOPS = 1024;
+// landed. No Quasar document gives a minimum; a review of the Quasar seeder RTL put the bound at no
+// fewer than 1600, above Blackhole's 600 (init_prng_seed). test_rand_seed_quasar fails if it is too
+// short: a late seed lets the first draws come from the previous run's PRNG state, so the same seed
+// no longer reproduces the same tile.
+constexpr std::uint32_t PRNG_SEED_SETTLE_NOPS = 1600;
 
-// The row-pair body is recorded once, by init_rand, as a head and a tail. The folded body replays
-// both back to back; the per-row-normalize body issues its SFPMULI between them.
+// calculate_rand records the row-pair body on every call as a head and a tail. The folded body
+// replays both back to back; the per-row-normalize body issues its SFPMULI between them.
 //   head = finish_mix (SFPXOR + 2 x shift-xor + SFPMUL24 + SFPMOV + SFPSETMAN + 2 x shift-xor)
 //          + to_unit (SFPCAST + SFPSETSGN)
 //   tail = SFPIADD + SFPMAD + SFPSHFT + SFPSTORE
@@ -168,19 +169,15 @@ inline void _rand_row_tail_() {
 }
 
 /**
- * @brief Seed every lane's hardware PRNG and record the row-pair body into the replay buffer.
+ * @brief Seed every lane's hardware PRNG.
  *
  * The seed reaches the PRNG through a RISC MMIO store to its config register. The seeder exposes no
- * busy flag, so PRNG_SEED_SETTLE_NOPS SFPNOPs stand in for polling one. The body is recorded only,
- * not recorded-and-executed (TEN-4690); it is all immediates, so recording it once here leaves each
- * face costing only its replays.
+ * busy flag, so PRNG_SEED_SETTLE_NOPS SFPNOPs stand in for polling one.
  *
  * @tparam APPROXIMATION_MODE: Unused; kept for parity with the Compute-API template tuple.
  * @param seed: 32-bit LFSR seed. All-ones is the XNOR lock-up state and is replaced by all-ones-but-one.
  * @note Calling this again restarts every lane's stream from @p seed, so call it once per stream,
- *       not once per tile.
- * @note Records replay slots [RAND_REPLAY_SLOT, RAND_REPLAY_SLOT + RAND_BODY_LEN). Call it again,
- *       with the seed the stream should continue from, after any op that records into those slots.
+ *       not once per tile. @ref calculate_rand needs no other state from it.
  */
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void init_rand(std::uint32_t seed) {
@@ -192,11 +189,6 @@ inline void init_rand(std::uint32_t seed) {
     for (std::uint32_t i = 0; i < PRNG_SEED_SETTLE_NOPS; i++) {
         TTI_SFPNOP(0 /* srcs_wr_done */, 0 /* srcs_rd_done */, 0 /* dest_done */);
     }
-
-    load_replay_buf<RAND_REPLAY_SLOT, RAND_BODY_LEN, false /* exec_while_loading */>([] {
-        _rand_row_head_();
-        _rand_row_tail_();
-    });
 }
 
 /**
@@ -226,9 +218,11 @@ inline void _rand_make_lane_salt_() {
  * @tparam ITERATIONS: Row pairs per face.
  * @param from: Lower bound of the interval, as FP32 bits.
  * @param scale: Width of the interval, as FP32 bits. Non-negative; 0 gives a face of constant from.
- * @note Call @ref init_rand before this - it seeds the PRNG and records the body this replays.
- * @note Programs ADDR_MOD_6 (Dest += 2) on every call, so ops that reprogram it in between need no
- *       re-init. Clobbers LREG0-LREG6.
+ * @note Call @ref init_rand once per stream before this - it seeds the PRNG.
+ * @note Programs ADDR_MOD_6 (Dest += 2) and records its body into replay slots
+ *       [RAND_REPLAY_SLOT, RAND_REPLAY_SLOT + RAND_BODY_LEN) on every call, so ops that reprogram
+ *       either in between need no re-init and the stream continues. The recording is record-only,
+ *       not record-and-execute (TEN-4690), as on Blackhole. Clobbers LREG0-LREG6.
  */
 template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_rand(const std::uint32_t from, std::uint32_t scale) {
@@ -250,6 +244,11 @@ inline void calculate_rand(const std::uint32_t from, std::uint32_t scale) {
     _rand_load_fp32_<p_sfpu::LREG2>(from);
 
     _rand_make_lane_salt_();
+
+    load_replay_buf<RAND_REPLAY_SLOT, RAND_BODY_LEN, false /* exec_while_loading */>([] {
+        _rand_row_head_();
+        _rand_row_tail_();
+    });
 
     // Prime row 0.
     TTI_SFPMOV(PRNG_RS_INDEX, p_sfpu::LREG0, SFPMOV_MOD1_FROM_RS);  // LREG0 = prng; steps the PRNG
