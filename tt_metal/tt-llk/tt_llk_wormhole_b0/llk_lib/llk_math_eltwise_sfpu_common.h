@@ -48,14 +48,21 @@ inline void _llk_math_eltwise_sfpu_assert_dst_index_(std::uint32_t dst_index, [[
 template <typename Callable, typename... Args>
 inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_mode_(Callable&& sfpu_func, VectorMode vector_mode, Args&&... args)
 {
+    // The dest counter is stepped one face (16 rows = two SETRWC) only between two kernel bodies. Nothing reads it
+    // after the last body: _llk_math_eltwise_sfpu_done_ follows and its clear_dst_reg_addr resets the counter, so a
+    // step after the last face (and the former "skip the remaining faces" steps of the R mode) would be dead
+    // instructions on the math thread.
     if (vector_mode == VectorMode::RC)
     {
         // Do all four faces, and iterate through all 4 blocks of 4 rows each
 #pragma GCC unroll 0
         for (int face = 0; face < 4; face++)
         {
+            if (face != 0)
+            {
+                _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+            }
             sfpu_func(args...);
-            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }
     else if (vector_mode == VectorMode::R)
@@ -64,12 +71,12 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
+            if (face != 0)
+            {
+                _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+            }
             sfpu_func(args...);
-            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
-        // Skip the next 2 faces
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
     }
     else if (vector_mode == VectorMode::C)
     {
@@ -77,9 +84,12 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
+            if (face != 0)
+            {
+                _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+                _llk_math_eltwise_sfpu_inc_dst_face_addr_();
+            }
             sfpu_func(args...);
-            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-            _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }
     else
