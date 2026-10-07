@@ -29,6 +29,13 @@ GROUPS = {
     ],  # dedicated short-prompt process: gsm8k as the only scenario (multi-scenario sessions inflate its decode ms/token)
     "G1s2": ["gsm8k", "isl4k", "isl8k"],  # G1s<k>: B=4 only, spec k (k=3 asserts at B=4: T=5 drafter rows)
     "G1s1": ["gsm8k", "isl4k", "isl8k"],
+    "GV64k": ["isl64k"],  # recheck of the 2048-token chunk budget at 64k: B=8 and B=32 only
+    "GV4k": [
+        "isl4k"
+    ],  # recheck of the 2048-token chunk budget at 4k: B=16 and B=32 (budgets changed from 8192 and 1024)
+    "GU1a": ["isl4k"],  # B=4 (one user per row) unified default, repeat launches a/b/c (hang check)
+    "GU1b": ["isl4k"],
+    "GU1c": ["isl4k"],
     "G4k": ["isl4k"],
     "GMAX": [
         "max"
@@ -112,12 +119,14 @@ def scenarios(B, g):
 
 def env_for(B, g, spec=True):
     e = EXTRA_ENV
-    if (B == 128 and g not in ("G1", "G0", "G4k", "GMAX")) or (B == 64 and (g.startswith("G2") or g == "GMAX")):
+    if (B == 128 and g not in ("G1", "G0", "G4k", "GMAX", "GV64k", "GV4k", "GU1a", "GU1b", "GU1c")) or (
+        B == 64 and (g.startswith("G2") or g == "GMAX")
+    ):
         e += " DSV41_POOL_DTYPE=fp8"  # bf16 pool cannot hold 128 users at >= 32k (recorded in GRID.md)
     k = (1 if g == "S128" else SPEC_K[B]) if spec else 0
     if g.startswith("G1s"):
         k = int(g[3:])
-    if g in ("G4k", "GMAX"):
+    if g in ("G4k", "GMAX", "GV64k", "GV4k", "GU1a", "GU1b", "GU1c"):
         k = 0
         if g == "GMAX" and B == 16:
             e += " DSV41_PREFILL_ROW_TOKENS=2048"  # the unified default budget (8192/row, C=2048) ran out of DRAM at 64k (first run): use the old default budget
@@ -135,10 +144,32 @@ def env_for(B, g, spec=True):
 
 def procs():
     out = []
-    order = {"G1": 0, "G2a": 1, "G2b": 2, "G3a": 3, "G3b": 4, "G1s2": 5, "G1s1": 6, "G0": 7, "G4k": 8, "GMAX": 9}
+    order = {
+        "G1": 0,
+        "G2a": 1,
+        "G2b": 2,
+        "G3a": 3,
+        "G3b": 4,
+        "G1s2": 5,
+        "G1s1": 6,
+        "G0": 7,
+        "G4k": 8,
+        "GMAX": 9,
+        "GV64k": 10,
+        "GU1a": 11,
+        "GU1b": 12,
+        "GU1c": 13,
+        "GV4k": 14,
+    }
     for g in sorted(GROUPS, key=lambda x: order[x]):
         for B in BATCHES:
             if g.startswith("G1s") and B != 4:
+                continue
+            if g == "GV4k" and B not in (16, 32):
+                continue
+            if g == "GV64k" and B not in (4, 8, 32):
+                continue
+            if g.startswith("GU1") and B != 4:
                 continue
             out.append((B, g))
     out.append((128, "S128"))
