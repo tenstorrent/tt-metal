@@ -45,10 +45,8 @@ void FftRadixPassDeviceOperation::validate_on_program_cache_miss(
     }
     TT_FATAL(
         is_pow2_op(M) && M >= 1u,
-        "fft_radix_pass: total batch (product of leading dims) must be pow-2 and >=1 (got {}). "
-        "Same reason as prim::fft — the underlying core-grid layout partitions batches across "
-        "a pow-2 grid. Route via the composite ttnn.experimental.fft entrypoint for the "
-        "non-pow-2-batch cases (Bluestein / three-pass tiers), or pad-and-slice on host.",
+        "fft_radix_pass: total batch (product of leading dims) must be a positive power of two (got {}). "
+        "Pad the leading dimensions up to the next power of two, run the transform, then slice the padding off.",
         M);
 
     if (attrs.twiddle_N2 != 0u) {
@@ -113,6 +111,7 @@ tt::stl::hash::hash_t FftRadixPassDeviceOperation::compute_program_hash(
         attrs.stride,
         args.input_real.dtype(),
         args.input_real.memory_config(),
+        args.input_imag.memory_config(),
         args.input_real.padded_shape(),
         attrs.input_imag_provided,
         apply_scale);
@@ -143,6 +142,11 @@ std::tuple<Tensor, Tensor> fft_radix_pass(
     for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
         B *= static_cast<uint32_t>(shape[d]);
     }
+    TT_FATAL(
+        fft_stockham::is_pow2(P) && P >= 2u && P <= fft_stockham::kTileElems,
+        "prim::fft_radix_pass: P={} must be a power of two in [2, {}].",
+        P,
+        fft_stockham::kTileElems);
     auto md = input_real.device()->get_mesh_device();
     auto twiddles = fft_stockham::get_cached_batch_plan(md, P);
     auto zeros = input_imag.has_value() ? nullptr : fft_stockham::get_cached_zero_imag(md, input_real.dtype(), B);

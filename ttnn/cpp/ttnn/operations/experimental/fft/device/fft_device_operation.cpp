@@ -48,12 +48,8 @@ FFTDeviceOperation::program_factory_t FFTDeviceOperation::select_program_factory
         N);
     TT_FATAL(
         is_pow2(B) && B >= 1u,
-        "prim::fft: batch dim B={} must be a positive power of two. "
-        "The pow-2 restriction reflects the SingleTile/BatchedStockham core-grid layout "
-        "(cores partition B evenly across a pow-2 grid). Workaround: pad the leading "
-        "dims so their product is a pow-2, run the FFT, then slice back on host — or "
-        "route via the composite ttnn.experimental.fft entrypoint which handles the "
-        "large-N tiers without this restriction.",
+        "prim::fft: the product of the leading dimensions B={} must be a positive power of two. "
+        "Pad those dimensions up to the next power of two, run the FFT, then slice the padding off.",
         B);
 
     // Complex-input case (used by the composite router when it feeds an
@@ -160,6 +156,25 @@ std::tuple<Tensor, Tensor> fft(
     for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
         B *= static_cast<uint32_t>(shape[d]);
     }
+    // Build the twiddle table only after these checks. get_cached_batch_plan
+    // writes N/2 entries into each 1024-wide tile, so N > 1024 corrupts the heap
+    // before launch() reaches validate_on_program_cache_miss.
+    TT_FATAL(
+        input_real.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "prim::fft: only ROW_MAJOR layout is supported.");
+    TT_FATAL(
+        input_real.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+            input_real.dtype() == tt::tt_metal::DataType::BFLOAT16,
+        "prim::fft: only Float32 and BFloat16 inputs are supported.");
+    TT_FATAL(
+        fft_stockham::is_pow2(N) && N >= 2u && N <= 1024u,
+        "prim::fft: N={} must be a power of two in [2, 1024].",
+        N);
+    TT_FATAL(
+        fft_stockham::is_pow2(B) && B >= 1u,
+        "prim::fft: the product of the leading dimensions B={} must be a positive power of two. "
+        "Pad those dimensions up to the next power of two, run the FFT, then slice the padding off.",
+        B);
     auto md = input_real.device()->get_mesh_device();
     auto twiddles = fft_stockham::get_cached_batch_plan(md, N);
     auto zeros = input_imag.has_value() ? nullptr : fft_stockham::get_cached_zero_imag(md, input_real.dtype(), B);

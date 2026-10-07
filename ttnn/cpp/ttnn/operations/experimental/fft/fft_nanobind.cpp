@@ -149,10 +149,16 @@ void bind_experimental_fft_operation(nb::module_& mod) {
 
             Args:
                 * :attr:`input_real`: Float32 or BFloat16 ROW_MAJOR tensor.
-                * :attr:`input_imag` (optional): same shape, dtype, layout as
-                  ``input_real``. When supplied, the input is treated as the
-                  complex signal ``input_real + i * input_imag``; when omitted,
-                  the imaginary part is taken to be zero.
+                  The product of the leading dimensions must be a positive
+                  power of two. Pad those dimensions up to the next power of
+                  two and slice the padding off afterwards.
+                * :attr:`input_imag` (optional): same shape, dtype, layout, and
+                  memory config as ``input_real``. When supplied, the input is
+                  treated as the complex signal ``input_real + i * input_imag``;
+                  when omitted, the imaginary part is taken to be zero.
+                * Non-power-of-two ``N`` that is not a multiple of 1024 must
+                  satisfy ``N <= 16384`` (Float32) or ``N <= 32768`` (BFloat16).
+                  Larger lengths are supported when ``N`` is a multiple of 1024.
                 * :attr:`precision` (str, default ``"precise"``):
                   ``"precise"`` → SFPU true-fp32 path (matches ``torch.fft``
                   precision; round-trip ~1e-7).

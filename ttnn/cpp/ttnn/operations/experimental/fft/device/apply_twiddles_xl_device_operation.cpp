@@ -103,6 +103,7 @@ tt::stl::hash::hash_t ApplyTwiddlesXlDeviceOperation::compute_program_hash(
         attrs.full_N,
         args.input_real.dtype(),
         args.input_real.memory_config(),
+        args.input_imag.memory_config(),
         args.input_real.padded_shape());
 }
 

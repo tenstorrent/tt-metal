@@ -300,7 +300,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> fft_two_pass(
     auto merge_or_reshape = [&](const ttnn::Tensor& t3d) -> ttnn::Tensor {
         if (need_merge) {
             auto t2d = ttnn::reshape(t3d, make_shape({B * N2, N1}));
-            return ttnn::prim::rebank_rm_merge(t2d, N2);
+            auto merged = ttnn::prim::rebank_rm_merge(t2d, N2);
+            // rebank_rm_merge returns the flattened (B_total, N). Put the
+            // caller's leading dimensions back; a rank-3 input must not come
+            // out as rank 2.
+            if (in_shape.size() == 2u) {
+                return merged;
+            }
+            return ttnn::reshape(merged, in_shape);
         }
         return ttnn::reshape(t3d, in_shape);
     };
@@ -334,28 +341,10 @@ constexpr uint32_t next_pow2_local(uint32_t v) {
 // Bluestein padded length M = next_pow2(2N - 1).
 constexpr uint32_t bluestein_M_local(uint32_t N) { return next_pow2_local(2u * N - 1u); }
 
-// ── L1 twiddle-table hard limit (WH B0) ──────────────────────────────────────
-// Both fft_radix_pass (two-pass) and apply_twiddles_xl (three-pass) store a
-// complex twiddle table of total size N × 2 × sizeof(dtype) bytes in L1.
-// Wormhole L1 per core = 1,499,136 B (~1.46 MB).
-//
-//   fp32: N × 8 ≤ 1,499,136  →  N ≤ 187,392  →  max pow-2 = 2^17 = 131,072
-//   bf16: N × 4 ≤ 1,499,136  →  N ≤ 374,784  →  max pow-2 = 2^18 = 262,144
-//
-// Measured on WH B0 with find_n_limit.py:
-//   N = 2^17 fp32  PASS  (twiddle = 1.0 MB < 1.46 MB)
-//   N = 2^18 fp32  FAIL  (twiddle = 2.1 MB > 1.46 MB)  — two-pass AND three-pass
-//   N = 2^18 bf16  PASS  (twiddle = 1.0 MB < 1.46 MB)
-//   N = 2^19 bf16  FAIL  (twiddle = 2.1 MB > 1.46 MB)
-//
-// Gap: N ∈ [2^18, 2^20] (fp32) and N ∈ [2^19, 2^20] (bf16) cannot be
-// handled by two-pass OR three-pass on WH B0.  The apply_twiddles_xl kernel
-// switches to on-the-fly (streaming) twiddle computation only for N > 2^20,
-// so three-pass works for AGGRESSIVE large-N but not the gap range.
-//
-// The routing below preserves the original two-pass range (≤ 2^20) and
-// three-pass range (> 2^20).  Calls within the gap throw TT_THROW from the
-// kernel; this is the correct behaviour given the hardware constraint.
+// Two-pass covers every power-of-two N in (1024, 2^20]. An earlier L1-size
+// estimate predicted failures at N = 2^18 (fp32) and N = 2^19 (bf16). Those
+// sizes run, so that estimate is not the dispatch limit. Three-pass covers
+// power-of-two N in (2^20, 2^30].
 
 bool two_pass_eligible(const ttnn::Tensor& input_real) {
     const auto& shape = input_real.padded_shape();
@@ -390,6 +379,28 @@ bool three_pass_eligible(const ttnn::Tensor& t) {
 // Bluestein eligible: non-pow-2 N where M = next_pow2(2N-1) ≤ 2^30.
 // Covers N up to ~715M for the XL range once three-pass inner FFTs are
 // available.
+// complex_mul_safe Case B pads a non-1024-aligned row up to the next multiple
+// of 1024 and then runs ttnn::pad, whose circular buffer is about 17 times the
+// padded row. That overflows L1 once the padded row exceeds 64 KB, which is
+// N > 16384 for fp32 and N > 32768 for bf16 when N is not a multiple of 1024.
+static void ensure_bluestein_row_fits(const ttnn::Tensor& real, const char* op_name) {
+    const uint32_t N = static_cast<uint32_t>(real.padded_shape()[-1]);
+    if ((N % 1024u) == 0u) {
+        return;
+    }
+    const uint32_t elem_bytes = (real.dtype() == tt::tt_metal::DataType::BFLOAT16) ? 2u : 4u;
+    const uint32_t n_pad = (N + 1023u) & ~1023u;
+    TT_FATAL(
+        static_cast<uint64_t>(n_pad) * elem_bytes <= kRebankThresholdBytes,
+        "{}: non-power-of-two length N={} is not supported. When N is not a multiple of 1024, "
+        "the row is padded to the next multiple of 1024 ({}) and that padded row must be at most {} bytes. "
+        "That allows N <= 16384 for Float32 and N <= 32768 for BFloat16, or any larger N that is a multiple of 1024.",
+        op_name,
+        N,
+        n_pad,
+        kRebankThresholdBytes);
+}
+
 bool bluestein_eligible(const ttnn::Tensor& t) {
     const auto& shape = t.padded_shape();
     if (shape.size() < 1) {
@@ -957,6 +968,28 @@ static void preflight_fft_input(
         op_name,
         N);
 
+    const auto dt = real.dtype();
+    TT_FATAL(
+        dt == tt::tt_metal::DataType::FLOAT32 || dt == tt::tt_metal::DataType::BFLOAT16,
+        "{}: only Float32 and BFloat16 are supported (got {}).",
+        op_name,
+        static_cast<int>(dt));
+    TT_FATAL(
+        real.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+        "{}: only ROW_MAJOR layout is supported.",
+        op_name);
+
+    uint32_t batch = 1u;
+    for (int d = 0; d < static_cast<int>(shape.size()) - 1; ++d) {
+        batch *= static_cast<uint32_t>(shape[d]);
+    }
+    TT_FATAL(
+        is_pow2(batch),
+        "{}: the product of the leading dimensions must be a positive power of two (got {}). "
+        "Pad those dimensions up to the next power of two, run the transform, then slice the padding off.",
+        op_name,
+        batch);
+
     auto* dev = real.device();
     TT_FATAL(dev != nullptr, "{}: input tensor must reside on a device.", op_name);
     TT_FATAL(
@@ -1020,8 +1053,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> fft(const ttnn::Tensor& input_real, FFTPr
         return squeeze(fft_three_pass_auto(real_in, /*input_imag=*/std::nullopt, precision, false));
     }
     if (bluestein_eligible(real_in)) {
+        ensure_bluestein_row_fits(real_in, "ttnn::experimental::fft");
         return squeeze(bluestein_dispatch(real_in, /*input_imag=*/std::nullopt, precision, false));
     }
+    TT_FATAL(
+        is_pow2(N_last) && N_last <= 1024u,
+        "ttnn::experimental::fft: length N={} is not supported. "
+        "Power-of-two N above 1024 uses the multi-pass path; this call did not match it. "
+        "Non-power-of-two N is supported only while next_pow2(2N-1) <= 2^30 and, "
+        "when N is not a multiple of 1024, the padded row fits in {} bytes.",
+        N_last,
+        kRebankThresholdBytes);
     return squeeze(ttnn::prim::fft(real_in, /*inverse=*/false, /*input_imag=*/std::nullopt, precision));
 }
 
@@ -1053,8 +1095,17 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> fft(
         return squeeze(fft_three_pass_auto(real_in, imag_in, precision, false));
     }
     if (bluestein_eligible(real_in)) {
+        ensure_bluestein_row_fits(real_in, "ttnn::experimental::fft");
         return squeeze(bluestein_dispatch(real_in, imag_in, precision, false));
     }
+    TT_FATAL(
+        is_pow2(N_last) && N_last <= 1024u,
+        "ttnn::experimental::fft: length N={} is not supported. "
+        "Power-of-two N above 1024 uses the multi-pass path; this call did not match it. "
+        "Non-power-of-two N is supported only while next_pow2(2N-1) <= 2^30 and, "
+        "when N is not a multiple of 1024, the padded row fits in {} bytes.",
+        N_last,
+        kRebankThresholdBytes);
     return squeeze(ttnn::prim::fft(real_in, /*inverse=*/false, imag_in, precision));
 }
 
@@ -1095,6 +1146,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ifft(
         return squeeze(fft_three_pass_auto(real_in, imag_in, precision, true));
     }
     if (bluestein_eligible(real_in)) {
+        ensure_bluestein_row_fits(real_in, "ttnn::experimental::ifft");
         return squeeze(bluestein_dispatch(real_in, imag_in, precision, true));
     }
     // Small pow-2 N ≤ 1024: SingleTile/BatchedStockhamFactory only implement

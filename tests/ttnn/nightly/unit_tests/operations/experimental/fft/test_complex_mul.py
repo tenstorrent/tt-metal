@@ -99,6 +99,39 @@ def test_complex_mul_program_cache_hit(device, tt_dtype, torch_dtype, label, tol
     )
 
 
+def test_complex_mul_l1_operand_does_not_reuse_dram_program(device):
+    """A DRAM call must not be reused when b moves to L1. That hit used to return NaN."""
+    torch.manual_seed(4)
+    M, P = 64, 256
+    a_re, a_im, b_re, b_im = (torch.randn(M, P, dtype=torch.float32) for _ in range(4))
+
+    def upload(tensor, memory_config):
+        return ttnn.from_torch(
+            tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    ttnn.experimental.complex_mul(
+        upload(a_re, ttnn.DRAM_MEMORY_CONFIG),
+        upload(a_im, ttnn.DRAM_MEMORY_CONFIG),
+        upload(b_re, ttnn.DRAM_MEMORY_CONFIG),
+        upload(b_im, ttnn.DRAM_MEMORY_CONFIG),
+    )
+    n_after_dram = device.num_program_cache_entries()
+    out_r, out_i = ttnn.experimental.complex_mul(
+        upload(a_re, ttnn.DRAM_MEMORY_CONFIG),
+        upload(a_im, ttnn.DRAM_MEMORY_CONFIG),
+        upload(b_re, ttnn.L1_MEMORY_CONFIG),
+        upload(b_im, ttnn.L1_MEMORY_CONFIG),
+    )
+    assert device.num_program_cache_entries() > n_after_dram, "L1 b must miss the DRAM program cache"
+
+    got = torch.complex(ttnn.to_torch(out_r).to(torch.float32), ttnn.to_torch(out_i).to(torch.float32))
+    ref = torch.complex(a_re, a_im) * torch.complex(b_re, b_im)
+    rel = _rel_err(got, ref)
+    assert rel < 5e-4, f"mixed-memory complex_mul rel err {rel:.2e}"
+    assert not torch.isnan(got).any()
+
+
 # ─── 3. Metal Trace replay ─────────────────────────────────────────────────
 # complex_mul is a single device dispatch (no host-orchestrated reshape /
 # transpose chain) so it IS trace-safe.  Verifies the captured program

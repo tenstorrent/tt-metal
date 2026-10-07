@@ -88,3 +88,42 @@ def test_cache_hit_complex_fft_uses_fresh_args(device, dtype, tol):
     ref = torch.fft.fft(torch.complex(br, bi).reshape(-1).to(torch.complex64))
     rel = _rel_err(got, ref)
     assert rel < tol, f"cache-hit output wrong: rel {rel:.2e} (tol {tol:.0e})"
+
+
+def test_non_pow2_batch_is_rejected(device, expect_error):
+    """A leading-dimension product that is not a power of two must fail before any twiddle table is built."""
+    tt_in = _from_torch(torch.randn(3, 4096), device, ttnn.float32)
+    with expect_error(RuntimeError, "power of two") as exc_info:
+        ttnn.experimental.fft(tt_in)
+    assert "route via" not in str(exc_info.value)
+
+
+def test_tile_layout_does_not_build_twiddles(device, expect_error):
+    """TILE layout used to miss the two-pass check and overflow the Stockham table."""
+    tt_in = ttnn.from_torch(
+        torch.randn(1, 4096), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "ROW_MAJOR"):
+        ttnn.experimental.fft(tt_in)
+
+
+def test_large_unaligned_length_is_rejected(device, expect_error):
+    """N=44100 is a common audio length and is past the fp32 padded-row limit."""
+    tt_in = _from_torch(torch.randn(1, 44100), device, ttnn.float32)
+    with expect_error(RuntimeError, "multiple of 1024"):
+        ttnn.experimental.fft(tt_in)
+
+
+def test_rank3_large_n_keeps_input_shape(device):
+    """The large-page merge path must restore leading dimensions, not return a flat (B, N)."""
+    torch_in = torch.randn(2, 2, 32768, dtype=torch.float32)
+    tt_in = _from_torch(torch_in, device, ttnn.float32)
+    real, imag = ttnn.experimental.fft(tt_in)
+    assert real.shape == tt_in.shape
+    assert imag.shape == tt_in.shape
+    got = torch.complex(
+        ttnn.to_torch(real).to(torch.float32),
+        ttnn.to_torch(imag).to(torch.float32),
+    )
+    rel = _rel_err(got, torch.fft.fft(torch_in, dim=-1))
+    assert rel < 1e-3, f"rank-3 fft rel err {rel:.2e}"

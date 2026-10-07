@@ -55,12 +55,17 @@ ComplexMulDeviceOperation::tensor_return_value_t ComplexMulDeviceOperation::crea
 
 tt::stl::hash::hash_t ComplexMulDeviceOperation::compute_program_hash(
     const operation_attributes_t&, const tensor_args_t& args) {
-    // No kernel-affecting attributes — the program identity is purely
-    // a function of the input dtype + shape + memory config.  All four
-    // tensors share the same spec (validated above) so hashing on
-    // a_real alone is sufficient.
+    // Dtype and shape are required to match across the four inputs.
+    // Memory config is not: a DRAM program reused for an L1 operand
+    // returns NaN. Hash every input's memory config so a mixed placement
+    // misses the cache and rebuilds with that operand's tensor spec.
     return tt::tt_metal::operation::hash_operation<ComplexMulDeviceOperation>(
-        args.a_real.dtype(), args.a_real.memory_config(), args.a_real.padded_shape());
+        args.a_real.dtype(),
+        args.a_real.padded_shape(),
+        args.a_real.memory_config(),
+        args.a_imag.memory_config(),
+        args.b_real.memory_config(),
+        args.b_imag.memory_config());
 }
 
 }  // namespace ttnn::experimental::prim

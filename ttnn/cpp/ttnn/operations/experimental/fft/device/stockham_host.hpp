@@ -35,11 +35,11 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "tt_stl/assert.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cassert>
 #include <memory>
 #include <unordered_map>
 #include <utility>
@@ -129,8 +129,13 @@ inline std::pair<std::vector<float>, std::vector<float>> batch_twiddles(uint32_t
 // caller's input is bf16.
 inline std::shared_ptr<BatchFFTPlan> make_batch_plan(std::shared_ptr<MeshDevice> md, uint32_t sub_N) {
     using namespace tt::tt_metal;
-    assert(sub_N <= kTileElems && "batch path requires sub_N <= 1024 (single tile per sub-FFT)");
-    assert(is_pow2(sub_N) && sub_N >= 2);
+    // batch_twiddles writes sub_N/2 values into each 1024-wide tile. A C assert
+    // is compiled out of Release builds, so an oversized sub_N corrupts the heap.
+    TT_FATAL(
+        is_pow2(sub_N) && sub_N >= 2u && sub_N <= kTileElems,
+        "Stockham twiddle table: sub_N={} must be a power of two in [2, {}].",
+        sub_N,
+        kTileElems);
 
     auto bp = std::make_shared<BatchFFTPlan>();
     bp->device_weak = md;
