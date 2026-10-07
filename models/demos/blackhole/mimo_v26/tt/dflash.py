@@ -185,6 +185,7 @@ class DFlashDrafter:
             self.rowmap,
             ttnn.ROW_MAJOR_LAYOUT,
         )
+        me = ttnn.reshape(me, (U, 1, 7, HIDDEN))
         x = ttnn.concat([e, me], dim=2)  # [U,1,8,4096] row major
         ttnn.deallocate(e)
         ttnn.deallocate(me)
