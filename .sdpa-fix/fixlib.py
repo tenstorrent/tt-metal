@@ -27,7 +27,7 @@ LEDGER = os.path.join(HOME, "ledger.json")
 ATTEMPTABLE = {"tracking"}
 # States that end when main goes green for the signature.
 OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed",
-               "awaiting_decision", "decided"}
+               "awaiting_decision", "decided", "revise"}
 # States the fix scan looks at: still failing, and no PR of ours on it.
 SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending", "awaiting_decision"}
 # States a re-appearing failure re-opens (a fresh regression after a fix).
@@ -224,6 +224,7 @@ def cmd_eligible(a):
         forced = []
         for sig, r in d["sigs"].items():
             if (r["state"] == "decided" and r.get("decision_choice")) or \
+               (r["state"] == "revise" and r.get("decision_note")) or \
                (a.only_sig and sig == a.only_sig and r["state"] in ("tracking", "no_fix", "proposed_dryrun", "decided")):
                 forced.append({"workflow": r["workflow"], "group": r.get("group") or sig, "sigs": [sig],
                                "prio": [-1, 0], "forced": True})
@@ -281,7 +282,8 @@ def cmd_mark(a):
                 r.setdefault("attempts", []).append(dict(extra, at=now_iso(), state=a.state))
             for k, v in extra.items():
                 if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr", "fix_author",
-                         "decision", "decision_choice", "decision_thread"):
+                         "decision", "decision_choice", "decision_thread", "decision_note",
+                         "decision_history"):
                     r[k] = v
                 elif k == "checked":
                     r.setdefault("checked", {}).update(v)

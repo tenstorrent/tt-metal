@@ -131,6 +131,15 @@ patch. The bot then **opens nothing**:
    cron runs dryrun, because you chose it). **Reject** sets `rejected`.
    Options are always code changes; the bot never comments on other people's PRs.
 
+**✍️ Other… (loop).** The poll also has an "Other…" button. It opens a Slack
+form; what you write is stored as `decision_note` (state `revise`), and the
+fixer runs the agent with the previous question, the options and your note.
+It edits nothing and returns a new poll, with your instruction as option A
+when that's allowed. The new poll replaces the buttons in the same message,
+with "round N: @you wrote …" above them. Repeat as often as needed; the
+rounds are kept in `decision_history`, and later status edits keep your
+notes and the final choice as a footer.
+
 Setup: Socket Mode on, Interactivity on, an app-level token (`connections:write`)
 in `~/.sdpa-fix/slack_app_token` (chmod 600). Cron runs `decide.sh` every
 5 min; it keeps exactly one listener alive (flock) and does nothing without the

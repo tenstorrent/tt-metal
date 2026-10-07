@@ -129,6 +129,9 @@ slack_sig() {
                        + " — chosen by <@\(.decision_choice.by)> at \(.decision_choice.at[0:16] | sub("T"; " ")) UTC_")
                   end' <<<"$recs")
   [[ -n "$foot" ]] && text+=$'\n'"$foot"
+  foot=$(jq -r '[.[] | .decision_history // [] | .[] | select(.note != null)
+                 | "_✍️ <@\(.note.by)>: “\(.note.text[0:200])”_"] | unique | join("\n")' <<<"$recs")
+  [[ -n "$foot" ]] && text+=$'\n'"$foot"
   if [[ -n "$mts" ]] && slack_update "$mts" "$text"; then return 0; fi
   slack "$text"
   [[ -n "${SLACK_LAST_TS:-}" ]] && $FIXLIB mark --state keep \
@@ -171,21 +174,39 @@ RECENT="&created=>$(date -u -d '-10 days' +%F)"
 # DECISIONS_ONLY=1 fixer.sh, which applies the choice right away.
 # ---------------------------------------------------------------------------
 slack_decision() {  # $1 sig(s) as space list, $2 header text, $3 decision json
-  local sigs_s="$1" head="$2" dec="$3" thread resp blocks first
+  local sigs_s="$1" head="$2" dec="$3" thread resp blocks first rec old oldth hist
   first="${sigs_s%% *}"
+  rec=$($FIXLIB get "$first" | jq -c --arg s "$first" '.[$s]')
+  old=$(jq -r '.slack_ts // ""' <<<"$rec"); oldth=$(jq -r '.decision_thread // ""' <<<"$rec")
+  # Earlier rounds: what was written in "Other…" before this poll.
+  hist=$(jq -r '[.decision_history // [] | to_entries[] | select(.value.note != null)
+                 | "round \(.key + 1): <@\(.value.note.by)> wrote “\(.value.note.text[0:300])”"] | join("\n")' <<<"$rec")
   [[ "$FIX_SLACK" == "1" && -n "$SLACK_BOT_TOKEN" && -n "${SLACK_CHANNEL_ID:-}" ]] || { log "  (slack decision) $head"; return 0; }
   thread=$(jq -r --arg ch "$SLACK_CHANNEL_ID" 'if (._slack.channel // "") == $ch then (._slack.ts // "") else "" end' \
              "$WATCH_STATE" 2>/dev/null || true)
-  blocks=$(jq -nc --arg t "$(linkify <<<"$head")" --arg s "$first" --argjson d "$dec" '
+  blocks=$(jq -nc --arg t "$(linkify <<<"$head")" --arg s "$first" --argjson d "$dec" --arg h "$hist" '
     [ {type: "section", text: {type: "mrkdwn", text: $t}},
-      {type: "context", elements: [{type: "mrkdwn", text: ($d.options | map("*\(.key)* · \(.summary)") | join("\n"))}]},
+      {type: "context", elements: [{type: "mrkdwn", text: ($d.options | map("*\(.key)* · \(.summary)") | join("\n"))}]}]
+    + (if $h != "" then [{type: "context", elements: [{type: "mrkdwn", text: ("✍️ " + $h)}]}] else [] end)
+    + [
       {type: "actions", block_id: "autofix_decide",
        elements: (($d.options | map({type: "button", action_id: ("autofix_decide_" + .key),
                                      text: {type: "plain_text", text: ("\(.key) · \(.label)" + (if .key == $d.recommended then " ★" else "" end))},
                                      value: ({sig: $s, key: .key} | tostring)}
                                     + (if .key == $d.recommended then {style: "primary"} else {} end)))
-                  + [{type: "button", action_id: "autofix_decide_REJECT", style: "danger",
+                  + [{type: "button", action_id: "autofix_decide_OTHER",
+                      text: {type: "plain_text", text: "✍️ Other…"}, value: ({sig: $s, key: "OTHER"} | tostring)},
+                     {type: "button", action_id: "autofix_decide_REJECT", style: "danger",
                       text: {type: "plain_text", text: "Reject"}, value: ({sig: $s, key: "REJECT"} | tostring)}])} ]')
+  # Same thread as before: replace the poll in place (next round of a loop).
+  if [[ -n "$old" && "$oldth" == "$thread" ]]; then
+    resp=$(jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg ts "$old" --arg t "$(linkify <<<"$head")" --argjson b "$blocks" \
+             '{channel:$ch, ts:$ts, text:$t, blocks:$b}' \
+           | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+                  -H 'Content-Type: application/json; charset=utf-8' --data @- https://slack.com/api/chat.update)
+    [[ "$(jq -r '.ok // false' <<<"$resp")" == "true" ]] && return 0
+    log "  WARN: decision edit failed, posting anew: $(jq -r '.error // "?"' <<<"$resp")"
+  fi
   resp=$(jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg t "$(linkify <<<"$head")" --arg th "$thread" --argjson b "$blocks" \
            '{channel:$ch, text:$t, blocks:$b, unfurl_links:false} + (if $th != "" then {thread_ts:$th} else {} end)' \
          | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
@@ -605,6 +626,8 @@ while IFS= read -r grp; do
   recs=$($FIXLIB get "${sigs[@]}")
   # A human chose an option for this failure: implement exactly that, live.
   choice=$(jq -c 'to_entries[0].value | if .state == "decided" then {choice: .decision_choice, decision} else empty end' <<<"$recs")
+  # The human wrote an instruction under "Other…": build a NEW poll from it.
+  note=$(jq -c 'to_entries[0].value | if .state == "revise" then {note: .decision_note, decision, history: (.decision_history // [])} else empty end' <<<"$recs")
   sig8="${sigs[0]:0:8}"
   first_test=$(jq -r 'to_entries[0].value.test' <<<"$recs")
   log "fix candidate [$workflow] group=$(jq -r .group <<<"$grp") sigs=${sigs[*]}"
@@ -669,6 +692,18 @@ $related
 
 Failing job log excerpts:
 $logs"
+  if [[ -n "$note" ]]; then
+    prompt+="
+
+# Human input on the decision
+The previous question was: $(jq -r .decision.question <<<"$note")
+Previous options:
+$(jq -r '.decision.options[] | "- \(.key): \(.label) — \(.summary)"' <<<"$note")
+$(jq -r '.history[] | select(.note != null) | "Earlier the human wrote: \(.note.text)"' <<<"$note")
+Now the human wrote: $(jq -r .note.text <<<"$note")
+
+Prepare a NEW decision from this. Do not edit any file. Return decision.needed=true with up to 3 options: option A follows the human's instruction as closely as is allowed; keep earlier options only if still useful. If the instruction asks for something the hard rules forbid, say so in the question and offer the closest allowed options. recommended = the option you would pick now."
+  fi
   if [[ -n "$choice" ]]; then
     prompt+="
 
@@ -703,6 +738,26 @@ Original question: $(jq -r .decision.question <<<"$choice")"
   git -C "$FIX_WORKTREE" diff --cached HEAD > "$pdir/patch.diff"
   v_fixed=$(jq -r .fixed "$pdir/verdict.json")
   v_title=$(jq -r .title "$pdir/verdict.json")
+
+  if [[ -n "$note" ]]; then
+    # A revise round never edits or opens anything: it only produces a new poll.
+    git -C "$FIX_WORKTREE" reset -q --hard && git -C "$FIX_WORKTREE" clean -fdq
+    hist=$(jq -c '.history + [{question: .decision.question, options: .decision.options, note: .note}]' <<<"$note")
+    if [[ "$(jq -r '.decision.needed // false' "$pdir/verdict.json")" == "true" ]]; then
+      dec=$(jq -c --argjson old "$(jq -c .decision <<<"$note")" '.decision + {culprit_pr: ($old.culprit_pr // ""), proposal: ($old.proposal // "")}' "$pdir/verdict.json")
+      extra=""
+    else
+      dec=$(jq -c .decision <<<"$note")
+      extra="
+_could not turn that into new options: $(jq -r '.reason_if_not_fixed // .why // "no reason given"' "$pdir/verdict.json")_"
+    fi
+    $FIXLIB mark --state awaiting_decision --attempt \
+      --extra "$(jq -nc --argjson d "$dec" --argjson h "$hist" '{decision: $d, decision_history: $h, decision_note: null}')" "${sigs[@]}"
+    log "  new poll after human note (round $(( $(jq length <<<"$hist") + 1 ))): $(jq -r .question <<<"$dec")"
+    slack_decision "${sigs[*]}" "❓ *autofix — needs your decision*: \`$first_test\` ($workflow)
+$(jq -r .question <<<"$dec")$extra" "$dec"
+    continue
+  fi
 
   if [[ -z "$choice" && "$(jq -r '.decision.needed // false' "$pdir/verdict.json")" == "true" ]]; then
     dec=$(jq -c '.decision' "$pdir/verdict.json")
