@@ -88,7 +88,6 @@ public:
             dispatch_core_manager,
             get_control_plane,
             get_dispatch_query_manager,
-            {},
             get_reads_dispatch_cores),
         d2h_{d2h},
         tunnel_id_{tunnel_index} {

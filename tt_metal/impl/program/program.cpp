@@ -3391,14 +3391,6 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
-bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
-    const auto& hal = MetalContext::instance(context_id_).hal();
-    return (
-        hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).empty());
-}
-
-// TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
     const auto& hal = MetalContext::instance(context_id_).hal();
     return (
@@ -3502,7 +3494,9 @@ void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const Pr
 
 void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     program_config_sizes_[programmable_core_count_] = runs_on_noc_multicast_only_cores();
-    program_config_sizes_[programmable_core_count_ + 1] = runs_on_noc_unicast_only_cores();
+    // The dispatch-to-eth go-signal unicast path was removed; this slot (formerly
+    // runs_on_noc_unicast_only_cores()) is retained to keep the worker config-buffer layout stable.
+    program_config_sizes_[programmable_core_count_ + 1] = 0;
     set_launch_msg_sem_offsets();
     // TODO: This check is wrong - it populates dispatch data for dispatch kernels
     if (MetalContext::instance(context_id_).rtoptions().get_fast_dispatch()) {
