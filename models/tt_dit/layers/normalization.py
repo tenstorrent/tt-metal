@@ -230,7 +230,8 @@ class DistributedRMSNorm(Module):
             raise ValueError(msg)
 
         # Effective affine weight: the static per-channel weight, optionally modulated by a
-        # per-sample dynamic weight (e.g. an adaLN (1 + scale) factor). Folding it in here
+        # per-sample dynamic weight (e.g. an adaLN (1 + scale) factor), unless the caller already
+        # folded the static weight into it (`dynamic_weight_includes_static`). Folding it in here
         # applies the modulation inside the fused op (fp32 internals) and removes the separate
         # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
         weight = self.weight.data if self.weight is not None else None

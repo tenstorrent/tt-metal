@@ -443,12 +443,13 @@ conditioner fidelity rather than output quality.
 
 ## adaLN modulation knobs
 
-The adaLN scale/shift reach the fused norms as a dynamic weight and bias. Each block gathers them from its 6-row
-modulation table with one-hot matmuls (exact), and the pipeline hands the norms a per-tile-row map built once per
+The adaLN scale/shift reach the fused norms as a dynamic weight and bias. Each block gathers them from its small
+modulation table (one row per timestep slot and modality, nine for a text-to-video request) with one-hot matmuls
+(exact), and the pipeline hands the norms a per-tile-row map built once per
 request: the norm reads tile row `tile_map[r]` of a small expanded table, so the gather runs over the table's few
 rows rather than the whole packed sequence. A request with more boundary tiles than `MINIMAX_H3_ADALN_MIXED_TILES`
 slots falls back to the per-token one-hot gathers and says so in the log; a transformer driven without the pipeline
-(no tile-row map) takes the same per-token path. The norms' static weight is multiplied into the 6-row modulation
+(no tile-row map) takes the same per-token path. The norms' static weight is multiplied into the modulation
 table instead of the per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores). None of these change the numerics.
 
 | env | effect |

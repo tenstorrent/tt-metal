@@ -195,7 +195,7 @@ class MiniMaxH3TransformerBlock(Module):
         num_timesteps = temb.shape[2]
         # silu at temb's precision, then cast to the projection's dtype -- the reference's
         # `self.linear(silu(temb).to(self.linear.weight.dtype))`. Casting here also keeps the
-        # resulting tables bfloat16, which `ttnn.embedding` requires of its weights.
+        # resulting tables bfloat16, so the bf16 one-hot gathers below reproduce their rows exactly.
         activated = ttnn.silu(temb)
         if activated.dtype != ttnn.bfloat16:
             activated = ttnn.typecast(activated, ttnn.bfloat16)
@@ -222,14 +222,15 @@ class MiniMaxH3TransformerBlock(Module):
                 if self._fold_norm_weight:
                     norm = self.norm1 if p == _SCALE_MSA else self.norm2
                     table = ttnn.multiply(table, norm.weight.data)
-            # ttnn.embedding wants a 2D [num_embeddings, embedding_dim] weight.
+            # The gathers take the table as a 2D [rows, hidden_local] matmul operand.
             table = ttnn.to_layout(table, ttnn.ROW_MAJOR_LAYOUT)
             table = ttnn.reshape(table, (rows, self.hidden_local))
             tables.append(ttnn.to_layout(table, ttnn.TILE_LAYOUT))
         return tables
 
     def _gather_rows(self, table: ttnn.Tensor, onehot: ttnn.Tensor) -> ttnn.Tensor:
-        """Select one table row per row of the local packed sequence -> [1, 1, S_local, hidden_local]."""
+        """One table row per row of the one-hot selector: [1, 1, S_local, hidden_local] for the per-token
+        gather, [1, 1, expanded_rows, hidden_local] for the tile-row selector."""
         return ttnn.matmul(onehot, table, compute_kernel_config=self.mm_compute_kernel_config)
 
     def _onehot(self, adaln_indices: ttnn.Tensor, rows: int, eye: ttnn.Tensor | None = None) -> ttnn.Tensor:
@@ -291,8 +292,8 @@ class MiniMaxH3TransformerBlock(Module):
         rope_cos/rope_sin: [1, 1, N_local, rotary_dim], fractured N on SP, replicated on TP
         logical_n: logical (unfractured) packed length as a [1, 1, 1, 1] uint32 device tensor.
 
-        onehot / tilerow: the shared one-hot gather matrix and the `(tile_map, selector)` pair from
-            `tilerow_tables`; each is built here when absent.
+        onehot / tilerow: the shared one-hot gather matrix (built here when absent) and the `(tile_map, selector)`
+            pair from `tilerow_tables`; without the pair the norms take the per-token gather.
 
         Returns the block output, fractured N on SP and hidden_size on TP.
         """

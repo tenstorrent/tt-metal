@@ -390,7 +390,8 @@ class MiniMaxH3Transformer3DModel(Module):
         timestep_indices: [1, 1, 1, S_padded_local] integers, same order
         rope_cos/rope_sin: [1, 1, S_padded_local, rotary_dim] float32, same order, replicated on TP
         logical_n: the true packed length `L + K + A + V` as a [1, 1, 1, 1] uint32 device tensor.
-        pad_to: the padded packed length; keys the trace (one capture per `pad_to`).
+        pad_to: the padded packed length; keys the trace together with the presence of the tile-row map (one
+            capture per `(pad_to, map present)`).
         adaln_tile_map / adaln_expanded_indices: `adaln_tilerow.tilerow_remap` tables, sharded on SP; the norms read
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
 

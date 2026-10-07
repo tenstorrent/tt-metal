@@ -2771,8 +2771,7 @@ class MiniMaxH3Pipeline:
                 levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
 
-        levels = step_levels(0)
-        upload_levels(levels)
+        upload_levels(step_levels(0))
         if _is_host_rank():
             _tqdm_spacer()
         # Untraced only: a capture replays these buffers, so they must outlive it. The sync at the
@@ -2815,8 +2814,7 @@ class MiniMaxH3Pipeline:
                 ttnn.multiply_(audio_velocity, float(audio_scheduler.step_coefficient(i)))
                 ttnn.add_(self._tt_audio.value, audio_velocity)
                 if i + 1 < len(timesteps):
-                    levels = step_levels(i + 1)
-                    upload_levels(levels)
+                    upload_levels(step_levels(i + 1))
                 ttnn.synchronize_device(self.mesh_device)
                 if ttnn.using_distributed_env():
                     ttnn.distributed_context_barrier()
