@@ -78,6 +78,19 @@ OPROJ_STREAM_READERS = 1
 GATE_UP_STREAM_READERS = 3
 DOWN_STREAM_READERS = 2
 
+# Decode LM head (decode_terminal.py): a DRAM-streaming copy of the LM-head weight, vocab split evenly over the TP
+# devices, BFP8 x BF16 LoFi like the other dense projections. Readers per DRAM bank (probes/bench_terminal.py: 1 and 2
+# reach ~504 GB/s, 4-5 are slower); weight columns buffered ahead while the fused final boundary runs.
+LM_HEAD_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+LM_HEAD_STREAM_READERS = 1
+LM_HEAD_STREAM_PREFETCH = 4
+# Greedy decode sampler of the fused terminal path: "split_argmax" = argmax over the gathered per-device top-32
+# candidates (kernels/terminal_pick.cpp); "sampling" = ttnn.sampling with k=1 (the seeded top-k / top-p draw).
+DECODE_GREEDY_SAMPLER = "split_argmax"
+# Sampler candidates of the fused terminal path: "fused" = per-core top-32 in the LM-head writers + merge + fabric
+# exchange inside the LM-head op (decode_terminal.TerminalExchange); "ops" = ttnn.topk + merge op + two all_gathers.
+DECODE_TERMINAL_EXCHANGE = "fused"
+
 # Paged decode SDPA K chunk per layer type (probes/bench_sdpa.py, 8x8 grid): the 128-token sliding window is fastest
 # at 128; full attention at 256 (11.8 vs 13.0 us at 200 tokens, 109 vs 155 us at 64k; 512 only wins past ~8k).
 SDPA_DECODE_K_CHUNK_SLIDING = 128

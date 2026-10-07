@@ -373,6 +373,7 @@ class LinearStream(_BankStreamOp):
     x: x_pages = 0: the flat BF16 normed hidden of the layer boundary (tt/decode_boundary.py); otherwise a BF16
     32x32-tile tensor (any TensorAccessor layout; a DRAM source is staged in L1 first) whose activation is row
     (j / x_pages) of tile page (j % x_pages) for j < k_tiles (x_pages = 2: the [heads, 64] SDPA output, head by head).
+    prefetch_cols: cap on the weight columns buffered ahead (default: all of them when a boundary is fused in, else 3).
     out_mode:
       3: attention heads, out = (Q, K, V) BF16 [heads, head_tiles * 32] tile tensors, head h in row h,
          heads = (q_cols, k_cols) output tiles of Q and K;
@@ -392,6 +393,7 @@ class LinearStream(_BankStreamOp):
         out_page_bytes=2048,
         heads=(0, 0),
         head_tiles=2,
+        prefetch_cols=None,
     ):
         n_tiles = -(-n // TILE)
         banks = mesh_device.dram_grid_size().x
@@ -408,6 +410,7 @@ class LinearStream(_BankStreamOp):
         self.out_page_bytes = out_page_bytes
         self.heads = heads
         self.head_tiles = head_tiles
+        self.prefetch_cols = prefetch_cols
         self.weight_dtype = weight_dtype
         self.tile_bytes = TILE_BYTES[weight_dtype]
         self.col_bytes = self.kt * self.tile_bytes
@@ -416,10 +419,12 @@ class LinearStream(_BankStreamOp):
     def weight_rows(self):
         return self.C * self.kt * TILE
 
-    def __call__(self, x, weights, out, send=None):
+    def __call__(self, x, weights, out, send=None, exchange=None):
         """send = (boundary, site), out_mode 5: fuse the boundary all-reduce's fabric send (decode_boundary.py
         sending_program). x may be a decode_boundary.PendingBoundary: the boundary producing x then runs inside this
-        op (DecodeBoundary.consumer_parts) while the weight readers stream ahead."""
+        op (DecodeBoundary.consumer_parts) while the weight readers stream ahead. exchange (out_mode 3): an object
+        whose writer_args() / program() add the fused decode LM head's top-k candidate merge and exchange
+        (decode_terminal.py TerminalExchange)."""
         pending = None
         if not isinstance(x, ttnn.Tensor):
             pending = x
@@ -436,6 +441,9 @@ class LinearStream(_BankStreamOp):
         # A fused boundary's consumer can buffer all its weight columns: the readers stream them while the boundary
         # runs (fused_decode.DECODE_BOUNDARY_PREFETCH_ALL).
         w_cols = max(3, self.cols) if pending is not None and DECODE_BOUNDARY_PREFETCH_ALL else 3
+        if self.prefetch_cols is not None:
+            # Large columns (the LM head's ~97 KB): cap the ring at what L1 holds.
+            w_cols = min(w_cols, max(3, self.prefetch_cols))
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, self.kt, tiny=True),
             self._cb(cb_w, self.weight_dtype, self.tile_bytes, w_cols * self.kt),
@@ -445,7 +453,7 @@ class LinearStream(_BankStreamOp):
             cbs.append(self._cb(cb_stage, ttnn.bfloat16, 2048, stage))
         cbs.append(self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 4, tiny=True))
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for core, bank, r, vc in self.assignments:
+        for i, (core, bank, r, vc) in enumerate(self.assignments):
             reader_rt[core.x][core.y] = [weights.buffer_address(), bank, vc, r * self.cols * self.col_bytes]
             writer_rt[core.x][core.y] = [
                 x.buffer_address(),
@@ -453,7 +461,7 @@ class LinearStream(_BankStreamOp):
                 bank * self.C + r * self.cols,
                 outs[1].buffer_address(),
                 outs[2].buffer_address(),
-            ]
+            ] + (exchange.writer_runtime_args(i) if exchange is not None else [])
         reader_ct = [cb_w, self.kt, self.cols, self.tile_bytes, self.page_bytes, w_cols]
         writer_ct = [cb_x, cb_out, cb_scr, self.kx, self.x_pages, NBIAS, self.cols, self.n_tiles, self.out_mode]
         writer_ct += [self.out_page_bytes, stage, cb_stage, self.heads[0], self.heads[1], self.head_tiles]
@@ -461,6 +469,7 @@ class LinearStream(_BankStreamOp):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         writer_ct += send[0].notify_args() if send else [0, 0, 0, 0]
         writer_ct += [1 if pending is not None else 0]
+        writer_ct += exchange.writer_compile_args() if exchange is not None else [0, 0, 0, 0]
         compute_ct = [cb_x, cb_w, cb_out, self.kt, self.cols]
 
         def build():
@@ -472,8 +481,15 @@ class LinearStream(_BankStreamOp):
             return program
 
         assert not (send and pending), "an op is either a boundary producer or its consumer"
-        program = send[0].sending_program(build, out, send[1], self.cores) if send else build()
+        assert not (send and exchange), "the LM-head exchange and a boundary send do not combine"
+        if exchange is not None:
+            assert self.out_mode == 3
+            program = exchange.program(build, self.cores)
+        else:
+            program = send[0].sending_program(build, out, send[1], self.cores) if send else build()
         unique = [t for i, t in enumerate(outs) if all(t is not o for o in outs[:i])]
         extra = [t for t in fused_io if all(t is not u for u in (x, *unique))] if pending is not None else []
+        if exchange is not None:
+            extra += [t for t in exchange.io if all(t is not u for u in (x, *unique, *extra))]
         ttnn.generic_op([weights, x, *unique, *extra], program)
         return out

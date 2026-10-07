@@ -14,6 +14,8 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from .decode_inputs import DecodeInputs
+from .decode_terminal import DecodeTerminal, FusedSamplingGenerator
 from .fused_decode import fused_decode_supported
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
@@ -192,6 +194,12 @@ class Model:
             cache_file_name=get_cache_file_name(tensor_cache_path, "model.embed_tokens.weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Fused decode: the token's embedding row and the Q/K RoPE rows come from one op (tt/decode_inputs.py).
+        self.decode_inputs = (
+            DecodeInputs(mesh_device, self.embedding_weight, self.rope_setup, hf_config.hidden_size)
+            if self.fused_decode
+            else None
+        )
         self.layers = [
             DecoderLayer(
                 mesh_device,
@@ -222,7 +230,19 @@ class Model:
         if self.fused_decode:
             for i, layer in enumerate(self.layers):
                 last = i + 1 == len(self.layers)
-                layer.set_decode_next_norm(self.norm if last else self.layers[i + 1].input_layernorm, last)
+                layer.set_decode_next_norm(
+                    self.norm if last else self.layers[i + 1].input_layernorm, last, lm_head_fused=last
+                )
+            # Decode terminal path (tt/decode_terminal.py): the last layer's boundary (+ final norm) runs inside the
+            # streamed LM head, which writes folded logits for the split sampler. Prefill keeps the LM head below.
+            self.decode_terminal = DecodeTerminal(
+                mesh_device,
+                hf_config,
+                substate(state_dict, "lm_head")["weight"] if state_dict else None,
+                tensor_cache_path,
+            )
+        else:
+            self.decode_terminal = None
         # Pad lm_head vocab dimension to padded_vocab_size BEFORE column-parallel sharding.
         # TTSampling._create_indices_tensors uses padded_per_device as the stride for device
         # offset calculation: global_idx = device_id * padded_per_device + local_idx.
@@ -259,11 +279,13 @@ class Model:
         self.sampling_dp = mesh_device.shape[0] if users_row_sharded else 1
         if self._supports_on_device_sampling:
             # tt_ccl=None makes TTSampling fall back to ttnn.all_gather() which works on [4,8] meshes
-            self.sampling = SamplingGenerator(
-                args=self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device),
-                mesh_device=mesh_device,
-                tt_ccl=None,
-            )
+            sampling_args = self.args if hasattr(self, "args") else self._make_sampling_args(hf_config, mesh_device)
+            if self.decode_terminal is not None:
+                self.sampling = FusedSamplingGenerator(
+                    args=sampling_args, mesh_device=mesh_device, tt_ccl=None, terminal=self.decode_terminal
+                )
+            else:
+                self.sampling = SamplingGenerator(args=sampling_args, mesh_device=mesh_device, tt_ccl=None)
             # Hook reset_sampling_params to set prefill flag — Generator calls this
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
             _orig_reset = self.sampling.reset_sampling_params
@@ -442,16 +464,21 @@ class Model:
         if skip_lm_head:
             return hidden_states
 
-        # Final norm and lm_head
         if self.fused_decode and mode == Mode.DECODE:
-            # The last fused decode layer's boundary already applied the final norm (tt/decode_boundary.py) and
-            # returns it in row 0 of the width-sharded BF16 layout; lm_head reads interleaved BF8, the activation
-            # dtype (and LoFi BFP8 x BFP8 matmul) of the unfused decode path.
-            normed = hidden_states
-            hidden_states = ttnn.to_memory_config(normed, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
-            normed.deallocate(True)
-        else:
-            hidden_states = self.norm(hidden_states)
+            # The last fused decode layer returns its pending boundary (MoE all-reduce + residual + final norm); the
+            # streamed LM head runs it and writes the folded logits of the split sampler (tt/decode_terminal.py).
+            pending = hidden_states
+            logits = self.decode_terminal.lm_head(
+                pending, sampling=self._decode_sampling, current_pos=current_pos, rot_idxs=self._decode_rot_idxs
+            )
+            pending.x.deallocate(True)
+            pending.residual.deallocate(True)
+            pending.residual_out.deallocate(True)
+            self._prefill_sampling_active = False
+            return logits
+
+        # Final norm and lm_head
+        hidden_states = self.norm(hidden_states)
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
@@ -551,24 +578,28 @@ class Model:
         Decode forward pass - processes single tokens.
         Matches tt-transformers interface where rot_mat_idxs are used for on-device RoPE lookup.
         """
-        # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
-        actual_batch = current_pos.shape[-1]
-        if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
-            tokens_for_embed = tokens[:, :, :, :actual_batch]
+        if self.decode_inputs is not None:
+            # Fused decode (one user): the embedding row (BF16 row-major, which the first layer boundary copies in) and
+            # the Q/K RoPE rows in one op.
+            input_embeds, rope_mats = self.decode_inputs(tokens, self.get_tt_pos_idx(rot_mat_idxs))
         else:
-            tokens_for_embed = tokens
-        # The fused decode layers carry a flat BF16 residual stream (tt/decode_boundary.py): the decode embedding stays
-        # BF16 and row-major, so the first boundary copies the token's row in one read.
-        input_embeds = ttnn.embedding(
-            tokens_for_embed,
-            self.embedding_weight,
-            layout=ttnn.ROW_MAJOR_LAYOUT if self.fused_decode else ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16 if self.fused_decode else ttnn.bfloat8_b,
-        )
-        input_embeds = ttnn.unsqueeze(input_embeds, 0)
-        # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
-        rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
+            # For non-row-sharded b<32, token buffer is padded to 32 — only embed real tokens
+            actual_batch = current_pos.shape[-1]
+            if not self.users_row_sharded and tokens.shape[-1] > actual_batch:
+                tokens_for_embed = tokens[:, :, :, :actual_batch]
+            else:
+                tokens_for_embed = tokens
+            input_embeds = ttnn.embedding(
+                tokens_for_embed, self.embedding_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b
+            )
+            input_embeds = ttnn.unsqueeze(input_embeds, 0)
+            # Get RoPE embeddings via on-device embedding lookup (matches tt-transformers)
+            rope_mats = self.rope_setup.get_rot_mats(self.get_tt_pos_idx(rot_mat_idxs))
 
+        # The fused decode LM head also produces the sampler candidates and advances the positions when sampling on
+        # device (tt/decode_terminal.py).
+        self._decode_sampling = on_device_logits
+        self._decode_rot_idxs = rot_mat_idxs
         # Forward through layers and head (shared with prefill)
         out = self._forward_layers_and_head(
             hidden_states=input_embeds,
@@ -579,6 +610,8 @@ class Model:
             is_decode=True,
             page_tables_per_layer=page_tables_per_layer,
         )
+        # Drop the per-call stash (an eager call's input tensors must not outlive the call).
+        self._decode_rot_idxs = None
 
         if on_device_logits:
             assert self.sampling is not None, (
@@ -589,7 +622,8 @@ class Model:
             batch_dim = out.shape[-2]
             if batch_dim < 32:
                 out = ttnn.pad(out, padding=[(0, 0), (0, 0), (0, 32 - batch_dim), (0, 0)], value=0.0)
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            if not (self.decode_terminal is not None and self.decode_terminal.advances_positions):
+                self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             return out
 
         return out, None
@@ -1277,6 +1311,17 @@ class Model:
             concat_out = self.concat_device_output(tt_out)
             # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
             return concat_out.reshape(-1)[:B]
+
+        if self.decode_terminal is not None and list(tt_out.shape) == [
+            1,
+            1,
+            ttnn.TILE_SIZE,
+            self.decode_terminal.width,
+        ]:
+            # Folded logits of the fused decode terminal path (one user).
+            device_tensors = ttnn.get_device_tensors(tt_out)[: self.decode_terminal.tp]
+            logits = self.decode_terminal.unfold_host([ttnn.to_torch(t) for t in device_tensors])
+            return logits.reshape(1, S, -1)[:B]
 
         # Host-side TP gather: concatenate TP shards per row, then DP rows.
         config = self.mesh_config.get_config(Mode.DECODE)

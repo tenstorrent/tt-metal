@@ -19,8 +19,11 @@
 //                the softmax runs in Q16 fixed point (exp2 = integer shift x degree-5 polynomial, ~1e-5 relative),
 //                then rounds to BF16;
 //    out_mode 5: flat BF16 output (the boundary's partial-sum input): column n -> one 64-byte write at byte 64 n.
+// 3. topk = 1 (the fused decode LM head, tt/decode_terminal.py): also keeps this core's top-32 output values (ties to
+//    the lower output index; index = 32 n + lane) and, after the last column, writes them as 32 UINT32 order keys + 32
+//    UINT32 indices into slot `list_idx` of the merge core's list buffer and increments its semaphore `merge_sem`.
 //
-// runtime args: [x_addr, out_addr, col0, k_addr, v_addr]
+// runtime args: [x_addr, out_addr, col0, k_addr, v_addr, lists_addr, list_idx]
 
 #include <stdint.h>
 
@@ -61,6 +64,19 @@ void kernel_main() {
     // 1: x is the normed output of a boundary fused into this op (tt/decode_boundary.py: consumer_parts); wait for
     // the boundary core's notification (program semaphore 0) before reading it.
     constexpr uint32_t wait_x = get_compile_time_arg_val(notify_ct + 4);
+    constexpr uint32_t topk = get_compile_time_arg_val(notify_ct + 5);
+    constexpr uint32_t merge_x = get_compile_time_arg_val(notify_ct + 6);
+    constexpr uint32_t merge_y = get_compile_time_arg_val(notify_ct + 7);
+    constexpr uint32_t merge_sem = get_compile_time_arg_val(notify_ct + 8);
+    constexpr uint32_t K = 32;
+    uint32_t top_key[K];
+    uint32_t top_idx[K];
+    if constexpr (topk) {
+        for (uint32_t i = 0; i < K; ++i) {
+            top_key[i] = 0;  // below every real value's key
+            top_idx[i] = 0xFFFFFFFFu;
+        }
+    }
 
     constexpr uint32_t tiny_bytes = 64;
     constexpr uint32_t half_row = 32;
@@ -134,10 +150,43 @@ void kernel_main() {
                                                            : s_v.get_noc_addr(m % head_tiles, off);
                 noc_async_write(src, dst, half_row);
                 noc_async_write(src + half_row, dst + face_bytes, half_row);
+                if constexpr (topk) {
+                    // Running top-K of this core's outputs (columns arrive in index order, so a value equal to the
+                    // current K-th one has a larger index and does not enter).
+                    volatile tt_l1_ptr uint16_t* val = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src);
+                    for (uint32_t j = 0; j < 32; ++j) {
+                        const uint32_t b = val[j];
+                        const uint32_t key = (b & 0x8000) ? (~b & 0xFFFFu) : (b | 0x8000u);
+                        if (key > top_key[K - 1]) {
+                            uint32_t i = K - 1;
+                            while (i > 0 && top_key[i - 1] < key) {
+                                top_key[i] = top_key[i - 1];
+                                top_idx[i] = top_idx[i - 1];
+                                --i;
+                            }
+                            top_key[i] = key;
+                            top_idx[i] = n * 32 + j;
+                        }
+                    }
+                }
             }
             noc_async_writes_flushed();
         }
         cb_pop_front(cb_out, 1);
+    }
+    if constexpr (topk) {
+        // The list goes out through the (now drained) weight-gather staging of cb_x: K keys then K indices.
+        volatile tt_l1_ptr uint32_t* list = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(x_l1);
+        for (uint32_t i = 0; i < K; ++i) {
+            list[i] = top_key[i];
+            list[K + i] = top_idx[i];
+        }
+        const uint32_t lists_addr = get_arg_val<uint32_t>(5);
+        const uint32_t list_idx = get_arg_val<uint32_t>(6);
+        noc_async_write(x_l1, get_noc_addr(merge_x, merge_y, lists_addr + list_idx * 8 * K), 8 * K);
+        noc_async_write_barrier();
+        noc_semaphore_inc(get_noc_addr(merge_x, merge_y, get_semaphore(merge_sem)), 1);
+        noc_async_atomic_barrier();
     }
     noc_async_write_barrier();
     if constexpr (notify) {

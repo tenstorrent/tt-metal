@@ -321,7 +321,7 @@ class ModelArgs:
     # (Mirrors DeepSeek's WEIGHT_CACHE_FORMAT_VERSION in deepseek_v3/utils/weight_config.py.)
     WEIGHT_CACHE_FORMAT_VERSION = 1
     # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
-    FUSED_DECODE_WEIGHTS_VERSION = 2
+    FUSED_DECODE_WEIGHTS_VERSION = 3
 
     def weight_cache_is_complete(self, dtype, fused_decode=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was

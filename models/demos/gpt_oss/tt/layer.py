@@ -108,6 +108,7 @@ class DecoderLayer:
             self.post_norm_gamma = self.boundary.flat_gamma(self.post_attention_layernorm)
             self.next_norm_gamma = None  # set_decode_next_norm (the model knows the next layer)
             self.is_last_layer = False
+            self.lm_head_fused = False
             # The persistent buffers the streamed decode ops share across layers are allocated here, at model
             # construction, so none of them is created while a trace is live.
             attn_config = self.self_attn.config
@@ -119,11 +120,13 @@ class DecoderLayer:
             ccl_manager.get_decode_partial(hf_config.hidden_size)
             ccl_manager.get_decode_router_out()
 
-    def set_decode_next_norm(self, norm, is_last_layer):
+    def set_decode_next_norm(self, norm, is_last_layer, lm_head_fused=False):
         """Fused decode: the layer's last boundary applies the next RMSNorm (the next layer's input norm, or the
-        model's final norm after the last layer)."""
+        model's final norm after the last layer). lm_head_fused: the last layer returns its pending boundary, which the
+        streamed LM head runs (decode_terminal.py)."""
         self.next_norm_gamma = self.boundary.flat_gamma(norm)
         self.is_last_layer = is_last_layer
+        self.lm_head_fused = lm_head_fused
 
     def _consumer_input(self, pending):
         """The input of a boundary's consumer op: the pending boundary itself when it runs fused into that op
@@ -139,8 +142,9 @@ class DecoderLayer:
         layer's input norm; decode_boundary.PendingBoundary), or for the first layer the [1, 1, 1, hidden] BF16
         row-major embedding. Runs [boundary] -> attention -> [boundary: all-reduce of the o_proj partial sums + residual
         add + post-attention norm] -> MoE, each boundary inside the op consuming its normed output (QKV, router).
-        Returns the pending MoE boundary for the next layer; the last layer runs it (with the final norm) and returns
-        the normed hidden in row 0 of the width-sharded [1, 1, 32, hidden] layout the LM-head path reads."""
+        Returns the pending MoE boundary for the next layer (for the last layer: with the final norm; the model's
+        streamed LM head runs it when lm_head_fused, else the layer runs it and returns the normed hidden in row 0 of
+        the width-sharded [1, 1, 32, hidden] layout)."""
         if isinstance(hidden_states, PendingBoundary):
             pending = hidden_states
         else:
@@ -168,7 +172,7 @@ class DecoderLayer:
         pending = PendingBoundary(
             self.boundary, residual, self.next_norm_gamma, mlp_partial, "moe", sent=self.boundary_sent
         )
-        if not self.is_last_layer:
+        if not self.is_last_layer or self.lm_head_fused:
             return pending
         residual, x = pending.run()
         pending.residual.deallocate(True)
