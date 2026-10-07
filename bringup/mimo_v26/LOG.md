@@ -44,3 +44,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log
 - paths: bringup/mimo_v26/scorecard.json
 - data: {"ckpt_files":65,"bytes":172932505264}
+
+## E261007-0228-fbc
+- date: 2026-10-07T02:28:57
+- commit: 15702a7f60a
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: DECISIONS (coordinator, 2026-10-07): (1) no L6-47 CPU chain; later layers verified teacher-forced on device-captured hidden states (policy: no full-model CPU run). (2) Router gate interpretation per tt-moe-correctness A.3: expert-SET match with mismatches only at near-ties; track-0 floor says bf16-CPU vs fp32 matches the same set for only 90.6-98.6% of tokens (L1-L5, E261007-0228-84b), so a raw 99% vs bf16 is unreachable by noise; report flip rate per layer and share of flips with gap<0.01 against that floor. This is a clarification not a relaxation; user to be told in the status report. (3) exact router mode proposed by moe agent (E261007-0215-4d9, synthetic data) pending real-token check; hilo non-deterministic, rejected until isolated.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
