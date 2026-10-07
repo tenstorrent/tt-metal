@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import statistics
 
 import numpy as np
@@ -38,6 +39,13 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 # 5B tests: the default trace mode (2cq) opens the mesh with two command queues; WAN5B_TRACE_MODE=blocking
 # restores the single-queue blocking path (read at import time).
 DEVICE_PARAMS_5B = device_params_for_trace_mode(DEVICE_PARAMS)
+
+# Sprint-7 measurement knob (levers 4.5 item 5): WAN5B_FABRIC_8K=1 runs the 5B perf tests with the
+# 8 KiB fabric packet payload the 14B BH ring perf case uses (`ring_params_8k_req_exact_devices`)
+# instead of the default router config. Zero model code; read at collection time.
+_RING_PARAMS_5B = (
+    ring_params_8k_req_exact_devices if os.environ.get("WAN5B_FABRIC_8K") == "1" else ring_params_req_exact_devices
+)
 
 # BH 4x8 linear topology is expected to be slower than ring; relax assert/CI targets by this factor.
 BH_4X8_LINEAR_EXPECTED_METRICS_SLACK = 1.10
@@ -518,7 +526,7 @@ def test_pipeline_performance(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
     [
         # Single BH Galaxy, ring. Dense 5B is warm-traced, so reserve a trace region.
-        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS_5B, **ring_params_req_exact_devices}, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS_5B, **_RING_PARAMS_5B}, ttnn.Topology.Ring],
     ],
     ids=["ring_bh_4x8_sp1tp0"],
     indirect=["mesh_device", "device_params"],
@@ -766,7 +774,7 @@ def ti2v_5b_i2v_metrics(mesh_shape, height):
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
     [
-        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS_5B, **ring_params_req_exact_devices}, ttnn.Topology.Ring],
+        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS_5B, **_RING_PARAMS_5B}, ttnn.Topology.Ring],
     ],
     ids=["ring_bh_4x8_sp1tp0"],
     indirect=["mesh_device", "device_params"],
