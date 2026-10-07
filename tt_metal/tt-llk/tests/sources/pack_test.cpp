@@ -205,8 +205,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res              = params.buffer_Res;
 #endif
 #if defined(ARCH_BLACKHOLE)
-    // Block-float tiles are not written back to back by one pack run; they and one-tile blocks keep the per-tile pack.
-    [[maybe_unused]] const bool block_pack = pack_block_en && NUM_TILES_IN_BLOCK > 1 && !IS_BFP_FORMAT(formats.pack_dst);
+    // Block-float blocks close every tile (_llk_pack_block_closed_); one-tile blocks keep the per-tile pack.
+    [[maybe_unused]] const bool block_pack  = pack_block_en && NUM_TILES_IN_BLOCK > 1 && !IS_BFP_FORMAT(formats.pack_dst);
+    [[maybe_unused]] const bool closed_pack = pack_block_en && NUM_TILES_IN_BLOCK > 1 && IS_BFP_FORMAT(formats.pack_dst);
 #endif
     {
         START_PERF_MEASURE("INIT")
@@ -238,6 +239,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
                     if constexpr (pack_block_en)
                     {
+                        if (closed_pack)
+                        {
+                            const std::uint32_t first = block * NUM_TILES_IN_BLOCK;
+                            _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(
+                                DST_INDEX,
+                                L1_ADDRESS(buffer_Res[first]),
+                                NUM_TILES_IN_BLOCK,
+                                (L1_ADDRESS(buffer_Res[first + 1]) - L1_ADDRESS(buffer_Res[first])) << 4);
+                            continue;
+                        }
                         if (block_pack)
                         {
                             LLK_ASSERT(
@@ -270,6 +281,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
                     if constexpr (pack_block_en)
                     {
+                        if (closed_pack)
+                        {
+                            const std::uint32_t first = block * NUM_TILES_IN_BLOCK;
+                            _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(
+                                DST_INDEX,
+                                L1_ADDRESS(buffer_Res[first]),
+                                NUM_TILES_IN_BLOCK,
+                                (L1_ADDRESS(buffer_Res[first + 1]) - L1_ADDRESS(buffer_Res[first])) << 4);
+                            _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                            continue;
+                        }
                         if (block_pack)
                         {
                             LLK_ASSERT(

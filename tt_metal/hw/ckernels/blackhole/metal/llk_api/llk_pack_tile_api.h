@@ -173,8 +173,15 @@ inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size == tile_words;
 }
 
+// True when the per-tile program packs the output's tiles (full 32x32 tiles of four faces), so a block may close every tile.
+inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
+    return get_output_num_faces(output_id) == 4 && get_output_face_r_dim(output_id) == FACE_R_DIM &&
+           !get_output_partial_face(output_id) && get_local_cb_interface(output_id).fifo_page_size < 0x1000;
+}
+
 // Same arguments and CB contract as llk_matmul_pack<is_fp32_dest_acc_en, false, PackMode::Default>; a contiguous block
-// of two or more tiles is one _llk_pack_block_ run, anything else one _llk_pack_ per tile.
+// of two or more tiles is one _llk_pack_block_ run, another block of full tiles (block-float, padded pages) one
+// _llk_pack_block_closed_ run, anything else one _llk_pack_ per tile.
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
@@ -201,6 +208,12 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
         _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
             start_tile_index, pack_tile_addr, ntiles);
+    } else if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
+        const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, pack_tile_addr, ntiles, page_size << 4);
     } else {
         for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
             std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);

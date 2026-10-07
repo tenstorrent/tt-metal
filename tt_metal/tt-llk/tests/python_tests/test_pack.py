@@ -291,7 +291,7 @@ PACK_BLOCK_SWEEP = dict(
 # Used by perf_pack.py::test_perf_pack_block.
 PACK_BLOCK_PERF_SWEEP = dict(
     formats=input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Int32]
+        [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Int32, DataFormat.Bfp8_b]
     ),
     dest_acc=get_valid_dest_accumulation_modes,
     input_dimensions=[[64, 64], [128, 64], [128, 128]],
