@@ -146,11 +146,124 @@ struct PackedKVGroupPlan {
     }
 };
 
+// Q row tile of a padded KV-pad rotation row. Such a row sees no K tile.
+constexpr uint32_t kPackedKVInvalidRowTile = 0xFFFFFFFFu;
+
+// Global K bounds of one Q chunk, in tiles. Every row sees the tiles below visible_end, and no row
+// sees the tiles at or past masked_from; both stop at the logical length. heads_visible: every head
+// slab lies below visible_end. None of these depend on the K chunk.
+struct PackedKVRowBounds {
+    uint32_t visible_end;
+    uint32_t masked_from;
+    bool heads_visible;
+};
+
+// row_tile(row) returns the global tile of Q row `row`, or kPackedKVInvalidRowTile. Every head slab
+// lies below head_global_end.
+template <typename RowTile>
+constexpr PackedKVRowBounds packed_kv_row_bounds(
+    uint32_t rows, uint32_t logical_tiles, uint32_t head_global_end, const RowTile& row_tile) {
+    uint32_t visible_end = logical_tiles;
+    uint32_t masked_from = 0;
+    for (uint32_t row = 0; row < rows; ++row) {
+        const uint32_t tile = row_tile(row);
+        if (tile == kPackedKVInvalidRowTile) {
+            visible_end = 0;
+            continue;
+        }
+        visible_end = tile < visible_end ? tile : visible_end;
+        masked_from = tile + 1 > masked_from ? tile + 1 : masked_from;
+    }
+    masked_from = masked_from < logical_tiles ? masked_from : logical_tiles;
+    return {visible_end, masked_from, head_global_end <= visible_end};
+}
+
+// How compute treats the columns of one K chunk.
+enum class PackedKVMaskMode : uint8_t {
+    // Per-source traversal: the columns are one local K range and take the ordinary mask path.
+    Contiguous,
+    // Packed source group; every row of the Q chunk sees every live column, so nothing is stamped.
+    PackedUnmasked,
+    // Packed source group; runs give each column's global K tile and are stamped row by row.
+    PackedMasked,
+};
+
+// Mask input of one K chunk. runs and run_count are set only in PackedMasked mode.
+struct PackedKVChunkMask {
+    PackedKVMaskMode mode = PackedKVMaskMode::Contiguous;
+    const PackedKVMaskRun* runs = nullptr;
+    uint32_t run_count = 0;
+
+    constexpr bool packed() const { return mode != PackedKVMaskMode::Contiguous; }
+};
+
+// A packed K chunk as compute consumes it: its live width and its mask.
+struct PackedKVChunkPlan {
+    uint32_t active_tiles;
+    PackedKVChunkMask mask;
+};
+
+// Plans one packed K chunk for a Q chunk. A chunk below visible_end is unmasked at full width.
+// Otherwise the columns at or past masked_from are masked for every row. They form a suffix
+// because the newest slabs ascend globally, so they are dropped from the live width instead of
+// stamped. The width is rounded up to whole subblocks, never below one, and never above
+// active_tiles. The runs are clipped to that width; if every clipped run stays below
+// visible_end, the chunk needs no stamp. `runs` must hold plan.chunk_tiles entries.
+constexpr PackedKVChunkPlan packed_kv_chunk_plan(
+    const PackedKVGroupPlan& plan,
+    uint32_t chunk,
+    const uint32_t* source_ids,
+    uint32_t global_chunk_tiles,
+    const PackedKVRowBounds& bounds,
+    uint32_t subblock_tiles,
+    uint32_t active_tiles,
+    PackedKVMaskRun* runs) {
+    PackedKVChunkPlan result{active_tiles, {PackedKVMaskMode::PackedUnmasked}};
+    // Tiles of local slab j lie below (j + 1) * global_chunk_tiles. Head chunks hold slabs below
+    // the newest one, so most skip the slab lookup.
+    const bool head_chunk = (chunk + 1) * plan.chunk_tiles <= plan.head_stream_tiles();
+    if ((head_chunk && bounds.heads_visible) || (plan.max_slab(chunk) + 1) * global_chunk_tiles <= bounds.visible_end) {
+        return result;
+    }
+    const uint32_t run_count = plan.mask_runs(chunk, source_ids, global_chunk_tiles, runs);
+    uint32_t live_tiles = 0;
+    uint32_t begin = 0;
+    for (uint32_t run = 0; run < run_count; ++run) {
+        const uint32_t start = runs[run].global_start_tile;
+        const uint32_t end = runs[run].column_end;
+        if (start < bounds.masked_from) {
+            const uint32_t seen = bounds.masked_from - start;
+            live_tiles = begin + (seen < end - begin ? seen : end - begin);
+        }
+        begin = end;
+    }
+    // Whole subblocks keep the full-width matmul blocking; the extra columns stay inside the
+    // clipped runs and are stamped.
+    live_tiles = (live_tiles + subblock_tiles - 1) / subblock_tiles * subblock_tiles;
+    live_tiles = live_tiles > 0 ? live_tiles : subblock_tiles;
+    result.active_tiles = live_tiles < active_tiles ? live_tiles : active_tiles;
+
+    bool needs_mask = false;
+    uint32_t clipped = 0;
+    begin = 0;
+    for (; clipped < run_count && begin < result.active_tiles; ++clipped) {
+        uint32_t end = runs[clipped].column_end;
+        end = end < result.active_tiles ? end : result.active_tiles;
+        runs[clipped].column_end = end;
+        needs_mask |= runs[clipped].global_start_tile + (end - begin) > bounds.visible_end;
+        begin = end;
+    }
+    if (needs_mask) {
+        result.mask = {PackedKVMaskMode::PackedMasked, runs, clipped};
+    }
+    return result;
+}
+
 // Rows appended by each pass: a row joins the pass in which its last rank arrives, so its
 // newest slabs are ready behind that pass's heads. arrival(i) returns the tensor rank the
 // route delivers i-th; pass p covers arrivals [p * group, (p + 1) * group).
 template <typename Arrival>
-constexpr void packed_kv_pass_rows(uint32_t ring_size, uint32_t group, Arrival&& arrival, uint32_t* pass_rows) {
+constexpr void packed_kv_pass_rows(uint32_t ring_size, uint32_t group, const Arrival& arrival, uint32_t* pass_rows) {
     const uint32_t passes = ring_size / group;
     uint32_t row_pass[32] = {};
     for (uint32_t i = 0; i < ring_size; ++i) {
@@ -179,7 +292,7 @@ struct PackedKVSourceReadiness {
     uint32_t ready_sources = 0;
 
     template <typename WaitSource>
-    void drain(uint32_t required_sources, WaitSource&& wait_source) {
+    void drain(uint32_t required_sources, const WaitSource& wait_source) {
         while (ready_sources < required_sources) {
             wait_source(ready_sources);
             ++ready_sources;
@@ -187,7 +300,7 @@ struct PackedKVSourceReadiness {
     }
 
     template <typename WaitSource>
-    void wait_for_chunk(const PackedKVGroupPlan& plan, uint32_t chunk, WaitSource&& wait_source) {
+    void wait_for_chunk(const PackedKVGroupPlan& plan, uint32_t chunk, const WaitSource& wait_source) {
         drain(plan.last_source(chunk) + 1, wait_source);
     }
 };
@@ -250,7 +363,7 @@ PackedKVSchedule packed_kv_schedule(
     uint32_t region_tiles,
     uint32_t chunk_tiles,
     bool sliding_window,
-    NextArrival&& next_arrival) {
+    const NextArrival& next_arrival) {
     PackedKVSchedule schedule;
     schedule.source_group_size =
         packed_kv_source_group_size(configured_group, ring_size, source_capacity_tiles, logical_tiles, active_mask);

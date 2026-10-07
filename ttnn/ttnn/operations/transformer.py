@@ -213,9 +213,37 @@ ttnn.attach_golden_function(
         "persistent_output_buffer_joint_v",
     ),
 )
+
+
+def _sequence_shard_count(tensor, dim):
+    rank = len(tensor.shape)
+    dim %= rank
+    topology = tensor.tensor_topology()
+    count = 1
+    for placement, size in zip(topology.placements(), topology.distribution_shape()):
+        if isinstance(placement, ttnn.PlacementShard) and placement.dim % rank == dim:
+            count *= int(size)
+    return count
+
+
+def _preprocess_ring_mla_golden_inputs(function_args, function_kwargs):
+    # Split KV (cluster_axis=None, more KV than Q sequence shards) lays KV out block-cyclically; the
+    # golden needs the source count to restore global sequence order.
+    function_kwargs = dict(function_kwargs)
+    if function_kwargs.get("cluster_axis") is None:
+        query = function_args[0] if function_args else function_kwargs["input_tensor_q"]
+        kv = function_args[1] if len(function_args) > 1 else function_kwargs["input_tensor_kv"]
+        q_shards = _sequence_shard_count(query, 2)
+        kv_shards = _sequence_shard_count(kv, function_kwargs.get("dim", 2))
+        if kv_shards > q_shards:
+            function_kwargs["_ttnn_ring_mla_kv_sources"] = kv_shards
+    return ttnn.decorators.default_preprocess_golden_function_inputs(function_args, function_kwargs)
+
+
 ttnn.attach_golden_function(
     ttnn.transformer.ring_mla,
     golden_function=ring_mla_golden,
+    preprocess_golden_function_inputs=_preprocess_ring_mla_golden_inputs,
     output_tensor_kwarg_names=("persistent_output_buffer_kv",),
 )
 ttnn.attach_golden_function(

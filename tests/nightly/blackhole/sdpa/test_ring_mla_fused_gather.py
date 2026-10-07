@@ -444,6 +444,93 @@ def test_ring_mla_split_kv_ordinary_mesh():
     run_ring_mla_split_kv_geometry(5, 8, 32, True, 32, 352, 4, ordinary_mesh=True)
 
 
+def test_ring_mla_split_kv_comparison_mode():
+    """Comparison mode checks split KV against the ring_mla golden. The golden without its block-cyclic
+    reorder must miss the same output, so the comparison cannot pass vacuously."""
+    if MESH_CONFIG.num_devices not in (8, 32):
+        pytest.skip("Split-KV coverage requires an eight-device LB or 32-device Galaxy")
+    tp = 4
+    sp = MESH_CONFIG.num_devices // tp
+    runtime = open_ring_joint_sdpa_runtime(replace(MESH_CONFIG, tp_size=sp, sp_size=tp), full_mesh=True)
+    try:
+        mesh = runtime.mesh_device
+        region, d_k, d_v, local_heads, depth = 64, 64, 32, 4, 2
+        ranks = sp * tp
+        chunk = ranks * region
+        source_rows = depth * region
+        torch.manual_seed(20261007)
+        # The first chunk of a two-slab cache, with each query twice its own key so attention is dominated
+        # by the diagonal. Source-major rows [0, chunk) hold half the first chunk and half the second, so a
+        # golden attending them unreordered loses the own key of every query past the chunk's midpoint.
+        global_kv = torch.randn(1, 1, depth * chunk, d_k).bfloat16()
+        q = (2 * global_kv[:, :, :chunk]).expand(1, local_heads * tp, chunk, d_k).contiguous()
+        source_major = torch.empty_like(global_kv)
+        for global_region in range(depth * ranks):
+            physical = (global_region % ranks) * source_rows + (global_region // ranks) * region
+            source_major[:, :, physical : physical + region] = global_kv[
+                :, :, global_region * region : (global_region + 1) * region
+            ]
+        tt_q = ttnn.from_torch(
+            q,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=(sp, tp), dims=[2, 1]),
+        )
+        tt_kv = ttnn.from_torch(
+            source_major,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=2),
+        )
+        scratch = ttnn.from_torch(
+            torch.zeros(1, 1, ranks * source_rows, d_k).bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+        kwargs = dict(
+            persistent_output_buffer_kv=scratch,
+            head_dim_v=d_v,
+            logical_n=chunk,
+            kv_actual_isl=0,
+            kv_cache_batch_idx=0,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                q_chunk_size=32,
+                k_chunk_size=352,
+                exp_approx_mode=False,
+            ),
+            compute_kernel_config=runtime.compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=runtime.ccl_semaphore_handles,
+            num_links=runtime.num_links,
+            cluster_axis=None,
+            mesh_device=mesh,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=runtime.worker_sub_device_id,
+            ccl_core_grid_offset=(runtime.ccl_column, 0),
+            use_column_major_ccl=True,
+            is_balanced=False,
+        )
+        with (
+            ttnn.manage_config("enable_comparison_mode", True),
+            ttnn.manage_config("comparison_mode_pcc", 0.99),
+            ttnn.manage_config("comparison_mode_should_raise_exception", True),
+        ):
+            output, _ = ttnn.transformer.ring_mla(tt_q, tt_kv, **kwargs)
+        # Negative control: the golden without the reorder must miss the same output.
+        golden = ttnn.get_golden_function(ttnn.transformer.ring_mla)
+        misordered, _ = golden(q, source_major, head_dim_v=d_v, logical_n=chunk, kv_actual_isl=0, kv_cache_batch_idx=0)
+        actual = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, mesh_shape=(sp, tp), dims=[2, 1]))
+        passed, message = comp_pcc(misordered.float(), actual.float(), 0.99)
+        assert not passed, f"source-major golden matched the split-KV output: {message}"
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
 @pytest.mark.parametrize(
     "invalid_case,error",
     [
