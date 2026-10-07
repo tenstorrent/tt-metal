@@ -8,6 +8,7 @@
 
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/small_vector.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
@@ -34,22 +35,32 @@ ttnn::MeshCoordinate snake_ring_coordinate(
         ttnn::ccl::snake_ring::coordinate_col(transport_rank, shape[0], shape[1], orientation));
 }
 
-bool has_row_major_mesh_coordinates(const ttnn::Tensor& tensor) {
-    if (tensor.device() == nullptr) {
+bool has_row_major_mesh_coordinates(
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    const tt::tt_metal::distributed::MeshShape& shape) {
+    if (coords.empty() || coords.size() != shape.mesh_size()) {
         return false;
     }
-    const auto& mesh_coords = tensor.tensor_topology().mesh_coords();
-    const auto shape = tensor.device()->shape();
-    if (mesh_coords.size() != shape.mesh_size()) {
+    const auto& origin = coords.front();
+    if (origin.dims() != shape.dims()) {
         return false;
     }
-    uint32_t index = 0;
-    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(shape)) {
-        if (mesh_coords[index++] != coord) {
+    size_t index = 0;
+    for (const auto& offset : tt::tt_metal::distributed::MeshCoordinateRange(shape)) {
+        ttsl::SmallVector<uint32_t> expected(shape.dims(), 0);
+        for (size_t dim = 0; dim < shape.dims(); ++dim) {
+            expected[dim] = origin[static_cast<int32_t>(dim)] + offset[static_cast<int32_t>(dim)];
+        }
+        if (coords[index++] != tt::tt_metal::distributed::MeshCoordinate(expected)) {
             return false;
         }
     }
     return true;
+}
+
+bool has_row_major_mesh_coordinates(const ttnn::Tensor& tensor) {
+    return tensor.device() != nullptr &&
+           has_row_major_mesh_coordinates(tensor.tensor_topology().mesh_coords(), tensor.device()->shape());
 }
 
 bool placement_shards_tensor_dim(

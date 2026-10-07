@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -55,6 +56,14 @@ ttnn::MeshCoordinate snake_ring_coordinate(
 // stale Shard dim left behind by a rank-changing op never matches anything (and never throws).
 std::optional<uint32_t> normalize_tensor_dim(int dim, uint32_t rank);
 
+// `coords` is the row-major walk of a `shape`-sized block of the mesh anchored at `coords.front()`. With the device
+// mesh's shape that is exactly MeshCoordinateRange(shape), in order -- the device order a 1-D mapper shards in; with
+// an N-D mapper's distribution shape it is the sub-mesh whose axes the mapper's placements describe one by one.
+bool has_row_major_mesh_coordinates(
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    const tt::tt_metal::distributed::MeshShape& shape);
+
+// The tensor's label coordinates are the row-major walk of its whole device mesh.
 bool has_row_major_mesh_coordinates(const ttnn::Tensor& tensor);
 
 bool placement_shards_tensor_dim(

@@ -278,22 +278,22 @@ std::vector<tt::tt_metal::TensorTopology> ReduceScatterMinimalAsyncDeviceOperati
     // another axis already shards `dim` returns the collapsed row-major label (that is the true layout; replicating
     // the other axis, as this op used to, claimed identical rows and lost data on serialisation) or refuses a
     // layout no label can express. `operation_attributes.dim` is already normalised by the host wrapper. No honest
-    // label (nullopt, already warned about): {} keeps the union default for every output.
+    // label (nullopt, already reported): the output keeps the input's label too. Returning {} would instead hand the
+    // framework the union over every tensor argument, the optional intermediate / output tensors' labels included.
     const auto& input_topology = tensor_args.input_tensor.tensor_topology();
-    auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
-        tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim));
-    if (!output_topology.has_value()) {
-        return {};
-    }
+    auto output_topology =
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            tensor_args.input_tensor, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim))
+            .value_or(input_topology);
 
     // The count must match create_output_tensors exactly, so the contiguous staging path contributes a
     // third entry for the penult intermediate. It is device-local scratch with no distribution semantics of
     // its own, so it keeps the input topology — same as the intermediate at index 0.
     if (uses_contiguous_staging(operation_attributes, tensor_args)) {
-        return {input_topology, std::move(*output_topology), input_topology};
+        return {input_topology, std::move(output_topology), input_topology};
     }
 
-    return {input_topology, std::move(*output_topology)};
+    return {input_topology, std::move(output_topology)};
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<ReduceScatterMinimalAsyncDeviceOperation::tensor_return_value_t>
