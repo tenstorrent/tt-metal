@@ -92,11 +92,19 @@ class H3AdapterHandle:
         return len(self.indices)
 
 
-def load_h3_adapter_into(transformer, path: str, *, scale: float = 1.0, name: str = "") -> H3AdapterHandle:
+def load_h3_adapter_into(
+    transformer,
+    path: str,
+    *,
+    scale: float = 1.0,
+    name: str = "",
+    host_prefixes: tuple[str, ...] = (),
+) -> H3AdapterHandle:
     """Register one adapter file into ``transformer`` and bind it.
 
     ``scale`` multiplies the adapter's own ``alpha / rank``; it is the caller's strength knob, not a
-    substitute for the published scale.
+    substitute for the published scale. Targets under ``host_prefixes`` are left to the caller, which
+    folds them on host through :func:`h3_host_deltas`.
     """
     name = name or path
     raw, metadata = _read(path)
@@ -113,6 +121,8 @@ def load_h3_adapter_into(transformer, path: str, *, scale: float = 1.0, name: st
     unmapped: list[str] = []
 
     for base, ab in sorted(pairs.items()):
+        if base.startswith(host_prefixes):
+            continue
         if base in _GLOBALS:
             owner_name, attr = _GLOBALS[base]
             linear = getattr(getattr(transformer, owner_name), attr)
@@ -158,6 +168,24 @@ def load_h3_adapter_into(transformer, path: str, *, scale: float = 1.0, name: st
         linear.bind_active(bank_idx)
     logger.info(f"{name}: bound {len(handle)} LoRA targets over {promoted} promoted linears")
     return handle
+
+
+def h3_host_deltas(path: str, prefixes: tuple[str, ...], *, scale: float = 1.0) -> dict[str, torch.Tensor]:
+    """``scale * alpha / rank * B @ A`` in float32 for every target under ``prefixes``, keyed by its
+    ``<module>.weight`` state-dict name.
+
+    For targets whose device weight is float32: ``register_lora`` uploads A and B as bfloat16, which
+    would round a delta the adapter publishes in float32.
+    """
+    with safe_open(path, framework="pt", device="cpu") as handle:
+        metadata = dict(handle.metadata() or {})
+        raw = {key: handle.get_tensor(key) for key in handle.keys() if _strip_prefixes(key).startswith(prefixes)}
+    pairs, alphas = _collect_pairs(raw)
+    file_alpha = _file_alpha(metadata)
+    return {
+        f"{base}.weight": scale * _scale_of(base, ab, alphas, file_alpha) * (ab["B"].float() @ ab["A"].float())
+        for base, ab in sorted(pairs.items())
+    }
 
 
 def _read(path: str) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
