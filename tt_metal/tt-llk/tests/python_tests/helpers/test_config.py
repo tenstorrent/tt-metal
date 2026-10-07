@@ -1424,6 +1424,10 @@ class TestConfig:
             OPTIONS_COMPILE += (
                 f"-DLLK_HARNESS_NOPS={int(os.environ['LLK_HARNESS_NOPS'])} "
             )
+        if (
+            os.environ.get("LLK_ZONE_OLD") == "1"
+        ):  # experiment: zone start record written inside the window
+            OPTIONS_COMPILE += "-DLLK_ZONE_OLD "
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
