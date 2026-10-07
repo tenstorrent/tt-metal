@@ -206,6 +206,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/tilize.h
     inc/api/compute/topk.h
     inc/api/compute/transpose.h
+    inc/api/compute/triangle_solve.h
     inc/api/compute/transpose_dest.h
     inc/api/compute/transpose_wh.h
     inc/api/compute/transpose_wh_dest.h
@@ -214,6 +215,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/xlogy.h
     inc/api/lock.h
     inc/api/dataflow/noc.h
+    inc/api/dataflow/buf_rw_note.h
     inc/api/dataflow/endpoints.h
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/cross_node_dfb.h
@@ -275,9 +277,11 @@ set(HW_JIT_API_HEADERS
     inc/internal/ethernet/tt_eth_ss_regs.h
     inc/internal/ethernet/tunneling.h
     inc/internal/tensor/array_wrapper.h
+    inc/internal/tensor/binding_id.h
     inc/internal/tensor/const.h
     inc/internal/tensor/dspec.h
     inc/internal/tensor/helpers.h
+    inc/internal/tensor/transfer_noc_addr.h
     inc/internal/tt-1xx/cache.h
     inc/internal/tt-1xx/blackhole/c_tensix_core.h
     inc/internal/tt-1xx/blackhole/cfg_defines.h

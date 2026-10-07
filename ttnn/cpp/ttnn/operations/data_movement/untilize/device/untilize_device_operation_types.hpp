@@ -25,7 +25,7 @@ struct UntilizeOperationAttributes {
     tt::tt_metal::MemoryConfig output_mem_config;
     bool use_multicore{};
     bool fp32_dest_acc_en{};
-    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     bool enough_space_height{};
     uint32_t pf_type{};
 };
