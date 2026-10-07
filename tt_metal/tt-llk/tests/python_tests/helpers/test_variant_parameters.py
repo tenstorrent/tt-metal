@@ -397,13 +397,8 @@ class SFPU_RELU_MAX_THRESHOLD(TemplateParameter):
 
 @dataclass
 class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
-    """Scalar that unary max/min compares Dest against, as a uint32 bit pattern.
-
-    Float ops take the raw fp32 bits; the Int32 ops take a *signed* Python int and emit
-    its two's-complement pattern, which is the kernel's scalar contract. Emitted as a macro
-    for the same reason as :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations_quasar.h selects on
-    ``#ifdef``, and unset means the dispatcher's fixed 0.0f / 1000.
-    """
+    """Unary max/min scalar bits (fp32, or two's-complement int32). A macro because the
+    dispatcher selects on ``#ifdef``; unset keeps its 0.0f / 1000 default."""
 
     max_min_scalar_bits: int = 0
 
@@ -413,12 +408,7 @@ class SFPU_UNARY_MAX_MIN_SCALAR(TemplateParameter):
 
 @dataclass
 class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
-    """Int32 unary max/min: Dest holds sign-magnitude int32 instead of two's complement.
-
-    Emitted as a macro for the same reason as :class:`SFPU_UNARY_MAX_MIN_SCALAR`: the
-    dispatcher in sfpu_operations_quasar.h selects on ``#ifdef``, and unset means the
-    kernel's default two's-complement Dest (SIGN_MAGNITUDE_FORMAT=false).
-    """
+    """Int32 unary max/min on a sign-magnitude Dest (macro, like SFPU_UNARY_MAX_MIN_SCALAR)."""
 
     max_min_sign_magnitude: bool = False
 

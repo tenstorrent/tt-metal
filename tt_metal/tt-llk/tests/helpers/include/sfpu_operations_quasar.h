@@ -790,8 +790,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::unary_max || OPERATION == SfpuType::unary_min)
     {
-        // Scalar as fp32 bits: SFPU_UNARY_MAX_MIN_SCALAR when the test sets it, else 0.0f (matching
-        // UnarySFPUGolden UNARY_MAX_MIN_VALUE). Float32 serves every float Dest width.
+        // Defaults match UnarySFPUGolden UNARY_MAX_MIN_VALUE; Float32 serves every float Dest width.
 #ifdef SFPU_UNARY_MAX_MIN_SCALAR
         constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
 #else
@@ -808,9 +807,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::unary_max_int32 || OPERATION == SfpuType::unary_min_int32)
     {
-        // Two's-complement int32 scalar: SFPU_UNARY_MAX_MIN_SCALAR when the test sets it, else 1000
-        // (matching UnarySFPUGolden INT_MAXMIN_SCALAR). Dest is two's complement unless the test sets
-        // SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
+        // Defaults match UnarySFPUGolden INT_MAXMIN_SCALAR and a two's-complement Dest.
 #ifdef SFPU_UNARY_MAX_MIN_SCALAR
         constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = SFPU_UNARY_MAX_MIN_SCALAR;
 #else

@@ -17,40 +17,21 @@
 namespace ckernel {
 namespace sfpu {
 
-// INT32_MIN as a bit pattern. Sign-magnitude has no encoding for it (0x80000000 is -0 there).
+// Sign-magnitude has no encoding for INT32_MIN (0x80000000 is -0 there).
 constexpr std::uint32_t UNARY_MAX_MIN_INT32_MIN_BITS = 0x80000000u;
 
 /**
- * @brief Element-wise max/min of a Dest tile against one uniform scalar: out = max(x, value) or min(x, value).
+ * @brief out = max(x, value) or min(x, value), one SFPSWAP per row.
  *
- * The result is always one of the two operands verbatim (no arithmetic, no rounding).
+ * sfpi >= 7.83 picks the SFPSWAP compare from the vector type: fp32 for vFloat (correct for
+ * both-negative pairs), two's-complement int32 for vInt. ckernel_sfpu_gelu.h's note predates this.
  *
- * Both paths are a single SFPSWAP per row: sfpi lowers min/max to SFPSWAP with the compare domain taken
- * from the vector type (imm12 bit 0, tt_llk_quasar/instructions/assembly.yaml), so
- *   - vFloat compares as fp32 (imm12 = 1), which orders both-negative pairs correctly and follows the
- *     SFPU total order (-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN);
- *   - vInt compares as two's-complement int32 (imm12 = 0), which is exact for every int32 pair.
- * This is sfpi >= 7.83 behaviour (sfpi_lib.h min_max passes SFPSWAP_IMM_TYPE_FLOAT for vFloat); the
- * objdump of both instantiations shows `sfpswap ...,1,1` (float) and `sfpswap ...,0,1` (Int32). The
- * note in ckernel_sfpu_gelu.h that sfpi omits the float-compare bit predates it. On an older sfpi, the
- * float path would mis-order both-negative pairs; the negative-scalar test variants catch that.
- *
- * @tparam IS_MAX_OP: true selects max, false selects min.
- * @tparam FMT: math-side DataFormat. Int32 takes the integer path; every float format takes the fp32
- *         path, so callers may pass Float32 for any float Dest width (the DEFAULT load resolves it).
- * @tparam APPROXIMATION_MODE: unused (the select is exact); kept so the dispatcher's
- *         (..., APPROX, ITERATIONS) template tail matches the other Quasar SFPU kernels.
- * @tparam ITERATIONS: number of SFP row-pairs per face.
- * @tparam SIGN_MAGNITUDE_FORMAT: Int32 only. false (default): Dest holds two's-complement int32, as
- *         unpack-to-dest leaves an Int32 L1 tile. true: Dest holds sign-magnitude int32 (e.g. the FPU
- *         path); the load/store convert SM <-> two's complement around the compare.
- * @param value: scalar to compare against: an fp32 bit pattern for float FMT, a two's-complement int32
- *        for DataFormat::Int32 (in both Dest encodings). With SIGN_MAGNITUDE_FORMAT it must not be
- *        INT32_MIN, which has no sign-magnitude encoding.
- * @note No init call is required.
- * @note No SFPNOP after the SFPSWAP: the Quasar scoreboard stalls the SFPSTORE (or SFPCAST) that reads its
- *       result. TEN-4581 / TEN-4605 list the dependents it misses after a 2-cycle op (SFPNONLINEAR
- *       mode 3-5, SFPIADD/SFPSHFT, SFPCONFIG, SFPSHFT2 mode 2-4, SFPSWAP), and sfpi pads exactly those.
+ * @tparam FMT: Int32 takes the integer path; any float format takes the fp32 path.
+ * @tparam APPROXIMATION_MODE: unused; keeps the dispatcher's (..., APPROX, ITERATIONS) tail.
+ * @tparam SIGN_MAGNITUDE_FORMAT: Int32 only; Dest holds sign-magnitude instead of two's complement.
+ * @param value: fp32 bits for float FMT, two's-complement int32 for Int32 (not INT32_MIN with SM).
+ * @note No SFPNOP after SFPSWAP: the scoreboard stalls the dependent SFPSTORE/SFPCAST, which are not
+ *       among the TEN-4581 / TEN-4605 misses.
  */
 template <
     bool IS_MAX_OP,
@@ -72,7 +53,7 @@ inline void calculate_unary_max_min(const std::uint32_t value) {
                 value != UNARY_MAX_MIN_INT32_MIN_BITS,
                 "calculate_unary_max_min: INT32_MIN has no sign-magnitude encoding");
         }
-        // SM32 makes sfpi wrap the load/store in SFPCAST SM <-> two's complement; I32 is a raw copy.
+        // SM32 wraps the load/store in SFPCAST SM <-> two's complement.
         constexpr sfpi::DataLayout layout = SIGN_MAGNITUDE_FORMAT ? sfpi::DataLayout::SM32 : sfpi::DataLayout::I32;
         const sfpi::vInt s = static_cast<std::int32_t>(value);
 #pragma GCC unroll 8

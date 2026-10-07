@@ -2512,8 +2512,7 @@ class UnarySFPUGolden:
         self._relu_min_int_threshold = relu_min_int_threshold
         # Mirrors the SFPU_RELU_MAX_THRESHOLD template parameter; only relu_max reads it.
         self._relu_max_threshold = relu_max_threshold
-        # Mirrors the SFPU_UNARY_MAX_MIN_SCALAR template parameter; only unary max/min read it.
-        # None restores the dispatcher defaults (0.0 for float, INT_MAXMIN_SCALAR for integer).
+        # Mirrors SFPU_UNARY_MAX_MIN_SCALAR; None restores the dispatcher defaults.
         self._UNARY_MAX_MIN_VALUE = (
             UNARY_MAX_MIN_VALUE if max_min_scalar is None else float(max_min_scalar)
         )
