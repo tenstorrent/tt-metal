@@ -157,16 +157,22 @@ ALWI void untilize_wait_for_block(DataflowBuffer& in_dfb, const uint32_t tile_co
 // Standalone Init/Uninit Wrapper Functions Implementations
 // =============================================================================
 
-template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb, untilize_config::RemapMode remap_mode>
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
+    untilize_config::RemapMode remap_mode,
+    untilize_config::FastChunk fast_chunk>
 ALWI void untilize_init() {
     using dispatch = UntilizeDispatchConfig<block_width_tiles, input_dfb, output_dfb>;
     constexpr bool configure_remap = (remap_mode == untilize_config::RemapMode::Configure);
+    constexpr bool four_tile_chunks = fast_chunk == untilize_config::FastChunk::FourTiles;
 
     if constexpr (dispatch::use_fast) {
         if constexpr (configure_remap) {
-            fast_untilize_init<block_width_tiles>(input_dfb, output_dfb);
+            fast_untilize_init<block_width_tiles, DST_ACCUM_MODE, four_tile_chunks>(input_dfb, output_dfb);
         } else {
-            fast_untilize_init_skip_remap<block_width_tiles>(input_dfb, output_dfb);
+            fast_untilize_init_skip_remap<block_width_tiles, DST_ACCUM_MODE, four_tile_chunks>(input_dfb, output_dfb);
         }
     } else if constexpr (dispatch::use_block_based_pack_path) {
         if constexpr (configure_remap) {
@@ -183,12 +189,13 @@ ALWI void untilize_init() {
     }
 }
 
-template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
+template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb, untilize_config::FastChunk fast_chunk>
 ALWI void untilize_uninit() {
     using dispatch = UntilizeDispatchConfig<block_width_tiles, input_dfb, output_dfb>;
 
     if constexpr (dispatch::use_fast) {
-        fast_untilize_uninit<block_width_tiles>(output_dfb);
+        fast_untilize_uninit<block_width_tiles, DST_ACCUM_MODE, fast_chunk == untilize_config::FastChunk::FourTiles>(
+            output_dfb);
     } else {
         pack_untilize_uninit(output_dfb);
     }
@@ -205,7 +212,8 @@ template <
     untilize_config::InitUninitMode init_uninit_mode,
     untilize_config::WaitMode wait_mode,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
-    untilize_config::RemapMode remap_mode>
+    untilize_config::RemapMode remap_mode,
+    untilize_config::FastChunk fast_chunk>
 ALWI void untilize(uint32_t num_blocks) {
     // Compile-time validation
     static_assert(
@@ -248,7 +256,7 @@ ALWI void untilize(uint32_t num_blocks) {
     if constexpr (
         init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == untilize_config::InitUninitMode::InitOnly) {
-        untilize_init<block_width_tiles, input_dfb, output_dfb, remap_mode>();
+        untilize_init<block_width_tiles, input_dfb, output_dfb, remap_mode, fast_chunk>();
     }
 
     // =================================================================
@@ -292,7 +300,8 @@ ALWI void untilize(uint32_t num_blocks) {
         for (uint32_t r = 0; r < num_blocks; ++r) {
             untilize_wait_for_block<wait_mode>(in_dfb, block_width_tiles);
             out_dfb.reserve_back(block_width_tiles);
-            fast_untilize_block<block_width_tiles>(input_dfb, output_dfb);
+            fast_untilize_block<block_width_tiles, DST_ACCUM_MODE, fast_chunk == untilize_config::FastChunk::FourTiles>(
+                input_dfb, output_dfb);
             in_dfb.pop_front(block_width_tiles);
             out_dfb.push_back(block_width_tiles);
         }
@@ -341,7 +350,7 @@ ALWI void untilize(uint32_t num_blocks) {
     if constexpr (
         init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == untilize_config::InitUninitMode::UninitOnly) {
-        untilize_uninit<block_width_tiles, input_dfb, output_dfb>();
+        untilize_uninit<block_width_tiles, input_dfb, output_dfb, fast_chunk>();
     }
 }
 

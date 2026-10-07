@@ -716,7 +716,16 @@ void kernel_main() {
                                 /*batches = q-rows */ q_tiles_per_unit));
                     }
                 } else {
-                    compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
+                    // Four-tile fast untilize chunks: this kernel measured slower with eight (tt-metal#58736).
+                    compute_kernel_lib::untilize<
+                        k_tiles_per_unit,
+                        cb_acc_strip,
+                        cb_out_strip,
+                        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+                        compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+                        compute_kernel_lib::untilize_config::RemapMode::Configure,
+                        compute_kernel_lib::untilize_config::FastChunk::FourTiles>(q_tiles_per_unit);
                 }
             }
 

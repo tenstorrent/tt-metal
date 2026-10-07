@@ -39,7 +39,12 @@ namespace ckernel {
 // exception on the unpack side because each tile must still be addressed around
 // its exponent section.
 
-template <std::uint32_t full_ct_dim, bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; init, block and uninit must agree on it.
+template <
+    std::uint32_t full_ct_dim,
+    bool configure_remap,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    bool four_tile_chunks = false>
 ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
@@ -55,7 +60,8 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
-    constexpr std::uint32_t max_unit_dim = fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
+    constexpr std::uint32_t max_unit_dim =
+        four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
     constexpr std::uint32_t first_unit_dim = fast_untilize_next_unit_dim<max_unit_dim>(full_ct_dim);
 
     // Fast-untilize can run immediately after other LLKs (for example matmul
@@ -84,17 +90,17 @@ ALWI void fast_untilize_init_impl(uint32_t icb, uint32_t ocb, uint32_t call_line
 
 // Default fast-untilize init configures BH DEST remap. Use the skip-remap variant
 // only when the caller has already configured remap and no intervening op changes it.
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en>(icb, ocb, call_line);
+    fast_untilize_init_impl<full_ct_dim, true, is_fp32_dest_acc_en, four_tile_chunks>(icb, ocb, call_line);
 }
 
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en>(icb, ocb, call_line);
+    fast_untilize_init_impl<full_ct_dim, false, is_fp32_dest_acc_en, four_tile_chunks>(icb, ocb, call_line);
 }
 
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_block(
     uint32_t icb, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
@@ -105,7 +111,8 @@ ALWI void fast_untilize_block(
         return;
     }
 
-    constexpr std::uint32_t max_unit_dim = fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
+    constexpr std::uint32_t max_unit_dim =
+        four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
 
     // Keep the common 2/3/4-tile case as a direct path. Routing it through the
     // generic decomposition loop materializes unit_dims state in the hot kernel
@@ -154,7 +161,7 @@ ALWI void fast_untilize_block(
 #endif
 }
 
-template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool four_tile_chunks = false>
 ALWI void fast_untilize_uninit(uint32_t ocb) {
     static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
 
@@ -174,7 +181,8 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
     PACK((llk_init_packer_dest_offset_registers<PackMode::Default>(ocb)));
     PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    constexpr std::uint32_t max_unit_dim = fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
+    constexpr std::uint32_t max_unit_dim =
+        four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
     PACK((llk_pack_fast_untilize_uninit<max_unit_dim, full_ct_dim>(ocb)));
 #else
     pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);

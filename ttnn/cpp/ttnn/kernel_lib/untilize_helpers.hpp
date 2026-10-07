@@ -49,6 +49,12 @@ enum class RemapMode : uint8_t {
     AssumeConfigured  // Caller already configured remap for this kernel
 };
 
+// Blackhole fast untilize chunk width; init, untilize and uninit must agree on it.
+enum class FastChunk : uint8_t {
+    Auto,      // Default: up to eight tiles with a 16-bit DEST
+    FourTiles  // Up to four tiles (tt-metal#58736: callers measured slower with eight)
+};
+
 }  // namespace untilize_config
 
 // Standalone init/uninit wrappers for manual lifecycle control.
@@ -63,10 +69,15 @@ template <
     uint32_t block_width_tiles,
     uint32_t input_dfb,
     uint32_t output_dfb,
-    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure,
+    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
 ALWI void untilize_init();
 
-template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
+    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
 ALWI void untilize_uninit();
 
 // An Fp8_e4m3 output cannot be packed in one-tile blocks of a wider row (tt-metal#59140): each row of such a block is
@@ -177,7 +188,8 @@ template <
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure,
+    untilize_config::FastChunk fast_chunk = untilize_config::FastChunk::Auto>
 ALWI void untilize(uint32_t num_blocks);
 
 }  // namespace compute_kernel_lib
