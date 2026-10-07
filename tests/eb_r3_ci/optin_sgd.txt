@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/moreh_sgd.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/moreh_sgd.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

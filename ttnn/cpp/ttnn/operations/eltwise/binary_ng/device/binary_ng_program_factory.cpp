@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -838,6 +841,13 @@ BinaryNgPerCoreArgs build_per_core_runtime_args(
 }  // namespace
 
 // Implements c = a op b
+namespace {
+int eb_r3_env_int(const char* name, int fallback) {  // CI only
+    const char* v = std::getenv(name);
+    return v != nullptr ? std::atoi(v) : fallback;
+}
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
@@ -1387,9 +1397,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // with one into bf16 or fp32.
     const bool block_section = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && fpu_op_without_activations &&
                                !is_where_op && compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast &&
-                               num_tiles_per_cycle > 1 && c_num_tiles_per_shard.value_or(0) >= 16;
+                               num_tiles_per_cycle > 1 && c_num_tiles_per_shard.value_or(0) >= eb_r3_env_int("EB_R3_BU_MIN", 16) &&
+                               std::getenv("EB_R3_NO_BLOCK") == nullptr;  // CI toggles, not in the PR
     const bool block_pack =
-        block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32);
+        block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32) &&
+        c_num_tiles_per_shard.value_or(0) >= eb_r3_env_int("EB_R3_BP_MIN", 16) &&
+        std::getenv("EB_R3_NO_BLOCK_PACK") == nullptr;  // CI toggles, not in the PR
     compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
     compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = block_pack ? "1" : "0";
 
@@ -1401,7 +1414,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                  compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg) &&
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) &&
-                                a_sharded && c_sharded;
+                                a_sharded && c_sharded &&
+                                std::getenv("EB_R3_NO_BCAST_CHUNK") == nullptr;  // CI toggle, not in the PR
+    compute_kernel_defines["EB_R3_MAIN_REINIT"] = std::getenv("EB_R3_MAIN_REINIT") != nullptr ? "1" : "0";  // CI only
+    compute_kernel_defines["EB_R3_PROBE_INIT"] = std::getenv("EB_R3_PROBE_INIT") != nullptr ? "1" : "0";    // CI only
+    compute_kernel_defines["EB_R3_PER_FACE"] = std::getenv("EB_R3_PER_FACE") != nullptr ? "1" : "0";        // CI only
+    if (std::getenv("EB_R3_LOG_RULE") != nullptr) {  // CI log, not in the PR
+        std::fprintf(stderr, "EB_R3_RULE block=%d block_pack=%d bcast_sections=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d n=%u\n",
+            static_cast<int>(block_section), static_cast<int>(block_pack), static_cast<int>(bcast_sections),
+            static_cast<int>(is_sfpu_op), static_cast<int>(a_dtype), static_cast<int>(b_dtype),
+            static_cast<int>(c_data_format), static_cast<int>(fp32_dest_acc_en), c_num_tiles_per_shard.value_or(0));
+    }
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
     }
@@ -1412,7 +1435,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.core_ranges = all_device_cores;
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
+    MathFidelity eb_r3_fidelity = MathFidelity::HiFi4;  // CI toggle EB_R3_FIDELITY, not in the PR
+    if (const char* f = std::getenv("EB_R3_FIDELITY"); f != nullptr) {
+        const std::string fs(f);
+        eb_r3_fidelity = fs == "LoFi"    ? MathFidelity::LoFi
+                         : fs == "HiFi2" ? MathFidelity::HiFi2
+                         : fs == "HiFi3" ? MathFidelity::HiFi3
+                                         : MathFidelity::HiFi4;
+    }
     compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = eb_r3_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };

@@ -5,7 +5,10 @@
 #include <cstdint>
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 // Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one.
-#define ELTWISE_BINARY_PER_TILE_HANDOFF (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL)
+#ifndef EB_R3_PER_FACE
+#define EB_R3_PER_FACE 0
+#endif
+#define ELTWISE_BINARY_PER_TILE_HANDOFF ((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL) && !EB_R3_PER_FACE)
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 
@@ -121,6 +124,7 @@ ALWI void process_tile(
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
+        EB_R3_EXTRA_INIT(cb_post_lhs, cb_post_rhs);
         tile_regs_acquire();
         BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
         PROCESS_POST_ACTIVATIONS(0);

@@ -1,0 +1,1 @@
+ttnn/cpp/ttnn/operations/moreh/moreh_softmax_backward/device/kernels/moreh_softmax_backward_w.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
