@@ -101,7 +101,7 @@ class UnifiedMoEShared:
 
 def row_topology():
     """dispatch / combine topology over the 4 rows (DSV41_UNI_TOPO=ring: use the column's wrap link; read per call so A/B modes can switch it)"""
-    return ttnn.Topology.Ring if os.environ.get("DSV41_UNI_TOPO", "linear") == "ring" else ttnn.Topology.Linear
+    return ttnn.Topology.Ring if os.environ.get("DSV41_UNI_TOPO", "ring") == "ring" else ttnn.Topology.Linear
 
 
 def get_shared(md, n_tokens):
@@ -443,7 +443,7 @@ def route_cols(gate, hh_own, h, mc, cc, mode=None, dbg=None):
             ttnn.deallocate(p_[0])
             ttnn.deallocate(p_[1])
         return sc_all, ix_all, ()
-    if os.environ.get("DSV41_UNI_ROUTER", "slices") == "batched":
+    if os.environ.get("DSV41_UNI_ROUTER", "batched") == "batched":
         # ONE router for all own rows (matmul / activations on n rows, router_select over n rows: bit-identical to the 32-row slices)
         sc, ix = gate._forward_fused(hh_own, grid=(min(4, max(1, n // 128)), 8))
         parts = []

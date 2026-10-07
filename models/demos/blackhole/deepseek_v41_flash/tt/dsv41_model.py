@@ -93,6 +93,9 @@ class Model:
         self.Up = int(os.environ.get("DSV41_PREFILL_UP", str(self.U)))
         assert 1 <= self.Up <= self.U, f"DSV41_PREFILL_UP={self.Up} must be in 1..{self.U}"
         self.max_ctx = max_ctx
+        from models.demos.blackhole.deepseek_v41_flash.tt import moe_overlap
+
+        moe_overlap.configure(self.B, max_ctx)
         self.layer_ids = list(args.layer_ids)
         self.timing = {}
         ratios = {R.model_args().compress_ratios[L] for L in self.layer_ids}
