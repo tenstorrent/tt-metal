@@ -37,13 +37,7 @@ def global_argmax(lg, tok_out, vocab_local):
     m = ttnn.max(cv, dim=3, keepdim=True)
     hit = ttnn.typecast(ttnn.eq(cv, m), ttnn.float32)  # 1 where the column holds the max
     # first hit wins: weight columns 8..1 and take the argmax of hit*weight
-    w = ttnn.from_torch(
-        torch.arange(8, 0, -1, dtype=torch.float32).reshape(1, 1, 1, 8),
-        device=lg.device(),
-        dtype=ttnn.float32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(lg.device()),
-    )
+    w = _col_weights(lg.device())
     sc = ttnn.multiply(hit, w)
     mx = ttnn.max(sc, dim=3, keepdim=True)
     onehot = ttnn.typecast(ttnn.eq(sc, mx), ttnn.float32)
@@ -56,6 +50,19 @@ def global_argmax(lg, tok_out, vocab_local):
 
 
 _COL_OFF = {}
+_COL_W = {}
+
+
+def _col_weights(mesh):
+    if id(mesh) not in _COL_W:  # device constants must exist before a trace capture (no host writes while capturing)
+        _COL_W[id(mesh)] = ttnn.from_torch(
+            torch.arange(8, 0, -1, dtype=torch.float32).reshape(1, 1, 1, 8),
+            device=mesh,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+    return _COL_W[id(mesh)]
 
 
 def _col_offset(mesh, U, vocab_local):
