@@ -37,6 +37,7 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
+    DEST_REUSE_UNPACK_A,
     DEST_SYNC,
     EN_DEST_REUSE,
     LOOP_FACTOR,
@@ -979,11 +980,20 @@ def _run_eltwise_binary_dest_reuse_test(
     loop_factor=1,
     per_face_handoff=None,
     broadcast_type=BroadcastType.None_,
+    dest_reuse_unpack_a=False,
 ):
     if per_face_handoff is None:
         per_face_handoff = is_perf and not _runs_per_tile(
             tile_dimensions, broadcast_type, dest_reuse=True
         )
+    # Blackhole hands a tile of 8-row faces to the dest-reuse math once per tile only from the dest-reuse unpack
+    face_r_dim, num_faces_r_dim, _ = get_tile_params(tile_dimensions)
+    dest_reuse_unpack_a = dest_reuse_unpack_a or (
+        not per_face_handoff
+        and broadcast_type == BroadcastType.None_
+        and face_r_dim == 8
+        and num_faces_r_dim == 1
+    )
     prepared = _prepare_dest_reuse_inputs(
         formats,
         input_dimensions,
@@ -1014,7 +1024,8 @@ def _run_eltwise_binary_dest_reuse_test(
             ACC_TO_DEST(False),
             PER_FACE_HANDOFF(per_face_handoff),
             UNPACK_AB_BLOCK(),
-        ],
+        ]
+        + ([DEST_REUSE_UNPACK_A()] if dest_reuse_unpack_a else []),
         "runtimes": [
             generate_input_dim(
                 input_dimensions,
@@ -1272,6 +1283,66 @@ def test_eltwise_binary_dest_reuse_row_bcast(
         output_dimensions,
         per_face_handoff=per_face_handoff,
         broadcast_type=BroadcastType.Row,
+    )
+
+
+def _first(values, count):
+    return values[:count]
+
+
+# Dest reuse with the dest-reuse unpack (as the compute API pairs them), both hand-offs; 8-row faces take the whole-tile program
+# under the per-tile hand-off.
+@blackhole_only
+@parametrize(
+    reuse_dest_type=[
+        EltwiseBinaryReuseDestType.DEST_TO_SRCA,
+        EltwiseBinaryReuseDestType.DEST_TO_SRCB,
+    ],
+    math_op=DEST_REUSE_MATH_OPS,
+    formats=get_dest_reuse_formats,
+    dest_acc=[DestAccumulation.No],
+    dest_sync=[DestSync.Half],
+    unpack_to_dest=[False],
+    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    tile_dimensions=[[8, 32], [32, 32], [16, 16]],
+    input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: _first(
+        get_dest_reuse_input_dimensions(dest_acc, dest_sync, formats, tile_dimensions),
+        2,
+    ),
+    output_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions, input_dimensions: _first(
+        get_dest_reuse_output_dimensions(
+            dest_acc, dest_sync, formats, tile_dimensions, input_dimensions
+        ),
+        1,
+    ),
+    per_face_handoff=[False, True],
+)
+def test_eltwise_binary_dest_reuse_unpack_a(
+    reuse_dest_type,
+    math_op,
+    formats,
+    dest_acc,
+    dest_sync,
+    unpack_to_dest,
+    math_fidelity,
+    tile_dimensions,
+    input_dimensions,
+    output_dimensions,
+    per_face_handoff,
+):
+    _run_eltwise_binary_dest_reuse_test(
+        reuse_dest_type,
+        math_op,
+        formats,
+        dest_acc,
+        dest_sync,
+        unpack_to_dest,
+        math_fidelity,
+        tile_dimensions,
+        input_dimensions,
+        output_dimensions,
+        per_face_handoff=per_face_handoff,
+        dest_reuse_unpack_a=True,
     )
 
 
