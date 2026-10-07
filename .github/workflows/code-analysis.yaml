@@ -96,6 +96,7 @@ jobs:
     outputs:
       do-full-scan: ${{ steps.compute-outputs.outputs.do-full-scan }}
       do-scan: ${{ steps.compute-outputs.outputs.do-scan }}
+      api-headers-changed: ${{ steps.find-changes.outputs.tt-metalium-api-headers-changed }}
     steps:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -264,3 +265,88 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+
+  # Report-only misc-include-cleaner on the tt_metal public headers touched by the
+  # PR. The check only reports on a translation unit's main file, so each header is
+  # analyzed as its own main file (-x c++-header) with the flags of its CMake
+  # header-verification TU; only configure and the generated API headers are
+  # needed, no build. Not a gate yet: findings go to the step summary and an
+  # artifact; pass --fail-on-findings to the script to make it one. See
+  # .github/scripts/utils/run_api_header_include_cleaner.py.
+  include-cleaner-api-headers:
+    name: "🔍 Include cleaner (tt_metal API headers)"
+    needs: [resolve-docker-pull-refs, determine-scan-type]
+    if: >-
+      ${{ !cancelled() && github.event_name == 'pull_request' &&
+          needs.resolve-docker-pull-refs.result == 'success' &&
+          needs.determine-scan-type.outputs.api-headers-changed == 'true' }}
+    # Configure and flatc are mostly single-threaded and clang-tidy runs on a few
+    # headers (~1-4 s each); medium is the smallest self-hosted size that already
+    # runs CPU-only container jobs.
+    runs-on: tt-ubuntu-2204-medium-stable
+    timeout-minutes: 30
+    continue-on-error: true
+    permissions:
+      contents: read
+    container:
+      # The ci-build image the clang-tidy jobs above already use: it has
+      # clang-tidy-20, cmake and ninja, so no extra image is needed.
+      image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
+      volumes:
+        - ${{ github.workspace }}:/work
+      options: --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Configure git safe.directory
+        run: git config --global --add safe.directory /work
+
+      - name: 📦 Restore CPM source cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .cpmcache.tar.zst
+          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: Unpack CPM cache
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
+
+      - name: 🔧 CMake configure
+        run: cmake --preset iwyu
+
+      - name: 🛠️ Generate API headers
+        run: cmake --build .build/iwyu --target metalium_GeneratedHeaders
+
+      - name: 🔍 Analyze changed API headers with misc-include-cleaner
+        run: |
+          base=$(git merge-base origin/main HEAD)
+          mapfile -t headers < <(git diff --name-only --diff-filter=ACMR "${base}..HEAD" -- 'tt_metal/api/*.h' 'tt_metal/api/*.hpp')
+          if [ "${#headers[@]}" -eq 0 ]; then
+            # Triggered by a change to the check itself, not by a header.
+            headers=(--all)
+          fi
+          # Report-only. To gate, add --fail-on-findings and drop continue-on-error.
+          .github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu "${headers[@]}" \
+            | tee -a "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload include-cleaner report
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: include-cleaner-api-headers-report
+          path: |
+            /work/.build/iwyu/report-api-include-cleaner/include-cleaner.txt
+            /work/.build/iwyu/report-api-include-cleaner/findings.json
+            /work/.build/iwyu/report-api-include-cleaner/clang-tidy-version.txt
+            /work/.build/iwyu/report-api-include-cleaner/exit-code.txt
+          retention-days: 30
