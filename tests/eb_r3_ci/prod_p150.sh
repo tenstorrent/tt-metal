@@ -17,7 +17,15 @@ if [[ -z "${PROD_ONLY:-}" || "${PROD_ONLY}" == stail ]]; then
   echo "##### bits sdpa_tail"; EB_RUN_LIMIT=1500 bash tests/eb_r3_ci/bits_ab.sh tests/eb_r3_ci/optin_stail.txt -p eb_seed_plugin $ST
   echo "##### elf sdpa_tail"; python3 tests/eb_r3_ci/elf_set_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin "sdpa_tail" 2>&1 | head -20
 fi
+PS=models/demos/deepseek_v3_b1/tests/unit_tests/test_post_sdpa.py
+if [[ "${PROD_ONLY:-}" == psdpa ]]; then
+  echo "##### bits post_sdpa single device"; EB_RUN_LIMIT=1500 bash tests/eb_r3_ci/bits_ab.sh tests/eb_r3_ci/optin_psdpa.txt -p eb_seed_plugin -p eb_unskip42714_plugin -rs $PS -k "single_device and ccl_off"
+  echo "##### elf post_sdpa"; python3 tests/eb_r3_ci/elf_set_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin "post_sdpa" 2>&1 | head -20
+fi
 for p in 1 2 3; do
+  if [[ "${PROD_ONLY:-}" == psdpa ]]; then
+    echo "##### post_sdpa pass $p"; EB_RUN_LIMIT=1500 bash tests/eb_r3_ci/ab_set.sh tests/eb_r3_ci/optin_psdpa.txt -p eb_unskip42714_plugin $PS -k "single_device and ccl_off"
+  fi
   if [[ -z "${PROD_ONLY:-}" || "${PROD_ONLY}" == dec ]]; then
     echo "##### decode pass $p"; EB_RUN_LIMIT=2400 bash tests/eb_r3_ci/ab_set.sh tests/eb_r3_ci/optin_dec_head.txt --nodes-file $DEC
   fi

@@ -9,14 +9,18 @@ cd /work
 export TT_METAL_RUNTIME_ROOT=/work EB_SHOW_ERR=1
 RR=tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_to_root_trace.py
 S2A=models/demos/deepseek_v3_b1/tests/unit_tests/test_sdpa_reduce_to_all.py
-echo "##### bits reduce_to_root"; EB_RUN_LIMIT=1500 bash tests/eb_r3_ci/bits_ab.sh tests/eb_r3_ci/optin_r2r.txt -p eb_seed_plugin -o timeout=1800 $RR
-echo "##### elf reduce_to_root"; python3 tests/eb_r3_ci/elf_set_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin "compute_kernel" 2>&1 | head -20
-echo "##### bits sdpa_reduce_to_all"; EB_RUN_LIMIT=1500 bash tests/eb_r3_ci/bits_ab.sh tests/eb_r3_ci/optin_s2a.txt -p eb_seed_plugin -o timeout=1800 $S2A -k "test_sdpa_reduce_to_all and not trace"
-echo "##### elf sdpa_reduce_to_all"; python3 tests/eb_r3_ci/elf_set_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin "sdpa_reduce_kernel" 2>&1 | head -20
-echo "##### reduce_to_root trace bench"; EB_RUN_LIMIT=900 bash tests/eb_r3_ci/bench_ab.sh tests/eb_r3_ci/optin_r2r.txt 4 --count 3 $RR -k "test_reduce_to_root_with_trace"
-echo "##### sdpa_reduce_to_all trace bench"; EB_RUN_LIMIT=900 bash tests/eb_r3_ci/bench_ab.sh tests/eb_r3_ci/optin_s2a.txt 4 $S2A -k "test_sdpa_reduce_to_all_trace"
-for t in test_reduce_to_root_auto_intermediate test_reduce_to_root_with_trace; do
-  echo "##### reduce_to_root device time $t"; EB_RUN_LIMIT=2400 bash tests/eb_r3_ci/ab_set.sh tests/eb_r3_ci/optin_r2r.txt -o timeout=1800 $RR -k "$t"
-done
-printf '%s\n' "$S2A|test_sdpa_reduce_to_all and reduce_only and pos500" "$S2A|test_sdpa_reduce_to_all and reduce_only and pos3500" "$S2A|test_sdpa_reduce_to_all and reduce_and_scatter and pos2500" > /tmp/s2a_spec.txt
-echo "##### sdpa_reduce_to_all device time"; EB_RUN_LIMIT=900 bash tests/eb_r3_ci/ab_plain.sh tests/eb_r3_ci/optin_s2a.txt /tmp/s2a_spec.txt 3 "."
+if [[ -z "${PROD_ONLY:-}" || "${PROD_ONLY}" == r2r ]]; then
+  echo "##### bits reduce_to_root"; EB_RUN_LIMIT=1500 bash tests/eb_r3_ci/bits_ab.sh tests/eb_r3_ci/optin_r2r.txt -p eb_seed_plugin -o timeout=1800 $RR
+  echo "##### elf reduce_to_root"; python3 tests/eb_r3_ci/elf_set_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin "compute_kernel" 2>&1 | head -20
+  echo "##### reduce_to_root trace bench"; EB_RUN_LIMIT=900 bash tests/eb_r3_ci/bench_ab.sh tests/eb_r3_ci/optin_r2r.txt 4 --count 3 $RR -k "test_reduce_to_root_with_trace"
+  for t in test_reduce_to_root_auto_intermediate test_reduce_to_root_with_trace; do
+    echo "##### reduce_to_root device time $t"; EB_RUN_LIMIT=2400 bash tests/eb_r3_ci/ab_set.sh tests/eb_r3_ci/optin_r2r.txt -o timeout=1800 $RR -k "$t"
+  done
+fi
+if [[ -z "${PROD_ONLY:-}" || "${PROD_ONLY}" == s2a ]]; then
+  echo "##### bits sdpa_reduce_to_all"; EB_RUN_LIMIT=1500 bash tests/eb_r3_ci/bits_ab.sh tests/eb_r3_ci/optin_s2a.txt -p eb_seed_plugin -o timeout=1800 $S2A -k "test_sdpa_reduce_to_all and not trace"
+  echo "##### elf sdpa_reduce_to_all"; python3 tests/eb_r3_ci/elf_set_diff.py /tmp/ebbits/cache_main /tmp/ebbits/cache_optin "sdpa_reduce_kernel" 2>&1 | head -20
+  echo "##### sdpa_reduce_to_all trace bench"; EB_RUN_LIMIT=900 bash tests/eb_r3_ci/bench_ab.sh tests/eb_r3_ci/optin_s2a.txt 4 $S2A -k "test_sdpa_reduce_to_all_trace"
+  printf '%s\n' "$S2A|test_sdpa_reduce_to_all and reduce_only and pos500" "$S2A|test_sdpa_reduce_to_all and reduce_only and pos3500" "$S2A|test_sdpa_reduce_to_all and reduce_and_scatter and pos2500" > /tmp/s2a_spec.txt
+  echo "##### sdpa_reduce_to_all device time"; EB_RUN_LIMIT=900 bash tests/eb_r3_ci/ab_plain.sh tests/eb_r3_ci/optin_s2a.txt /tmp/s2a_spec.txt 3 "."
+fi
