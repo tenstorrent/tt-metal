@@ -135,7 +135,7 @@ from .policy import (
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
 from .scheduler import MiniMaxH3Scheduler
-from .weights_minimax_h3 import resolve_weights_dir
+from .weights_minimax_h3 import LORA_PATH_ENV, resolve_weights_dir
 
 # ImageNet statistics; the video VAE emits normalized RGB and the pipeline reverts it. Imported from
 # `conditioning` rather than restated: the keyframe path normalizes *into* the VAE with these and the
@@ -756,15 +756,7 @@ class MiniMaxH3Pipeline:
         `trace_denoise`, `bucket_denoise`, `use_persistent_ccl_buffers` and `bucket_ladder` default to the mesh preset;
         `arena_caps` and `adaln_slot_roles` default to the task's envelope.
         """
-        transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
-        weights_dir = resolve_weights_dir(
-            transformer_subfolder,
-            "text_encoder",
-            "vae",
-            "audio_vae",
-            weights_dir=weights_dir,
-        )
-        return cls(
+        kwargs = dict(
             mesh_device=mesh_device,
             weights_dir=weights_dir,
             tp_axis=tp_axis,
@@ -789,6 +781,23 @@ class MiniMaxH3Pipeline:
             coresident=coresident,
             **subclass_kwargs,
         )
+
+        # A server builds its pipeline from the environment alone, so the adapter variable is the only
+        # thing that can ask for the Turbo path. The subclass factory owns strength and shift defaults.
+        if cls is MiniMaxH3Pipeline and os.environ.get(LORA_PATH_ENV):
+            from .pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
+
+            return MiniMaxH3TurboPipeline.create_pipeline(**kwargs)
+
+        transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
+        kwargs["weights_dir"] = resolve_weights_dir(
+            transformer_subfolder,
+            "text_encoder",
+            "vae",
+            "audio_vae",
+            weights_dir=weights_dir,
+        )
+        return cls(**kwargs)
 
     def _read_config(self, subfolder: str) -> dict:
         path = self.weights_dir / subfolder / "config.json"

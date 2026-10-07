@@ -67,3 +67,24 @@ def test_empty_path_variable_means_no_adapter(clean_env):
 def test_non_positive_values_are_rejected(clean_env, field, expect_error):
     with expect_error(ValueError, field):
         weights.resolve_adapter_settings(**{field: 0.0}, **DEFAULTS)
+
+
+def test_adapter_variable_routes_the_base_factory_to_the_turbo_pipeline(clean_env):
+    """A deployment picks Turbo by setting the adapter path, never by naming the class."""
+    from models.tt_dit.pipelines.minimax_h3 import pipeline_minimax_h3_turbo as turbo
+    from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+
+    clean_env.setenv(weights.LORA_PATH_ENV, "/adapters/turbo.safetensors")
+    forwarded = {}
+
+    @classmethod
+    def record(cls, **kwargs):
+        forwarded.update(kwargs)
+        return "turbo pipeline"
+
+    clean_env.setattr(turbo.MiniMaxH3TurboPipeline, "create_pipeline", record)
+
+    assert MiniMaxH3Pipeline.create_pipeline(mesh_device=None, task="t2va", dit_fsdp=False) == "turbo pipeline"
+    assert forwarded["task"] == "t2va"
+    assert forwarded["dit_fsdp"] is False
+    assert "cls" not in forwarded
