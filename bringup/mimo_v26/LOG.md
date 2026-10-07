@@ -1186,3 +1186,25 @@
 - claim: Attention scale table for the attention owner: /mnt/tt-data/ssinghal/mimo-logs/ref_attn_alpha_L6-47.json (per layer 6-47: attn_alpha = best scalar with device attn_out ~ alpha*oracle attention [fp32, bfp8 qkv/o, on the device attn_in], rel, rel_after_alpha, and ffn_alpha under forced device routing): attn alpha 1.040/1.024/1.021 at L6/7/8, ~1.00 L9-L17, ~0.99 L18-L47 (device 1% low). probes/device_vs_oracle.py now also records scale_alpha, rel_after_alpha, rel_over_floor and a flag (>=5x floor or |alpha-1|>=1%) for attn_out/ffn_out/h_out so the per-layer check detects scale bias (PCC is scale-invariant; L16 ffn: pcc 0.99999, alpha 0.989, 10.2x floor, flagged). tt-model-reference and tt-moe-correctness skills carry the one-line rule.
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_attn_alpha_L6-47.json
 - paths: models/demos/blackhole/mimo_v26/reference/probes/device_vs_oracle.py, models/demos/blackhole/mimo_v26/reference/probes/device_scale_bias.py
+
+## E261007-0745-799
+- date: 2026-10-07T07:45:04
+- commit: 9a8fd8582e5
+- branch: ssinghal/mimo-moe
+- host: 48
+- track: moe
+- status: verified
+- claim: MoE scale bias (alpha<1) CAUSE FOUND: math fidelity + bf16 accumulation in the expert matmuls (not router, combine, silu, weights, tilize). L5 real weights, dump routing, fp32 CPU oracle on same bf16 ffn_in (floor: bf16-chain dump vs oracle alpha 0.9998 rel 0.0051). Total device vs oracle (alpha, rel): unified LoFi/bf16-DEST (as shipped) 0.9762/0.0411; unified HiFi2 1.0008-per-slot .. total 0.9965/0.0326; mm path HiFi2 fp32acc 1.0039/0.0162; mm path HiFi4 fp32acc 1.0006/0.0058 (PCC 0.99998); mm bf16 weights identical to bfp8 weights (weights innocent), fp32 intermediates no help. Per-slot expert-output alpha: LoFi 0.9823, HiFi2 1.0008 (rel 0.0073 but 2% typical per-slot error), HiFi4 1.0113 with bf16 partials/bf16 DEST. Unified op had kFp32DestAccEn=false (bf16 DEST accumulation over a 16-tile K block) and bf16 K-loop partials: with fp32 DEST + fp32 partials + HiFi4/HiFi3 total alpha 1.0014 rel 0.0044 (below the CPU bf16 floor 0.0051), PCC 0.99999. Reduce stage (post_combine_reduce, packer L1 bf16 accumulate) adds +0.09% typical (alpha 1.0009) and +0.39% on the massive-activation token (norm 5655, 4 per run) which dominates a global alpha. Evidence stats: bfp8 device-read weights vs dequantised bf16 mean ratio 0.9991-1.0000
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_H_alpha_L5_h48_1cf05f84a7c.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+
+## E261007-0745-795
+- date: 2026-10-07T07:45:04
+- commit: 9a8fd8582e5
+- branch: ssinghal/mimo-moe
+- host: 48
+- track: moe
+- status: verified
+- claim: FIX (C++ private relink, commit 9a8fd8582e5, defaults ON, =0 restores originals; artifact /mnt/tt-data/ssinghal/mimo/artifacts/moe_B_9a8fd8582e5/lib/_ttnncpp.so): unified_routed_expert_moe now: bf16 x/intermediates/output, fp32 K-loop partials, fp32 DEST accumulation, HiFi3 (HiFi3 == HiFi4 accuracy; HiFi2 not enough); mm path forced to HiFi4+fp32 acc (MIMO_MM_FID=hifi2 for A/B). Gates vs fp32 oracle (alpha, rel(floor), PCC): L1 unified 1.0007/0.0042(0.0027)/0.99999, mm 1.0005/0.0044; L5 unified 1.0014/0.0044(0.0051)/0.99999, mm 1.0006/0.0058; L16 (device capture) unified 1.0038/0.0047/1.0 (alpha excluding the massive token 1.0009; per-slot expert alpha 0.9999), mm 1.0049/0.0055. Layer PCC vs bf16 dump 0.99984-0.99999 (L1, L5, both ops), 5 runs bit-identical. Cost: decode MoE per layer (traced, fast router, host-timed) 1.34 ms original (LoFi) -> 1.56 ms (HiFi3 fp32 DEST/partials) vs 1.78 ms (HiFi4); prefill 512 tok/row unified 2.3 -> 2.8 ms. 47 layers decode: 63 -> 73 ms/token MoE-only
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_H_g_L5_h48_9a8fd8582e5.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
