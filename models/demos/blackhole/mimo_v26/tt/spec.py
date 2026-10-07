@@ -33,15 +33,17 @@ class CapDecoder(Decoder):
         m = self.m
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)
         h = ttnn.reshape(e, (1, 1, self.U, HIDDEN))
-        caps = []
+        caps = {}
         for li, lyr in enumerate(m.layers):
             h2 = lyr.decode(h, self.pos["cur"], self.pos["idx"], live=self.live.t if self.live is not None else None)
             ttnn.deallocate(h)
             h = h2
             if li in self.cap:
-                caps.append(ttnn.clone(h))
-        self.feat = ttnn.concat(caps, dim=3)
-        for c in caps:
+                caps[li] = ttnn.clone(h)
+        self.feat = ttnn.concat(
+            [caps[c] for c in self.cap], dim=3
+        )  # (duplicates allowed: skeleton runs with < 5 distinct layers)
+        for c in caps.values():
             ttnn.deallocate(c)
         x = ttnn.rms_norm(h, epsilon=EPS, weight=m.w_norm, compute_kernel_config=_k_norm())
         ttnn.deallocate(h)

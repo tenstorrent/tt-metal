@@ -77,13 +77,14 @@ class ChunkedPrefill:
         m = self.m
         e = ttnn.embedding(self.tok, m.embed, layout=ttnn.TILE_LAYOUT)
         h = ttnn.reshape(e, (1, 1, self.CH, HIDDEN))
-        self.caps = []
+        capd = {}
         for li, lyr in enumerate(m.layers):
             h2 = lyr.chunk(h, self.io["swa" if lyr.swa else "ga"])
             ttnn.deallocate(h)
             h = h2
             if li in self.cap:
-                self.caps.append(ttnn.clone(h))
+                capd[li] = ttnn.clone(h)
+        self.caps = [capd[c] if i == self.cap.index(c) else ttnn.clone(capd[c]) for i, c in enumerate(self.cap)]
         return h
 
     def run_step(self):
