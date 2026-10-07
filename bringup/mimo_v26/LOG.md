@@ -1593,3 +1593,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/race_U_colnum_h43_9b48d653b51.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tests/test_colreduce_numerics.py
 - data: {"alpha_ag_sum":1.0001,"alpha_all_reduce":1.00126}
+
+## E261007-1556-ce9
+- date: 2026-10-07T15:56:23
+- commit: b5e70f78d96
+- branch: ssinghal/mimo-race
+- host: 47
+- track: decode
+- status: verified
+- claim: OTHER all_reduce SITES in context: inventory (all ttnn.all_reduce(cluster_axis=1, memory_config=DRAM), bf16 tile, default ring/links, no topology arg): (a) tt/attention.py:222 _all_reduce, decode o_proj partial [1,1,U,4096] (line 412) and prefill o_proj partial [1,1,CH,4096] (line 305); (b) tt/layer.py:170 all_reduce_cols: dense FFN of L0 decode [1,1,U,4096] / prefill [1,1,CH,4096] (line 182) and prefill MoE reduce [1,1,N,4096] (line 195, ffn_moe); (c) tt/moe_decode.py decode MoE reduce (fixed: ag_sum default); (d) lm_head: no collective in tt/*.py (no all_gather/reduce_scatter anywhere else; moe_prefill.py:189 only a debug barrier). IN-CONTEXT STRESS, bitwise vs replay 0, all with the unfixed all_reduce at these sites: decode attention + dense FFN: 6 real layers (L0 dense + 5 MoE, SWA and global) traced step, 32 GSM8K users, attn_out and ffn_out of all layers, 3000 replays + 100 eager steps (MoE reduce on ag_sum so any event is attention/dense): 0 glitches in 18600 attention all_reduce calls and 3100 dense-FFN calls (host 47, lib integ_73c014eb46d, race_R_sites_dec6); prefill attention + dense + MoE reduce: traced chunked prefill of 6 layers, CH=512, one real-text user per mesh row, output hidden state [4,8,512,4096] of 3000 replays bitwise vs replay 0 (18000 attention + 3000 dense + 15000 MoE prefill all_reduce calls): 0 events (host 44, race_S_prefill6). So no site other than the decode MoE reduce glitched at 1e-4 sensitivity (the MoE site glitched 8-23 per 36000-72000 calls = 2-3e-4); upper 95% bound for a site with 18000 clean calls ~1.7e-4, i.e. NOT excluded at the MoE rate. Why the decode MoE site: untested; what differs from the clean sites is the preceding dispatch/combine + post_combine_reduce (fabric traffic on the row axis) right before the column all_reduce
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/race_R_sites_dec6_h47_b5e70f78d96.log
+- paths: models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tests/test_decode_layer_determinism_traced.py, models/demos/blackhole/mimo_v26/tests/test_prefill_determinism_traced.py
+- data: {"attn_decode_calls":18600,"dense_calls":3100,"prefill_calls":36000,"events":0}
