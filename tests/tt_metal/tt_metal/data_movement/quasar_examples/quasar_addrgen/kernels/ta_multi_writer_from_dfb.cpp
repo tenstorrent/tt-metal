@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // One DFB -> three tensors, round-robin: page p of dst0, dst1, dst2, then page p + 1 of each, ... A direction has two
-// address-generator sides and the first walk on a side keeps it, so two tensors use the hardware and the third uses
+// address-generator sides and the first stream on a side keeps it, so two tensors use the hardware and the third uses
 // software (TensorAccessorAddrgenContention rows).
 //
-// Named RTAs: num_pages (per tensor), report_addr (12 stats words, see ta_reader_to_dfb.cpp)
+// Named RTAs: num_pages (per tensor), report_addr (4 stats words, see ta_reader_to_dfb.cpp)
 
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -41,17 +41,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* report =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr + MEM_L1_UNCACHED_BASE);
     report[0] = tensor_accessor::detail::transfer_stats.hw;
-    report[1] = tensor_accessor::detail::transfer_stats.sw_ineligible;
-    report[2] = tensor_accessor::detail::transfer_stats.sw_unsupported;
-    report[3] = tensor_accessor::detail::transfer_stats.seeks;
-    report[4] = transfers;
-    report[5] = tensor_accessor::detail::transfer_stats.skips;
-    report[6] = tensor_accessor::detail::transfer_stats.restores;
-    report[7] = tensor_accessor::detail::transfer_stats.write_seeks;
-    report[8] = tensor_accessor::detail::transfer_stats.write_restores;
-    report[10] = tensor_accessor::detail::transfer_stats.fallbacks;
-    report[11] = tensor_accessor::detail::transfer_stats.write_fallbacks;
-    report[12] = tensor_accessor::detail::transfer_stats.pushes;
+    report[1] = tensor_accessor::detail::transfer_stats.pushes;
+    report[2] = transfers;
 #else
     (void)report_addr;
     (void)transfers;

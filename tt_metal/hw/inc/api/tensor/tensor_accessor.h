@@ -740,7 +740,7 @@ auto make_tensor_accessors(const std::tuple<Tokens...>& tokens) {
  */
 namespace tensor_accessor {
 // Whether a NoC transfer reads or writes the tensor. The Quasar address generator has a source and a destination
-// side; reads walk on the source side, writes on the destination side (see api/tensor/transfer_noc_addr.h).
+// side; reads use the source side, writes the destination side (see api/tensor/transfer_noc_addr.h).
 enum class TransferDir : uint8_t { Read = 0, Write = 1 };
 
 // Defined in api/tensor/transfer_noc_addr.h (included by api/tensor/noc_traits.h, the NoC transfer path). Declared

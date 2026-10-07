@@ -19,7 +19,7 @@
 // Compile-time args: pattern, num_tensors (1..5), num_pages (per tensor, power of 2), width, run, num_transfers
 // (page ids per tensor per section).
 // Runtime args: report_addr -- kReportWords 32-bit words: 4 section cycle counts (64-bit, low word first), transfers
-// per section, the sink, then the TransferStats counters when TT_TA_ADDRGEN_STATS is defined.
+// per section, the sink, then {hw, pushes} when TT_TA_ADDRGEN_STATS is defined.
 
 #include <cstdint>
 
@@ -168,16 +168,6 @@ void kernel_main() {
     report[9] = static_cast<uint32_t>(sink ^ (sink >> 32));
 #if defined(TT_TA_ADDRGEN_STATS)
     report[10] = tensor_accessor::detail::transfer_stats.hw;
-    report[11] = tensor_accessor::detail::transfer_stats.sw_ineligible;
-    report[12] = tensor_accessor::detail::transfer_stats.sw_unsupported;
-    report[13] = tensor_accessor::detail::transfer_stats.seeks;
-    report[14] = tensor_accessor::detail::transfer_stats.skips;
-    report[15] = tensor_accessor::detail::transfer_stats.restores;
-    report[16] = tensor_accessor::detail::transfer_stats.fallbacks;
-    report[17] = tensor_accessor::detail::transfer_stats.reload_save_cycles;
-    report[18] = tensor_accessor::detail::transfer_stats.reload_swap_cycles;
-    report[19] = tensor_accessor::detail::transfer_stats.reload_restore_cycles;
-    report[20] = tensor_accessor::detail::transfer_stats.reload_serve_cycles;
-    report[21] = tensor_accessor::detail::transfer_stats.pushes;
+    report[11] = tensor_accessor::detail::transfer_stats.pushes;
 #endif
 }

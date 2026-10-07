@@ -506,9 +506,9 @@ unit_tests_data_movement:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-# TensorAccessor <-> DFB pattern matrix for HW AddrGen bring-up. Needs the 2x3 ATT map
-# (2 workers, DRAM selectors); emu boot does not program the tables, so firmware does.
-# Can't run this test because we don't want to extend emu runtime
+# TensorAccessor transfers through the HW address generator. Needs the 2x3 ATT map (2 workers, DRAM selectors); emu
+# boot does not program the tables, so firmware does. Disabled: the suite (~440 tests) is too long for the emulator
+# regression budget.
   # - filter: "*TensorAccessorAddrgen*"
   #   config: 2x3
   #   back2back: true

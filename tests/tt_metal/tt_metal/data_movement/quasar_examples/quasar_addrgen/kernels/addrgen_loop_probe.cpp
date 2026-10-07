@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Records the address sequence addrgen_1's source (or destination) side pops for a small loop-nest configuration, so
-// the host can check the loop semantics the TensorAccessor walkers rely on (tensor_accessor_addrgen.h): what the inner
+// the host can check the loop semantics the TensorAccessor sequencer rely on (addrgen_sequencer.h): what the inner
 // loop wraps to when the walk starts mid-row, when the bank advances under each bank order, and how the outer loop
 // steps. Addresses only -- no NoC transaction is issued.
 //
@@ -32,7 +32,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
-#include "internal/tt-2xx/quasar/overlay/addrgen_state.hpp"
+#include "internal/tt-2xx/quasar/overlay/addrgen_state.h"
 
 // Must match b1::kLoopProbe* in test_tensor_accessor_addrgen.cpp.
 constexpr uint32_t kNumPops = 24;
@@ -88,7 +88,7 @@ void kernel_main() {
     const uint32_t report_addr = get_arg(args::report_addr);
     static_assert(spill_after == 0 || use_outer, "a spill restores the outer loop, so it must be programmed");
 
-    // The walk's program, as the walkers keep it: all a restore needs besides the saved position.
+    // The walk's program, as the sequencer keep it: all a restore needs besides the saved position.
     const overlay::AddrgenProgram program{
         .banking =
             {
