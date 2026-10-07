@@ -28,6 +28,7 @@ from models.demos.blackhole.mimo_v26.tt.moe_prefill import (
     build_expert_weights,
     global_expert,
     make_ckc,
+    spread_pad_routing,
 )
 from models.demos.blackhole.mimo_v26.tt.moe_weights import load_layer_experts
 from models.demos.blackhole.mimo_v26.tt.router import MiMoGate
@@ -66,10 +67,11 @@ def test_moe_real_layer(mesh_device):
         pad = 32
         x = torch.cat([x, torch.zeros(ROWS, pad, HIDDEN, dtype=x.dtype)], 1)
         ref_b, ref_f = (torch.cat([t, torch.zeros(ROWS, pad, HIDDEN)], 1) for t in (ref_b, ref_f))
-        idx_d = torch.cat(
-            [idx_d, idx_d[:, :pad] * 0 + torch.arange(TOPK)], 1
-        )  # dead slots routed to experts 0..7 (padding rows must still route somewhere)
-        w_d = torch.cat([w_d, torch.full((ROWS, pad, TOPK), 1.0 / TOPK)], 1)
+        pidx, pw = spread_pad_routing(
+            ROWS, pad
+        )  # dead slots still dispatch: spread over all experts (concentrating them overflowed a chip)
+        idx_d = torch.cat([idx_d, pidx.to(idx_d.dtype)], 1)
+        w_d = torch.cat([w_d, pw.to(w_d.dtype)], 1)
         live = torch.zeros(ROWS, 64, dtype=torch.bool)
         for r in range(ROWS):
             live[r, : LIVE[r]] = True
@@ -108,7 +110,7 @@ def test_moe_real_layer(mesh_device):
         )
 
     # real skew / capacity from routing of the live tokens
-    cnt = torch.bincount(idx_all[live.flatten()].flatten(), minlength=NUM_ROUTED)
+    cnt = torch.bincount(idx_all.flatten(), minlength=NUM_ROUTED)  # ALL slots incl. dead pad slots (they dispatch too)
     load = {
         (r, c): sum(-(-int(cnt[global_expert(r, c, l)]) // 32) * 32 for l in range(EPC))
         for r in range(ROWS)
@@ -187,6 +189,9 @@ def test_moe_real_layer(mesh_device):
                 )
                 worst = max(worst, sum(-(-int(cn[global_expert(r, c, l)]) // 32) * 32 for l in range(EPC)))
         ttnn.deallocate(um.last_counts)
+        assert (
+            worst <= sh.max_buf
+        ), f"dispatch capacity overflow: worst chip load {worst} > max_buf {sh.max_buf} (cf={cf}); tokens would be dropped"
         print(
             f"RESULT op={op} device counts: worst chip load {worst} of max_buf {sh.max_buf} at cf={cf}: {'ok, no dropped tokens' if worst <= sh.max_buf else 'OVERFLOW'}",
             flush=True,

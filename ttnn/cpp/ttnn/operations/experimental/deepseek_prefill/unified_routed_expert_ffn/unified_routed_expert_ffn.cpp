@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
 #include "unified_routed_expert_ffn.hpp"
 
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
@@ -82,7 +83,10 @@ ttnn::Tensor unified_routed_expert_moe(
     const ttnn::Tensor output =
         x_is_row_major ? ttnn::empty(
                              dispatched_buffer.logical_shape(),
-                             tt::tt_metal::DataType::BFLOAT8_B,
+                             // MiMo patch: MOE_UNI_BF16_OUT=1 keeps the expert outputs bf16 (default bfp8, unchanged)
+                             (std::getenv("MOE_UNI_BF16_OUT") != nullptr && std::getenv("MOE_UNI_BF16_OUT")[0] == '1')
+                                 ? tt::tt_metal::DataType::BFLOAT16
+                                 : tt::tt_metal::DataType::BFLOAT8_B,
                              tt::tt_metal::Layout::TILE,
                              dispatched_buffer.device(),
                              tt::tt_metal::MemoryConfig{
