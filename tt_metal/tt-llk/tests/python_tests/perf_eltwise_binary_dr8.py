@@ -4,6 +4,8 @@
 # the per-face program (per_face_handoff True) against the whole-tile program for 8-row faces (False), with 32x32 beside them. Eight
 # output tiles per DEST section, folded once (two input tiles per output tile) or three times (four).
 
+from dataclasses import dataclass
+
 import pytest
 from helpers.llk_params import (
     DestAccumulation,
@@ -14,12 +16,22 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
+from helpers.test_variant_parameters import TemplateParameter
 from test_eltwise_binary import (
     _run_eltwise_binary_dest_reuse_test,
     get_dest_reuse_formats,
 )
 
 PERF_LOOP_FACTOR = 32
+
+
+@dataclass
+class DR8_HANDOFF(TemplateParameter):
+    handoff: str = "per_face"
+
+    def convert_to_cpp(self) -> str:
+        return ""
+
 INPUTS = {(8, 32): [[128, 32], [256, 32]], (32, 32): [[512, 32], [1024, 32]]}
 OUTPUTS = {(8, 32): [[64, 32]], (32, 32): [[256, 32]]}
 
@@ -84,4 +96,5 @@ def test_perf_eltwise_binary_dest_reuse_dr8(
         perf_report=perf_report,
         per_face_handoff=per_face_handoff,
         dest_reuse_unpack_a=True,
+        extra_templates=(DR8_HANDOFF("per_face" if per_face_handoff else "per_tile"),),
     )

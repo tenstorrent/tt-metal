@@ -981,6 +981,7 @@ def _run_eltwise_binary_dest_reuse_test(
     per_face_handoff=None,
     broadcast_type=BroadcastType.None_,
     dest_reuse_unpack_a=False,
+    extra_templates=(),
 ):
     if per_face_handoff is None:
         per_face_handoff = is_perf and not _runs_per_tile(
@@ -1025,7 +1026,8 @@ def _run_eltwise_binary_dest_reuse_test(
             PER_FACE_HANDOFF(per_face_handoff),
             UNPACK_AB_BLOCK(),
         ]
-        + ([DEST_REUSE_UNPACK_A()] if dest_reuse_unpack_a else []),
+        + ([DEST_REUSE_UNPACK_A()] if dest_reuse_unpack_a else [])
+        + list(extra_templates),
         "runtimes": [
             generate_input_dim(
                 input_dimensions,
