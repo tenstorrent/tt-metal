@@ -597,6 +597,7 @@ std::vector<ttnn::Tensor> moe_compute(
             *cluster_axis,
             mesh_shape.dims());
     }
+    // TODO(#59730): run the 1x1 cluster_axis=None call through the SingleCluster path once it supports shared experts.
     const bool single_device = !compute_only && !cluster_axis.has_value();
     const bool single_cluster = !compute_only && cluster_axis.has_value() && mesh_shape[*cluster_axis] == 1;
     if (single_device) {
