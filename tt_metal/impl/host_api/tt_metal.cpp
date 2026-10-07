@@ -336,46 +336,6 @@ IDevice* GetActiveDevice(ChipId device_id) {
     return device;
 }
 
-std::map<ChipId, IDevice*> CreateDevices(
-    const std::vector<ChipId>& device_ids,
-    const uint8_t num_hw_cqs,
-    const size_t l1_small_size,
-    const size_t trace_region_size,
-    const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& /*l1_bank_remap*/,
-    const size_t worker_l1_size,
-    bool init_profiler,
-    [[maybe_unused]] bool ignored,
-    bool initialize_fabric_and_dispatch_fw) {
-    ZoneScoped;
-    bool is_galaxy = MetalContext::instance().get_cluster().is_galaxy_cluster();
-    MetalContext::instance().initialize_device_manager(
-        device_ids,
-        num_hw_cqs,
-        l1_small_size,
-        trace_region_size,
-        dispatch_core_config,
-        {},
-        worker_l1_size,
-        init_profiler,
-        initialize_fabric_and_dispatch_fw);
-
-    const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
-    std::map<ChipId, IDevice*> ret_devices;
-    // Only include the mmio device in the active devices set returned to the caller if we are not running
-    // on a Galaxy cluster.
-    // On Galaxy, gateway (mmio devices) cannot run compute workloads.
-
-    for (IDevice* dev : devices) {
-        if (is_galaxy and dev->is_mmio_capable()) {
-            continue;
-        }
-        ret_devices.insert({dev->id(), dev});
-    }
-
-    return ret_devices;
-}
-
 }  // namespace detail
 
 namespace experimental {
@@ -549,21 +509,6 @@ CapturedKernelConfig CaptureKernelConfig(IDevice* device, const CoreCoord& logic
 
 namespace detail {
 
-void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
-    std::vector<IDevice*> devices_to_close;
-    devices_to_close.reserve(devices.size());
-    for (const auto& [id, device] : devices) {
-        devices_to_close.push_back(device);
-    }
-    if (devices.empty()) {
-        MetalContext::instance().device_manager()->close_devices(devices_to_close);
-    } else {
-        MetalContext::instance(extract_context_id(devices.begin()->second))
-            .device_manager()
-            ->close_devices(devices_to_close);
-    }
-}
-
 void ReleaseOwnership() {
     experimental::DispatchContext::get().reset();
     MetalContext::destroy_all_instances();
@@ -600,26 +545,6 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
     slow_dispatch::ReadShard(buffer, host_buffer, core_id);
 }
 
-void LaunchProgram(
-    IDevice* device, const std::shared_ptr<Program>& program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    LaunchProgram(device, *program, wait_until_cores_done, force_slow_dispatch);
-}
-
-void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done, bool force_slow_dispatch) {
-    slow_dispatch::LaunchProgramAsync(*device, program, force_slow_dispatch);
-#ifdef TT_METAL_USE_EMULE
-    // Emulated mode executes synchronously inside slow_dispatch::LaunchProgramAsync.
-    if (MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
-        tt::TargetDevice::Emule) {
-        return;
-    }
-#endif
-    if (wait_until_cores_done) {
-        slow_dispatch::WaitProgramDone(*device, program);
-        detail::ReadDeviceProfilerResults(device);
-    }
-}
-
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     slow_dispatch::WaitProgramDone(*device, program);
     if (read_device_profiler_results) {
@@ -634,10 +559,6 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
 void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow_dispatch) {
     slow_dispatch::WriteRuntimeArgsToDevice(*device, program, force_slow_dispatch);
-}
-
-void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch) {
-    program.impl().compile(device, force_slow_dispatch);
 }
 
 }  // namespace detail
@@ -674,68 +595,6 @@ std::string SerializeClusterDescriptor() {
 
 // This function is used to set a default root directory for the tt_metal library.
 void SetRootDir(const std::string& root_dir) { tt::llrt::RunTimeOptions::set_root_dir(root_dir); }
-
-IDevice* CreateDevice(
-    ChipId device_id,
-    const uint8_t num_hw_cqs,
-    const size_t l1_small_size,
-    const size_t trace_region_size,
-    const DispatchCoreConfig& dispatch_core_config,
-    const std::vector<uint32_t>& l1_bank_remap,
-    const size_t worker_l1_size) {
-    ZoneScoped;
-
-    // MMIO devices do not support dispatch on galaxy clusters.
-    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        TT_FATAL(
-            !(MetalContext::instance().get_cluster().is_galaxy_cluster() &&
-              MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
-            "Galaxy clusters do not support dispatch on MMIO devices. Use "
-            "distributed::MeshDevice::create_unit_meshes to open all devices for dispatch.");
-    }
-
-    // This API may not be used to create single remote device or multi chip clusters
-    // MeshDevice should be used instead to ensure proper initialization and teardown.
-    TT_FATAL(
-        MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
-        "CreateDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
-        "use distributed::MeshDevice::create_unit_meshes().",
-        device_id);
-
-    MetalContext::instance().initialize_device_manager(
-        {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
-    auto* dev = MetalContext::instance().device_manager()->get_active_device(device_id);
-    return dev;
-}
-
-IDevice* CreateDeviceMinimal(
-    ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
-    ZoneScoped;
-    auto& ctx = MetalContext::instance();  // runtime state
-    auto& env = ctx.get_env();             // default low level state
-    ctx.initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto* dev =
-        new Device(&env, &ctx, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    auto& control_plane = MetalEnvAccessor(env).impl().get_control_plane();
-    MetalEnvAccessor(env).impl().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
-    return dev;
-}
-
-bool CloseDevice(IDevice* device) {
-    ZoneScoped;
-    auto device_id = device->id();
-    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-
-    // This API may not be used to close a single remote device or multi-chip cluster.
-    // MeshDevice RAII should be used instead to ensure proper teardown.
-    TT_FATAL(
-        metal_ctx.get_cluster().get_associated_mmio_device(device_id) == device_id,
-        "CloseDevice(device_id={}) may only be used for closing single MMIO capable devices. For multi chip clusters, "
-        "use MeshDevice RAII or MeshDevice::close().",
-        device_id);
-
-    return metal_ctx.device_manager()->close_device(device_id);
-}
 
 Program CreateProgram() { return Program(); }
 
@@ -1113,46 +972,6 @@ GlobalSemaphore CreateGlobalSemaphore(
     distributed::MeshDevice& device, CoreRangeSet cores, uint32_t initial_value, BufferType buffer_type) {
     return GlobalSemaphore(GlobalSemaphoreImpl(device, std::move(cores), initial_value, buffer_type));
 }
-
-std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
-    return BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type);
-}
-std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, DeviceAddr address) {
-    return BufferImpl::create(config.device, address, config.size, config.page_size, config.buffer_type);
-}
-std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, SubDeviceId sub_device_id) {
-    return BufferImpl::create(
-        config.device, config.size, config.page_size, config.buffer_type, std::nullopt, std::nullopt, sub_device_id);
-}
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
-    return BufferImpl::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
-}
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
-    return BufferImpl::create(
-        config.device,
-        address,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout));
-}
-std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
-    return BufferImpl::create(
-        config.device,
-        config.size,
-        config.page_size,
-        config.buffer_type,
-        BufferShardingArgs(config.shard_parameters, config.buffer_layout),
-        std::nullopt,
-        sub_device_id);
-}
-
-void DeallocateBuffer(Buffer& buffer) { buffer.impl().deallocate(buffer); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());

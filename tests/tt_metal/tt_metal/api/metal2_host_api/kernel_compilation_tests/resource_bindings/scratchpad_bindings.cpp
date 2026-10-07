@@ -111,8 +111,7 @@ void kernel_main() {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
 
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
-    IDevice* device = mesh_device_->get_devices()[0];
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
 }
 
 // Compile-only: a range-based for loop over a Scratchpad must compile. Exercises begin()/end() and the

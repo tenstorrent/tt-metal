@@ -33,31 +33,6 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
-[[deprecated("Use distributed::MeshDevice::create_unit_meshes instead. This API will be removed after 2026-09-27.")]]
-std::map<ChipId, IDevice*> CreateDevices(
-    // TODO: delete this in favour of DeviceManager
-    const std::vector<ChipId>& device_ids,
-    uint8_t num_hw_cqs = 1,
-    size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
-    size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
-    const tt_metal::DispatchCoreConfig& dispatch_core_config = tt_metal::DispatchCoreConfig{},
-    const std::vector<uint32_t>& l1_bank_remap = {},
-    size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
-    bool init_profiler = true,
-    [[deprecated]] bool ignored = false,  // This argument was not used
-    bool initialize_fabric_and_dispatch_fw = true);
-
-/**
- * Close all devices in the given map.
- *
- * This function closes all devices in the given map, releasing many associated resources. After this call, this process
- * still controls all devices. Call ReleaseOwnership() to fully release ownership.
- *
- * Return value: void
- */
-[[deprecated("Use MeshDevice RAII or MeshDevice::close instead. This API will be removed after 2026-09-27.")]]
-void CloseDevices(const std::map<ChipId, IDevice*>& devices);
-
 /**
  * Release ownership of the MetalContext singleton instance.
  *
@@ -186,50 +161,10 @@ void ReadShard(Buffer& buffer, std::vector<DType>& host_buffer, const uint32_t& 
     ReadShard(buffer, reinterpret_cast<uint8_t*>(host_buffer.data()), core_id);
 }
 
-// Launches all kernels on cores specified with kernels in the program.
-// All kernels on a given Tensix core must be launched.
-[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-21.")]]
-void LaunchProgram(
-    IDevice* device, Program& program, bool wait_until_cores_done = true, bool force_slow_dispatch = false);
-[[deprecated("Use distributed::EnqueueMeshWorkload instead. detail::LaunchProgram will be removed after 2026-09-21.")]]
-void LaunchProgram(
-    IDevice* device,
-    const std::shared_ptr<Program>& program,
-    bool wait_until_cores_done = true,
-    bool force_slow_dispatch = false);
 [[deprecated(
     "Use MeshCommandQueue synchronization (e.g. distributed::Finish) instead. This API will be removed after "
     "2026-10-28.")]]
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
-
-/**
- *  Compiles all kernels within the program, and generates binaries that are written to
- * `<tt-metal-cache directory>/<build_key>/kernels/<kernel name>/<kernel hash>`
- *
- *  The build key component accounts for device architecture as binaries are not compatible across architectures.
- *  To speed up compilation there is a kernel compilation cache that skips over generating binaries for the previously
- * compiled kernels. Kernel uniqueness is determined by the kernel hash which is computed based on compile time args,
- * defines, and kernel type specific attributes such as NOC for data movement kernels and math fidelity for compute
- * kernels.
- *  On cache hits the kernel is not recompiled if the output binary directory exists, otherwise the kernel is compiled.
- *  This cache is static and is enabled for the duration of the running process.
- *  Across runs, previously compiled kernels are recompiled if the source code or dependencies have changed.
- *
- *  Return value: void
- *
- * | Argument                  | Description                                                      | Type      | Valid
- * Range                                        | Required |
- * |---------------------------|------------------------------------------------------------------|-----------|----------------------------------------------------|----------|
- * | device                    | Which device the program is compiled for                         | IDevice*  | Must be
- * initialized via tt_metal::InitializeDevice | Yes      | | program                   | The program to compile |
- * Program & |                                                    | Yes      | | force_slow_dispatch        | Set when
- * a user wants to compile a program with Slow Dispatch Force Enabled (advanced feature, currently used internally to
- * launch Fast Dispatch Firmware and in the Device Performance Profiler)           | bool      | | No |
- */
-[[deprecated(
-    "Program is compiled automatically by the runtime infrastructure; this API is unnecessary. "
-    "CompileProgram will be removed after 2026-09-21.")]]
-void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
  * Writes runtime args that are saved in the program to device
