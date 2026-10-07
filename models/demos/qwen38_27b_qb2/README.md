@@ -115,9 +115,9 @@ after the first replica/fabric attempts. Results are under
 `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
 the artifact entrypoint and updates after each completed cell. Five host tests
 validate the metric accounting and reject cold captures as warm measurements.
-The first nineteen cells are measured and preserved in
+The first twenty-three cells are measured and preserved in
 [`galaxy-evidence/perf-sweep-tp4-v1/index.html`](galaxy-evidence/perf-sweep-tp4-v1/index.html)
-(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; eight cells remain and
+(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; four cells remain and
 the host job continues. At ISL 128, C=1/2/4/8/16 measured
 38.79/31.08/24.85/20.48/12.15 tokens/s/user, with aggregate decode throughput
 38.79/62.16/99.39/163.84/194.40 tokens/s. This baseline has substantial batch
@@ -132,29 +132,61 @@ chunk, and copies the resulting recurrent state back. These are profiling
 targets; source inspection does not establish their measured cost.
 At 55K, C1 measures 30.57 tokens/s/user and 9.65 s TTFT; C8 measures
 16.33 tokens/s/user (130.64 aggregate) and 78.14 s TTFT.
+At 128K, C1/C2/C4 measure 31.87/26.12/19.19 tokens/s/user;
+C4 delivers 76.76 aggregate with 113.14 s TTFT.
 
 Initialize with `--replicas 8`
 for the follow-up: throughput is measured on all eight replicas rather than
 inferred by multiplying the TP4 result.
 
-### Reduced P0 device profile
+### Long-context optimization priority and reduced P0 profile
+
+The user prioritizes 128K–256K context and aggregate throughput at useful
+concurrency, accepting some short-context slowdown. Select candidates using
+those long-context measurements, while retaining short-context controls to
+quantify the tradeoff. Accuracy thresholds and context semantics are unchanged:
+do not truncate, use sliding-window attention, or lower precision merely to
+claim a long-context win. The existing KV-pool guard is a configured limit,
+not proof of the maximum physical concurrency.
 
 `demo/run_galaxy_layer_profile.sh TASK_ROOT NEW_RESULTS` uses the same baseline
-knobs, the pinned checkpoint, one TP4 submesh, and layers 0/3 (GDN/GQA) at 8K
-context and B1/B16. After repeated warmup it profiles an eager decode step with
+knobs, the pinned checkpoint, one TP4 submesh, and layers 0/3 (GDN/GQA). The
+matrix is 8K at B1/B16, 128K at B1/B8, and 262,016 tokens at B1/B4. The latter
+leaves room for decode within the 262,144-token limit. After repeated warmup it profiles an eager decode step with
 Tracy signposts around layer, norm, attention and FFN/residual stages. It runs
 through the Metal safe pytest wrapper and the shared device lock. The launcher
 requires the actual passing JUnit, completed receipt and per-op CSV because the
 Tracy wrapper can mask pytest failures. Collection and shell syntax validation
 pass; device results are still pending.
 
-The persistent `qwen38-layer-profile-v1-20261006.service` waits for the corrected
+The persistent `qwen38-layer-profile-v2-20261006.service` waits for the corrected
 eight-replica qualification job. Receipts and Tracy reports go to
-`TASK_ROOT/layer-profile-v1/`. The enclosing deadline is eight hours including
-queue time; the test itself allows thirty minutes. This reduced eager trace is
+`TASK_ROOT/layer-profile-v2/`. The enclosing deadline is eight hours including
+queue time; the test itself allows sixty minutes. This reduced eager trace is
 for operation attribution. Its host time includes profiling and Python dispatch
 and must not be presented as full-model traced TPOT. P0 still needs measured
 operation totals reconciled with full-model TPOT and TP8 collective costs.
+
+`tests/layer_profile_report.py` selects only the diagnostic signpost windows,
+keeps parallel devices separate, and distinguishes inclusive from exclusive
+nested stages. It writes per-device, per-stage and per-op CSV/JSON plus a ranked
+Markdown report under `analysis/`. Missing device timings are explicit. Nine
+host tests protect against warmup contamination, duplicate rows, trace replay,
+unbalanced signposts and incomplete rank coverage. Their receipt is
+`galaxy-evidence/long-context-profile-host.xml`. The profile and serving v1
+wrappers were verified to be waiting and stopped before replacing their queue;
+the running TP4 sweep and other hardware jobs were not interrupted.
+
+Another tuning candidate is cache/chunk alignment. `_ensure_cache` rounds a
+fresh allocation to 32 tokens, while `_full_decode` halves `sdpa_k` until it
+divides the page-table extent. With the native sweep's 128-token output budget,
+55,000 input tokens allocate 55,136 positions and select a 32-token chunk;
+131,072 inputs allocate 131,200 positions and retain the TP4 default chunk of
+128. This is a source-derived explanation to test for the non-monotonic C1
+timings, not a demonstrated cause. Benchmark aligned cache extents and larger
+chunks at unchanged precision. Do not simply delete the divisibility guard:
+the paged reader reads whole chunks through the page table, so a partial last
+chunk needs valid mapped backing even though causal attention masks its tail.
 
 ### Persistent eight-engine serving and reference evaluation
 
@@ -193,15 +225,15 @@ Client decode timing ends at stream completion, including any suppressed
 special-token tail. This fixes a measurement bug that could otherwise inflate
 fixed-length throughput by stopping at the final visible text.
 
-The persistent job is `qwen38-galaxy-serving-v1-20261006.service`, queued behind
-`qwen38-layer-profile-v1-20261006.service`. It has a 48-hour enclosing deadline
+The persistent job is `qwen38-galaxy-serving-v2-20261006.service`, queued behind
+`qwen38-layer-profile-v2-20261006.service`. It has a 48-hour enclosing deadline
 including queue time, a 256 GiB host-memory limit and a 32-core CPU quota. It
 keeps the endpoint resident after the evaluations and sweep. Stop this owned
-job with `systemctl --user stop qwen38-galaxy-serving-v1-20261006.service`;
+job with `systemctl --user stop qwen38-galaxy-serving-v2-20261006.service`;
 weights and caches remain. The next device job resets a pessimistic dirty
 marker through the normal safe-runner path.
 
-Receipts are under `TASK_ROOT/galaxy-serving-v1/`: `deployment.json`,
+Receipts are under `TASK_ROOT/galaxy-serving-v2/`: `deployment.json`,
 `server.log`, `api.json`, `gpqa/`, and `http-sweep/`. Connect after readiness
 using `ssh -L 8000:127.0.0.1:8000 ttuser@10.228.203.98`; the served model is
 `Qwen/Qwen3.8-27B` at `/v1/chat/completions`.

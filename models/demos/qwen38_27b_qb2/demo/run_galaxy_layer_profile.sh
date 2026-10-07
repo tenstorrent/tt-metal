@@ -34,23 +34,31 @@ unset QWEN_PREFILL_SKIP_INTERMEDIATE_HEAD QWEN_PREFILL_STARTUP_WARMUP
 # The Metal wrapper supports Tracy and holds the same cooperative device lock.
 /bin/bash "$QWEN_TASK_ROOT/metal-galaxy/scripts/run_safe_pytest.sh" --profile \
     "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/tests/test_galaxy_layer_profile.py" \
-    -vv -s --timeout=1800 --junitxml="$QWEN_PROFILE_DIR/hardware.xml"
+    -vv -s --timeout=3600 --junitxml="$QWEN_PROFILE_DIR/hardware.xml"
 # Tracy can mask pytest's exit status. Require the actual test receipt and JUnit
 # success before reporting success for the persistent job.
 python - "$QWEN_PROFILE_DIR" <<'PY'
 import json
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from models.demos.qwen38_27b_qb2.tests.layer_profile_report import PROFILE_CASES
 
 root = Path(sys.argv[1])
 receipt = json.loads((root / "profile.json").read_text())
 assert receipt["passed"] is True and receipt["state"] == "completed", receipt
-assert [cell["batch"] for cell in receipt["cells"]] == [1, 16]
+assert [(cell["input_tokens"], cell["batch"]) for cell in receipt["cells"]] == PROFILE_CASES
 suites = ET.parse(root / "hardware.xml").getroot().findall(".//testsuite")
 assert sum(int(suite.get("tests", 0)) for suite in suites) == 1
 assert all(int(suite.get(field, 0)) == 0 for suite in suites for field in ("failures", "errors", "skipped"))
 reports = list((root / "tracy").rglob("ops_perf_results*.csv"))
 assert reports, "Tracy produced no per-op report"
+assert len(reports) == 1, "Ambiguous profiler reports; select the diagnostic CSV explicitly"
 print("PROFILE_REPORTS", *reports, sep="\n", flush=True)
+subprocess.run([
+    sys.executable, "-m", "models.demos.qwen38_27b_qb2.tests.layer_profile_report",
+    "--csv", str(reports[0]), "--receipt", str(root / "profile.json"),
+    "--output", str(root / "analysis"),
+], check=True)
 PY
