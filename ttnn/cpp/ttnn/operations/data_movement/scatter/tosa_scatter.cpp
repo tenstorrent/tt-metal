@@ -130,20 +130,13 @@ Tensor tosa_scatter(
 
     operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_tensors(input_shape, index_shape, source_shape);
 
-    // Same empty-operand bail-out as ttnn::scatter, repeated because this entry point builds the
-    // device op itself and so never passes through that guard. Source is not checked: validate_tensors
-    // above pins it to (N, W, C) with N and C from input and W from index, so an empty source always
-    // implies an empty input or an empty index. See #56881.
+    // Same bail-out as ttnn::scatter; this entry point builds the device op itself. Source is not
+    // checked - validate_tensors pins it to (N, W, C), so an empty source implies an empty input or
+    // index. See #56881.
     if (input_tensor.logical_volume() == 0 || index_tensor.logical_volume() == 0) {
-        // validate_tensors above checks shapes only - no dtypes, sharding, buffers or device
-        // residency - and returning here skips the device operation that does. Run it, or an empty
-        // call accepts operands a non-empty call rejects. It reads only the tensors and does no
-        // arithmetic, so it is safe on an empty operand.
-        //
-        // One difference worth naming: the index dtype rule is applied here to the original index,
-        // while the non-empty path converts the index to UINT16 before the prim sees it. TOSA
-        // indices are integral (the tests use INT32 and UINT32), which both forms accept; a
-        // non-integral index is rejected here and merely converted there.
+        // validate_tensors checks shapes only, so run the device operation's validation too. The
+        // index dtype rule applies to the original index here, while the non-empty path converts to
+        // UINT16 first; TOSA indices are integral either way.
         ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
             ttnn::prim::ScatterParams{
                 operations::data_movement::LAST_DIMENSION,
