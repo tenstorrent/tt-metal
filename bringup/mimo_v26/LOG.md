@@ -141,3 +141,14 @@
 - claim: Decode-style 4x8 (ragged live users/row 32,20,7,1; 32 users padded to 64 tokens/row because masked_bincount needs tokens%64==0), REAL gate weights (bf16 in ckpt) and e_score_correction_bias (fp32) of layers 1/20/46 (bias mean 2.05/10.46/11.98, std .041/.025/.049), SYNTHETIC unit-rms hidden and synthetic bfp8 experts. Mode exact (fp32 matmul+sigmoid+ttnn.topk, weights from fp32 score): MoE PCC vs dense torch with the device's own routing 0.99922-0.99928 on live tokens, 3 runs bit-identical, set agreement vs fp32 CPU routing 1.00/0.983/0.967 (synthetic x: not a routing claim). Mode hilo (kernel op with calibrated shift): agreement 0.82/0.73/0.78 on the same synthetic input AND NOT deterministic across 3 runs (live tokens differ) in my wrapper. Proposal: use exact router; hilo kernel path rejected until a cause is found
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_decode_b435b8394f9.log
 - paths: models/demos/blackhole/mimo_v26
+
+## E261007-0230-284
+- date: 2026-10-07T02:30:54
+- commit: ab01b0c449b
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: Router on REAL ffn_in (track-0 dump s128b16, 2048 tokens, real gate+bias), 1x1 device, vs fp32 CPU routing of the same bf16 input; set match L1..L5: exact 0.9937/0.9883/0.9912/0.9946/0.9888 (flips 11-24 of 2048, ALL with fp32 gap<0.01, max gap 3e-4); plain TTMoEGate bf16 path 0.289/0.297/0.637/0.597/0.578; hilo kernel+shift 0.822/0.840/0.806/0.793/0.732. Gap<0.01 share of tokens 0.88/0.96/0.86/0.80/0.85 (routing is knife-edge; weights ~0.125 each). Floor bf16-chain dump vs fp32-chain dump: 0.970/0.881/0.873/0.894/0.856 (flips 99-100% gap<0.01). exact vs fp32-chain oracle dump: 0.969/0.879/0.873/0.895/0.855 = at the floor. Decision: exact router; the 99% set-match vs fp32 oracle gate is not achievable from bf16 upstream noise (floor 86-97%) but exact vs same-input fp32 is 98.8-99.5% with flips only at near-ties. hilo stage diagnostic (1x1, T=64, 5 repeats): logits, score, folded, kernel idx all bit-identical; the 4x8 non-determinism seen before is not reproduced here; hilo dropped (worse agreement, cause open)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_router_real_ab01b0c449b.log
+- paths: models/demos/blackhole/mimo_v26
