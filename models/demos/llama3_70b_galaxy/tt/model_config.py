@@ -744,14 +744,15 @@ class TtModelArgs:
                 math_approx_mode=False,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
-                dst_full_sync_en=True,
+                # only the ring matmuls need one DEST section; the no-prefetcher path's blocks fit half of it
+                dst_full_sync_en=not self.blackhole_no_prefetcher,
             )
             self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
-                dst_full_sync_en=True,
+                dst_full_sync_en=not self.blackhole_no_prefetcher,
             )
             self.compute_kernel_config_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
