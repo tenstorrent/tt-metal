@@ -1,0 +1,13 @@
+# binary_ng's other FPU kernels, per-tile against per-face multiply (four fidelities, and HiFi3 against HiFi4 per-tile):
+# interleaved row, column, scalar and row-column broadcasts against the bf16 special and normal set, the row broadcast with
+# block-float data, and the scalar kernel's full cross product (every bf16 scalar against every bfp8_b / bfp4_b datum)
+EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi2|EB_R3_FIDELITY=HiFi2;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi3|EB_R3_FIDELITY=HiFi3;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi4;EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi3|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_bcast_mul"
+EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi2|EB_R3_FIDELITY=HiFi2;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi3|EB_R3_FIDELITY=HiFi3;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi4;EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi3|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_row_partial"
+EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi4;EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_scalar_lhs"|||EB_DUMP_MAX_DETAIL=256
+# code evidence for the comparisons run before the per-line ELF check (one call each)
+EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_nob_partial and bf16-bfp8-bf16-ab"
+EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_nob_cross and b16set-add-bf16-ab"|||EB_DUMP_MAX_CHUNKS=1
+EB_R3_NO_BLOCK=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_block and (mul-b16-bf16-hs32 or add-b16-bf16-hs32 or mul-b16-fp32-hs32 or sub-b16-bfp8-hs21)"|||EB_DUMP_MAX_CHUNKS=1
+EB_R3_NO_BCAST_CHUNK=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_bcast_sec and (col_w32-mul-bf16 or scalar_w32-add-bf16 or col_w21-sub-bfp8 or scalar_w33-mul-fp32)"|||EB_DUMP_MAX_CHUNKS=1
+EB_R3_MAIN_REINIT=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_post_act and (gelu-nob or gelu-col or gelu-scalar or gelu-pyscalar)"
+default|default|||tests/eb_r3_ci/test_eb_dump_reuse.py -k "mul-srca-HiFi4-d16 or mul-srcb-HiFi2-d32f or add-rowsrca-LoFi-d16 or mul-rowsrca-HiFi4-d32b"

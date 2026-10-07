@@ -37,9 +37,12 @@ for side in main pr; do
   EB_DUMP_STAGE=$st timeout -s INT -k 60 ${EB_RUN_LIMIT:-3000} python3 -u -m pytest -p no:cacheprovider -q -s -rfE "$@" < /dev/null 2>&1 | sed -u -E 's/^tests\/eb_r3_ci\/[^ ]* //' | awk "$F"
 done
 restore
-# the toggled kernels compiled to different binaries on the two sides (same kernel hash, different ELF bytes)
+# the toggled kernels compiled to different code on the two sides (same kernel hash, different executable sections)
 python3 - "$O" "${FILES[@]}" <<'PY'
 import hashlib, os, sys
+sys.path.insert(0, "/work/tests/eb_r3_ci")
+sys.argv_saved = list(sys.argv)
+exec(open("/work/tests/eb_r3_ci/elf_ab.py").read().split("root = sys.argv[1]")[0])
 o, files = sys.argv[1], sys.argv[2:]
 def elfs(root, name):
     out = {}
@@ -49,14 +52,14 @@ def elfs(root, name):
             i = len(parts) - 1 - parts[::-1].index("kernels")
             if len(parts) > i + 2 and parts[i + 1] == name:
                 for f in fn:
-                    if f.endswith(".elf") and "trisc" in f:
-                        out[os.path.relpath(os.path.join(dp, f), os.path.join(root))] = hashlib.sha1(open(os.path.join(dp, f), "rb").read()).hexdigest()
+                    if f.endswith(".elf") and f.startswith("trisc"):
+                        out[os.path.relpath(os.path.join(dp, f), os.path.join(root))] = code_hash(os.path.join(dp, f))
     return out
 for e in files:
     name = os.path.basename(e.split("|")[0]).rsplit(".", 1)[0]
     m, p = elfs(os.path.join(o, "cache_main"), name), elfs(os.path.join(o, "cache_pr"), name)
     common = sorted(set(m) & set(p))
     ndiff = sum(1 for k in common if m[k] != p[k])
-    print(f"DUMP elf {name}: trisc ELFs main {len(m)}, PR {len(p)}, same path {len(common)}, differing bytes {ndiff}")
+    print(f"DUMP elf {name}: trisc ELFs main {len(m)}, PR {len(p)}, same path {len(common)}, executable sections differ {ndiff}")
 PY
 echo "##### end $(date -u +%T)"; du -sh $O 2>/dev/null

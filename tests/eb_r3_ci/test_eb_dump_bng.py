@@ -225,3 +225,59 @@ def test_nob_cross(device, src, op, out_dt, order):
     cover = min(65536, done * P)
     for *_, d in diffs:
         d.report(f"(a patterns {cover} of 65536 x {nbv} b values, {done} chunks of {P}, {time.time() - t0:.1f} s)")
+
+
+def _bcast_layout(kind):
+    """(big bits, big shape, small bits, small shape, per-element small operand bits) for every pattern against the bf16
+    special and normal set: row (small is a row), col (a column), scalar (one value per batch), rowcol (small column of every
+    pattern against a row of the set: the full outer product)."""
+    B = b16_set()
+    nb = B.size
+    if kind == "row":
+        q = 2
+        W = nb * q
+        R = 65536 // q
+        r = np.arange(R)[:, None]
+        c = np.arange(W)[None, :]
+        big = PATS[(r * q + c // nb) % 65536]
+        small = B[np.arange(W) % nb]
+        return big, (1, 1, R, W), small, (1, 1, 1, W), np.broadcast_to(small[None, :], (R, W)).reshape(-1)
+    if kind == "col":
+        W = 1024
+        R = 64 * nb
+        r = np.arange(R)
+        big = PATS[((r // nb)[:, None] * W + np.arange(W)[None, :]) % 65536]
+        small = B[r % nb]
+        return big, (1, 1, R, W), small, (1, 1, R, 1), np.repeat(small, W)
+    if kind == "scalar":
+        big = np.tile(PATS, nb)
+        return big, (nb, 1, 64, 1024), B, (nb, 1, 1, 1), np.repeat(B, 65536)
+    raise ValueError(kind)
+
+
+BPF = [(k, side, o) for k in ("row", "col", "scalar", "rowcol") for side in ("b", "a") for o in ("bf16", "fp32")]
+
+
+@pytest.mark.parametrize("kind, side, out_dt", BPF, ids=["-".join(c) for c in BPF])
+def test_bcast_mul(device, kind, side, out_dt):
+    """Interleaved multiply with a broadcast operand (binary_ng's row, column, scalar and row-column broadcast kernels):
+    every bf16 pattern against the special and normal set. side b: the broadcast operand on the right; side a: on the left."""
+    t0 = time.time()
+    if kind == "rowcol":
+        B = b16_set()
+        col = PATS
+        tcol = to_dev(bf16_from_bits(col).reshape(1, 1, 65536, 1), ttnn.bfloat16, device)
+        trow = to_dev(bf16_from_bits(B).reshape(1, 1, 1, B.size), ttnn.bfloat16, device)
+        colv = np.repeat(f32_of_bf16(col), B.size)
+        rowv = np.tile(f32_of_bf16(B), 65536)
+        x, y, xv, yv = (tcol, trow, colv, rowv) if side == "a" else (trow, tcol, rowv, colv)
+    else:
+        big, bshape, small, sshape, sel = _bcast_layout(kind)
+        tbig = to_dev(bf16_from_bits(big.reshape(-1)).reshape(bshape), ttnn.bfloat16, device)
+        tsm = to_dev(bf16_from_bits(small.reshape(-1)).reshape(sshape), ttnn.bfloat16, device)
+        bigv, smv = f32_of_bf16(big.reshape(-1)), f32_of_bf16(sel)
+        x, y, xv, yv = (tbig, tsm, bigv, smv) if side == "b" else (tsm, tbig, smv, bigv)
+    diffs = make_diffs(f"bmul_{kind}_{side}_{out_dt}", "mul")
+    run_chunk(device, diffs, lambda: out_bits(binop("mul", x, y, out_dt)), xv, yv)
+    for *_, d in diffs:
+        d.report(f"({time.time() - t0:.1f} s)")
