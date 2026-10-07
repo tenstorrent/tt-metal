@@ -175,7 +175,6 @@ void probe(std::uint32_t value)
 
 //--- prepacked-access.cpp
 #include "fields.h"
-#include "hal/cfg/detail/thread_access.h"
 
 void probe(std::uint32_t value)
 {
@@ -184,7 +183,6 @@ void probe(std::uint32_t value)
 
 //--- prepacked-state.cpp
 #include "fields.h"
-#include "hal/cfg/detail/thread_access.h"
 
 void probe(std::uint32_t value)
 {
@@ -193,7 +191,6 @@ void probe(std::uint32_t value)
 
 //--- prepacked-shifted.cpp
 #include "fields.h"
-#include "hal/cfg/detail/thread_access.h"
 
 void probe(std::uint32_t value)
 {
