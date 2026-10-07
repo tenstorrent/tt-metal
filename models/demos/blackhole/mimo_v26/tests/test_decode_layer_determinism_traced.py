@@ -4,6 +4,7 @@ of every layer bitwise between the two executions (per mesh row and slot). The K
 import json
 import os
 import sys
+import time
 
 import torch
 
@@ -75,49 +76,77 @@ def main():
 
         fwd()  # eager warmup (compile); taps leak, fine
         ttnn.synchronize_device(mesh)
-        os.environ["MIMO_CHECK_CAP"] = "0"
-        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-        fwd()
-        ttnn.end_trace_capture(mesh, tid, cq_id=0)
-        ttnn.synchronize_device(mesh)
-        taps_dev = list(taps_all)
         R = int(E("DEC_REPS", "30"))
+        RE = int(E("DEC_EAGER", "0"))
         live = alive
         stats = {}
         first = None
-        ref = None
+        # on-device bitwise comparison (host readback of every tap is ~60 s per replay): ref = replay 0, flags = per (layer, tap, device) count of
+        # differing elements in LIVE rows, one small read per replay
+        livet = ttnn.from_torch(
+            alive.float().reshape(alive.shape[0], 1, SLOTS, 1),
+            device=mesh,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(0, None), mesh_shape=tuple(mesh.shape)),
+        )
+        names = [(L, k) for L, t in enumerate(taps_all) for k in t if k in TAPS]
 
-        def compare(run, rep):
+        def tf(t):
+            return ttnn.typecast(t, ttnn.float32) if t.dtype != ttnn.float32 else ttnn.clone(t)
+
+        ref = {n: tf(taps_all[n[0]][n[1]]) for n in names}
+
+        def cmp():
+            flags = []
+            for L, k in names:
+                a_ = tf(taps_all[L][k])
+                ne = ttnn.multiply(ttnn.ne(a_, ref[(L, k)]), livet)
+                flags.append(ttnn.to_layout(ttnn.reshape(ttnn.sum(ne), [1, 1, 1, 1]), ttnn.ROW_MAJOR_LAYOUT))
+            return ttnn.concat(flags, dim=3)
+
+        cmp()  # compile the compare ops
+        fwd()
+        cmp()
+        ttnn.synchronize_device(mesh)
+        os.environ["MIMO_CHECK_CAP"] = "0"
+        tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+        fwd()
+        fl = cmp()
+        ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        ttnn.synchronize_device(mesh)
+        taps_dev = list(taps_all)
+        comp = ttnn.ConcatMesh2dToTensor(mesh, dims=(0, 1), mesh_shape=tuple(mesh.shape))
+        ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+        for n in names:  # replay 0 defines the reference, in place (the trace reads the ref buffers)
+            ttnn.copy(tf(taps_dev[n[0]][n[1]]), ref[n])
+        ttnn.synchronize_device(mesh)
+
+        def check(rep, flt, tag):
             nonlocal first
-            for L in range(NL):
-                for k in ref[L]:
-                    d = (ref[L][k] - run[L][k]).abs().amax(dim=-1)  # [rows, cols, 32]
-                    dl = d[live.unsqueeze(1).expand_as(d)]
-                    if dl.numel() and float(dl.max()) > 0:
-                        rows_bad = sorted(
-                            {int(r) for r in (d * live.unsqueeze(1)).amax(dim=(1, 2)).nonzero().flatten().tolist()}
-                        )
-                        e = stats.setdefault((L, k), dict(n_reps_bad=0, rows=set(), maxdiff=0.0))
-                        e["n_reps_bad"] += 1
-                        e["rows"].update(rows_bad)
-                        e["maxdiff"] = max(e["maxdiff"], float(dl.max()))
-                        if first is None or (L, k) < first:
-                            first = (L, k)
-                        print("DEC_GLITCH", rep, L, k, rows_bad, float(dl.max()), flush=True)
+            f = ttnn.to_torch(flt, mesh_composer=comp).reshape(alive.shape[0], -1, len(names))
+            for r, c, j in f.nonzero().tolist():
+                L, k = names[j]
+                e = stats.setdefault((L, k), dict(n_reps_bad=0, rows=set(), maxdiff=0.0, devs=set()))
+                e["n_reps_bad"] += 1
+                e["rows"].add(r)
+                e["devs"].add((r, c))
+                e["maxdiff"] = max(e["maxdiff"], float(f[r, c, j]))  # = number of differing elements
+                if first is None or (L, k) < first:
+                    first = (L, k)
+                print("DEC_GLITCH", tag, rep, f"L{L}.{k}", (r, c), int(f[r, c, j]), flush=True)
 
-        # streaming comparison against replay 0 (no storage of all replays)
+        t0 = time.time()
         for rep in range(R):
             ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
-            run = [{k: host(mesh, v) for k, v in t.items() if k in TAPS} for t in taps_dev]
-            if ref is None:
-                ref = run
-            else:
-                compare(run, rep)
-        RE = int(E("DEC_EAGER", "0"))
-        for rep in range(RE):  # eager steps: taps of the eager step vs the trace reference
+            check(rep, fl, "trace")
+            if rep % 100 == 0:
+                print("DEC_PROGRESS trace", rep, round(time.time() - t0), flush=True)
+        for rep in range(RE):  # eager steps compared with the same reference
             fwd()
-            run = [{k: host(mesh, v) for k, v in t.items() if k in TAPS} for t in taps_all]
-            compare(run, 100000 + rep)
+            check(rep, cmp(), "eager")
+            if rep % 50 == 0:
+                print("DEC_PROGRESS eager", rep, round(time.time() - t0), flush=True)
         R = R + RE
         out = {
             f"L{L}.{k}": dict(n_reps_bad=v["n_reps_bad"], rows=sorted(v["rows"]), maxdiff=v["maxdiff"])
