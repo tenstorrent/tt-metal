@@ -1,6 +1,7 @@
 Tests:
   - name: "MeshAllToAll"
     sync: true
+    enable_flow_control: true
     fabric_setup:
       topology: Mesh
 
@@ -18,6 +19,7 @@ Tests:
 
   - name: "MeshAllToAllIntra"
     sync: true
+    enable_flow_control: true
     fabric_setup:
       topology: Mesh
 
@@ -36,6 +38,7 @@ Tests:
 
   - name: "MeshMulticastAllToAllIntra"
     sync: true
+    enable_flow_control: true
     fabric_setup:
       topology: Mesh
 
@@ -54,6 +57,7 @@ Tests:
 
   - name: "TorusXAllToAll"
     sync: true
+    enable_flow_control: true
     fabric_setup:
       topology: Torus
       torus_config: X
@@ -72,6 +76,7 @@ Tests:
 
   - name: "TorusXAllToAllIntra"
     sync: true
+    enable_flow_control: true
     fabric_setup:
       topology: Torus
       torus_config: X
@@ -91,6 +96,7 @@ Tests:
 
   - name: "TorusXYAllToAll"
     sync: true
+    enable_flow_control: true
     fabric_setup:
       topology: Torus
       torus_config: XY
@@ -109,6 +115,7 @@ Tests:
 
   - name: "TorusXYAllToAllIntra"
     sync: true
+    enable_flow_control: true
     fabric_setup:
       topology: Torus
       torus_config: XY
