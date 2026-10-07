@@ -30,7 +30,8 @@ constexpr unsigned mm(unsigned x) { return (x >> 16) & 15; }
 
 constexpr bool supported(unsigned x) {
     if (op(x) == 0x94) return mod(x) <= 6;
-    if (op(x) == 0x95) return mod(x) == 0 || mod(x) == 2 || mod(x) == 3 || mod(x) == 10;
+    // Sign retention (4) and indirect destination (8) are independent flags.
+    if (op(x) == 0x95) return (mod(x) & 3) != 1;
     return op(x) >= 0x70 && op(x) <= 0x99;
 }
 constexpr unsigned math_r(unsigned x, bool has_c = true) {
@@ -88,7 +89,7 @@ constexpr unsigned read(unsigned x) {
         // Model every LREG as an input and output rather than hiding effects.
         case 0x93: return 0xff;
         case 0x94: return shft2_r(x);
-        case 0x95: return m == 10 ? 0x8f : 0x7f;
+        case 0x95: return ((m & 10) == 10 ? 0x0fu : 0x7fu) | ((m & 8) ? 0x80u : 0u);
         case 0x96: case 0x97: return bit(cc) | bit(dd);
         case 0x98:
 #if defined(TT_LLK_SFPU_ARCH_QSR)
@@ -121,7 +122,7 @@ constexpr unsigned write(unsigned x) {
         case 0x92: return bit(cc) | bit(dd) | bit(4 + (cc & 3)) | bit(4 + (dd & 3));
         case 0x93: return 0xff;
         case 0x94: return shft2_w(x);
-        case 0x95: return m == 10 ? 0xff : bit(dd);
+        case 0x95: return (m & 8) ? 0xff : bit(dd);
         case 0x96: case 0x97: return (m & 8) ? bit(dd) : 0u;
         default: return 0;
     }

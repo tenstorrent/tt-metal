@@ -130,6 +130,44 @@ static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPLUTFP32(4, 3)) == 0x10u);
 static_assert(ckernel::raw_lreg_effect::read(TT_OP_SFPLUTFP32(4, 10)) == 0x8fu);
 static_assert(ckernel::raw_lreg_effect::write(TT_OP_SFPLUTFP32(4, 10)) == 0xffu);
 
+// WH/BH ISA SFPLUTFP32 functional model: table selection uses bits 0/1,
+// sign retention uses bit 2, and indirect addressing uses bit 3. Packed
+// three-entry coefficients need L0..L3; other tables also need L4..L6.
+constexpr bool lut_modifier_masks()
+{
+    constexpr unsigned expected_reads[16] = {
+        0x7f, 0, 0x7f, 0x7f, 0x7f, 0, 0x7f, 0x7f,
+        0xff, 0, 0x8f, 0x8f, 0xff, 0, 0x8f, 0x8f
+    };
+    for (unsigned mode = 0; mode != 16; ++mode) {
+        const unsigned word = TT_OP_SFPLUTFP32(4, mode);
+        if (ckernel::raw_lreg_effect::supported(word) != (expected_reads[mode] != 0)) return false;
+        if (!expected_reads[mode]) continue;
+        if (ckernel::raw_lreg_effect::read(word) != expected_reads[mode]) return false;
+        if (ckernel::raw_lreg_effect::write(word) != (mode >= 8 ? 0xffu : 0x10u)) return false;
+    }
+    return true;
+}
+static_assert(lut_modifier_masks());
+
+#ifdef TEST_LUT_MODES
+void lut_modifier_issue()
+{
+    TTI_SFPLUTFP32(4, 0);
+    TTI_SFPLUTFP32(4, 2);
+    TTI_SFPLUTFP32(4, 3);
+    TTI_SFPLUTFP32(4, 4);
+    TTI_SFPLUTFP32(4, 6);
+    TTI_SFPLUTFP32(4, 7);
+    TTI_SFPLUTFP32(4, 8);
+    TTI_SFPLUTFP32(4, 10);
+    TTI_SFPLUTFP32(4, 11);
+    TTI_SFPLUTFP32(4, 12);
+    TTI_SFPLUTFP32(4, 14);
+    TTI_SFPLUTFP32(4, 15);
+}
+#endif
+
 void tt_mmio_constant_lreg()
 {
 #if defined(TEST_QSR)
