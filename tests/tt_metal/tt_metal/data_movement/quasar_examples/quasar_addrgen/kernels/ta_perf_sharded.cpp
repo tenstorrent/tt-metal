@@ -4,7 +4,7 @@
 
 // Sharded transfer-address microbenchmark (TensorAccessorAddrgenShardedPerf): reads every page of one sharded tensor
 // into a one-page scratchpad, addressed one of four ways, timed with rdcycle. Built with the address-generator path,
-// with the software path (TT_TA_ADDRGEN_DISABLE), or with TT_TA_ADDRGEN_STATS for the walker's counts.
+// with the software path (TT_TA_ADDRGEN_DISABLE), or with TT_TA_ADDRGEN_STATS for the hardware counts.
 //   mode 0  page-id loop: noc.async_read(ta, ..., {.page_id})
 //   mode 1  pages(): the page iterator (it computes each page's software address as it goes)
 //   mode 2  shard_pages(): shard by shard, in storage order
@@ -16,8 +16,8 @@
 //   3 batched   - the same reads, one barrier at the end
 //
 // Compile-time args: mode.
-// Runtime args: report_addr -- 18 words: 4 section cycle counts (64-bit, low word first), transfers per section, the
-// sink, then {hw, sw_ineligible, sw_unsupported, seeks, skips, restores, fallbacks, pushes} (TT_TA_ADDRGEN_STATS).
+// Runtime args: report_addr -- 12 words: 4 section cycle counts (64-bit, low word first), transfers per section, the
+// sink, then {hw, pushes} (TT_TA_ADDRGEN_STATS).
 
 #include <cstdint>
 #include <type_traits>
@@ -139,14 +139,7 @@ void kernel_main() {
     report[8] = transfers;
     report[9] = static_cast<uint32_t>(sink ^ (sink >> 32));
 #if defined(TT_TA_ADDRGEN_STATS)
-    const auto& stats = tensor_accessor::detail::transfer_stats;
-    report[10] = stats.hw;
-    report[11] = stats.sw_ineligible;
-    report[12] = stats.sw_unsupported;
-    report[13] = stats.seeks;
-    report[14] = stats.skips;
-    report[15] = stats.restores;
-    report[16] = stats.fallbacks;
-    report[17] = stats.pushes;
+    report[10] = tensor_accessor::detail::transfer_stats.hw;
+    report[11] = tensor_accessor::detail::transfer_stats.pushes;
 #endif
 }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Raw address-generator cost breakdown (AddrgenRawPerf): where the TensorAccessor walker's per-transfer cycles go,
+// Raw address-generator cost breakdown (AddrgenRawPerf): where the TensorAccessor sequencer's per-transfer cycles go,
 // and what pushing straight into the command buffer would save. One interleaved tensor, num_pages pages, read in
 // page order. Address generator 1's source side walks it with the ATT window bits folded into the outer loop's start
 // (outer_start = window.compare), so every generated address is the complete NoC address and can be pushed as is.
@@ -15,27 +15,29 @@
 //   5 push_issue  - DEST_ADDR + LEN write, push, issue, one barrier at the end
 //   6 push_issue_barrier - section 5 with a barrier after every page
 //   7 sw_issue_barrier   - section 3 with a barrier after every page
-//   8 walker      - tensor_accessor::transfer_noc_addr() (the walker as shipped), address only
+//   8 sequencer      - tensor_accessor::transfer_noc_addr() (the sequencer as shipped), address only
 // The push breakdown, a ladder from the bare push to the NoC API (one barrier at the end of each):
-//   9 walker_push    - the walker with push allowed (transfer_noc_addr<Read, MayPush>), nothing issued: on a hit the
+//   9 sequencer_push    - the sequencer with push allowed (transfer_noc_addr<Read, MayPush>), nothing issued: on a hit
+//   the
 //                      address goes into the command buffer instead of back to the RISC-V (vs 8: the same with pop)
 //  10 push_v3        - raw push, then the NoC V3 issue of a pushed address (ncrisc_noc_fast_read<src_in_cmd_buf>:
 //                      VCs, DEST_ADDR, LEN, issue, counter every transfer) (vs 5: DEST_ADDR + LEN only)
-//  11 walker_push_v3 - section 9's walker, then section 10's issue: the shipped push path below the Noc API
+//  11 sequencer_push_v3 - section 9's sequencer, then section 10's issue: the shipped push path below the Noc API
 //  12 noc_api        - Noc::async_read(tensor, scratchpad, ...), the API kernels call (vs 11: the Noc / traits layer)
-//  13 walker_pop_v3  - the walker without push, then noc_async_read() of the popped address (the path before push)
-//  14 push_x         - raw push with a skip count in a register, push_src_pop_x(generator, 0) -- the form the walker
+//  13 sequencer_pop_v3  - the sequencer without push, then noc_async_read() of the popped address (the path before
+//  push) 14 push_x         - raw push with a skip count in a register, push_src_pop_x(generator, 0) -- the form the
+//  sequencer
 //                      uses (its stride is a run-time value) -- nothing issued (vs 4: the count-less push)
 //  15 push_x_v3      - section 14's push, then section 10's issue
-// The walker sections (8, 9, 11, 12, 13) are `flatten`: the walker is inlined into each loop, as in a kernel that
+// The sequencer sections (8, 9, 11, 12, 13) are `flatten`: the sequencer is inlined into each loop, as in a kernel that
 // calls it from one place. (Without it GCC outlined the push variant, which this kernel calls from four places, and
 // those sections measured a function call.) The noinline slow paths stay calls.
 // Checks (untimed): the folded walk's pops equal get_noc_addr() for every page; pages read through push (pop_x 0 and
 // the count-less builtin) and through section 12 carry their own page id; how many of a sequential walk's requests
-// the walker pushed.
+// the sequencer pushed.
 //
 // Runtime args: report_addr. Report: 16 section cycle counts (64-bit, low word first), then pop mismatches, push_x data
-// mismatches, push (count-less) data mismatches, num_pages, the sink, noc_api data mismatches, walker pushes.
+// mismatches, push (count-less) data mismatches, num_pages, the sink, noc_api data mismatches, sequencer pushes.
 
 #include <cstdint>
 #include <type_traits>
@@ -46,7 +48,7 @@
 #include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
-#include "internal/tt-2xx/quasar/tensor/tensor_accessor_addrgen.h"
+#include "internal/tt-2xx/quasar/tensor/addrgen_sequencer.h"
 
 namespace {
 
@@ -191,7 +193,7 @@ void kernel_main() {
         }
         noc_async_read_barrier();
     });
-    // 14, 15: the walker's push form. The skip count is a run-time value, as the walker's stride is.
+    // 14, 15: the sequencer's push form. The skip count is a run-time value, as the sequencer's stride is.
     uint32_t skip = 0;
     RAW_PERF_KEEP(skip);
     program_walk<kIsDram>(bank_base, page_size);
@@ -257,7 +259,7 @@ void kernel_main() {
     const uint32_t push_mismatches = data_mismatches();
     overlay::reset_addrgen<overlay::ADDRGEN_1>();
 
-    // 8: the walker as shipped (it resets and programs the generators it uses itself).
+    // 8: the sequencer as shipped (it resets and programs the generators it uses itself).
     time(8, [&]() __attribute__((flatten)) {
         for (uint32_t i = 0; i < num_pages; ++i) {
             sink += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read>(ta, i, 0, noc_index);
@@ -265,8 +267,8 @@ void kernel_main() {
         }
     });
 
-    // The rest of the push ladder (10 ran above, before the walker owned generator 1). Each walker section starts over
-    // at page 0, so the walker re-seeks once per section (as in 8).
+    // The rest of the push ladder (10 ran above, before the sequencer owned generator 1). Each sequencer section starts
+    // over at page 0, so the sequencer re-seeks once per section (as in 8).
     time(9, [&]() __attribute__((flatten)) {
         for (uint32_t i = 0; i < num_pages; ++i) {
             sink += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(ta, i, 0, noc_index);
@@ -305,11 +307,11 @@ void kernel_main() {
         }
         noc_async_read_barrier();
     });
-    // Untimed: how many of a sequential walk's requests the walker pushed (all but its seek, when push is built in).
-    uint32_t walker_pushes = 0;
+    // Untimed: how many of a sequential walk's requests the sequencer pushed (all but its seek, when push is built in).
+    uint32_t sequencer_pushes = 0;
     for (uint32_t i = 0; i < num_pages; ++i) {
-        walker_pushes += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(
-                             ta, i, 0, noc_index) == tt_addrgen::kAddrInCmdBuf;
+        sequencer_pushes += tensor_accessor::transfer_noc_addr<tensor_accessor::TransferDir::Read, true>(
+                                ta, i, 0, noc_index) == tt_addrgen::kAddrInCmdBuf;
     }
 
     volatile tt_l1_ptr uint32_t* report =
@@ -324,5 +326,5 @@ void kernel_main() {
     report[2 * kNumSections + 3] = num_pages;
     report[2 * kNumSections + 4] = static_cast<uint32_t>(sink);
     report[2 * kNumSections + 5] = noc_api_mismatches;
-    report[2 * kNumSections + 6] = walker_pushes;
+    report[2 * kNumSections + 6] = sequencer_pushes;
 }

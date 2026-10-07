@@ -4,7 +4,7 @@
 
 // TensorAccessor API coverage (TensorAccessorAddrgenApi): copies tensor src to tensor dst through a scratchpad that
 // holds one slot per page, using one NoC/TensorAccessor API per mode, so each API's transfer address goes through
-// tensor_accessor::transfer_noc_addr (on Quasar, the address-generator walker). With several threads, each thread
+// tensor_accessor::transfer_noc_addr (on Quasar, the address-generator sequencer). With several threads, each thread
 // copies the pages it owns.
 //   mode 0  pages() with no range (sharded: the whole tensor) / pages(0, num_pages) (interleaved)
 //   mode 1  shard_pages(shard, start, end) in two halves per shard (sharded only)
@@ -16,9 +16,8 @@
 // async_write_zeros (DRAM pages are addressed in software; local L1 is zeroed by the iDMA zero device).
 //
 // Compile-time args: mode, num_pages.
-// Runtime args: report_addr -- per thread (at + thread * 64 bytes), 16 words: {hw, sw_ineligible, sw_unsupported,
-// seeks, address requests, skips, restores, write seeks, write restores, 0, fallbacks, write fallbacks, pushes,
-// done marker, 0, 0} (TT_TA_ADDRGEN_STATS builds; see api/tensor/transfer_noc_addr.h).
+// Runtime args: report_addr -- per thread (at + thread * 64 bytes), 4 words: {hw, pushes, address requests, done
+// marker} (hw and pushes in TT_TA_ADDRGEN_STATS builds; see api/tensor/transfer_noc_addr.h).
 
 #include <type_traits>
 
@@ -165,20 +164,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         report_addr + get_my_thread_id() * kReportStride + MEM_L1_UNCACHED_BASE);
 #if defined(TT_TA_ADDRGEN_STATS)
-    const auto& stats = tensor_accessor::detail::transfer_stats;
-    report[0] = stats.hw;
-    report[1] = stats.sw_ineligible;
-    report[2] = stats.sw_unsupported;
-    report[3] = stats.seeks;
-    report[5] = stats.skips;
-    report[6] = stats.restores;
-    report[7] = stats.write_seeks;
-    report[8] = stats.write_restores;
-    report[10] = stats.fallbacks;
-    report[11] = stats.write_fallbacks;
-    report[12] = stats.pushes;
+    report[0] = tensor_accessor::detail::transfer_stats.hw;
+    report[1] = tensor_accessor::detail::transfer_stats.pushes;
 #endif
-    report[4] = requests;
-    report[9] = 0;
-    report[13] = kDoneMarker;
+    report[2] = requests;
+    report[3] = kDoneMarker;
 }

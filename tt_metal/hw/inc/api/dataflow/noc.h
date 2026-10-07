@@ -615,7 +615,7 @@ public:
 
             WAYPOINT("NWPW");
             // The addresses above: each endpoint is asked once per transfer (a stateful transfer address, such as the
-            // Quasar address-generator walk, advances when asked).
+            // Quasar address-generator stream, advances when asked).
             ncrisc_noc_write_any_len_with_state<noc_mode, posted>(
                 noc_id_, write_cmd_buf, src_addr, (uint32_t)dst_addr, size_bytes);
             WAYPOINT("NWPD");

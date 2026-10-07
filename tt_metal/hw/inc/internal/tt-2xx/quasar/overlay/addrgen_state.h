@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * @file addrgen_state.hpp
+ * @file addrgen_state.h
  * @brief Side-generic address generator helpers, and save/restore of one side's walk
  *
  * An address generator has two independent sides, source and destination, with identical loop/bank registers (they
@@ -80,29 +80,18 @@ struct AddrgenPosition {
 };
 
 // Address-generator register reads (rd_reg) must not be in flight together: two value-returning RoCC instructions
-// outstanding at once can hang the core (AIHWE-6506; AddrgenFenceRepro). The hardware workaround is a no-result RoCC
-// instruction between them (rocc_nop); a fence after each read also works but costs more. read_reg_separated is the
-// read every save uses.
+// outstanding at once can hang the core (AIHWE-6506). The hardware workaround is a no-result RoCC
+// instruction between them (rocc_nop); a fence after each read also works but costs more.
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t read_reg_addrgen(uint32_t reg_offset) {
     return __builtin_riscv_ttrocc_addrgen_rd_reg(ADDRGEN, reg_offset / 8);
 }
-
-inline __attribute__((always_inline)) void fence_reg_reads_addrgen() { asm volatile("fence" ::: "memory"); }
 
 // A register read, then rocc_nop (AIHWE-6506): the form every read here uses.
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t read_reg_separated(uint32_t reg_offset) {
     const uint64_t value = read_reg_addrgen<ADDRGEN>(reg_offset);
     rocc_nop();
-    return value;
-}
-
-// A register read and a fence (the earlier workaround; AddrgenFenceRepro compares the two).
-template <AddrGen ADDRGEN>
-inline __attribute__((always_inline)) uint64_t read_reg_fenced(uint32_t reg_offset) {
-    const uint64_t value = read_reg_addrgen<ADDRGEN>(reg_offset);
-    fence_reg_reads_addrgen();
     return value;
 }
 
