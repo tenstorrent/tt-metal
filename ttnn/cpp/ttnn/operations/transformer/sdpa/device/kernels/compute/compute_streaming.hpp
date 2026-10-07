@@ -564,8 +564,12 @@ void reduce_c_row_group(
 /**
  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
  * writes back to same positions. Accumulates row sums into reduce_cb.
+ *
+ * exp_approx_mode = true (default) keeps the approximate exponential on the pack thread. false selects the accurate
+ * exponential with the full FP32 scale: inside the pack-thread primitive when the scale is exactly representable
+ * in BF16, on the math thread after an FP32 multiply otherwise.
  */
-template <bool profiling_enabled, uint32_t scale_fp32>
+template <bool profiling_enabled, uint32_t scale_fp32, bool exp_approx_mode = true>
 void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
@@ -599,10 +603,30 @@ void sub_exp_block_bcast_cols(
             dst_index += tiles_per_column;
         }
     }
+    // The public scale is FP32.  Keep its full precision on the MATH thread
+    // when it is not exactly representable by the pack-thread BF16 scalar.
+    // Exact-BF16 scales take the overlapped PACK-thread path below.
+    if constexpr (!exp_approx_mode && (scale_fp32 & 0xFFFFu) != 0) {
+        binop_with_scalar_tile_init();
+        for (uint32_t dst_index = 0; dst_index < tiles_per_row * tiles_per_column; ++dst_index) {
+            mul_unary_tile(dst_index, scale_fp32);
+        }
+        exp_tile_init<false, 0x3F800000, InputClamping::ClampToNegative>();
+        constexpr int iterations = 32;
+        constexpr VectorMode vector_mode_exp = VectorMode::None;
+        for (uint32_t dst_index = 0; dst_index < tiles_per_row * tiles_per_column; ++dst_index) {
+            exp_tile<false, false, InputClamping::ClampToNegative, iterations>(dst_index, vector_mode_exp);
+        }
+    }
     tile_regs_commit();
 
     tile_regs_wait();
     PACK((llk_pack_relu_config(ReluConfig::zero())));
+    if constexpr (!exp_approx_mode && (scale_fp32 & 0xFFFFu) == 0) {
+        // Accurate pack-thread exp needs reciprocal constants live immediately
+        // before use; earlier matmul/reduce SFPU setup may clobber them.
+        exp_packthread_tile_init<false, scale_fp32, InputClamping::ClampToNegative>();
+    }
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
@@ -610,7 +634,13 @@ void sub_exp_block_bcast_cols(
         constexpr VectorMode vector_mode_exp = VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
-                exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+                if constexpr (exp_approx_mode) {
+                    exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+                } else if constexpr ((scale_fp32 & 0xFFFFu) == 0) {
+                    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+                    exp_packthread_tile<false, true, InputClamping::ClampToNegative, iterations>(
+                        dst_index++, vector_mode_exp, scale_bf16);
+                }
             }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
