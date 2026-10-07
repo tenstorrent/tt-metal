@@ -546,7 +546,11 @@ class MiniMaxH3Pipeline:
         self._tt_video_out_idx = StateTensor()
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
+        self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        # Set for the duration of `warmup`, whose short generations compile and capture but whose
+        # output is discarded.
+        self._warming = False
         # One repository holds both partitions -- `transformer/` for t2va/fl2va and
         # `transformer_ref/` for ref2va -- with byte-identical `config.json`, so only the
         # weights differ. Fixed at construction because each is 62 GB and switching would
@@ -1823,10 +1827,7 @@ class MiniMaxH3Pipeline:
         # Both schedules. Built here rather than after the layout because the keyframe step below needs
         # `scale_noise`, which takes its `t` at face value and works before `set_timesteps` -- but they
         # are set up fully so there is only one place that decides the schedule.
-        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
-        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # All noise for the request, off one generator, in the reference's draw order: conditioning
         # first, then video, then audio. The reference spreads these across two blocks -- the keyframe
@@ -1954,10 +1955,7 @@ class MiniMaxH3Pipeline:
         with self._track_cache_misses(on_event, "encoder"):
             prompt_embeds, text_token_tags = self.encode_prompt(prompt, references=prepared)
 
-        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
-        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
-        scheduler.set_timesteps(num_inference_steps)
-        audio_scheduler.set_timesteps(num_inference_steps)
+        scheduler, audio_scheduler = self._build_schedulers(num_inference_steps)
 
         # 3. Reference VAE encode.
         has_visual = any(reference.kind != "audio" for reference in prepared)
@@ -2047,6 +2045,20 @@ class MiniMaxH3Pipeline:
             on_event=on_event,
             condition_spec=condition_spec,
         )
+
+    def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
+        """The video and audio schedules for one request."""
+        scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
+        audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
+        scheduler.set_timesteps(num_inference_steps)
+        audio_scheduler.set_timesteps(num_inference_steps)
+        return scheduler, audio_scheduler
+
+    def _step_endpoints(
+        self, scheduler: MiniMaxH3Scheduler, audio_scheduler: MiniMaxH3Scheduler
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Each step's video and audio endpoint `r` for two-time conditioning; None for single-time."""
+        return None
 
     def _denoise_and_decode(
         self,
@@ -2214,6 +2226,7 @@ class MiniMaxH3Pipeline:
         trace_audio = self.trace_audio
         self.trace_audio = False
         self._log_generation = False
+        self._warming = True
         try:
             if self.vae_output_type == "yuv420":
                 self._warm_vae_decode()
@@ -2224,6 +2237,7 @@ class MiniMaxH3Pipeline:
         finally:
             self.trace_audio = trace_audio
             self._log_generation = True
+            self._warming = False
 
     def _warm_denoise_buckets(
         self, prompt: str, generation_kwargs: dict, overrides: Mapping[int, dict]
@@ -2672,6 +2686,7 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
+        endpoints = self._step_endpoints(scheduler, audio_scheduler)
 
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
@@ -2742,19 +2757,32 @@ class MiniMaxH3Pipeline:
         t_preamble = time.time() - t_preamble
         t_first = t_steady = 0.0
 
-        def step_levels(i: int) -> torch.Tensor:
+        def step_levels(i: int) -> tuple[torch.Tensor, torch.Tensor | None]:
             t = float(timesteps[i])
             level_kwargs = {"video_timestep": t, "audio_timestep": float(audio_timesteps[i])}
             if "condition_video" in slot_roles:
                 level_kwargs["condition_video_timestep"] = max(t, MINIMAX_H3_KEYFRAME_NOISE_AUG)
             if "condition_audio" in slot_roles:
                 level_kwargs["condition_audio_timestep"] = MINIMAX_H3_AUDIO_CONDITION_TIMESTEP
-            return slot_levels(slot_roles, **level_kwargs)
+            if endpoints is None:
+                return slot_levels(slot_roles, **level_kwargs), None
+            # Conditioning slots are anchors with nowhere to go, so their interval is empty: r == t.
+            endpoint_kwargs = {
+                **level_kwargs,
+                "video_timestep": float(endpoints[0][i]),
+                "audio_timestep": float(endpoints[1][i]),
+            }
+            return slot_levels(slot_roles, **level_kwargs), slot_levels(slot_roles, **endpoint_kwargs)
 
-        def upload_levels(levels: torch.Tensor) -> None:
+        def upload_levels(levels: tuple[torch.Tensor, torch.Tensor | None]) -> None:
+            timestep, endpoint = levels
             self._tt_timestep.update(
-                levels.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                timestep.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
             )
+            if endpoint is not None:
+                self._tt_endpoint_timestep.update(
+                    endpoint.reshape(1, 1, -1, 1), traced=traced, dtype=ttnn.float32, device=self.mesh_device
+                )
 
         upload_levels(step_levels(0))
         if _is_host_rank():
@@ -2791,6 +2819,7 @@ class MiniMaxH3Pipeline:
                     logical_n=self._tt_logical_n.value,
                     pad_to=rung,
                     traced=traced,
+                    **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
                 )
 
                 ttnn.multiply_(video_velocity, float(scheduler.step_coefficient(i)))
