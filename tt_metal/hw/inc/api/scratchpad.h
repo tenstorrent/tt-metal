@@ -161,7 +161,7 @@ private:
     // constexpr note:
     // The following members could be `constexpr` if `CoreLocalMem<T>` supported constexpr
     // construction/copy and a constexpr `get_address()`:
-    //   - Scratchpad(pointer, size_type)
+    //   - Scratchpad(pointer, size_type, DataFormat)
     //   - size(), size_in_bytes()
     //   - get_base_address(), local_mem()
     //   - begin(), end()
