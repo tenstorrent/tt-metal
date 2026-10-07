@@ -99,16 +99,18 @@ def _e8m0(t):
     return t.view(torch.float8_e8m0fnu).float() if t.dtype == torch.uint8 else t.float()
 
 
-def load_layer(i, dtype=torch.bfloat16, ckpt=None, experts=True):
+def load_layer(i, dtype=torch.bfloat16, ckpt=None, experts=True, qkv_layout="rank"):
     """Dequantized HF-layout state dict for decoder layer i (keys relative to model.layers.{i}.). Streams; experts ~13 GB bf16/layer."""
     ck = ckpt or Ckpt()
     p = f"model.layers.{i}."
     sd = {}
     for n in ("input_layernorm.weight", "post_attention_layernorm.weight"):
         sd[n] = ck.get(p + n).to(dtype)
-    sd["self_attn.qkv_proj.weight"] = dequant_qkv(
-        i, ck.get(p + "self_attn.qkv_proj.weight"), ck.get(p + "self_attn.qkv_proj.weight_scale_inv")
-    ).to(dtype)
+    qw, qs = ck.get(p + "self_attn.qkv_proj.weight"), ck.get(p + "self_attn.qkv_proj.weight_scale_inv")
+    if qkv_layout == "rank":
+        sd["self_attn.qkv_proj.weight"] = dequant_qkv(i, qw, qs).to(dtype)
+    else:  # "naive": contiguous Q|K|V reading with contiguous 128-row scale blocks (known-wrong control)
+        sd["self_attn.qkv_proj.weight"] = dequant_fp8_block(qw, qs[: -(-qw.shape[0] // 128)]).to(dtype)
     sd["self_attn.o_proj.weight"] = ck.get(p + "self_attn.o_proj.weight").to(dtype)
     if ck.has(p + "self_attn.attention_sink_bias"):
         sd["self_attn.attention_sink_bias"] = ck.get(p + "self_attn.attention_sink_bias").to(dtype)
