@@ -867,3 +867,15 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_s8192_ch2048_a43e4229c9f.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
 - data: {"ragged_hidden_min":0.9996,"s8192_hidden":0.99977}
+
+## E261007-0533-fb3
+- date: 2026-10-07T05:33:53
+- commit: a43e4229c9f
+- branch: ssinghal/mimo-asm
+- host: 48
+- track: asm
+- status: verified
+- claim: 4-LAYER (L0-L3, 1 GA + 3 SWA) chunked traced prefill at scale, real GSM8K text concatenated to the ISL, 4 users (1 per mesh row), CH=2048, unified bf16 experts, TWO ISLs in ONE process 64k -> 8k -> 64k: step (2048 tokens per row) 23.5 ms first / 30.0 median / 36.7 last at 64k (GA chunk cost grows with cache length), 24.1 ms median at 8k; replay-only 0.956 s per 64k user per row (4 users in parallel) = 274k tok/s aggregate for 4 layers (hint; scales ~1/layers), first case wall 25 s includes eager warm-up + trace capture, repeat 64k wall 1.84 s. DRAM per bank (ttnn memory view, 8 banks/chip): before build free 3882.4 MB, after build 3592.1 MB free (290.3 allocated: weights + KV pool max_pos 67584, 1 slot/row), after 64k 3589.8, after 8k 3589.8, after second 64k 3589.8: FREE DRAM IDENTICAL after each ISL (no leak across ISLs), +2.3 MB/bank only for the trace/io tensors. All logits finite. Built with PS_LAYERS=4 so first tokens are junk (no accuracy claim).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps4_64k_a43e4229c9f.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
+- data: {"step_ms_64k_median_4L":30.0,"free_mb_per_bank_after":3589.8}
