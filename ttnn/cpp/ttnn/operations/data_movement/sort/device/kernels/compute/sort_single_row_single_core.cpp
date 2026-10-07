@@ -17,6 +17,121 @@
 
 #include "sort_common.hpp"
 
+#ifdef SORT_STABLE_FUSED_32B_DEST
+#include "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_fused_raw16.hpp"
+
+// The stable path's local sorts on fused [bf16 value | u16 index] keys in a 32-bit DEST section: the plain network gives
+// the comparator's order. The values travel as raw u16 words, so every buffer keeps its format; the merges between them
+// stay on the comparator, which costs less than fusing and splitting a pair.
+FORCE_INLINE void enter_fused_section() {
+    set_fp32_dest_acc<true>();
+    ckernel::topk_tile_init</*fused=*/true>();
+    reconfig_data_format_srca(dfb::index_tensor);
+    PACK((llk_pack_reconfig_data_format<true>(dfb::index_tensor_transposed)));
+}
+
+FORCE_INLINE void leave_fused_section() {
+    restore_fp32_dest_acc<true>();
+    ckernel::topk_tile_init();
+}
+
+// sort_Wt_tiles_row_to_bitonic_sequence on fused keys.
+template <bool largest>
+void sort_Wt_tiles_row_to_bitonic_sequence_fused(
+    DataflowBuffer& input_dfb,
+    DataflowBuffer& index_dfb,
+    DataflowBuffer& input_transposed_dfb,
+    DataflowBuffer& index_transposed_dfb,
+    const uint32_t Wt,
+    const bool ascending) {
+    enter_fused_section();
+    input_transposed_dfb.reserve_back(Wt);
+    index_transposed_dfb.reserve_back(Wt);
+    bool ascending_local = ascending;
+    for (uint32_t wt = 0; wt < Wt; wt += 2) {
+        tile_regs_acquire();
+
+        input_dfb.wait_front(2);
+        index_dfb.wait_front(2);
+
+        transpose_init<true>(dfb::index_tensor);
+        transpose_tile<true>(dfb::input_tensor, 0, 0);
+        transpose_tile<true>(dfb::input_tensor, 1, 1);
+        transpose_tile<true>(dfb::index_tensor, 0, 2);
+        transpose_tile<true>(dfb::index_tensor, 1, 3);
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::ToPositive>,
+            0,
+            VectorMode::RC_custom)));
+        ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+            0, (int)ascending_local, /*i_end_phase=*/5);
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            topk_fused_raw16::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
+
+        tile_regs_commit<true>();
+        tile_regs_wait();
+
+        pack_tile<true, true>(0, dfb::input_tensor_transposed, wt);
+        pack_tile<true, true>(1, dfb::input_tensor_transposed, wt + 1);
+        pack_tile<true, true>(2, dfb::index_tensor_transposed, wt);
+        pack_tile<true, true>(3, dfb::index_tensor_transposed, wt + 1);
+        input_dfb.pop_front(2);
+        index_dfb.pop_front(2);
+
+        tile_regs_release<true>();
+
+        ascending_local = !ascending_local;
+    }
+    input_transposed_dfb.push_back(Wt);
+    index_transposed_dfb.push_back(Wt);
+    leave_fused_section();
+}
+
+// The last pass of a merge stage (sub 1: tiles i and i + 1 sorted in place) on fused keys.
+template <bool largest>
+void sort_tile_pairs_fused(
+    DataflowBuffer& synchronization_dfb, const uint32_t Wt, const uint32_t stage, const bool ascending) {
+    constexpr uint32_t one_tile = 1;
+    enter_fused_section();
+    for (uint32_t i = 0; i < Wt; i += 2) {
+        const bool dir = (((i >> stage) & 1) == 0) == ascending;
+
+        tile_regs_acquire();
+
+        synchronization_dfb.wait_front(one_tile);
+        synchronization_dfb.pop_front(one_tile);
+        synchronization_dfb.reserve_back(one_tile);
+
+        copy_init<true>(dfb::index_tensor_transposed);
+        copy_tile<true>(dfb::input_tensor_transposed, i, 0);
+        copy_tile<true>(dfb::input_tensor_transposed, i + 1, 1);
+        copy_tile<true>(dfb::index_tensor_transposed, i, 2);
+        copy_tile<true>(dfb::index_tensor_transposed, i + 1, 3);
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            topk_fused_raw16::fuse_raw16_slab<largest, topk_fused_raw16::Zeros::ToPositive>,
+            0,
+            VectorMode::RC_custom)));
+        ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+            0, (int)dir, /*i_end_phase=*/5);
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            topk_fused_raw16::defuse_raw16<largest, true>, 0, VectorMode::RC_custom, 2)));
+
+        tile_regs_commit<true>();
+        tile_regs_wait();
+
+        pack_tile<true, true>(0, dfb::input_tensor_transposed, i);
+        pack_tile<true, true>(1, dfb::input_tensor_transposed, i + 1);
+        pack_tile<true, true>(2, dfb::index_tensor_transposed, i);
+        pack_tile<true, true>(3, dfb::index_tensor_transposed, i + 1);
+
+        synchronization_dfb.push_back(one_tile);
+
+        tile_regs_release<true>();
+    }
+    leave_fused_section();
+}
+#endif
+
 /*
 This sorting algorithm is based on Bitonic Merge Sort and operates on input data arranged in tiles.
 
@@ -179,6 +294,10 @@ void kernel_main() {
         }
 #endif
 
+#ifdef SORT_STABLE_FUSED_32B_DEST
+        sort_Wt_tiles_row_to_bitonic_sequence_fused<descending>(
+            input_tensor_dfb, index_tensor_dfb, input_tensor_transposed_dfb, index_tensor_transposed_dfb, Wt, ascending);
+#else
         sort_Wt_tiles_row_to_bitonic_sequence<stable, tie_order>(
             input_tensor_dfb,
             index_tensor_dfb,
@@ -188,6 +307,7 @@ void kernel_main() {
             /*switch_dir=*/true,
             ascending,
             /*end_phase(log2(K))=*/5);
+#endif
 
         // Wait for bitonic sequence of Wt tiles
         input_tensor_transposed_dfb.wait_front(Wt);
@@ -205,6 +325,12 @@ void kernel_main() {
         for (uint32_t stage = 2; stage <= stages; stage++) {
             const uint32_t m_iter = stage - 1;
             for (uint32_t sub = stage; sub > 0; sub--) {
+#ifdef SORT_STABLE_FUSED_32B_DEST
+                if (sub == 1) {
+                    sort_tile_pairs_fused<descending>(synchronization_dfb, Wt, stage, ascending);
+                    continue;
+                }
+#endif
                 uint32_t sub_dist = 1 << (sub - 1);
                 for (uint32_t i = 0; i < Wt; i++) {
                     uint32_t j = i ^ sub_dist;

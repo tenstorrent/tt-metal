@@ -606,6 +606,12 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         }
     }
 
+    auto compute_defines = sort_kernel_defines(is_row_major, is_uint16_input);
+    // On Blackhole a stable bf16 sort with uint16 indices orders fused [value | index] keys in a 32-bit DEST section.
+    if (attributes.stable && !is_row_major && input_tensor_cb_data_format == tt::DataFormat::Float16_b &&
+        index_tensor_cb_data_format == tt::DataFormat::UInt16 && device->arch() == tt::ARCH::BLACKHOLE) {
+        compute_defines.insert({"SORT_STABLE_FUSED_32B_DEST", "1"});
+    }
     spec.kernels.push_back(KernelSpec{
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
@@ -613,8 +619,7 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
         // explicitly rather than inherited.
         .compiler_options =
-            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
-             .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
+            {.defines = std::move(compute_defines), .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
