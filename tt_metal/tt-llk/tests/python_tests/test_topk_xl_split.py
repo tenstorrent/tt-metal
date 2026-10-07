@@ -23,33 +23,43 @@ from test_topk_xl import (
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
-K = 512
 FP32_FORMATS = InputOutputFormat(DataFormat.Float32, DataFormat.UInt32)
 
-# (num_chunks, tail_elements, num_rows, mode, fp32 input, seg_base)
+# (K, num_chunks, tail_elements, num_rows, mode, fp32 input, seg_base)
 CASES = [
-    (1, K, 1, "positive", False, 0),
-    (2, K, 1, "positive", False, 0),
-    (3, K, 1, "positive", False, 0),
-    (4, K // 2, 1, "positive", False, 0),
-    (5, K, 2, "positive", False, 0),
-    (8, K, 1, "signed", False, 0),
-    (8, K, 1, "random", False, 0),
-    (2, K, 1, "zeros_win", False, 0),
-    (4, K, 1, "positive", True, 0),
-    (4, K, 1, "positive", False, 32 * K),
-    (32, K, 1, "positive", False, 0),
-    (32, 100, 2, "planted:512", False, 0),
+    (512, 1, 512, 1, "positive", False, 0),
+    (512, 2, 512, 1, "positive", False, 0),
+    (512, 3, 512, 1, "positive", False, 0),
+    (512, 4, 256, 1, "positive", False, 0),
+    (512, 5, 512, 2, "positive", False, 0),
+    (512, 8, 512, 1, "signed", False, 0),
+    (512, 8, 512, 1, "random", False, 0),
+    (512, 2, 512, 1, "zeros_win", False, 0),
+    (512, 4, 512, 1, "positive", True, 0),
+    (512, 4, 512, 1, "positive", False, 32 * 512),
+    (512, 32, 512, 1, "positive", False, 0),
+    (512, 32, 100, 2, "planted:512", False, 0),
+    (2048, 2, 2048, 1, "positive", False, 0),
+    (2048, 3, 2048, 1, "positive", False, 0),
+    (2048, 4, 1500, 1, "positive", False, 0),
+    (2048, 5, 2048, 2, "positive", False, 0),
+    (2048, 8, 2048, 1, "signed", False, 0),
+    (2048, 8, 2048, 1, "random", False, 0),
+    (2048, 2, 2048, 1, "zeros_win", False, 0),
+    (2048, 4, 2048, 1, "positive", True, 0),
+    (2048, 25, 2048, 1, "planted:2048", False, 0),
+    (2048, 32, 700, 2, "planted:2048", False, 0),
 ]
 CASE_IDS = [
-    f"chunks{c}-tail{t}-rows{r}-{m.replace(':', '')}-{'fp32' if f else 'bf16'}-seg{s}"
-    for c, t, r, m, f, s in CASES
+    f"k{k}-chunks{c}-tail{t}-rows{r}-{m.replace(':', '')}-{'fp32' if f else 'bf16'}-seg{s}"
+    for k, c, t, r, m, f, s in CASES
 ]
 
 
 def _config(test_name, case):
-    num_chunks, tail, num_rows, mode, fp32, seg_base = case
+    K, num_chunks, tail, num_rows, mode, fp32, seg_base = case
     formats = FP32_FORMATS if fp32 else FORMATS
+    tiles_per_seq = (K + ELEMENTS_PER_TILE - 1) // ELEMENTS_PER_TILE
     src_A, rows = _build_input(K, num_chunks, tail, num_rows, mode, fp32)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[formats.input_format])
     config = TestConfig(
@@ -72,9 +82,9 @@ def _config(test_name, case):
             src_B,
             formats.input_format,
             formats.output_format,
-            tile_count_A=num_rows * num_chunks,
+            tile_count_A=num_rows * num_chunks * tiles_per_seq,
             tile_count_B=1,
-            tile_count_res=num_rows * 2,
+            tile_count_res=num_rows * 2 * tiles_per_seq,
         ),
         dest_acc=DestAccumulation.Yes,
         unpack_to_dest=fp32,
@@ -84,7 +94,7 @@ def _config(test_name, case):
 
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
 def test_topk_xl_split(case):
-    num_chunks, tail, num_rows, mode, fp32, seg_base = case
+    K, num_chunks, tail, num_rows, mode, fp32, seg_base = case
     single, rows, formats = _config("sources/topk_xl_test.cpp", case)
     split, _, _ = _config("sources/topk_xl_split_test.cpp", case)
     # A compile-only run stops at the first run(), so build both first.
