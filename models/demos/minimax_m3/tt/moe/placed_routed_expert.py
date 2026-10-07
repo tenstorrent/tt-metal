@@ -86,6 +86,7 @@ def make_placed_routed_expert_cls(perm):
             emb_dim=None,
             hidden_dim=None,
             weights_dram_nd_sharded=False,
+            cache_dump_mode=None,  # never writes the cache
         ):
             if torch_weights is not None or device is None or cache_path is None or cache_name_prefix is None:
                 raise NotImplementedError("M3_KA_EXPERT_PLACEMENT supports the cache-only expert load path only")
