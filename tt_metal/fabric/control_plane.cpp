@@ -480,7 +480,9 @@ void ControlPlane::init_control_plane(
 
         // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
-            const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            auto mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            tt::tt_metal::experimental::tt_fabric::drop_inactive_revision_pinnings(
+                mgd_pinnings, *this->physical_system_descriptor_);
             for (const auto& [_, groups] : mgd_pinnings) {
                 pinning_groups.insert(pinning_groups.end(), groups.begin(), groups.end());
             }
@@ -869,8 +871,8 @@ void ControlPlane::initialize_fabric_context() {
         "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
         enchantum::to_string(this->fabric_config_));
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
-        this->fabric_context_ = std::make_unique<FabricContext>(
-            *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);
+        this->fabric_context_ =
+            std::make_unique<FabricContext>(*this, hal_, cluster_, rtoptions_, fabric_config_, fabric_router_config_);
     }
 }
 
@@ -1725,7 +1727,7 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     return forwarding_channels;
 }
 
-stl::Span<const ChipId> ControlPlane::get_intra_chip_neighbors(
+ttsl::Span<const ChipId> ControlPlane::get_intra_chip_neighbors(
     FabricNodeId src_fabric_node_id, RoutingDirection routing_direction) const {
     for (const auto& [_, routing_edge] :
          this->mesh_graph_->get_intra_mesh_connectivity()[*src_fabric_node_id.mesh_id][src_fabric_node_id.chip_id]) {
@@ -1924,7 +1926,7 @@ void ControlPlane::compute_and_embed_1d_routing_path_table(MeshId mesh_id, routi
                              : static_cast<uint16_t>(local_mesh_chip_id_container.size());
 
     intra_mesh_routing_path_t<1, false> routing_path_1d;
-    routing_path_1d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, 0), num_chips);
+    routing_path_1d.calculate_chip_to_all_routing_fields(*this, FabricNodeId(mesh_id, 0), num_chips);
 
     std::memcpy(&routing_info.routing_path_table_1d, &routing_path_1d, sizeof(intra_mesh_routing_path_t<1, false>));
 }
@@ -1960,7 +1962,7 @@ void ControlPlane::compute_and_embed_2d_routing_path_table(
         mesh_shape[1]);
 
     intra_mesh_routing_path_t<2, true> routing_path_2d;
-    routing_path_2d.calculate_chip_to_all_routing_fields(FabricNodeId(mesh_id, chip_id), num_chips);
+    routing_path_2d.calculate_chip_to_all_routing_fields(*this, FabricNodeId(mesh_id, chip_id), num_chips);
 
     std::memcpy(&routing_info.routing_path_table_2d, &routing_path_2d, sizeof(intra_mesh_routing_path_t<2, true>));
 

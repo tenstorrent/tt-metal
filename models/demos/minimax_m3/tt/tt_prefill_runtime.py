@@ -39,6 +39,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
+from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
 @dataclass
@@ -73,6 +75,9 @@ class TtPrefillRuntimeConfig:
     # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
     # ones the D2H service. M3 has no traced path, so it stays False.
     use_trace: bool = False
+    # MoE layers: run the shared expert on its own sub-device concurrently with dispatch (the runner's
+    # PrefillRunParams.overlap_shared_expert_with_dispatch). Off: it runs before the MoE on the full grid.
+    overlap_shared_expert: bool = True
 
     @property
     def sp_factor(self) -> int:
@@ -156,6 +161,7 @@ class TtPrefillRuntime:
             layer_indices=self.config.layer_indices,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
+            overlap_shared_expert=self.config.overlap_shared_expert,
         )
         self.model_built = True
 
@@ -225,6 +231,15 @@ class TtPrefillRuntime:
         self.model.ccl_manager.release_scratch_buffers()
         self.compiled = False
 
+    def release_sub_device_managers(self) -> None:
+        """Remove the MoE overlap sub-device manager before the mesh is closed. Idempotent."""
+        if self.model_built:
+            self.model.release_sub_device_managers()
+
+    def release_trace(self) -> None:
+        """The prefill runner's pre-close hook. M3 has no trace; this releases the sub-device managers."""
+        self.release_sub_device_managers()
+
     def make_placeholder_activation(self) -> ttnn.Tensor:
         """Zero hidden-state activation matching the decoder-layer-boundary residual and the D2D receiver
         backing: global ``[1, 1, chunk_size, hidden_size]`` bf16 TILE DRAM, sequence sharded across the SP
@@ -247,13 +262,15 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=tuple(dims), mesh_shape=cfg.mesh_shape),
         )
 
-    def make_chunk_input(self, token_ids: list) -> ttnn.Tensor:
+    def make_chunk_input(self, token_ids: list, actual_start: int = 0) -> ttnn.Tensor:
         """Build one chunk's device input for ``prefill_chunk``. On the first rank: the chunk's token IDs
-        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)`` — row r
-        holds the contiguous token slice ``[r*s_local : (r+1)*s_local]``, replicated across the TP cols.
-        This is the SAME per-chip layout the request-mode H2D socket delivers, so both paths feed one code
-        path; ``prefill_chunk`` embeds it on device. (M3 uses a contiguous — non-balanced — SP shard,
-        matching ``prepare_inputs_prefill`` and the block-cyclic layout ``_build_indexed_rope`` assumes.)
+        as an SP-sharded uint32 ROW_MAJOR DRAM tensor of per-chip shape ``(1, 1, chunk_size // sp)``,
+        replicated across the TP cols. ``token_ids`` are in natural order; chip r receives the tokens at
+        ``rotated_chunk_positions(actual_start)[r]`` — the contiguous slice ``[r*s_local : (r+1)*s_local]``
+        for a chunk-aligned ``actual_start``, rotated for a mid-slab one (a multi-turn resume) so the KV
+        writer and indexed RoPE see each token at its true position. This is the SAME per-chip layout the
+        request-mode H2D socket delivers (the engine's H2D connector applies the same reshuffle), so both
+        paths feed one code path; ``prefill_chunk`` embeds it on device.
 
         On a non-first pipeline rank the input is a hidden-state activation (received over the D2D socket at
         run time), not token IDs — return a placeholder activation of the right spec for warm-up."""
@@ -265,7 +282,8 @@ class TtPrefillRuntime:
         )
         sp = self.config.sp_factor
         s_local = self.config.chunk_size // sp
-        tok = torch.tensor(token_ids, dtype=torch.int32).reshape(sp, 1, s_local)
+        tok = torch.tensor(rotate_chunk_tokens(list(token_ids), actual_start, sp), dtype=torch.int32)
+        tok = tok.reshape(sp, 1, s_local)
         return ttnn.from_torch(
             tok,
             device=self.mesh_device,
@@ -313,7 +331,11 @@ class TtPrefillRuntime:
         t0 = time.perf_counter()
         for start, real in plan:
             self.prefill_chunk(
-                self.make_chunk_input([0] * chunk), kv_cache, slot_id=0, actual_start=start, actual_end=start + real
+                self.make_chunk_input([0] * chunk, start),
+                kv_cache,
+                slot_id=0,
+                actual_start=start,
+                actual_end=start + real,
             )
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
@@ -386,13 +408,13 @@ class TtPrefillRuntime:
         assert (
             actual_start < actual_end <= actual_start + self.config.chunk_size
         ), f"[actual_start={actual_start}, actual_end={actual_end}) not within one chunk of {self.config.chunk_size}"
-        # The block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3 does
-        # not support multi-turn continuation from a prefix that is not chunk-aligned (the shared
-        # producer's PREFILL_PRODUCER_MULTI_TURN_PROB mode resumes at a 32-token boundary). Fail here,
-        # not as a scrambled cache read deep in attention.
-        assert actual_start % self.config.chunk_size == 0, (
-            f"actual_start={actual_start} must be a multiple of chunk_size={self.config.chunk_size}: MiniMax-M3 "
-            f"does not support resuming (multi-turn continuation) from a non-chunk-aligned prefix"
+        # A chunk may start mid-slab (multi-turn continuation resumes at a tile boundary): the input rotation
+        # (make_chunk_input / the engine's H2D reshuffle), the KV writer, indexed rope, ring-joint SDPA, the MSA
+        # indexer / sparse_sdpa_msa and the MoE padding config all derive this device's rotated positions from
+        # actual_start, on the writer's tile-row grid.
+        assert actual_start % ttnn.TILE_SIZE == 0, (
+            f"actual_start={actual_start} must be a multiple of {ttnn.TILE_SIZE} (the KV-cache writer's tile grid); "
+            f"resume a multi-turn continuation at a tile boundary"
         )
 
         # First rank embeds the SP-sharded tokens. On a non-first rank the input is already the upstream
@@ -529,7 +551,19 @@ class TtPrefillRuntime:
             head_dim=self.hf_config.head_dim,
             path=path,
             stage_layouts=stage_layouts,
+            index_k_layers=self.msa_layer_ids(),
         )
+
+    def msa_layer_ids(self) -> set[int]:
+        """Global ids of the MSA (block-sparse) layers — the only layers that write an index_k (layers 3-59 on
+        M3). Read through the same helper as ``Layer``, so the table can't disagree with the model."""
+        ids = {i for i, f in enumerate(sparse_attention_freq(self.hf_config) or []) if f}
+        if not ids:
+            logger.warning(
+                "[migration] the config has no MSA layers (sparse_attention_freq missing or use_sparse_attention "
+                "off): the KV chunk table publishes no index_k rows"
+            )
+        return ids
 
     def read_slot_kv(self, kv_cache, slot: int, n_tokens: int | None = None):
         """Read one slot's KV cache from device to host: ``[k, v, index_k]``, one host tensor per cache

@@ -33,6 +33,7 @@ TestVariant = PrefillModelAdapter
 TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 
+from models.demos.deepseek_v3_d_p.tests import _reuse
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     assert_torus_xy_descriptor,
     fabric2d_device_params,
@@ -41,12 +42,12 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_y_device_params,
 )
 
-# glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
+# glm_5_3 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
 # ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
 # without modifying the common prefill registry.
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 
-TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
+TEST_VARIANTS["glm_5_3"] = GLM53Adapter()
 
 from models.demos.deepseek_v3_d_p.utils.test_utils import convert_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -209,6 +210,10 @@ def pytest_collection_modifyitems(config, items):
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.BLACKHOLE_GALAXY: {
+            # A TT_VISIBLE_DEVICES-filtered Galaxy column retains its board type. The device
+            # count check below still requires exactly eight visible devices for this mesh;
+            # Torus-Y auto-discovery must map the selected chips into a physical ring.
+            (8, 1): [FC.FABRIC_2D_TORUS_Y],
             (32, 1): [FC.FABRIC_2D],
             (16, 2): [FC.FABRIC_2D],
             (8, 4): [FC.FABRIC_1D, FC.FABRIC_2D, FC.FABRIC_2D_TORUS_XY],
@@ -335,6 +340,30 @@ def pytest_collection_modifyitems(config, items):
 
         if skip_reason:
             item.add_marker(pytest.mark.skip(reason=skip_reason))
+
+
+if _reuse.reuse_enabled():
+
+    @pytest.fixture(scope="function")
+    def mesh_device(request, silicon_arch_name, device_params):
+        """Root mesh_device, kept open across tests while device_params stay the same (see _reuse)."""
+        return _reuse.get_device(request, silicon_arch_name, device_params)
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_makereport(item, call):
+        outcome = yield
+        rep = outcome.get_result()
+        if rep.failed:
+            logger.warning(f"{item.nodeid} {rep.when} failed; dropping the reused mesh device and models")
+            _reuse.mark_dirty()
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_teardown(item, nextitem):
+        yield
+        _reuse.close_if_dirty()
+
+    def pytest_sessionfinish(session, exitstatus):
+        _reuse.close_all()
 
 
 @pytest.fixture(autouse=True)
@@ -563,7 +592,7 @@ def _resolve_hf_snapshot_dir(path: Path) -> Path:
     return the active snapshot dir (the ``refs/main`` commit, else the newest snapshot that has the
     safetensors index) so callers see the real config.json + shards. Otherwise return `path` as-is.
 
-    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.1``) or a plain
+    Lets ``*_HF_MODEL`` point at either the hub root (``.../hub/models--zai-org--GLM-5.3``) or a plain
     checkout dir. The hash snapshot dir also sidesteps the trust_remote_code dot-in-path import issue.
     """
     if (path / "model.safetensors.index.json").exists():
@@ -599,7 +628,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     if env_path:
         model_path = Path(env_path)
         if model_path.exists():
-            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1)
+            # Accept an HF hub-cache root (e.g. /mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.3)
             # by descending into its current snapshot, where config.json + the safetensors index live.
             model_path = _resolve_hf_snapshot_dir(model_path)
             index_file = model_path / "model.safetensors.index.json"
@@ -609,7 +638,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
                 # dot-free symlink (e.g. Kimi-K2_7-Code) back to a dotted real dir (Kimi-K2.7-Code), and HF
                 # trust_remote_code cannot import a dynamic module whose name contains a '.'. The
                 # safetensors load works through the symlink either way; only the config import cares.
-                # This matches _resolve_config_only, which already loads config from the raw env path.
+                # _resolve_config_only descends the same way for config.json.
                 return model_path.absolute()
             else:
                 logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
@@ -687,7 +716,7 @@ def _resolve_hf_config(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
-    # Hand-built config takes precedence: some models (e.g. GLM-5.1 `glm_moe_dsa`, DeepSeek-V3.2
+    # Hand-built config takes precedence: some models (e.g. GLM-5.3 `glm_moe_dsa`, DeepSeek-V3.2
     # `deepseek_v32`) are not registered with transformers, so AutoConfig cannot load them. The builder
     # returns a ready HF-attribute config. (Result is lru_cached like the AutoConfig path; tests that
     # mutate config.max_seq_len already rely on this shared/cached object.)
@@ -740,8 +769,11 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
     # Only variants that ship custom tokenizer code (e.g. Kimi) need trust_remote_code; DeepSeek-V3
     # uses a stock fast tokenizer and turns it off to avoid the flat-config custom-import path.
     trust_remote_code = v.tokenizer_trust_remote_code
+    env_path = os.getenv(v.env_var)
     candidates = [
-        os.getenv(v.env_var),
+        # Descend an HF hub-cache root to its snapshot, where tokenizer.json lives; the root itself
+        # holds only blobs/refs/snapshots, so the glob below never matches it.
+        str(_resolve_hf_snapshot_dir(Path(env_path))) if env_path else None,
         str(v.default_local_path) if v.default_local_path is not None else None,
         str(v.shared_path) if v.shared_path is not None else None,
     ]

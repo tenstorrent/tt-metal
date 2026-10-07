@@ -133,18 +133,18 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     return ret;
 }
 
-CoreRangeSet get_worker_grid(
+tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Unary: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
     }
 
     // A sharded tensor's grid is in shard_spec or in nd_shard_spec when the config is ND_SHARDED
-    auto shard_grid_of = [](const tt::tt_metal::MemoryConfig& mem_config) -> std::optional<CoreRangeSet> {
+    auto shard_grid_of = [](const tt::tt_metal::MemoryConfig& mem_config) -> std::optional<tt::tt_metal::CoreRangeSet> {
         if (!mem_config.is_sharded()) {
             return std::nullopt;
         }
@@ -161,8 +161,8 @@ CoreRangeSet get_worker_grid(
     // fall through to the all-workers default on nullopt; the previous __builtin_unreachable() here made
     // that case UB instead. Returns by value: a pointer into worker_cores() would be valid, but the
     // grid is a small vector and copying it keeps the lifetime obvious.
-    auto sub_device_workers_for = [](const CoreRangeSet& grid,
-                                     tt::tt_metal::IDevice* device) -> std::optional<CoreRangeSet> {
+    auto sub_device_workers_for = [](const tt::tt_metal::CoreRangeSet& grid,
+                                     tt::tt_metal::IDevice* device) -> std::optional<tt::tt_metal::CoreRangeSet> {
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers =
                 device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
@@ -200,14 +200,33 @@ CoreRangeSet get_worker_grid(
 }
 
 tt::tt_metal::ShardSpec generate_output_shard_spec(
-    const Tensor& input_tensor, const ttnn::Shape& padded_out_shape, tt::tt_metal::TensorMemoryLayout memory_layout) {
+    const Tensor& input_tensor,
+    const ttnn::Shape& padded_out_shape,
+    tt::tt_metal::TensorMemoryLayout memory_layout,
+    uint32_t output_element_size_bytes) {
     // Unary: forced ROW_MAJOR — no input-orientation inheritance path (unlike Transpose/Repeat/Fold).
+    // Output layout mirrors input (unary is dtype-only), so is_tile is derived from input layout.
     auto* device = input_tensor.device();
+    const auto compute_grid_size = device->compute_with_storage_grid_size();
+    const bool is_tile = (input_tensor.layout() == tt::tt_metal::Layout::TILE);
     auto spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
-        device->compute_with_storage_grid_size(),
+        compute_grid_size,
         padded_out_shape,
         memory_layout,
-        {.is_tile = true, .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR, .caller_tag = "Unary"});
+        {.is_tile = is_tile,
+         .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR,
+         .caller_tag = "Unary"});
+    // Shrink only when we produced an RM synth; typecast means the OUTPUT element size drives the page.
+    if (!is_tile) {
+        spec = *ttnn::operations::data_movement::common::shrink_shard_for_rm_page_alignment(
+            spec,
+            input_tensor.layout(),
+            output_element_size_bytes,
+            static_cast<uint64_t>(padded_out_shape[-1]),
+            compute_grid_size,
+            memory_layout,
+            ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
+    }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());
     return spec;
 }

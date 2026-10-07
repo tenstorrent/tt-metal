@@ -80,7 +80,7 @@ inline bool wait_for_workers(uint32_t worker_mask, uint32_t num_ready, uint32_t 
 
 inline void pulse_ready(uint32_t& ready_token, uint32_t iteration) {
     if (iteration % kReadySpinIterations == 0) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, ready_token);
+        overlay::FdsNeo::fds_done(ready_token);
         ready_token = (ready_token == kReadyTokenA) ? kReadyTokenB : kReadyTokenA;
     }
 }

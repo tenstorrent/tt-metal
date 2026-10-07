@@ -24,9 +24,9 @@ from models.demos.gemma4_d_p.tt.runners.kv_validation import (
     read_cache_tensor,
 )
 
-MIN_PER_HEAD_PCC = 0.91
-MIN_OVERALL_PCC = 0.97
-MAX_OVERALL_RRMSE = 0.232
+MIN_PER_HEAD_PCC = 0.928
+MIN_OVERALL_PCC = 0.978
+MAX_OVERALL_RRMSE = 0.208
 
 
 def verify_inputs(adapter, trace_dir):
@@ -100,7 +100,7 @@ def migration_environment(request, tmp_path):
         PREFILL_TP="4",
         PREFILL_NUM_LAYERS="60",
         PREFILL_MAX_SEQ_LEN="262144",
-        PREFILL_CHUNK_SIZE="8192",
+        PREFILL_CHUNK_SIZE=str(Gemma4ServiceConfig.CHUNK_SIZE),
         PREFILL_NUM_USERS=str(Gemma4ServiceConfig.MAX_USER_SLOTS),
         PREFILL_LAYER_ACK_D2H="1",
         PREFILL_H2D_SERVICE_ID=f"gemma4_migration_{gate}_{os.getpid()}",
