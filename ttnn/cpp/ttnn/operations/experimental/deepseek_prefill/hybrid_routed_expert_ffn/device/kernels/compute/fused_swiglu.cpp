@@ -368,9 +368,13 @@ FORCE_INLINE void matmul_phase(
             }
 
             final_cb.reserve_back(this_tiles);
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, final_cb_id, this_tiles);
+#else
             for (uint32_t i = 0; i < this_tiles; ++i) {
                 pack_tile(i, final_cb_id);
             }
+#endif
             final_cb.push_back(this_tiles);
 
             tile_regs_release();
@@ -667,9 +671,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
         tile_regs_commit();
         tile_regs_wait();
         gate_intermed_cb.reserve_back(out_subblock_num_tiles);
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, gate_intermed_cb_id, out_subblock_num_tiles);
+#else
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, gate_intermed_cb_id);
         }
+#endif
         gate_intermed_cb.push_back(out_subblock_num_tiles);
         tile_regs_release();
     }
@@ -812,9 +820,13 @@ FORCE_INLINE void binary_activation_phase(
         tile_regs_commit();
         tile_regs_wait();
         activated_cb.reserve_back(c);
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, activated_cb_id, c);
+#else
         for (uint32_t j = 0; j < c; ++j) {
             pack_tile(j, activated_cb_id);
         }
+#endif
         activated_cb.push_back(c);
         tile_regs_release();
     }
@@ -871,9 +883,13 @@ FORCE_INLINE void multiply_phase(
         tile_regs_commit();
         tile_regs_wait();
         activated_cb.reserve_back(out_subblock_num_tiles);
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, activated_cb_id, out_subblock_num_tiles);
+#else
         for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
             pack_tile(i, activated_cb_id);
         }
+#endif
         activated_cb.push_back(out_subblock_num_tiles);
         tile_regs_release();
         base += out_subblock_num_tiles;
