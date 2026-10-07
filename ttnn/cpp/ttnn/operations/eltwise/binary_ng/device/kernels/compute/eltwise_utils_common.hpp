@@ -42,6 +42,12 @@
 #else
 #define EB_R3_EXTRA_INIT(l, r)
 #endif
+// CI only: EB_R3_PAD adds that many never-executed NOPs to the compute binary (a binary-size probe).
+#if defined(EB_R3_PAD) && EB_R3_PAD
+#define EB_R3_PAD_STR2(x) #x
+#define EB_R3_PAD_STR(x) EB_R3_PAD_STR2(x)
+__attribute__((used, noinline)) void eb_r3_pad_fn() { asm volatile(".rept " EB_R3_PAD_STR(EB_R3_PAD) "\n nop\n .endr"); }
+#endif
 
 // Physical LHS means the tensor in c_0, not necessarily the mathematical LHS.
 // This is a FORMAT reference, not necessarily the buffer supplying the next tile:

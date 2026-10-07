@@ -1446,6 +1446,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["EB_R3_MAIN_REINIT"] = std::getenv("EB_R3_MAIN_REINIT") != nullptr ? "1" : "0";
     compute_kernel_defines["EB_R3_PROBE_INIT"] = std::getenv("EB_R3_PROBE_INIT") != nullptr ? "1" : "0";
     compute_kernel_defines["EB_R3_PER_FACE"] = std::getenv("EB_R3_PER_FACE") != nullptr ? "1" : "0";
+    if (const char* pad = std::getenv("EB_R3_PAD"); pad != nullptr) {
+        compute_kernel_defines["EB_R3_PAD"] = pad;  // CI only: dead code in the compute binary (placement probe)
+    }
     if (std::getenv("EB_R3_LOG_RULE") != nullptr) {
         std::fprintf(stderr, "EB_R3_RULE block=%d block_pack=%d kind=%d bcast_sections=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d n=%u\n",
             static_cast<int>(block_section), static_cast<int>(block_pack), eb_kind, static_cast<int>(bcast_sections),
