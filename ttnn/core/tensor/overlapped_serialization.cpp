@@ -6,7 +6,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cerrno>
 #include <string>
 #include <sys/stat.h>
@@ -48,25 +47,12 @@ void dump_overlapped_tensors(const std::string& file_name, const std::vector<Ove
 
     const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (ctx->rank() == tt::tt_metal::distributed::multihost::Rank(0)) {
-        FILE* output_file = fopen(file_name.c_str(), "wb");
-        TT_FATAL(
-            output_file != nullptr,
-            "Cannot open \"{}\" for writing: errno={} \"{}\"",
-            file_name,
-            errno,
-            strerror(errno));
-        auto cleanup = ttsl::make_cleanup([f = output_file, &file_name]() {
-            if (f && fclose(f) != 0) {
-                log_warning(tt::LogAlways, "Failed to close \"{}\"", file_name);
-            }
-        });
-
         std::vector<SerializedTensorBuffer> buffers;
         flatbuffers::FlatBufferBuilder builder;
         auto root_offset = ttnn::overlapped_tensors_to_flatbuffer(cpu_views, builder, buffers);
         builder.Finish(root_offset);
 
-        write_tensor_file(output_file, file_name, builder, buffers);
+        write_tensor_file(file_name, builder, buffers);
     }
     ctx->barrier();
 }

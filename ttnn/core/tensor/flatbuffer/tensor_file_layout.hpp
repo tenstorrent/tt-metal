@@ -6,8 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include <flatbuffers/flatbuffers.h>
@@ -52,11 +52,18 @@ struct SerializedTensorBuffer {
     uint64_t offset = 0;
 };
 
-// Writes a finished flatbuffer header and its shard buffers to `file` in the layout described above.
-// `file_name` is used for error reporting only.
+// Writes a finished flatbuffer header and its shard buffers to `file_name` in the layout described above.
+//
+// The data goes to a new file in the same directory, which is then renamed over `file_name`, so an existing file is
+// replaced rather than rewritten in place. rename(2) is atomic: a concurrent reader, such as another process sharing
+// the same tensor cache, sees either the previous file or the complete new one, never a half-written file, and of two
+// writers racing on one name the last rename wins. A tensor loaded from the old file keeps it mapped and may have it
+// pinned for device uploads (see `map_tensor_file`). Rewriting that file in place would change the loaded tensor's
+// contents under it, or kill its readers with SIGBUS where the new file is shorter, while uploads from a cached pin
+// kept sending the old pages. Replacing it leaves the old file intact until its last mapping goes away. When
+// `file_name` is a symlink, the file it points to is replaced, not the link.
 void write_tensor_file(
-    FILE* file,
-    std::string_view file_name,
+    const std::string& file_name,
     const flatbuffers::FlatBufferBuilder& builder,
     ttsl::Span<const SerializedTensorBuffer> buffers);
 
@@ -67,9 +74,10 @@ void write_tensor_file(
 // The mapping is MAP_SHARED wherever the filesystem allows it, because uploads pin it read-only as a device DMA
 // source. A long-term pin of a MAP_PRIVATE file mapping makes the kernel first copy every page into private anonymous
 // memory (copy-on-write unshare), which is slower than the upload itself and doubles resident memory; a shared
-// mapping is pinned in place. The cost of pinning in place is that the device reads the file's page cache: a write to
-// the file by another process while a pin is cached changes what later uploads from that pin transfer, where the
-// private copies made for a MAP_PRIVATE pin would not have changed.
+// mapping is pinned in place. The cost of pinning in place is that the device reads the file's page cache: writing
+// the file in place while a pin is cached changes what later uploads from that pin transfer, where the private copies
+// made for a MAP_PRIVATE pin would not have changed. `write_tensor_file` replaces a file instead of writing it in
+// place, so only other writers can do that.
 //
 // Some filesystems accept MAP_PRIVATE but refuse MAP_SHARED: FUSE in direct-I/O mode fails a shared mapping with
 // ENODEV unless the server allows it. The mapping then falls back to MAP_PRIVATE, which loads correctly and pays the

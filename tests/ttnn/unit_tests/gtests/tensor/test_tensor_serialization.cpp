@@ -11,7 +11,9 @@
 #include "tt_metal/distributed/utils.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/tensor/pinned_upload.hpp"
 
+#include "ttnn/tensor/overlapped_tensor.hpp"
 #include "ttnn/tensor/serialization.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -505,6 +507,56 @@ TEST(TensorSerializationFlatbufferAlignmentTest, ShardsAreAlignedForPinnedMemory
     }
 }
 
+// A loaded tensor keeps its file mapped, so dump_overlapped_tensors has to replace an existing file rather than
+// rewrite it: views loaded from the old file keep reading the old contents.
+TEST(TensorSerializationOverwriteTest, OverwritingOverlappedTensorsFileKeepsLoadedViewContents) {
+    TemporaryFile test_file("overwrite.overlappedtensorbin");
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const std::vector<uint32_t> original_data(shape.volume(), 1);
+    const std::vector<uint32_t> replacement_data(shape.volume(), 2);
+    const auto single_view = [&](const std::vector<uint32_t>& data) {
+        return std::vector<OverlappedTensorView>{{
+            .name = "view",
+            .fused_tensor = Tensor::from_vector(data, get_tensor_spec(shape, DataType::UINT32)),
+            .tensor_shape = {32, 32},
+            .shard_shape = {32, 32},
+            .core_range_set = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))),
+            .dtype = DataType::UINT32,
+            .tile_shape = {32, 32},
+            .byte_offset = 0,
+            .total_size = data.size() * sizeof(uint32_t),
+        }};
+    };
+
+    dump_overlapped_tensors(test_file.string(), single_view(original_data));
+    std::vector<OverlappedTensorView> loaded_views = load_overlapped_tensors(test_file.string());
+    dump_overlapped_tensors(test_file.string(), single_view(replacement_data));
+
+    ASSERT_THAT(loaded_views, SizeIs(1));
+    EXPECT_EQ(loaded_views[0].fused_tensor.to_vector<uint32_t>(), original_data);
+    std::vector<OverlappedTensorView> reloaded_views = load_overlapped_tensors(test_file.string());
+    ASSERT_THAT(reloaded_views, SizeIs(1));
+    EXPECT_EQ(reloaded_views[0].fused_tensor.to_vector<uint32_t>(), replacement_data);
+}
+
+// Replacing the file must not replace a symlink to it: the dump goes to the file the link points to.
+TEST(TensorSerializationOverwriteTest, OverwritingSymlinkReplacesItsTarget) {
+    TemporaryFile target_file("overwrite_target.tensorbin");
+    TemporaryFile link_file("overwrite_link.tensorbin");
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const std::vector<uint32_t> original_data(shape.volume(), 1);
+    const std::vector<uint32_t> replacement_data(shape.volume(), 2);
+
+    dump_tensor_flatbuffer(
+        target_file.string(), Tensor::from_vector(original_data, get_tensor_spec(shape, DataType::UINT32)));
+    std::filesystem::create_symlink(target_file.path(), link_file.path());
+    dump_tensor_flatbuffer(
+        link_file.string(), Tensor::from_vector(replacement_data, get_tensor_spec(shape, DataType::UINT32)));
+
+    EXPECT_TRUE(std::filesystem::is_symlink(link_file.path()));
+    EXPECT_EQ(load_tensor_flatbuffer(target_file.string()).to_vector<uint32_t>(), replacement_data);
+}
+
 // Returns the permission column of the /proc/self/maps entry that contains `address` -- e.g. "r--s", where the
 // fourth character is 's' for a shared mapping and 'p' for a private one -- or nullopt if no entry contains it.
 std::optional<std::string> mapping_permissions(uintptr_t address) {
@@ -522,10 +574,6 @@ std::optional<std::string> mapping_permissions(uintptr_t address) {
     return std::nullopt;
 }
 
-// Uploads above this size take the pinned path. Mirrors `k_pin_write_threshold_bytes` in
-// `tt_metal/impl/tensor/tensor_apis.cpp`, which is not exported.
-constexpr size_t kPinnedWriteThresholdBytes = 32 * 1024 * 1024;
-
 using TensorSerializationPinnedUploadTest = MeshDevice1x1Fixture;
 
 // load_tensor_flatbuffer maps the file MAP_SHARED so that a pinned upload pins the file's page-cache pages in place,
@@ -534,7 +582,7 @@ using TensorSerializationPinnedUploadTest = MeshDevice1x1Fixture;
 TEST_F(TensorSerializationPinnedUploadTest, LargeLoadedTensorUploadPinsSharedFileMapping) {
     const ttnn::Shape shape{1, 1, 1024, 9216};
     const size_t size_bytes = static_cast<size_t>(shape.volume()) * sizeof(uint32_t);
-    ASSERT_GT(size_bytes, kPinnedWriteThresholdBytes);
+    ASSERT_GT(size_bytes, pinned_upload::k_pin_write_threshold_bytes);
 
     distributed::MeshDevice& mesh_device = *mesh_device_;
     const auto pinning_params = experimental::GetMemoryPinningParameters(mesh_device);
