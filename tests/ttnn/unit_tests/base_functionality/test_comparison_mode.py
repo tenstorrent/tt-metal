@@ -651,11 +651,31 @@ def test_quantize_goldens_support_scalar_and_per_channel_args():
     scale = torch.tensor([0.5, 2.0])
     zero_point = torch.tensor([1.0, 0.0])
     per_channel = ttnn.get_golden_function(ttnn.quantize)(input_tensor, scale, zero_point, axis=-1)
-    assert torch.equal(per_channel, torch.round(input_tensor / scale + zero_point).to(torch.int32))
+    assert torch.equal(per_channel, (torch.round(input_tensor / scale) + zero_point).to(torch.int32))
 
     requantized = ttnn.get_golden_function(ttnn.requantize)(input_tensor, 0.5, 2.0, 0.25, 1.0)
-    expected = torch.round((input_tensor - 2.0) * (0.5 / 0.25) + 1.0).to(torch.int32)
+    expected = (torch.round((input_tensor - 2.0) * (0.5 / 0.25)) + 1.0).to(torch.int32)
     assert torch.equal(requantized, expected)
+
+
+def test_quantize_goldens_with_preallocated_output_and_tensor_zero_point():
+    input_tensor = torch.tensor([[200.0, -200.0]])
+    quantize = ttnn.get_golden_function(ttnn.quantize)
+    requantize = ttnn.get_golden_function(ttnn.requantize)
+
+    expected = torch.tensor([[127, -128]], dtype=torch.int32)
+    assert torch.equal(quantize(input_tensor, 1.0, 0), expected)
+    assert torch.equal(requantize(input_tensor, 1.0, 0, 1.0, 0), expected)
+
+    output_tensor = torch.zeros((1, 2), dtype=torch.uint8)
+    expected = torch.tensor([[200, 0]], dtype=torch.uint8)
+    assert torch.equal(quantize(input_tensor, 1.0, 0, output_tensor=output_tensor), expected)
+    assert torch.equal(requantize(input_tensor, 1.0, 0, 1.0, 0, output_tensor=output_tensor), expected)
+
+    zero_point = torch.tensor([0])
+    expected = torch.tensor([[200, -200]], dtype=torch.int32)
+    assert torch.equal(quantize(input_tensor, 1.0, zero_point), expected)
+    assert torch.equal(requantize(input_tensor, 1.0, 0, 1.0, zero_point), expected)
 
 
 def test_nonzero_golden_packs_count_and_flat_indices_with_masks(expect_error):
