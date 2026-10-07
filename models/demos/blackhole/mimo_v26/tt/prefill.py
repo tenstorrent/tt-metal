@@ -176,3 +176,30 @@ class ChunkedPrefill:
             x[r, u] = v.float()
         lg = self.m.final_logits(self.m.upload_rows(x))
         return {k: (int(lg[k[0], k[1]].argmax()), lg[k[0], k[1]]) for k in last}
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------------
+# Small helper so long-context generation uses the chunked traced prefill + the traced Decoder (decode U-size changes stay behind Generator/Decoder).
+from models.demos.blackhole.mimo_v26.tt.generator import Generator  # noqa: E402
+
+
+class ChunkedGenerator(Generator):
+    """Generator whose prefill is ChunkedPrefill (paged pool of tt/kv_pool.py, any ISL up to layout.max_pos - decode room). prompt i -> row i % rows, slot i // rows."""
+
+    def __init__(self, model, max_pos, pf, **kw):
+        super().__init__(model, max_pos, **kw)
+        self.pf = pf
+
+    def prefill(self, prompts, S=None):
+        rows = self.rows
+        per_row = [[] for _ in range(rows)]
+        for i, p in enumerate(prompts):
+            per_row[i % rows].append(list(p))
+        res = self.pf.prefill(per_row)
+        ft = self.pf.first_tokens(res["last"])
+        U = -(-len(prompts) // rows)
+        ids = torch.zeros(rows, U, dtype=torch.long)
+        for (r, u), (t, _) in ft.items():
+            ids[r, u] = t
+        self.last_prefill_steps = res["steps"]
+        return ids, None
