@@ -789,3 +789,25 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48u_43f8c5f81d5.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_smoke_model.py
 - data: {"layers":48,"first_token":"<think>","isl":[128,256]}
+
+## E261007-0459-e2c
+- date: 2026-10-07T04:59:12
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: skill-defect
+- status: verified
+- claim: Defects found in assembly: (1) repo .gitignore has 'build_*': a new tt/build_wcache.py was silently untracked (renamed cache_weights.py); kits should warn on gitignored names. (2) host_health.py exits 0 for BUSY and launch.py then queues on the host flock (my chain waited behind the moe job): launch recipe must gate on the verdict. (3) TTMoEGate allocates 4 L1-sharded kernel buffers per instance; 47 layers exhaust L1 and the first rms_norm fails ('static dataflow buffers clash with L1 buffers') at 48 layers though 6 is fine: freed in exact mode in layer.py. (4) One 48-layer launch on host .46 sat 18 min at ~2500% CPU after layer 0 with no progress (killed, own pid); same run on .48 progressed at 25 s/layer: single occurrence, no bad-host claim. (5) launch.py unset-prefix does not unset MOE_UNI_*: pass them explicitly. (6) tests need mesh_device fixtures with FABRIC_1D_RING + l1_small_size 16384.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48b_4bb27d3fd91.log
+- paths: models/common/bringup_kit/launch.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-0459-4db
+- date: 2026-10-07T04:59:12
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: handoff
+- status: verified
+- claim: HANDOFF track 3 (asm), worktree /mnt/tt-data/ssinghal/mimo/wt/asm branch ssinghal/mimo-asm. Code: tt/layer.py (MiMoDecoderLayer prefill/decode, dense L0 + MoE, capacity assertion), tt/model.py (embedding, 48 layers, final norm, lm_head vocab-sharded bf16, prefill_first_token, decode_step), tt/weights.py (flatbuffer cache of sharded bfp8 tensors under /mnt/tt-data/ssinghal/mimo-wcache/v1, ~6.5 GB/MoE layer, all L0-47 built), tt/cache_weights.py (parallel cache builder), tests/test_chain_dump.py, tests/test_smoke_model.py. Evidence: chain L0..L5 free-running h_out PCC >=0.99973 vs bf16 dump (E261007-0456-8fe), FFN-only teacher forcing at floor, 48-layer first token '<think>' on GSM8K prompts for two ISLs (see 48-layer smoke entry). Repro: launch.py --worktree WT --commit C --host H --env MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL --env MOE_UNI_BF16_X=1 --env MOE_UNI_BF16_INTERMED=1 --env MOE_UNI_BF16_OUT=1 --env LD_LIBRARY_PATH=/mnt/tt-data/ssinghal/mimo/artifacts/integ_23b56c47ac7/lib --env MIMO_EXPERT_OP=unified --env SMOKE_LAYERS=48 -- python_env/bin/python -m pytest -x -s -q models/demos/blackhole/mimo_v26/tests/test_smoke_model.py (chain: test_chain_dump.py, CHAIN_LAYERS=6 CHAIN_DECODE=1). NOT done/unverified: no GSM8K accuracy, no traced/chunked/paged prefill or decode loop, no timing (host-timed only), decode dead slots not spread-routed (capacity assertion passes at 4 live/row; spread_pad_routing not wired), decode teacher-forced L5 step 2 min PCC 0.987 (near-tie routing, 4 live tokens), layers 6-47 verified only by finite/plausible tokens not by PCC, per-slot decode positions are shared by all mesh rows (attention decode_set takes one vector), max_pos 512, bf16 lm_head/embedding replicated, MTP not built. Merge notes: ssinghal/mimo merged twice into this branch (LOG.md conflicts resolved by keeping both).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48u_43f8c5f81d5.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests
