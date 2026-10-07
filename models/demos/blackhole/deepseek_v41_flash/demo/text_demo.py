@@ -284,7 +284,11 @@ def _run_demo(
     spec_k = (
         spec_choice.k if spec_choice.on else 0
     )  # k drafts per round (DSpark drafter); the largest candidate when adaptive; 0 = plain
-    logger.info(spec_choice.describe() + f" [batch {batch_size}, padded {padded_batch}, max_seq_len {model.max_ctx}]")
+    (logger.warning if "context too long" in spec_choice.reason else logger.info)(
+        ("!!! " if "context too long" in spec_choice.reason else "")
+        + spec_choice.describe()
+        + f" [batch {batch_size}, padded {padded_batch}, max_seq_len {model.max_ctx}]"
+    )
     if spec_k and os.environ.get("DSV41_SPEC_EARLY") == "1" and not hasattr(generator, "spec"):
         # build the spec runner(s) BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on that trace's scratch memory and
         # are overwritten by its replays (a later prefill then hangs the spec traces)
