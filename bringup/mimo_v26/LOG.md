@@ -898,3 +898,14 @@
 - claim: USER DECISIONS 2026-10-07: (1) spec decode drafter = the model card's 5-layer SWA DFlash-style drafter predicting 7 tokens per forward pass (model card README section 'Speculative Decoder'; block size 8 = 1 verified + 7 drafted; checkpoint dir dflash/), NOT the in-checkpoint MTP-3 (interpretation of 'MTP 7 token prediction': the card calls the DFlash drafter an MTP drafter; coordinator to confirm in the report). (2) bfp8 attention weights confirmed (keep bfp8 qkv/o; supersedes the open question in E261007-0542-8b2). (3) GSM8K threshold: user asked to use a different benchmark prompt set from the model card; the README publishes only agentic suites (DeepSWE, ProgramBench, Terminal Bench, OSWorld ...) with no runnable prompts or example messages, so no such set exists locally: clarification requested, GSM8K non-thinking n=128 remains the interim runnable proxy with threshold not yet set.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0553-ce8
+- date: 2026-10-07T05:53:58
+- commit: bde698a68ac
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER DECISIONS 2026-10-07: drafter confirmed = DFlash-style 5-layer drafter in the checkpoint dflash/ dir (7 draft tokens, block 8). GSM8K gate set to 85%: scorecard gsm8k min_n=128, min_correct=109 on gsm8k_128_nothink.json (sha256 858aa02c...2190b), non-thinking. Supersedes the provisional n=64/55 template value.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
