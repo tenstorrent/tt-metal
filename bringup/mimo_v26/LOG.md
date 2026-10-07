@@ -1828,3 +1828,25 @@
 - claim: EXPERT PLACEMENT / load imbalance analysis (CPU, real routing histograms of 47 layers: L1-5 bf16 dump, L6-47 device capture, 2048 tokens each): mean active experts per chip for a decode batch of B tokens (B=4U): 3.3 (U=8), 4.3 (U=16), 5.3 (U=32). Default mapping (e -> col e//32, row (e%32)//8): expected max/mean chip load 1.65/1.50/1.38 at U=8/16/32; balanced assignment (LPT on the layer's own histogram) 1.006-1.012 in expectation. But on HELD-OUT prompts (histogram from 8 prompts, evaluated on the other 8, 100 random batches, realized max/mean of active experts per chip) default 1.92/1.66/1.47 vs balanced 1.72/1.51/1.37: only ~10% better. Most of the max/mean gap at decode batch sizes is Poisson noise of few active experts per chip, not systematic hot experts. Placement gain estimate: ~0.04 ms/layer on the expert stage (~2 ms/token): low priority
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_Q_ring_bfp8_hifi3_f32_r2_h30_7279090f3c4.log
 - paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute, models/demos/blackhole/mimo_v26/tests/test_moe_ring_decode.py, models/common/modules/moe/tt_moe_decode.py
+
+## E261007-1732-537
+- date: 2026-10-07T17:32:56
+- commit: 929092ec570
+- branch: ssinghal/mimo-moe
+- host: 30,40,43,48
+- track: moe
+- status: verified
+- claim: RING decode MoE (tt/moe_ring.py: MiMoRingMoEDecode + RingExpertWeights; library artifacts/moe_C_29b0e1519bb, defaults MOE_COMPUTE_BFP8_WEIGHTS=1 FP32_ACC=1 FIDELITY=HiFi3) vs the gated unified decode MoE on REAL layers 1/5/16, 4x8, T tokens per mesh row 1,2,4,8,16,32 (T=8U verify path included), 75% live (dead slots with weight-0 balanced routing): ring vs unified alpha 0.994-1.0003, rel L2 0.0046-0.0064, PCC >= 0.99999; vs dump ffn_out ring rel/alpha equal to or better than unified (L5 T=8: ring alpha 1.0030 rel 0.0076 PCC 0.99998 vs unified 1.0029/0.0074; L16 device-capture dump is biased: ring alpha 1.0108 rel 0.0112 vs unified 1.0167/0.0174). 5 eager runs identical and trace==eager for both. ALTERNATING traced time ms/layer (host-timed, 3 rounds, incl. mask/dead routing and the column all_gather) unified -> ring: T=1 0.842 -> 0.416; 2 1.083 -> 0.615; 4 1.241 -> 0.789; 8 1.450 -> 0.964; 16 1.608 -> 1.153; 32 1.693 -> 1.188 (saves 0.43-0.51 ms/layer = 20-24 ms/token at 47 layers). DRAM: the ring copy costs ~53 MB per bank (~214 MB/chip) per layer next to the unified copy (free per bank 4027 -> 3866 MB after both copies of 3 layers). Ring weights cache build (NFS /mnt/tt-data/ssinghal/mimo-wcache/ring_L<L>): ~33 s/layer warm-up for the first three, ~60 s/layer in the full build
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_R_ringlayers_h30_29b0e1519bb.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1732-aee
+- date: 2026-10-07T17:32:56
+- commit: 929092ec570
+- branch: ssinghal/mimo-moe
+- host: 30,40,43,48
+- track: moe
+- status: verified
+- claim: RING decode MoE hang/race gates (real layers 1,5,16 reused, shared ring buffers+semaphores as in the model, one trace): 48-layer deep trace 1000 replays NO hang at T=1 (0.409 ms/layer), T=8 live 6 (0.958), T=32 live 24 (1.181); bitwise glitch stress (every layer output of every replay vs the first replay, per mesh row): T=8 6 layers x 3000 = 18000 layer-calls 0 glitches, T=32 6 x 6000 = 36000 calls 0 glitches, T=1 (zero-token chips: 4 tokens x 8 experts) 36000 calls 0 glitches (the unified path glitches 2-5 per 18000 calls). So the ring path (all_to_all_dispatch_metadata + moe_compute + fast_reduce + reduce_scatter + all_gather) shows neither the sentinel hang nor the unified/all_reduce glitch in this MoE-only context
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_S_stress6_t32_h48_d2d2e6a1a5b.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/layer.py
