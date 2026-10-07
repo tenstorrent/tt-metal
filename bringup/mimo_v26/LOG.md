@@ -124,3 +124,27 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dump_s128b16_bf16_L0-5.log
 - paths: models/demos/blackhole/mimo_v26/reference
 - data: {"S":128,"B":16,"layers":"0-5","dtype":"bf16","sha256":"d2b8fd683e1e4e09c2f437e1e71b55a011f493d3bbfe57ba01ed40b2049e8f00"}
+
+## E261007-0228-172
+- date: 2026-10-07T02:28:02
+- commit: c488d1c5736
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: correctness
+- status: verified
+- claim: GATE (a) PASS for track 0 on real tokens (16x128 GSM8K chat prompts, sha d2b8fd68..): single-layer teacher-forced on the real bf16-chain h_in, fp32 oracle vs HF fp32: L0 (dense) PCC 0.99999994, L1 (SWA-MoE) 0.99999994, L5 (global-MoE) 0.99999994 (L2-4 1.0); router expert sets identical on 100% of the 2048 tokens for L1..L5. Chain L0..L5: HF chained vs fp32 oracle chain per-layer h_out PCC >= 0.9999999 each layer; logits after L0..L5 (norm+lm_head, prefix not language) PCC 1.000000 and greedy tokens equal on 100% of 2048 positions. bf16 oracle dump vs HF fp32: h_out PCC 0.99996-1.0 per layer, greedy-equal 98.3% (bf16 noise). Note PCC saturates because of residual outliers; use rel err (noise.pt) too.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_chain_vs_hf_L0-5.log
+- paths: models/demos/blackhole/mimo_v26/reference
+- data: {"L0_pcc":0.99999994,"L1_pcc":0.99999994,"L5_pcc":0.99999994,"router_sets_equal":1.0,"chain_logits_pcc":1.0,"chain_greedy_equal":1.0}
+
+## E261007-0228-84b
+- date: 2026-10-07T02:28:03
+- commit: c488d1c5736
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: noise-floor
+- status: verified
+- claim: Reference noise floor, S=128 B=16 real tokens, L0-5, teacher-forced (fp32 layer on the bf16 dump's h_in vs the bf16 oracle layer): h_out relative L2 error 0.26% (L0), 0.31/0.63/0.43/0.36/0.27% (L1-L5); PCC 0.99998-1.0. Router: identical 8-expert set for 98.6/90.6/93.6/94.5/93.7% of tokens (L1-L5), per-slot overlap 98.8-99.8%. So ~6-9% of tokens flip >=1 expert between bf16 and fp32 purely from rounding; a device router mismatch below that is noise, not a bug. Dumps: /mnt/tt-data/ssinghal/mimo-dumps/mimo-prefill-s128b16 (bf16 chain) and ...-f32 (fp32 own chain, noise.pt holds the numbers per layer).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_dump_s128b16_fp32_L0-5.log
+- paths: models/demos/blackhole/mimo_v26/reference
+- data: {"rel_h_out":[0.00259,0.00309,0.00630,0.00435,0.00356,0.00272],"router_set_equal":[null,0.986,0.906,0.936,0.945,0.937]}
