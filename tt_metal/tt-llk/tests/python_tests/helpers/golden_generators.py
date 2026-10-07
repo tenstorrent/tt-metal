@@ -2287,12 +2287,9 @@ class PackGolden:
 
 
 def ema_down_columns(x: torch.Tensor, chain_rows: int = None) -> torch.Tensor:
-    """EMA down each column of a row-major [rows, cols] tensor, as the Quasar EMA kernel runs it.
+    """EMA down each column of a row-major [rows, cols] tensor, carry reset every ``chain_rows`` rows.
 
-    ``out[r] = EMA_ALPHA * out[r-1] + EMA_BETA * x[r]``, with the carry restarting at 0 every
-    ``chain_rows`` rows (default: one chain over all rows). The recurrence runs in float32
-    because the kernel keeps its carry in an LREG at full width; the caller applies the
-    output-format rounding.
+    Float32 throughout, like the kernel's LREG carry; the caller applies the output rounding.
     """
     x = x.to(torch.float32)
     chain_rows = chain_rows or x.shape[0]
@@ -2627,9 +2624,7 @@ class UnarySFPUGolden:
         if operation not in (MathOperation.Cumsum, MathOperation.Ema):
             whole_tensor_res = None
         elif skip_tilize:
-            # The caller (the fuser) hands over Dest already tilized: run the recurrence on the
-            # row-major view and put the result back in tilized order. Float32 throughout so
-            # neither permutation rounds; the single Dest-format rounding is applied below.
+            # The fuser passes Dest already tilized; permute in Float32 so neither direction rounds.
             row_major = untilize_block(
                 result.to(torch.float32), DataFormat.Float32, dimensions
             ).flatten()
@@ -3644,11 +3639,7 @@ class UnarySFPUGolden:
         return torch.cumsum(tiles.to(torch.float32), dim=1).flatten()
 
     def _ema(self, x, dimensions: tuple[int, int]):
-        """Column-wise (top-to-bottom) exponential moving average inside each 32x32 tile.
-
-        Reached through the whole-tensor branch of __call__ like _cumsum, on the untilized
-        [rows, cols] view; every tile starts a fresh chain (see ema_down_columns).
-        """
+        """Column-wise EMA inside each 32x32 tile, on the untilized view (see ema_down_columns)."""
         rows, cols = dimensions[0], dimensions[1]
         return ema_down_columns(x.reshape(rows, cols), chain_rows=TILE_DIM).flatten()
 

@@ -152,7 +152,6 @@ using namespace ckernel::sfpu;
 template <auto>
 inline constexpr bool unhandled_op = false;
 
-// EMA smoothing weights as fp32 bit patterns: EMA_new = alpha * EMA_old + beta * x.
 // Mirrored by EMA_ALPHA_BITS / EMA_BETA_BITS in helpers/sfpu_dispatch_constants.py.
 inline constexpr std::uint32_t kEmaAlphaBits = 0x3F19999Au; // 0.6f
 inline constexpr std::uint32_t kEmaBetaBits  = 0x3ECCCCCDu; // 0.4f
@@ -485,8 +484,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::ema)
     {
-        // In place (OUT_TILE_DELTA = 0): the harness packs the tile it hands the functor. The
-        // production dst + 1 contract is covered by test_sfpu_ema_quasar.py.
+        // In place: the harness packs the tile it hands the functor (dst + 1 is in test_sfpu_ema_quasar.py).
         init_ema<0 /*OUT_TILE_DELTA*/>();
         ema_load_alpha_beta(kEmaAlphaBits, kEmaBetaBits);
     }
@@ -833,8 +831,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::ema)
     {
-        // Whole-tile op, run in place with the OUT_TILE_DELTA init_ema recorded; first = true (the
-        // default) starts a fresh chain at every tile.
+        // Once per tile (RC_custom); first = true (the default) starts a new chain every tile.
         if (first)
         {
             ema_clear_previous_output();

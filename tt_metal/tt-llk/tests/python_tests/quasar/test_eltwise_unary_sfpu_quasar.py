@@ -500,13 +500,8 @@ def prepare_ema_inputs(
     src_A: torch.Tensor,
     input_format: DataFormat,
 ) -> torch.Tensor:
-    """
-    Map the uniform [0, 1] stimulus into [-4, 4] for the column-wise EMA.
-
-    alpha + beta = 1, so every EMA value is a convex mix of its column's inputs and stays
-    inside [-4, 4]. Both signs let the carry and the input cancel.
-    """
-    u = src_A.to(torch.float32)  # uniform [0, 1] from the uniform stimuli spec
+    """Map uniform [0, 1] to [-4, 4]; alpha + beta = 1 keeps every output in range."""
+    u = src_A.to(torch.float32)
     return (-4.0 + 8.0 * u).to(format_dict[input_format])
 
 
@@ -897,8 +892,7 @@ OP_CONFIGS = [
     # cross-tile carry (first=false) needs the shared C++ source to thread
     # `first = (i == 0)` through its tile loop, so it is a follow-on.
     OpConfig(MathOperation.Cumsum, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    # Column-wise EMA: the same whole-tile, in-place (OUT_TILE_DELTA = 0) RC_custom shape as
-    # cumsum, with the carry in LREG4 zeroed per tile.
+    # Whole-tile like cumsum: in place, carry zeroed per tile.
     OpConfig(MathOperation.Ema, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,

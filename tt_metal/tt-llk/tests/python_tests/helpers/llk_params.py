@@ -81,8 +81,7 @@ class MathOperation(Enum):
     # tilized tensor rather than per datum.
     Cumsum = OpSpec("cumsum", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)
-    # Whole-tile column-wise exponential moving average (alpha=0.6, beta=0.4); golden works on
-    # the tilized tensor.
+    # Whole-tile column-wise EMA; its golden works on the tilized tensor.
     Ema = OpSpec("ema", MathOpType.SFPU_UNARY)
     Exp = OpSpec("exponential", MathOpType.SFPU_UNARY)
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)

@@ -85,11 +85,9 @@ SITU_GLU_BETA_UP = 25.0
 RAND_FROM = 1.0
 RAND_SCALE = 2.0
 
-# EMA smoothing weights as fp32 bit patterns (kEmaAlphaBits / kEmaBetaBits in
-# sfpu_operations_quasar.h): EMA_new = alpha * EMA_old + beta * x. alpha = 0.6f is
-# non-dyadic, so alpha * EMA_old rounds, and it weights the carry above the input.
+# EMA weights, mirrored by kEmaAlphaBits / kEmaBetaBits in sfpu_operations_quasar.h. 0.6 is
+# non-dyadic, so the carry product rounds.
 EMA_ALPHA_BITS = 0x3F19999A  # 0.6f
 EMA_BETA_BITS = 0x3ECCCCCD  # 0.4f
-# The same weights as floats, exactly the fp32 values the bit patterns encode.
 EMA_ALPHA = struct.unpack("<f", struct.pack("<I", EMA_ALPHA_BITS))[0]
 EMA_BETA = struct.unpack("<f", struct.pack("<I", EMA_BETA_BITS))[0]
