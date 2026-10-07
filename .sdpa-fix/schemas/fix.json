@@ -19,7 +19,8 @@
     "reviewer_focus",
     "regression",
     "why",
-    "fix"
+    "fix",
+    "decision"
   ],
   "properties": {
     "fixed": {
@@ -93,6 +94,67 @@
     "fix": {
       "type": "string",
       "maxLength": 300
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "needed",
+        "question",
+        "options",
+        "recommended"
+      ],
+      "properties": {
+        "needed": {
+          "type": "boolean"
+        },
+        "question": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "key",
+              "label",
+              "summary",
+              "kind"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "enum": [
+                  "A",
+                  "B",
+                  "C"
+                ]
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "ask_owner"
+                ]
+              }
+            }
+          }
+        },
+        "recommended": {
+          "type": "string"
+        }
+      }
     }
   }
 }

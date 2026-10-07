@@ -704,6 +704,9 @@ autofix_annotate() {
              elif .state == "fixed_upstream" then "\($em) already fixed on main by \(fixref)\(if (.fix_author // "") != "" then " by @\(.fix_author)" else "" end), not in this run yet"
              elif .state == "fix_pending" then "\($eo) fix in progress\(if (.fix_author // "") != "" then " by @\(.fix_author)" else "" end): open PR \(.fix_pr.url | prlink)"
              elif .state == "proposed_dryrun" then "🛠 *autofix dry-run proposal — take a look*: \((.verdict_title // "see proposals/") | sub("^\\[autofix[^]]*\\] *"; ""))"
+             elif .state == "awaiting_decision" then "❓ *autofix — needs your decision* (buttons in the thread)"
+             elif .state == "decided" then "🛠 decision taken, autofix draft on its way"
+             elif .state == "with_owner" then "🙋 handed to the owner of \(if (.decision.culprit_pr // "") != "" then "<\($gh)/pull/\(.decision.culprit_pr)|#\(.decision.culprit_pr)>" else "the culprit PR" end)"
              elif .state == "no_fix" then "🛠 no safe autofix"
              else null end)}
       | select(.n != null and (.f | length) > 3) ] as $notes

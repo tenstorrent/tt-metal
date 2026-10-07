@@ -113,6 +113,30 @@ nothing; a newer green run makes it `verified`; a newer red run reopens it.
 | already fixed on main by #N by @author | someone else's merged fix; nothing to do |
 | fix in progress by @author: open PR #N | someone else's open PR; the bot will not draft its own |
 
+## Decisions in Slack (buttons)
+
+When the right fix is a human call (a CI time limit, running fewer cases on a
+platform, a threshold whose cause is unclear, anything that changes what a test
+checks), the fix agent returns `decision.needed` with 2-3 options instead of a
+patch. The bot then **opens nothing**:
+
+1. The record becomes `awaiting_decision`. One message in the digest thread
+   asks the question, with a button per option (★ = recommended) plus Reject.
+2. `decide.py`, a Socket Mode listener (outbound websocket, no public URL),
+   receives your click, checks `DECIDERS`, writes `decision_choice` to the
+   ledger, swaps the buttons for "decided: … by @you, applying…", and starts
+   `DECISIONS_ONLY=1 fixer.sh`.
+3. The fixer applies it: a **patch** option becomes `decided`, and the agent
+   implements only that option, guard, then a real draft PR (live even when
+   cron runs dryrun, because you chose it). **ask_owner** comments on the
+   culprit PR tagging its author (`with_owner`). **Reject** sets `rejected`.
+
+Setup: Socket Mode on, Interactivity on, an app-level token (`connections:write`)
+in `~/.sdpa-fix/slack_app_token` (chmod 600). Cron runs `decide.sh` every
+5 min; it keeps exactly one listener alive (flock) and does nothing without the
+token. Log: `logs/decide.log`. `FORCE_SIG=<sig> sdpa-fix-dry` runs the fix
+agent on one failure by hand.
+
 ## No duplicate PRs
 
 Deduplication is by regression **signature** = `sha1(workflow :: job-without-SKU :: test-id)`,
