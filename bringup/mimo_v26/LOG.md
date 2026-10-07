@@ -1021,3 +1021,39 @@
 - claim: MERGE CANDIDATE ssinghal/mimo-asm @ 34b6fa4ef62 (ssinghal/mimo merged in, incl. moe_decode.py): re-check after merge, s2048b1 CH=512 L0..L5 traced chunked prefill: hidden L5 PCC 0.99972, logits 0.99945 top1 1/1, replay bit-identical, hand-off decode min 0.99986 over L0-L5 (decode MoE uses spread_pad_routing for the padding rows). Contents: tt/prefill.py, tt/kv_pool.py, layer.chunk(), model layout kwarg, tests test_prefill_handoff.py / test_prefill_scale.py / test_capture_device.py, notes/kv_pool.md.
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_pf_merged_34b6fa4ef62.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt
+
+## E261007-0601-d16
+- date: 2026-10-07T06:01:11
+- commit: 990094ad6bc
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: memory
+- status: verified
+- claim: memory_fit table (scorecard format) from E261007-0557-332: free DRAM per chip after 48-layer chunked prefill, free_gib = (free MB per bank x 8 banks) / 1024 from the ttnn memory view in the logs: (4,4096) 2321.0 MB/bank -> 18.13 GiB; (16,4096) 2278.3 -> 17.80 GiB; (4,65536) 2000.2 -> 15.63 GiB; (16,65536) 1805.7 -> 14.11 GiB. KV pool sized to each cell, no OOM. Measured (ttnn memory view), not arithmetic.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps48_16_65536_990094ad6bc.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
+- data: {"table":[{"batch":4,"isl":4096,"free_gib":18.133},{"batch":16,"isl":4096,"free_gib":17.799},{"batch":4,"isl":65536,"free_gib":15.627},{"batch":16,"isl":65536,"free_gib":14.107}]}
+
+## E261007-0601-86b
+- date: 2026-10-07T06:01:11
+- commit: 990094ad6bc
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: perf
+- status: verified
+- claim: perf_prefill (scorecard format) from E261007-0557-332: 48-layer chunked traced prefill, B=4 users (1 per mesh row), ISL 4096, CH=2048: 2 replay steps of 375.3 ms = replay-only time to last chunk 0.746 s per user (ttft_ms 746; REPLAY-ONLY: excludes host input copies outside the trace, final norm + lm_head and eager/trace warm-up; first-token logits time not measured); aggregate prefill_tok_s = 4 x 4096 / 0.746 s = 21959 tok/s (all 4 mesh rows busy), i.e. 5490 tok/s per user. B=16 ISL 4096 (4 users per row): 21919 tok/s replay-only.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps48_4_4096_990094ad6bc.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
+- data: {"ttft_ms":746,"prefill_tok_s":21959,"batch":4,"isl":4096,"replay_only":1}
+
+## E261007-0601-af7
+- date: 2026-10-07T06:01:11
+- commit: 990094ad6bc
+- branch: ssinghal/mimo-asm
+- host: 35,43,47,48
+- track: metric
+- status: verified
+- claim: ctx64k_two_isl: 48 layers, 4 users, ISL 64k -> 8k -> 64k in ONE process (E261007-0557-332): DRAM free identical (2000.2 MB/bank after each of the three cases), no OOM, logits finite. No accuracy claim.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps48_4_65536_4_8192_4_65536_990094ad6bc.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
+- data: {"two_isl_same_process_ok":1}
