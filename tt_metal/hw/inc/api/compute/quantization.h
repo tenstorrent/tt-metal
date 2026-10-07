@@ -247,13 +247,14 @@ ALWI void quant_int8_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range | Required |
+ * |----------------|--------------------------------------------------------|-----------|-------------|----------|
+ * | zero_point     | The zero point of the input quantized tensor           | uint32_t  | Any number  | Yes      |
+ * | out_zero_point | The zero point of the output quantized tensor          | uint32_t  | Any number  | No       |
  * */
 // clang-format on
-ALWI void requant_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point)));
+ALWI void requant_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -263,13 +264,15 @@ ALWI void requant_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range | Required |
+ * |----------------|--------------------------------------------------------|-----------|-------------|----------|
+ * | zero_point     | The zero point of the input quantized tensor           | uint32_t  | Any number  | Yes      |
+ * | out_zero_point | The zero point of the output quantized tensor          | uint32_t  | Any number  | No       |
  * */
 // clang-format on
-ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point)));
+ALWI void requant_uint8_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -278,13 +281,15 @@ ALWI void requant_uint8_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range | Required |
+ * |----------------|--------------------------------------------------------|-----------|-------------|----------|
+ * | zero_point     | The zero point of the input quantized tensor           | uint32_t  | Any number  | Yes      |
+ * | out_zero_point | The zero point of the output quantized tensor          | uint32_t  | Any number  | No       |
  * */
 // clang-format on
-ALWI void requant_int8_tile_init(const uint32_t zero_point) {
-    MATH((SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8), zero_point)));
+ALWI void requant_int8_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -294,14 +299,15 @@ ALWI void requant_int8_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range | Required |
+ * |----------------|--------------------------------------------------------|-----------|-------------|----------|
+ * | zero_point     | The zero point of the input quantized tensor           | uint32_t  | Any number  | Yes      |
+ * | out_zero_point | The zero point of the output quantized tensor          | uint32_t  | Any number  | No       |
  * */
 // clang-format on
-ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
+ALWI void requant_int8_in_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int32, true), zero_point)));
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int32, true), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -312,14 +318,15 @@ ALWI void requant_int8_in_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range | Required |
+ * |----------------|--------------------------------------------------------|-----------|-------------|----------|
+ * | zero_point     | The zero point of the input quantized tensor           | uint32_t  | Any number  | Yes      |
+ * | out_zero_point | The zero point of the output quantized tensor          | uint32_t  | Any number  | No       |
  * */
 // clang-format on
-ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
+ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8, true), zero_point)));
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::UInt8, true), zero_point, out_zero_point)));
 }
 
 // clang-format off
@@ -330,14 +337,15 @@ ALWI void requant_int8_in_uint8_out_tile_init(const uint32_t zero_point) {
  *
  * Return value: None
  *
- * | Argument   | Description                              | Data type | Valid range | Required |
- * |------------|------------------------------------------|-----------|-------------|----------|
- * | zero_point | The zero point of the re-quantization Op | uint32_t  | Any number  | Yes      |
+ * | Argument       | Description                                            | Data type | Valid range | Required |
+ * |----------------|--------------------------------------------------------|-----------|-------------|----------|
+ * | zero_point     | The zero point of the input quantized tensor           | uint32_t  | Any number  | Yes      |
+ * | out_zero_point | The zero point of the output quantized tensor          | uint32_t  | Any number  | No       |
  * */
 // clang-format on
-ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point) {
+ALWI void requant_int8_in_int8_out_tile_init(const uint32_t zero_point, const uint32_t out_zero_point = 0) {
     MATH((SFPU_BINARY_INIT_FN_ARGS(
-        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point)));
+        requant_int32, sfpu::requant_init, (APPROX, false, DataFormat::Int8, true), zero_point, out_zero_point)));
 }
 
 // clang-format off
