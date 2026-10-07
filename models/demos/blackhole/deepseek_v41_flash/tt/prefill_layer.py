@@ -352,7 +352,9 @@ class DSV41PrefillLayer:
         own = moe_cols(self.umoe, L.moe.gate, hh_own, L.mesh_config, L.ccl)  # [1,1,n8*32,D]
         if n8 > 1:
             ttnn.deallocate(hh_own)
-        if n8 == 1:  # U=2 x C=128: a full-extent slice aliases ``own`` (freeing it would free the result: "Tensor is not allocated")
+        if (
+            n8 == 1
+        ):  # U=2 x C=128: a full-extent slice aliases ``own`` (freeing it would free the result: "Tensor is not allocated")
             return [own]
         D = own.shape[3]
         outs = [ttnn.slice(own, [0, 0, g * T, 0], [1, 1, (g + 1) * T, D]) for g in range(n8)]
@@ -363,8 +365,8 @@ class DSV41PrefillLayer:
         if self.colsplit:
             n8 = int(xs[0].shape[2]) // self.T if getattr(xs, "packed", False) else len(xs)
             if (
-                pk_mhc_enabled() and n8 > 1 and self.umoe is None
-            ):  # n8 == 1 (U=2 x C=128) segfaults in the packed path's all_gather; the packed carrier has no unified-MoE branch
+                pk_mhc_enabled() and n8 > 1 and (self.umoe is None or pf_tune._env("DSV41_PF_MHC_UMOE", "0") == "1")
+            ):  # DSV41_PF_MHC_UMOE=1: packed carrier with the unified MoE (moe_cols on the packed hh). n8 == 1 (U=2 x C=128) segfaults in the packed path's all_gather; the packed carrier has no unified-MoE branch
                 return self.forward_cols_pk(xs, pres, S, s0)
             return self.forward_cols(xs, pres, S, s0)
         xs, pres = unpack_streams(xs, pres)
@@ -451,41 +453,49 @@ class DSV41PrefillLayer:
         hh = pkf.collapse_norm(x2, pre_a, L.ffn_norm_w, eps)  # [1,1,N,D] bf16
         ttnn.deallocate(pre_a)
         _mark("mhc_expand_collapse")
-        route_own = os.environ.get("DSV41_PF_ROUTE_OWN", "1") == "1"
         if (
-            route_own
-        ):  # router on the column's own chunks once, gathered with the hidden states (instead of 8x redundantly per group)
-            sc_all, ix_all = self._route_own(hh, n8)
-        hha = mc.allgather(ttnn.reshape(hh, [n8, 1, T, D]), cc, axis=1, dim=1)  # [n8,8,T,D]
-        ms = []
-        for g in range(n8):
-            hh_g = ttnn.reshape(ttnn.slice(hha, [g, 0, 0, 0], [g + 1, 8, T, D]), [1, 1, 8 * T, D])
-            tok_g = ttnn.reshape(ttnn.to_layout(hh_g, ttnn.ROW_MAJOR_LAYOUT), [8 * T, 1, 1, D])
+            self.umoe is not None
+        ):  # unified MoE: all own rows hh [1,1,N,D] in one count-driven pipeline -> own rows [1,1,N,D]
+            from models.demos.blackhole.deepseek_v41_flash.tt.prefill_unified_moe import moe_cols
+
+            ms = [moe_cols(self.umoe, L.moe.gate, hh, mc, cc)]
+            _mark("moe+allgather")
+        else:
+            route_own = os.environ.get("DSV41_PF_ROUTE_OWN", "1") == "1"
+            if (
+                route_own
+            ):  # router on the column's own chunks once, gathered with the hidden states (instead of 8x redundantly per group)
+                sc_all, ix_all = self._route_own(hh, n8)
+            hha = mc.allgather(ttnn.reshape(hh, [n8, 1, T, D]), cc, axis=1, dim=1)  # [n8,8,T,D]
+            ms = []
+            for g in range(n8):
+                hh_g = ttnn.reshape(ttnn.slice(hha, [g, 0, 0, 0], [g + 1, 8, T, D]), [1, 1, 8 * T, D])
+                tok_g = ttnn.reshape(ttnn.to_layout(hh_g, ttnn.ROW_MAJOR_LAYOUT), [8 * T, 1, 1, D])
+                if route_own:
+                    k_ = sc_all.shape[3]
+                    sc_g = ttnn.slice(sc_all, [g * 8 * T, 0, 0, 0], [(g + 1) * 8 * T, 1, 1, k_])
+                    ix_g = ttnn.slice(ix_all, [g * 8 * T, 0, 0, 0], [(g + 1) * 8 * T, 1, 1, k_])
+                    mg = self.pmoe.forward_routed(tok_g, sc_g, ix_g)
+                    ttnn.deallocate(sc_g)
+                    ttnn.deallocate(ix_g)
+                else:
+                    mg = self.pmoe.forward(hh_g, tok_g)  # [1,1,256,D/8]
+                ttnn.deallocate(hh_g)
+                ttnn.deallocate(tok_g)
+                m_own = ttnn.experimental.all_to_all_async_generic(
+                    mg, in_dim=3, out_dim=2, num_links=cc.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
+                )
+                ttnn.deallocate(mg)
+                ms.append(m_own)
+            ttnn.deallocate(hha)
             if route_own:
-                k_ = sc_all.shape[3]
-                sc_g = ttnn.slice(sc_all, [g * 8 * T, 0, 0, 0], [(g + 1) * 8 * T, 1, 1, k_])
-                ix_g = ttnn.slice(ix_all, [g * 8 * T, 0, 0, 0], [(g + 1) * 8 * T, 1, 1, k_])
-                mg = self.pmoe.forward_routed(tok_g, sc_g, ix_g)
-                ttnn.deallocate(sc_g)
-                ttnn.deallocate(ix_g)
-            else:
-                mg = self.pmoe.forward(hh_g, tok_g)  # [1,1,256,D/8]
-            ttnn.deallocate(hh_g)
-            ttnn.deallocate(tok_g)
-            m_own = ttnn.experimental.all_to_all_async_generic(
-                mg, in_dim=3, out_dim=2, num_links=cc.num_links, topology=ttnn.Topology.Ring, cluster_axis=1
-            )
-            ttnn.deallocate(mg)
-            ms.append(m_own)
-        ttnn.deallocate(hha)
-        if route_own:
-            ttnn.deallocate(sc_all)
-            ttnn.deallocate(ix_all)
-        _mark("moe+allgather")
+                ttnn.deallocate(sc_all)
+                ttnn.deallocate(ix_all)
+            _mark("moe+allgather")
         sh_all = shared_big(L.shared, hh)
         ttnn.deallocate(hh)
         _mark("shared")
-        m_all = f32(ttnn.concat(ms, dim=2) if n8 > 1 else ms[0])
+        m_all = f32(ttnn.concat(ms, dim=2) if len(ms) > 1 else ms[0])
         for t in ms:
             ttnn.deallocate(t)
         x3 = pkf.expand(m_all, x2, post_f, comb_f, sh_all)
