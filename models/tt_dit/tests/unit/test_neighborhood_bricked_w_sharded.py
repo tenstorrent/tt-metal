@@ -130,3 +130,62 @@ def test_bricked_w_sharded_tp_matches_host(*, mesh_device, heads, dims, kernel, 
     got = to_torch_replicated(out, mesh_axes=[None, None, sp_axis, None])
     got = got.reshape(sp, T, H, W // sp, heads * head_dim).permute(1, 2, 0, 3, 4).reshape(1, T, H, W, heads * head_dim)
     assert_quality(expected, got, pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize(
+    "dims, kernel, brick, heads",
+    [
+        ((8, 32, 64), (3, 5, 5), (8, 2, 2), 4),
+        # Stage 5's window and brick on a short volume: 6-site halos on both axes.
+        ((8, 48, 96), (11, 11, 11), (8, 2, 2), 4),
+    ],
+    ids=["win5", "stage5_window"],
+)
+def test_bricked_2d_sharded_matches_host(*, mesh_device, dims, kernel, brick, heads):
+    """The 2-D split: H over the size-4 axis, W over the size-8 axis, every head on every chip.
+
+    Each chip widens K/V by an H halo, then a W halo of the H-widened tensor; a missed corner shows
+    up as a PCC miss at the shard corners, so the windows here all straddle both seams.
+    """
+    from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
+
+    h_axis, sp_axis = 0, 1
+    T, H, W = dims
+    head_dim = 64
+    hs, ws = (list(mesh_device.shape)[axis] for axis in (h_axis, sp_axis))
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, T, H, W, heads, head_dim, dtype=torch.float32) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0).reshape(1, T, H, W, heads * head_dim)
+
+    shard_axes = [None, None, h_axis, sp_axis, None, None]
+    q_tt, k_tt, v_tt = (
+        from_torch(x, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_axes=shard_axes)
+        for x in (q, k, v)
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    out = neighborhood_attention_3d_bricked_w_sharded(
+        q_tt,
+        k_tt,
+        v_tt,
+        dims=dims,
+        kernel_size=kernel,
+        sp_axis=sp_axis,
+        h_axis=h_axis,
+        ccl_manager=ccl_manager,
+        scale=1.0,
+        brick=brick,
+    )
+
+    # (1, sites_local, C) in (t, h_local, w_local) order on each chip.
+    h_local, w_local = H // hs, W // ws
+    channels = heads * head_dim
+    got = to_torch_replicated(
+        ttnn.reshape(out, (1, 1, T * h_local * w_local, channels)), mesh_axes=[h_axis, sp_axis, None, None]
+    )
+    got = got.reshape(hs, ws, T, h_local, w_local, channels).permute(2, 0, 3, 1, 4, 5).reshape(1, T, H, W, channels)
+    assert_quality(expected, got, pcc=0.999)

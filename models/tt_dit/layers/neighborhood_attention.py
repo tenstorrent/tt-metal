@@ -458,6 +458,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     already_bricked: bool = False,
     brick: tuple[int, int, int] | None = None,
     stride: tuple[int, int, int] | None = None,
+    h_axis: int | None = None,
 ) -> ttnn.Tensor:
     """Spatial-W sharded NA3D. ``q``/``k``/``v`` are this chip's W-shard; ``dims`` is the FULL grid.
 
@@ -483,9 +484,15 @@ def neighborhood_attention_3d_bricked_w_sharded(
 
     ``stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites, defaulting to (1,1,1).
     A caller that derives its own brick must pass the same stride here.
+
+    ``h_axis`` splits H over a second mesh axis as well (the 2-D split): each chip holds an
+    ``H/h x W/w`` tile with all its heads and widens K/V by an H halo first, then a W halo of the
+    H-widened tensor, which brings the diagonal neighbours' corners along. It excludes ``tp_axis``.
     """
+    assert h_axis is None or tp_axis is None, "the 2-D split keeps every head on the chip; drop tp_axis"
     shard_count = int(list(query.device().shape)[sp_axis])
-    time_extent, height_extent = dims[0], dims[1]
+    h_shard_count = int(list(query.device().shape)[h_axis]) if h_axis is not None else 1
+    time_extent, height_extent = dims[0], dims[1] // h_shard_count
     width_local = dims[2] // shard_count
     if already_bricked:
         batch, head_count, _, head_dim = tuple(query.shape)
@@ -501,6 +508,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
     assert (
         volume[2] == width_local * shard_count
     ), f"W {volume[2]} does not split into {shard_count} shards of {width_local}"
+    assert (
+        volume[1] == height_extent * h_shard_count
+    ), f"H {volume[1]} does not split into {h_shard_count} shards of {height_extent}"
 
     context_window = tuple(min(window, extent) for window, extent in zip(kernel_size, volume))
     if stride is None:
@@ -517,15 +527,27 @@ def neighborhood_attention_3d_bricked_w_sharded(
         f"a {halo}-site halo exceeds the {width_local}-site shard: the window reaches past the "
         f"neighbour into its neighbour, which a single-hop exchange cannot serve"
     )
-    resident = (time_extent, height_extent, width_local + 2 * halo)
+    halo_h = halo_sites(context_window[1], brick[1]) if h_axis is not None else 0
+    assert halo_h <= height_extent, f"a {halo_h}-site H halo exceeds the {height_extent}-site H shard"
+    assert height_extent % brick[1] == 0, f"H shard {height_extent} is not whole {brick[1]}-site bricks"
+    resident = (time_extent, height_extent + 2 * halo_h, width_local + 2 * halo)
 
     device = query.device()
     plan = cached_bricked_plan(
-        volume, context_window, stride, brick, device, resident=resident, shard_count=shard_count, sp_axis=sp_axis
+        volume,
+        context_window,
+        stride,
+        brick,
+        device,
+        resident=resident,
+        shard_count=shard_count,
+        sp_axis=sp_axis,
+        h_shard_count=h_shard_count,
+        h_axis=h_axis,
     )
     channels = head_count * head_dim
     # DIFFVAE_NA_RELAYOUT=1 keeps the untilize/permute round trips around the op, for A/B timing.
-    single_head_tiles = head_count == 1 and os.environ.get("DIFFVAE_NA_RELAYOUT") != "1"
+    single_head_tiles = head_count == 1 and h_axis is None and os.environ.get("DIFFVAE_NA_RELAYOUT") != "1"
     # K and V span the resident region (owned + halo); Q and the output span only the owned columns.
     owned_volume = (time_extent, height_extent, width_local)
     bricked_sites = brick_count(resident, brick) * SITES_PER_BRICK
@@ -542,6 +564,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     # DIFFVAE_NA_HALO_LINKS overrides the link count for this halo exchange only.
     num_links = int(os.environ.get("DIFFVAE_NA_HALO_LINKS", 0)) or max(1, ccl_manager.num_links)
     semaphore = ccl_manager.get_np_ping_pong_semaphore(sp_axis)
+    h_semaphore = ccl_manager.get_np_ping_pong_semaphore(h_axis) if h_axis is not None else None
 
     t_br, h_br, w_br = brick_grid(owned_volume, brick)
 
@@ -577,6 +600,19 @@ def neighborhood_attention_3d_bricked_w_sharded(
         )
         with timing_tree.span(device, f"{lane}: halo-exchange", category=timing_tree.ALLGATHER, deep=True):
             split = ttnn.reshape(grid5, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
+            if h_axis is not None:
+                # H first, so the W exchange below carries the neighbours' H halo rows: the corners.
+                halo_h_br = halo_h // brick[1]
+                split = _halo_exchange(
+                    ccl_manager,
+                    split,
+                    dims=[2],
+                    pad_left=[halo_h_br],
+                    pad_right=[halo_h_br],
+                    axes=[h_axis],
+                    neighbor_sems=[h_semaphore],
+                    num_links=[num_links],
+                )
             exchanged = _halo_exchange(
                 ccl_manager,
                 split,
@@ -701,7 +737,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             query_chunk_bricks=plan["query_chunk_bricks"],
             shard_extent=resident,
             # Representative only: each device reads its own origin out of the sharded table.
-            shard_origin=(0, 0, -halo),
+            shard_origin=(0, -halo_h, -halo),
             # Uniform across the mesh, so compile-time; one program serves every shard.
             query_extent=plan["query_extent"],
             query_origin=plan["query_origin"],
