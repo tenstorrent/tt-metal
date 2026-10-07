@@ -570,6 +570,9 @@ class ModelArgs:
         "GATE_MM_OUTPUT",
     )
 
+    # GQA models padded to the tensor-parallel width when their KV heads do not divide it.
+    PAD_HEADS_FOR_TP_MODELS = ("Qwen2.5-VL-3B", "Qwen2.5-VL-7B", "olmOCR-2-7B")
+
     LOCAL_LLAMA_PARAMS = {
         k: str(_REPO_ROOT / v)
         for k, v in {
@@ -2944,10 +2947,23 @@ class ModelArgs:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
 
-        # Pad heads so TP=8 divisibility is satisfied for Qwen2.5-VL-7B and olmOCR-2-7B on T3K and TG
-        if self.device_name in ("T3K", "TG") and self.base_model_name in ("Qwen2.5-VL-7B", "olmOCR-2-7B"):
-            self.n_heads = 32  # padded from 28 (nearest mult of 8)
-            self.n_kv_heads = 8  # padded from 4 (nearest mult of 8)
+        # GQA models whose KV heads do not split across the tensor-parallel width get padded heads:
+        # each KV head is duplicated over tp // n_kv_heads devices and each device's Q-head slots are
+        # zero-padded up to ceil(gqa_ratio / devices_per_kv_head). Weights are rearranged to match in
+        # Attention (see _rearrange_qkv_*), e.g. Qwen2.5-VL-7B 28/4 -> 32/8 and 3B 16/2 -> 16/8 at TP=8.
+        self.unpadded_n_heads = self.n_heads
+        self.unpadded_n_kv_heads = self.n_kv_heads
+        if self.base_model_name in self.PAD_HEADS_FOR_TP_MODELS and self.num_devices > 1:
+            tp = 8 if self.num_devices == 32 else self.num_devices
+            if self.n_kv_heads % tp != 0 and tp % self.n_kv_heads == 0:
+                devices_per_kv_head = tp // self.n_kv_heads
+                heads_per_device = math.ceil((self.n_heads // self.n_kv_heads) / devices_per_kv_head)
+                self.n_heads = heads_per_device * tp
+                self.n_kv_heads = tp
+                logger.info(
+                    f"Padding attention heads for TP={tp}: {self.unpadded_n_heads}/{self.unpadded_n_kv_heads} "
+                    f"-> {self.n_heads}/{self.n_kv_heads} (q/kv)"
+                )
 
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.num_local_experts = text_config.get("num_local_experts", 0)

@@ -23,6 +23,43 @@ def find_qwen_vl_width_grid(width: int, tile_size: int, max_rows: int = 4, max_c
     raise ValueError(f"Could not find a tile-aligned grid for width={width}")
 
 
+# Default data-parallel split of a 32-chip Wormhole Galaxy per base model; each DP lane is a
+# T3K-like 1x8 submesh (see tt_transformers create_submeshes).
+GALAXY_DEFAULT_DATA_PARALLEL = {
+    "Qwen2.5-VL-3B": 4,
+    "Qwen2.5-VL-7B": 4,
+    "olmOCR-2-7B": 4,
+    "Qwen2.5-VL-32B": 4,
+    "Qwen2.5-VL-72B": 4,
+}
+
+
+def default_data_parallel(hf_model: str, num_devices: int) -> int:
+    """Data-parallel lanes to use for ``hf_model`` on ``num_devices`` (TT_DATA_PARALLEL overrides)."""
+    override = os.environ.get("TT_DATA_PARALLEL") or os.environ.get("DATA_PARALLEL")
+    if override:
+        return int(override)
+    if num_devices != 32:
+        return 1
+    for base_name, data_parallel in GALAXY_DEFAULT_DATA_PARALLEL.items():
+        if base_name in hf_model:
+            return data_parallel
+    return 1
+
+
+def qwen25_vl_mesh_shape():
+    """Mesh shape to open for MESH_DEVICE (falls back to the number of visible devices).
+
+    Galaxy data-parallel runs open the 32 chips directly as the 4x8 view that create_submeshes
+    splits into 1x8 lanes, so the parent mesh is never reshaped after open (a reshape leaves the
+    real-time profiler bound to the old coordinates).
+    """
+    mesh_device_env = os.environ.get("MESH_DEVICE")
+    if mesh_device_env == "TG":
+        return (4, 8) if default_data_parallel(os.environ.get("HF_MODEL", ""), 32) > 1 else (8, 4)
+    return {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(mesh_device_env, len(ttnn.get_device_ids()))
+
+
 class ModelArgs(TTModelArgs):
     LOCAL_HF_PARAMS = {
         **TTModelArgs.LOCAL_HF_PARAMS,

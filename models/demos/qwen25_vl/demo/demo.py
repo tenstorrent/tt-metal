@@ -24,7 +24,12 @@ from models.demos.qwen25_vl.tt.common import (
 )
 from models.demos.qwen25_vl.tt.generator import Generator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
-from models.demos.qwen25_vl.tt.model_config import ModelArgs, VisionModelArgs
+from models.demos.qwen25_vl.tt.model_config import (
+    ModelArgs,
+    VisionModelArgs,
+    default_data_parallel,
+    qwen25_vl_mesh_shape,
+)
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
@@ -40,6 +45,8 @@ def _qwen25_vl_model_key() -> str:
         return "qwen2.5-vl-72b"
     if "32b" in hf_lower:
         return "qwen2.5-vl-32b"
+    if "3b" in hf_lower:
+        return "qwen2.5-vl-3b"
     return "qwen2.5-vl-7b"
 
 
@@ -171,7 +178,8 @@ def prepare_generator_args(
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
-# data_parallel (int): Number of data parallel groups (1 for T3K, 4 for Galaxy with 128 total batch)
+# data_parallel (int | None): Number of data parallel groups; None picks default_data_parallel(HF_MODEL, num_devices)
+#     (1 on N150/N300/T3K, 4 x 1x8 submeshes on Galaxy). batch_size is per DP group.
 #
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
@@ -190,7 +198,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompts
             "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
@@ -204,21 +212,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,  # data_parallel
-        ),
-        (  # DP-4-b32 Galaxy run (Throughput) - 4 instances × 32 users = 128 global batch
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
-            True,  # instruct mode
-            1,  # repeat_batches
-            4096,  # max_seq_len, allow for image tokens
-            32,  # batch_size per DP group
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-            4,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
         (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/test_bert_score.json",
@@ -232,7 +226,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
-            1,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
@@ -246,7 +240,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
-            1,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -260,7 +254,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
         (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -274,7 +268,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -288,7 +282,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -302,13 +296,12 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            1,  # data_parallel
+            None,  # data_parallel (None: default for model/device, see default_data_parallel)
         ),
     ],
     ids=[
         "batch-1",  # latency
         "batch-32",  # 32 users (special because it fills tile size)
-        "DP-4-b32",  # Galaxy: 4 instances × 32 users = 128 global batch
         "ci-only-bert-score",  # ci_only batch-bert-score for testing coverage in CI pipelines
         "ci-only-text-only",  # ci_only batch-text-only for testing coverage in CI pipelines
         "long-context-16k",  # real-world test for 300DPI scanned document with 16k long context
@@ -333,11 +326,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [qwen25_vl_mesh_shape()],
     indirect=True,
 )
 def test_demo(
@@ -369,15 +358,15 @@ def test_demo(
         pytest.skip("CI only runs the CI-only tests")
 
     num_devices = mesh_device.get_num_devices()
+    data_parallel = request.config.getoption("--data_parallel") or data_parallel
+    if data_parallel is None:
+        data_parallel = default_data_parallel(os.environ.get("HF_MODEL", ""), num_devices)
 
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
     if data_parallel > 1 and (data_parallel > num_devices or num_devices % data_parallel != 0):
         pytest.skip(f"Invalid DP={data_parallel} for {num_devices} devices")
-
-    if data_parallel > 1 and num_devices != 32:
-        pytest.skip(f"DP={data_parallel} requires Galaxy (32 devices), got {num_devices}")
 
     if num_devices == 1 and "Qwen2.5-VL-7B" in os.environ.get("HF_MODEL", ""):
         pytest.skip("Qwen2.5-VL-7B does not support running on N150")
@@ -398,7 +387,6 @@ def test_demo(
     max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
-    data_parallel = request.config.getoption("--data_parallel") or data_parallel
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     cli_sampling_params = request.config.getoption("--sampling_params")
