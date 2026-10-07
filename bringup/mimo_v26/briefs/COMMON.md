@@ -2,7 +2,7 @@
 
 Model: MiMo-V2.6-Flash-RL on Blackhole Galaxy 4x8 (32 chips). Read, in order: `bringup/ONBOARDING.md`, `.claude/skills/tt-moe-bringup/SKILL.md`,
 the skill your brief names, `bringup/GUIDE_dsv4_lessons.md`, `/mnt/tt-data/ssinghal/bringup_study/mimo_v2_6.md` and `bringup_study/mimo/` (config, HF modeling code
-`modeling_mimo_v2.py`, `sgl.py`). The study is UNVERIFIED notes: check every MiMo fact you rely on against config/modeling code and record the check.
+`modeling_mimo_v2.py`; NOTE `sgl.py` in the study dir is a 404 stub, no sglang source is on disk; the checkpoint is at /mnt/tt-data/MiMo-V2.6-Flash-RL). The study is UNVERIFIED notes: check every MiMo fact you rely on against config/modeling code and record the check.
 
 Rules
 - Work ONLY in your worktree (`/mnt/tt-data/ssinghal/mimo/wt/<track>`, branch `ssinghal/mimo-<track>`). `pwd` before any build/cp/rm. Never write to
