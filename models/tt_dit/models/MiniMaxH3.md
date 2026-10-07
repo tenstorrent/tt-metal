@@ -452,10 +452,22 @@ slots falls back to the per-token one-hot gathers and says so in the log; a tran
 (no tile-row map) takes the same per-token path. The norms' static weight is multiplied into the modulation
 table instead of the per-token weight (`MINIMAX_H3_FOLD_NORM_WEIGHT=0` restores). None of these change the numerics.
 
+Opt-in, off by default: `MINIMAX_H3_ADALN_CACHE=1` keeps every block's six modulation tables per denoise step, so a
+step whose timestep vector was seen before (the same schedule as the previous request) costs no adaLN projection.
+The cache is one slot per step of the default 50-step schedule, reserved at warm-up before any trace is captured
+(about 1.3 GB per device for a text-to-video request; a pipeline without buckets captures no traces and reserves
+the slots on its first request, sized for it) and refilled in place when a step's timestep vector changes;
+steps beyond the reserved schedule and traced steps project per step as without the cache. The reservation order
+matters: a ttnn trace replays into the memory its capture-time intermediates occupied, so a table allocated after
+the audio-decode trace was captured would be overwritten on every audio decode (that is what made an earlier
+version of this cache diverge). If device memory runs out at the reservation the cache switches itself off with a
+warning.
+
 | env | effect |
 |---|---|
 | `MINIMAX_H3_ADALN_MIXED_TILES=N` | tile-row slots for tiles that straddle an adaLN run boundary (default 16) |
 | `MINIMAX_H3_FOLD_NORM_WEIGHT=0` | apply the norm's static weight per token again instead of folding it into the table |
+| `MINIMAX_H3_ADALN_CACHE=1` | keep every block's modulation tables per denoise step across requests (eager path only; see above) |
 
 ## Audio decode precision
 
