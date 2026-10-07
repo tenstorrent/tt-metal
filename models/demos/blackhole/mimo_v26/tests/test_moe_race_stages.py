@@ -228,16 +228,24 @@ def main_body(md, dec, xdev, layers, mask_dev):
     names = [(i, k) for i, t in enumerate(t_e) for k in t]
     ref_f = {(i, k): ttnn.clone(tf(t_e[i][k])) for (i, k) in names}
     ttnn.synchronize_device(md)
+
+    def cmp(tl):
+        flags = []
+        for i, k in names:
+            a = tf(tl[i][k])
+            ne = ttnn.ne(a, ref_f[(i, k)])
+            s_ = ttnn.sum(ne)
+            flags.append(ttnn.to_layout(ttnn.reshape(s_, [1, 1, 1, 1]), ttnn.ROW_MAJOR_LAYOUT))
+        return ttnn.concat(flags, dim=3)
+
+    cmp(t_e)  # compile the compare ops before the capture
+    t_w = []
+    run_all(t_w)  # second eager pass: warm program cache of every stage op in the exact capture sequence
+    ttnn.synchronize_device(md)
     t_tr = []
     tid = ttnn.begin_trace_capture(md, cq_id=0)
     run_all(t_tr)
-    flags = []
-    for i, k in names:
-        a = tf(t_tr[i][k])
-        ne = ttnn.ne(a, ref_f[(i, k)])
-        s = ttnn.sum(ne)
-        flags.append(ttnn.to_layout(ttnn.reshape(s, [1, 1, 1, 1]), ttnn.ROW_MAJOR_LAYOUT))
-    fl = ttnn.concat(flags, dim=3)
+    fl = cmp(t_tr)
     ttnn.end_trace_capture(md, tid, cq_id=0)
     ttnn.synchronize_device(md)
     comp = ttnn.ConcatMesh2dToTensor(md, dims=(0, 1), mesh_shape=tuple(md.shape))
