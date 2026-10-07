@@ -487,3 +487,15 @@
 - claim: USER DECISION 2026-10-07 (/goal): agents may build C++ autonomously; use any free host on the cluster, skip hosts that are busy or bad; aim is end-to-end prefill + decode + spec decode on MiMo-V2.6-Flash. Coordinator reading: C++ builds go in PRIVATE build dirs per worktree (never the shared build_Release, never the DeepSeek repo); still NOT authorised: bfp4/fp8-KV, pushing, deleting data, touching or killing foreign jobs, gate weakening.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0346-6df
+- date: 2026-10-07T03:46:23
+- commit: a150b001c4b
+- branch: ssinghal/mimo-asm
+- host: 35
+- track: asm
+- status: verified
+- claim: First on-device decoder layers L0+L1 (dense SwiGLU + SWA/MoE) on 4x8 vs track-0 dump mimo-prefill-s128b16 (B=16,S=128, 4 users/row), real bfp8 weights, expert op mm (bf16 activations, fp32-acc matmuls), exact router. TEACHER FORCED prefill (min over 16 users) L0: attn_out 0.99997, ffn_out 0.99995, h_out 0.99998 vs bf16 dump. L1: attn_out 0.99968, ffn_out 0.99512 (bf16/fp32 dump floor 0.99739; on tokens whose routed expert SET matches the dump 0.99996), h_out 0.99993 (floor 0.99995); router set match 0.95996 (82 flips/2048 tokens, all 82 with gap<0.01 near-ties; track-0 floor 90.6-98.6%). Teacher-forced decode (3 steps, dump dec_in/dec_out, 32 slots/row, MoE decode padded to 64 rows) min PCC L0 0.99997, L1 0.99981. Free-running chain with device embedding (embedding PCC 1.0): h_out vs bf16 dump L0 0.99998, L1 0.99989 (vs fp32 0.9999, floor 0.99995). Weight convert+cache first build: L0 5.5 s, L1 93.6 s (27 tensors); 2-layer test 374 s total.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_chain2_a150b001c4b.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tests/test_chain_dump.py
+- data: {"l0_h_out":0.99998,"l1_ffn_out_min":0.99512,"l1_set_match":0.95996,"l1_h_out_tf":0.99993,"chain_l1_vs_bf16":0.99989}
