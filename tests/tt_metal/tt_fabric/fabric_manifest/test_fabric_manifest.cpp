@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
@@ -314,7 +315,8 @@ void check_router_blocks(const std::vector<RouterEntry>& routers) {
         SCOPED_TRACE(entry.path);
         EXPECT_EQ(
             keys_of(*entry.router),
-            (std::set<std::string>{"identity", "link", "shape", "credit_counters", "channels"}));
+            (std::set<std::string>{
+                "identity", "link", "shape", "credit_counters", "channels", "intra_chip_downstream_edges"}));
         EXPECT_EQ(keys_of(entry.router->at("channels")), (std::set<std::string>{"senders", "receivers"}));
     }
 }
@@ -939,6 +941,82 @@ void check_router_receivers(const json& manifest, const std::vector<RouterEntry>
     }
 }
 
+// A router's edges, on VC0 and VC1 only, and only VC0 in 1D. In 2D, edge n goes to the sibling at compact index
+// n - 1 among the router's other directions; 1D has only edge 1. Each lands on a sender channel, on the edge's VC, of
+// a different router on the same chip and plane: one whose producer is this router, or, through the tensix mux, one
+// the mux carries. Its free-slots register is allocated when a serviced receiver forwards on its VC, and the
+// receivers that do forward on the same NoC.
+void check_router_edges(const json& manifest, const std::vector<RouterEntry>& routers) {
+    const bool is_2d = manifest.at("fabric_context").at("is_2d_routing").get<bool>();
+
+    for (const auto& entry : routers) {
+        SCOPED_TRACE(entry.path);
+        const auto& router = *entry.router;
+        const auto chip_prefix = entry.path.substr(0, entry.path.rfind('/') + 1);
+        const auto plane = control_plane().get_routing_plane_id(entry.node, entry.eth_chan);
+        const auto facing = control_plane().get_eth_chan_direction(entry.node, entry.eth_chan);
+
+        std::map<std::string, json> forward_noc_by_vc;
+        for (const auto& [vc_key, vc_receivers] : router.at("channels").at("receivers").items()) {
+            for (const auto& [ch_key, receiver] : vc_receivers.items()) {
+                const auto& forwards_on = receiver.at("forwards_on");
+                if (forwards_on.is_null()) {
+                    continue;
+                }
+                const auto [it, inserted] =
+                    forward_noc_by_vc.emplace(forwards_on.get<std::string>(), receiver.at("forward_noc").at("noc"));
+                EXPECT_EQ(it->second, receiver.at("forward_noc").at("noc")) << vc_key << "/" << ch_key;
+            }
+        }
+
+        const auto& edges = router.at("intra_chip_downstream_edges");
+        for (const auto& [vc_key, vc_edges] : edges.items()) {
+            SCOPED_TRACE(vc_key);
+            EXPECT_TRUE(vc_key == "vc0" || (is_2d && vc_key == "vc1")) << vc_key;
+            EXPECT_FALSE(vc_edges.empty());
+            for (const auto& [edge_key, edge] : vc_edges.items()) {
+                SCOPED_TRACE(edge_key);
+                EXPECT_EQ(
+                    keys_of(edge),
+                    (std::set<std::string>{"downstream_channel", "through_tensix_mux", "free_slots", "teardown_sem"}));
+                ASSERT_TRUE(edge_key.starts_with("edge"));
+                const auto n = std::stoul(edge_key.substr(4));
+
+                const auto target = edge.at("downstream_channel").get<std::string>();
+                const auto senders = target.find("/channels/senders/" + vc_key + "/ch");
+                ASSERT_NE(senders, std::string::npos) << target << " is not a " << vc_key << " sender channel";
+                const auto target_router_path = target.substr(0, senders);
+                EXPECT_TRUE(target_router_path.starts_with(chip_prefix)) << target;
+                EXPECT_NE(target_router_path, entry.path);
+                if (is_2d) {
+                    ASSERT_TRUE(n >= 1 && n <= 4) << edge_key;
+                    EXPECT_EQ(
+                        key_of_path(target_router_path),
+                        router_key(builder::direction_from_compact_index(facing, n - 1), plane));
+                } else {
+                    EXPECT_EQ(n, 1u);
+                    EXPECT_EQ(key_of_path(target_router_path).substr(1), entry.router_key.substr(1));
+                }
+
+                const json* target_router = find_router(manifest, target_router_path);
+                ASSERT_NE(target_router, nullptr) << target;
+                const json::json_pointer channel_pointer(target.substr(senders));
+                ASSERT_TRUE(target_router->contains(channel_pointer)) << target;
+                const auto& channel = target_router->at(channel_pointer);
+                if (edge.at("through_tensix_mux").get<bool>()) {
+                    EXPECT_EQ(vc_key, "vc0");
+                    EXPECT_EQ(channel.at("status"), lower_enum_name(manifest::ChannelStatus::MUX)) << target;
+                } else {
+                    EXPECT_EQ(channel.at("producer"), entry.path) << target;
+                }
+
+                expect_stream(edge.at("free_slots"), forward_noc_by_vc.contains(vc_key));
+                expect_value_region(edge.at("teardown_sem"), schema_name_of<uint32_t>(), sizeof(uint32_t));
+            }
+        }
+    }
+}
+
 }  // namespace
 
 // ============ Tests ============
@@ -1039,6 +1117,9 @@ TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_,
 
 TEST_F(Fabric1DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
 TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
 
 TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
