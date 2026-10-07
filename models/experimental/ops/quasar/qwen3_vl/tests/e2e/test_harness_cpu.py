@@ -827,3 +827,21 @@ def test_quasar_experimental_mul_routes_to_experimental_multiply(monkeypatch):
     assert [w.target for w in routed] == ["ttnn.mul"]
     monkeypatch.setattr(ttnn.experimental.quasar, "multiply", lambda *a, **k: ("q-mul", a, k))
     assert routed[0].rewrite(None, ("a", "b"), {"dtype": "d"}) == ("q-mul", ("a", "b"), {"dtype": "d"})
+
+
+def test_quasar_experimental_sdpa_decode_routes_paged_decode(monkeypatch):
+    import types
+
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    wa = next(w for w in O.WORKAROUNDS if w.name == "quasar_experimental_sdpa_decode")
+    assert wa.target == "ttnn.transformer.paged_scaled_dot_product_attention_decode"
+    fake = types.SimpleNamespace(paged_scaled_dot_product_attention_decode=lambda *a, **k: ("q-dec", a, k))
+    monkeypatch.setattr(ttnn.experimental.quasar, "transformer", fake)
+    assert wa.rewrite(None, ("q", "k", "v"), {"page_table_tensor": "pt"}) == (
+        "q-dec",
+        ("q", "k", "v"),
+        {"page_table_tensor": "pt"},
+    )
