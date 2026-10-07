@@ -279,6 +279,45 @@ TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
     EXPECT_NO_THROW(replicated_buffer->get_device_buffer(MeshCoordinate{1, 3}));
 }
 
+TEST_F(MeshBufferTest2x4, MeshWideBufferPropertiesMatchEveryDeviceBuffer) {
+    const DeviceLocalBufferConfig interleaved_config{
+        .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto interleaved_buffer =
+        MeshBuffer::create(ReplicatedBufferConfig{.size = 16 << 10}, interleaved_config, mesh_device_.get());
+
+    // Interleaved buffers have no page mapping.
+    EXPECT_ANY_THROW(interleaved_buffer->buffer_page_mapping());
+
+    const DeviceLocalShardedBufferTestConfig test_config{
+        .num_pages_per_core = {1, 1}, .num_cores = {4, 1}, .page_shape = {32, 16}, .element_size = 2};
+    const DeviceLocalBufferConfig sharded_config{
+        .page_size = test_config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(test_config.shard_parameters(), test_config.mem_config)};
+    auto sharded_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = test_config.num_pages() * test_config.page_size()},
+        sharded_config,
+        mesh_device_.get());
+
+    for (const auto& buffer : {interleaved_buffer, sharded_buffer}) {
+        for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+            const auto* device_buffer = buffer->get_device_buffer(coord);
+            EXPECT_EQ(buffer->alignment(), device_buffer->alignment()) << coord;
+            EXPECT_EQ(buffer->aligned_page_size(), device_buffer->aligned_page_size()) << coord;
+            EXPECT_EQ(buffer->aligned_size_per_bank(), device_buffer->aligned_size_per_bank()) << coord;
+        }
+    }
+
+    const auto mesh_mapping = sharded_buffer->buffer_page_mapping();
+    ASSERT_NE(mesh_mapping, nullptr);
+    EXPECT_EQ(mesh_mapping->all_cores.size(), 4u);
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        const auto device_mapping = sharded_buffer->get_device_buffer(coord)->get_buffer_page_mapping();
+        EXPECT_EQ(mesh_mapping->all_cores, device_mapping->all_cores) << coord;
+        EXPECT_EQ(mesh_mapping->core_to_core_id, device_mapping->core_to_core_id) << coord;
+    }
+}
+
 TEST_F(MeshBufferTestSuite, MoveConstructor) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};

@@ -144,6 +144,15 @@ public:
     uint32_t page_size() const { return device_local_config_.page_size; }
     uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
+    // Properties shared by every device-local buffer of this MeshBuffer. The per-device buffers are built from the
+    // same sharding args, page size and allocator configuration, so these are mesh-wide values and no device needs
+    // to be named to read them. Throws if this host drives no device of the mesh.
+    uint32_t alignment() const;
+    DeviceAddr aligned_page_size() const;
+    DeviceAddr aligned_size_per_bank() const;
+    // Host-page to device-page mapping of a sharded buffer, keyed by logical core. Throws if the buffer is not sharded.
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping() const;
+
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
     MeshBuffer(

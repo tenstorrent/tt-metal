@@ -62,8 +62,7 @@ void ReadShard(
         return;
     }
 
-    auto* shard = mesh_buffer->get_device_buffer(coord);
-    dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
+    dst.resize(mesh_buffer->page_size() * mesh_buffer->num_pages() / sizeof(DType));
     std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 }

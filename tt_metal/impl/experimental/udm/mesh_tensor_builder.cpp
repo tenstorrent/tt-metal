@@ -51,7 +51,7 @@ public:
         // 13. fabric_chip_ids[num_grids]
 
         compile_time_args.push_back(static_cast<uint32_t>(mesh_buffer_.address()));
-        compile_time_args.push_back(mesh_buffer_.get_reference_buffer()->aligned_page_size());
+        compile_time_args.push_back(mesh_buffer_.aligned_page_size());
 
         compile_time_args.push_back(mesh_tensor_rank_);
         for (uint32_t i = 0; i < mesh_tensor_rank_; ++i) {
@@ -93,7 +93,7 @@ public:
 
     uint64_t get_buffer_address() const { return mesh_buffer_.address(); }
 
-    uint32_t get_aligned_page_size() const { return mesh_buffer_.get_reference_buffer()->aligned_page_size(); }
+    uint32_t get_aligned_page_size() const { return mesh_buffer_.aligned_page_size(); }
 
     tt::tt_metal::Shape get_mesh_tensor_shape_in_pages() const {
         return tt::tt_metal::Shape(
