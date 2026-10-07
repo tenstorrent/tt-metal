@@ -18,6 +18,7 @@
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
@@ -179,6 +180,14 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     bool blocking,
     std::optional<BufferRegion> region) {
     auto lock = lock_api_function_();
+    // The graph-capture hook is per-thread (see GraphTracker's threading contract), and the shard
+    // writes below run on dispatch_thread_pool_ workers, which never see it. So decide here, on the
+    // calling thread: under a NO_DISPATCH capture the buffer's allocation was intercepted and given
+    // the placeholder address 0, and letting a worker write it would put the data at address 0 of
+    // every bank -- for an L1 buffer, over the firmware and mailboxes, which wedges the device.
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
@@ -234,6 +243,12 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
+
+    // Same as enqueue_write_shard_to_sub_grid: the graph-capture hook is per-thread, and the shard
+    // writes below run on dispatch_thread_pool_ workers, so check it on the calling thread.
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
 
     // Track if any transfer actually used pinned memory
     std::atomic<bool> any_pinned_used = false;

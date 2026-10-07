@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_experimental_deepseek_prefill_insert ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::DeepSeekPrefill::Insert ALIAS ttnn_op_experimental_deepseek_prefill_insert)
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_insert REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_insert TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_insert)
 
 set_target_properties(

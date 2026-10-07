@@ -59,6 +59,17 @@ def test_dropout_output_tensor(device):
     ), "output_tensor parameter not working: input tensor was not modified in place"
 
 
+def test_dropout_rejects_mismatched_output_shape(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.ones((1, 1, 256, 256)), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    output_tensor = ttnn.from_torch(
+        torch.ones((1, 1, 32, 32)), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
+    with expect_error(RuntimeError, "shape to match the input"):
+        ttnn.experimental.dropout(input_tensor, probability=0.5, scale=2.0, seed=1, output_tensor=output_tensor)
+
+
 @pytest.mark.parametrize("in_place", [False, True])
 @pytest.mark.parametrize("use_per_device_seed", [False, True])
 def test_dropout_seed_distinguishes_cache_entries(device, in_place, use_per_device_seed):

@@ -147,3 +147,9 @@ class MiniMaxH3Scheduler:
 
         self._step_index += 1
         return prev_sample.to(dtype=sample.dtype)
+
+    def step_coefficient(self, i: int) -> float:
+        """The scalar ``c = sigma - sigma_next`` in ``next = sample + c * model_output``, for applying the
+        step on device. Matches ``step()`` up to fp32 ulp.
+        """
+        return float(self.sigmas[i] - self.sigmas[i + 1])

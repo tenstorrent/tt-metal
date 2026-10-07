@@ -118,6 +118,11 @@ AdamWDeviceOperation::tensor_return_value_t AdamWDeviceOperation::create_output_
     return tensor_args.param;
 }
 
+std::vector<tt::tt_metal::TensorTopology> AdamWDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    return {tensor_args.param.tensor_topology()};
+}
+
 ttsl::hash::hash_t AdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& param_tensor = tensor_args.param;

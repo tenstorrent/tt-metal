@@ -45,6 +45,10 @@ struct XlogyBinary;
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct Atan2Binary;
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct NextafterBinary;
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct NextafterBf16Binary;
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct LtBinary;
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
 struct GtBinary;

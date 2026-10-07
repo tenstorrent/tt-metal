@@ -9,6 +9,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/types.hpp"
 
@@ -43,7 +44,8 @@ Tensor matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const PrefetcherPipeList& prefetcher_pipes = {});
 
 std::vector<Tensor> matmul_batched_weights(
     const Tensor& input_tensor_a,
@@ -76,7 +78,8 @@ Tensor linear(
     const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
+    const PrefetcherPipeList& prefetcher_pipes = {});
 
 void addmm_validate(
     const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta);
@@ -111,7 +114,8 @@ Tensor sparse_matmul(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt,
-    const std::optional<Tensor>& indices = std::nullopt);
+    const std::optional<Tensor>& indices = std::nullopt,
+    const std::optional<Tensor>& bias = std::nullopt);
 
 }  // namespace operations::matmul
 

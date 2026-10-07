@@ -19,7 +19,8 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/instructions/metal-api.instructions.md @tenstorrent/metalium-api-owners
 .github/instructions/metal-dispatch.instructions.md @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @anashTT @abhullar-tt
 .github/instructions/metal-runtime.instructions.md @tenstorrent/metalium-runtime
-.github/instructions/models.instructions.md @uaydonat @yieldthought @cglagovichTT @esmalTT @mtairum
+.github/instructions/metal2-host-api.instructions.md @tenstorrent/metalium-api-owners
+.github/instructions/models.instructions.md @tenstorrent/metalium-models-maintainers @cglagovichTT @esmalTT
 .github/instructions/nanobind.instructions.md @tenstorrent/metalium-developers-ttnn-core @nsextonTT
 .github/instructions/python.instructions.md @tenstorrent/metalium-developers-infra
 .github/instructions/tt-stl.instructions.md @ayerofieiev-tt @akerteszTT @riverwuTT
@@ -32,9 +33,11 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/time_budget.yaml @roseli-TT @tdowdallTT @dpopovTT
 .github/time_budgets/ @roseli-TT @tdowdallTT @dpopovTT
 # Agentic research CI: @uaydonat is the backup owner.
-.github/workflows/agentic-research-model-tests.yaml @yieldthought @tchedaTT @mtairum @uaydonat @tenstorrent/metalium-developers-infra
+.github/workflows/agentic-research-model-tests.yaml @tenstorrent/metalium-models-maintainers @tchedaTT @tenstorrent/metalium-developers-infra
+.github/workflows/eltwise-accuracy-report-command.yaml @ijankowskiTT @tenstorrent/metalium-developers-eltwise @tenstorrent/metalium-developers-infra
 .github/workflows/fabric-cpu-only-tests-impl.yaml @Riddy21 @tt-asaigal @aliuTT @cfjchu @p1-0tr @tenstorrent/metalium-developers-infra
-.github/workflows/galaxy-multi-user-isolation-tests.yaml @sott0n @changh95
+.github/workflows/galaxy-multi-user-isolation-tests-impl.yaml @sott0n @changh95
+tests/pipeline_reorg/galaxy_multi_user_isolation_tests.yaml @sott0n @changh95
 .github/workflows/galaxy-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/galaxy-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/models-t1*.yaml @mtairum @uaydonat @tenstorrent/metalium-developers-infra
@@ -44,7 +47,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/metalium-developers-infra
 .github/workflows/pipeline-select-profiler.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/single-card-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/single-card-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
-.github/workflows/syseng-didt-tests-impl.yaml @rdjogoTT @tenstorrent/metalium-developers-infra
+.github/workflows/syseng-didt-tests-impl.yaml @rdjogoTT @rtawfik01 @mbezuljTT @pavlepopovic @tenstorrent/metalium-developers-infra
 .github/workflows/t3000-profiler-tests-impl.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/t3000-profiler-tests.yaml @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-model-trace-sweep-validation*.yaml @stevendae @cmaryanTT @sjameelTT @bbradelTT @ntarafdar
@@ -72,22 +75,25 @@ conftest.py @tenstorrent/metalium-developers-infra
 
 # test scripts
 tests/CMakeLists.txt @tenstorrent/metalium-developers-infra
-tests/pipeline_reorg/agentic_research_model_tests.yaml @yieldthought @tchedaTT @mtairum @uaydonat @jonathansuTT @cglagovichTT
+tests/model_behavior/ @tenstorrent/metalium-models-maintainers @tchedaTT
+tests/pipeline_reorg/agentic_research_model_tests.yaml @tenstorrent/metalium-models-maintainers @tchedaTT @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/blaze_models_prefill_tests.yaml @mbezuljTT @mtairum @jonathansuTT @cglagovichTT
-tests/pipeline_reorg/models_device_perf_tests.yaml @mtairum @yieldthought @uaydonat @jonathansuTT @cglagovichTT
-tests/pipeline_reorg/models_e2e_tests.yaml @mtairum @yieldthought @uaydonat @jonathansuTT @cglagovichTT
-tests/pipeline_reorg/models_sweep_tests.yaml @mtairum @yieldthought @uaydonat @jonathansuTT @cglagovichTT
-tests/pipeline_reorg/models_unit_tests.yaml @mtairum @yieldthought @uaydonat @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_device_perf_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_e2e_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_sweep_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
+tests/pipeline_reorg/models_unit_tests.yaml @tenstorrent/metalium-models-maintainers @jonathansuTT @cglagovichTT
 tests/pipeline_reorg/vllm_model_tests.yaml @viktorpusTT @tchedaTT @ppetrovicTT @tenstorrent/metalium-developers-infra
 tests/pipeline_reorg/ttsim-skip-list.yaml @roseli-TT @tdowdallTT @mcraigheadTT @tenstorrent-github-bot @dpopovTT
 tests/scripts/ @tenstorrent/metalium-developers-infra
 tests/scripts/quasar @kstevensTT @fvranicTT @tenstorrent/metalium-developers-infra
+tests/scripts/single_card/run_bh_tensor_prefetcher_mpfe_tune.py @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-developers-infra
 tests/scripts/single_card/run_single_card_profiler_tests.sh @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
+tests/scripts/single_card/test_run_bh_tensor_prefetcher_mpfe_tune.py @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT @tenstorrent/metalium-developers-infra
 tests/scripts/t3000/run_t3000_profiler_tests.sh @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh @cfjchu @tenstorrent/metalium-developers-infra
 
 # Emule software emulation tests
-tests/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
+tests/emule/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 
 # TT-STL
 tt_stl/ @ayerofieiev-tt @akerteszTT @riverwuTT
@@ -99,6 +105,7 @@ tools/bringup/ @ctr-martemovTT
 # Scaleout Tools
 tools/**/scaleout/ @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT
 tools/**/scaleout/**/CMakeLists.txt @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @tenstorrent/metalium-developers-infra
+tools/scaleout/src/generate_rank_bindings.cpp @tt-aho @tt-asaigal @aliuTT @Riddy21 @agupta-tt @cfjchu @jpanasiukTT @p1-0tr
 tools/scaleout/sweep_rank_binding_solutions.py @Riddy21 @p1-0tr
 tools/scaleout/exabox/ @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT
 tools/scaleout/exabox/run_fabric_tests.sh @jpanasiukTT @aczajkowskiTT @ctr-fmamedov-crypto @gsarabandoTT @tt-mnijjar @mgajewskiTT @pbaraTT @vdu-TT @tt-rkim @jlakisTT @dpopovTT @nnyamagoudar-TT
@@ -109,11 +116,12 @@ tests/scale_out/test_ccl_fabric_manager.py @tenstorrent/metalium-developers-meta
 # metal runtime
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra
 tt_metal/ @tenstorrent/metalium-developers-infra # nothing should be caught by this, if so, someone added a path somewhere
-tests/tt_metal/tt_metal/test_kernels/ @abhullar-tt @jbaumanTT
+tests/tt_metal/tt_metal/test_kernels/ @abhullar-tt @jbaumanTT @kstevensTT
 tt_metal/api/ @tenstorrent/metalium-api-owners
 tt_metal/api/tt-metalium/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental APIs
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr # fabric experimental APIs
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
+tt_metal/api/tt-metalium/experimental/command_list.hpp @anashTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @anashTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal APIs (moved from experimental in #48638)
@@ -124,6 +132,7 @@ tt_metal/core_descriptors/ @abhullar-tt @aliuTT @ubcheema
 tt_metal/detail/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu # this should go away
 tt_metal/detail/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra # this should go away
 tt_metal/distributed/ @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
+tt_metal/distributed/experimental/command_list.* @anashTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/distributed/realtime_profiler_manager.* @mo-tenstorrent @yusufbashiTT @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT
 tt_metal/distributed/**/CMakeLists.txt @cfjchu @aliuTT @tt-asaigal @jbaumanTT @sidnadTT @tenstorrent/metalium-developers-infra
 tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr
@@ -165,7 +174,7 @@ tt_metal/impl/dispatch/kernels/*realtime_profiler* @mo-tenstorrent @yusufbashiTT
 tt_metal/impl/dispatch/kernels/REALTIME_PROFILER.md @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp @anashTT @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
 tt_metal/impl/dispatch/realtime_profiler_tracy_handler.* @mo-tenstorrent @yusufbashiTT @jbaumanTT @tt-asaigal @tt-aho @sidnadTT
-tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
+tt_metal/impl/emulation/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tt_metal/impl/event @jbaumanTT @tt-asaigal @tt-aho
 tt_metal/impl/experimental/disaggregation/ @SeanNijjar @ubcheema # disaggregation experimental impl
 tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
@@ -182,7 +191,7 @@ tt_metal/impl/internal/service/ @jbaumanTT @tt-asaigal @sidnadTT
 tt_metal/impl/jit_server/ @ruizhangTT @tenstorrent/metalium-runtime
 tt_metal/impl/kernels/ @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @sagarwalTT
 tt_metal/impl/lightmetal/ @kmabeeTT @gsarabandoTT
-tt_metal/impl/memory_tracking/ @aperezvicente-TT @alnah005
+tt_metal/impl/memory_tracking/ @aperezvicente-TT
 tt_metal/impl/metal2_host_api/ @tenstorrent/metalium-api-owners
 tt_metal/impl/per_core_allocation/ @yugaoTT @cfjchu
 tt_metal/impl/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
@@ -248,20 +257,24 @@ tt_metal/tt-llk/.cursor/ @nstamatovicTT @njokovicTT
 tt_metal/tt-llk/.github/ @fvranicTT @nvelickovicTT
 tt_metal/tt-llk/common/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rdjogoTT @rtawfik01
 tt_metal/tt-llk/tests/ @amokanTT @fvranicTT @ldjurovicTT @ndivnicTT @nvelickovicTT @rtawfik01 @skotaracTT @skrsmanovicTT @sstanisicTT @vkrsmanovicTT
-tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rdjogoTT @rtawfik01 @ldjurovicTT
-tt_metal/tt-llk/tt_llk_wormhole_b0/ @amahmudTT @fvranicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rdjogoTT @rtawfik01 @ldjurovicTT
+tt_metal/tt-llk/tests/python_tests/fuser/ @fvranicTT @markoradosavljevicTT @ndivnicTT
+tt_metal/tt-llk/tt_llk_blackhole/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rdjogoTT @rtawfik01
+tt_metal/tt-llk/tt_llk_quasar/ @amahmudTT @amokanTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rdjogoTT @rtawfik01
+tt_metal/tt-llk/tt_llk_wormhole_b0/ @amahmudTT @fvranicTT @ldjurovicTT @lpremovicTT @ncvetkovicTT @ndivnicTT @nvelickovicTT @rdjogoTT @rtawfik01
 
 # metal tests
 tests/tt_metal/distributed/ @tenstorrent/metalium-developers-metal-distributed
+tests/tt_metal/distributed/test_mesh_command_list.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/distributed/**/CMakeLists.txt @cfjchu @tt-asaigal @tenstorrent/metalium-developers-infra
 tests/tt_metal/microbenchmarks/ethernet/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT
 tests/tt_metal/test_utils/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu
-tests/tt_metal/test_utils/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/metalium-developers-infra
-tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
+tests/tt_metal/test_utils/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @kstevensTT @tenstorrent/metalium-developers-infra
+tests/tt_metal/tt_metal/ @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT @kstevensTT
 tests/tt_metal/tt_metal/dispatch/dispatch_program/*realtime_profiler* @mo-tenstorrent @yusufbashiTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/dispatch/dispatch_util/test_dispatch_telemetry.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/misc/test_broadcast_ring.cpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/sources.cmake @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT @riverwuTT @akerteszTT
+tests/tt_metal/tt_metal/test_kernels/dataflow/command_list_l1_write.cpp @anashTT @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @sidnadTT
 tests/tt_metal/tt_metal/**/CMakeLists.txt @abhullar-tt @aagarwalTT @jbaumanTT @tt-asaigal @tt-aho @cfjchu @tenstorrent/metalium-developers-infra
 tests/tt_metal/tt_metal/api/metal2_host_api/ @tenstorrent/metalium-api-owners
 tests/tt_metal/tt_metal/api/tensor/ @akerteszTT @riverwuTT @aliaksei-sala
@@ -275,7 +288,7 @@ tests/tt_metal/tt_fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yug
 tests/tt_metal/tt_fabric/physical_discovery/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr
 tests/tt_metal/tt_fabric/test_infra/ @ubcheema @aagarwalTT @SeanNijjar @nnyamagoudar-TT
 tests/tt_metal/tt_fabric/**/CMakeLists.txt @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @p1-0tr @tenstorrent/metalium-developers-infra
-tests/tt_metal/tt_metal/api/emule/ @smeydanshahiTT @xanderchin @arminaleTT @vtangTT @sgholamiTT
+tests/tt_metal/tt_metal/api/emule/ @xanderchin @arminaleTT @vtangTT @sgholamiTT
 tests/tt_metal/tt_metal/data_movement @rtawfik01 @vvukomanovicTT @atatuzunerTT
 tests/tt_metal/tt_metal/debug_tools/ @tenstorrent/metalium-developers-triage
 tests/tt_metal/tt_metal/llk/ @tenstorrent/low-level-team-wh-bh @tenstorrent/low-level-team-quasar
@@ -287,10 +300,10 @@ tests/tt_metal/tt_metal/test_kernels/device_print @tenstorrent/metalium-develope
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT
 
 # misc tests
-tests/didt/ @rdjogoTT @ttmtrajkovic @ctr-nradojevicTT @ctr-adjokicTT
+tests/didt/ @rdjogoTT @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
 
 # Deployment tests
-tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT @ctr-adjokicTT
+tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
 
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
@@ -490,8 +503,10 @@ tests/ttnn/stress_tests/test_ccl.py @tenstorrent/metalium-developers-ops-data-mo
 tests/ttnn/stress_tests/test_data_movement.py @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/gtests/ccl/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/gtests/conv/ @tenstorrent/metalium-developers-convolutions
+tests/ttnn/unit_tests/gtests/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/gtests/udm/ @yugaoTT @SeanNijjar
 tests/ttnn/unit_tests/gtests/udm/**/CMakeLists.txt @yugaoTT @SeanNijjar @tenstorrent/metalium-developers-infra
+tests/ttnn/unit_tests/kernel_lib/ @tenstorrent/metalium-developers-kernel-lib
 tests/ttnn/unit_tests/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/data_movement/ @tenstorrent/metalium-developers-ops-data-movement
 tests/ttnn/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
@@ -520,6 +535,7 @@ tests/ttnn/unit_tests/operations/experimental/test_attn_res_*.py @tenstorrent/me
 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/unit_tests/operations/transformers/test_chunk_gated_delta_rule.py @tenstorrent/cse-developer-ttnn @iwroszTT
+tests/ttnn/unit_tests/operations/transformers/test_chunk_gdn_*.py @tenstorrent/cse-developer-ttnn @iwroszTT
 
 # OP docs examples
 tests/ttnn/docs_examples/test_backward_examples.py @tenstorrent/metalium-developers-eltwise
@@ -545,105 +561,75 @@ tests/ttnn/unit_tests/base_functionality/test_graph_report.py @tenstorrent/third
 ttnn/ttnn/graph_report.py @tenstorrent/thirdparty-lights-on-software @tenstorrent/metalium-developers-ttnn-core
 
 # models
-/models/ @uaydonat @yieldthought @cglagovichTT @jonathansuTT
+/**/functional_*/ @esmalTT @tenstorrent/metalium-models-maintainers
+/models/ @cglagovichTT @jonathansuTT @tenstorrent/metalium-models-maintainers
 /models/tt_cnn/ @esmalTT @tenstorrent/metalium-developers-convolutions
-/**/functional_*/ @uaydonat @esmalTT
-models/common @yieldthought @mtairum @uaydonat
-models/common/sampling/ @sraizada-tt @djordje-tt @tchedaTT @mtairum
-models/common/warmup/ @nostojicTT @sraizada-tt @djordje-tt @tchedaTT
+
+models/common @tenstorrent/metalium-models-maintainers
+models/common/sampling/ @sraizada-tt @djordje-tt @tchedaTT @tenstorrent/metalium-models-maintainers
+models/common/warmup/ @nostojicTT @sraizada-tt @djordje-tt @tchedaTT @tenstorrent/metalium-models-maintainers
+
 models/datasets/llm_dataset_utils.py @mtairum @uaydonat
-models/demos @mtairum @yieldthought @cglagovichTT @uaydonat
-models/demos/common/prefill @tenstorrent/metalium-developers-ds-prefill @philei-tt
-models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT
-models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal
-models/demos/deepseek_v3_b1/demo @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal
-models/demos/deepseek_v3_b1/weights @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal
-models/demos/deepseek_v3_d_p @tenstorrent/metalium-developers-ds-prefill
-models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @djordje-tt @handrewsTT
-models/demos/gpt_oss_d_p @mdragulaTT @philei-tt @vmelnykovTT @ayerofieiev-tt @jmalone-tt
-models/demos/minimax_m3 @philei-tt @vmelnykovTT @zbaczewskiTT @ayerofieiev-tt
-models/**/bert*/ @TT-BrianLiu @uaydonat
-models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
-models/**/distilbert/ @tt-aho @uaydonat
-models/*/mnist/ @esmalTT @uaydonat
-models/*/squeezebert/ @cfjchu @uaydonat
-models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
+
+models/demos @tenstorrent/metalium-models-maintainers @cglagovichTT
 models/demos/audio/qwen3_asr @yasuhiroitoTT @sott0n @uaydonat
-models/demos/audio/whisper @atupe-tt @djordje-tt @uaydonat
+models/demos/audio/qwen3_tts @acicovicTT
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/blackhole/qwen36 @atupe-tt @tenstorrent/cse-developer-ttnn
-models/demos/blackhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
-models/demos/falcon7b_common @djordje-tt @uaydonat
+models/demos/common/prefill @tenstorrent/metalium-developers-ds-prefill @philei-tt
+models/demos/deepseek_v3 @kpaigwar @pprajapatiTT @esmalTT @johanna-rock-tt @yalrawwashTT @tenstorrent/metalium-models-maintainers
+models/demos/deepseek_v3_b1 @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal @tenstorrent/metalium-models-maintainers
+models/demos/deepseek_v3_b1/demo @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal @tenstorrent/metalium-models-maintainers
+models/demos/deepseek_v3_b1/weights @esmalTT @tt-aho @TT-BrianLiu @sjameelTT @tt-asaigal @tenstorrent/metalium-models-maintainers
+models/demos/deepseek_v3_d_p @tenstorrent/metalium-developers-ds-prefill
 models/demos/gemma4 @handrewsTT @mtairum @uaydonat @dwadhwaniTT @arginugaTT
-models/demos/gemma4_31b_qb2 @yieldthought @handrewsTT @mtairum @uaydonat @dwadhwaniTT @arginugaTT
+models/demos/gemma4_31b_qb2 @tenstorrent/metalium-models-maintainers @handrewsTT @dwadhwaniTT @arginugaTT
 models/demos/gemma4_d_p @svuckovicTT @amilovanovicTT @sdjordjevicTT
-models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
-models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @mtairum @arginugaTT
-models/demos/qwen25_vl @ssanjayTT @yieldthought @uaydonat
-models/demos/qwen3_vl @ssanjayTT @mtairum
-models/demos/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
+models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @djordje-tt @handrewsTT
+models/demos/gpt_oss_d_p @mdragulaTT @philei-tt @vmelnykovTT @ayerofieiev-tt @jmalone-tt
+models/demos/llama_3p1_8b_d_p @mgiermakowskiTT @djordje-tt
+models/demos/minimax_m3 @philei-tt @vmelnykovTT @zbaczewskiTT @ayerofieiev-tt
+models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @arginugaTT @tenstorrent/metalium-models-maintainers
 models/demos/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt
-models/demos/t3000 @uaydonat @yieldthought @cglagovichTT
-models/demos/t3000/falcon40b @uaydonat @djordje-tt @johanna-rock-tt
-models/demos/t3000/falcon7b @djordje-tt @uaydonat
-models/demos/t3000/sentence_bert @tenstorrent/cse-developer-ttnn
-models/demos/tg/falcon7b @djordje-tt @uaydonat
-models/demos/ttnn_falcon7b @cfjchu @uaydonat
-models/demos/utils/llm_demo_utils.py @mtairum @esmalTT @uaydonat
-models/demos/vision/classification/classification_eval @tenstorrent/cse-developer-ttnn
-models/demos/vision/classification/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn
+models/demos/vision/classification/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/vision/classification/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/demos/vision/classification/resnet50/ @tenstorrent/metalium-developers-convolutions
 models/demos/vision/classification/resnet50/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
-models/demos/vision/classification/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
-models/demos/vision/generative/stable_diffusion @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/demos/vision/segmentation/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
-models/demos/vision/segmentation/segmentation_evaluation @tenstorrent/cse-developer-ttnn
-models/demos/vision/segmentation/ufld_v2/ @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/demos/vision/segmentation/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/demos/vision/segmentation/vgg_unet/ @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/demos/wormhole @uaydonat @yieldthought @cglagovichTT
-models/demos/wormhole/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
-models/demos/wormhole/bge_m3 @gtobarTT @tenstorrent/cse-developer-ttnn
+models/demos/vision/classification/vit @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/vision/generative/stable_diffusion @esmalTT @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-models-maintainers
+models/demos/vision/segmentation/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/vision/segmentation/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/vision/segmentation/ufld_v2/ @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/vision/segmentation/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/vision/segmentation/vgg_unet/ @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/wormhole @cglagovichTT @tenstorrent/metalium-models-maintainers
+models/demos/wormhole/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/demos/wormhole/bge_m3 @gtobarTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
 models/demos/wormhole/falcon7b @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
-models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
-models/experimental/ @uaydonat @mtairum
-models/experimental/SSD512 @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/experimental/bevformer/ @mbezuljTT @njovanovicTT
-models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/experimental/exaone45_vl @changh95 @uaydonat @mtairum
-models/experimental/functional_unet @esmalTT @uaydonat
-models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce
-models/experimental/mobileNetV3 @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
-models/experimental/openvla @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT
-models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT
-models/experimental/retinanet @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/experimental/smolvla @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/experimental/speecht5_tts @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn
-models/experimental/swin_v2 @arginugaTT @tenstorrent/cse-developer-ttnn
-models/experimental/transfuser/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT
-models/experimental/tt_symbiote @alnah005 @mbahnasTT @yieldthought @uaydonat
-models/experimental/tt_transformers_v2 @yieldthought @mtairum @uaydonat
-models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
-models/perf/ @yieldthought @esmalTT @mtairum @uaydonat
-models/perf/benchmarking_utils.py @williamlyTT @mtairum @uaydonat
+models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+
+models/experimental/ @tenstorrent/metalium-models-maintainers
+models/experimental/bevformer/ @mbezuljTT @njovanovicTT @tenstorrent/metalium-models-maintainers
+models/experimental/exaone45_vl @changh95 @tenstorrent/metalium-models-maintainers
+models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
+/models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-models-maintainers
+models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
+models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT @tenstorrent/metalium-models-maintainers
+models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT @tenstorrent/metalium-models-maintainers
+models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-models-maintainers
+models/experimental/tt_transformers_v2 @tenstorrent/metalium-models-maintainers
+
 models/tt_dit/ @jonathansuTT @cglagovichTT @tenstorrent/cse-developer-ttnn
-models/tt_transformers @mtairum @yieldthought @uaydonat @cglagovichTT
-models/**/requirements*.txt @tenstorrent/metalium-developers-infra
-models/experimental/gated_attention_gated_deltanet @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce
-models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn
-models/vllm_test_utils/ @viktorpusTT @tchedaTT @uaydonat
+models/tt_transformers @tenstorrent/metalium-models-maintainers @cglagovichTT
+models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-models-maintainers
+models/vllm_test_utils/ @viktorpusTT @tchedaTT @tenstorrent/metalium-models-maintainers
 
 # tracy
 tools/tracy/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/third_party/tracy @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent-github-bot
 
-tools/scripts/ @mtairum
+tools/scripts/ @tenstorrent/metalium-models-maintainers
 
 # tt-triage
 tools/tests/triage/ @tenstorrent/metalium-developers-triage
@@ -678,7 +664,6 @@ tt-train/**/CMakeLists.txt @tenstorrent/tt-train @lgalasTT @abustamanteTT @tenst
 **/.clang-tidy @tenstorrent/metalium-developers-infra
 
 # Tech reports
-models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT
 tech_reports/AdvancedPerformanceOptimizationsForModels/TraceCorrectness.md @tchedaTT @uaydonat
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT
@@ -692,4 +677,4 @@ tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisi
 tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT
 
-/models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT
+/models/experimental/qwen_image_2_1/ @changh95 @uaydonat @mtairum

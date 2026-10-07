@@ -22,7 +22,6 @@
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/full_like/full_like.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 // Make NamedParameters opaque - must be before unordered_map include
@@ -35,6 +34,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 #include "core/distributed/distributed.hpp"
 #include "core/distributed/socket_manager.hpp"
 #include "core/tt_profiler.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 #include "utils/memory_utils.hpp"
@@ -101,17 +101,13 @@ void py_module(nb::module_& m) {
 
     m.def(
         "zeros_like",
-        [](const ttnn::Tensor& tensor) -> ttnn::Tensor {
-            return ttnn::moreh_full_like(tensor, 0.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
-        },
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttml::core::zeros_like(tensor); },
         nb::arg("tensor"),
         "Create a zero tensor with the same shape and properties as the input tensor");
 
     m.def(
         "ones_like",
-        [](const ttnn::Tensor& tensor) -> ttnn::Tensor {
-            return ttnn::moreh_full_like(tensor, 1.F, tensor.dtype(), tensor.layout(), tensor.memory_config());
-        },
+        [](const ttnn::Tensor& tensor) -> ttnn::Tensor { return ttml::core::ones_like(tensor); },
         nb::arg("tensor"),
         "Create a ones tensor with the same shape and properties as the input tensor");
 

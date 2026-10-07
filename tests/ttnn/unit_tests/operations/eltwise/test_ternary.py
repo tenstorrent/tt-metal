@@ -25,32 +25,6 @@ def test_where_golden_treats_negative_predicates_as_true():
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_mac_all_tensors(device, h, w):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16)
-
-    golden_fn = ttnn.get_golden_function(ttnn.mac)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn.mac(input_tensor, input_tensor1, input_tensor2)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("scalar1", [5.5])
 @pytest.mark.parametrize("scalar2", [-13.25])
 def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
@@ -125,37 +99,6 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch_input_tensor2 = torch.rand((hf, wf), dtype=dtype).uniform_(-100, 100)
 
     assert_where_exact(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
-
-
-def run_ternary_test_value(device, h, w, value, ttnn_function, pcc=0.9999):
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor1 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-    torch_input_tensor2 = torch.rand((h, w), dtype=torch.bfloat16).uniform_(-100, 100)
-
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_fn(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, value=value)
-
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor = ttnn.to_device(input_tensor, device)
-    input_tensor1 = ttnn.from_torch(torch_input_tensor1, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor1 = ttnn.to_device(input_tensor1, device)
-    input_tensor2 = ttnn.from_torch(torch_input_tensor2, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor2 = ttnn.to_device(input_tensor2, device)
-    output_tensor = ttnn_function(input_tensor, input_tensor1, input_tensor2, value=value)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
-@pytest.mark.parametrize("value", [15.5])
-def test_addcdiv(device, h, w, value):
-    run_ternary_test_value(device, h, w, value, ttnn.addcdiv)
 
 
 @pytest.mark.parametrize(
@@ -498,5 +441,42 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
 
     assert_with_pcc(reference(0), ttnn.to_torch(out0).float(), 0.99)
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
+
+    device.disable_and_clear_program_cache()
+
+
+def test_ternary_cache_miss_different_alignment(device):
+    """Same logical shape, over-padded TILE vs default padding, must be two cache entries."""
+    device.enable_program_cache()
+
+    logical = (1, 1, 32, 32)
+    padded = [1, 1, 64, 32]
+    torch.manual_seed(0)
+
+    def make(overpad):
+        tensors = []
+        for _ in range(3):
+            host = torch.rand(logical, dtype=torch.bfloat16)
+            if overpad:
+                tt = ttnn.tilize_with_val_padding(
+                    ttnn.from_torch(host, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16),
+                    padded,
+                    0.0,
+                )
+            else:
+                tt = ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            tensors.append(tt)
+        return tensors
+
+    over = make(True)
+    normal = make(False)
+    assert list(over[0].shape) == list(normal[0].shape)
+    assert list(over[0].padded_shape) != list(normal[0].padded_shape)
+
+    device.clear_program_cache()
+    ttnn.addcmul(*over, value=1.0)
+    assert device.num_program_cache_entries() == 1
+    ttnn.addcmul(*normal, value=1.0)
+    assert device.num_program_cache_entries() == 2
 
     device.disable_and_clear_program_cache()

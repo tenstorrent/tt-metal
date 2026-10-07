@@ -28,6 +28,8 @@ class FDMeshCQTestAccessor;
 
 namespace tt::tt_metal::distributed {
 
+class SubDeviceSetupCacheTestAccessor;
+
 struct MeshReadEventDescriptor;
 struct MeshBufferReadDescriptor;
 struct MeshCoreDataReadDescriptor;
@@ -40,11 +42,17 @@ private:
     // This class can now access private members of FDMeshCommandQueue
     // This is used to access the system memory manager from cq test fixtures
     friend class tt_dispatch_tests::Common::FDMeshCQTestAccessor;
+    friend class SubDeviceSetupCacheTestAccessor;
 
     void populate_read_descriptor_queue();
     void populate_virtual_program_dispatch_core();
     CoreCoord virtual_program_dispatch_core() const;
     CoreType dispatch_core_type() const;
+
+    void submit_replay_buffer(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer);
 
     void increment_num_entries_in_completion_queue();
     MeshEvent enqueue_record_event_helper(
@@ -86,6 +94,20 @@ private:
 
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
+
+    // Value keys avoid retaining manager pointers/IDs after removal. Device-specific command bytes
+    // live with this CQ and runtime context. Include device order to handle mesh reshaping.
+    struct SubDeviceSetupCommands {
+        std::vector<IDevice*> devices;
+        std::vector<uint32_t> workers;
+        vector_aligned<uint32_t> noc_data;
+        std::vector<std::pair<CoreRangeSet, uint32_t>> core_mapping;
+        bool reset_launch_msg_state;
+        std::vector<std::vector<vector_aligned<uint32_t>>> device_batches;
+    };
+    // Most recently used first. Bound retained per-chip blobs and linear lookup cost.
+    static constexpr size_t max_sub_device_setup_cache_entries = 8;
+    std::vector<SubDeviceSetupCommands> sub_device_setup_commands_;
 
     DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
@@ -267,6 +289,15 @@ public:
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;
+    // Enqueue a command list without entering the mesh-trace lifecycle.
+    void enqueue_command_list(
+        const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
+        const std::vector<SubDeviceId>& sub_device_ids,
+        const MeshBuffer& buffer,
+        SubDeviceManagerId sub_device_manager_id,
+        bool blocking);
+    // Wait until this host's queued device work completes.
+    void drain_device_work();
     // Main function (event loop) for the Completion Queue Reader
     void read_completion_queue();
     // Helper function - read events from Completion Queue

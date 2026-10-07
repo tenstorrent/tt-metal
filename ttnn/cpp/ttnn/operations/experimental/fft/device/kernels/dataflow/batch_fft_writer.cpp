@@ -61,12 +61,11 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_state_i.get_read_ptr());
             volatile tt_l1_ptr uint16_t* const dst_r = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_r_bf16_l1);
             volatile tt_l1_ptr uint16_t* const dst_i = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(out_i_bf16_l1);
-            // Truncation (drop low 16 bits). Round-to-nearest-even costs
-            // one add + one mask per element; truncation is fine for the
-            // first cut and avoids any RNE corner cases.
+            // Round-to-nearest-even (see fft_f32_bits_to_bf16_rne in batch_fft_common.h): plain
+            // truncation biases every stored value toward zero.
             for (uint32_t i = 0; i < SUB_N; ++i) {
-                dst_r[i] = static_cast<uint16_t>(src_r[i] >> 16);
-                dst_i[i] = static_cast<uint16_t>(src_i[i] >> 16);
+                dst_r[i] = fft_f32_bits_to_bf16_rne(src_r[i]);
+                dst_i[i] = fft_f32_bits_to_bf16_rne(src_i[i]);
             }
             cb_out_r_bf16.push_back(1);
             cb_out_i_bf16.push_back(1);

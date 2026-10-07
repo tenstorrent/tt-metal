@@ -741,7 +741,7 @@ def load_captured_routing(
     ---------------------------------------------
         layer:                  int, MoE layer index (e.g. 27)
         col:                    int, Galaxy column [0, 4) to simulate
-        model:                  str, model name ("dsv3", "kimi26", "glm52"); selects the per-model
+        model:                  str, model name ("dsv3", "kimi26", "glm53"); selects the per-model
                                 capture file when captured_indices_path is unset
         captured_indices_path:  path to the capture safetensors; if falsy, falls back to
                                 CODE_DEBUG_5K_CHUNKED / "expert_routing_MODELNAME.safetensors"
@@ -777,8 +777,8 @@ def load_captured_routing(
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import CODE_DEBUG_5K_CHUNKED
 
         # "kimi26" not "kimi27": https://github.com/tenstorrent/tt-metal/issues/54972
-        if model not in {"dsv3", "kimi26", "glm52"}:
-            raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm52")
+        if model not in {"dsv3", "kimi26", "glm53"}:
+            raise ValueError(f"Unknown model {model!r}; expected one of dsv3, kimi26, glm53")
 
         # Keep naming in this convention in order for other models to be consistent.
         path = CODE_DEBUG_5K_CHUNKED / f"expert_routing_{model}.safetensors"
@@ -1012,7 +1012,7 @@ def load_gate_weights_from_hf(
         layer_idx: Transformer layer index (must be an MoE layer, i.e. >= 3 for DeepSeek-V3)
         dtype: Target dtype for the returned weight AND for ``e_score_correction_bias``. The
             checkpoints store the bias as fp32, but it is downcast here on purpose: the device gate
-            (``ttnn.experimental.deepseek_grouped_gate``) requires a bf16 bias, so keeping it wider
+            (``moe_grouped_topk``) requires a bf16 bias, so keeping it wider
             on the host would only put the reference and the device on different precisions at the
             top-k tie-break.
         key_prefix_template: HF key prefix with a ``{layer_idx}`` placeholder. Defaults to the

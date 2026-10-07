@@ -9,7 +9,7 @@ naming the implementation module. See ``docs/tests/getting_started.md`` §9.
 working for existing tests.
 """
 
-pytest_plugins = ["helpers.llk_pytest_plugin"]
+pytest_plugins = ["helpers.llk_pytest_plugin", "fuser.pytest_plugin"]
 
 from helpers.llk_pytest_plugin import (  # noqa: E402
     blackhole_only,

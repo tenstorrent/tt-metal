@@ -208,10 +208,20 @@ void SubDeviceManager::validate_sub_devices() const {
     // Validate sub device cores fit inside the device grid
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
+    const Hal& hal = MetalContext::instance(context_id_).hal();
 
     for (uint8_t sub_device_id = 0; sub_device_id < this->num_sub_devices(); ++sub_device_id) {
         const auto& sub_device = this->sub_device(SubDeviceId(sub_device_id));
-        const auto& worker_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
+        // The HAL's core type slots can be sparse (e.g. Quasar has DISPATCH but a placeholder DRAM slot), so check
+        // each type rather than comparing against the slot count.
+        for (uint32_t i = 0; i < NumHalProgrammableCoreTypes; ++i) {
+            const auto core_type = static_cast<HalProgrammableCoreType>(i);
+            TT_FATAL(
+                sub_device.impl()->cores()[i].empty() || hal.has_programmable_core_type(core_type),
+                "CoreType {} is not allowed in SubDevice",
+                core_type);
+        }
+        const auto& worker_cores = sub_device.impl()->cores(HalProgrammableCoreType::TENSIX);
         TT_FATAL(
             device_worker_cores.contains(worker_cores),
             "Tensix cores {} specified in sub device must be within device grid {}",
@@ -219,7 +229,7 @@ void SubDeviceManager::validate_sub_devices() const {
             device_worker_cores);
 
         if (sub_device.impl()->has_core_type(HalProgrammableCoreType::ACTIVE_ETH)) {
-            const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
+            const auto& eth_cores = sub_device.impl()->cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
             const auto& device_eth_cores = tt::tt_metal::MetalContext::instance(context_id_)
                                                .get_control_plane()
@@ -279,7 +289,7 @@ void SubDeviceManager::populate_sub_allocators() {
     // PCIe/DRAM -> Tensix/Eth src and dst addrs must be DRAM_ALIGNMENT aligned
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     for (uint32_t i = 0; i < this->num_sub_devices(); ++i) {
-        const auto& compute_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX);
+        const auto& compute_cores = sub_devices_[i].impl()->cores(HalProgrammableCoreType::TENSIX);
         if (compute_cores.empty()) {
             continue;
         }
@@ -354,7 +364,7 @@ void SubDeviceManager::populate_noc_data() {
     NOC noc_index = MetalContext::instance(context_id_).get_dispatch_query_manager().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        const auto& eth_cores = sub_devices_[i].cores(HalProgrammableCoreType::ACTIVE_ETH);
+        const auto& eth_cores = sub_devices_[i].impl()->cores(HalProgrammableCoreType::ACTIVE_ETH);
 
         has_noc_mcast_txns_[i] = sub_devices_[i].impl()->has_core_type(HalProgrammableCoreType::TENSIX);
 
@@ -384,7 +394,7 @@ void SubDeviceManager::populate_noc_data() {
     CoreRangeSet used_cores;
     for (size_t i = 0; i < num_sub_devices; ++i) {
         const auto& sub_device = sub_devices_[i];
-        const auto& tensix_cores = sub_device.cores(HalProgrammableCoreType::TENSIX);
+        const auto& tensix_cores = sub_device.impl()->cores(HalProgrammableCoreType::TENSIX);
         used_cores = used_cores.merge(tensix_cores);
         core_go_message_mapping_.emplace_back(tensix_cores, i);
     }

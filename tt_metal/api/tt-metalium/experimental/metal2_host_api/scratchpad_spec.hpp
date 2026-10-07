@@ -5,8 +5,11 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
+#include <tt-metalium/tile.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -57,6 +60,27 @@ struct ScratchpadSpec {
     // Size of the SRAM ("L1") region reserved on each node, in bytes.
     // (Only occupies space on nodes where the scratchpad's bound kernel instances run.)
     uint32_t size_per_node = 0;
+
+    ////////////////////////////////////
+    // Entry format metadata
+    ////////////////////////////////////
+
+    // The fields in this section are used to convey scratchpad entry format metadata to the
+    // Low-Level Kernel (LLK) device APIs (compute primitives).
+    // (These only need to be considered for scratchpads that are bound to a compute kernel.)
+
+    // These fields are identical as those in the DataflowBufferSpec.
+
+    // The data format is required if LLK metadata will be extracted from the device code
+    std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
+
+    // Optional; if unspecified, the default tile format (32x32) is assumed.
+    //
+    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces", and the compute
+    // engine derives the face layout from this field. If an entry holds shorter, more numerous faces
+    // than the default layout for its tile shape, say so with the `Tile(tile_shape, face_shape)`
+    // constructor -- the compute engine then reads exactly that much data.
+    std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 };
 
 }  // namespace tt::tt_metal::experimental

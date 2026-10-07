@@ -18,6 +18,7 @@ from helpers.param_config import (
     generate_quasar_srcs_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
     runtime,
 )
 from helpers.stimuli_config import StimuliConfig
@@ -43,13 +44,13 @@ SQUARE_RANGE_SAFETY_FACTOR = 0.9
 
 SFPU_SQUARE_FORMATS = input_output_formats(
     [
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
     ]
-)
+    # The MX pair is on the input side: these operands reach the SFPU through UNP_S
+    # into SrcS, a decode port the unpack test (UnpA/UnpB) does not cover.
+) + quasar_mx_smoke(DataFormat.MxFp8P, DataFormat.Float16_b)
 
 SFPU_SQUARE_COMBINATIONS = [
     (fmt, dest_acc, implied_math_format, runtime(input_dimensions))

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Stress test for the real-time (RT) profiler. If NCRISC or the host receiver can't drain as fast as
-// BRISC produces, the device ring fills and BRISC drops records.
+// BRISC produces, the device ring fills and the backpressure reaches dispatch_s, which then waits (a
+// dispatch stall) rather than dropping records.
 //
 // The drain path is expected to absorb peak dispatch without backing up. This test replays a 4096 blank-kernel trace
 // back-to-back to feed BRISC at the peak rate dispatch_s can sustain, then asserts every record arrived, the device
@@ -47,11 +48,8 @@ using tt::tt_metal::experimental::ProgramRealtimeRecordBatch;
 using tt::tt_metal::experimental::RegisterProgramRealtimeProfilerCallback;
 using tt::tt_metal::experimental::UnregisterProgramRealtimeProfilerCallback;
 
-// Matches RT_PROFILER_RING_CAPACITY in realtime_profiler_ring_buffer.hpp.
-// Picking the trace length equal to the ring capacity is the worst case for
-// the back-pressure path: BRISC can fill the ring in roughly the time it
-// takes NCRISC to push 1–2 entries over PCIe, so by enqueue ~80 of 4096
-// the ring is at capacity and stays there for the rest of the trace.
+// Programs per trace: enough back-to-back launches for dispatch_s to reach its peak record rate. Replays run
+// back to back, so the load is sustained well beyond one trace.
 constexpr uint32_t kNumProgramsInTrace = 4096;
 
 constexpr uint32_t kDefaultStressReplaySeconds = 60;
@@ -226,6 +224,9 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     const uint32_t peak_fifo_pages = rt->peak_fifo_pages();
     const uint32_t fifo_capacity_pages = rt->host_fifo_capacity_pages();
     const uint32_t ring_full_waits = rt->ring_full_wait_count();
+    const uint32_t record_ring_full_waits = rt->record_ring_full_wait_count();
+    const uint64_t dispatch_stalls = rt->dispatch_stall_events();
+    const uint64_t dispatch_stall_cycles = rt->dispatch_stall_cycles();
     const uint64_t published_batches = rt->num_published_batches();
     const double mean_publish_batch =
         published_batches ? static_cast<double>(rt->num_published_records()) / published_batches : 0.0;
@@ -238,7 +239,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     log_info(
         tt::LogTest,
         "[RT profiler stress] {} stress records across {} active device(s) over {} replays, max_callback_batch={}, "
-        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, {} startup-race skips, {} "
+        "mean_publish_batch={:.1f}, peak_fifo={}/{} pages, ring_full_waits={}, record_ring_full_waits={}, "
+        "dispatch_stalls={} ({} cycles), {} startup-race skips, {} "
         "large-negative-delta skips (worst delta = {} cycles), {} bad-frequency, {} implausible-duration",
         stress_records,
         num_active_devices,
@@ -248,6 +250,9 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
         peak_fifo_pages,
         fifo_capacity_pages,
         ring_full_waits,
+        record_ring_full_waits,
+        dispatch_stalls,
+        dispatch_stall_cycles,
         startup_race_skips,
         large_negative_skips,
         worst_negative_delta,
@@ -286,6 +291,104 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
 // Three consumers read the same record stream at different throttled rates. Verifies the per-reader
 // drop accounting: for every consumer, received + dropped covers every record produced, and a
 // throttled consumer drops no more than its sustain rate forces (no over-dropping).
+// When the host stops reading profiler data, the backpressure reaches dispatch_s, which must wait rather than drop
+// records, and report each wait to the host as a dispatch stall. The host receiver is paused while traces are
+// queued, so the host FIFO, the BRISC ring and the record ring fill (~49k records) until dispatch_s waits; after
+// unpausing, every record must arrive and the host's stall count and length must match what the device saw.
+TEST(RealtimeProfilerStress, DispatchStallIsReportedAndLossless) {
+    // ~98k records: twice what the host FIFO, BRISC ring and record ring hold together.
+    constexpr uint32_t kNumReplays = 24;
+    constexpr auto kStallDeadline = std::chrono::seconds(10);
+    // Keep the receiver paused this long after dispatch_s starts waiting, so one stall is known to be long.
+    constexpr auto kHoldWhileStalled = std::chrono::milliseconds(200);
+
+    auto mesh_device = open_full_mesh();
+    ASSERT_NE(mesh_device, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        mesh_device->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+    auto* rt = mesh_device->impl().get_realtime_profiler();
+    ASSERT_NE(rt, nullptr);
+    const uint64_t num_active_devices = rt->num_active_devices();
+
+    std::atomic<uint64_t> stress_records{0};
+    std::atomic<double> frequency{0.0};  // device cycles per ns
+    ProgramRealtimeProfilerCallbackHandle handle =
+        RegisterProgramRealtimeProfilerCallback([&](const ProgramRealtimeRecordBatch& batch) {
+            for (const auto& rec : batch.records) {
+                if (rec.runtime_id == kStressRuntimeId) {
+                    stress_records.fetch_add(1, std::memory_order_relaxed);
+                    frequency.store(rec.frequency, std::memory_order_relaxed);
+                }
+            }
+        });
+
+    distributed::MeshWorkload workload = build_blank_kernel_workload(mesh_device);
+    auto& cq = mesh_device->mesh_command_queue(0);
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
+    for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    }
+    mesh_device->end_mesh_trace(cq, trace_id);
+    const uint64_t records_before = stress_records.load();
+
+    // Nothing may block on the device while paused: dispatch cannot finish until the host reads again.
+    rt->pause_receiver_for_testing(true);
+    for (uint32_t i = 0; i < kNumReplays; ++i) {
+        mesh_device->replay_mesh_trace(cq, trace_id, /*blocking=*/false);
+    }
+    // Wait until the backup reaches the BRISC: its output ring only fills once the host FIFO is full, and then
+    // dispatch_s waits within a few records. (dispatch_s's own wait count also moves on short waits at peak rate,
+    // so it cannot tell when the backup has arrived.)
+    const auto stall_deadline = std::chrono::steady_clock::now() + kStallDeadline;
+    while (rt->ring_full_wait_count() == 0 && std::chrono::steady_clock::now() < stall_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool backed_up = rt->ring_full_wait_count() != 0;
+    std::this_thread::sleep_for(kHoldWhileStalled);
+    rt->pause_receiver_for_testing(false);
+
+    mesh_device->quiesce_devices();
+    std::this_thread::sleep_for(kPostQuiesceDrain);
+
+    const uint64_t host_stalls = rt->dispatch_stall_events();
+    const uint64_t host_stall_cycles = rt->dispatch_stall_cycles();
+    const uint32_t device_waits = rt->record_ring_full_wait_count();
+    UnregisterProgramRealtimeProfilerCallback(handle);
+    mesh_device->release_mesh_trace(trace_id);
+
+    const double freq = frequency.load();
+    const double host_stall_ms = freq > 0.0 ? static_cast<double>(host_stall_cycles) / freq / 1e6 : 0.0;
+    log_info(
+        tt::LogTest,
+        "[RT profiler stall] {} stress records, {} dispatch stalls reported ({:.1f} ms), {} device waits",
+        stress_records.load() - records_before,
+        host_stalls,
+        host_stall_ms,
+        device_waits);
+
+    ASSERT_TRUE(backed_up) << "pausing the host receiver never backed the profiler up to the BRISC";
+    EXPECT_GT(device_waits, 0u) << "the backup never made dispatch_s wait for a record slot";
+    const uint64_t expected_records = static_cast<uint64_t>(kNumProgramsInTrace) * kNumReplays * num_active_devices;
+    EXPECT_GE(stress_records.load() - records_before, expected_records)
+        << "records were dropped while dispatch_s waited";
+    EXPECT_GT(host_stalls, 0u) << "dispatch_s waits were not reported to the host";
+    // dispatch_s waited at least from the first wait until the unpause.
+    const double hold_ms = std::chrono::duration<double, std::milli>(kHoldWhileStalled).count();
+    EXPECT_GE(host_stall_ms, hold_ms / 2) << "reported stall time is shorter than the time dispatch_s was held";
+    if (num_active_devices == 1) {
+        // record_ring_full_wait_count() is a per-device peak, so it only compares exactly on one device. The latest
+        // wait is reported once the record after it (or terminate) reaches the reader, so it may still be pending.
+        EXPECT_LE(host_stalls, device_waits);
+        EXPECT_LE(device_waits - host_stalls, 1u) << "dispatch_s waits were not reported to the host";
+    }
+
+    EXPECT_TRUE(mesh_device->close());
+}
+
 TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const std::chrono::seconds run_window(
         tt::parse_env<std::uint32_t>("TT_RT_PROFILER_DROP_ACCOUNTING", kDefaultDropAccountingSeconds));

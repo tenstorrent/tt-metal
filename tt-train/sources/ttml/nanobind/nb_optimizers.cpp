@@ -165,6 +165,10 @@ void py_module(nb::module_& m) {
             "set_state_dict", &OptimizerBase::set_state_dict, nb::arg("dict"), "Set state dictionary");
         py_optimizer_base.def("get_lr", &OptimizerBase::get_lr, "Get learning rate");
         py_optimizer_base.def("set_lr", &OptimizerBase::set_lr, nb::arg("lr"), "Set learning rate");
+        py_optimizer_base.def(
+            "get_initial_lr",
+            &OptimizerBase::get_initial_lr,
+            "Get the LR recorded when the first scheduler attached (mirrors PyTorch's param_group['initial_lr'])");
         py_optimizer_base.def("print_stats", &OptimizerBase::print_stats, "Print statistics");
     }
 

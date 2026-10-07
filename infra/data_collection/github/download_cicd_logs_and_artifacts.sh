@@ -5,6 +5,62 @@ set -eo pipefail
 # Default argument values
 default_repo="tenstorrent/tt-metal"
 
+# --- Per-execution REST-call attribution -------------------------------------------------
+# Counts only the GitHub REST calls THIS produce-data execution makes, grouped by category, so
+# its exact share can be separated from every other workflow drawing on the same installation
+# token bucket. This pairs with the [rate-limit] line the workflow emits (which measures the
+# shared bucket): [rate-limit] is the shared total, [api-usage] is this execution's own calls.
+#
+# It is a LOCAL counter, deliberately NOT an X-Ratelimit-Used delta: many workflows execute
+# concurrently against the same bucket, so a before/after delta would wrongly attribute their
+# calls to this run. Counts are appended to a file rather than shell variables because the
+# collectors run inside command-substitution and pipe subshells, whose variable writes would
+# otherwise be lost.
+api_count() {
+    local category=$1 n=${2:-1}
+    [[ -n "${API_COUNT_FILE:-}" ]] || return 0
+    printf '%s %s\n' "$category" "$n" >> "$API_COUNT_FILE"
+}
+
+_api_sum() {
+    awk -v c="$1" '$1==c {s+=$2} END{print s+0}' "$API_COUNT_FILE"
+}
+
+emit_api_usage() {
+    [[ -n "${API_COUNT_FILE:-}" && -f "$API_COUNT_FILE" ]] || return 0
+    local jobs_list artifact_list artifact_download log_archive per_job_log annotations attempt_meta total
+    jobs_list=$(_api_sum jobs_list)
+    artifact_list=$(_api_sum artifact_list)
+    artifact_download=$(_api_sum artifact_download)
+    log_archive=$(_api_sum log_archive)
+    per_job_log=$(_api_sum per_job_log)
+    annotations=$(_api_sum annotations)
+    attempt_meta=$(_api_sum attempt_meta)
+    total=$(( jobs_list + artifact_list + artifact_download + log_archive + per_job_log + annotations + attempt_meta ))
+    # One stable, greppable line per execution. This counts the REST calls the collection script
+    # makes. The workflow-metadata fetch (workflow.json) is a separate request made by the
+    # workflow step -- intentionally outside this counter, since that is where #57432 samples the
+    # rate-limit headers.
+    #
+    # Accuracy: jobs_list, log_archive, per_job_log, annotations and attempt_meta are exact
+    # (counted at each call). artifact_download counts the ZIP requests that were billed --
+    # successful downloads plus the request that fails on a partial/rate-limited download.
+    # artifact_list counts each `gh run download`'s internal artifact listing as one page; on a
+    # run with >100 TOTAL artifacts that listing paginates, so artifact_list (and thus total) is
+    # a slight lower bound in that case -- rare for produce-data, and it never over-counts.
+    # A run name is arbitrary user-controlled text: spaces/brackets (e.g.
+    # "Sanity tests (push) SKUs[WH,Sim]") and in principle double quotes, newlines or CRs. Emit
+    # it as one quoted field and neutralise the characters that would break that quoting or the
+    # one-line-per-record format, so ANY name stays parseable via workflow="([^"]*)".
+    local safe_name=${workflow_name:-unknown}
+    safe_name=${safe_name//$'\r'/}       # drop carriage returns
+    safe_name=${safe_name//$'\n'/ }      # newlines -> space (keep a single line)
+    safe_name=${safe_name//\"/\'}        # double quotes -> single, so the surrounding quotes hold
+    [[ -n "$safe_name" ]] || safe_name=unknown
+    # Every field after the name is space-free key=value.
+    echo "[api-usage] workflow=\"${safe_name}\" run_id=${workflow_run_id:-unknown} attempt=${attempt_number:-unknown} total=${total} jobs_list=${jobs_list} artifact_list=${artifact_list} artifact_download=${artifact_download} log_archive=${log_archive} per_job_log=${per_job_log} annotations=${annotations} attempt_meta=${attempt_meta}"
+}
+
 set_up_dirs() {
     local workflow_run_id=$1
     mkdir -p generated/cicd
@@ -37,8 +93,22 @@ download_artifacts() {
     # exceeded" both land here, and collapsing the second into "not found" is how a
     # throttled fetch gets mistaken for a run that simply had no test reports.
     local download_error
+    local download_ok=1
     if ! download_error=$(gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern 'test_reports_*' $workflow_run_id 2>&1 >/dev/null); then
         echo "[Warning] Test reports not downloaded for workflow run $workflow_run_id: ${download_error:-no reason given}"
+        download_ok=0
+    fi
+
+    # gh run download bills one artifacts listing plus one ZIP request per matching artifact.
+    # artifact_download = the ZIP requests actually billed: one per successfully downloaded
+    # directory, plus the request that failed when a partial/rate-limited download stops early
+    # (so a throttled collection is not undercounted -- the case rate-limit diagnosis needs most).
+    api_count artifact_list 1
+    api_count artifact_download "$(find "generated/cicd/$workflow_run_id/artifacts" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+    # `if`, not `&&`: a false `[[ ]]` as the function's last command returns 1 and, under
+    # `set -e`, would abort the whole collection.
+    if [[ "$download_ok" -eq 0 ]]; then
+        api_count artifact_download 1
     fi
 }
 
@@ -50,17 +120,22 @@ download_artifacts_created_since_attempt_start() {
 
     local attempt_started
     if ! attempt_started=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number" --jq '.run_started_at' 2>&1); then
+        api_count attempt_meta 1
         echo "[Warning] could not read attempt $attempt_number start time (${attempt_started:-no reason given}); downloading all test reports"
         download_artifacts "$repo" "$workflow_run_id" 1
         return
     fi
+    api_count attempt_meta 1
     echo "[info] attempt $attempt_number started $attempt_started; only test reports newer than that are this attempt's"
 
     local listing
     if ! listing=$(gh api --paginate "/repos/$repo/actions/runs/$workflow_run_id/artifacts" 2>&1); then
+        api_count artifact_list 1
         echo "[Warning] could not list artifacts for workflow run $workflow_run_id: ${listing:-no reason given}"
         return
     fi
+    # --paginate concatenates one JSON object per page, so the page count is the exact request count.
+    api_count artifact_list "$(printf '%s' "$listing" | jq -s 'length' 2>/dev/null || echo 1)"
 
     # Lexicographic compare is ordering-correct for the UTC "...Z" form the API returns.
     local fresh
@@ -97,6 +172,10 @@ download_artifacts_created_since_attempt_start() {
     if ! download_error=$(gh run download --repo $repo -D "$dest" "${name_args[@]}" $workflow_run_id 2>&1 >/dev/null); then
         echo "[Warning] Test reports not downloaded for workflow run $workflow_run_id: ${download_error:-no reason given}"
     fi
+
+    # One internal listing per gh run download, plus one ZIP request per requested artifact name.
+    api_count artifact_list 1
+    api_count artifact_download "${#fresh_names[@]}"
 }
 
 # Function to get jobs with pagination fallback
@@ -115,6 +194,8 @@ get_jobs_with_pagination_fallback() {
 
     if [ $paginate_exit_code -eq 0 ]; then
         echo "Successfully fetched jobs using --paginate" >&2
+        # --paginate concatenates one JSON object per page; the count is the exact request count.
+        api_count jobs_list "$(printf '%s' "$paginated_output" | jq -s 'length' 2>/dev/null || echo 1)"
         echo "$paginated_output" | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > "$jobs_json_file"
         cat "$jobs_json_file"
     else
@@ -124,6 +205,7 @@ get_jobs_with_pagination_fallback() {
         # Manual pagination to avoid 502 errors with --paginate
         # Get first page to determine total count
         first_page=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs?per_page=50&page=1")
+        api_count jobs_list 1
         total_count=$(echo "$first_page" | jq -r '.total_count')
         echo "Total jobs: $total_count" >&2
 
@@ -139,6 +221,7 @@ get_jobs_with_pagination_fallback() {
         for page in $(seq 2 $total_pages); do
             echo "Fetching page $page of $total_pages" >&2
             page_data=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs?per_page=50&page=$page")
+            api_count jobs_list 1
             page_jobs=$(echo "$page_data" | jq -r '.jobs')
             all_jobs=$(jq -s '.[0] + .[1]' <(echo "$all_jobs") <(echo "$page_jobs"))
             sleep 5
@@ -204,11 +287,15 @@ extract_one_attempt_archive() {
     local archive_error retry_error
     if ! archive_error=$(gh api --allow-escape-sequences "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt/logs" 2>&1 >"$archive"); then
         if ! retry_error=$(gh api "/repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt/logs" 2>&1 >"$archive"); then
+            api_count log_archive 2
             echo "[Warning] could not download the attempt $attempt log archive: ${retry_error:-no reason given}"
             echo "[Warning] first try (with --allow-escape-sequences) said: ${archive_error:-no reason given}"
             rm -rf "$tmp_dir"
             return 1
         fi
+        api_count log_archive 2
+    else
+        api_count log_archive 1
     fi
 
     if ! python3 "$script_dir/extract_job_logs_from_archive.py" \
@@ -278,14 +365,22 @@ download_logs_for_all_jobs() {
             # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
             # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
             # We output escape sequences, gh cli >= 2.97.0 requires --allow-escape-sequences else it fails. Fall back to regular call for older images.
-            gh api --allow-escape-sequences /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || \
+            if gh api --allow-escape-sequences /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log; then
+                api_count per_job_log 1
+            else
+                # Fall back to a plain request for gh < 2.97.0 (no --allow-escape-sequences).
+                # Both requests are billed, hence 2; the trailing `|| true` keeps a failed log
+                # download non-fatal, exactly as before.
+                api_count per_job_log 2
                 gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
+            fi
         fi
 
         # Download annotations for failed jobs only (failure reason).
         if [[ "$job_conclusion" == "failure" ]]; then
             echo "[info] downloading annotations for job $job_id (conclusion=$job_conclusion)"
             gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${job_id}_annotations.json
+            api_count annotations 1
         fi
     done
 }
@@ -300,6 +395,10 @@ main() {
                 ;;
             --attempt-number)
                 attempt_number=$2
+                shift
+                ;;
+            --workflow-name)
+                workflow_name=$2
                 shift
                 ;;
             --repo)
@@ -327,9 +426,18 @@ main() {
         exit 1
     fi
 
+    # Emit the [api-usage] line on any exit (including a mid-run rate-limit 403), so the counts
+    # are recorded even for a partial collection. The file is created here and cleaned up after.
+    API_COUNT_FILE=$(mktemp)
+    trap 'emit_api_usage; rm -f "$API_COUNT_FILE"' EXIT
+
     set_up_dirs "$workflow_run_id"
     download_artifacts "$repo" "$workflow_run_id" "$attempt_number"
     download_logs_for_all_jobs "$repo" "$workflow_run_id" "$attempt_number"
 }
 
-main "$@"
+# Only run when executed directly, not when sourced (the tests source the file to exercise the
+# counters in isolation).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

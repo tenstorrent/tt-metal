@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/shm_resource_tracker.hpp"
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 
 #include <mutex>
 #include <tt-logger/tt-logger.hpp>

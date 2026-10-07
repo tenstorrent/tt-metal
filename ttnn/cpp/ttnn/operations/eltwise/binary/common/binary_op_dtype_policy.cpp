@@ -55,6 +55,7 @@ std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
         case BinaryOpType::XLOGY:
         case BinaryOpType::ATAN2:
         case BinaryOpType::HYPOT: return float_only;
+        case BinaryOpType::NEXTAFTER: return ulp_step_float;
         case BinaryOpType::WHERE_TST:
         case BinaryOpType::WHERE_TTS: return where;
         case BinaryOpType::ADDALPHA:

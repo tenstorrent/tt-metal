@@ -441,7 +441,9 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode, GeluVariant
+# ttnn.operations registers its submodules under bare names, so importing ttnn.operations.unary here
+# would execute unary.py a second time and let its goldens override later registrations.
+from ttnn._ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div
 sub = ttnn.subtract
@@ -500,7 +502,6 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
-    create_group_norm_reciprocals,
     create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     determine_expected_group_norm_dram_grid_size,
@@ -583,9 +584,24 @@ experimental.rgb_to_yuv = rgb_to_yuv
 experimental.yuv_bt601_coefficients = yuv_bt601_coefficients
 experimental.yuv_bt709_coefficients = yuv_bt709_coefficients
 
+# PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
+from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
+
+experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
+experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
+experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOverride, SparseKVFormat
+from ttnn.operations.transformer import (
+    SDPAProgramConfig,
+    PagedCacheGeometryOverride,
+    SparseKVFormat,
+    ChunkGdnMonoProgramConfig,
+    ChunkGdnPhasedProgramConfig,
+    ChunkGdnFusedProgramConfig,
+    ChunkGdnWyInverse,
+)
 
 transformer.SparseKVFormat = SparseKVFormat
 

@@ -6,7 +6,7 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_prefill_outbound_socket_service_sync
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_prefill_outbound_socket_service_sync REUSE_FROM TTNN::PCHFull)
+tt_reuse_precompile_headers(ttnn_op_experimental_deepseek_prefill_outbound_socket_service_sync TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_prefill_outbound_socket_service_sync)
 
 set_target_properties(

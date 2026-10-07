@@ -30,7 +30,9 @@ FORCE_INLINE void send_block(
     uint32_t row_chunk_i,
     uint32_t num_blocks_in_column,
     uint32_t num_slices_along_channels,
-    uint32_t block_depth) {
+    uint32_t block_depth,
+    uint32_t generic_block_depth) {
+    // Tile ids use the full block depth, not this partial count.
     for (uint32_t inner_tile_stride = 0; inner_tile_stride < block_depth; ++inner_tile_stride) {
         const uint32_t read_tile_id = get_tile_id(
             num_blocks_in_column,
@@ -39,7 +41,7 @@ FORCE_INLINE void send_block(
             channels_slice_i,
             row_chunk_i,
             column_block_i,
-            block_depth);
+            generic_block_depth);
         load_from_dram(cb_input, input_addr_gen, read_tile_id);
     }
 }
@@ -78,7 +80,8 @@ void kernel_main() {
                     row_chunk_i,
                     num_blocks_in_column,
                     num_slices_along_channels,
-                    block_depth);
+                    block_depth,
+                    ctas.block_depth);
             }
         }
     }

@@ -848,6 +848,15 @@ jobs:
           ARTIFACT_NAME="ttnn-dist-inplace-cp${PYTHON_VERSION_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
 
+      - name: 🔍 Import the wheel in a clean venv
+        if: ${{ inputs.build-inplace-wheel && github.event_name == 'merge_group' }}
+        timeout-minutes: 10
+        run: |
+          # ttnn must import on its declared dependencies alone.
+          python3 -m venv "$RUNNER_TEMP/wheel-smoke"  # not /tmp: noexec in this image
+          "$RUNNER_TEMP/wheel-smoke/bin/pip" install --quiet /work/wheelhouse/*.whl
+          cd / && "$RUNNER_TEMP/wheel-smoke/bin/python" -c "import ttnn"
+
       - name: ☁️ Upload wheel package
         if: ${{ inputs.build-inplace-wheel }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

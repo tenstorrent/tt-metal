@@ -129,7 +129,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         Nc_tiles,
         num_B_cores);
 
-    IDevice* device = input_tensor_a.device();
+    MeshDevice* device = input_tensor_a.device();
     const uint32_t N_tiles = div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
 
     ProgramDescriptor desc;

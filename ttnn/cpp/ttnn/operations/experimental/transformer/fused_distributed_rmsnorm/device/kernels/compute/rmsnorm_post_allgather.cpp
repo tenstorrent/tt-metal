@@ -43,10 +43,9 @@ void kernel_main() {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(12);
     constexpr uint32_t block_size = get_compile_time_arg_val(13);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(14);
-    constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(15);
-    constexpr uint32_t has_weight = get_compile_time_arg_val(16);
-    constexpr uint32_t fuse_rope = get_compile_time_arg_val(17);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(18);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(15);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(16);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(17);
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
 
@@ -102,7 +101,7 @@ void kernel_main() {
                 ckl::BinaryFpuOp::Add,
                 ckl::input(reduce_result_cb),
                 ckl::input(epsilon_cb, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
-            ckl::Rsqrt<ckl::Approx::Exact, use_legacy_rsqrt ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(reduce_result_cb)>{});
 
         /*

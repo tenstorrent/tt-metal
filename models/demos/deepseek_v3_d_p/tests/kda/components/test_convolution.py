@@ -9,19 +9,13 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
-pytestmark = [
-    run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
-]
+pytestmark = [run_for_blackhole()]
 
 
 def _coordinate(sp_rank: int, tp_rank: int, sp_axis: int) -> tuple[int, int]:
@@ -53,49 +47,107 @@ def _sp_carries(tensor: ttnn.Tensor, device: ttnn.MeshDevice, sp_axis: int, tp_a
     return torch.stack(partitions)
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@pytest.mark.parametrize(
+    "mesh_device,tp_axis,device_params",
+    [
+        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4"),
+        pytest.param((4, 2), 1, fabric_1d_device_params(), id="SP4xTP2"),
+        pytest.param((4, 2), 0, fabric_1d_device_params(), id="SP2xTP4-axis1"),
+        pytest.param((2, 4), 0, fabric_1d_device_params(), id="SP4xTP2-axis1"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("local_rows", [640, 2560])
 def test_exchange_convolution_carry_preserves_causal_carries(
-    mesh_device: ttnn.MeshDevice,
-    tensor_parallel_axis: int,
+    mesh_device: ttnn.MeshDevice, tp_axis: int, device_params: dict, local_rows: int
 ) -> None:
-    sp_axis = 1 - tensor_parallel_axis
-    sp_size = tuple(mesh_device.shape)[sp_axis]
-    tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
-    batch, local_sequence, history = 1, 8, 3
-    channels = tp_size * 32
-    sequence = sp_size * local_sequence
+    """All sources, both axes, exact routing, trace replay and fresh-address cache hits."""
+    axis = 1 - tp_axis
+    sp = tuple(mesh_device.shape)[axis]
+    width = 96 * 128 * 3
+    generator = torch.Generator().manual_seed(128)
+    qkv = torch.randn(1, sp * local_rows, width, generator=generator).bfloat16()
+    dims = [None, None]
+    dims[axis], dims[tp_axis] = 1, 2
+    qkv_tt = _to_device(qkv, mesh_device, tuple(dims))
 
-    qkv = torch.arange(batch * sequence * channels, dtype=torch.float32).reshape(batch, sequence, channels)
-    qkv = ((qkv.remainder(97) - 48) / 8).to(torch.bfloat16)
-    external = torch.arange(batch * history * channels, dtype=torch.float32).reshape(batch, history, channels)
-    external = (-(external.remainder(31) + 1) / 8).to(torch.bfloat16)
+    def release(outputs: tuple[ttnn.Tensor, ttnn.Tensor]) -> None:
+        for tensor in outputs:
+            ttnn.deallocate(tensor)
 
-    qkv_dims = [None, None]
-    qkv_dims[sp_axis], qkv_dims[tensor_parallel_axis] = 1, 2
-    state_dims = [None, None]
-    state_dims[tensor_parallel_axis] = 2
-    qkv_tt = _to_device(qkv, mesh_device, tuple(qkv_dims))
-    state_tt = _to_device(external, mesh_device, tuple(state_dims))
+    try:
+        for first_rank in range(sp):
+            for tail_rows in (0, 32, local_rows // 2, local_rows - 32):
+                topology = chronological_topology(first_rank * local_rows + tail_rows, sp, local_rows)
+                expected_entries = []
+                for rank in range(sp):
+                    previous = (rank - 1) % sp
+                    end_row = previous * local_rows + (
+                        topology.head_rows if topology.is_split and previous == first_rank else local_rows
+                    )
+                    outgoing = qkv[:, end_row - 3 : end_row]
+                    expected_entries.append(outgoing)
+                expected_entries = torch.stack(expected_entries)
+                final_rank = first_rank if topology.is_split else (first_rank - 1) % sp
+                end_row = (final_rank + 1) * local_rows
+                expected_final = qkv[:, end_row - 3 : end_row]
 
-    def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return exchange_convolution_carry(qkv_tt, state_tt, sequence_parallel_axis=sp_axis)
+                actual_start = make_actual_start(mesh_device, first_rank * local_rows + tail_rows)
+                selection_records = ttnn.experimental.kda.chronological_selections(
+                    actual_start, axis, local_rows, 1, 32, 32
+                )
+                selections = ChronologicalSelections(selection_records)
 
-    (entry_tt, final_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
-    actual_entries = _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
-    actual_finals = _sp_carries(final_tt, mesh_device, sp_axis, tensor_parallel_axis)
+                def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
+                    return exchange_convolution_carry(qkv_tt, sequence_parallel_axis=axis, selections=selections)
 
-    expected_entries = [external]
-    for sp_rank in range(1, sp_size):
-        predecessor_end = sp_rank * local_sequence
-        expected_entries.append(qkv[:, predecessor_end - history : predecessor_end])
-    expected_entries_tensor = torch.stack(expected_entries)
-    expected_final = qkv[:, -history:]
+                def check(outputs: tuple[ttnn.Tensor, ttnn.Tensor]) -> None:
+                    entries, final = outputs
+                    assert entries.dtype == final.dtype == ttnn.bfloat16
+                    assert entries.layout == final.layout == ttnn.ROW_MAJOR_LAYOUT
+                    assert entries.memory_config() == final.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+                    assert torch.equal(_sp_carries(entries, mesh_device, axis, tp_axis), expected_entries)
+                    assert all(
+                        torch.equal(item, expected_final) for item in _sp_carries(final, mesh_device, axis, tp_axis)
+                    )
+                    assert final.buffer_address() != qkv_tt.buffer_address()
 
-    assert_equal(expected_entries_tensor, actual_entries, name="halo entries")
-    for sp_rank in range(sp_size):
-        assert_equal(expected_final, actual_finals[sp_rank], name=f"halo final rank {sp_rank}")
-    assert all(marker.item() == 0 for marker in mismatch_markers), "halo output is not bit-identical across runs"
-    print(
-        f"tp_axis={tensor_parallel_axis}: rank0 external carry, {sp_size - 1} neighbor carries, "
-        "and all replicated final carries are exact"
-    )
+                for _ in range(2):
+                    outputs = run()
+                    check(outputs)
+                    release(outputs)
+                trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                outputs = run()
+                ttnn.end_trace_capture(mesh_device, trace, cq_id=0)
+                try:
+                    for _ in range(2):
+                        ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
+                        check(outputs)
+                finally:
+                    ttnn.release_trace(mesh_device, trace)
+                    release(outputs)
+
+                if first_rank == sp - 1 and tail_rows in (0, local_rows // 2):
+                    # Keep old allocations alive so fresh addresses cannot be recycled.
+                    old_qkv = qkv_tt
+                    cache_entries = mesh_device.num_program_cache_entries()
+                    qkv_tt = _to_device(-qkv, mesh_device, tuple(dims))
+                    try:
+                        assert qkv_tt.buffer_address() != old_qkv.buffer_address()
+                        expected_entries, expected_final = -expected_entries, -expected_final
+                        outputs = run()
+                        check(outputs)
+                        release(outputs)
+                        assert mesh_device.num_program_cache_entries() == cache_entries
+                        assert torch.equal(
+                            _sp_carries(qkv_tt, mesh_device, axis, tp_axis), -qkv.reshape(sp, 1, local_rows, width)
+                        )
+                    finally:
+                        ttnn.deallocate(qkv_tt)
+                        qkv_tt = old_qkv
+                for tensor in (actual_start, selection_records):
+                    ttnn.deallocate(tensor)
+        assert torch.equal(_sp_carries(qkv_tt, mesh_device, axis, tp_axis), qkv.reshape(sp, 1, local_rows, width))
+    finally:
+        ttnn.deallocate(qkv_tt)
+    print(f"SP={sp} axis={axis} C={local_rows}: exact routing, trace, rebinding and immutable inputs PASS")

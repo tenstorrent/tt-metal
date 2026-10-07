@@ -7,8 +7,8 @@
 #include "api/compute/common.h"
 #include "api/dataflow/circular_buffer.h"
 
-// Id-free (2.0) unary_bcast kernel: per tile, unary_bcast c_0 -> DST (BroadcastType::ROW), pack -> c_16.
-// IDENTICAL to unary_bcast_legacy.cpp except the broadcast uses experimental::unary_bcast[_init] built from an
+// Id-free (2.0) unary_bcast kernel: per tile, unary_bcast_tile c_0 -> DST (BroadcastType::ROW), pack -> c_16.
+// IDENTICAL to unary_bcast_legacy.cpp except the broadcast uses experimental::unary_bcast_init/_tile built from an
 // LLKOperand (data format + tile geometry as NTTPs, absolute L1 address as the only runtime state) -- NO CB id
 // on the op surface. The register format is derived on-device from the L1 format. hw_startup / pack_tile stay
 // the legacy CB-id API so the differential isolates unary_bcast. Output must be bit-identical to the legacy kernel.
@@ -34,7 +34,7 @@ void kernel_main() {
         cb0.wait_front(1);
         cb16.reserve_back(1);
 
-        experimental::unary_bcast<BroadcastType::ROW>(InOp(in_cb.read_address()), 0);
+        experimental::unary_bcast_tile<BroadcastType::ROW>(InOp(in_cb.read_address()), 0);
 
         tile_regs_commit();
         tile_regs_wait();

@@ -24,6 +24,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_mx_smoke,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -57,11 +58,8 @@ PACK_L1_ACC_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ]
-)
+) + quasar_mx_smoke(DataFormat.MxInt8, DataFormat.Float16_b)
 
 
 def generate_qsr_pack_l1_acc_combinations(

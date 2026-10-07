@@ -1186,7 +1186,7 @@ def test_noc_event_profiler_linked_multicast_hang():
 
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole", "quasar"]
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
     clear_profiler_runtime_artifacts()
@@ -1216,6 +1216,30 @@ def test_noc_event_profiler():
             "BARRIER" in event_type for event_type in event_types
         ), f"plain NOC tracing must not record barrier events, got: {event_types}"
         assert len(noc_trace_data) == 4, f"unexpected noc trace events: {event_types}"
+
+        # Must match the buffer set up in test_noc_event_profiler.cpp (single_tile_size, num_tiles). The kernel copies
+        # it DRAM -> L1 -> DRAM on NOC 0 from a single core, using DRAM bank 0.
+        TILE_HEIGHT = TILE_WIDTH = 32
+        BFLOAT16_BYTES = 2
+        NUM_TILES = 5
+        expected_num_bytes = NUM_TILES * TILE_HEIGHT * TILE_WIDTH * BFLOAT16_BYTES
+        noc_events = {event["type"]: event for event in noc_trace_data if "type" in event}
+        read_event, write_event = noc_events["READ"], noc_events["WRITE_"]
+        for event in (read_event, write_event):
+            assert event["num_bytes"] == expected_num_bytes, f"unexpected num_bytes: {event}"
+            assert event["noc"] == "NOC_0", f"unexpected noc: {event}"
+            if ENV_VAR_ARCH_NAME == "quasar":
+                assert event["proc"].startswith("QUASAR_DM"), f"unexpected proc: {event}"
+            else:
+                assert event["proc"] == "BRISC", f"unexpected proc: {event}"
+            assert "dx" in event and "dy" in event, f"missing destination coordinates: {event}"
+
+        # Every entry (both events and the kernel zone markers) comes from the one core running the kernel.
+        src_coords = {(event["sx"], event["sy"]) for event in noc_trace_data}
+        assert len(src_coords) == 1, f"expected a single source core, got: {src_coords}"
+        dst_coords = {(event["dx"], event["dy"]) for event in (read_event, write_event)}
+        assert len(dst_coords) == 1, f"READ and WRITE_ should target the same DRAM bank, got: {dst_coords}"
+        assert dst_coords != src_coords, f"destination should be a DRAM core, not the source core: {dst_coords}"
 
     # Validate SoC descriptor is produced and contains valid grid/core data
     expected_soc_descriptor_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/soc_descriptor.yaml"

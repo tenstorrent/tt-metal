@@ -2605,6 +2605,19 @@ def run_teacher_forcing(
     total_len = len(reference_tokens)
     num_target = total_len - prompt_len
 
+    # Bring-up / simulator escape hatch: the full refpt drives ~num_target-1 decode steps (≈255 for the
+    # 511-token Llama-3.2-1B refpt), each a complete model forward. On the Quasar functional simulator /
+    # emulator that is hours. LLAMA32_1B_TF_MAX_DECODE_STEPS=N caps the decode loop to N steps (the prefill
+    # + first predicted token always run, so N=0 exercises prefill+lm_head only, N=2 also covers steady-state
+    # decode + SDPA + KV-cache read). Accuracy is not meaningful when capped — this is for op bring-up.
+    _tf_cap = os.environ.get("LLAMA32_1B_TF_MAX_DECODE_STEPS")
+    if _tf_cap is not None:
+        num_target = min(num_target, max(int(_tf_cap), 0) + 1)
+        logger.warning(
+            f"[teacher-forcing] LLAMA32_1B_TF_MAX_DECODE_STEPS={_tf_cap} -> capping to {num_target - 1} decode "
+            f"steps (of {total_len - prompt_len - 1}); accuracy gate is not meaningful when capped"
+        )
+
     # Compile prefill + decode with config validation
     _compile_prefill_and_decode(
         executor,

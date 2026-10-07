@@ -288,6 +288,46 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
             batch_length_B);
         indexed_num_active = static_cast<uint32_t>(indices.logical_volume());
     }
+    // Per-group fused bias validation. `bias` (optional_input_tensors[1]) is a TILE tensor whose tile
+    // row e is group e's [1, N] bias; the in1 reader fetches tile row indices[bB] for every group and the
+    // compute kernel adds it row-broadcast before packing, so it only exists in indexed/gather mode.
+    if (operation_attributes.use_bias) {
+        TT_FATAL(
+            operation_attributes.use_indices,
+            "sparse_matmul bias requires indexed/gather mode (pass `indices`): the bias tile row is selected by "
+            "the active group id");
+        TT_FATAL(
+            tensor_args.optional_input_tensors.size() > 1 && tensor_args.optional_input_tensors.at(1).has_value(),
+            "use_bias is set but no bias tensor was provided");
+        const auto& bias = tensor_args.optional_input_tensors.at(1).value();
+        TT_FATAL(bias.storage_type() == ttnn::StorageType::DEVICE, "bias tensor must be on device");
+        TT_FATAL(bias.buffer() != nullptr, "bias tensor must be allocated in a buffer");
+        TT_FATAL(
+            bias.device() == input_tensor_a.device(),
+            "bias tensor must be on the same device as the other sparse matmul inputs");
+        TT_FATAL(bias.layout() == ttnn::Layout::TILE, "bias must be TILE layout, got {}", bias.layout());
+        TT_FATAL(!bias.is_sharded(), "bias must use interleaved memory, got {}", bias.memory_config());
+        TT_FATAL(
+            bias.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "bias must be BFLOAT16 (it is added at bias precision, not the weight dtype), got {}",
+            bias.dtype());
+        const auto& bias_shape = bias.padded_shape();
+        const auto& bias_tile = bias.tensor_spec().tile();
+        TT_FATAL(
+            bias_shape.rank() >= 3 && bias_shape[-1] == b_shape_padded[-1] &&
+                bias_shape[-2] == bias_tile.get_height() && bias_shape[-3] == batch_length_B &&
+                bias.padded_shape().volume() == bias_shape[-1] * bias_shape[-2] * bias_shape[-3],
+            "bias must have padded shape [E, tile_height, N] with E the number of sparse groups ({}) and N the "
+            "output width ({}), got {}",
+            batch_length_B,
+            b_shape_padded[-1],
+            bias_shape);
+        TT_FATAL(
+            bias_tile.get_width() == in1_tile.get_width(),
+            "bias tile width {} must match the in1 tile width {}",
+            bias_tile.get_width(),
+            in1_tile.get_width());
+    }
 
     const bool is_output_tensor_given =
         !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
@@ -520,12 +560,14 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<Tensor>& indices) {
+    const std::optional<Tensor>& indices,
+    const std::optional<Tensor>& bias) {
     auto sparse_matmul_attributes = SparseMatmulParams{
         nnz,
         is_input_a_sparse,
         is_input_b_sparse,
         indices.has_value(),  // use_indices
+        bias.has_value(),     // use_bias
         program_config,
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
         dtype,
@@ -544,6 +586,11 @@ std::tuple<SparseMatmulParams, SparseMatmulInputs> sparse_matmul_build_operation
     std::vector<std::optional<const Tensor>> optional_inputs;
     if (indices.has_value()) {
         optional_inputs.emplace_back(indices);
+    }
+    // The per-group bias rides in optional_input_tensors[1] and needs the group ids in slot 0.
+    if (bias.has_value()) {
+        TT_FATAL(indices.has_value(), "sparse_matmul bias requires indices (indexed/gather mode)");
+        optional_inputs.emplace_back(bias);
     }
 
     return {
@@ -567,7 +614,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<Tensor>& indices) {
+    const std::optional<Tensor>& indices,
+    const std::optional<Tensor>& bias) {
     auto [params, inputs] = sparse_matmul_build_operation_args(
         input_tensor_a,
         input_tensor_b,
@@ -584,7 +632,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t sparse_matmul(
         output_tile,
         global_cb,
         sub_device_id,
-        indices);
+        indices,
+        bias);
     return ttnn::device_operation::launch<SparseMatmulDeviceOperation>(params, inputs);
 }
 
@@ -621,6 +670,7 @@ SparseMatmulParams create_sparse_matmul_attributes(
         parameters.is_input_a_sparse,
         parameters.is_input_b_sparse,
         parameters.use_indices,
+        parameters.use_bias,
         matmul_struct.program_config,
         matmul_struct.output_mem_config,
         matmul_struct.output_dtype,

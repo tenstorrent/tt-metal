@@ -32,7 +32,7 @@ struct UntilizerCtArgs {
     uint32_t my_expert_base;
     uint32_t dispatch_group_size;
     uint32_t my_dg_index;
-    uint32_t num_destinations;
+    uint32_t num_destinations = 0;  // counted from the host destination block; read from CT args on device
     uint32_t walks_down;
     // Position in the group and its size. A group's batches are dealt out round robin, so this core takes
     // those where batch % num_peers == my_index and needs nothing else to know which are its own.
@@ -60,7 +60,6 @@ struct UntilizerCtArgs {
         my_expert_base(plan.my_expert_base),
         dispatch_group_size(op::ring_extent(args)),
         my_dg_index(op::my_dg_index(args, coord)),
-        num_destinations(0),  // set from the destination block below, so the two cannot disagree
         walks_down(plan.walks_down),
         my_index(plan.my_index),
         num_peers(plan.num_peers),

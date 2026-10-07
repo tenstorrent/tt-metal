@@ -14,7 +14,7 @@ struct FastReduceNCProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const FastReduceNCParams& operation_attributes,
         const FastReduceNCInputs& tensor_args,
-        Tensor& tensor_return_value);
+        std::vector<Tensor>& outputs);
 };
 
 }  // namespace ttnn::experimental::prim

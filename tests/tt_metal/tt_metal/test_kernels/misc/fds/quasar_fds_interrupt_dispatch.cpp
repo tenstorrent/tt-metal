@@ -85,7 +85,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kGroupId);
+    overlay::FdsDispatch::fds_go(kGroupId);
 
     uint32_t result = kComplete;
     if (!fds_interrupt::wait_for_interrupt_count(status, 1, kPollIterations)) {

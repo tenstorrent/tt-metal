@@ -49,15 +49,14 @@ from fuser.validator import (
     FpuMathSchemaBase,
     OperationSchemaBase,
     PackSchema,
+    TernarySfpuMathSchema,
     UnarySfpuMathSchema,
     eltwise_unpacker_rules,
     forced_unpackers,
     require_dest_tiles,
     require_src_a_tiles,
 )
-from helpers.llk_params import (
-    MathOperation,
-)
+from helpers.llk_params import MathOperation
 from pydantic import Field
 
 from .fpu.datacopy import DatacopyFpu
@@ -72,6 +71,7 @@ from .fpu.transpose_dest import TransposeDestFpu
 from .packer.packer import Packer
 from .packer.untilize import PackUntilize
 from .sfpu.binary import BinarySfpu
+from .sfpu.ternary import TernarySfpu
 from .sfpu.unary import UnarySfpu
 from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
@@ -278,6 +278,11 @@ BINARY_SFPU_OPS = {
 }
 
 
+TERNARY_SFPU_OPS = {
+    MathOperation.SfpuWhere,
+}
+
+
 class FpuMathSchema(FpuMathSchemaBase):
     _fpu_map: ClassVar = FPU_MAP
     _unpacker_map: ClassVar = UNPACKER_MAP
@@ -294,8 +299,18 @@ class WormholeBinarySfpuMathSchema(BinarySfpuMathSchema):
     _sfpu_ops: ClassVar = BINARY_SFPU_OPS
 
 
+class WormholeTernarySfpuMathSchema(TernarySfpuMathSchema):
+    _sfpu_cls: ClassVar = TernarySfpu
+    _sfpu_ops: ClassVar = TERNARY_SFPU_OPS
+
+
 MathSchema = Annotated[
-    Union[FpuMathSchema, WormholeUnarySfpuMathSchema, WormholeBinarySfpuMathSchema],
+    Union[
+        FpuMathSchema,
+        WormholeUnarySfpuMathSchema,
+        WormholeBinarySfpuMathSchema,
+        WormholeTernarySfpuMathSchema,
+    ],
     Field(discriminator="type"),
 ]
 
@@ -305,7 +320,10 @@ class WormholePackSchema(PackSchema):
 
 
 PackEntrySchema = Union[
-    WormholeUnarySfpuMathSchema, WormholeBinarySfpuMathSchema, WormholePackSchema
+    WormholeUnarySfpuMathSchema,
+    WormholeBinarySfpuMathSchema,
+    WormholeTernarySfpuMathSchema,
+    WormholePackSchema,
 ]
 
 

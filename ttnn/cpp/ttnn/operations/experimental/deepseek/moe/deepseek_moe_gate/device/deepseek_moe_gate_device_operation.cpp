@@ -8,8 +8,6 @@
 
 #include <tt-metalium/buffer.hpp>
 
-#include "deepseek_moe_gate_program_descriptor_builder.hpp"
-
 namespace ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate {
 
 void DeepseekMoeGateDeviceOperation::validate_on_program_cache_hit(

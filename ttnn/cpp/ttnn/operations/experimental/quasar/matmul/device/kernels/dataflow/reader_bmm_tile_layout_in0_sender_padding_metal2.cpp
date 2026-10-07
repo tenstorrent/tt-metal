@@ -156,9 +156,10 @@ void kernel_main() {
     // enabled (batchB > 0). As a single-kernel self-loop DFB (PRODUCER+CONSUMER) it is rejected by
     // the Metal 2.0 DM-kernel self-loop validator, so it is gated behind SPARSITY — never defined by
     // the non-sparse mcast factories that build this kernel (batchB is always 0 here). tensor::sparsity
-    // stays referenced so the factory's inert sparsity tensor binding remains valid.
-    [[maybe_unused]] const auto s_sparsity = TensorAccessor(tensor::sparsity);
+    // is gated with it: those factories declare no sparsity tensor binding, so the token only exists
+    // when a factory that defines SPARSITY also binds a real sparsity tensor.
 #ifdef SPARSITY
+    const auto s_sparsity = TensorAccessor(tensor::sparsity);
     constexpr uint32_t cb_id_sparsity = dfb::cb_sparsity;
     DataflowBuffer cb_sparsity(cb_id_sparsity);
 #endif

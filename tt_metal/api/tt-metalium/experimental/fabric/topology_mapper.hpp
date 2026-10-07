@@ -47,8 +47,6 @@ using AsicPosition = tt::tt_metal::ASICPosition;
  */
 
 using HostMeshMapping = std::map<MeshId, std::unordered_set<HostName>>;
-using LogicalAdjacencyMap = std::map<tt::tt_fabric::FabricNodeId, std::vector<tt::tt_fabric::FabricNodeId>>;
-using PhysicalAdjacencyMap = std::map<tt::tt_metal::AsicID, std::vector<tt::tt_metal::AsicID>>;
 
 /**
  * @brief Centralized representation of chip topology information

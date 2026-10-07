@@ -73,8 +73,11 @@ constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGrid
 // pattern cb_in0_down_full and cb_out already use. The adaptive win is untouched:
 // no MAC, tilize, DRAM read or multicast byte is spent on the padded rows.
 //
-// The tail per_core_M is still returned as a DIVISOR of per_core_M_max, so the
-// runtime rows always tile evenly inside the constant block.
+// The tail per_core_M is therefore free to be ANY value in [1, per_core_M_max]:
+// it bounds work only, and each CB still moves its whole constant block (the
+// runtime remainder arrives as a pointer-only pad). The host asserts every ring
+// is a whole number of the granule its kernels push, which is the property the
+// FIFO wrap actually depends on.
 
 // Clamp a DEVICE-PROVIDED token-tile count to what this expert can actually
 // hold: its region (`m_tiles_full` tile-rows), and — as a backstop — the chunk
@@ -134,9 +137,8 @@ inline uint32_t num_chunks(uint32_t count_tiles, uint32_t max_chunk) {
 }
 
 // per_core_M for chunk index `c`: per_core_M_max for the full chunks; for the
-// tail chunk, the smallest DIVISOR of per_core_M_max whose *kGridY covers the
-// tail tiles (so the tail does the least M-work while its block still tiles
-// evenly into the CBs).
+// tail chunk, exactly the rows/core needed to cover the tail tiles, so no MAC,
+// DRAM read or multicast byte is spent on a row the tail does not hold.
 inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t max_chunk) {
     const uint32_t per_core_M_max = max_chunk / kGridY;
     const uint32_t num_full = count_tiles / max_chunk;
@@ -148,12 +150,7 @@ inline uint32_t per_core_M_for_chunk(uint32_t c, uint32_t count_tiles, uint32_t 
     if (need < 1) {
         need = 1;
     }
-    for (uint32_t d = need; d <= per_core_M_max; ++d) {
-        if ((per_core_M_max % d) == 0) {
-            return d;
-        }
-    }
-    return per_core_M_max;
+    return (need < per_core_M_max) ? need : per_core_M_max;
 }
 
 }  // namespace adaptive_chunk

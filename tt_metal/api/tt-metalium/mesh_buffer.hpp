@@ -203,7 +203,7 @@ private:
         const tt::tt_metal::distributed::MeshCoordinate&);
 };
 
-class AnyBuffer {
+class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {
 public:
     AnyBuffer() = default;
     [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]

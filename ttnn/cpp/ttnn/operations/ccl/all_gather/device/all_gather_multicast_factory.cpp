@@ -41,15 +41,24 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
             "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
             "allocations. Configure an L1_SMALL region to mitigate this.");
     }
+    // One semaphore per phase: on a shared one, a fast device's next-launch startup credit could stand in for
+    // a slow device's completion credit, and the op would exit before that device's data has landed.
     auto barrier_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+    auto done_sem = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphore allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
-            operation_attributes, coord, tensor_args, output_tensor, barrier_sem, available_cores.num_cores());
+            operation_attributes,
+            coord,
+            tensor_args,
+            output_tensor,
+            barrier_sem,
+            done_sem,
+            available_cores.num_cores());
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -63,6 +72,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
     const AllGatherInputs& tensor_args,
     const Tensor& output_tensor,
     const tt::tt_metal::GlobalSemaphore& barrier_sem,
+    const tt::tt_metal::GlobalSemaphore& done_sem,
     uint32_t num_available_cores) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
@@ -446,9 +456,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             output_page_byte_offset_start,      // worker's initial byte offset within output page
             num_worker_output_chunks,           // number of output chunks for this worker
             device_idx,                         // this device's index
-            barrier_sem.address(),              // barrier_sem L1 address
-            virtual_core.x,                     // barrier_sem location (core.x)
-            virtual_core.y,                     // barrier_sem location (core.y)
+            barrier_sem.address(),              // barrier_sem L1 address (startup)
+            done_sem.address(),                 // done_sem L1 address (completion)
+            virtual_core.x,                     // semaphore location (core.x)
+            virtual_core.y,                     // semaphore location (core.y)
             barrier_wait_value,                 // barrier counter to wait for
             e_hops,                             // line_hops
             e_hops,                             // rect_e_hops
@@ -491,9 +502,10 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
             output_page_byte_offset_start,      // worker's initial byte offset within output page
             num_worker_output_chunks,           // number of output chunks for this worker
             device_idx,                         // this device's index
-            barrier_sem.address(),              // barrier_sem L1 address
-            virtual_core.x,                     // barrier_sem location (core.x)
-            virtual_core.y,                     // barrier_sem location (core.y)
+            barrier_sem.address(),              // barrier_sem L1 address (startup)
+            done_sem.address(),                 // done_sem L1 address (completion)
+            virtual_core.x,                     // semaphore location (core.x)
+            virtual_core.y,                     // semaphore location (core.y)
             w_hops,                             // line_hops
             e_hops,                             // rect_e_hops
             w_hops,                             // rect_w_hops
@@ -536,6 +548,7 @@ AllGatherMulticastFactory::cached_program_t AllGatherMulticastFactory::create_at
         .reader_kernel_id = reader_kernel_id,
         .writer_kernel_id = writer_kernel_id,
         .barrier_sem = barrier_sem,
+        .done_sem = done_sem,
     };
 
     return {std::move(program), std::move(shared_variables)};
@@ -552,19 +565,22 @@ void AllGatherMulticastFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
         const uint32_t barrier_sem_addr = shared_vars.barrier_sem.address();
+        const uint32_t done_sem_addr = shared_vars.done_sem.address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
         for (const auto& core : shared_vars.worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [10]=barrier_sem
+            // reader: [0]=input_addr, [1]=output_addr, [10]=barrier_sem, [11]=done_sem
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args[0] = input_addr;
             reader_args[1] = output_addr;
             reader_args[10] = barrier_sem_addr;
-            // writer: [0]=output_addr, [7]=barrier_sem
+            reader_args[11] = done_sem_addr;
+            // writer: [0]=output_addr, [7]=barrier_sem, [8]=done_sem
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args[0] = output_addr;
             writer_args[7] = barrier_sem_addr;
+            writer_args[8] = done_sem_addr;
         }
     }
 }

@@ -25,7 +25,7 @@ namespace cmbf2d {
 
 // Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
 // the field list below, so it cannot drift out of step with it.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 28;
+constexpr uint32_t READER_SCALAR_CT_ARGS = 29;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -37,7 +37,7 @@ struct ReaderCtArgs {
     uint32_t freed_addr;
     uint32_t fwd_pages_per_stream;
     uint32_t my_stream;
-    uint32_t num_forwarding_chunks;
+    uint32_t num_forwarding_chunks = 0;  // Host construction derives this from the descriptor block.
     uint32_t fwd_sem_addr;
     uint32_t nbr_chip_id;
     uint32_t num_assignments;
@@ -63,6 +63,8 @@ struct ReaderCtArgs {
     uint32_t num_untilizers;
     // The counter this reader owns on each untilizer core, bumped once per batch it is done with.
     uint32_t unt_freed_addr;
+    // Bumped by the upstream sender for every token it writes straight into this chip's output.
+    uint32_t final_sem_addr;
 
 #ifndef KERNEL_BUILD
     ReaderCtArgs(
@@ -87,7 +89,6 @@ struct ReaderCtArgs {
         // and READS region q of its own — the same q, because every chip runs the same code. Doubles as
         // this stream's share of the same-chip run, which it copies after the fabric work.
         my_stream(plan.stream),
-        num_forwarding_chunks(0),  // set from the descriptor block below, so the two cannot disagree
         fwd_sem_addr(plan.fwd_arrived_addr),
         nbr_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         num_assignments(count_own_assignments(work)),
@@ -105,7 +106,8 @@ struct ReaderCtArgs {
         unt_ring_addr(untilizers.ring_addr),
         unt_ring_batches(UNT_RING_BATCHES),
         num_untilizers(static_cast<uint32_t>(untilizers.peers.size())),
-        unt_freed_addr(untilizers.my_freed_addr) {
+        unt_freed_addr(untilizers.my_freed_addr),
+        final_sem_addr(plan.final_arrived_addr) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
         // follows.
         uint32_t own_idx = 0;
@@ -170,7 +172,8 @@ struct ReaderCtArgs {
             unt_ring_addr,
             unt_ring_batches,
             num_untilizers,
-            unt_freed_addr};
+            unt_freed_addr,
+            final_sem_addr};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
         return word_arr;
     }
@@ -203,7 +206,8 @@ struct ReaderCtArgs {
         unt_ring_addr(get_compile_time_arg_val(24)),
         unt_ring_batches(get_compile_time_arg_val(25)),
         num_untilizers(get_compile_time_arg_val(26)),
-        unt_freed_addr(get_compile_time_arg_val(27)) {}
+        unt_freed_addr(get_compile_time_arg_val(27)),
+        final_sem_addr(get_compile_time_arg_val(28)) {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
     static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len

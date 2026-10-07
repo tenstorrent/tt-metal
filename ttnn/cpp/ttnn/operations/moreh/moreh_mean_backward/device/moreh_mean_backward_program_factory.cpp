@@ -190,7 +190,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardProgramFactory::create_program_arti
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_GRAD_PARAM, .accessor_name = "output_grad"}},
         .compile_time_args = {{"input_grad_rank", input_grad_rank}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_output_tiles", "start_id", "num_dim"}},
-        .hw_config = create_reader_datamovement_config(device->arch()),
+        .hw_config = create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * input_grad_rank},
     };
 
@@ -201,7 +201,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardProgramFactory::create_program_arti
             .dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_GRAD_PARAM, .accessor_name = "input_grad"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
-        .hw_config = create_writer_datamovement_config(device->arch()),
+        .hw_config = create_writer_datamovement_config(),
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -214,7 +214,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardProgramFactory::create_program_arti
     if (fp32_dest_acc_en) {
         compute_defines.insert({"FP32_DEST_ACC_EN", "1"});
     }
-    const auto compute_hw_config = to_compute_hardware_config(device->arch(), compute_kernel_config);
+    const auto compute_hw_config = to_compute_hardware_config(compute_kernel_config);
 
     auto make_compute_spec = [&](const KernelSpecName& unique_id, uint32_t num_output_tiles) {
         return KernelSpec{

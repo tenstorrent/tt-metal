@@ -44,8 +44,6 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     constexpr const char* COMPUTE_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_metal2.cpp";
 
-    auto* device = a.device();
-
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
     tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -109,7 +107,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
             .dfb_spec_name = SRC0, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     KernelSpec writer_spec{
@@ -122,10 +120,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_core", "tile_width_size", "start_stick_id", "offset_within_stick"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     if (fp32_dest_acc_en) {
         compute_cfg.unpack_modes.insert({SRC0, UnpackMode::UnpackToDest});
     }

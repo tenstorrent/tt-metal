@@ -371,6 +371,9 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
         }
     }
 
+    // The tile copies above are NoC reads; with PNHt == 1 the last ones are not covered by the loop's
+    // barriers. This DFB uses explicit sync on Quasar, so they must land before the push.
+    noc.async_read_barrier();
     dfb_mask.push_back(total_read_tiles);
 }
 
@@ -593,7 +596,6 @@ struct KMcastParams {
     uint32_t mcast_y0;      // y start for multicast range
     uint32_t mcast_y1;      // y end for multicast range
     uint32_t num_dests;     // number of multicast destinations
-    uint32_t mcast_sem_id;  // semaphore ID for synchronization (Semaphore<> takes this)
 };
 
 template <
@@ -606,7 +608,8 @@ template <
     bool is_page_table_sharded,
     bool use_mcast,
     uint32_t capacity_t,
-    typename KReaderType>
+    typename KReaderType,
+    typename KMcastSemT>
 uint32_t read_k(
     uint32_t k_chunk_tiles,
     uint32_t cur_head,
@@ -616,7 +619,8 @@ uint32_t read_k(
     volatile tt_l1_ptr uint16_t* page_table_ptr_u16,
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32,
     uint32_t& barrier_count,
-    const KMcastParams& mcast_params = {}) {
+    const KMcastParams& mcast_params,
+    KMcastSemT* k_mcast_sem) {
     Noc noc;
     DataflowBuffer dfb_k(dfb_k_in);
     dfb_k.reserve_back(k_chunk_tiles);
@@ -675,7 +679,7 @@ uint32_t read_k(
             noc.async_write_barrier();
             // Signal all receivers that the full K^T chunk is ready
             constexpr uint32_t VALID = 1;
-            Semaphore<> mcast_sem(mcast_params.mcast_sem_id);
+            auto& mcast_sem = *k_mcast_sem;
             mcast_sem.set(VALID);
             mcast_sem.set_multicast(
                 noc,
@@ -688,7 +692,7 @@ uint32_t read_k(
             noc.async_write_barrier();
         } else {
             // Wait for single signal that the full K^T chunk is ready
-            Semaphore<> mcast_sem(mcast_params.mcast_sem_id);
+            auto& mcast_sem = *k_mcast_sem;
             mcast_sem.wait(1);
             mcast_sem.set(0);
             noc.async_atomic_barrier();

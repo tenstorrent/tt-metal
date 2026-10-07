@@ -26,12 +26,9 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 
-namespace tt::tt_metal {
-
-namespace distributed {
+namespace tt::tt_metal::distributed {
 class MeshDevice;
-}
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::distributed
 
 namespace tt::tt_metal::experimental {
 

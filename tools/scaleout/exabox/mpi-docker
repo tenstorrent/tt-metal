@@ -332,7 +332,7 @@ default() {
         fi
 
         # Build docker command
-        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
+        local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --init --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
         # Single segment without per-rank args
         if [[ "$tag_host" == true ]]; then
@@ -409,7 +409,7 @@ default() {
             fi
 
             # Build docker command for this group
-            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
+            local docker_cmd="docker run \$(env | grep -E \"^(OMPI_|PMIX_)\" | cut -f1 -d= | awk \"{print \\\"-e \\\" \\\$1}\" | tr \"\n\" \" \") $docker_env_flags --rm --init --net=host --privileged -v /tmp:/tmp -v /dev/hugepages-1G:/dev/hugepages-1G -v \$HOME:\$HOME --user \$(id -u):\$(id -g) -v /etc/passwd:/etc/passwd:ro -v /etc/group:/etc/group:ro$extra_volumes$docker_extra_args $entrypoint_opt $image $executable"
 
             # Combine this group's MPI args with docker command
             if [[ "$tag_host" == true ]]; then

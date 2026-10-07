@@ -1,4 +1,7 @@
 import pathlib
+import sys
+
+from loguru import logger
 
 from infra.data_collection.github.utils import get_github_runner_environment
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis, get_cicd_json_filename
@@ -18,6 +21,12 @@ if __name__ == "__main__":
         github_pipeline_json_filename,
         github_jobs_json_filename,
     )
+
+    if pipeline is None:
+        # Nothing ran in the analysed run, so there is no data to write. The upload steps skip
+        # themselves when no pipeline JSON is present, so exit cleanly instead of failing.
+        logger.info("No pipeline data for this run, exiting without writing a JSON file")
+        sys.exit(0)
 
     cicd_json_filename = get_cicd_json_filename(pipeline)
 

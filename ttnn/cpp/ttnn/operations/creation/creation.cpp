@@ -205,6 +205,10 @@ Tensor full_impl(
                 shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
             std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
             auto output = ttnn::Tensor::from_vector(std::move(fill_value_vec), tensor_spec);
+            if (optional_output_tensor.has_value()) {
+                copy_to_device(output, *optional_output_tensor);
+                return *optional_output_tensor;
+            }
             if (device_to_use != nullptr) {
                 output = output.to_device(device_to_use, mem_cfg);
             }

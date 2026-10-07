@@ -315,6 +315,7 @@ def test_demo_vision(mesh_device, prompt_file, use_trace, max_generated_tokens, 
         device,
         max_batch_size=1,
         max_seq_len=max_seq_len,
+        enable_mtp=False,  # vision demo never runs spec decode
         # n_layers=4,  # uncomment for fast iteration; default uses the full config
     )
     logger.info(f"Text model load: {time.time() - t0:.1f}s")
@@ -412,6 +413,10 @@ def _run_traced_vision_generation(model, tokenizer, device, token_ids, vision_in
             kv_cache=None,
             enable_trace=True,
             read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         decode_times.append(time.time() - t_step)
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
@@ -461,6 +466,10 @@ def _run_paged_vision_generation(model, tokenizer, device, token_ids, vision_inp
             kv_cache=None,
             enable_trace=False,
             read_from_device=True,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         decode_times.append(time.time() - t_step)
         dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()

@@ -15,8 +15,6 @@ list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 include(cmake/dependencies.cmake)
 
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
 # ttnn header files are not clean against narrowing conversion checks
 # therefore tt-train likely is not clean against them
 # must disable checks to build with tt-metal as super project

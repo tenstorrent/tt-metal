@@ -15,7 +15,9 @@
 namespace triage_hang_apps {
 
 struct AddIntegersHangOperation {
-    struct operation_attributes_t {};
+    struct operation_attributes_t {
+        uint32_t incremented_semaphore_address;
+    };
 
     struct tensor_args_t {
         const ttnn::Tensor& input_tensor_a;
@@ -43,6 +45,7 @@ struct AddIntegersHangOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-ttnn::Tensor add_integers_hang(const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b);
+ttnn::Tensor add_integers_hang(
+    const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, uint32_t incremented_semaphore_address);
 
 }  // namespace triage_hang_apps

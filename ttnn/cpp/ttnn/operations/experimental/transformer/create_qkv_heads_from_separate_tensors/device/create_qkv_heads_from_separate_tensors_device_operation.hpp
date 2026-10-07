@@ -9,8 +9,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "create_qkv_heads_from_separate_tensors_device_operation_types.hpp"
-#include "create_qkv_heads_from_separate_tensors_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -19,7 +19,14 @@ struct CreateQKVHeadsSeparateTensorsDeviceOperation {
     using tensor_args_t = CreateQKVHeadsFromSeparateTensorsInputs;
     using spec_return_value_t = CreateQKVHeadsFromSeparateTensorsResultSpec;
     using tensor_return_value_t = CreateQKVHeadsFromSeparateTensorsResult;
-    using program_factory_t = std::variant<CreateQKVHeadsSeparateTensorsProgramFactory>;
+
+    // The op emits no runtime args: all five tensors are sharded and reached through
+    // globally-allocated circular buffers, so the CB `.buffer` bindings are the whole
+    // per-dispatch state and the framework re-pegs them on a cache hit. No override needed.
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 

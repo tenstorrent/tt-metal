@@ -23,12 +23,14 @@
 // input entries). Padded rows / W columns past valid data carry the reduction identity (0 for SUM)
 // from the reader's pre-fill, so they contribute nothing to the running sum.
 //
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 #ifdef REDUCE_POST_MUL
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_compute_common.hpp"
 #endif
 
 namespace {
@@ -66,7 +68,10 @@ FORCE_INLINE void reduce_block(
             compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
 #ifdef REDUCE_POST_MUL
             [](uint32_t dst_idx) {
-                constexpr auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+                const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+                if (post_mul_scaler_bits == k_identity_scaler_bits) {
+                    return;
+                }
                 binop_with_scalar_tile_init();
                 mul_unary_tile(dst_idx, post_mul_scaler_bits);
             }
@@ -158,4 +163,10 @@ void kernel_main() {
             }
         }
     }
+
+    // The scaler tile is waited once and reused for the whole reduction; pop it at the
+    // end so the buffer is left balanced. The wait is not present in this file:
+    // compute_kernel_lib::reduce waits one page on the buffer it is given as the scaler
+    // and leaves it unpopped so one pushed tile serves every reduce call.
+    DataflowBuffer(dfb::scaler).pop_front(1);
 }

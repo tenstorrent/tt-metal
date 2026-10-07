@@ -153,7 +153,6 @@ inline void _llk_math_matmul_block_no_mop_(std::uint8_t ct_dim, std::uint8_t rt_
         if (!reuse_a && ct_dim >= 2)
         {
             TT_SETRWC(p_setrwc::CLR_NONE, 0, 64 * (t + 1), p_setrwc::SET_D);
-            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::C_TO_CR_MODE, 0, p_setrwc::SET_D);
         }
     }
     _reset_counters_<p_setrwc::SET_ABD_F>();

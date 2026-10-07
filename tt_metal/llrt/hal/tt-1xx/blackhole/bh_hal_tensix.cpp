@@ -4,7 +4,7 @@
 
 #define HAL_BUILD tt::tt_metal::blackhole::tensix
 #include "hostdev/dev_msgs.h"
-#include "hostdev/fabric_telemetry_msgs.h"
+#include "hostdevcommon/fabric_telemetry_msgs.h"
 #include "hostdev/realtime_profiler_msgs.h"
 using namespace tt::tt_metal::blackhole::tensix;
 

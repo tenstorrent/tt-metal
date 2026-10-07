@@ -539,8 +539,10 @@ Tensor fold(
             processed_tensor = ttnn::pad(processed_tensor, padding_spec, 0.0f, true, std::nullopt);
         }
 
-        if (processed_tensor.layout() == Layout::TILE) {
-            // TILE-native factory is broken (see fold_multi_core_tiled_interleaved) → untilize→RM.
+        // Rejection falls back to untilize→RM so prim::fold takes the 1-stick RM path; validate_fold FATALs on same
+        // predicate.
+        if (processed_tensor.layout() == Layout::TILE &&
+            !operations::data_movement::is_tile_native_fold_supported(processed_tensor, stride_h, stride_w)) {
             processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
 

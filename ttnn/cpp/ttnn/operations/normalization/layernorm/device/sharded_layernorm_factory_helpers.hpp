@@ -17,6 +17,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::prim::sharded_layernorm_helpers {
 
@@ -304,7 +305,6 @@ struct SpecConfig {
     uint32_t tile_width = 32;
     bool fp32_dest_acc_en = false;
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
     float eps = 0.0f;
     uint32_t per_core_recip_lut_size = 0;
 
@@ -432,7 +432,7 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
+    const MeshDevice& device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,

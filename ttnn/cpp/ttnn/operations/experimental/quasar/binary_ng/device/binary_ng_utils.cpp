@@ -154,7 +154,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu, bool is_w
 
 //  EnumT can either be FpuBinaryOp or SfpuBinaryOp
 template <class EnumT>
-OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std::optional<DataType> dtype) :
+OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<EnumT>,
+    std::optional<DataType> dtype,
+    const std::optional<binary::BinaryOpParams>& op_params) :
     binary_op(EnumT::SUB) {
     switch (binary_op_type) {
         case BinaryOpType::ADD: binary_op = EnumT::ADD; break;
@@ -226,10 +230,16 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
         // (a-b)**2
         case BinaryOpType::SQUARED_DIFFERENCE: postprocess = unary::UnaryOpType::SQUARE; break;
         // gelu(a+b)
-        case BinaryOpType::BIAS_GELU:
+        case BinaryOpType::BIAS_GELU: {
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GELU;
+            const auto* gelu_params =
+                op_params.has_value() ? std::get_if<binary::BiasGeluParams>(&op_params.value()) : nullptr;
+            const bool fast_and_approximate = gelu_params != nullptr && gelu_params->fast_and_approximate;
+            // The parameter is required: without it this reaches gelu_tile's default template
+            // argument, which is the approximate variant, where ttnn.gelu defaults to exact.
+            postprocess = unary::EltwiseUnaryWithParam{unary::UnaryOpType::GELU, fast_and_approximate ? 1.0f : 0.0f};
             break;
+        }
         case BinaryOpType::LOGICAL_AND:
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
@@ -699,8 +709,16 @@ uint32_t pack_scalar_runtime_arg(const unary::ScalarVariant scalar, const DataTy
         scalar);
 }
 
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>, std::optional<DataType>);
-template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<FpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
+template OpConfig::OpConfig(
+    BinaryOpType binary_op_type,
+    std::in_place_type_t<SfpuBinaryOp>,
+    std::optional<DataType>,
+    const std::optional<binary::BinaryOpParams>&);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
@@ -803,6 +821,12 @@ bool is_native_L1_sharding(
 
     // Both tensors have identical shape and memory config (no broadcast on any dimension)
     if ((a.logical_shape() == b->logical_shape()) && (a.memory_config() == b->memory_config())) {
+        // A sharded input must carry the output's exact memory config: the factories borrow the shards in
+        // place, so another layout, shard spec or orientation maps core i's inputs to tiles its output shard
+        // does not hold. b needs no check of its own: the condition above makes its memory config a's.
+        if (a.memory_config().is_sharded() && c.is_sharded() && a.memory_config() != c) {
+            return false;
+        }
         if (is_uneven(a) || is_uneven(*b)) {
             // Uneven shards are safe when all tensors (a, b, c) are L1 sharded with identical
             // shard specs -- each core sees the same tile counts for all tensors, matching legacy
@@ -817,24 +841,6 @@ bool is_native_L1_sharding(
         if (a.memory_config().buffer_type() == BufferType::DRAM ||
             b->memory_config().buffer_type() == BufferType::DRAM || c.buffer_type() == BufferType::DRAM) {
             return false;
-        }
-
-        // Check if output grid differs from input grids - if so, cannot use native sharding
-        // This will force resharding through interleaved path
-        if (c.is_sharded() && c.shard_spec().has_value()) {
-            const auto& c_grid = c.shard_spec()->grid;
-            if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value()) {
-                const auto& a_grid = a.memory_config().shard_spec()->grid;
-                if (a_grid != c_grid) {
-                    return false;
-                }
-            }
-            if (b->memory_config().is_sharded() && b->memory_config().shard_spec().has_value()) {
-                const auto& b_grid = b->memory_config().shard_spec()->grid;
-                if (b_grid != c_grid) {
-                    return false;
-                }
-            }
         }
 
         if ((a.memory_config().is_sharded() && a.memory_config().buffer_type() == BufferType::L1)) {
@@ -901,8 +907,8 @@ const NativeTuning& native_tuning() {
             return v != nullptr && v[0] != '\0' && v[0] != '0';
         };
         // max_value is per-knob and required: strtol returns long, so 4294967296 passes `> 0` and then
-        // truncates to 0, and std::lcm(0, x) makes the gate divide by zero. Depth 40 is a normal sweep
-        // point; 40 reader threads is not -- hence different bounds.
+        // truncates to 0, and the gate's max(p,c) % min(p,c) then divides by zero. Depth 40 is a normal
+        // sweep point; 40 reader threads is not -- hence different bounds.
         const auto env_u32 = [](const char* name, uint32_t fallback, uint32_t max_value) {
             const char* v = std::getenv(name);
             if (v == nullptr || v[0] == '\0') {
@@ -926,6 +932,10 @@ const NativeTuning& native_tuning() {
         t.enabled = env_bool("TTNN_QSR_NATIVE");
         t.implicit_sync = env_bool("TTNN_QSR_IMPLICIT_SYNC");
         t.entries_per_thread = env_u32("TTNN_QSR_ENTRIES_PER_THREAD", 2, kMaxEntriesPerThread);
+        // EXPERIMENTAL: 0 keeps the derived value. env_u32 rejects 0, so read it separately.
+        t.tiles_per_cycle =
+            std::getenv("TTNN_QSR_TILES_PER_CYCLE") == nullptr ? 0u : env_u32("TTNN_QSR_TILES_PER_CYCLE", 1, 8);
+        t.dm_batch = env_u32("TTNN_QSR_DM_BATCH", 1, 8);
         t.reader_threads = env_u32("TTNN_QSR_READER_THREADS", 1, kMaxThreads);
         t.compute_threads = env_u32("TTNN_QSR_COMPUTE_THREADS", 1, kMaxThreads);
         t.writer_threads = env_u32("TTNN_QSR_WRITER_THREADS", 1, kMaxThreads);
@@ -934,7 +944,8 @@ const NativeTuning& native_tuning() {
         // would have no protective value and would kill the fallback reference arm on any arch.
         if (!t.enabled) {
             const bool any_knob_set = t.implicit_sync || t.entries_per_thread != 2 || t.reader_threads != 1 ||
-                                      t.compute_threads != 1 || t.writer_threads != 1;
+                                      t.compute_threads != 1 || t.writer_threads != 1 || t.tiles_per_cycle != 0 ||
+                                      t.dm_batch != 1;
             if (any_knob_set) {
                 log_warning(
                     tt::LogOp,
@@ -943,6 +954,13 @@ const NativeTuning& native_tuning() {
             }
             return t;
         }
+        // Inert today (the factory hardcodes explicit sync), and it cannot simply be switched on: under
+        // implicit sync a thread that drew zero tiles skips handle_final_credits' barrier while its
+        // siblings enter it, which deadlocks. Uneven tile counts are now admitted, so that is reachable.
+        TT_FATAL(
+            !t.implicit_sync,
+            "TTNN_QSR_IMPLICIT_SYNC is parsed but not consumed. Enabling it requires restoring the "
+            "guarantee that no thread draws zero tiles, which the uneven-tile-count support removed.");
         // Also enforced in program_spec.cpp, but a throw here names the knob.
         TT_FATAL(
             t.compute_threads == 1 || t.compute_threads == 2 || t.compute_threads == 4,
@@ -959,13 +977,14 @@ const NativeTuning& native_tuning() {
         // number.
         log_info(
             tt::LogOp,
-            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={}. Sync is EXPLICIT; "
-            "TTNN_QSR_IMPLICIT_SYNC={} is parsed but NOT wired to the program.",
+            "binary_ng Quasar-native ENABLED: R={} C={} W={} entries_per_thread={} tiles_per_cycle={} "
+            "dm_batch={}. Sync is EXPLICIT.",
             t.reader_threads,
             t.compute_threads,
             t.writer_threads,
             t.entries_per_thread,
-            t.implicit_sync);
+            t.tiles_per_cycle,
+            t.dm_batch);
         return t;
     }();
     return tuning;

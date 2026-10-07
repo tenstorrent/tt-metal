@@ -15,6 +15,7 @@
 
 #include "internal/tt-2xx/quasar/noc/att/att.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h"
+#include "internal/tt-2xx/quasar/noc/att/configs/horizon_2x3_att_config.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/quasar_aether_2x3_att_config.h"
 
 namespace {
@@ -232,6 +233,70 @@ TEST(QuasarAttAetherConfig, SelectorTablesMatchAetherUtils) {
 TEST(QuasarAttAetherConfig, WindowsAreDisjoint) {
     EXPECT_TRUE(
         windows_disjoint(quasar_aether_2x3_att_config::LOCAL_WINDOW, quasar_aether_2x3_att_config::REMOTE_WINDOW));
+}
+
+// ---------------------------------------------------------------------------
+// Horizon 2x3 map: quasar_aether_2x3's geometry, Horizon's tiles
+// ---------------------------------------------------------------------------
+
+TEST(QuasarAttHorizonConfig, WindowsHaveTheAether2x3Geometry) {
+    constexpr const Window& local = horizon_2x3_att_config::LOCAL_WINDOW;
+    constexpr const Window& aether_local = quasar_aether_2x3_att_config::LOCAL_WINDOW;
+    EXPECT_EQ(local.compare, aether_local.compare);
+    EXPECT_EQ(local.mask_bits, aether_local.mask_bits);
+    EXPECT_EQ(local.endpoint_shift, aether_local.endpoint_shift);
+    EXPECT_EQ(local.endpoint_size, aether_local.endpoint_size);
+    EXPECT_EQ(local.endpoint_table_offset, aether_local.endpoint_table_offset);
+    EXPECT_TRUE(local.translate_address);
+
+    constexpr const Window& remote = horizon_2x3_att_config::REMOTE_WINDOW;
+    constexpr const Window& aether_remote = quasar_aether_2x3_att_config::REMOTE_WINDOW;
+    EXPECT_EQ(remote.compare, aether_remote.compare);
+    EXPECT_EQ(remote.mask_bits, aether_remote.mask_bits);
+    EXPECT_EQ(remote.endpoint_shift, aether_remote.endpoint_shift);
+    EXPECT_EQ(remote.endpoint_size, aether_remote.endpoint_size);
+    EXPECT_EQ(remote.endpoint_table_offset, aether_remote.endpoint_table_offset);
+    EXPECT_TRUE(remote.translate_address);
+
+    EXPECT_TRUE(windows_disjoint(local, remote));
+}
+
+TEST(QuasarAttHorizonConfig, RawAddressMatchesNoWindow) {
+    static_assert(horizon_2x3_att_config::LOCAL_WINDOW_BASE == 0x1800000000ull);
+    static_assert(horizon_2x3_att_config::LOCAL_WINDOW.selector(0x18000523c0ull) == 0);
+    static_assert(horizon_2x3_att_config::LOCAL_WINDOW.local_address(0x18000523c0ull) == 0x523c0ull);
+    static_assert(!horizon_2x3_att_config::LOCAL_WINDOW.matches(0x523c0ull));
+    static_assert(!horizon_2x3_att_config::REMOTE_WINDOW.matches(0x523c0ull));
+}
+
+TEST(QuasarAttHorizonConfig, SelectorTablesCoverTheGrid) {
+    EXPECT_TRUE(all_unique(horizon_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS));
+    // Endpoint words encode (y << 6) | x, by selector.
+    for (std::uint8_t selector = 0; selector < 6; ++selector) {
+        const std::uint16_t x = selector % 2, y = selector / 2;
+        EXPECT_EQ(horizon_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS[selector], (y << 6) | x);
+    }
+    EXPECT_EQ(horizon_2x3_att_config::ATT_WORKER_SELECTORS[0], 0);
+    EXPECT_EQ(horizon_2x3_att_config::ATT_WORKER_SELECTORS[1], 1);
+    // DRAM banks 0 and 1 are behind the NOC2AXI tiles (0,2) and (1,2).
+    EXPECT_EQ(horizon_2x3_att_config::ATT_LOGICAL_DRAM_SELECTORS[0], 4);
+    EXPECT_EQ(horizon_2x3_att_config::ATT_LOGICAL_DRAM_SELECTORS[1], 5);
+}
+
+TEST(QuasarAttHorizonConfig, AddressesCarryTheSelectorAtBit26) {
+    constexpr std::uint64_t remote = 0x1000000000ull;
+    EXPECT_EQ(*noc_att::Address::worker(0, 0, 0x1000).encode<horizon_2x3_att_config::MAP>(), remote | 0x1000);
+    EXPECT_EQ(*noc_att::Address::worker(1, 0, 0x1000).encode<horizon_2x3_att_config::MAP>(), remote | (1ull << 26) | 0x1000);
+    EXPECT_EQ(*noc_att::Address::dispatch(1, 1, 0x20).encode<horizon_2x3_att_config::MAP>(), remote | (3ull << 26) | 0x20);
+    EXPECT_EQ(
+        *noc_att::Address::dram(0, 0x16fe880).encode<horizon_2x3_att_config::MAP>(), remote | (4ull << 26) | 0x16fe880);
+    EXPECT_EQ(*noc_att::Address::dram(1, 0x100).encode<horizon_2x3_att_config::MAP>(), remote | (5ull << 26) | 0x100);
+    EXPECT_EQ(*noc_att::Address::local(0x523c0).encode<horizon_2x3_att_config::MAP>(), 0x18000523c0ull);
+    EXPECT_FALSE(noc_att::Address::worker(0, 1, 0).encode<horizon_2x3_att_config::MAP>().has_value());
+    EXPECT_FALSE(noc_att::Address::dram(2, 0).encode<horizon_2x3_att_config::MAP>().has_value());
+    // A worker's own coordinate resolves to its selector (my_x/my_y from NOC_NODE_ID).
+    EXPECT_EQ(noc_att::resolve_current(horizon_2x3_att_config::MAP, 1, 0).selector, 1u);
+    EXPECT_EQ(noc_att::resolve_current(horizon_2x3_att_config::MAP, 1, 2).selector, 5u);
 }
 
 }  // namespace

@@ -20,6 +20,7 @@
 #include <set>
 #include <tuple>
 #include <unordered_map>
+#include <filesystem>
 #include <unordered_set>
 #include <vector>
 
@@ -28,6 +29,7 @@
 #include <umd/device/cluster_descriptor.hpp>
 #include <umd/device/chip_helpers/sysmem_buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <umd/device/types/io_window_config.hpp>
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -62,6 +64,10 @@ public:
     static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc = nullptr);
     static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
+    // The chips UMD opens from the simulator build in simulator_dir. A partitioned build (one with an
+    // ip_layout.yaml) states its own devices, so it gets none and UMD opens all of them, or the ones
+    // TT_VISIBLE_DEVICES selects. Any other build is a single chip, 0.
+    static std::unordered_set<ChipId> simulator_target_devices(const std::filesystem::path& simulator_dir);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
@@ -139,11 +145,20 @@ public:
     void assert_risc_reset_at_core(const tt_cxy_pair& core, const tt::umd::RiscType& soft_resets) const;
 
     void write_dram_vec(
-        const void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        ChipId device_id,
+        int dram_view,
+        uint64_t addr,
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
-    // Write to core. Accepts physical noc coordinates
-    void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+    void write_core(
+        const void* mem_ptr,
+        uint32_t sz_in_bytes,
+        tt_cxy_pair core,
+        uint64_t addr,
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
 
     // Access physical noc coordinates. Does write without effects of write combining
     void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;

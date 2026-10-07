@@ -14,6 +14,7 @@ using namespace tt::tt_metal;
 using ttnn::operations::experimental::quasar::transpose_op::adjust_shard_spec_to_shape;
 using ttnn::operations::experimental::quasar::transpose_op::generate_transpose_shard_spec;
 using ttnn::operations::experimental::quasar::transpose_op::is_native_transpose_sharding;
+using ttnn::operations::experimental::quasar::transpose_op::OutputTiling;
 
 namespace ttnn::prim::qsr {
 
@@ -89,8 +90,14 @@ MemoryConfig derive_effective_output_memory_config(
             }
         }
     }
-    auto shard_spec =
-        generate_transpose_shard_spec(input_tensor, output_padded_shape, output_mem_config.memory_layout());
+    // Device-op fallback: use tile-inflated synth so the downstream interleaved factory sees a
+    // tensor-width-divisor shard (RM synth can produce a shard_w that doesn't divide tensor_w).
+    auto shard_spec = generate_transpose_shard_spec(
+        input_tensor,
+        output_padded_shape,
+        output_mem_config.memory_layout(),
+        std::nullopt,
+        OutputTiling::Default);
     return MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
 }
 

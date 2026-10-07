@@ -25,7 +25,8 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "dtypes",
     [
-        (torch.bfloat16, ttnn.bfloat16),
+        # (torch.bfloat16, ttnn.bfloat16) is now covered exhaustively (and with a tighter
+        # ULP<=1 gate, vs. this test's PCC>=0.999) by test_unary_category6_bfloat16.py::test_round_op.
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )

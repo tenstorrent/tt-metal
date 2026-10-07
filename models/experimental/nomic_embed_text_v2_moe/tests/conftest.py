@@ -76,7 +76,7 @@ def tokenizer():
 
 @pytest.fixture
 def tt_config(device):
-    """TTNN dtypes, layout and the compute kernel config bound to the test device.
+    """TTNN dtypes, layout and the per-op-group compute kernel configs bound to the test device.
 
     Function-scoped and cheap: it only reads the grid and architecture off an already-open
     device. Requesting it is what makes a test device-bound.

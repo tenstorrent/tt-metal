@@ -60,6 +60,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         std::optional<Tensor> kv_actual_global;
         // Optional, METADATA path only: 1-element uint32 valid_global (= actual_end). Same clamp.
         std::optional<Tensor> valid_global;
+        // Optional tiled BF16 RoPE input: fuse packing and untilization into the row-major cache write.
+        std::optional<Tensor> rope;
+        // Optional FP32 scales: selects mixed-field ROW_MAJOR FP8 packing.
+        std::optional<Tensor> scales;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -134,6 +138,8 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::Tensor>& valid_global_tensor = std::nullopt,
     std::optional<uint32_t> valid_global = std::nullopt,
-    std::optional<uint32_t> tp_axis = std::nullopt);
+    std::optional<uint32_t> tp_axis = std::nullopt,
+    const std::optional<ttnn::Tensor>& rope = std::nullopt,
+    const std::optional<ttnn::Tensor>& scales = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -271,7 +271,12 @@ Tensor from_flatbuffer(
     TT_FATAL(mesh_shape != nullptr, "Mesh shape is required for tensor");
     const tt::tt_metal::distributed::MeshShape ttnn_mesh_shape = from_flatbuffer(mesh_shape);
 
-    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(ttnn_mesh_shape);
+    // File shards are host-local. Loading them must not initialize MetalContext or acquire device locks.
+    auto distributed_buffer = tt::tt_metal::DistributedHostBuffer::create(
+        ttnn_mesh_shape,
+        ttnn_mesh_shape,
+        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(ttnn_mesh_shape.dims()),
+        /*context=*/nullptr);
     for (size_t i = 0; i < fb_tensor->shards()->size(); ++i) {
         const auto* shard = fb_tensor->shards()->Get(i);
 
@@ -280,6 +285,16 @@ Tensor from_flatbuffer(
 
         const uint64_t offset = inline_storage->offset();
         const uint64_t size = inline_storage->size();
+        // The header is verified, but the data section is not: a file cut short after its header
+        // (a writer killed mid-write) would otherwise yield a buffer that runs past the mapping and
+        // faults on the first use. Reject it here so callers can regenerate the file.
+        TT_FATAL(
+            offset <= tensor_data.size() && size <= tensor_data.size() - offset,
+            "Tensor shard {} spans bytes [{}, {}) of a {}-byte data section: the file is truncated or corrupt",
+            i,
+            offset,
+            offset + size,
+            tensor_data.size());
 
         tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
             size, spec, ttsl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);

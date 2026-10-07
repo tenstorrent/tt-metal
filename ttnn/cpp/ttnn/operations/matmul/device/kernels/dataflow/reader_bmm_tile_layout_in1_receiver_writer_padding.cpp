@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_bmm_tile_layout_in1_receiver_writer_padding_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
+// file serves the consumers still on the legacy API. Until the last of them migrates and this
+// file is retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -235,7 +240,10 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 }

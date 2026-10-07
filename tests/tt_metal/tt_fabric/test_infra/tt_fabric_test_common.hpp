@@ -477,12 +477,12 @@ public:
 
     std::shared_ptr<MeshBuffer> create_mesh_buffer_helper(
         const std::vector<tt::tt_metal::CoreCoord>& cores, uint32_t address, uint32_t size_bytes) const {
-        std::set<CoreRange> all_cores_set;
+        std::set<tt::tt_metal::CoreRange> all_cores_set;
         for (const auto& core : cores) {
-            all_cores_set.insert(CoreRange(core));
+            all_cores_set.insert(tt::tt_metal::CoreRange(core));
         }
 
-        auto all_cores = CoreRangeSet(all_cores_set);
+        auto all_cores = tt::tt_metal::CoreRangeSet(all_cores_set);
         auto num_cores = all_cores_set.size();
         auto total_size = size_bytes * num_cores;
         auto shard_params = tt::tt_metal::ShardSpecBuffer(

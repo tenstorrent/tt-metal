@@ -13,8 +13,9 @@ if TYPE_CHECKING:
 
 
 def hw_configure_math(dest_acc: str, math_fmt: DataFormat) -> str:
+    implied = "false" if math_fmt.is_integer() else "true"
     return (
-        f"_llk_math_srcAB_hw_configure_<true, {dest_acc}, false>(\n"
+        f"_llk_math_srcAB_hw_configure_<{implied}, {dest_acc}>(\n"
         f"    {math_fmt.cpp_enum_value}, {math_fmt.cpp_enum_value}\n"
         f");\n"
     )
@@ -26,7 +27,7 @@ def configure_math(
     new_math: DataFormat,
 ) -> str:
     return (
-        f"_llk_math_srcAB_hw_configure_<false, {dest_acc}, false>(\n"
+        f"_llk_math_srcAB_hw_configure_<false, {dest_acc}>(\n"
         f"    {new_math.cpp_enum_value}, {new_math.cpp_enum_value}\n"
         f");\n"
     )

@@ -254,9 +254,6 @@ bool operator==(const MeshCoordinateRangeSet& lhs, const MeshCoordinateRangeSet&
 bool operator!=(const MeshCoordinateRangeSet& lhs, const MeshCoordinateRangeSet& rhs);
 std::ostream& operator<<(std::ostream& os, const MeshCoordinateRangeSet& range_set);
 
-// Returns the set of ranges that result from subtracting the intersection from the parent range.
-MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoordinateRange& intersection);
-
 namespace detail {
 
 // Proxy class that allows convenient structured binding to a pair of a coordinate and the value it points to.

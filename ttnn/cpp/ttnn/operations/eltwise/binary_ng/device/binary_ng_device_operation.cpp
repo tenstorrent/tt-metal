@@ -5,6 +5,7 @@
 #include "binary_ng_device_operation.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
@@ -61,8 +62,14 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MUL:
             return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
+        // logaddexp and logaddexp2 are fused SFPU kernels templated on the destination
+        // precision, so the 16-bit formats route to them as well as float32. Which body they
+        // get is decided by fp32_dest_acc_en, and binary_ng_program_factory.cpp derives that
+        // from the OUTPUT format as well as the inputs, so bfloat16 operands with an fp32
+        // output take the fp32 body rather than the narrow one. Left on the composed
+        // EXP/ADD/LOG route, all of them overflow exactly where the fused kernels do not.
         case LOGADDEXP:
-        case LOGADDEXP2:
+        case LOGADDEXP2: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == BFLOAT8_B || a == BFLOAT4_B);
         case LDEXP:
         case BIAS_GELU:
         case HYPOT: return (a == FLOAT32 && b == FLOAT32);
@@ -92,6 +99,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case MINIMUM:
         case XLOGY:
         case ATAN2:
+        case NEXTAFTER:
         case POWER:
         case WHERE_TST:
         case WHERE_TTS:
@@ -101,40 +109,19 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     return false;
 }
 
-ShardSpec generate_shard_spec_all_cores(
-    const Tensor& input_tensor_a, const Shape& padded_out_shape, const TensorMemoryLayout& memory_layout) {
-    // Generate shard spec using all worker cores
-    auto* device = input_tensor_a.device();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
-    auto all_cores = CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-
-    // Calculate squeezed tensor height (all dims except last) and width (last dim)
-    uint32_t tensor_height = 1;
-    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= padded_out_shape[i];
-    }
-    uint32_t tensor_width = padded_out_shape[-1];
-
-    // Calculate shard shape based on memory layout (must be tile-aligned for TILE layout)
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
-        shard_shape = {shard_height, tensor_width};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
-        shard_shape = {tensor_height, shard_width};
-    } else {
-        // BLOCK_SHARDED
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
-        shard_shape = {shard_height, shard_width};
-    }
-    log_debug(tt::LogOp, "BinaryNgDeviceOperation: Generated shard spec using all {} worker cores", num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+ShardSpec generate_shard_spec_specless(
+    const Tensor& input_tensor_a,
+    const Shape& padded_out_shape,
+    const TensorMemoryLayout& memory_layout,
+    Layout output_layout) {
+    // Zero-volume specless-sharded is absorbed by the synthesizer's layout-aware degenerate-spec return.
+    return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+        input_tensor_a.device()->compute_with_storage_grid_size(),
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = (output_layout == Layout::TILE),
+         .orientation_hint = ShardOrientation::ROW_MAJOR,
+         .caller_tag = "BinaryNg"});
 }
 }  // namespace utils
 
@@ -308,7 +295,9 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::tensor_args_t::to_hash() const {
                                    : std::nullopt,
         input_tensor_b.has_value() ? std::optional{input_tensor_b->tensor_spec().tile()} : std::nullopt,
         sharded_tensor_shape_in_pages(input_tensor_a),
-        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt);
+        input_tensor_b.has_value() ? sharded_tensor_shape_in_pages(*input_tensor_b) : std::nullopt,
+        // Output dtype can change the program (fp32 DEST). Falls back to a's dtype so in-place calls still share.
+        output_tensor.has_value() ? output_tensor->dtype() : input_tensor_a.dtype());
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_miss(
@@ -479,9 +468,6 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const auto& tensor_b = tensor_args.input_tensor_b;
     const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
-    const int rank_a = input_shape_a.rank();
-    const int rank_b = input_shape_b.rank();
-    const int larger_rank = std::max(rank_a, rank_b);
     auto output_dtype = attributes.get_dtype();
 
     // Integer division results in FP32 outputs.
@@ -503,7 +489,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 }
             }
             const auto& larger_shape = shape_a.rank() > shape_b.rank() ? shape_a : shape_b;
-            for (int i = smaller_rank; i < larger_rank; ++i) {
+            for (int i = smaller_rank; i < larger_shape.rank(); ++i) {
                 auto dim = -1 - i;
                 if (larger_shape[dim] != 1) {
                     return false;
@@ -541,7 +527,8 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
             } else {
-                shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
+                shard_spec_opt = utils::generate_shard_spec_specless(
+                    input_tensor_a, padded_out_shape, memory_layout, attributes.output_layout);
             }
         }
 
@@ -695,8 +682,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                 mem_config_actual = MemoryConfig(
                     memory_layout,
                     mem_config_actual.buffer_type(),
-                    operations::binary_ng::utils::generate_shard_spec_all_cores(
-                        input_tensor_a, padded_out_shape, memory_layout));
+                    operations::binary_ng::utils::generate_shard_spec_specless(
+                        input_tensor_a, padded_out_shape, memory_layout, output_layout));
             }
         } else {
             log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
@@ -735,6 +722,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt,
         std::nullopt,
         std::nullopt};
+
+    if (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params =
+            ttnn::operations::binary::BiasGeluParams{.fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
@@ -834,6 +826,11 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         std::nullopt,
         std::nullopt,
         std::nullopt};
+
+    if (binary_op_type == ttnn::operations::binary_ng::BinaryOpType::BIAS_GELU) {
+        operation_attributes.op_params =
+            ttnn::operations::binary::BiasGeluParams{.fast_and_approximate = fast_and_approximate_mode.value_or(false)};
+    }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     // Skip the output-spec computation on the interleaved fast path. output_tensor is tested separately:

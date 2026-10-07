@@ -14,13 +14,14 @@ operands:
 operations:
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input_A"
         in1: "input_B"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [64, 64]
     pack:
       - output: "l1_acc_out"
+        block_size: [64, 64]
         packer: "Packer"
         pack_l1_accumulation: 1

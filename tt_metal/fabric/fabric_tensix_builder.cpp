@@ -241,7 +241,10 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
         size_t missing_dirs_to_add = std::min(missing_plane_dirs.size(), cores_remaining);
 
         if (missing_dirs_to_add == 0) {
-            log_warning(
+            // Expected outcome of UDM's core-budget fallback (not all missing directions can be
+            // backfilled when the mux cores are exhausted) -- routine per-device setup info, not
+            // an error condition, so this stays at debug rather than warning.
+            log_debug(
                 tt::LogMetal,
                 "Device {}: No remaining cores for missing directions. "
                 "Total cores: {}, cores used by active channels: {}, missing directions: {}",
@@ -253,7 +256,8 @@ void FabricTensixDatamoverConfig::track_missing_directions_for_udm(
         }
 
         if (missing_dirs_to_add < missing_plane_dirs.size()) {
-            log_warning(
+            // Same rationale as above: partial backfill is an expected UDM fallback, not a fault.
+            log_debug(
                 tt::LogMetal,
                 "Device {}: Not enough cores for all missing directions. "
                 "Adding {} out of {} missing directions. Total cores: {}, cores used: {}",

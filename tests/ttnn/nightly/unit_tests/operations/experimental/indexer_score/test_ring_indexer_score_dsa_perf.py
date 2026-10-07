@@ -3,7 +3,7 @@
 
 """Realtime-profiler coverage for the fused DSA ring indexer.
 
-This is a per-TP-lane proxy for GLM-5.2: the production 8x4 Galaxy mesh has an
+This is a per-TP-lane proxy for GLM-5.3: the production 8x4 Galaxy mesh has an
 8-rank SP ring and TP=4. Its 5120-token chunk makes a 640-row SP slab, which
 the model splits over TP before the fused op, yielding 160 query rows and all
 32 indexer heads on every physical chip. QuietBox (4x1) and LoudBox (8x1)
@@ -26,7 +26,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_indexer_score import to_device
@@ -39,27 +39,27 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.indexer_score.test_in
 
 # 55 Ki tokens is the GLM chunked-prefill width (50 Ki history + 5 Ki chunk).
 # 512 Ki is the long-context target; both are tile-aligned.
-GLM52_GLOBAL_CHUNK = 5120
-GLM52_SP = 8
-GLM52_TP = 4
-GLM52_Q_PER_SP_RANK = GLM52_GLOBAL_CHUNK // GLM52_SP
-GLM52_Q_PER_CHIP = GLM52_Q_PER_SP_RANK // GLM52_TP
-GLM52_KV_55K = 56320
-GLM52_KV_512K = 512 * 1024
-GLM52_INDEX_HEADS = GLM52Config.INDEX_N_HEADS
-GLM52_INDEX_DIM = GLM52Config.INDEX_HEAD_DIM
+GLM53_GLOBAL_CHUNK = 5120
+GLM53_SP = 8
+GLM53_TP = 4
+GLM53_Q_PER_SP_RANK = GLM53_GLOBAL_CHUNK // GLM53_SP
+GLM53_Q_PER_CHIP = GLM53_Q_PER_SP_RANK // GLM53_TP
+GLM53_KV_55K = 56320
+GLM53_KV_512K = 512 * 1024
+GLM53_INDEX_HEADS = GLM53Config.INDEX_N_HEADS
+GLM53_INDEX_DIM = GLM53Config.INDEX_HEAD_DIM
 # The runtime requires a whole 5120-token global chunk. Keep the largest legal
-# cache no greater than GLM-5.2's advertised 1 Mi position limit.
-GLM52_K_CACHE_CAPACITY = GLM52Config.MAX_POSITION_EMBEDDINGS // GLM52_GLOBAL_CHUNK * GLM52_GLOBAL_CHUNK
-GLM52_INDEX_CACHE_SLOTS = sum(indexer_type == "full" for indexer_type in GLM52Config.indexer_types())
-GLM52_INDEX_CACHE_SLOT = GLM52_INDEX_CACHE_SLOTS - 1
+# cache no greater than GLM-5.3's advertised 1 Mi position limit.
+GLM53_K_CACHE_CAPACITY = GLM53Config.MAX_POSITION_EMBEDDINGS // GLM53_GLOBAL_CHUNK * GLM53_GLOBAL_CHUNK
+GLM53_INDEX_CACHE_SLOTS = sum(indexer_type == "full" for indexer_type in GLM53Config.indexer_types())
+GLM53_INDEX_CACHE_SLOT = GLM53_INDEX_CACHE_SLOTS - 1
 
 RING_PERF_CASES = (
-    pytest.param(GLM52_KV_55K, "scalar", id="scalar-55k"),
-    pytest.param(GLM52_KV_512K, "scalar", id="scalar-512k"),
-    pytest.param(GLM52_KV_512K, "metadata", id="metadata-512k"),
+    pytest.param(GLM53_KV_55K, "scalar", id="scalar-55k"),
+    pytest.param(GLM53_KV_512K, "scalar", id="scalar-512k"),
+    pytest.param(GLM53_KV_512K, "metadata", id="metadata-512k"),
 )
-GLM52_K_CHUNK = get_indexer_key_chunk(GLM52_INDEX_HEADS)
+GLM53_K_CHUNK = get_indexer_key_chunk(GLM53_INDEX_HEADS)
 
 # Do not measure a logical subset of another box: bandwidth and torus routing are
 # properties of the complete physical box.  The unmatched shape skips, leaving
@@ -86,10 +86,10 @@ RING_INDEXER_PERF_MARGIN = 0.02
 RING_INDEXER_PERF_REPLAYS = 3
 RING_INDEXER_EXPECTED_FPU_UTIL = {
     # (SP ranks, KV prefix): expected fused-program FPU utilization, percent.
-    (4, GLM52_KV_55K): 52.22,
-    (4, GLM52_KV_512K): 62.99,
-    (8, GLM52_KV_55K): 58.10,
-    (8, GLM52_KV_512K): 60.39,
+    (4, GLM53_KV_55K): 52.22,
+    (4, GLM53_KV_512K): 62.99,
+    (8, GLM53_KV_55K): 58.10,
+    (8, GLM53_KV_512K): 60.39,
 }
 
 _FABRIC_2D_TORUS_DEVICE_PARAMS = {
@@ -102,7 +102,7 @@ _FABRIC_2D_TORUS_DEVICE_PARAMS = {
 
 # Keep this in lockstep with IndexerScoreDeviceOperation's Blackhole perf
 # model. The profiler duration is measured in ns; its device clock is 1.35
-# cycles/ns. LoFi is the deployed bfp8 Q/K path used by GLM-5.2.
+# cycles/ns. LoFi is the deployed bfp8 Q/K path used by GLM-5.3.
 _BH_CLOCK_GHZ = 1.35
 _LOFI_MUL_ADDS_PER_CYCLE_PER_CORE = 4096
 
@@ -147,17 +147,17 @@ def _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start):
     links reserve four all-gather worker cores, so score math is credited
     only to the remaining compute rectangle.
     """
-    q_tiles = GLM52_Q_PER_CHIP // 32
-    k_tiles = GLM52_K_CACHE_CAPACITY // 32
+    q_tiles = GLM53_Q_PER_CHIP // 32
+    k_tiles = GLM53_K_CACHE_CAPACITY // 32
     kv_tiles = kv_len // 32
     chunk_start_tiles = chunk_start // 32
     valid_tiles = sum(min(kv_tiles, chunk_start_tiles + row + 1) for row in range(q_tiles))
 
-    # IndexerScoreProgramConfig(q_chunk=32, k_chunk=GLM52_K_CHUNK) maps q groups by
+    # IndexerScoreProgramConfig(q_chunk=32, k_chunk=GLM53_K_CHUNK) maps q groups by
     # grid rows and K bands by columns. This is the same banded_core_count()
     # arithmetic as the C++ program factory/perf model.
     q_groups = q_tiles
-    k_bands = math.ceil(k_tiles / (GLM52_K_CHUNK // 32))
+    k_bands = math.ceil(k_tiles / (GLM53_K_CHUNK // 32))
     grid = mesh_device.compute_with_storage_grid_size()
     ag_worker_cores = 2 * 2  # two directions for each of the two links
     compute_grid_x = grid.x - math.ceil(ag_worker_cores / grid.y)
@@ -167,16 +167,16 @@ def _ring_indexer_ideal_compute_cycles(mesh_device, kv_len, chunk_start):
     row_blocks = max(1, min(grid.y // group_rows, k_bands // band_columns))
     core_count = group_rows * row_blocks * band_columns
 
-    num_mul_adds = 2 * valid_tiles * GLM52_INDEX_HEADS * (32 * 32) * GLM52_INDEX_DIM
+    num_mul_adds = 2 * valid_tiles * GLM53_INDEX_HEADS * (32 * 32) * GLM53_INDEX_DIM
     return math.ceil(num_mul_adds / (core_count * _LOFI_MUL_ADDS_PER_CYCLE_PER_CORE))
 
 
 def _ring_perf_config():
-    """The resident-head GLM-5.2 indexer-score program configuration."""
+    """The resident-head GLM-5.3 indexer-score program configuration."""
     return ttnn.IndexerScoreProgramConfig(
         # indexer.py chooses 32 when the 160-row TP shard is not divisible by 64.
         q_chunk_size=32,
-        k_chunk_size=GLM52_K_CHUNK,
+        k_chunk_size=GLM53_K_CHUNK,
         head_group_size=0,
     )
 
@@ -303,43 +303,43 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
     assert ttnn.get_num_devices() == sp * tp, "perf proxy must use the complete physical box"
     assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
     assert kv_len % 32 == 0
-    assert GLM52_Q_PER_SP_RANK == GLM52_Q_PER_CHIP * GLM52_TP
+    assert GLM53_Q_PER_SP_RANK == GLM53_Q_PER_CHIP * GLM53_TP
 
-    # Match the GLM-5.2 fused-op inputs: 128-d BFP8 Q/K, BF16 gates, 32
+    # Match the GLM-5.3 fused-op inputs: 128-d BFP8 Q/K, BF16 gates, 32
     # resident index heads, and 160 post-TP query rows per physical chip. A
     # TP-free box runs one TP lane on every SP rank. The physical proxy has no
     # TP axis, so its cache uses the corresponding 160-row lane slab; the
     # production 640-row SP slab needs its real TP=4 mesh axis for the op's
     # exact 2-D block-cyclic geometry.
-    q_rows = sp * GLM52_Q_PER_CHIP
+    q_rows = sp * GLM53_Q_PER_CHIP
     chunk_start = kv_len - q_rows
-    q_host = torch.randn((1, GLM52_INDEX_HEADS, q_rows, GLM52_INDEX_DIM), dtype=torch.bfloat16)
-    w_host = torch.randn((1, 1, q_rows, GLM52_INDEX_HEADS), dtype=torch.bfloat16)
+    q_host = torch.randn((1, GLM53_INDEX_HEADS, q_rows, GLM53_INDEX_DIM), dtype=torch.bfloat16)
+    w_host = torch.randn((1, 1, q_rows, GLM53_INDEX_HEADS), dtype=torch.bfloat16)
 
     sp_shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(sp, tp), dims=(2, None))
     q_dev = ttnn.from_torch(
         q_host, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, mesh_mapper=sp_shard
     )
     w_dev = to_device(w_host, mesh_device, mesh_mapper=sp_shard)
-    # The production GLM-5.2 cache is 1 Mi tokens wide, ND-sharded in DRAM,
+    # The production GLM-5.3 cache is 1 Mi tokens wide, ND-sharded in DRAM,
     # and has one slot per full indexer layer. The fused program is compiled
     # from this *capacity* (not kv_len): kv_len bounds the populated prefix,
     # but leaves the capacity-sized K-band schedule intact. Selecting slot 20
-    # matches the final full GLM-5.2 indexer layer.
+    # matches the final full GLM-5.3 indexer layer.
     k_local = init_kvpe_cache(
-        kvpe_cache_head_dim=GLM52_INDEX_DIM,
+        kvpe_cache_head_dim=GLM53_INDEX_DIM,
         mesh_device=mesh_device,
-        seq_len=GLM52_K_CACHE_CAPACITY,
+        seq_len=GLM53_K_CACHE_CAPACITY,
         mesh_shape=(sp, tp),
         sp_axis=0,
-        num_kvpe_cache_layers=GLM52_INDEX_CACHE_SLOTS,
+        num_kvpe_cache_layers=GLM53_INDEX_CACHE_SLOTS,
         num_users=1,
         dtype=ttnn.bfloat8_b,
     )
     # The all-gather output is persistent and full-width on every rank.  It is
     # zero-seeded because only shape/route/device timing matters here.
     k_gathered = ttnn.from_torch(
-        torch.zeros((1, 1, GLM52_K_CACHE_CAPACITY, GLM52_INDEX_DIM), dtype=torch.bfloat16),
+        torch.zeros((1, 1, GLM53_K_CACHE_CAPACITY, GLM53_INDEX_DIM), dtype=torch.bfloat16),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat8_b,
@@ -377,9 +377,9 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
                 topology=ttnn.Topology.Ring,
                 num_links=2,
                 ag_sub_device_id=subdevice_id,
-                cache_batch_idx=GLM52_INDEX_CACHE_SLOT,
+                cache_batch_idx=GLM53_INDEX_CACHE_SLOT,
                 block_cyclic_sp_axis=0,
-                block_cyclic_chunk_local=GLM52_Q_PER_CHIP,
+                block_cyclic_chunk_local=GLM53_Q_PER_CHIP,
                 program_config=_ring_perf_config(),
                 **bounds_kwargs,
             )
@@ -422,10 +422,10 @@ def test_ring_indexer_score_dsa_perf(mesh_device, kv_len, bounds_source):
                 tuple(mesh_device.shape),
                 bounds_source,
                 ttnn.get_fabric_config(),
-                GLM52_INDEX_HEADS,
-                GLM52_K_CACHE_CAPACITY,
+                GLM53_INDEX_HEADS,
+                GLM53_K_CACHE_CAPACITY,
                 kv_len,
-                GLM52_Q_PER_CHIP,
+                GLM53_Q_PER_CHIP,
                 duration_ns / 1e6,
                 fpu_utilization,
                 expected_fpu_utilization,

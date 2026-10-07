@@ -51,90 +51,115 @@ operations:
   # 1x1 reduce conv
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "input"
         in1: "w_reduce"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [64, 64]
     pack:
       - output: "reduce_out"
+        block_size: [64, 64]
         packer: "Packer"
 
   # Bias + ReLU for reduce conv
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "reduce_out"
         in1: "b_reduce"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        broadcast_tile: 0
         math_fidelity: "LoFi"
+        indexes:
+          in0: {count: 8}
+          in1: {count: 8, step: 0}
+          dest: {count: 4}
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Relu"
         iterations: 32
-    block_size: [64, 64]
+        indexes:
+          dest: {count: 4}
     pack:
       - output: "reduce_bias"
+        block_size: [32, 32]
         packer: "Packer"
+        indexes:
+          dest: {count: 4}
+          out: {count: 8}
 
   # 1x1 mid conv (stand-in for the bottleneck's 3x3 conv)
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "reduce_bias"
         in1: "w_mid"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [64, 64]
     pack:
       - output: "mid_out"
+        block_size: [64, 64]
         packer: "Packer"
 
   # Bias + ReLU for mid conv
   - math:
       - type: "Fpu"
+        block_size: [32, 32]
         in0: "mid_out"
         in1: "b_mid"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         broadcast_type: "ROW"
-        broadcast_tile: 0
         math_fidelity: "LoFi"
+        indexes:
+          in0: {count: 8}
+          in1: {count: 8, step: 0}
+          dest: {count: 4}
       - type: "UnarySfpu"
+        block_size: [32, 32]
         operation: "Relu"
         iterations: 32
-    block_size: [64, 64]
+        indexes:
+          dest: {count: 4}
     pack:
       - output: "mid_bias"
+        block_size: [32, 32]
         packer: "Packer"
+        indexes:
+          dest: {count: 4}
+          out: {count: 8}
 
   # 1x1 expand conv
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "mid_bias"
         in1: "w_expand"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"
-    block_size: [64, 64]
     pack:
       - output: "expand_out"
+        block_size: [64, 64]
         packer: "Packer"
 
   # Residual add + ReLU
   - math:
       - type: "Fpu"
+        block_size: [64, 64]
         in0: "expand_out"
         in1: "skip"
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
       - type: "UnarySfpu"
+        block_size: [64, 64]
         operation: "Relu"
         iterations: 32
-    block_size: [64, 64]
     pack:
       - output: "output"
+        block_size: [64, 64]
         packer: "Packer"

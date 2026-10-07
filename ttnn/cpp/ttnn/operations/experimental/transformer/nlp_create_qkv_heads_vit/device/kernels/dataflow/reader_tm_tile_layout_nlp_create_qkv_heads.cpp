@@ -36,7 +36,6 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t onetile = 1;
-    const DataFormat data_format = get_dataformat(cb_id_qv);
     const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
 
 #ifdef READ_FROM_INPUT_TENSOR_KV

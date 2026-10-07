@@ -83,6 +83,9 @@ the `prefill_chunk` alignment assert on M3.
 | `M3_LOAD_LAYER_START` | `0` | First global layer of the `M3_LOAD_NLAYERS` window (a pipeline rank's adapter sets its `first_layer_idx`). |
 | `M3_SHARDED_RESIDUAL` | `1` | Residual-stream layout (`tt/residual.py`): `1` = `emb/tp`-sharded per TP column (attention and the MLPs close with a reduce-scatter only); `0` = full-emb replicated (the layout older baselines were measured on, kept for bisects). |
 | `M3_SHARDED_RESIDUAL_NORM` | `gather_first` | Only with a sharded residual: `gather_first` = all-gather the residual shard, then one single-pass norm (measured fastest); `distributed` = 3-op distributed RMSNorm on the shard, then all-gather (the DeepSeek/Kimi/GLM shape, kept for A/Bs). |
+| `PREFILL_OVERLAP_SHARED_EXPERT` | `1` | Common prefill runner knob (`PrefillRunParams.overlap_shared_expert_with_dispatch` -> `TtPrefillRuntimeConfig.overlap_shared_expert`), honored by M3's MoE layers (`tt/moe/shared_overlap.py`): `1` = the shared expert runs on its own Tensix sub-device (rows 1-9) concurrently with the routed-expert dispatch (row 0); `0` = it runs before the MoE on the full grid. The standalone harnesses build the runtime with the default. |
+| `M3_MOE_FUSE_SHARED_RS` | `1` | MoE layers: `1` = the shared expert's un-reduced partial is added to the routed output before the MoE's TP reduce-scatter, saving its own collective (mathematically equivalent, the RS is linear; not bit-identical, the added bf16 add rounds before the collective); `0` = it runs its own reduce-scatter / all-reduce. |
+| `M3_MOE_HYBRID_THRESHOLD` | `128` on Blackhole with bf4 experts, else off | MoE routed experts (`tt/moe/tt_minimax_moe.py`): experts with at most this many tokens run `moe_fused_swiglu`, the rest `unified_routed_expert_moe`; `0` = every expert on `unified_routed_expert_moe` (the only path off Blackhole; `moe_fused_swiglu` does not fit L1 with bf8 experts). |
 | `M3_EMBED_SHARD_VOCAB` | `1` | Embedding table sharding (`tt/parallel_embedding.py`): `1` = 2D vocab + hidden; `0` = 1D hidden only. Each layout has its own cache entry. |
 | `M3_INDEX_CACHE_BF16` | unset | `1` = cache the MSA `index_k` in bf16 instead of the K/V cache dtype (bf8), keeping the indexer's hard top-16 block selection stable across chunks. |
 | `M3_PROFILE_ZONES` | `0` | `1` = emit the Tracy zone signposts (`utils/profiler_utils.py`); read at import, the profiler harness sets it. |
@@ -101,7 +104,7 @@ the `prefill_chunk` alignment assert on M3.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `PREFILL_TRACE_DIR` | unset (required) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). |
+| `PREFILL_TRACE_DIR` | unset (required in single-run) | Golden trace dir (`metadata.json` with `token_ids`, plus `kv_cache/` for the PCC check). In multi-run mode it only seeds the initial capacity and the default `PREFILL_GOLDEN_ROOT`. |
 | `PREFILL_CHUNKED` | `0` | `1` = chunked prefill (exercises the cache-read path); `0` = one-shot. |
 | `PREFILL_CHUNK_SIZE` | `5120` | Tokens per chunk (>= 2048 so the first MSA chunk has 16 blocks). |
 | `PREFILL_NUM_LAYERS` | all 60 | Build / run only the first N layers (sets `M3_LOAD_NLAYERS`). |
@@ -112,6 +115,13 @@ the `prefill_chunk` alignment assert on M3.
 | `PREFILL_STANDALONE_CHUNKED_PCC` | `0.88` | Per-layer KV PCC floor (also read by `tt/runners/prefill_kv_validation.py`). |
 | `PREFILL_STANDALONE_CHUNKED_RECORD_ONLY` | `0` | `1` = record PCCs without asserting (`prefill_kv_validation.py`). |
 | `GOLDEN_DIR`, `SRC_TRACE`, `LOGDIR`, `PERF_WORKDIR` | see script header | `run_prefill_perf.sh` trace synthesis and logging paths. |
+| `PREFILL_RUNS` | unset | Multi-run mode: load weights once, then run many specs against the resident model. `<file>` (one spec per line, batch), `-` (stdin) or `fifo:<path>` (FIFO server; `quit` exits). Spec keys: `trace= isl= capacity= iters= skip_pcc= expected_tps= perf_margin= pcc_threshold= label=`. Chunked only. |
+| `PREFILL_GOLDEN_ROOT` | `dirname(PREFILL_TRACE_DIR)` | Directory bare `trace=` names resolve under. |
+| `PREFILL_MAX_SEQ_LEN` | unset (fit) | Multi-run only: pin the KV-cache capacity for runs without `capacity=`; unset fits the cache to each run's padded length (re-allocates cache + rebuilds RoPE, no weight reload). Dense layers gather the whole cache shard per chunk, so an over-sized cache costs time. |
+| `PREFILL_ISL` | trace length | Prefill N tokens: the trace's real tokens tiled cyclically (truncated if shorter). KV PCC still checks the first `min(N, trace)` tokens. Per-spec `isl=` overrides. |
+| `PREFILL_WARMUP_ITERS` | `0` | Untimed whole-sequence passes before the timed iterations (iteration 0 carries the per-ISL JIT). |
+| `PREFILL_COMPILE` | `1` | `0` = skip `compile()`'s warm-up (three chunk variants: first / cache-read / ragged; per-chunk offsets are runtime args, so no per-ISL JIT exists). |
+| `PREFILL_RESULTS_JSONL` | unset | Append one JSON line per run (perf, min PCC, status). |
 
 **Zone profiler** (`tests/perf/profile_prefill.py`, driven by `scripts/run_prefill_profile.sh`): `PROFILE_CHUNK`,
 `PROFILE_CACHE`, `PROFILE_NUM_LAYERS`, `PROFILE_LAYER_IDS`, `PROFILE_READ_EVERY`, `PROFILE_READ_IN_CHUNK`,
@@ -142,6 +152,7 @@ tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
 reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification
+scripts/prefill_matrix/  repeatable (new x cached) prefill perf matrix on the 16-stage pipeline (see its README)
 docs/             multi-galaxy pipeline-parallel prefill running & testing
 configs/MiniMax-M3/config.json    dims only (modeling code loaded from the checkpoint via HF_MODEL)
 tests/unit/       module-by-module PCC tests

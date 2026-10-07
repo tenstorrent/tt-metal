@@ -10,11 +10,6 @@
 // interface: every later consumer inherits them, so they are taken from the kernel's own vocabulary
 // rather than any one op's locals, and are not renamed once a consumer exists.
 //
-// ALSO DUPLICATED BY: copy/typecast/device/kernels/dataflow/writer_unary_interleaved_start_id_metal2.cpp
-// — a second Metal 2.0 fork of the same kernel, in a consumer's directory rather than beside the
-// original. The two are functionally identical (that one names the accessor `tensor::output`). They
-// should be consolidated onto this copy; until then a change here likely belongs there too.
-//
 // TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
 // list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
@@ -37,7 +32,10 @@ void kernel_main() {
     const uint32_t page_bytes = dfb.get_entry_size();
 
 #ifdef OUT_SHARDED
+    // Output is sharded in place; the wait is only a readiness handshake. Pop to
+    // leave the DFB balanced.
     dfb.wait_front(num_pages);
+    dfb.pop_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)

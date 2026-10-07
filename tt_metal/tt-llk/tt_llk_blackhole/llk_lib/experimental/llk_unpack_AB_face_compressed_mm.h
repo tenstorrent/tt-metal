@@ -320,31 +320,18 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
         std::uint32_t idx4 = (meta >> (4 * meta_stride_bits)) & meta_index_mask;
         std::uint32_t idx5 = (meta >> (5 * meta_stride_bits)) & meta_index_mask;
 
-        std::uint32_t data0  = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-        std::uint32_t data1  = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-        std::uint32_t data2  = _llk_unpack_AB_face_compressed_mm_header_table_[idx1];
-        std::uint32_t data3  = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx1];
-        std::uint32_t data4  = _llk_unpack_AB_face_compressed_mm_header_table_[idx2];
-        std::uint32_t data5  = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx2];
-        std::uint32_t data6  = _llk_unpack_AB_face_compressed_mm_header_table_[idx3];
-        std::uint32_t data7  = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx3];
-        std::uint32_t data8  = _llk_unpack_AB_face_compressed_mm_header_table_[idx4];
-        std::uint32_t data9  = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx4];
-        std::uint32_t data10 = _llk_unpack_AB_face_compressed_mm_header_table_[idx5];
-        std::uint32_t data11 = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx5];
-
-        ckernel::instrn_buffer[0] = data0;
-        ckernel::instrn_buffer[0] = data1;
-        ckernel::instrn_buffer[0] = data2;
-        ckernel::instrn_buffer[0] = data3;
-        ckernel::instrn_buffer[0] = data4;
-        ckernel::instrn_buffer[0] = data5;
-        ckernel::instrn_buffer[0] = data6;
-        ckernel::instrn_buffer[0] = data7;
-        ckernel::instrn_buffer[0] = data8;
-        ckernel::instrn_buffer[0] = data9;
-        ckernel::instrn_buffer[0] = data10;
-        ckernel::instrn_buffer[0] = data11;
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx0]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx0]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx1]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx1]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx2]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx2]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx3]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx3]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx4]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx4]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx5]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx5]);
     };
 
     volatile std::uint32_t* cfg = get_cfg_pointer();
@@ -437,10 +424,8 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     for (std::uint32_t j = 0; j < rem_iters; ++j)
     {
         std::uint32_t idx0        = meta & meta_index_mask;
-        std::uint32_t data0       = _llk_unpack_AB_face_compressed_mm_header_table_[idx0];
-        std::uint32_t data1       = _llk_unpack_AB_face_compressed_mm_pairs_table_[idx0];
-        ckernel::instrn_buffer[0] = data0;
-        ckernel::instrn_buffer[0] = data1;
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_header_table_[idx0]);
+        TT_INSN(_llk_unpack_AB_face_compressed_mm_pairs_table_[idx0]);
         meta >>= meta_stride_bits;
     }
 

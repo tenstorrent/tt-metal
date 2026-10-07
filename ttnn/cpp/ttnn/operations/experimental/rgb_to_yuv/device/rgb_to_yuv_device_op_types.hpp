@@ -34,6 +34,7 @@ enum class YUVFormat { YUV420Planar };
 struct RgbToYuvParams {
     YUVCoefficients coefficients;
     YUVFormat format = YUVFormat::YUV420Planar;
+    bool wide_rows = false;
     tt::tt_metal::MemoryConfig output_memory_config;
 };
 

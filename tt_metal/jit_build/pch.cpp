@@ -36,14 +36,15 @@ std::string ensure_pch(
 
     tt::StableHasher hasher;
     hasher.update(gpp);
+    hasher.update(utils::compiler_version(gpp));
     hasher.update(opt_level);
     hasher.update(cflags);
     hasher.update(umbrella_bytes.data(), umbrella_bytes.size());
     const std::string key = fmt::format("{:016x}", hasher.digest());
     const fs::path dir = fs::absolute(pch_root / key);
 
-    // A server handles multiple build keys and cache roots in one process; keep their
-    // staged paths separate even when the compiler flags and umbrella text match.
+    // A server handles multiple cache roots in one process; keep their staged paths
+    // separate even when the compiler flags and umbrella text match.
     // Built at most once per directory per process. The map also caches failure (an empty string),
     // so a flag set whose PCH cannot be built is not retried on every compile.
     static std::mutex mutex;

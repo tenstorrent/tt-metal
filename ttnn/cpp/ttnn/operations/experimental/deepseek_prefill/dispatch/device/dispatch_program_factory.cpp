@@ -945,7 +945,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         const bool any_fp8 =
             operation_attributes.fp8_output || input_tensor.dtype() == tt::tt_metal::DataType::FP8_E4M3;
         untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = any_fp8,
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
             // tiles, but pack_untilize_block uses block_ct_dim. Full-sync 32-bit restores the

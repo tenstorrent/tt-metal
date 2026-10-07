@@ -65,12 +65,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_zero_dest_dvalid_handshake_for_unpack();
         }
 
-        if constexpr (unpack_to_dest)
-        {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
-        }
-
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
@@ -83,8 +78,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
-        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
+        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, TILE_CNT);
         PROFILER_SYNC();
     }
     {
@@ -176,17 +170,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_zero_dest_dvalid_handshake_for_math();
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
-        // Max/min selects the Dest mode (fp32 / int32 / neither) from pack_src
-        // so integer ordering is preserved. Other ops use the inferred mode.
-        if constexpr (test_utils::quasar_binary_op_is_max_min(SFPU_BINARY_OP))
-        {
-            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
-                math_format, static_cast<DataFormat>(formats.pack_src));
-        }
-        else
-        {
-            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>(math_format, math_format);
-        }
+
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
         if constexpr (!unpack_to_dest)
         {
@@ -286,11 +271,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*only the SFPU result tile*/);
         PROFILER_SYNC();
     }
     {

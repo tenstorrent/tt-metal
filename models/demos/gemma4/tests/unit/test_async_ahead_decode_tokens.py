@@ -183,3 +183,30 @@ def test_slot_remap_beyond_device_width_still_falls_back():
     )
     assert src == "host_fallback"
     assert int(merged[0]) == 111
+
+
+def test_inactive_host_rows_are_not_reactivated_by_a_device_position_of_zero():
+    """A row the host disabled sits at -1. Device position 0 is "one step
+    ahead" of it arithmetically, so the row came back as live with the
+    device's stale token."""
+    host_toks = torch.tensor([10, 0, 0], dtype=torch.int32)
+    host_pos = torch.tensor([5, -1, -1], dtype=torch.int64)
+    dev_toks = torch.tensor([11, 77, 78], dtype=torch.int32)
+    dev_pos = torch.tensor([6, 0, -1], dtype=torch.int64)
+
+    toks, pos, src = merge_async_ahead_decode_tokens(host_toks, host_pos, dev_toks, dev_pos)
+    assert src == "merged"
+    assert toks.tolist() == [11, 0, 0]
+    assert pos.tolist() == [6, -1, -1]
+
+
+def test_live_rows_keep_device_feedback_next_to_inactive_rows():
+    host_toks = torch.tensor([10, 20, 0], dtype=torch.int32)
+    host_pos = torch.tensor([5, 9, -1], dtype=torch.int64)
+    dev_toks = torch.tensor([11, 20, 78], dtype=torch.int32)
+    dev_pos = torch.tensor([6, 9, 0], dtype=torch.int64)
+
+    toks, pos, src = merge_async_ahead_decode_tokens(host_toks, host_pos, dev_toks, dev_pos)
+    assert src == "merged"
+    assert toks.tolist() == [11, 20, 0]
+    assert pos.tolist() == [6, 9, -1]

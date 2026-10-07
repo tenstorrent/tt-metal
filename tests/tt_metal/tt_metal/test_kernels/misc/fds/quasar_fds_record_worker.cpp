@@ -36,7 +36,7 @@ void kernel_main() {
     }
 
     overlay::FdsNeo::fds_clear_de_status(go_inst);
-    overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenArmed);
+    overlay::FdsNeo::fds_done(kTokenArmed);
 
     // Every burst value is distinct, so a new capture is simply a new register value. Zero is
     // skipped because the mode switch to auto dispatch may put an idle zero on the wire, and the
@@ -57,6 +57,6 @@ void kernel_main() {
     fds_kernel::finish(status, l1_address, num_slots, (recorded == burst_length) ? kComplete : kTimeoutBurst);
 
     if (recorded == burst_length) {
-        overlay::FdsNeo::fds_done(/*ad_enable=*/false, kTokenRecorded);
+        overlay::FdsNeo::fds_done(kTokenRecorded);
     }
 }

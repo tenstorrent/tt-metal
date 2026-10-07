@@ -979,6 +979,7 @@ __attribute__((noinline)) void trace_only_init() {
 
 #include "noc_event_profiler.hpp"
 #include "perf_counters.hpp"
+#include "tools/profiler/synchronization_event_profiler.hpp"
 
 // Not dispatch
 #if (!defined(DISPATCH_KERNEL))
@@ -1138,6 +1139,10 @@ __attribute__((noinline)) void trace_only_init() {
 #define StartPerfCounters()
 #define StopPerfCounters()
 #define RecordPerfCounters()
+
+#define SYNC_WAIT(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL(name, key) (void(sizeof(key)))
+#define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) (void(sizeof(addr) + sizeof(noc)))
 
 #endif
 #endif

@@ -27,7 +27,7 @@ ALWI void sdpa_custom_mm_block_init(
     const std::uint32_t out_cb_id,
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, false /* clear_src */>(in0_cb_id, in1_cb_id, ct_dim)));
 
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
@@ -46,7 +46,7 @@ ALWI void sdpa_custom_mm_block_init_short(
     const std::uint32_t in1_cb_id,
     const std::uint32_t out_cb_id,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, false /* clear_src */>(in0_cb_id, in1_cb_id, ct_dim)));
     MATH((llk_math_sdpa_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
 
     if constexpr (init_pack) {
@@ -54,7 +54,9 @@ ALWI void sdpa_custom_mm_block_init_short(
     }
 }
 
-template <bool read_transposed = false, std::uint32_t signal_granularity = 1>
+// configure_mask_extent supports masks spanning ct_dim*2 SrcB rows and restores
+// the Q operand's face height before the subsequent matmul unpack.
+template <bool read_transposed = false, std::uint32_t signal_granularity = 1, bool configure_mask_extent = false>
 ALWI void sdpa_custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -65,7 +67,7 @@ ALWI void sdpa_custom_mm_block(
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
     const bool mask_chunk = false) {
-    UNPACK((llk_unpack_AB_sdpa_custom_mm<read_transposed>(
+    UNPACK((llk_unpack_AB_sdpa_custom_mm<read_transposed, configure_mask_extent>(
         in0_cb_id, in1_cb_id, mask_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, mask_chunk)));
     MATH((llk_math_sdpa_custom_mm<signal_granularity>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, mask_chunk)));
 }

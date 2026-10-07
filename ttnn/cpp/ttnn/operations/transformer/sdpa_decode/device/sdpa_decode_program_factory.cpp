@@ -12,8 +12,10 @@
 #include <optional>
 #include <string>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -58,13 +60,18 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0);
     const uint32_t capacity_t = cache_position_modulo / TILE_HEIGHT;
     const bool share_cache = operation_attributes.share_cache.value_or(false);
+    // Speculative multi-position mode: Tg candidates per batch row (PNHt == Tg), each
+    // row-tile carrying its own causal bound from cur_pos[cur_batch*Tg + j]. 0 = off. See
+    // SdpaDecodeParams::spec_multi_pos_tiles.
+    const uint32_t spec_multi_pos_tiles = operation_attributes.spec_multi_pos_tiles;
+    const bool spec_multi_pos = spec_multi_pos_tiles > 0;
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
     TT_FATAL(use_mla || tensor_args.v.has_value(), "V tensor must be provided when MLA is disabled.");
     const auto& input_tensor_v = tensor_args.v.value_or(input_tensor_k);
 
     // ========== Device ==========
-    IDevice* device = input_tensor_q.device();
+    MeshDevice* device = input_tensor_q.device();
 
     // ========== Feature Flags ==========
     const bool is_paged_attention = page_table_tensor.has_value();
@@ -385,26 +392,46 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // ========== Compute Configuration ==========
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
-    const uint32_t max_dynamic_chunk_size = dst_size;
+    // Spec mode multiplies every Q-shaped CB (q, qk_im, out_im, out_accumulate, mask, ...)
+    // by PNHt == T, so the K/V/mask/qk CBs — the only ones that scale with the chunk size —
+    // are capped to keep the per-core L1 footprint in range. 4 tiles = 128 KV positions per
+    // chunk; the hard L1 check after CB creation reports the exact numbers if T and
+    // max_cores_per_head_batch still push the total over budget.
+    constexpr uint32_t kSpecMaxDynamicChunkTiles = 4;
+    const uint32_t max_dynamic_chunk_size = spec_multi_pos ? std::min(dst_size, kSpecMaxDynamicChunkTiles) : dst_size;
     const uint32_t Sk_chunk_t_cb_size = Sk_chunk_t == 0 ? max_dynamic_chunk_size : Sk_chunk_t;
 
     // Matmul block/subblock configuration for QK
     const uint32_t qk_in0_block_w = DHt;
-    const uint32_t qk_num_blocks = 1;
     uint32_t qk_out_subblock_w = 0, qk_out_subblock_h = 0, qk_in0_num_subblocks = 0, qk_in1_num_subblocks = 0;
+    // matmul_blocks() walks in0 as in0_num_subblocks blocks of subblock_h row-tiles, so the
+    // subblock height MUST divide PNHt — otherwise PNHt / subblock_h truncates and the tail
+    // row-tiles are never produced (the output CB is reserved for M*N tiles but only
+    // in0_num_subblocks*subblock_h*N are pushed). Every configuration that reaches here today
+    // has a power-of-2 PNHt, for which the divisor search below exits immediately and the
+    // values are unchanged; spec multi-position mode makes PNHt == T, which is 7 or 11 as
+    // often as not.
+    auto largest_divisor_at_most = [](uint32_t n, uint32_t cap) {
+        uint32_t h = std::min(n, cap);
+        while (h > 1 && n % h != 0) {
+            h--;
+        }
+        return h;
+    };
     if (Sk_chunk_t > 0) {
         qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
-        qk_out_subblock_h = (qk_out_subblock_w == Sk_chunk_t) ? std::min(PNHt, dst_size / qk_out_subblock_w) : 1;
+        qk_out_subblock_h =
+            (qk_out_subblock_w == Sk_chunk_t) ? largest_divisor_at_most(PNHt, dst_size / qk_out_subblock_w) : 1;
         qk_in0_num_subblocks = PNHt / qk_out_subblock_h;
         qk_in1_num_subblocks = Sk_chunk_t / qk_out_subblock_w;
     }
 
     // Matmul block/subblock configuration for output (QK * V)
     uint32_t out_in0_block_w = Sk_chunk_t > 0 ? Sk_chunk_t : 0;
-    uint32_t out_num_blocks = Sk_chunk_t > 0 ? 1 : 0;
     const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
+    // Same divisibility requirement as the QK subblock height above.
     const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == vDHt) ? std::min(PNHt, dst_size / out_out_subblock_w) : 1;
+        (out_out_subblock_w == vDHt) ? largest_divisor_at_most(PNHt, dst_size / out_out_subblock_w) : 1;
     const uint32_t out_in0_num_subblocks = PNHt / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
 
@@ -413,7 +440,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
     if (dht_granularity != (1u << log2_dht_granularity)) {
         dht_granularity = 1;
-        log2_dht_granularity = 0;
     }
 
     // ========== Tile Counts for Circular Buffers ==========
@@ -424,7 +450,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t out_tiles = PNHt * vDHt;
     const uint32_t scale_tiles = 1;
     const uint32_t statistics_tiles = PNHt;
-    const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * (num_cores_per_head - 1);
+    // c_19 staging for the tree reduction is indexed by ROUND (block_offset =
+    // round * (out_chunk_tiles + 2*PNHt)), so only num_tree_reduction_rounds blocks are
+    // ever addressed; the (num_cores_per_head - 1) sizing is legacy over-provisioning from
+    // the pre-tree-reduction flat gather. Legacy sizing is kept verbatim off the spec path;
+    // in spec mode each block is T times larger and the over-provisioning alone would blow
+    // L1 (110 tiles/block * 63 blocks = 14 MB at T=11, 64 cores/head).
+    const uint32_t intermed_output_blocks =
+        spec_multi_pos ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds) : (num_cores_per_head - 1);
+    const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * intermed_output_blocks;
 
     // ========== Data Formats ==========
     const tt::DataFormat q_df = tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -443,6 +477,36 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const auto half_tile = tt::tt_metal::Tile({16, 32});
     const auto full_tile = tt::tt_metal::Tile({32, 32});
     const bool use_half_tile = is_causal && num_q_heads <= 16 && q_df == tt::DataFormat::Float16_b;
+    if (spec_multi_pos) {
+        // The mask generator writes one full 32x32 tile per (candidate, k-column) pair and
+        // the writer's MQA full-tile output branch assumes full tiles, so half tiles must be
+        // off. num_q_heads = T*32 > 16 already forces this; assert rather than assume.
+        TT_FATAL(!use_half_tile, "spec_multi_pos_tiles requires full 32x32 tiles, but use_half_tile was selected");
+        TT_FATAL(B >= 1, "spec_multi_pos_tiles requires B >= 1, got {}", B);
+        TT_FATAL(num_kv_heads == 1, "spec_multi_pos_tiles requires num_kv_heads == 1, got {}", num_kv_heads);
+        TT_FATAL(is_causal, "spec_multi_pos_tiles requires is_causal");
+        TT_FATAL(is_paged_attention, "spec_multi_pos_tiles requires paged attention");
+        TT_FATAL(use_cur_pos_tensor, "spec_multi_pos_tiles requires a cur_pos tensor");
+        TT_FATAL(!is_q_sharded, "spec_multi_pos_tiles requires an unsharded Q tensor");
+        TT_FATAL(sliding_window_size == 0, "spec_multi_pos_tiles is not supported with a sliding window");
+        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with MLA");
+        TT_FATAL(!use_attention_mask, "spec_multi_pos_tiles is not supported with an explicit attention mask");
+        TT_FATAL(
+            PNHt == spec_multi_pos_tiles,
+            "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
+            spec_multi_pos_tiles,
+            PNHt);
+        TT_FATAL(q_heads_parallel_factor == 1, "spec_multi_pos_tiles requires q_heads_parallel_factor == 1");
+        TT_FATAL(num_heads_per_core == 1, "spec_multi_pos_tiles requires num_heads_per_core == 1");
+        // The mask CB is now push/pop cycled (one block per masked chunk) instead of pushed
+        // once, so its write pointer wraps. A power-of-2 capacity guarantees every possible
+        // dynamic chunk size (also a power of 2, capped at Sk_chunk_t_cb_size) divides the
+        // capacity exactly, so no mask block ever straddles the wrap point.
+        TT_FATAL(
+            (Sk_chunk_t_cb_size & (Sk_chunk_t_cb_size - 1)) == 0,
+            "spec_multi_pos_tiles requires a power-of-2 k chunk size in tiles, got {}",
+            Sk_chunk_t_cb_size);
+    }
     const auto q_tile = use_half_tile ? half_tile : full_tile;
     const auto k_tile = full_tile;
     const auto v_tile = full_tile;
@@ -575,7 +639,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             nullptr,
             is_page_table_sharded ? page_table_buffer : nullptr);
     }
-    add_cb(CBIndex::c_10, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile);  // tilized Q
+    // c_10 (row-major Q staging) is only ever written/read when tilize_q is set. Spec mode
+    // requires a TILE-layout Q, so the full q_tiles allocation would waste PNHt*DHt tiles of
+    // L1 (176 KB at T=11); allocate a single tile so the CB still exists and is addressable.
+    add_cb(CBIndex::c_10, (spec_multi_pos ? 1 : q_tiles) * q_tile_size, q_df, q_tile_size,
+           &q_tile);  // tilized Q
 
     // Scalar/identity CBs
     const uint32_t col_identity_tile_size = full_tile.get_tile_size(scalar_df);
@@ -617,12 +685,47 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         &out_tile,
         is_output_sharded ? out_buffer : nullptr);
 
+    if (spec_multi_pos) {
+        // Every Q-shaped CB scales with PNHt == T here, so an otherwise legal (T,
+        // max_cores_per_head_batch) pair can exceed L1. Fail with the numbers and the two
+        // knobs that fix it, instead of the generic "circular buffers grow to N B" error
+        // raised later during program compile.
+        uint64_t total_cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            total_cb_bytes += cb.total_size;
+        }
+        const uint64_t l1_budget =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        log_debug(
+            tt::LogOp,
+            "spec_multi_pos: Tg={}, B={}, Sk_chunk_t_cb={}, cores/head={}, active cores={}, tree rounds={}, "
+            "intermed blocks={}, CB total={} B of {} B",
+            spec_multi_pos_tiles,
+            B,
+            Sk_chunk_t_cb_size,
+            num_cores_per_head,
+            num_active_cores,
+            num_tree_reduction_rounds,
+            intermed_output_blocks,
+            total_cb_bytes,
+            l1_budget);
+        TT_FATAL(
+            total_cb_bytes <= l1_budget,
+            "spec_multi_pos_tiles={}: circular buffers need {} B per core but only {} B of L1 are available "
+            "(Sk_chunk_t={}, cores_per_head={}, intermed_blocks={}). Reduce spec_multi_pos_tiles or "
+            "program_config.max_cores_per_head_batch.",
+            spec_multi_pos_tiles,
+            total_cb_bytes,
+            l1_budget,
+            Sk_chunk_t_cb_size,
+            num_cores_per_head,
+            intermed_output_blocks);
+    }
+
     // ========== Kernel Scalars ==========
     const bfloat16 bfloat_identity_scalar(1.0f);
-    const bfloat16 bfloat_zero_scalar(0.0f);
     const uint32_t packed_identity_scalar =
         pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
-    const uint32_t packed_zero_scalar = pack_two_bfloat16_into_uint32({bfloat_zero_scalar, bfloat_zero_scalar});
 
     const uint32_t scale_packed = std::bit_cast<uint32_t>(scale);
 
@@ -653,8 +756,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         Sk_chunk_t,
         num_active_cores,
         static_cast<uint32_t>(is_q_sharded),
-        num_cores_per_batch,
-        k_chunk_size,
         cur_pos_stick_size,
         static_cast<uint32_t>(is_paged_attention),
         num_kv_heads,
@@ -682,6 +783,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
         Bmask,
         capacity_t,
+        spec_multi_pos_tiles,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
@@ -698,21 +800,16 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
-        B,
         PNHt,
         St,
-        DHt,
         vDHt,
         Sk_chunk_t,
         packed_identity_scalar,
-        packed_zero_scalar,
-        scale_packed,
         num_cores_per_batch,
         num_active_cores,
         reducer_semaphore_id,
         output_semaphore_id,
         static_cast<uint32_t>(is_output_sharded),
-        k_chunk_size,
         num_q_heads,
         num_kv_heads,
         num_cores_per_head,
@@ -724,8 +821,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
         sliding_window_size,
-        num_tree_reduction_rounds,
         original_block_size,
+        spec_multi_pos_tiles,
     };
     tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
@@ -740,15 +837,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         qk_out_subblock_h,
         qk_in0_num_subblocks,
         qk_in1_num_subblocks,
-        qk_num_blocks,
         out_in0_block_w,
         out_out_subblock_w,
         out_out_subblock_h,
         out_in0_num_subblocks,
         out_in1_num_subblocks,
-        out_num_blocks,
-        num_cores_per_batch,
-        k_chunk_size,
         num_cores_per_head,
         num_heads_per_core,
         static_cast<uint32_t>(is_causal),
@@ -760,25 +853,28 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         static_cast<uint32_t>(use_half_tile),
         scale_packed,
         sliding_window_size,
-        num_tree_reduction_rounds,
         original_block_size,
+        spec_multi_pos_tiles,
     };
 
     // ========== Compute Defines ==========
     std::map<std::string, std::string> compute_defines;
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    compute_defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
 
     if (Sk_chunk_t > 0) {
         auto add_granularity = [&](const char* name, uint32_t value) {
             uint32_t log2_val = static_cast<uint32_t>(std::log2(value));
             TT_FATAL(value == (1u << log2_val), "{} ({}) must be power of 2", name, value);
             compute_defines[name] = std::to_string(value);
-            compute_defines[std::string("LOG2_") + name] = std::to_string(log2_val);
         };
         add_granularity("SUB_EXP_GRANULARITY", std::min(Sk_chunk_t, dst_size));
-        add_granularity("MUL_BCAST_GRANULARITY", std::min(PNHt * Sk_chunk_t, dst_size));
+        // Preserve the shape validation even though no kernel consumes this granularity define.
+        const uint32_t mul_bcast_granularity = std::min(PNHt * Sk_chunk_t, dst_size);
+        TT_FATAL(
+            std::has_single_bit(mul_bcast_granularity),
+            "MUL_BCAST_GRANULARITY ({}) must be power of 2",
+            mul_bcast_granularity);
         add_granularity("STATS_GRANULARITY", std::min(Sk_chunk_t, dst_size));
     } else {
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
@@ -835,7 +931,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         CoreCoord core = core_group[i];
         bool do_k_mcast = false;
         uint32_t mcast_x = 0, mcast_y0 = 0, mcast_y1 = 0, num_dests = 0;
-        uint32_t cur_batch = 0, cur_head = 0, core_num_in_reduce = 0, core_num_in_output = 0;
+        uint32_t cur_batch = 0, cur_head = 0, core_num_in_reduce = 0;
         if (use_col_major_group_indexing) {
             uint32_t group_idx = i / num_cores_per_head;          // row-major group index
             uint32_t group_row = group_idx / num_group_rows;      // which row of groups (0 to grid_size.y-1)
@@ -843,8 +939,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             cur_batch = group_col * num_group_cols + group_row;   // column-major: batches go down columns first
             cur_head = 0;                                         // single KV head when using this indexing
             core_num_in_reduce =
-                i % num_cores_per_head;               // position within the reduction group (0 to num_cores_per_head-1)
-            core_num_in_output = core_num_in_reduce;  // same as reduce for single head
+                i % num_cores_per_head;  // position within the reduction group (0 to num_cores_per_head-1)
             do_k_mcast = (core.y % q_heads_parallel_factor == 0);
             num_dests = q_heads_parallel_factor - 1;
             if (do_k_mcast && num_dests > 0) {
@@ -858,12 +953,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             cur_head = (i % num_cores_per_batch) / num_cores_per_head;
             cur_batch = i / num_cores_per_batch;
             core_num_in_reduce = i % num_cores_per_head;
-            core_num_in_output = i % num_cores_per_batch;
         }
-        uint32_t worker_id_for_reduce = (num_cores_per_head == 0) ? UINT32_MAX : core_num_in_reduce - 1;
-        uint32_t worker_id_for_output = (core_num_in_output == 0) ? UINT32_MAX : core_num_in_output - 1;
-        bool do_reduce = (worker_id_for_reduce == UINT32_MAX);
-        bool do_output = (worker_id_for_output == UINT32_MAX);
+        const bool do_reduce = core_num_in_reduce == 0;
+        const bool do_output = use_col_major_group_indexing ? do_reduce : i % num_cores_per_batch == 0;
         uint32_t cur_pos = (use_cur_pos_tensor || !is_causal)
                                ? UINT32_MAX
                                : cur_pos_ids.at(static_cast<uint32_t>(cur_batch / q_heads_parallel_factor));
@@ -872,20 +964,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         TreeReductionParams tree_params = get_tree_reduction_params(core_num_in_reduce, num_cores_per_head);
 
         log_debug(tt::LogOp, "---- core_id: {}, coord: {} ----", i, core);
-        log_debug(tt::LogOp, "worker_id_for_reduce: {}", worker_id_for_reduce);
-        log_debug(tt::LogOp, "worker_id_for_output: {}", worker_id_for_output);
         log_debug(tt::LogOp, "do_reduce: {}", do_reduce);
         log_debug(tt::LogOp, "do_output: {}", do_output);
         log_debug(tt::LogOp, "cur_head: {}", cur_head);
         log_debug(tt::LogOp, "cur_batch: {}", cur_batch);
         log_debug(tt::LogOp, "core_num_in_reduce: {}", core_num_in_reduce);
-        log_debug(tt::LogOp, "core_num_in_output: {}", core_num_in_output);
         log_debug(tt::LogOp, "cur_pos: {}", cur_pos);
         log_debug(tt::LogOp, "tree_params.is_root: {}", tree_params.is_root);
         log_debug(tt::LogOp, "tree_params.parent_core_in_group: {}", tree_params.parent_core_in_group);
         log_debug(tt::LogOp, "tree_params.send_at_round: {}", tree_params.send_at_round);
-        log_debug(tt::LogOp, "tree_params.num_children: {}", tree_params.num_children);
-        log_debug(tt::LogOp, "tree_params.my_active_rounds: {}", tree_params.my_active_rounds);
         log_debug(tt::LogOp, "do_k_mcast: {}", do_k_mcast);
         log_debug(tt::LogOp, "mcast_x: {}", mcast_x);
         log_debug(tt::LogOp, "mcast_y0: {}", mcast_y0);
@@ -924,12 +1011,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         reader_rt_args.push_back(attn_mask_buffer);
         reader_rt_args.push_back(attention_sink_buffer);
         reader_rt_args.push_back(page_table_stick_size);
-        reader_rt_args.push_back(static_cast<uint32_t>(do_reduce));
         reader_rt_args.push_back(static_cast<uint32_t>(do_output));
         reader_rt_args.push_back(cur_head);
         reader_rt_args.push_back(cur_batch);
         reader_rt_args.push_back(core_num_in_reduce);
-        reader_rt_args.push_back(core_num_in_output);
         reader_rt_args.push_back(cur_pos);
         reader_rt_args.push_back(static_cast<uint32_t>(do_k_mcast));
         reader_rt_args.push_back(mcast_x);
@@ -945,22 +1030,15 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         // reader note above), so they never go stale on a hit.
         KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.push_back(out_buffer);
-        writer_rt_args.push_back(worker_id_for_reduce);
-        writer_rt_args.push_back(worker_id_for_output);
-        writer_rt_args.push_back(static_cast<uint32_t>(do_reduce));
         writer_rt_args.push_back(static_cast<uint32_t>(do_output));
         writer_rt_args.push_back(cur_head);
         writer_rt_args.push_back(cur_batch);
         writer_rt_args.push_back(core_num_in_reduce);
-        writer_rt_args.push_back(core_num_in_output);
         writer_rt_args.push_back(cur_pos);
         // Tree reduction parameters
         writer_rt_args.push_back(tree_params.is_root ? 1u : 0u);
         writer_rt_args.push_back(tree_params.parent_core_in_group);
         writer_rt_args.push_back(tree_params.send_at_round);
-        writer_rt_args.push_back(tree_params.num_children);
-        writer_rt_args.push_back(tree_params.my_active_rounds);
-        writer_rt_args.push_back(reduction_group_base_idx);
         // Add children_per_round array (MAX_TREE_REDUCTION_ROUNDS elements)
         for (uint32_t children : tree_params.children_per_round) {
             writer_rt_args.push_back(children);
@@ -980,18 +1058,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         // compute runtime args
         KernelDescriptor::RTArgList compute_rt_args;
         compute_rt_args.push_back(static_cast<uint32_t>(do_reduce));
-        compute_rt_args.push_back(static_cast<uint32_t>(do_output));
-        compute_rt_args.push_back(cur_head);
         compute_rt_args.push_back(cur_batch);
         compute_rt_args.push_back(core_num_in_reduce);
-        compute_rt_args.push_back(core_num_in_output);
         compute_rt_args.push_back(cur_pos);
         // Tree reduction parameters for compute
         compute_rt_args.push_back(tree_params.is_root ? 1u : 0u);
         compute_rt_args.push_back(tree_params.parent_core_in_group);
-        compute_rt_args.push_back(tree_params.send_at_round);
-        compute_rt_args.push_back(tree_params.num_children);
-        compute_rt_args.push_back(tree_params.my_active_rounds);
         // Add children_per_round array for compute
         for (uint32_t children : tree_params.children_per_round) {
             compute_rt_args.push_back(children);
@@ -1007,19 +1079,19 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             log_debug(tt::LogOp, "Setting core {} to idle", core);
 
             // Reader runtime args
-            // Base args (20): includes K-mcast args [do_k_mcast, mcast_x, mcast_y0, mcast_y1, num_dests]
-            KernelDescriptor::CoreRuntimeArgs reader_rt_args(20, 0);
+            // Base args (18): includes K-mcast args [do_k_mcast, mcast_x, mcast_y0, mcast_y1, num_dests]
+            KernelDescriptor::CoreRuntimeArgs reader_rt_args(18, 0);
 
             // Writer runtime args - need to match the size with tree reduction params
-            // Base args (10) + tree params (6) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
+            // Base args (6) + tree params (3) + children_per_round (MAX_TREE_REDUCTION_ROUNDS) + group coords
             // (2*num_cores_per_head)
             // + reducer coords + output coords
             KernelDescriptor::CoreRuntimeArgs writer_rt_args(
-                10 + 6 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
+                6 + 3 + MAX_TREE_REDUCTION_ROUNDS + (2 * num_cores_per_head), 0);
 
             // Compute runtime args - 65 indicates idle core
-            // Base args (7) + tree params (5) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
-            KernelDescriptor::CoreRuntimeArgs compute_rt_args(7 + 5 + MAX_TREE_REDUCTION_ROUNDS, 0);
+            // Base args (4) + tree params (2) + children_per_round (MAX_TREE_REDUCTION_ROUNDS)
+            KernelDescriptor::CoreRuntimeArgs compute_rt_args(4 + 2 + MAX_TREE_REDUCTION_ROUNDS, 0);
             compute_rt_args[0] = 65;  // Idle marker
 
             reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));

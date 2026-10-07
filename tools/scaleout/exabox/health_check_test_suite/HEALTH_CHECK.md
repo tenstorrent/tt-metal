@@ -32,6 +32,16 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 | `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | ~75 s   | Smoke check on every new unit |
 | `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
 | `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | ~18 min + triage + ~7 min | Final deploy gate |
+| `pre_reboot` | none | — | host_side + device_side | yes, if installed | snapshot + triage + ~7 min | Collect data before a BMC reboot |
+
+`pre_reboot` collects data; it does not check the unit. It runs on a unit that is
+about to be power cycled through the BMC, so it records the state first and runs
+nothing that would change it. It never resets the unit: the snapshot, the
+triage tools and the QSFP tests all read the unit as it was found. There are no
+gtests or pytests either: a stress run on a unit that is already going to be
+rebooted would change the state the later phases are meant to record. The reset
+loop and test phases are recorded as SKIP with the reason, not left out; there
+is no `post_test_reset` phase.
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -65,8 +75,9 @@ The reset cadence and test set are defined in `RESET_PLAN` / `TIER_TESTS` /
 `medium` and `deploy` end with a post-test `tt-smi -glx_reset` followed by the
 first-step triage tools — `host_side.sh` (host, PCIe and driver state, read from
 sysfs) and `device_side.sh` (per-chip liveness, ARC scratch, telemetry and a NOC0
-node sweep). They live in `tools/scaleout/kmd_triage/`. Tables are
-`POST_TEST_RESET_PLAN`, `TRIAGE_TOOLS` and `TIER_TRIAGE` in `diag_runner.py`.
+node sweep). `pre_reboot` runs the same tools with no reset before them. They
+live in `tools/scaleout/kmd_triage/`. Tables are `POST_TEST_RESET_PLAN`,
+`TRIAGE_TOOLS` and `TIER_TRIAGE` in `diag_runner.py`.
 
 **What the two tools actually check, how to run them by hand, their exit codes
 and their known gaps are documented in
@@ -131,6 +142,11 @@ can't vanish from the console summary.
   32-chip Galaxy they were verified against, `host_side.sh` returned DEGRADED on five
   correctable-AER findings on a unit `device_side.sh` and the rest of the suite called
   healthy. Gating on that from day one would ticket the fleet.
+- Two are held the other way: **`hostside_pcie_aer` and `hostside_kernel_log` record
+  their WARN as PASS** (`TRIAGE_ADVISORY_WARN` in `diag_runner.py`). Both count host
+  state accumulated over a boot, so they WARN on units everything else calls healthy,
+  and one phase WARN is a run WARN. FAIL continues to follow `--triage-gating`; the
+  finding still reaches `details` and `data`, annotated `[advisory: WARN recorded as PASS]`.
 
 The text reports land in `<output_dir>/logs/triage_<tool>.txt`, so
 `collect_run_artifacts()` attaches them to the JIRA ticket with no extra wiring.
@@ -158,7 +174,7 @@ in the container's PID namespace — the holder count is right, the names are no
 
 ## QSFP tests phase
 
-`medium` and `deploy` finish by collecting an ETH dump with
+`medium`, `deploy` and `pre_reboot` finish by collecting an ETH dump with
 `tt-bh-glx-cluster-debug collect --parallelize`, when that binary is on PATH.
 
 **It answers a question nothing else in this suite reaches.** The snapshot phase
@@ -251,7 +267,7 @@ Nothing is lost by this — the finding, its offending port paths and its full
 them. Only the status is held, and only because a tool nobody has yet confirmed
 is right should not be the thing an operator's eye is drawn to when triaging a
 rack. A held FAIL goes straight to PASS rather than sliding down through WARN,
-since the phase has undertaken not to raise one.
+since while the holds are on the phase has undertaken not to raise one.
 
 **The ingest module is not subject to this policy.** Run standalone against a
 stored dump it reports WARN and FAIL normally, so reviewing a dump by hand shows
@@ -263,11 +279,16 @@ which is the only place that knows it is feeding a fleet verdict.
 `--qsfp-gating` changes this completely and in one step: findings report at their
 real severity and the phase gates the run like any other — `overall_status`, the
 exit code, `has_actionable_failure()`, the JIRA ticket and the Slurm
-reboot-and-requeue all respond to a QSFP FAIL. `Phase.gates` in the JSON records
-which mode a run was in, and `report.py` plus the CSV analyzer both read that one
-flag rather than each keeping a list of which phases count. A phase with no
-`gates` key gates, so every other phase and every report written before the flag
-existed is unaffected.
+reboot-and-requeue all respond to a QSFP FAIL.
+
+Both holds lift together, FAIL and WARN. Restoring only FAIL would leave the five
+WARN-capable checks mute — `qsfp_findings` among them, whose whole job is to stop
+`collect`'s exit code 0 reading as a clean run.
+
+`Phase.gates` in the JSON records which mode a run was in, and `report.py` plus
+the CSV analyzer both read that one flag rather than each keeping a list of which
+phases count. A phase with no `gates` key gates, so every other phase and every
+report written before the flag existed is unaffected.
 
 Turning it on is the decision to make once there is enough fleet history to say
 the findings are right — which is why the phase records them from the first run
@@ -290,13 +311,13 @@ its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
 timeout is 1200 s as a backstop. That has to stay well inside
 `run_health_check.py`'s whole-run `--timeout-minutes` (30 by default), which
 kills the process group and takes the report with it — so raise it when running
-`medium` or `deploy` on a host that has the package.
+`medium`, `deploy` or `pre_reboot` on a host that has the package.
 
 ## Flags
 
 | Flag | Default | Purpose |
 |---|---|---|
-| `--tier {light,medium,deploy}` | required | Selects reset cadence + gtest matrix |
+| `--tier {light,medium,deploy,pre_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
@@ -380,7 +401,7 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 ### Thermal (JSON-only)
 `asic_thermal_precheck` records the hottest chip / temp vs `thm_limit` for forensics.
 
-### QSFP tests (medium / deploy, when the package is installed)
+### QSFP tests (medium / deploy / pre_reboot, when the package is installed)
 
 Derived from the ETH dump; see [the phase section](#qsfp-tests-phase) above
 for how they get here. **The status column below is what the ingest assesses.**

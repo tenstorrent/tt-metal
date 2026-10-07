@@ -46,7 +46,7 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
             {
                 .runtime_arg_names = {"base_addr", "size_bytes", "write_path", "num_iterations", "test_id"},
             },
-        .hw_config = experimental::DataMovementGen2Config{},
+        .hw_config = experimental::DataMovementHardwareConfig{},
     };
     experimental::WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     experimental::ProgramSpec spec{.name = "cache_write_perf", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};

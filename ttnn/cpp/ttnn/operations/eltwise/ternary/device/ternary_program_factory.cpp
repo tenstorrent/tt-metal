@@ -418,7 +418,9 @@ uint32_t extract_nD_dims(const ttnn::Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
         }
@@ -563,7 +565,8 @@ TernaryCorePartition compute_core_partition(
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
     const auto& all_device_cores = operation_attributes.worker_grid;
-    if (grid.size() == 1) {
+    // A multi-range worker grid would leave cores past its first range without args.
+    if (grid.size() == 1 && all_device_cores.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (p.has_sharding) {
@@ -1426,7 +1429,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
         kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
         kernel_defines["FILL_WITH_VALUE_INT"] = "1";
     } else if (predicate_tensor.dtype() == DataType::UINT32) {
-        kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
+        kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::UInt32>";
         kernel_defines["FILL_WITH_VALUE_INT"] = "1";
     } else {
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";

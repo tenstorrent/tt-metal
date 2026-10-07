@@ -7,6 +7,14 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string_view>
+#include <vector>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
@@ -216,6 +224,7 @@ static void run_step_and_compare(const AdamWCase& pc) {
         fused_state["exp_avg_sq"] = serialization::NamedParameters{{"theta", v0_tensor}};
         fused_state["steps"] = initial_steps;
         fused_state["lr"] = pc.lr;
+        fused_state["initial_lr"] = pc.lr;
         fused_state["beta1"] = pc.beta1;
         fused_state["beta2"] = pc.beta2;
         fused_state["epsilon"] = pc.epsilon;
@@ -407,6 +416,7 @@ TEST_F(AdamWWeightDecaySkip1DTest, SkipsDecayOn1DParamsOnly) {
             {"weight", autograd::create_tensor(to_tt_bf16(v2_0), false)}};
         state["steps"] = initial_steps;
         state["lr"] = lr;
+        state["initial_lr"] = lr;
         state["beta1"] = beta1;
         state["beta2"] = beta2;
         state["epsilon"] = epsilon;
@@ -518,6 +528,7 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
         state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_bf16(v0), false)}};
         state["steps"] = initial_steps;
         state["lr"] = lr;
+        state["initial_lr"] = lr;
         state["beta1"] = state_beta1;
         state["beta2"] = state_beta2;
         state["epsilon"] = epsilon;
@@ -625,7 +636,69 @@ INSTANTIATE_TEST_SUITE_P(AdamWAMSGrad, AdamWComparisonTest, ::testing::ValuesIn(
 // Test AdamW with stochastic rounding enabled
 // ====================================================================
 
-// These tests are nondeterministic but should never fail
+static constexpr uint32_t kSrSeed = 0x12345678U;
+static constexpr uint32_t kSrRepeats = 5U;
+static constexpr std::array<size_t, 4> kSrShape = {1, 1, 256, 1024};
+
+static std::vector<uint32_t> to_bits(const ttnn::Tensor& tensor) {
+    auto values = ttml::core::to_xtensor(tensor);
+    std::vector<uint32_t> bits;
+    bits.reserve(values.size());
+    for (float v : values) {
+        bits.push_back(std::bit_cast<uint32_t>(v));
+    }
+    return bits;
+}
+
+static size_t count_mismatches(const std::vector<uint32_t>& a, const std::vector<uint32_t>& b) {
+    size_t n = 0;
+    for (size_t i = 0; i < a.size(); ++i) {
+        n += static_cast<size_t>(a[i] != b[i]);
+    }
+    return n;
+}
+
+static xt::xarray<float> make_sine_pattern(float base, float amplitude, float freq) {
+    xt::xarray<float> x = xt::zeros<float>(kSrShape);
+    for (size_t i = 0; i < x.size(); ++i) {
+        x.flat(i) = base + amplitude * std::sin(freq * static_cast<float>(i));
+    }
+    return x;
+}
+
+static std::vector<uint32_t> run_adamw_once(ttml::metal::StochasticRounding sr, uint32_t seed = kSrSeed) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto param = ttml::core::from_xtensor(make_sine_pattern(1.0F, 0.25F, 0.37F), device);
+    auto grad = ttml::core::from_xtensor(make_sine_pattern(0.0F, 1.0F, 0.11F), device);
+    auto exp_avg = ttml::core::zeros_like(param);
+    auto exp_avg_sq = ttml::core::zeros_like(param);
+    auto out = ttml::metal::adamw(
+        param,
+        grad,
+        exp_avg,
+        exp_avg_sq,
+        std::nullopt,
+        /*lr=*/1e-3F,
+        /*beta1=*/0.9F,
+        /*beta2=*/0.999F,
+        /*beta1_pow=*/0.9F,
+        /*beta2_pow=*/0.999F,
+        /*epsilon=*/1e-8F,
+        /*weight_decay=*/0.0F,
+        sr,
+        sr == ttml::metal::StochasticRounding::Enabled ? std::optional<uint32_t>{seed} : std::nullopt);
+    return to_bits(out);
+}
+
+static void expect_repeats_identical(std::string_view name, const std::function<std::vector<uint32_t>()>& run) {
+    const auto first = run();
+    for (uint32_t r = 1; r < kSrRepeats; ++r) {
+        const auto again = run();
+        const size_t mismatches = count_mismatches(first, again);
+        EXPECT_EQ(mismatches, 0U) << name << ": repeat " << r << " differs from repeat 0";
+    }
+}
+
 class StochasticRoundingTest : public ::testing::Test {
 public:
     static void SetUpTestSuite() {
@@ -752,4 +825,23 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
 
     EXPECT_LT(stoch_metrics.mean_error, det_metrics.mean_error);
     EXPECT_LT(stoch_metrics.max_error, det_metrics.max_error);
+}
+
+TEST_F(StochasticRoundingTest, DisabledIsBitIdentical) {
+    expect_repeats_identical("sr_off", [] { return run_adamw_once(ttml::metal::StochasticRounding::Disabled); });
+}
+
+TEST_F(StochasticRoundingTest, SameSeedIsBitIdentical) {
+    expect_repeats_identical("sr_on", [] { return run_adamw_once(ttml::metal::StochasticRounding::Enabled); });
+}
+
+TEST_F(StochasticRoundingTest, DifferentSeedDiffers) {
+    const auto a = run_adamw_once(ttml::metal::StochasticRounding::Enabled, kSrSeed);
+    const auto b = run_adamw_once(ttml::metal::StochasticRounding::Enabled, kSrSeed + 1U);
+    const auto off = run_adamw_once(ttml::metal::StochasticRounding::Disabled);
+    const size_t seed_mismatches = count_mismatches(a, b);
+    const size_t off_mismatches = count_mismatches(a, off);
+    SCOPED_TRACE(fmt::format("mismatches seed vs seed+1={} seed vs off={}", seed_mismatches, off_mismatches));
+    EXPECT_GT(seed_mismatches, 0U) << "a different seed must change the rounding";
+    EXPECT_GT(off_mismatches, 0U) << "stochastic rounding must differ from round-to-nearest";
 }

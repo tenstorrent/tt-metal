@@ -16,6 +16,7 @@ from models.demos.minimax_m3.utils.substate import substate
 
 from .attention.operations import assert_sharded_residual_unpadded
 from .dense_mlp import DenseMLP
+from .moe.shared_overlap import fuse_shared_rs_enabled
 from .residual import use_sharded_residual
 from .topk import TopKRouter
 
@@ -65,6 +66,7 @@ class MLP:
         expert_weight_dtype=ttnn.bfloat4_b,
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
+        overlap_shared_expert=True,
     ):
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
@@ -176,6 +178,12 @@ class MLP:
                 t, ccl_manager, dim=len(t.shape) - 1, axis=mesh_config.tp_axis
             )
 
+        # Shared-expert schedule (tt/moe/shared_overlap.py), both on by default: overlap_shared runs it on its
+        # own sub-device while dispatch runs (TtPrefillRuntimeConfig.overlap_shared_expert); fuse_shared_rs
+        # folds its TP collective into the routed reduce-scatter.
+        self.overlap_shared = overlap_shared_expert and self.shared_expert is not None
+        self.fuse_shared_rs = fuse_shared_rs_enabled() and self.shared_expert is not None
+
         # Routed experts: DeepSeek EP dispatch/combine + the fused unified_routed_expert_moe kernel with
         # M3's clamped swigluoai activation (baked alpha=1.702 / limit=7.0). See TtMiniMaxMoE.
         self.experts = TtMiniMaxMoE(
@@ -201,15 +209,18 @@ class MLP:
             # as soon as gate_fallback_mode selects the internal gate over the caller-supplied topk.
             route_scale=getattr(hf_config, "routed_scaling_factor", 1.0),
             reduce_scatter_fn=moe_reduce_scatter,
+            overlap_shared_expert=self.overlap_shared,
         )
         self.ep_num_links = ccl_manager.num_links
 
-    def __call__(self, hidden_states, actual_isl=None):
+    def __call__(self, hidden_states, actual_isl=None, actual_start=0):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
         actual_isl: real (non-pad) tokens in this chunk across the whole SP axis, or None for a full
         chunk. Drives the padding config below; a wrong value silently drops real tokens, so a caller
         that does not track it must pass None (correct, it just does the padded work).
+        actual_start: the chunk's global start (the cache offset); decides which rows of each SP chip are
+        real when the chunk starts mid-slab (see TopKRouter.build_padding_config).
 
         hidden_states: per-device [1,1,S,H] at FULL emb (the prompts/seq-shards live in the mesh rows).
         Under a sharded residual that full width comes from the layer's single pre-MLP all-gather, and
@@ -220,21 +231,46 @@ class MLP:
         Returns emb/tp under a sharded residual (routed reduce-scatter + shared reduce-scatter, added),
         or full emb under the replicated one (the routed output is all-gathered back and the shared
         expert all-reduced), matching the layer residual either way.
+
+        With overlap_shared / fuse_shared_rs the shared expert runs inside the MoE, right after dispatch is
+        enqueued (concurrently with it under overlap_shared), and its TP collective runs after the MoE or,
+        under fuse_shared_rs, is folded into the routed reduce-scatter. The output contract is the same.
         """
-        with zone("shared_expert"):
-            shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
+        scheduled = self.overlap_shared or self.fuse_shared_rs
+        shared_out = None
+        if self.shared_expert is not None and not scheduled:
+            with zone("shared_expert"):
+                shared_out = self.shared_expert(hidden_states)
 
         Hfull = hidden_states.shape[-1]
         # ONE padding config per chunk, shared by the gate and the EP dispatch. Built (and memoized) by
         # the router; None for a full chunk. Both consumers must see the SAME tensor — the gate
         # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
-        padding_config = self.router.build_padding_config(actual_isl)
+        padding_config = self.router.build_padding_config(actual_isl, actual_start)
         with zone("router_topk"):
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
-        out = self.experts(
-            x3d, topk_indices=idx, topk_weights=wts, padding_config=padding_config
-        )  # -> [1,S,H/tp] reduce-scattered
+        if scheduled:
+
+            def shared_fn(sub_device, keep_alive):
+                return self.shared_expert.partial(hidden_states, sub_device=sub_device, keep_alive=keep_alive)
+
+            out, shared_partial = self.experts(
+                x3d,
+                topk_indices=idx,
+                topk_weights=wts,
+                padding_config=padding_config,
+                shared_fn=shared_fn,
+                overlap=self.overlap_shared,
+                fuse_shared=self.fuse_shared_rs,
+            )
+            if shared_partial is not None:
+                with zone("shared_expert"):
+                    shared_out = self.shared_expert.reduce(shared_partial)
+        else:
+            out = self.experts(
+                x3d, topk_indices=idx, topk_weights=wts, padding_config=padding_config
+            )  # -> [1,S,H/tp] reduce-scattered
         out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
         if not self.sharded_residual and self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
             # TP all-gather (reduce-scattered emb -> full emb). Use the MANAGED all_gather_async

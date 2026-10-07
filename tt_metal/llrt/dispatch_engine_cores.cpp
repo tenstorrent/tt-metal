@@ -16,6 +16,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -212,71 +213,73 @@ CoreType resolve_dispatch_core_type(
 
 namespace {
 
-const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const tt::tt_metal::IDevice* device) {
-    auto& context = MetalContext::instance(extract_context_id(device));
+const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const distributed::MeshDevice& mesh_device) {
+    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
     auto& env = MetalEnvAccessor(context.get_env()).impl();
     const auto& dispatch_core_config = context.get_dispatch_core_config();
-    return env.get_quasar_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+    return env.get_quasar_dispatch_cores(
+        mesh_device.get_device_ids()[0], mesh_device.num_hw_cqs(), dispatch_core_config);
 }
 
 }  // namespace
 
-CoreType resolve_sd_cq_kernel_core_type(const tt::tt_metal::IDevice* device) {
-    auto& context = MetalContext::instance(extract_context_id(device));
+CoreType resolve_sd_cq_kernel_core_type(const distributed::MeshDevice& mesh_device) {
+    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
     auto& env = MetalEnvAccessor(context.get_env()).impl();
-    const auto& dispatch_core_config = context.get_dispatch_core_config();
-    return tt::tt_metal::resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
+    return tt::tt_metal::resolve_dispatch_core_type(
+        env, mesh_device.get_device_ids()[0], context.get_dispatch_core_config());
 }
 
-CoreCoord dispatch_engine_core(const tt::tt_metal::IDevice* device, uint32_t index) {
-    TT_FATAL(device->arch() == tt::ARCH::QUASAR, "dispatch_engine_core is only valid on Quasar");
-    const auto& cores = get_sd_cq_dispatch_cores(device);
+CoreCoord dispatch_engine_core(const distributed::MeshDevice& mesh_device, uint32_t index) {
+    TT_FATAL(mesh_device.arch() == tt::ARCH::QUASAR, "dispatch_engine_core is only valid on Quasar");
+    const auto& cores = get_sd_cq_dispatch_cores(mesh_device);
+    const auto device_id = mesh_device.get_device_ids()[0];
     TT_FATAL(
         index < cores.size(),
         "dispatch_engine_core index {} out of range ({} dispatch cores on device {})",
         index,
         cores.size(),
-        device->id());
+        device_id);
     return cores[index];
 }
 
-CoreCoord dispatch_engine_virtual_core(const tt::tt_metal::IDevice* device, uint32_t index) {
-    const CoreCoord logical_core = dispatch_engine_core(device, index);
-    return device->virtual_core_from_logical_core(logical_core, CoreType::DISPATCH);
+CoreCoord dispatch_engine_virtual_core(const distributed::MeshDevice& mesh_device, uint32_t index) {
+    const CoreCoord logical_core = dispatch_engine_core(mesh_device, index);
+    return mesh_device.virtual_core_from_logical_core(logical_core, CoreType::DISPATCH);
 }
 
-CoreCoord sd_cq_prefetch_core(const tt::tt_metal::IDevice* device) {
+CoreCoord sd_cq_prefetch_core(const distributed::MeshDevice& mesh_device) {
     // Only the Quasar dispatch-engine path uses synthetic dispatch cores. WH/BH and the Quasar
     // interim Tensix path (TT_METAL_TENSIX_DISPATCH_CORES=1, resolves to WORKER) keep the legacy
     // hardcoded worker logical core.
-    if (resolve_sd_cq_kernel_core_type(device) == CoreType::DISPATCH) {
-        return dispatch_engine_core(device, 0);
+    if (resolve_sd_cq_kernel_core_type(mesh_device) == CoreType::DISPATCH) {
+        return dispatch_engine_core(mesh_device, 0);
     }
     return CoreCoord{0, 0};
 }
 
-CoreCoord sd_cq_dispatch_core(const tt::tt_metal::IDevice* device) {
-    if (resolve_sd_cq_kernel_core_type(device) == CoreType::DISPATCH) {
-        return dispatch_engine_core(device, 0);
+CoreCoord sd_cq_dispatch_core(const distributed::MeshDevice& mesh_device) {
+    if (resolve_sd_cq_kernel_core_type(mesh_device) == CoreType::DISPATCH) {
+        return dispatch_engine_core(mesh_device, 0);
     }
     // Legacy interim placement: Quasar shares core {0,0} with prefetch; WH/BH uses a separate core.
-    return (device->arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
+    return (mesh_device.arch() == tt::ARCH::QUASAR) ? CoreCoord{0, 0} : CoreCoord{4, 0};
 }
 
-CoreCoord sd_cq_virtual_core(const tt::tt_metal::IDevice* device, const CoreCoord& logical_core) {
-    return device->virtual_core_from_logical_core(logical_core, resolve_sd_cq_kernel_core_type(device));
+CoreCoord sd_cq_virtual_core(const distributed::MeshDevice& mesh_device, const CoreCoord& logical_core) {
+    return mesh_device.virtual_core_from_logical_core(logical_core, resolve_sd_cq_kernel_core_type(mesh_device));
 }
 
-bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device) {
-    if (device->arch() != tt::ARCH::QUASAR) {
+bool sd_cq_kernel_tests_should_skip(const distributed::MeshDevice& mesh_device) {
+    if (mesh_device.arch() != tt::ARCH::QUASAR) {
         return false;
     }
-    auto& context = MetalContext::instance(extract_context_id(device));
+    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
     auto& env = MetalEnvAccessor(context.get_env()).impl();
     if (env.get_rtoptions().get_use_quasar_tensix_dispatch_cores()) {
         return false;
     }
-    return get_sd_cq_dispatch_cores(device).empty();
+    return get_sd_cq_dispatch_cores(mesh_device).empty();
 }
 
 DataMovementProcessor prefetch_dm_processor() { return DataMovementProcessor::RISCV_0; }

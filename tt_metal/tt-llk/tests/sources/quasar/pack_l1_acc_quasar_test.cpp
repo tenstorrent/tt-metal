@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+        const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
         {
@@ -68,12 +68,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // ISSUE tt-llk #988: For unpack to dest cannot init the unpacker with 1 tile per unpack, because it will
             // keep writing to dest_idx=0.
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, OUTPUT_NUM_TILES_IN_BLOCK /*num_tiles_per_unpack*/);
+                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, OUTPUT_NUM_TILES_IN_BLOCK /*num_tiles_per_unpack*/);
         }
         else
         {
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
-                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
+                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/);
         }
         PROFILER_SYNC();
     }
@@ -160,8 +160,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
 
-            configure_math_hardware_for_float32_int32_or_default<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(
-                static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.pack_src));
+            const DataFormat math_format = static_cast<DataFormat>(formats.math);
+            _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
@@ -261,11 +261,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
         }
 
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+        const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
             ckernel::tensor_shape_from_num_faces(params.TEST_FACE_R_DIM, params.num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
-        _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
+        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/);
         _llk_pack_relu_config_<p_pacr::PACK0, is_fp32_dest_acc_en>(relu_config);
         PROFILER_SYNC();
     }

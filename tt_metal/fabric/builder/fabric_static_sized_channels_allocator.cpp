@@ -5,7 +5,6 @@
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
@@ -597,7 +596,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     };
 
     // auto axis_index = static_cast<std::size_t>(options.edm_axis);
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    auto arch = options.arch;
     size_t arch_index;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         arch_index = 0;

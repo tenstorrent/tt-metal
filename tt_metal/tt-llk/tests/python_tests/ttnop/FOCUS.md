@@ -1,9 +1,9 @@
-# Using focus.sh on one test case
+# Using scripts/focus.sh on one test case
 
-`focus.sh` perturbs one pytest case in depth to expose timing races. It varies
-injection sites, filler instructions, and delay counts, then runs each variant
-many times. That repeated perturbation surfaces non-deterministic failures and
-hangs that a single run might miss.
+`scripts/focus.sh` perturbs one pytest case in depth to expose timing races. It
+varies injection sites, filler instructions, and delay counts, then runs each
+variant many times. That repeated perturbation surfaces non-deterministic
+failures and hangs that a single run might miss.
 
 The report shows how often each variant failed or hung. For example, 3 failures
 from 10 repeats is a failure rate of 3/10.
@@ -15,14 +15,14 @@ This tool only supports LLK Python tests. It cannot run Metal tests.
 Run from the `ttnop` directory and quote the full pytest node id.
 
 ```bash
-./focus.sh \
-    'test_eltwise_unary_datacopy.py::test_unary_datacopy[formats:Float16_b->Float16_b-dest_acc:No-num_faces:1-tilize:No-input_dimensions:[64, 64]]'
+./scripts/focus.sh \
+    'test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy[formats:Float16_b->Float16_b-dest_acc:No-num_faces:1-tilize:No-input_dimensions:[64, 64]]'
 ```
 
 To measure a known site with one filler and a small delay range:
 
 ```bash
-./focus.sh \
+./scripts/focus.sh \
     --sites unpack:3 \
     --nop risc_nop \
     --delays 40-60 \
@@ -62,11 +62,11 @@ runs each variant 10 times.
 
 Start by choosing a site, a filler, and a useful delay range.
 
-Every setting below can be passed either as a `focus.sh` flag or as a
+Every setting below can be passed either as a `scripts/focus.sh` flag or as a
 `TTNOP_*` environment variable. Use whichever is more convenient.
 
 ```bash
-TTNOP_SITES=unpack:3 TTNOP_DELAYS=8,16 ./focus.sh \
+TTNOP_SITES=unpack:3 TTNOP_DELAYS=8,16 ./scripts/focus.sh \
     --nop risc_nop \
     'test_x.py::test_y[params]'
 ```
@@ -226,10 +226,19 @@ Reproduce:
 ```bash
 CHIP_ARCH=blackhole TTNOP_SITE_MODE=sync TTNOP_THREADS=unpack TTNOP_SITES=unpack:2 \
   TTNOP_ENABLE_UNPACR_NOP=1 TTNOP_DELAYS=13,18-19,27-28,33-34,36-37,39-41,43,46-47,50,52,54,56-57,59,61-63,65-66,69,72-73,75-76,78,80,83,86,90-91,93,96-98 \
-  ./focus.sh 'test_hadamard.py::test_hadamard_h128[fidelity:LoFi-normalize:False-num_tiles:8]'
+  ./scripts/focus.sh 'test_hadamard.py::test_hadamard_h128[fidelity:LoFi-normalize:False-num_tiles:8]'
 ```
 
 
+
+## After a race is found
+
+1. Move to a Tensix machine with the Blackhole simulator.
+2. Use `report.md` to find the failing site and NOP count.
+3. Insert those NOPs manually, reproduce the failure, and generate
+   `waveform.fsdb`.
+4. Inspect the waveform with FSDB Digger or manually. Find the first incorrect
+   signal behavior, fix the root cause, and rerun the test.
 
 ## Reports from separate runs
 
@@ -243,7 +252,7 @@ removed.
 Choose another directory when you want to keep several runs.
 
 ```bash
-./focus.sh --report-dir reports/issue-123 \
+./scripts/focus.sh --report-dir reports/issue-123 \
     --sites unpack:3 --nop risc_nop --delays 40-60 \
     'test_x.py::test_y[params]'
 ```

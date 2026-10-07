@@ -39,7 +39,6 @@ void kernel_main() {
     constexpr uint32_t v_shard_ht = k_shard_ht;
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_inq);
-    const DataFormat data_format = get_dataformat(cb_inq);
 
     /**
      * Iterate over number of heads in each group (n Q, 1 K, 1 V) where total number of groups = total number of KV

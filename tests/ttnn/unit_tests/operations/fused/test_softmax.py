@@ -294,6 +294,7 @@ def test_softmax_sharded_stable_with_program_cache(
     assert device.cache_entries_counter.total == 1
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [24, 32, 64])
 @pytest.mark.parametrize("w", [42, 32, 64])
@@ -325,6 +326,8 @@ def test_softmax(device, batch_size, h, w, dim):
     )
 
 
+# Not in the Merge Gate: fails sporadically on wh_n150, see #58082.
+# @pytest.mark.merge_gate
 def test_softmax_with_3D(device):
     torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 1500, 1500), -10, 10, dtype=torch.bfloat16)
@@ -776,31 +779,39 @@ def test_softmax_large_non_divisible_width(device, Wt):
 
 
 @pytest.mark.parametrize(
-    "batch, causal, Wt",
+    "batch, causal, Wt, pad",
     [
         # broadcast mask: batch * Ht = 128 tile rows, so every core gets more than one row
-        (64, False, 5),
-        (64, False, 7),
-        (64, False, 13),
-        (64, False, 47),
+        (64, False, 5, 0),
+        (64, False, 7, 0),
+        (64, False, 13, 0),
+        (64, False, 47, 0),
         # causal mask: re-read for every row rather than once per batch, square Wt*32 mask
-        (16, True, 5),
-        (16, True, 7),
-        (16, True, 13),
+        (16, True, 5, 0),
+        (16, True, 7, 0),
+        (16, True, 13, 0),
         # wide enough to select the streaming large kernel, which pads c_4 per pass
-        (1, False, 637),
-        (1, False, 1001),
+        (1, False, 637, 0),
+        (1, False, 1001, 0),
+        # W not a multiple of 32: the mask's zero tile padding must not reach the row sum
+        (64, False, 1, 15),
+        (64, False, 4, 30),
+        (64, False, 7, 15),
+        (16, True, 2, 15),
+        (16, True, 4, 30),
+        # large kernel with a mask and a padded last tile
+        (1, False, 637, 15),
     ],
 )
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
 @pytest.mark.parametrize("numeric_stable", [True, False])
-def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, fp32_acc_en, numeric_stable):
+def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, pad, fp32_acc_en, numeric_stable):
     """Issue #39050: the fused scale/mask path streams the attention mask (c_4) in blocks of the
     fixed block_size. Its CB is sized round_up(Wt, block_size), so a row of Wt tiles leaves the fifo
     mid-cycle and a missing realignment shows up as a wrapped mask read on a later row."""
     torch.manual_seed(0)
 
-    W = Wt * 32
+    W = Wt * 32 - pad
     scale = 0.75
     mask_shape = (batch, 1, W, W) if causal else (batch, 1, 32, W)
 
@@ -838,6 +849,63 @@ def test_scale_mask_softmax_non_divisible_width(device, batch, causal, Wt, fp32_
             numeric_stable=numeric_stable,
         )
     ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_numeric_metrics(
+        torch_output,
+        ttnn_output,
+        pcc_threshold=0.999,
+        rtol=0.09,
+        atol=0.01,
+        frobenius_threshold=0.05,
+    )
+
+
+def test_scale_mask_softmax_causal_large_kernel(device):
+    # #51231: the large-kernel reader must read each row's own causal mask row, not row 0's.
+    # Wt = 637 selects the large kernel; 256 tile-rows give every core 2+ rows to expose a stale mask.
+    torch.manual_seed(0)
+    shape = (1, 1, 256 * 32, 637 * 32)
+    scale = 0.75
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    attention_mask = torch.zeros(shape, dtype=torch.bfloat16)
+    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = float("-inf")
+    torch_output = F.softmax(torch_input * scale + attention_mask, dim=-1, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    ttnn_mask = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    ttnn_output = ttnn.to_torch(ttnn.scale_mask_softmax_in_place(ttnn_input, scale, ttnn_mask, is_causal_mask=True))
+
+    assert_numeric_metrics(
+        torch_output, ttnn_output, pcc_threshold=0.999, rtol=0.09, atol=0.01, frobenius_threshold=0.05
+    )
+
+
+@pytest.mark.parametrize("W", [17, 98])
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("mask_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+def test_attention_softmax_non_tile_aligned_width(device, W, causal, in_dtype, mask_dtype):
+    torch.manual_seed(0)
+
+    head_size = 64
+    torch_dtype = torch.float32 if in_dtype == ttnn.float32 else torch.bfloat16
+    torch_input = torch.randn((2, 1, W if causal else 64, W), dtype=torch_dtype)
+    # bfloat8_b has no inf
+    masked = -1e4 if mask_dtype == ttnn.bfloat8_b else float("-inf")
+    attention_mask = torch.zeros((2, 1, W, W) if causal else (2, 1, 32, W), dtype=torch.bfloat16)
+    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = masked
+
+    golden_mask = attention_mask if causal else attention_mask[:, :, :1, :]
+    torch_output = F.softmax(torch_input.float() / head_size**0.5 + golden_mask.float(), dim=-1)
+
+    ttnn_input = ttnn.from_torch(torch_input, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_mask = ttnn.from_torch(
+        attention_mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
+    ttnn_output = ttnn.transformer.attention_softmax_(
+        ttnn_input, head_size=head_size, attention_mask=ttnn_mask, causal_mask=causal
+    )
+    ttnn_output = ttnn.to_torch(ttnn_output).float()
 
     assert_numeric_metrics(
         torch_output,

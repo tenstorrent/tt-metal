@@ -14,6 +14,7 @@ from models.demos.gpt_oss.utils.substate import substate
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
+from .host_readback import DecodeHostReadback, DecodeHostRows
 from .layer import DecoderLayer
 from .rms_norm import RMSNorm
 
@@ -259,6 +260,16 @@ class Model:
             logger.info(f"On-device sampling initialized (vocab_size={self.vocab_size}, splits={sampling_splits})")
         else:
             self.sampling = None
+
+        # Slice programs and their persistent destinations must precede all
+        # prefill, decode, and sampling traces, including device-only warmup.
+        decode_tp = self.mesh_config.get_config(Mode.DECODE).tp
+        self._host_readback = DecodeHostReadback(
+            mesh_device,
+            max_local_batch_size,
+            per_device_padded,
+            mesh_device.get_num_devices() // decode_tp if users_row_sharded else 1,
+        )
 
     def _make_sampling_args(self, hf_config, mesh_device):
         """Create a minimal args object for SamplingGenerator/TTSampling."""
@@ -562,6 +573,9 @@ class Model:
             self._increment_decode_positions_device(current_pos, rot_mat_idxs)
             return out
 
+        # Host sampling consumes row-major logits. Untilize in the decode
+        # trace so each host conversion does not repeat the tile reordering.
+        out = ttnn.untilize(out, use_multicore=True)
         return out, None
 
     def ttnn_prefill_forward(
@@ -794,7 +808,8 @@ class Model:
             for local_idx, slot in enumerate(list(empty_slots)[:original_n]):
                 target_row = min(int(slot) // max_local_batch_size, num_rows - 1)
                 users_by_row[target_row].append(local_idx)
-            max_per_row = max((len(group) for group in users_by_row), default=1) or 1
+            real_users_per_row = [len(group) for group in users_by_row]
+            max_per_row = max(real_users_per_row, default=1) or 1
             fallback = users_by_row[0][0] if users_by_row[0] else 0
             for r in range(num_rows):
                 if not users_by_row[r]:
@@ -818,6 +833,13 @@ class Model:
             prefill_seq_lens = [prefill_seq_lens_list[i] for i in new_order]
             if page_table is not None:
                 page_table = page_table[new_order]
+                # Lanes allocate block IDs independently. A padding copy from another
+                # row can therefore overwrite a live request in this row. Keep its
+                # tokens for the fixed execution shape, but disable its cache writes.
+                for row, real_count in enumerate(real_users_per_row):
+                    start = row * _max_per_row_padded + real_count
+                    end = (row + 1) * _max_per_row_padded
+                    page_table[start:end] = -1
 
         batch_size = len(prompt_lens)
         actual_batch_size = batch_size
@@ -835,7 +857,8 @@ class Model:
             prompt_lens = list(prompt_lens) + [int(prompt_lens[0])] * pad_count
             prefill_seq_lens = list(prefill_seq_lens) + [prefill_seq_lens[0]] * pad_count
             if page_table is not None:
-                page_table = torch.cat([page_table, page_table[:1].expand(pad_count, -1)], dim=0)
+                padding_pages = torch.full_like(page_table[:1].expand(pad_count, -1), -1)
+                page_table = torch.cat([page_table, padding_pages], dim=0)
             batch_size += pad_count
         users_per_row = batch_size // num_rows
         num_iters = users_per_row // upr
@@ -843,6 +866,13 @@ class Model:
         max_padded_len = max(prefill_seq_lens)
         block_size = get_block_size(kv_cache)
         max_num_blocks = num_blocks_in_seq(max_padded_len, block_size)
+        if page_table is not None:
+            # Only a prompt's real blocks belong to this request. Reused vLLM
+            # table rows can retain old block IDs beyond that valid prefix.
+            page_table = page_table[:, :max_num_blocks].clone()
+            for uid, prompt_len in enumerate(prompt_lens):
+                valid_blocks = num_blocks_in_seq(int(prompt_len), block_size)
+                page_table[uid, valid_blocks:] = -1
         all_last_idxs = [int(prompt_lens[uid]) - 1 for uid in range(batch_size)]
         fixed_glt = (min(all_last_idxs) // 32) * 32
         if (max(all_last_idxs) // 32) * 32 != fixed_glt:
@@ -1233,7 +1263,11 @@ class Model:
             tt_chunk_start_idx,
         )
 
-    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
+    def read_output_decode(self, tt_out, sample_rows, blocking=True):
+        """Read a prepared slot range without compiling or allocating device buffers."""
+        return self._host_readback.read(tt_out, sample_rows, blocking=blocking)
+
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False, sample_rows=None):
         """Process decode output and convert to torch tensors.
 
         Host-side TP gather for logits: the generator moves output to CPU
@@ -1246,31 +1280,100 @@ class Model:
 
         # Host-side TP gather: concatenate TP shards per row, then DP rows.
         config = self.mesh_config.get_config(Mode.DECODE)
+        if isinstance(tt_out, DecodeHostRows):
+            if sample_rows is None or tuple(sample_rows) != tt_out.sample_rows:
+                raise ValueError(f"Sampling rows {sample_rows} differ from readback rows {tt_out.sample_rows}")
+            sample_rows = [
+                (row // tt_out.batch_per_row) * tt_out.tensor.shape[-2] + row % tt_out.batch_per_row - tt_out.row_start
+                for row in sample_rows
+            ]
+            tt_out = tt_out.tensor
         if config.tp > 1:
             device_tensors = ttnn.get_device_tensors(tt_out)
             tp = config.tp
-            if self.users_row_sharded:
-                # TP gather per row, then DP gather across rows (rows carry different users)
-                num_rows = len(device_tensors) // tp
-                rows = []
+            # Assemble the real vocabulary once. Per-row concatenations followed
+            # by a DP concatenation copy the padded logits twice, including shards
+            # containing only padding. EP replicas still use just the first row.
+            num_rows = len(device_tensors) // tp if self.users_row_sharded else 1
+            if sample_rows is not None:
+                batch_per_row = device_tensors[0].shape[-2]
+                if (
+                    not sample_rows
+                    or len(sample_rows) != B
+                    or len(set(sample_rows)) != B
+                    or any(row < 0 or row >= num_rows * batch_per_row for row in sample_rows)
+                ):
+                    raise ValueError(f"Invalid compact sampling rows {sample_rows} for batch {B}")
+                first_row = sample_rows[0] // batch_per_row
+                first = self._decode_host_shard(device_tensors[first_row * tp])
+                width = first.shape[-1]
+                shape = list(first.shape)
+                shape[-2], shape[-1] = B, self.vocab_size
+                # vLLM samples in FP32. Cast while copying the selected shards
+                # instead of writing and then converting a full BF16 buffer.
+                torch_out = torch.empty(shape, dtype=torch.float32, device=first.device)
                 for r in range(num_rows):
-                    row_tensors = device_tensors[r * tp : (r + 1) * tp]
-                    row_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
-                    rows.append(row_out)
-                torch_out = torch.cat(rows, dim=-2) if num_rows > 1 else rows[0]
-            else:
-                # Rows are EP replicas with identical data; TP-gather first row only
-                row_tensors = device_tensors[:tp]
-                torch_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
+                    selected = [
+                        (i, row % batch_per_row) for i, row in enumerate(sample_rows) if row // batch_per_row == r
+                    ]
+                    if not selected:
+                        continue
+                    output_rows = [i for i, _ in selected]
+                    local_rows = [row for _, row in selected]
+                    contiguous_rows = output_rows == list(
+                        range(output_rows[0], output_rows[0] + len(output_rows))
+                    ) and local_rows == list(range(local_rows[0], local_rows[0] + len(local_rows)))
+                    for c in range((self.vocab_size + width - 1) // width):
+                        shard = (
+                            first if r == first_row and c == 0 else self._decode_host_shard(device_tensors[r * tp + c])
+                        )
+                        start = c * width
+                        valid = min(width, self.vocab_size - start)
+                        if contiguous_rows:
+                            torch_out[..., output_rows[0] : output_rows[-1] + 1, start : start + valid].copy_(
+                                shard[..., local_rows[0] : local_rows[-1] + 1, :valid]
+                            )
+                        else:
+                            torch_out[..., output_rows, start : start + valid] = shard[..., local_rows, :valid].to(
+                                torch_out.dtype
+                            )
+                return torch_out.reshape(B, S, self.vocab_size)
+            first = self._decode_host_shard(device_tensors[0])
+            shard_width = first.shape[-1]
+            batch_per_row = first.shape[-2]
+            output_shape = list(first.shape)
+            output_shape[-2] *= num_rows
+            output_shape[-1] = self.vocab_size
+            torch_out = torch.empty(output_shape, dtype=first.dtype, device=first.device)
+            for r in range(num_rows):
+                for c in range((self.vocab_size + shard_width - 1) // shard_width):
+                    shard = first if r == 0 and c == 0 else self._decode_host_shard(device_tensors[r * tp + c])
+                    start = c * shard_width
+                    width = min(shard_width, self.vocab_size - start)
+                    torch_out[..., r * batch_per_row : (r + 1) * batch_per_row, start : start + width].copy_(
+                        shard[..., :width]
+                    )
         else:
             torch_out = self.concat_device_output(tt_out)
-        torch_out = torch_out[:, 0, :, :]  # [1, 1, B, padded_vocab_size]
-        torch_out = torch_out.view(B, S, -1)
-        # Truncate to vocab_size — lm_head is padded to padded_vocab_size for
-        # on-device sampling (pow2 topk), but callers expect vocab_size width.
-        if torch_out.shape[-1] > self.vocab_size:
-            torch_out = torch_out[:, :, : self.vocab_size]
-        return torch_out
+            if sample_rows is not None:
+                torch_out = torch_out[..., sample_rows, :]
+        # Trim vocabulary padding after TP gather, preserving the returned rows.
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        return torch_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
+
+    @staticmethod
+    def _decode_host_shard(tensor):
+        # The aligned row-major host buffer already has Torch's layout. Borrow
+        # that storage while assembling the independently owned output; the
+        # sampler must never mutate a TT host buffer through this temporary view.
+        if (
+            tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+            and tensor.storage_type() == ttnn.StorageType.HOST
+            and tuple(tensor.shape) == tuple(tensor.padded_shape)
+            and tensor.shape[-1] % 32 == 0
+        ):
+            return tensor.to_torch_with_padded_shape()
+        return ttnn.to_torch(tensor)
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""

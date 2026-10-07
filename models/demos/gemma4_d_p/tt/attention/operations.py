@@ -18,21 +18,63 @@ Handles:
 import os
 
 import ttnn
+from models.demos.gemma4_d_p.tt.matmul_config import prefill_1d_matmul_program_config, prefill_matmul_program_config
 
 from .weights import AttentionWeights
 
 
 def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
-    """Choose DRAM or optional L1 storage for short-lived attention activations."""
-    if os.environ.get("GEMMA4_PREFILL_L1_ACT", "0").lower() in ("1", "true", "yes"):
-        return ttnn.L1_MEMORY_CONFIG
-    return ttnn.DRAM_MEMORY_CONFIG
+    """Some ops improve overall perf by leaving their activations in L1. This function returns L1 interleaved config, unless overriden to DRAM."""
+    if os.environ.get("GEMMA4_ACTIVATIONS_DRAM_ONLY", "0").lower() in ("1", "true", "yes"):
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
+
+
+# Rows per device from which the projections are FPU-bound, so one fidelity pass saves time.
+_LOFI_PROJECTION_MIN_ROWS = 512
+
+
+def projection_math_fidelity(rows):
+    return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
+
+
+def projection_matmul_configs(hidden_states, weight):
+    """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
+    accumulation, or (None, None) for ttnn's defaults.
+
+    Uses the device's full core grid. With this blocking, accumulating in bf16 measurably costs
+    prefill KV accuracy, so it accumulates in fp32. LoFi pays from 512 rows per device; below that the
+    projections stream their weights and gain nothing from it. packer_l1_acc accumulates the K-block
+    partials in L1 instead of re-reading them.
+    """
+    device = hidden_states.device()
+    grid = device.compute_with_storage_grid_size()
+    program_config = prefill_1d_matmul_program_config(hidden_states, weight, grid) or prefill_matmul_program_config(
+        hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True
+    )
+    if program_config is None:
+        return None, None
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=projection_math_fidelity(hidden_states.shape[-2]),
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return program_config, compute_kernel_config
 
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
     w_tensor = weights.wqk if kv_tied else weights.wqkv
-    return ttnn.linear(hidden_states, w_tensor, memory_config=memory_config)
+    program_config, compute_kernel_config = projection_matmul_configs(hidden_states, w_tensor)
+    return ttnn.linear(
+        hidden_states,
+        w_tensor,
+        memory_config=memory_config,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
 
 
 def split_qkv_heads_prefill(

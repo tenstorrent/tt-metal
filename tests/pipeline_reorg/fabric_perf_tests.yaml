@@ -1,5 +1,6 @@
 # Fabric perf test matrix — consumed by .github/workflows/tm-fabric-tests-perf-impl.yaml.
-# T3K microbenchmarks on wh_llmbox_perf (uses pipeline-perf runner pool).
+# T3K microbenchmarks on wh_llmbox_perf and BH 4-card microbenchmarks on
+# bh_quietbox_2 (both use the pipeline-perf runner pool).
 #
 # Each entry:
 #   name: GitHub Actions job display name.
@@ -45,10 +46,21 @@
       timeout: 45
   team: scaleout
   budget_type: perf
-  owner_id: U06US5C7M7X # Sean Nijjar
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
 
-- name: T3K ubench - Fabric Mux V2 Throughput
+- name: Fabric ubench - Mux V2 Throughput
   cmd: TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_v2_throughput.py
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+    bh_quietbox_2:
+      timeout: 45
+  team: scaleout
+  budget_type: perf
+  owner_id: U08FXFFH7L0 # Abhishek Agarwal
+
+- name: Fabric Collectives ubench - Point to Point
+  cmd: tests/tt_metal/tt_fabric/benchmark/collectives/unicast/ci_run_unicast.sh
   skus:
     wh_llmbox_perf:
       timeout: 45

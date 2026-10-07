@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_default_program_factory.hpp"
+#include <algorithm>
+#include <array>
 
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
@@ -14,6 +16,21 @@ using namespace ccl;
 
 namespace experimental::prim {
 
+AllGatherProgramArtifacts::RuntimeArgs AllGatherProgramArtifacts::collect_runtime_args(
+    const std::optional<GlobalSemaphore>& barrier,
+    const std::vector<GlobalSemaphore>& semaphores,
+    const Tensor& input,
+    const Tensor& output) {
+    using Args = ttnn::ccl::AllGatherCommonArgs;
+    RuntimeArgs args{};
+    args[Args::input] = input.buffer()->address();
+    args[Args::output] = output.buffer()->address();
+    args[Args::barrier] = barrier ? barrier->address() : 0;
+    args[Args::semaphore_0] = semaphores.at(0).address();
+    args[Args::semaphore_1] = semaphores.at(1).address();
+    return args;
+}
+
 DefaultMeshWorkloadFactory::cached_mesh_workload_t DefaultMeshWorkloadFactory::create_mesh_workload(
     const AllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -24,7 +41,7 @@ DefaultMeshWorkloadFactory::cached_mesh_workload_t DefaultMeshWorkloadFactory::c
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, output_tensor);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
@@ -65,48 +82,31 @@ DefaultMeshWorkloadFactory::cached_program_t DefaultMeshWorkloadFactory::create_
 
     tt::tt_metal::Program program{};
 
-    auto
-        [reader_kernel_id,
-         writer_kernel_id,
-         all_cores,
-         num_directions_per_link,
-         num_workers_per_direction,
-         num_mux_cores_per_direction_per_link,
-         num_cores_per_link] =
-            build_all_gather_async_minimal_default_program_artifacts(
-                program,
-                input_tensor,
-                sender_device_coord,
-                forward_coord,
-                backward_coord,
-                output_tensor,
-                dim,
-                num_links,
-                ring_size,
-                ring_index,
-                topology,
-                semaphore,
-                barrier_semaphore,
-                using_persistent_buffers,
-                sub_device_id,
-                fused_op_signaler,
-                chunks_per_sync,
-                num_workers_per_direction_opt,
-                num_buffers_per_channel,
-                core_grid_offset,
-                reverse_order,
-                sub_core_grid);
-
     return {
         std::move(program),
-        shared_variables_t{
-            .reader_kernel_id = reader_kernel_id,
-            .writer_kernel_id = writer_kernel_id,
-            .all_cores = all_cores,
-            .num_directions_per_link = num_directions_per_link,
-            .num_workers_per_direction = num_workers_per_direction,
-            .num_mux_cores_per_direction_per_link = num_mux_cores_per_direction_per_link,
-            .num_cores_per_link = num_cores_per_link}};
+        build_all_gather_async_minimal_default_program_artifacts(
+            program,
+            input_tensor,
+            sender_device_coord,
+            forward_coord,
+            backward_coord,
+            output_tensor,
+            dim,
+            num_links,
+            ring_size,
+            ring_index,
+            topology,
+            semaphore,
+            barrier_semaphore,
+            using_persistent_buffers,
+            sub_device_id,
+            fused_op_signaler,
+            chunks_per_sync,
+            num_workers_per_direction_opt,
+            num_buffers_per_channel,
+            core_grid_offset,
+            reverse_order,
+            sub_core_grid)};
 }
 
 void DefaultMeshWorkloadFactory::override_runtime_arguments(
@@ -114,30 +114,13 @@ void DefaultMeshWorkloadFactory::override_runtime_arguments(
     const AllGatherAsyncParams& operation_attributes,
     const AllGatherAsyncInputs& tensor_args,
     Tensor& output_tensor) {
-    // Update runtime arguments for each program in the mesh workload
-    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        const auto& input = tensor_args.input_tensor;
-        const auto& output = output_tensor;
-
-        auto semaphore = operation_attributes.semaphore;
-        auto barrier_semaphore = operation_attributes.barrier_semaphore;
-
-        all_gather_async_minimal_default_helper_override_runtime_arguments(
-            program,
-            shared_vars.reader_kernel_id,
-            shared_vars.writer_kernel_id,
-            shared_vars.all_cores,
-            operation_attributes.num_links,
-            shared_vars.num_directions_per_link,
-            shared_vars.num_workers_per_direction,
-            shared_vars.num_mux_cores_per_direction_per_link,
-            shared_vars.num_cores_per_link,
-            barrier_semaphore,
-            semaphore,
-            input,
-            output);
+    const auto args = AllGatherProgramArtifacts::collect_runtime_args(
+        operation_attributes.barrier_semaphore,
+        operation_attributes.semaphore,
+        tensor_args.input_tensor,
+        output_tensor);
+    for (const auto& [coordinate_range, shared_vars] : cached_workload.shared_variables) {
+        shared_vars.override_runtime_arguments(args);
     }
 }
 
@@ -707,15 +690,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                 }
 
                 std::vector<uint32_t> reader_rt_args = {
-                    input_tensor.buffer()->address(),   // input_tensor_address
-                    output_tensor.buffer()->address(),  // output_tensor_address
-                    semaphore.at(dir).address(),        // out_ready_sem
-                    dir,                                // direction RT ARG
-                    input_tile_id_start,                // input_tile_id_start RT ARG
-                    input_tile_id_end,                  // input_tile_id_end RT ARG
-                    start_pages_read_in_row,            // start_pages_read_in_row RT ARG
-                    start_row_offset,                   // start_row_offset RT ARG
-                    chunks_per_sync_val,                // chunks_per_sync RT ARG
+                    dir,                      // direction RT ARG
+                    input_tile_id_start,      // input_tile_id_start RT ARG
+                    input_tile_id_end,        // input_tile_id_end RT ARG
+                    start_pages_read_in_row,  // start_pages_read_in_row RT ARG
+                    start_row_offset,         // start_row_offset RT ARG
+                    chunks_per_sync_val,      // chunks_per_sync RT ARG
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -745,22 +725,17 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),                           // output_tensor_address
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
-                    semaphore.at(dir).address(),                                 // out_ready_sem
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
-                        ? barrier_semaphore.value().address()
-                        : 0,
-                    opposite_core_coord.x,    // opposite_core_sem_noc0_x
-                    opposite_core_coord.y,    // opposite_core_sem_noc0_y
-                    dir,                      // direction
-                    input_tile_id_start,      // input_tile_id_start
-                    input_tile_id_end,        // input_tile_id_end
-                    start_pages_read_in_row,  // start_pages_read_in_row
-                    start_row_offset,         // start_row_offset
-                    chunks_per_sync_val};     // chunks_per_sync
+                    opposite_core_coord.x,                                       // opposite_core_sem_noc0_x
+                    opposite_core_coord.y,                                       // opposite_core_sem_noc0_y
+                    dir,                                                         // direction
+                    input_tile_id_start,                                         // input_tile_id_start
+                    input_tile_id_end,                                           // input_tile_id_end
+                    start_pages_read_in_row,                                     // start_pages_read_in_row
+                    start_row_offset,                                            // start_row_offset
+                    chunks_per_sync_val};                                        // chunks_per_sync
 
                 if (num_mux_cores_per_direction_per_link) {
                     ccl::fabric_mux_connection_rt_args(
@@ -814,61 +789,12 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         }
     }
 
-    // Return the program artifacts
-    return {
-        reader_kernel_id,
-        writer_kernel_id,
-        all_cores,
-        num_directions_per_link,
-        num_workers_per_direction,
-        num_mux_cores_per_direction_per_link,
-        num_cores_per_link};
-}
-
-void all_gather_async_minimal_default_helper_override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::KernelHandle reader_kernel_id,
-    const tt::tt_metal::KernelHandle writer_kernel_id,
-    const std::vector<tt::tt_metal::CoreCoord>& all_cores,
-    uint32_t num_links,
-    uint32_t num_directions_per_link,
-    uint32_t num_workers_per_direction,
-    uint32_t num_mux_cores_per_direction_per_link,
-    uint32_t num_cores_per_link,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const std::vector<GlobalSemaphore>& semaphore,
-    const Tensor& input,
-    const Tensor& output) {
-    // Update runtime arguments for all worker cores
-    for (uint32_t link = 0; link < num_links; link++) {
-        for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            for (uint32_t worker = 0; worker < num_workers_per_direction; worker++) {
-                uint32_t mux_core_offset = (link * num_cores_per_link) +
-                                           (dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
-                tt::tt_metal::CoreCoord core =
-                    all_cores[mux_core_offset + num_mux_cores_per_direction_per_link + worker];
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-                auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-
-                const auto& out_ready_semaphore = semaphore.at(dir);
-
-                // sender reader
-                auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
-                worker_reader_sender_runtime_args[0] = input.buffer()->address();
-                worker_reader_sender_runtime_args[1] = output.buffer()->address();
-                worker_reader_sender_runtime_args[2] = out_ready_semaphore.address();
-
-                // sender writer
-                auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
-                worker_writer_sender_runtime_args[3] = out_ready_semaphore.address();
-
-                if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[5] = barrier_semaphore.value().address();
-                }
-            }
-        }
-    }
+    // Common bindings: input, output, barrier, forward semaphore, backward semaphore.
+    const auto common_args =
+        AllGatherProgramArtifacts::collect_runtime_args(barrier_semaphore, semaphore, input_tensor, output_tensor);
+    SetCommonRuntimeArgs(program, reader_kernel_id, common_args);
+    SetCommonRuntimeArgs(program, writer_kernel_id, common_args);
+    return {GetCommonRuntimeArgs(program, reader_kernel_id), GetCommonRuntimeArgs(program, writer_kernel_id)};
 }
 
 }  // namespace ttnn

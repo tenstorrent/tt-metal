@@ -1389,6 +1389,24 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
+    entries = device.num_program_cache_entries()
+    # Keep the original controls alive while a cache hit binds fresh control buffers.
+    next_start = ttnn.from_torch(torch_start_tensor, device=device)
+    next_end = ttnn.from_torch(torch_end_tensor, device=device)
+    output = ttnn.slice(ttnn_tensor, next_start, next_end, slice_dim=dim, num_devices=num_devices_calc)
+    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output), 0.999)
+    assert device.num_program_cache_entries() == entries
+
+    # Update these buffers in place; cached work assignments must still read the new bounds.
+    length = end[dim] - start[dim]
+    offset = (start[dim] + length) % input_shape[dim]
+    torch_start_tensor[dim], torch_end_tensor[dim] = offset, offset + length
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch_start_tensor), next_start)
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch_end_tensor), next_end)
+    updated_output = ttnn.slice(ttnn_tensor, next_start, next_end, slice_dim=dim, num_devices=num_devices_calc)
+    assert_with_pcc(torch_input.narrow(dim, offset, length), ttnn.to_torch(updated_output), 0.999)
+    assert device.num_program_cache_entries() == entries
+
 
 @pytest.mark.parametrize(
     "input_shape, dim, start, end",

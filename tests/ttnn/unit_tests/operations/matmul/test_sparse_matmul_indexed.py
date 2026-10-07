@@ -17,6 +17,7 @@ import pytest
 import torch
 import ttnn
 
+from models.common.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -412,3 +413,113 @@ def test_indexed_optional_output(device):
         assert_numeric_metrics(
             ref, out[i], atol=0.05 * k, rtol=10.0 * k, frobenius_threshold=0.01 * k, pcc_threshold=0.99
         )
+
+
+@pytest.mark.parametrize("compact_a", [False, True], ids=["broadcast_a", "compact_a"])
+@pytest.mark.parametrize("weight_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("n,grid,per_core_n,out_block_w", [(32, (1, 1), 1, 1), (96, (2, 1), 2, 2), (128, (1, 1), 4, 2)])
+@pytest.mark.parametrize("fp32_dest_acc_en,packer_l1_acc", [(True, False), (False, False), (True, True)])
+def test_indexed_bias_and_cache_rebinding(
+    device, compact_a, weight_dtype, n, grid, per_core_n, out_block_w, fp32_dest_acc_en, packer_l1_acc
+):
+    """Each compact group uses its own bias, including on cache hits with new indices and bias buffers."""
+    torch.manual_seed(81)
+    experts, active, m, k = 8, 3, 64, 128
+    a = torch.randn(1, active if compact_a else 1, m, k, dtype=torch.bfloat16)
+    b = torch.randn(1, experts, k, n, dtype=torch.bfloat16)
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=weight_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    # Use the quantized operand as the independent matmul reference, so BF4 quantization cannot hide bias errors.
+    b_quantized = ttnn.to_torch(b_tt).float()
+    config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=out_block_w,
+        per_core_M=m // 32,
+        per_core_N=per_core_n,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+    kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
+        packer_l1_acc=packer_l1_acc,
+    )
+    cases = []
+    for ids, sign in [([7, 1, 5], 1), ([4, 6, 0], -1)]:
+        bias = (torch.randn(experts, 1, n) * 4 + sign * 8).to(torch.bfloat16)
+        bias_tt = ttnn.from_torch(bias, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        cases.append((ids, bias, bias_tt, _make_indices(ids, device), _make_sparsity(ids, experts, device)))
+    assert cases[0][2].buffer_address() != cases[1][2].buffer_address()
+
+    for call, (ids, bias, bias_tt, indices, sparsity) in enumerate(cases):
+        result = ttnn.sparse_matmul(
+            a_tt,
+            b_tt,
+            sparsity=sparsity,
+            indices=indices,
+            bias=bias_tt,
+            is_input_a_sparse=compact_a,
+            is_input_b_sparse=True,
+            program_config=config,
+            compute_kernel_config=kernel_config,
+        )
+        actual = ttnn.to_torch(result).reshape(active, m, n).float()
+        if call == 0:
+            cache_entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == cache_entries
+        if not fp32_dest_acc_en:
+            unbiased_tt = ttnn.sparse_matmul(
+                a_tt,
+                b_tt,
+                sparsity=sparsity,
+                indices=indices,
+                is_input_a_sparse=compact_a,
+                is_input_b_sparse=True,
+                program_config=config,
+                compute_kernel_config=kernel_config,
+            )
+            unbiased = ttnn.to_torch(unbiased_tt).reshape(active, m, n).float()
+            unbiased_tt.deallocate(True)
+            cache_entries = device.num_program_cache_entries()
+        for slot, expert in enumerate(ids):
+            matmul_reference = a[0, slot if compact_a else 0].float() @ b_quantized[0, expert]
+            expected = matmul_reference + bias[expert].float()
+            if not fp32_dest_acc_en:
+                # BF16 K-block accumulation already exceeds 0.3 absolute error
+                # without bias on these unscaled inputs. Check the full result
+                # independently, then isolate bias from that accumulation error.
+                assert comp_pcc(expected, actual[slot], pcc=0.999)[0]
+                rounding_bound = torch.finfo(torch.bfloat16).eps * (unbiased[slot].abs() + bias[expert].float().abs())
+                bias_error = (actual[slot] - unbiased[slot] - bias[expert].float()).abs()
+                assert (bias_error <= rounding_bound).all(), "Fused bias exceeds BF16 operand rounding bound"
+            else:
+                torch.testing.assert_close(actual[slot], expected, atol=0.3, rtol=0.03)
+
+
+@pytest.mark.parametrize("invalid", ["no_indices", "dtype", "layout", "groups", "width"])
+def test_indexed_bias_contract(device, expect_error, invalid):
+    a, b, sparsity, ids, config, (_, _, n, experts) = _contract_inputs(device)
+    indices = None if invalid == "no_indices" else _make_indices(ids, device)
+    shape = (experts - 1 if invalid == "groups" else experts, 1, n + 32 if invalid == "width" else n)
+    bias = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat8_b if invalid == "dtype" else ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT if invalid == "layout" else ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    messages = {
+        "no_indices": "bias requires indices",
+        "dtype": "bias must be BFLOAT16",
+        "layout": "bias must be TILE",
+        "groups": "bias must have padded shape",
+        "width": "bias must have padded shape",
+    }
+    with expect_error(RuntimeError, messages[invalid]):
+        _run_indexed(a, b, sparsity, indices, config, bias=bias)

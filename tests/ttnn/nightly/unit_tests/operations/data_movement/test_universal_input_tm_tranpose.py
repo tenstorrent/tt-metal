@@ -420,6 +420,113 @@ def test_transpose_native_col_major_sharded_input_to_sharded_nospec_cross_layout
     )
 
 
+def test_transpose_rm_specless_width_shard_l1_alignment_retry(device):
+    """RM WIDTH_SHARDED specless: transpose(1,1,16,64)→(1,1,64,16), tensor_w=16, bf16; sub-16B page
+    triggers shrink_shard_for_rm_page_alignment → nc=2, shard_w=8, page=16B. Pins (nc, shard_shape)."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < 4:
+        pytest.skip("Retry-path test needs >=4 compute cores for input shard config")
+    shape = (1, 1, 16, 64)
+    in_mc = _width_shard_config(shape, device, num_cores=4, layout=_RM)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=_RM, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.transpose(ttnn_in, -2, -1, memory_config=out_mc)
+    mc = result.memory_config()
+    assert (
+        mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    ), f"Retry must not fall back to INTERLEAVED; got {mc.memory_layout}"
+    ss = mc.shard_spec
+    assert ss.grid.num_cores() == 2, f"Expected 2 populated cores after retry, got {ss.grid.num_cores()}"
+    assert tuple(ss.shape) == (64, 8), f"Expected shard shape (64, 8) after retry, got {tuple(ss.shape)}"
+    ref = x.transpose(-2, -1)
+    got = ttnn.to_torch(result.cpu().to(_RM))
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+def test_transpose_rm_specless_width_shard_retry_fallback_to_tile_synth(device):
+    """RM WIDTH_SHARDED lenient fallback: (1,1,12,8)→(1,1,8,12), tensor_w=12, tensor_h=8.
+    bf16 divisors of 12 are none-multiple-of-8, so strict shrink returns nullopt; lenient
+    fallback must tile-pad shard_w while keeping shard_h at physical (8, not round_up(8,32)=32
+    which is the FATAL the pre-fix is_tile=true re-synth path tripped)."""
+    shape = (1, 1, 12, 8)
+    in_mc = _width_shard_config(shape, device, num_cores=1, layout=_RM)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=_RM, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.transpose(ttnn_in, -2, -1, memory_config=out_mc)
+    mc = result.memory_config()
+    assert (
+        mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    ), f"Fallback must keep WIDTH_SHARDED (no INTERLEAVED); got {mc.memory_layout}"
+    ss = mc.shard_spec
+    assert (
+        ss.shape[0] == 8
+    ), f"Lenient fallback must pin shard_h to physical (8), not round_up(8,32)=32; got {ss.shape[0]}"
+    assert ss.shape[1] % 32 == 0, f"Lenient fallback must tile-pad shard_w; got {ss.shape[1]}"
+    assert ss.shape[1] * 2 % 16 == 0, f"Fallback shard_w * bf16 must be L1-aligned; got page {ss.shape[1] * 2}"
+    ref = x.transpose(-2, -1)
+    got = ttnn.to_torch(result.cpu().to(_RM))
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+def test_transpose_rm_specless_height_shard_direct_path(device):
+    """RM HEIGHT_SHARDED specless output from a WIDTH-sharded RM irregular input: transpose(1,1,16,64)→
+    (1,1,64,16), tensor_w=16 (page=32B) hits direct RM synth. Pins n_used=64, shard=(1,16)."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x * compute_grid.y < 64:
+        pytest.skip("Height direct-path test pins n_used=64; needs >=64 compute cores")
+    shape = (1, 1, 16, 64)
+    in_mc = _width_shard_config(shape, device, num_cores=4, layout=_RM)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=_RM, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.transpose(ttnn_in, -2, -1, memory_config=out_mc)
+    mc = result.memory_config()
+    assert (
+        mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    ), f"HEIGHT specless must not fall back to INTERLEAVED; got {mc.memory_layout}"
+    ss = mc.shard_spec
+    assert ss.grid.num_cores() == 64, f"Expected 64 populated cores, got {ss.grid.num_cores()}"
+    assert tuple(ss.shape) == (1, 16), f"Expected shard shape (1, 16), got {tuple(ss.shape)}"
+    ref = x.transpose(-2, -1)
+    got = ttnn.to_torch(result.cpu().to(_RM))
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
+def test_transpose_rm_specless_block_shard_direct_path(device):
+    """RM BLOCK_SHARDED specless output from a WIDTH-sharded RM irregular input: transpose(1,1,64,40)→
+    (1,1,40,64), out tw=64 with div_up(64, grid.x=8)=8 yields L1-aligned page=16B; skipped on grids
+    where div_up doesn't give a page-aligned tw divisor."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 4 or compute_grid.y < 4:
+        pytest.skip("Block direct-path test needs >=4x4 compute cores")
+    tw = 64
+    shard_w_direct = -(-tw // compute_grid.x)
+    if (shard_w_direct * 2) % 16 != 0 or tw % shard_w_direct != 0:
+        pytest.skip(f"Grid.x={compute_grid.x} → shard_w={shard_w_direct} unaligned; BLOCK direct path not exercised")
+    shape = (1, 1, 64, 40)
+    in_mc = _width_shard_config(shape, device, num_cores=4, layout=_RM)
+    out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    torch.manual_seed(12345)
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    ttnn_in = ttnn.from_torch(x, layout=_RM, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    result = ttnn.transpose(ttnn_in, -2, -1, memory_config=out_mc)
+    mc = result.memory_config()
+    assert (
+        mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    ), f"BLOCK specless must not fall back to INTERLEAVED; got {mc.memory_layout}"
+    ss = mc.shard_spec
+    assert ss.shape[1] * 2 % 16 == 0, f"BLOCK RM shard page must be L1-aligned; got page={ss.shape[1] * 2}B"
+    assert tw % ss.shape[1] == 0, f"tensor_w={tw} must be a multiple of shard_w; got shard_w={ss.shape[1]}"
+    ref = x.transpose(-2, -1)
+    got = ttnn.to_torch(result.cpu().to(_RM))
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
+
+
 # Universal-IO matrix for ROW_MAJOR composite-fallback paths.
 # Every row exercises the composite (un-tilize → transpose → re-tilize) path that the device op
 # falls back to when one or both endpoints are ROW_MAJOR + sharded.

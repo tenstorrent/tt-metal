@@ -2304,6 +2304,7 @@ def run_test_moe_gpt_e2e(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
@@ -2356,6 +2357,7 @@ def test_moe_gpt_e2e(
     "device_params",
     [
         {
+            "l1_small_size": 16384,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
         }
@@ -2413,7 +2415,13 @@ def test_moe_gpt_e2e_perf(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [
+        {
+            "l1_small_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
@@ -2436,7 +2444,13 @@ def test_dispatch(mesh_device, tokens_global, hidden_size, selected_experts_k, e
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [
+        {
+            "l1_small_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
@@ -2459,7 +2473,13 @@ def test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_expe
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [
+        {
+            "l1_small_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
@@ -2784,7 +2804,13 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [
+        {
+            "l1_small_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
@@ -3091,7 +3117,13 @@ def run_test_full_pipeline_multi_iter(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [
+        {
+            "l1_small_size": 16384,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        }
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)

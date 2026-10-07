@@ -26,13 +26,6 @@ tt::ARCH get_arch();
 std::string get_arch_name();
 
 /**
- * @brief Uses the hardware abstraction layer to inform client of architecture specific L1 Size
- *
- * @return Size in bytes of the L1 SRAM buffer associated with the currently present architecture.
- */
-uint32_t get_l1_size();
-
-/**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific DRAM alignment.
  *
  * @return Alignment requirement in bytes
@@ -108,10 +101,19 @@ float get_nan();
 float get_inf();
 
 /**
- * @brief Uses the hardware abstraction layer to get the maximum number of circular buffers per core.
+ * @brief Uses the hardware abstraction layer to get the maximum number of dataflow buffers per core.
  *
- * @return Maximum number of circular buffers
+ * @return Maximum number of dataflow buffers
  */
+uint32_t get_num_dataflow_buffers();
+
+/**
+ * @brief Uses the hardware abstraction layer to get the maximum number of dataflow buffers per core.
+ *
+ * @deprecated Use get_num_dataflow_buffers(). This API will be removed after 2026-10-23.
+ * @return Maximum number of dataflow buffers
+ */
+[[deprecated("Use get_num_dataflow_buffers(). This API will be removed after 2026-10-23.")]]
 uint32_t get_arch_num_circular_buffers();
 
 }  // namespace tt::tt_metal::hal

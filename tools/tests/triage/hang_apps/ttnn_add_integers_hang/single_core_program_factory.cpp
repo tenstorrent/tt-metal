@@ -12,7 +12,9 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 ProgramDescriptor AddIntegersHangOperation::SingleCore::create_descriptor(
-    const operation_attributes_t&, const tensor_args_t& tensor_args, tensor_return_value_t& tensor_return_value) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const auto& a_tensor = tensor_args.input_tensor_a;
     const auto& b_tensor = tensor_args.input_tensor_b;
     auto& output_tensor = tensor_return_value;
@@ -60,6 +62,9 @@ ProgramDescriptor AddIntegersHangOperation::SingleCore::create_descriptor(
         }}},
     });
 
+    // Read by dump_semaphores, same as in add_2_integers_hang.
+    desc.semaphores.push_back(SemaphoreDescriptor{.id = 0, .core_ranges = core_set, .initial_value = 7});
+
     // Reuse the sibling add_2_integers_hang kernels. CB indices c_0/c_1/c_16 are chosen
     // above to match the constants those kernels expect.
     std::vector<uint32_t> reader_compile_time_args;
@@ -85,7 +90,9 @@ ProgramDescriptor AddIntegersHangOperation::SingleCore::create_descriptor(
     writer_desc.core_ranges = core_set;
     writer_desc.compile_time_args = writer_compile_time_args;
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address()});
+    writer_desc.runtime_args.emplace_back(
+        core,
+        KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), operation_attributes.incremented_semaphore_address});
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source =

@@ -29,8 +29,8 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
         "dst_index_out exceeds max dest tiles");
     LLK_ASSERT(
         vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
-            vector_mode == VectorMode::None,
-        "Quasar binary SFPU supports vector modes R, C, RC, None");
+            vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
+        "Quasar binary SFPU supports vector modes R, C, RC, None, RC_custom");
 }
 
 }  // namespace ckernel

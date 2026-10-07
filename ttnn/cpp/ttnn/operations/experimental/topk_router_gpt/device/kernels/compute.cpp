@@ -5,7 +5,7 @@
 // Compute Kernel: Distributed Sender/Worker/Collector Architecture
 //
 // Sender: matmul K-slice × 1 N-tile → pack 1 partial tile
-// Worker: matmul + add 2 sender partials (binary_dest_reuse) + add bias →
+// Worker: matmul + add sender partials (binary_dest_reuse) + add bias →
 //         pack logit tile + index tile for collector
 // Collector: continues from worker → merge 4 workers' logit tiles via
 //            insertion-sort topk → softmax → pack final output
@@ -32,6 +32,7 @@
 void kernel_main() {
     // Compile-time args
     constexpr uint32_t num_groups = get_named_compile_time_arg_val("num_groups");
+    constexpr uint32_t num_senders = get_named_compile_time_arg_val("num_senders");
     constexpr uint32_t topk_k = get_named_compile_time_arg_val("topk_k");
 
     // Run-time arguments (shared layout with dm0 and dm1)
@@ -149,15 +150,14 @@ void kernel_main() {
     // =====================================================================
     // WORKER PATH: add sender partials + bias → pack logit tile
     // =====================================================================
-    cb_partial_recv.wait_front(2);
+    cb_partial_recv.wait_front(num_senders);
 
     add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv_id);
-    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-        cb_partial_recv_id, 0, 0);
-    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-        cb_partial_recv_id, 1, 0);
+    for (uint32_t sender = 0; sender < num_senders; sender++) {
+        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv_id, sender, 0);
+    }
 
-    cb_partial_recv.pop_front(2);
+    cb_partial_recv.pop_front(num_senders);
 
     // Add bias
     cb_bias.wait_front(1);

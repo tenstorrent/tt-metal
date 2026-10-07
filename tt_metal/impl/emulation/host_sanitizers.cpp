@@ -5,7 +5,7 @@
 // Emule-only implementation of the host-side sanitizer facade (host_sanitizers.hpp).
 // Compiled into libtt_metal ONLY when TT_METAL_USE_EMULE is set, so it is the single
 // place that references __emule_asan_panic / MetalContext — a non-emule build never
-// carries an unresolved panic reference. See SANITIZER_CHECKS.md.
+// carries an unresolved panic reference. See tt-emule docs/SANITIZER_CHECKS.md.
 
 #include "host_sanitizers.hpp"
 

@@ -227,7 +227,7 @@
       timeout: 40
   team: ttnn
   budget_type: sanity
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
 
 - name: "ttnn sdpa group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
@@ -247,7 +247,7 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
 
 # indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
-# test's sp_rank-7 GLM5.1 deployment cases (8h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
+# test's sp_rank-7 GLM5 deployment cases (8h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
 # sanity catches deployment regressions and the op gets watcher coverage, without re-running them nightly.
 - name: "ttnn indexer_score group"
   cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/test_indexer_score.py -k "accuracy and rank7" -xv'
@@ -337,3 +337,28 @@
   team: ttnn
   budget_type: sanity
   owner_id: U091SNDA4TS # Tomasz Cheda
+
+- name: "ttnn sweep framework tensor setup"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/sweep_framework/test_tensor_setup.py
+    tests/sweep_framework/test_tensor_setup_device.py
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U08T3JQEB36 # stevendae
+
+- name: "ttnn deepseek_prefill group"
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_moe_post_combine_reduce.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_deepseek_prefill_per_token_cast.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_moe_grouped_topk.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_single_routed_expert.py tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/test_swigluoai_routed_expert.py -k "(test_skip_nonlocal_experts and dsv3) or (test_moe_grouped_topk and kimi-1g384e and sigmoid and in_bf16 and realistic and pad0) or (test_single_routed_expert_functional and x_rm and dsv3-isl-3001) or (test_swigluoai_routed_expert_m3_shapes and (t128 or t4k)) or (test_cast_to_fp8_scale_values and bfloat16 and TILE and 7168) or (test_round_trip_random and bfloat16 and TILE and 1152)" -v'
+  skus:
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U0976495SLU # Nikola Ostojic

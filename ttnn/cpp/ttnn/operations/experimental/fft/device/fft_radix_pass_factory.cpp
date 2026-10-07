@@ -121,18 +121,18 @@ ttnn::device_operation::ProgramArtifacts FftRadixPassFactory::create_program_art
         .compile_time_args = {{"sub_n", N}, {"log2_sub_n", log2u_rp(N)}, {"bit_reverse_on_load", 1u}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"base_tile_idx", "batch_per_core", "noc_x", "noc_y", "pt_modulus", "pt_stride"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch())};
+        .hw_config = ttnn::create_reader_datamovement_config()};
     KernelSpec writer{
         .unique_id = shared::WRITER,
         .source = "ttnn/cpp/ttnn/operations/experimental/fft/device/kernels/dataflow/radix_pass_writer.cpp",
         .compiler_options = {.defines = writer_defines},
         .dfb_bindings = shared::writer_bindings(is_bf16, apply_pt),
-        .tensor_bindings = {
-            {.tensor_parameter_name = shared::OUT_R, .accessor_name = "out_r"},
-            {.tensor_parameter_name = shared::OUT_I, .accessor_name = "out_i"}},
+        .tensor_bindings =
+            {{.tensor_parameter_name = shared::OUT_R, .accessor_name = "out_r"},
+             {.tensor_parameter_name = shared::OUT_I, .accessor_name = "out_i"}},
         .compile_time_args = {{"sub_n", N}},
         .runtime_arg_schema = {.runtime_arg_names = {"base_tile_idx", "batch_per_core", "output_scale_bits"}},
-        .hw_config = ttnn::create_writer_datamovement_config(device->arch())};
+        .hw_config = ttnn::create_writer_datamovement_config()};
     KernelSpec compute = shared::make_compute(log2u_rp(N));
 
     KernelRunArgs reader_args{.kernel = shared::READER};

@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
 #include <vector>
@@ -92,7 +93,9 @@ void kernel_main() {
     constexpr auto dfb_writer_cur_pos = dfb::writer_cur_pos;
     constexpr auto dfb_compute_cur_pos = dfb::compute_cur_pos;
 #endif
-#ifdef IS_PAGED_ATTENTION
+#if defined(IS_PAGED_ATTENTION) && defined(IS_PAGE_TABLE_SHARDED)
+    // Only the sharded page table is a DFB (it borrows the resident L1 shard). The non-sharded page
+    // table is a node-local scratchpad (scratch::page_table), so dfb::page_table does not exist there.
     constexpr auto dfb_id_page_table = dfb::page_table;
 #endif
 
@@ -305,27 +308,29 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
 #ifdef IS_PAGED_ATTENTION
     {
-        DataflowBuffer dfb_page_table(dfb_id_page_table);
-        uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
-        dfb_page_table.reserve_back(num_pages_to_read);
 #ifndef IS_PAGE_TABLE_SHARDED
-        // Read page table from DRAM via the sdpa donor's Metal 2.0 overload of read_page_table_for_batch,
-        // building the accessor from the tensor::page_table binding (the legacy 3rd page-size argument is
-        // redundant — the binding token supplies the aligned page size — and is dropped).
-        page_table_ptr = read_page_table_for_batch(
-            noc,
-            dfb_page_table,
-            cur_batch / q_heads_parallel_factor,
+        // Non-sharded: read one page-table stick from DRAM into a node-local scratchpad (Gen2 forbids the
+        // self-loop DFB the legacy path used). Pass the scratchpad object so the NoC writes its cached L1
+        // view, then read back through its base address (coherent, no fence — same pattern as fill_cache).
+        Scratchpad<uint32_t> page_table_scratch(scratch::page_table);
+        noc.async_read(
             TensorAccessor(tensor::page_table),
-            page_table_page_size);
+            page_table_scratch,
+            page_table_page_size,
+            {.page_id = cur_batch / q_heads_parallel_factor},
+            {});
+        noc.async_read_barrier();
+        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_scratch.get_base_address());
         page_table_ptr_u32 = page_table_ptr;
 #else
-        // Read page table from dynamically allocated L1 buffer (borrowed sharded buffer)
+        // Sharded: read the page table from the borrowed sharded L1 buffer (the DFB backs the resident shard).
+        DataflowBuffer dfb_page_table(dfb_id_page_table);
+        dfb_page_table.reserve_back(B);
         uint32_t page_table_dfb_wr_ptr =
             dfb_page_table.get_write_ptr() + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
         page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_dfb_wr_ptr);
+        dfb_page_table.push_back(B);
 #endif
-        dfb_page_table.push_back(num_pages_to_read);
     }
 #endif
 
@@ -335,14 +340,14 @@ void kernel_main() {
         const uint32_t mask_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bmask) * PNHt * St;
         const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic;
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
+        Semaphore k_mcast_sem(sem::k_mcast);
         // Setup multicast parameters for K streaming (vertical multicast)
         KMcastParams k_mcast_params = {
             .do_mcast = do_k_mcast,
             .mcast_x = mcast_x,
             .mcast_y0 = mcast_y0,
             .mcast_y1 = mcast_y1,
-            .num_dests = num_dests,
-            .mcast_sem_id = sem::k_mcast};
+            .num_dests = num_dests};
 
 #ifdef IS_PAGED_ATTENTION
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
@@ -368,7 +373,8 @@ void kernel_main() {
                 page_table_ptr_u16,
                 page_table_ptr_u32,
                 barrier_count,
-                k_mcast_params);
+                k_mcast_params,
+                &k_mcast_sem);
 
 #ifdef USE_ATTENTION_MASK
             mask_start_tile_id = read_mask_chunk<dfb::mask_in, mask_tile_bytes, barrier_threshold, PNHt>(

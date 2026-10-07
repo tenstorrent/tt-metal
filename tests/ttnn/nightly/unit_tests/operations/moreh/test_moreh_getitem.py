@@ -25,6 +25,18 @@ def to_output_5d_shape(shape, index_dims, index_size):
     return output_5d_shape
 
 
+def test_moreh_getitem_golden_uses_paired_negative_indices():
+    input_tensor = torch.arange(24).reshape(2, 3, 4)
+    first_index = torch.tensor([0, -1])
+    second_index = torch.tensor([1, 2])
+    golden_function = ttnn.get_golden_function(ttnn.moreh_getitem)
+
+    actual = golden_function(input_tensor, [first_index, second_index], [1, 2])
+    expected = input_tensor[:, first_index, second_index]
+
+    assert torch.equal(actual, expected)
+
+
 @skip_for_blackhole("Mismatching on Blackhole, see #12349")
 @pytest.mark.parametrize(
     "shape_index_dim",

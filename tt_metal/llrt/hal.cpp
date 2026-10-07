@@ -38,7 +38,8 @@ Hal::Hal(
     uint32_t profiler_dram_bank_size_per_risc_bytes,
     bool enable_dram_backed_cq,
     bool is_simulator,
-    bool enable_blackhole_dram_programmable_cores) :
+    bool enable_blackhole_dram_programmable_cores,
+    bool enable_aerisc_ptp_trace) :
     arch_(arch) {
     switch (this->arch_) {
         case tt::ARCH::WORMHOLE_B0:
@@ -53,7 +54,8 @@ Hal::Hal(
                 profiler_dram_bank_size_per_risc_bytes,
                 enable_dram_backed_cq,
                 is_simulator,
-                enable_blackhole_dram_programmable_cores);
+                enable_blackhole_dram_programmable_cores,
+                enable_aerisc_ptp_trace);
             break;
 
         default: /*TT_THROW("Unsupported arch for HAL")*/; break;

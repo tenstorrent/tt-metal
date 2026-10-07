@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "dev_mem_map.h"
+#include "experimental/kernel_args.h"
 
 // Canonical mailbox usage for synchronizing threads with one another: each thread only ever
 // touches a slot other than its own. (Loopback -- a thread using its OWN slot -- is legal
@@ -18,7 +19,7 @@ void kernel_main() {
     UNPACK({ ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, kValue); })
 
     MATH({
-        const std::uint32_t result_l1_addr = get_arg_val<std::uint32_t>(0);
+        const std::uint32_t result_l1_addr = get_arg(args::result_l1_addr);
         const std::uint32_t v = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);
         volatile tt_l1_ptr std::uint32_t* const result =
             reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(result_l1_addr);

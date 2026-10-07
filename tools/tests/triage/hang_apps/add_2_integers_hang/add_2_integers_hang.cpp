@@ -8,6 +8,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
@@ -78,6 +79,12 @@ int main() {
     tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_1));
     tt_metal::CreateCircularBuffer(program, core, make_cb_config(CBIndex::c_16));
 
+    // Read by dump_semaphores: the writer kernel bumps the program semaphore twice and incremented_semaphore once,
+    // nothing touches global_semaphore.
+    CreateSemaphore(program, core, 7);
+    auto global_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(core), 3);
+    auto incremented_semaphore = CreateGlobalSemaphore(*mesh_device, CoreRange(core), 5);
+
     // Create the reader, writer and compute kernels. The kernels do the following:
     // * Reader: Reads data from the DRAM buffer and pushes it into the circular buffer.
     // * Compute: Waits for data to be available in the circular buffer, pops it, adds the two inputs together and
@@ -143,7 +150,11 @@ int main() {
         core,
         {(uint32_t)src0_dram_buffer->address(), (uint32_t)src1_dram_buffer->address()});
     SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
-    SetRuntimeArgs(program, unary_writer_kernel_id, core, {(uint32_t)dst_dram_buffer->address()});
+    SetRuntimeArgs(
+        program,
+        unary_writer_kernel_id,
+        core,
+        {(uint32_t)dst_dram_buffer->address(), (uint32_t)incremented_semaphore.address()});
 
     // Add the program to the workload and execute it.
     try {

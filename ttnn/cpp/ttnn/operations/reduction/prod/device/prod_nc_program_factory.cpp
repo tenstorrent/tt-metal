@@ -118,7 +118,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     const bool needs_wh_fp32_workaround = fp32_dest_acc_en && arch == tt::ARCH::WORMHOLE_B0;
     const auto math_fidelity = needs_wh_fp32_workaround ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
 
-    m2::ComputeGen1Config compute_hw{
+    m2::ComputeHardwareConfig compute_hw{
         .fpu_math_fidelity = math_fidelity,
         // legacy math_approx_mode unset (default false) -> sfpu_precision_mode default (Precise)
         .enable_32_bit_dest = fp32_dest_acc_en,
@@ -144,7 +144,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_input_tiles", "num_output_tiles", "input_tile_offset", "start_id", "HtWt", "CHtWt"}},
-        .hw_config = ttnn::create_reader_datamovement_config(arch),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
     m2::KernelSpec writer{
@@ -155,7 +155,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
             .dfb_spec_name = OUTPUT_DFB, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "dst"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = ttnn::create_writer_datamovement_config(arch),
+        .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
     // One compute KernelSpec per legacy compute KernelDescriptor (per core group), preserving the

@@ -85,7 +85,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // sqrt value straddles a bf16 rounding boundary).
     bool narrow_scratch_to_bf16 = !is_std && dst_cb_data_format == tt::DataFormat::Float16_b;
 
-    tt_metal::IDevice* device = tensor_arg.device();
+    tt_metal::distributed::MeshDevice* device = tensor_arg.device();
 
     // Work division:
     // - W-reduce: Work is split by rows of the tile grid (NC * Ht work units).

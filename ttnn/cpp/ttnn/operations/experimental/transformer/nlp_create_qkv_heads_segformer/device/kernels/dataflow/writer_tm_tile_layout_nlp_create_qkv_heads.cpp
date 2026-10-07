@@ -28,7 +28,6 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads tiles
 
-    const DataFormat data_format = get_dataformat(cb_id_qv);
     const auto sq = TensorAccessor(q_args, q_tensor_addr);
 
     CircularBuffer cb_qv(cb_id_qv);

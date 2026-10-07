@@ -19,7 +19,8 @@ from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
 from .attention.operations import assert_sharded_residual_unpadded
-from .moe.activation import swiglu
+from .moe.activation import apply_swiglu_fused, swiglu
+from .moe.shared_overlap import shared_expert_program_configs
 from .residual import use_sharded_residual
 
 
@@ -85,6 +86,19 @@ class DenseMLP:
         self.down_proj = _load("down_proj", down_w, row_mapper)
 
     def __call__(self, x):
+        return self.reduce(self.partial(x))
+
+    def partial(self, x, sub_device=None, keep_alive=None):
+        """down(swiglu(gate(x), up(x))) before the TP collective: each TP device's partial sum over its
+        intermediate shard.
+
+        sub_device: None -> ops pick their own grid. (SubDeviceId, CoreRangeSet) -> every op is confined to
+        that sub-device (2D matmul configs sized to its grid), for running concurrently with work on
+        another sub-device. Nothing is freed then: gate / up / act go to keep_alive, which the caller frees
+        once the sub-device manager is cleared.
+        """
+        if sub_device is not None:
+            return self._partial_on_sub_device(x, sub_device, keep_alive)
         with zone("gate_up_proj", FINE):
             gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16)
             up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16)
@@ -93,6 +107,24 @@ class DenseMLP:
         with zone("down_proj", FINE):
             out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16)
         act.deallocate(True)
+        return out
+
+    def _partial_on_sub_device(self, x, sub_device, keep_alive):
+        assert keep_alive is not None, "a sub-device partial must hand its intermediates to keep_alive"
+        sd_id, cores = sub_device
+        gate_cfg, up_cfg, down_cfg = shared_expert_program_configs(cores, x, self.gate_proj, self.down_proj)
+        with zone("gate_up_proj", FINE):
+            gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16, program_config=gate_cfg, sub_device_id=sd_id)
+            up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16, program_config=up_cfg, sub_device_id=sd_id)
+        with zone("swiglu", FINE):
+            act = apply_swiglu_fused(gate, up, self.swiglu_cfg, sub_core_grids=cores)
+        with zone("down_proj", FINE):
+            out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16, program_config=down_cfg, sub_device_id=sd_id)
+        keep_alive.extend((gate, up, act))
+        return out
+
+    def reduce(self, out):
+        """The TP collective closing partial(): reduce-scatter (sharded residual) or all-reduce."""
         # down is row-parallel: each TP device holds a partial sum over the intermediate shard, so a TP
         # collective is required either way. Sharded residual -> reduce-scatter only (emb/tp out, which
         # the caller adds straight into its residual); replicated residual -> full all-reduce (RS + AG).

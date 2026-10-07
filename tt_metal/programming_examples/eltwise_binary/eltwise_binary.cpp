@@ -134,7 +134,7 @@ int main(int /*argc*/, char** /*argv*/) {
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_binary/kernels/compute/tiles_add.cpp",
             core,
-            ComputeConfig{.math_fidelity = MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
+            ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4});   // There's different math fidelity modes (for the tensor engine)
                                                                 // that trade off performance for accuracy. HiFi4 is the most accurate
                                                                 // mode. The other modes are HiFi3, HiFi2, HiFi1 and LoFi. The
                                                                 // difference between them is the number of bits used during computation.

@@ -22,10 +22,10 @@ void kernel_main() {
     const uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(PCIE_NOC_X, PCIE_NOC_Y));
 
     const uint64_t host_src_noc_addr = pcie_noc_xy | host_src_pcie_addr;
-    noc_async_read(host_src_noc_addr, l1_staging_addr, transfer_size_bytes);
+    noc_async_read_pcie(host_src_noc_addr, l1_staging_addr, transfer_size_bytes);
     noc_async_read_barrier();
 
     const uint64_t host_dst_noc_addr = pcie_noc_xy | host_dst_pcie_addr;
-    noc_async_write(l1_staging_addr, host_dst_noc_addr, transfer_size_bytes);
+    noc_async_write_pcie(l1_staging_addr, host_dst_noc_addr, transfer_size_bytes);
     noc_async_write_barrier();
 }

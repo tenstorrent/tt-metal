@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef _ETH_COMMON_HPP
-#define _ETH_COMMON_HPP
+#ifndef ETH_COMMON_HPP
+#define ETH_COMMON_HPP
 
+#include <algorithm>
 #include <chrono>
 
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
@@ -21,7 +22,7 @@
     do {                                                                                      \
         double delta_ms = std::chrono::duration<double, std::milli>(NOW() - (start)).count(); \
         log_info(tt::LogTest, "      {} done in {} ms", (s), delta_ms);                       \
-        start = NOW();                                                                        \
+        (start) = NOW();                                                                      \
     } while (0)
 
 namespace tt::tt_metal {
@@ -163,38 +164,6 @@ static void prepare_bidir(
     tt_metal::SetRuntimeArgs(*send_program, send_kernel, send_core, {});
 }
 
-template <typename FIXTURE>
-[[maybe_unused]]
-static void wait_to_finish(
-    FIXTURE* fixture,
-    tt_metal::Program& send_program,
-    tt_metal::Program& recv_program,
-    const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
-    const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
-    distributed::MeshCoordinateRange& device_range) {
-    /* ==================== */
-    bool same_device = send_mesh_device == recv_mesh_device;
-
-    distributed::MeshWorkload send_workload;
-    distributed::MeshWorkload recv_workload_;
-    distributed::MeshWorkload& recv_workload = same_device ? send_workload : recv_workload_;
-
-    send_workload.add_program(device_range, std::move(send_program));
-    if (!same_device) {
-        recv_workload.add_program(device_range, std::move(recv_program));
-    }
-
-    fixture->RunProgram(send_mesh_device, send_workload, true);
-    if (!same_device) {
-        fixture->RunProgram(recv_mesh_device, recv_workload, true);
-    }
-
-    fixture->FinishCommands(send_mesh_device);
-    if (!same_device) {
-        fixture->FinishCommands(recv_mesh_device);
-    }
-}
-
 [[maybe_unused]]
 static void track_eth_progress_timeout(
     tt::tt_metal::IDevice* const send_device,
@@ -302,46 +271,6 @@ static void wait_to_finish_eth_timeout_cores(
     }
 }
 
-template <typename FIXTURE>
-[[maybe_unused]]
-static void wait_to_finish_eth_timeout(
-    FIXTURE* fixture,
-    tt_metal::Program& send_program,
-    tt_metal::Program& recv_program,
-    const std::shared_ptr<distributed::MeshDevice>& send_mesh_device,
-    const std::shared_ptr<distributed::MeshDevice>& recv_mesh_device,
-    distributed::MeshCoordinateRange& device_range,
-    const CoreCoord& send_core,
-    const CoreCoord& recv_core,
-    uint32_t iter_l1_addr,
-    uint32_t expected_count) {
-    /* ==================== */
-    bool same_device = send_mesh_device == recv_mesh_device;
-
-    distributed::MeshWorkload send_workload;
-    distributed::MeshWorkload recv_workload_;
-    distributed::MeshWorkload& recv_workload = same_device ? send_workload : recv_workload_;
-
-    send_workload.add_program(device_range, std::move(send_program));
-    if (!same_device) {
-        recv_workload.add_program(device_range, std::move(recv_program));
-    }
-
-    fixture->RunProgram(send_mesh_device, send_workload, true);
-    if (!same_device) {
-        fixture->RunProgram(recv_mesh_device, recv_workload, true);
-    }
-
-    auto* const send_device = send_mesh_device->get_devices()[0];
-    auto* const recv_device = recv_mesh_device->get_devices()[0];
-    track_eth_progress_timeout(send_device, recv_device, send_core, recv_core, iter_l1_addr, expected_count);
-
-    fixture->FinishCommands(send_mesh_device);
-    if (!same_device) {
-        fixture->FinishCommands(recv_mesh_device);
-    }
-}
-
 [[maybe_unused]]
 static bool data_check(
     tt::tt_metal::IDevice* const recv_device,
@@ -403,44 +332,6 @@ static bool bandwidth_check(
     }
 
     return pass;
-}
-
-[[maybe_unused]]
-static bool data_dram_check(
-    tt::tt_metal::IDevice* const recv_device,
-    uint32_t dram_start_addr,
-    uint32_t dram_end_addr,
-    uint32_t dram_bank_id,
-    std::span<uint32_t> inputs) {
-    /* ==================== */
-    uint64_t total_transferred = dram_end_addr - dram_start_addr;
-    std::vector<uint32_t> outputs;
-
-    detail::ReadFromDeviceDRAMChannel(recv_device, dram_bank_id, dram_start_addr, total_transferred, outputs);
-    log_info(tt::LogTest, "      Read {} bytes from bank {}", outputs.size() * sizeof(uint32_t), dram_bank_id);
-    TT_FATAL(inputs.size() == outputs.size(), "Input and output vector sizes must match");
-    // inputs == std::span(outputs);
-    // bool pass = !memcmp(&inputs[0], &outputs[0], inputs.size() * sizeof inputs[0]);
-
-    uint64_t total_mismatches = 0;
-    for (long i = 0; i < inputs.size(); i++) {
-        if (inputs[i] != outputs[i]) {
-            if (!total_mismatches) {
-                log_critical(
-                    tt::LogTest,
-                    "      Input and output data don't match starting at: {:x}",
-                    dram_start_addr + i * sizeof(uint32_t));
-            }
-            total_mismatches++;
-            // log_critical(tt::LogTest, "      Input and output data don't match at {:08x}: {:08x} {:08x}", i,
-            // inputs[i], outputs[i]);
-        }
-    }
-    if (total_mismatches) {
-        log_critical(tt::LogTest, "      Total mismatches: {} words", total_mismatches);
-    }
-
-    return !total_mismatches;
 }
 
 template <typename FIXTURE>
@@ -698,14 +589,10 @@ static bool tensix_compare_dram_banks(
 
             if (errors) {
                 uint32_t t = read_l1_u32(device, core, first_error_addr);
-                if (t < first_error) {
-                    first_error = t;
-                }
+                first_error = std::min(t, first_error);
 
                 t = read_l1_u32(device, core, last_error_addr);
-                if (t > last_error) {
-                    last_error = t;
-                }
+                last_error = std::max(t, last_error);
             }
         }
     }
@@ -729,7 +616,7 @@ static bool tensix_compare_dram_banks(
 static bool test_check_cores(std::span<struct core_setup> cores) {
     bool pass = true;
 
-    std::string prev = "";
+    std::string prev;
     for (const auto& cs : cores) {
         if (prev != cs.locinfo) {
             log_info(tt::LogTest, "core_check: {}", cs.locinfo);
@@ -747,7 +634,7 @@ static bool test_check_cores(std::span<struct core_setup> cores) {
 
 [[maybe_unused]]
 static void print_summary(std::span<struct LinkError> errors) {
-    if (!errors.size()) {
+    if (errors.empty()) {
         return;
     }
 
@@ -861,6 +748,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
                 return "ExaMAX";
             }
             break;
+        default: break;
     }
 
     return "unknown";
@@ -939,4 +827,4 @@ static bool ensure_links(std::span<std::shared_ptr<distributed::MeshDevice>> dev
 
 }  // namespace tt::tt_metal
 
-#endif /* _ETH_COMMON_HPP */
+#endif /* ETH_COMMON_HPP */

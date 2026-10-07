@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 
 constexpr uint32_t kSlotDoneReadback = 1;
@@ -34,7 +35,9 @@ void kernel_main() {
     overlay::FdsNeo::fds_config_auto_dispatch_outbox(TT_FDS_TENSIXNEO_TENSIX_TO_DISPATCH_REG_ADDR);
     overlay::FdsNeo::fds_enable_auto_dispatch();
 
-    overlay::FdsNeo::fds_done(/*ad_enable=*/true, group_id);
+    while (overlay::FdsNeo::fds_read_auto_dispatch_fifo_full() != 0) {
+    }
+    overlay::FdsNeo::fds_done(group_id);
 
     // The queue path never touches the register, so this reads the zero from before the enable. A
     // readback of the group id means the write took the direct path.
@@ -54,9 +57,10 @@ void kernel_main() {
         }
     }
 
-    // Back to the direct path. The outbox stays parked on the output bus, and the pacing is left
-    // alone: the counter is mid-interval after the release above, and a cycle count it has
-    // already passed would strand the queue until a 32 bit wrap.
+    overlay::fds_signalling::wait_cycles(
+        overlay::auto_dispatch_drain_cycles(overlay::worker_auto_dispatch_queue_depth, auto_dispatch_cycles));
+
+    // Back to the direct path. The outbox stays parked on the output bus.
     overlay::FdsNeo::fds_disable_auto_dispatch();
 
     fds_kernel::finish(status, l1_address, kNumSlots, result);

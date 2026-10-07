@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded_metal2.cpp. Ops ported to Metal 2.0 bind the fork;
+// this file serves the consumers still on the legacy API. Until the last of them migrates and this file is retired,
+// changes here likely belong in the fork too.
+
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
@@ -362,4 +367,8 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
+
+    // The sharded in0 buffer is reserved only to take its address; the shard already sits in this
+    // core's SRAM. Push the reserved tiles so the buffer is left balanced.
+    dfb_in2.push_back(batch * in0_block_num_tiles);
 }

@@ -230,7 +230,6 @@ void kernel_main() {
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
             if constexpr (DIRECT_CONCAT_HEADS == 1) {
-                static_assert(!use_streaming_compute, "direct concat requires non-streaming compute");
                 constexpr uint32_t fold = NQH / NKH;
                 constexpr uint32_t out_row_tiles = NKH * vDHt;
                 constexpr uint32_t out_seq_tiles = Sqt * fold;
@@ -241,19 +240,57 @@ void kernel_main() {
                 // the separate reshape + concat-heads DRAM reorder.
                 const uint32_t parent_head = nq / fold;
                 const uint32_t seq_group = nq - parent_head * fold;
+                const uint32_t out_page_base = nb * out_batch_tiles +
+                                               (seq_group * Sqt + write_offset + out_row_start_tile) * out_row_tiles +
+                                               parent_head * vDHt;
                 CircularBuffer out_cb(cb_out);
-                out_cb.wait_front(out_chunk_tiles);
-                for (uint32_t row = 0; row < out_row_tile_count; ++row) {
-                    const uint32_t out_seq = seq_group * Sqt + write_offset + out_row_start_tile + row;
-                    const uint32_t out_page = nb * out_batch_tiles + out_seq * out_row_tiles + parent_head * vDHt;
-                    for (uint32_t d = 0; d < vDHt; ++d) {
-                        const uint32_t src_offset = (row * vDHt + d) * tile_bytes;
-                        noc.async_write(
-                            out_cb, out_writer, tile_bytes, {.offset_bytes = src_offset}, {.page_id = out_page + d});
+                if constexpr (use_streaming_compute) {
+                    // Streaming compute pushes cb_out in row groups of out_subblock_h rows
+                    // (2-slot ping-pong) and always pushes Sq_chunk_t rows. Drain group by
+                    // group like write_block_row_grouped; rows past out_row_tile_count are
+                    // padding and are popped without a write.
+                    constexpr uint32_t default_trid = 0;
+                    const uint32_t num_full_groups = Sq_chunk_t / out_subblock_h;
+                    const uint32_t remainder_rows = Sq_chunk_t - num_full_groups * out_subblock_h;
+                    const uint32_t num_groups = num_full_groups + (remainder_rows ? 1 : 0);
+                    for (uint32_t rg = 0; rg < num_groups; ++rg) {
+                        const uint32_t rows_this_group = (rg < num_full_groups) ? out_subblock_h : remainder_rows;
+                        out_cb.wait_front(rows_this_group * vDHt);
+                        for (uint32_t r = 0; r < rows_this_group; ++r) {
+                            const uint32_t row = rg * out_subblock_h + r;
+                            if (row < out_row_tile_count) {
+                                const uint32_t out_page = out_page_base + row * out_row_tiles;
+                                for (uint32_t d = 0; d < vDHt; ++d) {
+                                    noc.async_write(
+                                        out_cb,
+                                        out_writer,
+                                        tile_bytes,
+                                        {.offset_bytes = (r * vDHt + d) * tile_bytes},
+                                        {.page_id = out_page + d});
+                                }
+                            }
+                        }
+                        noc.async_writes_flushed<NocOptions::TXN_ID>({.trid = default_trid});
+                        out_cb.pop_front(rows_this_group * vDHt);
                     }
+                    noc.async_write_barrier();
+                } else {
+                    out_cb.wait_front(out_chunk_tiles);
+                    for (uint32_t row = 0; row < out_row_tile_count; ++row) {
+                        const uint32_t out_page = out_page_base + row * out_row_tiles;
+                        for (uint32_t d = 0; d < vDHt; ++d) {
+                            const uint32_t src_offset = (row * vDHt + d) * tile_bytes;
+                            noc.async_write(
+                                out_cb,
+                                out_writer,
+                                tile_bytes,
+                                {.offset_bytes = src_offset},
+                                {.page_id = out_page + d});
+                        }
+                    }
+                    noc.async_write_barrier();
+                    out_cb.pop_front(out_chunk_tiles);
                 }
-                noc.async_write_barrier();
-                out_cb.pop_front(out_chunk_tiles);
             } else {
                 uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
                 if constexpr (use_streaming_compute) {

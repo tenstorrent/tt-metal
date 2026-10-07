@@ -47,6 +47,9 @@ struct PolynomialEvaluator
     // first becomes strictly shorter than Horner's N-1 serial multiply-adds.
     static constexpr int DefaultSplitThreshold = 6;
 
+    // SplitThreshold that keeps every call on plain Horner, the Blackhole evaluator's only scheme.
+    static constexpr int NoSplit = 1 << 30;
+
 private:
     // Holds the two independent partial results of the even/odd split. The even and odd accumulators
     // may have different types (e.g. one purely scalar, one sfpi::vFloat), hence two type parameters.

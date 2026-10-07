@@ -90,9 +90,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     Tensor& tensor_return_value,
     const std::optional<GlobalSemaphore>& init_semaphore,
     const std::optional<GlobalSemaphore>& cross_device_semaphore,
-    const uint32_t metadata_sync_semaphore_id,
-    const uint32_t compute_sync_semaphore_id,
-    const uint32_t compute_cores_per_combine_cores = 0,
+    uint32_t metadata_sync_semaphore_id,
+    uint32_t compute_sync_semaphore_id,
+    uint32_t compute_cores_per_combine_cores = 0,
     const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id = std::nullopt);
 
 // Runtime argument override function. Semaphore kernel runtime-arg slots are written as

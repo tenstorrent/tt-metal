@@ -551,6 +551,45 @@ struct Reader {
         claimed--;  // hand the staging slot back; nothing was ever announced for it
     }
 
+    // Tokens the upstream chip on this stream writes straight into OUR output over the whole launch. Every
+    // one of them is a chunk whose destination is this chip, so it comes from origins 1 … extent/2 hops
+    // upstream, sized by the same stream_chunk the host built the writers' assignments with and from the same
+    // replicated tables, so it equals what the upstream sender counts.
+    uint32_t expected_final_writes() const {
+        const uint32_t extent = ct.dispatch_group_size;
+        uint32_t total = 0;
+        for (uint32_t local_expert = 0; local_expert < ct.experts_per_chip; local_expert++) {
+            for (uint32_t hops = 1; hops <= extent / 2; hops++) {
+                const uint32_t origin =
+                    cmbf2d::ring_step(ct.my_stream, ct.my_dg_index, -static_cast<int32_t>(hops), extent);
+                total += chunk_tokens(
+                    cmbf2d::stream_chunk(ct.my_stream, origin, hops, extent, ct.local_split_count), local_expert);
+            }
+        }
+        return total;
+    }
+
+    // Block until every token the upstream sender wrote into our output has been counted. Without this the
+    // program on this chip can finish while a neighbour is still delivering, and the next op on this chip
+    // would read an output whose last tokens have not landed.
+    //
+    // The bump is a flushing atomic, so the far router has pushed the writes ahead of it before counting
+    // them.
+    //
+    // The counter is NOT meant to end at zero. It outlives the launch, and the upstream chip does not wait for
+    // us before starting the next one, so it can bump between the wait and the subtract below; those bumps
+    // are the next launch's and must survive. Hence `>=` rather than `==` in the wait, and subtracting exactly
+    // this launch's count rather than a set(0), which would drop them and hang the next launch's wait.
+    void wait_for_final_writes() const {
+        const uint32_t expected = expected_final_writes();
+        volatile tt_l1_ptr uint32_t* final_arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.final_sem_addr);
+        invalidate_l1_cache();
+        while (*final_arrived < expected) {
+            invalidate_l1_cache();
+        }
+        noc_semaphore_inc(get_noc_addr(ct.final_sem_addr), 0u - expected);
+    }
+
     // End of stream. The sender cannot know the length up front, so it stops on this.
     void end_stream() {
         slot_metadata(claim_slot())->cmd = cmbf2d::CMD_END;
@@ -586,11 +625,18 @@ void kernel_main() {
 #if TILE
     reader.untilized.reset_counters();
 #endif
+    // After end_stream, so our own sender is already free to finish: the upstream sender we are waiting on
+    // only needs its own reader to have ended, never ours, so this cannot close a cycle around the ring.
+    reader.wait_for_final_writes();
 
-    // Back to zero for the next launch, which starts its own count at zero. The upstream sender cannot bump
-    // this again: its bumps sum to exactly the pages of our region and we consumed all of them, so the last
-    // one has already landed — and its drain targets a sink address rather than this semaphore.
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr), 0);
-    // Do not exit with `filled` increments still in the NIU.
+    // Subtract what this launch consumed instead of zeroing: the upstream chip may already be bumping for the
+    // next launch, and zeroing would drop those bumps and hang it. The sender counts every forwarded page and
+    // always bumps on a chunk's last one, so this launch's bumps sum to exactly `consumed` and what is left
+    // belongs to the next launch. The NoC only has an atomic add, so this adds the two's complement.
+    //
+    // This keeps the count right, nothing more. The upstream chip never waits for us to read a page before
+    // writing that page again, so a chip far enough ahead can still overwrite pages we have not read.
+    noc_semaphore_inc(get_noc_addr(ct.fwd_sem_addr), 0u - reader.consumed);
+    // Do not exit with this or any `filled` increment still in flight.
     noc_async_atomic_barrier();
 }

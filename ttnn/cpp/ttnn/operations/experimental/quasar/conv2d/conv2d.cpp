@@ -363,7 +363,7 @@ static ttnn::Tensor fix_conv_output_logical_nhw(
         // Already correct, or somehow smaller (never over-count) -- do not touch.
         return out;
     }
-    ttnn::SmallVector<uint32_t> new_logical{
+    ttsl::SmallVector<uint32_t> new_logical{
         static_cast<uint32_t>(logical[0]),
         static_cast<uint32_t>(logical[1]),
         true_nhw,

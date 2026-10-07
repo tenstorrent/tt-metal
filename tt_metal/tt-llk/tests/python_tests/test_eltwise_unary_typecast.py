@@ -178,6 +178,64 @@ def test_eltwise_unary_typecast(
     else:
         spec_A = _whole_number_float_spec(16 if bfp_involved else 201)
 
+    _run_typecast(formats, dest_acc, approx_mode, input_dimensions, spec_A)
+
+
+@parametrize(
+    formats=[
+        pair
+        for pair in TYPECAST_PAIRS
+        if pair.input_format == DataFormat.UInt32
+        and pair.output_format == DataFormat.Float32
+    ],
+    dest_acc=_production_dest_acc,
+    approx_mode=[ApproximationMode.No],
+    input_dimensions=[[32, 32], [32, 256]],
+)
+def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+):
+    # Cover every uint32 binade requiring rounding, both midpoint parities,
+    # and the 23-bit split boundaries. 2164260993 reproduces double rounding.
+    boundaries = [0, 1, 2**32 - 1, 2164260993]
+    for exponent in range(24, 32):
+        ulp = 1 << (exponent - 23)
+        for offset in (0, ulp, 1 << 23):
+            midpoint = (1 << exponent) + offset + ulp // 2
+            boundaries.extend((midpoint - 1, midpoint, midpoint + 1))
+    for high in (1, 2, 127, 128, 255, 256, 510, 511):
+        boundaries.extend(((high << 23) - 1, high << 23, (high << 23) + 1))
+
+    def distribution(size, dtype, generator):
+        # Keep integers exact until conversion by the device / golden generator.
+        values = torch.randint(
+            0, 2**32, (size,), dtype=torch.int64, generator=generator
+        )
+        values[: len(boundaries)] = torch.tensor(boundaries, dtype=torch.int64)
+        return values.to(dtype)
+
+    _run_typecast(
+        formats,
+        dest_acc,
+        approx_mode,
+        input_dimensions,
+        StimuliSpec(distribution=distribution, seed=52787),
+        max_ulp=0,
+    )
+
+
+def _run_typecast(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+    approx_mode: ApproximationMode,
+    input_dimensions: list[int],
+    spec_A: StimuliSpec,
+    *,
+    max_ulp: int | None = None,
+):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -279,5 +337,5 @@ def test_eltwise_unary_typecast(
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
     assert passed_test(
-        golden_tensor, res_tensor, formats.output_format
+        golden_tensor, res_tensor, formats.output_format, max_ulp=max_ulp
     ), "Assert against golden failed"

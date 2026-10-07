@@ -182,6 +182,9 @@ inline void row_wise_accumulate_with_epilogue(
 
     dfb_out.reserve_back(1);
     pack_reconfig_data_format(dfb_out.get_id());
+#ifdef ARCH_QUASAR
+    pack_init(dfb_out.get_id());  // Quasar: reconfig is gasket-only; retarget the packer ring (see layernorm.cpp)
+#endif
     pack_tile(detail::dst0, dfb_out.get_id());
     tile_regs_release();
     dfb_out.push_back(1);

@@ -34,7 +34,7 @@ process_agmm_fusion_program_and_create_override_variables(
     tt_metal::Program& program,
     const ttnn::Tensor& /*a*/,
     const std::vector<ttnn::Tensor>& b_tensors,
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -83,9 +83,9 @@ process_agmm_fusion_program_and_create_override_variables(
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
-    auto subdevice_cores = device->worker_cores(
+    auto subdevice_cores = device.worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        sub_device_id.has_value() ? *sub_device_id : device.get_sub_device_ids().at(0));
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
@@ -429,13 +429,13 @@ process_agmm_fusion_program_and_create_override_variables(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device.arch());
 
     bool use_dedicated_noc = true;
     tt_metal::NOC_MODE noc_mode =
@@ -445,7 +445,7 @@ process_agmm_fusion_program_and_create_override_variables(
     if (fused_op_signaler.has_value() && fused_op_signaler.value().fused_op_type ==
                                              ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-        signaler.init_llama_rs_cores_mm(all_cores, program, device, 0);
+        signaler.init_llama_rs_cores_mm(all_cores, program, &device, 0);
     }
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
@@ -511,7 +511,7 @@ process_agmm_fusion_program_and_create_override_variables(
                 fused_op_signaler.value().fused_op_type ==
                     ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
                 ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
             }
 
             tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
@@ -527,7 +527,7 @@ process_agmm_fusion_program_and_create_override_variables(
     std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_first_col_mapping;
     std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_second_col_mapping;
     if (in1_is_dram_sharded) {
-        if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+        if (device.arch() == tt::ARCH::WORMHOLE_B0) {
             worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
             worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
             worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
@@ -542,7 +542,7 @@ process_agmm_fusion_program_and_create_override_variables(
             worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
             worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
 
-        } else if (device->arch() == tt::ARCH::BLACKHOLE) {
+        } else if (device.arch() == tt::ARCH::BLACKHOLE) {
             TT_THROW("ring gather MM currently not supporting blackhole when in1 is dram sharded");
         } else {
             TT_THROW("ring gather MM currently not supporting this device arch");
@@ -601,7 +601,7 @@ process_agmm_fusion_program_and_create_override_variables(
             fused_op_signaler.value().fused_op_type ==
                 ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
+            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, &device);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
@@ -635,7 +635,7 @@ process_agmm_fusion_program_and_create_override_variables(
             fused_op_signaler.value().fused_op_type ==
                 ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
-            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, &device);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
 
@@ -772,7 +772,7 @@ static ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
     }
 
-    tt_metal::IDevice* device = a.device();
+    tt_metal::distributed::MeshDevice* device = a.device();
 
     uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
@@ -872,7 +872,7 @@ static ttnn::prim::matmul_mcast_1d_common_override_variables_t matmul_multi_core
         program,
         a,
         b_tensors,
-        device,
+        *device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,

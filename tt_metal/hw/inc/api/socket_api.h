@@ -159,9 +159,18 @@ void socket_notify_receiver(const SocketSenderInterface& socket, uint8_t noc = n
         uint32_t local_bytes_sent_addr = socket.config_addr;
         uint64_t bytes_sent_pcie_addr = (static_cast<uint64_t>(socket.d2h.bytes_sent_addr_hi) << 32) |
                                         (static_cast<uint64_t>(socket.downstream_bytes_sent_addr));
+        // noc_write_init_state() rewrites NOC_CTRL without waiting for the command buffer. If the caller's last
+        // write (e.g. socket data to the same PCIe target) is still leaving it, on WH that write lands but its ack
+        // is lost, and the caller's next write barrier never returns. Let the command buffer drain first.
+        while (!noc_cmd_buf_ready(noc, write_cmd_buf)) {
+        }
         noc_write_init_state<write_cmd_buf>(noc, NOC_UNICAST_WRITE_VC);
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
             noc, local_bytes_sent_addr, socket.d2h.pcie_xy_enc, bytes_sent_pcie_addr, 4, 1);
+        // The wide with_state form writes NOC_RET_ADDR_MID from the full 64 bit address, and plain writes
+        // do not program it, so an ordinary write on write_cmd_buf after this would be routed to host
+        // memory. Put the routing back.
+        noc_async_write_clear_pcie_state(noc, write_cmd_buf);
     } else {
         for (uint32_t i = 0; i < socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
@@ -363,9 +372,16 @@ void socket_notify_sender(const SocketReceiverInterface& socket, uint8_t noc = n
         uint32_t local_bytes_acked_addr = socket.config_addr + offsetof(receiver_socket_md, bytes_acked);
         uint64_t pcie_addr = (static_cast<uint64_t>(socket.h2d.bytes_acked_addr_hi) << 32) |
                              static_cast<uint64_t>(socket.h2d.bytes_acked_addr_lo);
+        // noc_write_init_state() rewrites NOC_CTRL without waiting for the command buffer. If the caller's last
+        // write (e.g. socket data to the same PCIe target) is still leaving it, on WH that write lands but its ack
+        // is lost, and the caller's next write barrier never returns. Let the command buffer drain first.
+        while (!noc_cmd_buf_ready(noc, write_cmd_buf)) {
+        }
         noc_write_init_state<write_cmd_buf>(noc, NOC_UNICAST_WRITE_VC);
         noc_wwrite_with_state<noc_mode, write_cmd_buf, CQ_NOC_SNDL, CQ_NOC_SEND, CQ_NOC_WAIT, true, false>(
             noc, local_bytes_acked_addr, socket.h2d.pcie_xy_enc, pcie_addr, sizeof(socket.bytes_acked));
+        // See socket_notify_receiver: NOC_RET_ADDR_MID is left routed to PCIe otherwise.
+        noc_async_write_clear_pcie_state(noc, write_cmd_buf);
     } else {
         auto upstream_bytes_acked_noc_addr =
             get_noc_addr(socket.d2d.upstream_noc_x, socket.d2d.upstream_noc_y, socket.d2d.upstream_bytes_acked_addr, noc);

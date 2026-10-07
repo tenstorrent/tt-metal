@@ -295,70 +295,9 @@ end
 
 /////////////
 // Instruction macro definitions
-// Consult instruction documentation in assembly.yaml
-#define INSTRN_GETDESC(arg) (0x40000000 | (arg))  // Unimplemented.
-#define INSTRN_PACRNL(arg) (0x41000000 | (arg))   // Pack row from DST to L0/L1
-#define INSTRN_UNPACR(arg) (0x42000000 | (arg))   // Unpack row from tile in L0 to SRCA/SRCB
-#define INSTRN_SEARCHX(arg) \
-    (0x43000000 |           \
-     (arg))  // Search for start of selected row within tile. To be invoked prior to each invocation of UNPACR.
-#define INSTRN_RSTDMA 0x44000000  // Soft reset of TDMA engine
-#define INSTRN_SET_DMA_REG(arg) \
-    (0x45000000 | (arg))  // Set TDMA register file register with 16b immediate value provided with instruction
-#define INSTRN_FLUSH_DMA(arg) \
-    (0x46000000 | (arg))  // Flush TDMA engine or some subset of it as specified by instruction argument
-#define INSTRN_MV_REG_TO_FLOPS(arg) \
-    (0x48000000 | (arg))  // Move data from TDMA register file into flip flops driving actual config signals. Used for
-                          // certain TDMA configuration signal setting.
-#define INSTRN_LOAD_IND(arg) \
-    (0x49000000 | (arg))  // Load indirect from address specified in a TDMA register, with offset specified in TDMA
-                          // register to a TDMA register. Supports autoincrementing offset
-#define INSTRN_AT_INCR_GET(arg) \
-    (0x61000000 | (arg))  // Atomic increment and get - will read value in targeted memory location and return it to
-                          // TDMA register and post-increment it atomically
-#define INSTRN_AT_INCR_GET_PTR(arg) \
-    (0x62000000 |                   \
-     (arg))  // Atomic increment and get pointer - will access a memory location designated as a FIFO pointer location
-             // (contains a 32b read pointer and a 32b write pointer), return the pointer value to TDMA register and
-             // post-increment it unless the FIFO condition precludes that. For example, write pointer will not be
-             // incremented if FIFO is full. Read pointer will not be incremented if FIFO is empty. FIFO full or empty
-             // conditions are returned as an unsuccessful return condition code, so that the thread controller can
-             // retry until success (retry reads if FIFO empty, retry writes if FIFO full.)
-#define INSTRN_AT_SWAP(arg) \
-    (0x63000000 | (arg))  // Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones
-                          // provided on write data bus.
-#define INSTRN_AT_CAS(arg) \
-    (0x64000000 | (arg))  // Atomic compare-and-swap. If value at selected memory location matches that provided by
-                          // programmer it is swapped to a new one, also provided by programmer. This instruction is
-                          // implemented for implementations of mutual exclusion between Tensix cores and threads
-#define INSTRN_STORE_IND(arg) \
-    (0x66000000 |             \
-     (arg))  // Store indirect. Stores data from TDMA register to memory location specified by a combination of
-             // base+offset provided in other TDMA registers. Supports auto-increment on offset value.
-
-#define INSTRN_SETC16(arg) \
-    (0xb2000000 | (arg))  // Sets thread specific control register <register> to the value stored in the slot argument.
-                          // 32-bit instruction. Register index (bits16-23) Value: (bits 15-0).
-#define INSTRN_WRCFG(arg) (0xb0000000 | (arg))
-#define INSTRN_RDCFG(arg) (0xb1000000 | (arg))
-
-#define INSTRN_SETC(arg) \
-    (0x80000000 | (arg))  // Sets thread specific control register <register> to the value stored in the slot argument.
-                          // 64-bit instruction. Register index in low 11 bits of first word, register value in second
-                          // word. **Deprecated**
-#define INSTRN_SETRWC(arg) (0x38000000 | (arg))        //
-#define INSTRN_SETADC(arg) (0x50000000 | (arg))        // Set address counter for one channel and one dimension.
-#define INSTRN_SETADCXY(arg) (0x51000000 | (arg))      // Set address counters for X and Y dimensions for all channels
-#define INSTRN_SETADCZW(arg) (0x54000000 | (arg))      // Set address counters for Z and W dimensions for all channels
-#define INSTRN_FLUSH(arg) (0x81000000 | (arg))         // Flush all buffers of outstanding instructions, reads/writes.
-#define INSTRN_NOP(arg) (0x89000000 | (arg))           // Do nothing and consume an instruction slot and a cycle
-#define INSTRN_MOVA2D(arg) (0x1a000000 | (arg))        // Move SRCA register to DST
-#define INSTRN_ZEROSRC(arg) (0x1b000000 | (arg))       // Clear SRC registers
-#define INSTRN_SETPKEDGEOF(arg) (0x1d000000 | (arg))   // Set packer edge masking offsets
-#define INSTRN_STALLWAIT(arg) (0xa2000000 | (arg))     // Stall resource until condition is met
-#define INSTRN_CLEAR_DVALID(arg) (0x37000000 | (arg))  // Clear dvalid bits
-#define INSTRN_SEMINIT(arg) (0xa3000000 | (arg))       // Initialize a semaphore
-#define INSTRN_ZEROACC(arg) (0x10000000 | (arg))       // Zero out the accumulator
+// Consult instruction documentation in tt_llk_quasar/instructions/assembly.yaml
+// Alternatively, see instruction macro definitions in tt_llk_quasar/common/inc/ckernel_ops.h
+/////////////
 
 #define TENSIX_UNHALT_VAL \
     0x40000000  // When written into PC_BUF_BASE, tensix core will unhalt and continue execution at the previous PC.
@@ -367,10 +306,6 @@ end
                           // can be written into PC_BUF_BASE.
 #define TENSIX_LOOP_PC_VAL(arg) (0x00000000 | (arg))  // Start a PC buffer loop
 #define TENSIX_PC_SYNC(arg) (0xC0000000 | (arg))      // Sync - block until all kernels are done
-
-#define INSTRN_HALTF(arg) \
-    (0x90000000 | (arg))  // Final Halt PC, it will stop the thread in question from executing and only tensix reset can
-                          // unhalt, can't be unhalted by usual register write.
 
 // Instruction modes (i.e., selection) definitions
 #define INSTRN_SEL_L0 0

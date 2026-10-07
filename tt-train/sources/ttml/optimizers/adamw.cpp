@@ -27,10 +27,6 @@ bool is_effectively_1d(const ttnn::Tensor& tensor) {
     }
     return non_unit_dims < 2;
 }
-
-uint32_t draw_stochastic_rounding_seed() {
-    return static_cast<uint32_t>(autograd::ctx().get_generator()());
-}
 }  // namespace
 
 std::string AdamW::get_name() const {
@@ -111,7 +107,9 @@ void AdamW::step() {
             m_config.epsilon,
             weight_decay,
             static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding),
-            m_config.stochastic_rounding ? std::optional<uint32_t>{draw_stochastic_rounding_seed()} : std::nullopt);
+            m_config.stochastic_rounding
+                ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
+                : std::nullopt);
     }
 }
 
@@ -130,11 +128,13 @@ serialization::StateDict AdamW::get_state_dict() const {
     if (m_config.amsgrad) {
         dict["max_exp_avg_sq"] = m_max_exp_avg_sq;
     }
+    save_initial_lr(dict);
     return dict;
 }
 
 void AdamW::set_state_dict(const serialization::StateDict& dict) {
     set_lr(serialization::get_value_type<float>(dict, "lr"));
+    restore_initial_lr(dict);
     set_beta1(serialization::get_value_type<float>(dict, "beta1"));
     set_beta2(serialization::get_value_type<float>(dict, "beta2"));
     m_config.epsilon = serialization::get_value_type<float>(dict, "epsilon");

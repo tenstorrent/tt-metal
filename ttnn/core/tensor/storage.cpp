@@ -8,6 +8,7 @@
 #include <set>
 #include <vector>
 
+#include <tt_stl/overloaded.hpp>
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/distributed/types.hpp>
 #include "tt-metalium/mesh_coord.hpp"

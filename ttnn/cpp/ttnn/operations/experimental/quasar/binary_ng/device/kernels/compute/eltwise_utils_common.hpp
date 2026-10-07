@@ -29,6 +29,15 @@
 #define PROCESS_ACTIVATIONS_(op) PROCESS_##op##_ACTIVATIONS
 #define HAS_ACTIVATIONS(op) P_COMPL(IS_EMPTY(PROCESS_ACTIVATIONS(op, 0)))
 
+// Quasar binary kernels currently use physical LHS as SrcA at startup and between
+// activation passes/chunks (including tensor-scalar). Unlike the main binary_ng
+// family, these kernels do not implement scalar-first operand swapping.
+// This names a FORMAT, not necessarily the next tile's buffer: the factory gives
+// the LHS broadcast intermediate c_5 the same format as c_0. Optimized broadcasts
+// require matching input formats and exclude format-changing intermediates.
+// Revisit this contract if operand ordering, buffer layout, or routing changes.
+#define QSR_BINARY_SRCA_FORMAT_CB (HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0)
+
 #define BCAST_OP P_CAT(BCAST_OP_, BCAST_INPUT)
 #define OTHER_OP P_CAT(BCAST_OP_, P_COMPL(BCAST_INPUT))
 #define BCAST_OP_0 LHS
