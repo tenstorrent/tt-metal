@@ -153,9 +153,6 @@ class MLP:
             sharded = to_l1_width_sharded(hidden)
             hidden.deallocate(True)
             hidden = sharded
-        # Pack output to DRAM ahead of the reduce-scatter. Short M: down runs 4 columns per core (the 1D config only
-        # applies there). With gate and up writing sharded outputs, that is ~0.9 ms per 2048 chunk faster than 2
-        # columns and interleaved outputs.
         output = self._project(hidden, self.down_proj, ttnn.DRAM_MEMORY_CONFIG, per_core_n=4)
         hidden.deallocate(True)
         output = ccl_reduce_scatter_rows(output, self.mesh_config, self.ccl_manager)

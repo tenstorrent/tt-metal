@@ -69,7 +69,7 @@ def projection_matmul_configs(hidden_states, weight):
     return program_config, compute_kernel_config
 
 
-def project(hidden_states, weight, memory_config=None):
+def apply_attn_projection(hidden_states, weight, memory_config=None):
     """hidden_states @ weight for an attention projection, written interleaved (DRAM unless memory_config says
     otherwise). A short-M activation is read width-sharded from L1."""
     x = to_l1_width_sharded(hidden_states) if is_short_m(hidden_states) else hidden_states
@@ -88,7 +88,12 @@ def project(hidden_states, weight, memory_config=None):
 
 def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config=None, kv_tied: bool = False):
     """Project to QKV, or QK when kv_tied selects the narrow tied weight."""
-    return project(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
+    return apply_attn_projection(hidden_states, weights.wqk if kv_tied else weights.wqkv, memory_config=memory_config)
+
+
+def apply_output_projection(hidden_states, weights: AttentionWeights):
+    """Project the concatenated attention heads through o_proj."""
+    return apply_attn_projection(hidden_states, weights.o_proj)
 
 
 def split_qkv_heads_prefill(

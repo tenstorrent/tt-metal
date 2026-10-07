@@ -13,8 +13,8 @@ from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
 from .operations import (
     apply_per_head_norm,
+    apply_output_projection,
     apply_qkv_projection,
-    project,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
@@ -135,7 +135,6 @@ class Gemma4Attention:
         chunk_offset = int(chunk_start_idx)
         kv_tied = self.config.is_kv_tied
         xqkv = apply_qkv_projection(hidden_states, self.weights, kv_tied=kv_tied)
-        # The block consumes its gathered input; at short M it sits in L1, so free it before attention's buffers.
         hidden_states.deallocate(True)
 
         # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
@@ -300,7 +299,7 @@ class Gemma4Attention:
 
         # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        projected = project(tt_out, self.weights.o_proj)
+        projected = apply_output_projection(tt_out, self.weights)
         tt_out.deallocate(True)
         tt_out = ccl_reduce_scatter_rows(projected, self.mesh_config, self.ccl_manager)
 

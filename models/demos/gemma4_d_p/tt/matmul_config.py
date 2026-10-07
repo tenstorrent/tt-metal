@@ -13,6 +13,14 @@ _PER_CORE_N_1D = 2
 # ttnn's default config.
 _MAX_PER_CORE_M = 4
 
+# Most tile rows (per device) that the 1D projection config takes.
+_MAX_SHORT_M_TILES = 8
+
+# K tiles per core of a width-sharded short-M activation. An interleaved activation is read and multicast through a
+# single core, which paces the 1D projections at chunk 2048; sharded, the cores holding its K slices multicast them
+# in turn. 8 (or 7 where 8 does not divide K) keeps the K blocks deep; shallow blocks are much slower.
+_SHARD_K_TILES = (8, 7, 6, 4)
+
 
 def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_activation=None, fp32_dest_acc=False):
     """2D-multicast program config for hidden_states @ weight on a grid_x x grid_y core grid, or None
@@ -82,15 +90,6 @@ def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activati
 
 def _in0_block_w(k_tiles):
     return max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0)
-
-
-# Most tile rows (per device) that the 1D projection config takes.
-_MAX_SHORT_M_TILES = 8
-
-# K tiles per core of a width-sharded short-M activation. An interleaved activation is read and multicast through a
-# single core, which paces the 1D projections at chunk 2048; sharded, the cores holding its K slices multicast them
-# in turn. 8 (or 7 where 8 does not divide K) keeps the K blocks deep; shallow blocks are much slower.
-_SHARD_K_TILES = (8, 7, 6, 4)
 
 
 def _is_short_m_rows(rows):
