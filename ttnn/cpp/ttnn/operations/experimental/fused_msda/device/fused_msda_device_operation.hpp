@@ -64,9 +64,7 @@ struct FusedMSDAOperation {
     using tensor_return_value_t = Tensor;
 
     static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& output);
+        const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& output);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
