@@ -1,0 +1,4 @@
+bits7 head test_rk1_prof.py - lofi
+bits7 rXs test_rk1_prof.py - lofi
+bits7 head test_bitid2.py
+bits7 rXs test_bitid2.py

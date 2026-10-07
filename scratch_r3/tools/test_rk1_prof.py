@@ -53,6 +53,9 @@ def test_rk1_mm(device, case):
     )
     out = ttnn.matmul(a, b, memory_config=D, dtype=do, compute_kernel_config=ckc)
     ttnn.synchronize_device(device)
+    if _os.environ.get("V12_OUT"):
+        t = ttnn.to_torch(out).contiguous()
+        torch.save(t.view(torch.int16) if t.dtype == torch.bfloat16 else t.view(torch.int32), _os.path.join(_os.environ["V12_OUT"], f"rk1_{name}.pt"))
     out.deallocate()
     a.deallocate()
     b.deallocate()
