@@ -17,7 +17,6 @@ namespace tt::tt_fabric {
 
 class ControlPlane;
 class FabricEriscDatamoverBuilder;
-class StreamAssignment;
 struct ChipRoutingFacts;
 struct RouterLocation;
 struct RouterVcShape;
@@ -38,8 +37,6 @@ struct ManifestRouterInputs {
     const RouterLocation& location;
     const ChipRoutingFacts& chip_facts;
     const ControlPlane& control_plane;
-    // The router's mesh's stream assignment, which holds its credit transport plan.
-    const StreamAssignment& stream_assignment;
     // get_fabric_router_addresses_to_clear()
     const std::vector<size_t>& addresses_to_clear;
     const RouterKernelInputs& kernel;

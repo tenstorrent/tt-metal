@@ -25,13 +25,25 @@
 // place a field sits.
 namespace tt::tt_fabric::manifest {
 
-// The channel index a per-channel argument's name takes in its {}.
+// The index a per-channel or per-edge argument's name takes in its {}.
 enum class ArgIndex : uint8_t {
     NONE,
     // Over this router's own counts, as most per-channel tables are indexed.
     COMPACT,
     // Over the fabric's maximum counts, as the free-slots stream table is indexed (StreamAssignment).
     FABRIC_POSITION,
+    // The edge's VC in the first {}, and its edge number in the second.
+    VC_AND_EDGE,
+};
+
+// The channel or edge a per-channel or per-edge field is read for. Zero for router and ERISC fields.
+struct FieldIndex {
+    uint32_t compact = 0;
+    uint32_t fabric_position = 0;
+    uint32_t vc = 0;
+    uint32_t edge = 0;
+    // The edge's rank among the router's edges, VC0's before VC1's, which its teardown semaphore is indexed by.
+    uint32_t teardown = 0;
 };
 
 // When the builder emits a named argument.
@@ -51,10 +63,10 @@ struct NamedArg {
     Emitted emitted;
 };
 
-// A per-channel builder member the router or the producer gets as a runtime argument. Runtime arguments are
-// positional, so the field reads the member get_runtime_args pushes.
+// A per-channel or per-edge builder member the router or the producer gets as a runtime argument. Runtime arguments
+// are positional, so the field reads the member get_runtime_args pushes.
 struct BuilderMember {
-    uint32_t (*read)(const FabricEriscDatamoverBuilder& builder, uint32_t compact);
+    uint32_t (*read)(const FabricEriscDatamoverBuilder& builder, const FieldIndex& index);
 };
 
 // What the kernel is fed that holds a field: the address, the stream id or the value.
@@ -352,8 +364,8 @@ inline constexpr auto k_sender_channel_fields = [] {
         },
         RouterField{
             .key = "connection",
-            .source = BuilderMember{[](const FabricEriscDatamoverBuilder& builder, uint32_t compact) {
-                return static_cast<uint32_t>(builder.sender_channels_connection_semaphore_id[compact]);
+            .source = BuilderMember{[](const FabricEriscDatamoverBuilder& builder, const FieldIndex& index) {
+                return static_cast<uint32_t>(builder.sender_channels_connection_semaphore_id[index.compact]);
             }},
             .category = CONTROL_INFO,
             .kind = l1_value<uint32_t>(),
@@ -368,8 +380,8 @@ inline constexpr auto k_sender_channel_fields = [] {
         },
         RouterField{
             .key = "buffer_index_sem",
-            .source = BuilderMember{[](const FabricEriscDatamoverBuilder& builder, uint32_t compact) {
-                return static_cast<uint32_t>(builder.sender_channels_buffer_index_semaphore_id[compact]);
+            .source = BuilderMember{[](const FabricEriscDatamoverBuilder& builder, const FieldIndex& index) {
+                return static_cast<uint32_t>(builder.sender_channels_buffer_index_semaphore_id[index.compact]);
             }},
             .category = CONTROL_INFO,
             .kind = l1_value<SenderChannelProducerCursor>(),
@@ -447,16 +459,58 @@ inline constexpr auto k_receiver_channel_fields = [] {
     };
 }();
 
-// Validate fields from a particular table.
+inline constexpr auto k_downstream_edge_fields = [] {
+    using enum FieldCategory;
+    return std::array{
+        RouterField{
+            .key = "free_slots",
+            .source = NamedArg{"VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", ArgIndex::VC_AND_EDGE},
+            .category = FLOW_CONTROL,
+            .kind = stream<uint32_t>(StreamRegister::BUF_SPACE_AVAILABLE),
+            .description = "The router's view of the free slots in the sender channel the edge lands on: the router "
+                           "takes one per packet it forwards, and the sibling returns it once the packet completes.",
+        },
+        RouterField{
+            .key = "teardown_sem",
+            // get_runtime_args pushes -1 for a semaphore the builder has not set.
+            .source = BuilderMember{[](const FabricEriscDatamoverBuilder& builder, const FieldIndex& index) {
+                const auto& ids = builder.receiver_channels_downstream_teardown_semaphore_id;
+                return static_cast<uint32_t>(index.teardown < ids.size() ? ids[index.teardown].value_or(-1) : -1);
+            }},
+            .category = CONTROL_INFO,
+            .kind = l1_value<uint32_t>(),
+            .description = "Where the sibling acks the router closing the edge's connection at teardown. In the "
+                           "router's runtime args.",
+        },
+    };
+}();
+
+// The number of {} an argument index fills.
+constexpr size_t num_placeholders(ArgIndex index) {
+    switch (index) {
+        case ArgIndex::NONE: return 0;
+        case ArgIndex::COMPACT:
+        case ArgIndex::FABRIC_POSITION: return 1;
+        case ArgIndex::VC_AND_EDGE: return 2;
+    }
+    return 0;
+}
+
+constexpr size_t count_placeholders(std::string_view name) {
+    size_t count = 0;
+    for (size_t pos = name.find("{}"); pos != std::string_view::npos; pos = name.find("{}", pos + 2)) {
+        ++count;
+    }
+    return count;
+}
+
+// Validate fields from a particular table. An argument's name has as many {} as its index fills, and only a table
+// that is per channel or per edge has indexed arguments or builder members.
 constexpr bool sources_name_channels(const auto& fields, bool per_channel) {
     for (const auto& field : fields) {
         if (const auto* arg = std::get_if<NamedArg>(&field.source)) {
-            const bool names_channel = arg->name.find("{}") != std::string_view::npos;
-            const bool uses_index = arg->index != ArgIndex::NONE;
-            // Args that name a channel need to specify what the provided
-            // index is for (compact or fabric position), and only per-channel tables
-            // should name a channel.
-            if (names_channel != uses_index || names_channel != per_channel) {
+            const size_t placeholders = count_placeholders(arg->name);
+            if (placeholders != num_placeholders(arg->index) || (placeholders > 0) != per_channel) {
                 return false;
             }
         } else if (!per_channel) {
@@ -469,5 +523,6 @@ static_assert(sources_name_channels(k_router_fields, false));
 static_assert(sources_name_channels(k_erisc_fields, false));
 static_assert(sources_name_channels(k_sender_channel_fields, true));
 static_assert(sources_name_channels(k_receiver_channel_fields, true));
+static_assert(sources_name_channels(k_downstream_edge_fields, true));
 
 }  // namespace tt::tt_fabric::manifest
