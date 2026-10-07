@@ -599,9 +599,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         value,
         mask_type,
         mask_type == ttml::metal::AttentionMaskType::Arbitrary ? std::make_optional(attn_mask) : std::nullopt,
-        /*gate=*/std::nullopt,
         dropout_probability,
-        /*return_intermediates=*/true);
+        /*return_intermediates=*/true,
+        /*gate=*/std::nullopt);
 
     // sdpa_fw returns std::vector<std::optional<ttnn::Tensor>>, unwrap with .value()
     const auto kernel_attn_output = sdpa_fw_result[0].value();
@@ -987,9 +987,9 @@ TEST_F(SDPABackwardTest, ShapeMismatch_GradOutputLastDim) {
         value,
         metal::AttentionMaskType::Causal,
         std::nullopt,
-        /*gate=*/std::nullopt,
         0.0F,
-        /*return_intermediates=*/true);
+        /*return_intermediates=*/true,
+        /*gate=*/std::nullopt);
     auto attn_output = fw_result[0].value();
     auto intermediates = fw_result[1].value();
 
@@ -1203,9 +1203,9 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
         value_tt,
         metal::AttentionMaskType::Causal,
         std::nullopt,
-        /*gate=*/std::nullopt,
         0.0F,
-        /*return_intermediates=*/true);
+        /*return_intermediates=*/true,
+        /*gate=*/std::nullopt);
     const auto full_output = full_fw_result[0].value();
     const auto full_intermediates = full_fw_result[1].value();
 
@@ -1281,9 +1281,9 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
                 V_chunk_tt,
                 mask_type,
                 std::nullopt,
-                /*gate=*/std::nullopt,
                 0.0F,
-                /*return_intermediates=*/true);
+                /*return_intermediates=*/true,
+                /*gate=*/std::nullopt);
 
             auto chunk_output_cpu = core::to_xtensor(chunk_result[0].value());
             auto chunk_inter_cpu = core::to_xtensor(chunk_result[1].value());
@@ -1375,9 +1375,9 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
                 V_chunk_tt,
                 mask_type,
                 std::nullopt,
-                /*gate=*/std::nullopt,
                 0.0F,
-                /*return_intermediates=*/true);
+                /*return_intermediates=*/true,
+                /*gate=*/std::nullopt);
             auto step_intermediates = recomputed[1].value();
             auto step_recomp_output = recomputed[0].value();
 

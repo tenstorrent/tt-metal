@@ -160,7 +160,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.gate.has_value()) {
         const auto& gate = tensor_args.gate.value();
         check_tensor(gate, "Gate", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
-
+        TT_FATAL(gate.device() == query.device(), "Gate must be on the same device as query");
         const auto gate_shape = gate.logical_shape();
         // Gate shape (B, H, S, vE) - heads NOT fused, inner dim matches V
         TT_FATAL(
@@ -302,11 +302,11 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const ttnn::Tensor& value_tensor,
     ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& mask,
-    const std::optional<ttnn::Tensor>& gate,
     const float dropout_probability,
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_output,
+    const std::optional<ttnn::Tensor>& gate) {
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -319,9 +319,9 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
         .key = key_tensor,
         .value = value_tensor,
         .mask = mask,
-        .gate = gate,
         .preallocated_intermediate = preallocated_intermediate,
         .preallocated_output = preallocated_output,
+        .gate = gate,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -313,11 +313,11 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 #ifdef HAS_GATE
         reconfig_data_format(cb_gate, cb_gate);
         copy_init(cb_gate);
+        sigmoid_tile_init();
+        mul_binary_tile_init();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             copy_tile(cb_gate, tile_idx + block_idx, block_size);
-            sigmoid_tile_init();
             sigmoid_tile(block_size);
-            mul_binary_tile_init();
             mul_binary_tile(block_idx, block_size, block_idx);
         }
 #endif

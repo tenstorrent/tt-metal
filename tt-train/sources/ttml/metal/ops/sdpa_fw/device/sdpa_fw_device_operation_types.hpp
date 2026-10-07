@@ -21,10 +21,11 @@ struct SDPAForwardInputs {
     const ttnn::Tensor& key;
     const ttnn::Tensor& value;
     const std::optional<ttnn::Tensor>& mask;  // attention mask
-    const std::optional<ttnn::Tensor>& gate;  // optional gate input
 
     std::optional<ttnn::Tensor> preallocated_intermediate;
     std::optional<ttnn::Tensor> preallocated_output;
+
+    const std::optional<ttnn::Tensor>& gate;  // optional gate input
 };
 
 using operation_attributes_t = SDPAForwardParams;

@@ -261,9 +261,9 @@ autograd::TensorPtr scaled_dot_product_attention(
         value->get_value(),
         mask_type,
         mask_tensor,
-        /*gate=*/std::nullopt,
         dropout_probability,
-        /*return_intermediates=*/true);  // Need intermediates for backward pass
+        /*return_intermediates=*/true,  // Need intermediates for backward pass
+        /*gate=*/std::nullopt);
 
     auto attn_output = fw_result[0].value();    // (B, H, S, D)
     auto intermediates = fw_result[1].value();  // (B, H, S, 32) FP32 logsumexp per row for softmax

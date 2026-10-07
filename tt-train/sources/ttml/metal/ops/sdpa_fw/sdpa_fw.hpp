@@ -15,8 +15,8 @@ std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
     const ttnn::Tensor& value,
     AttentionMaskType mask_type = AttentionMaskType::Causal,
     const std::optional<ttnn::Tensor>& mask = std::nullopt,  // only used when mask_type == Arbitrary
-    const std::optional<ttnn::Tensor>& gate = std::nullopt,
     const float dropout_probability = 0.0F,
-    const bool return_intermediates = false);
+    const bool return_intermediates = false,
+    const std::optional<ttnn::Tensor>& gate = std::nullopt);
 
 }  // namespace ttml::metal

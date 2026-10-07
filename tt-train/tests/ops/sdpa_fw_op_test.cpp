@@ -614,7 +614,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
 
     // Run SDPA kernel with new interface - this is our reference implementation
     auto result = ttml::metal::sdpa_fw(
-        query, key, value, config.mask_type, kernel_mask, kernel_gate, config.dropout_prob, return_intermediates);
+        query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates, kernel_gate);
     xt::xarray<float> result_xtensor =
         core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
     xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
@@ -637,7 +637,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
     // float references, so they isolate the gating step from the rest of the attention math.
     if (gate_tensor.has_value()) {
         auto ungated = ttml::metal::sdpa_fw(
-            query, key, value, config.mask_type, kernel_mask, std::nullopt, config.dropout_prob, return_intermediates);
+            query, key, value, config.mask_type, kernel_mask, config.dropout_prob, return_intermediates, std::nullopt);
         xt::xarray<float> ungated_xtensor = core::to_xtensor(ungated[0].value());
         xt::xarray<float> ungated_interm_xtensor = core::to_xtensor(ungated[1].value());
 
@@ -943,7 +943,7 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
         auto result = ttml::metal::sdpa_fw(
-            query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, std::nullopt, 0.0F, false);
+            query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, 0.0F, false, std::nullopt);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should always be present";
         EXPECT_FALSE(result[1].has_value()) << "Intermediate should be null when return_intermediates=false";
@@ -962,7 +962,7 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
         auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
         auto result = ttml::metal::sdpa_fw(
-            query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, std::nullopt, 0.0F, true);
+            query, key, value, ttml::metal::AttentionMaskType::Arbitrary, attn_mask, 0.0F, true, std::nullopt);
 
         EXPECT_TRUE(result[0].has_value()) << "Main result should be present";
         EXPECT_TRUE(result[1].has_value()) << "Intermediate should be present when return_intermediates=true";
@@ -1360,7 +1360,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> run_kernel_causal(
     if (gate.has_value()) {
         g = core::from_xtensor(gate.value(), device);
     }
-    auto res = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, g, 0.0F, true);
+    auto res = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, true, g);
     return {core::to_xtensor(res[0].value()), core::to_xtensor(res[1].value())};
 }
 
@@ -1460,8 +1460,8 @@ TEST_F(SDPAForwardTest, GateTest_WorksWithoutIntermediates) {
     xt::xarray<float> gate_host = ttml::test_utils::make_uniform_xarray<float>(t.out_shape, -4.0F, 4.0F, 1234U);
     auto gate = core::from_xtensor(gate_host, device);
 
-    auto ungated = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, std::nullopt, 0.0F, false);
-    auto gated = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, gate, 0.0F, false);
+    auto ungated = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, false, std::nullopt);
+    auto gated = metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, false, gate);
 
     ASSERT_TRUE(gated[0].has_value());
     EXPECT_FALSE(gated[1].has_value()) << "Intermediates must be absent when return_intermediates=false";
@@ -1490,7 +1490,7 @@ TEST_F(SDPAForwardTest, GateTest_RejectsWrongShapes) {
         return core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 4U), device);
     };
     auto run = [&](const ttnn::Tensor& gate) {
-        return metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, gate, 0.0F, false);
+        return metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, false, gate);
     };
 
     // Correct shape must be accepted.
@@ -1696,30 +1696,30 @@ TEST_F(SDPAForwardTest, ValidationTest_RejectsInvalidArgumentCombinations) {
     auto mask = core::from_xtensor(generate_sliding_window_mask(S, S), device);
 
     // Dropout is not implemented in the forward kernel (ticket #28205); any non-zero value must be rejected.
-    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, std::nullopt, 0.1F, false))
+    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, 0.1F, false, std::nullopt))
         << "Non-zero dropout should be rejected";
 
     // Arbitrary mask type requires a mask tensor.
     EXPECT_ANY_THROW(
-        metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, std::nullopt, std::nullopt, 0.0F, false))
+        metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, std::nullopt, 0.0F, false, std::nullopt))
         << "Arbitrary mask_type without a mask tensor should be rejected";
 
     // A mask tensor is only valid with Arbitrary.
-    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, mask, std::nullopt, 0.0F, false))
+    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, mask, 0.0F, false, std::nullopt))
         << "Mask tensor with Causal mask_type should be rejected";
-    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::None, mask, std::nullopt, 0.0F, false))
+    EXPECT_ANY_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::None, mask, 0.0F, false, std::nullopt))
         << "Mask tensor with None mask_type should be rejected";
 
     // Mask with the wrong sequence length.
     auto short_mask = core::from_xtensor(generate_sliding_window_mask(S / 2U, S / 2U), device);
     EXPECT_ANY_THROW(
-        metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, short_mask, std::nullopt, 0.0F, false))
+        metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, short_mask, 0.0F, false, std::nullopt))
         << "Mask with wrong S should be rejected";
 
     // The valid combinations must still be accepted.
-    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, std::nullopt, 0.0F, false));
-    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::None, std::nullopt, std::nullopt, 0.0F, false));
-    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, mask, std::nullopt, 0.0F, false));
+    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Causal, std::nullopt, 0.0F, false, std::nullopt));
+    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::None, std::nullopt, 0.0F, false, std::nullopt));
+    EXPECT_NO_THROW(metal::sdpa_fw(q, k, v, metal::AttentionMaskType::Arbitrary, mask, 0.0F, false, std::nullopt));
 }
 
 // =============================================================================
