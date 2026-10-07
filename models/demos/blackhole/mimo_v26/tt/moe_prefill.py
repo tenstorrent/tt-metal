@@ -72,7 +72,9 @@ class Shared:
             mesh_mapper=ttnn.ShardTensor2dMesh(md, mesh_shape=md.shape, dims=(1, 0)),
         )
         self.gidx = ttnn.squeeze(ttnn.squeeze(t, 0), 0)
-        self.num_links, self.workers = num_links, workers
+        self.num_links, self.workers = int(os.environ.get("MIMO_DISP_LINKS", num_links)), int(
+            os.environ.get("MIMO_DISP_WORKERS", workers)
+        )
         self.topology = ttnn.Topology.Linear
 
 

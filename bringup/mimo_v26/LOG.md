@@ -912,6 +912,42 @@
 - claim: B decision data: single-card moe_compute (bfp4, compute_only, K=4096 N=2048, 8 experts, top-8) traced: 0.396 / 0.393 / 0.392 ms per call at T=32 / 16 / 8 tokens (independent of T => weight-read bound: 107 MB bfp4 / 0.393 ms = 273 GB/s). The unified op's expert stage on the real 4x8 trace: 0.775 ms for 214 MB bfp8 = 276 GB/s, i.e. the same effective bandwidth. A bfp8 moe_compute would read 2x bytes => ~0.79 ms, no gain over the unified op; only bfp4 would halve it (0.39 ms, NOT authorised). The expert stage of MoE at bfp8 is therefore ~0.775 ms x 47 = 36 ms/token at this bandwidth, above the 26 ms whole-model roofline (which assumed 450 GB/s). Recommendation: do NOT port the bfp8 moe_compute patch (no speed gain); remaining non-expert MoE overhead is 0.75 ms/layer (router 0.29, post_combine_reduce 0.19, combine 0.10, bincount 0.09) = 35 ms/token, the part worth optimising
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_E_mc_timing3_h47_56601b284bb.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/router.py
+
+## E261007-0548-a81
+- date: 2026-10-07T05:48:02
+- commit: 0e192cf8377
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: Closed-loop decode of the 4-layer chain (L0..L3 + final norm + lm_head, real bfp8 weights, unified bf16-activation experts via traced MiMoMoEDecode) on the 4x8 mesh vs the CPU oracle (ref_chain_decode.py, bf16 weights/matmuls, greedy, 16 real GSM8K prompts with enable_thinking=false, lengths 35..120 tokens = RAGGED per mesh row and per slot, 12 tokens each, oracle file mimo-dumps/decode_chain4.pt): teacher forced on oracle tokens first-token (prefill) logits PCC min 0.99966, per-step logits PCC min 0.99927..0.99989 over 11 decode steps, top-1 agreement 192/192 (100%); free-running device tokens equal to the oracle's in all 16 x 12 positions; two identical runs token-identical. Eager (attn_K4_chain4_eager) and traced (attn_K6_chain4_traced) give identical PCC numbers. Per-row/per-slot positions (decode_pos_io/decode_pos_set: cur_pos int32 [32] sharded over mesh rows), KVPoolLayout page tables, dead slots (slots 4..31 per row) with live-mask routing spread, trace capture once/replay per step (tt/decode.py, tt/generator.py). Step time 330-360 ms in this test is dominated by reading the full logits back (keep_logits=True), not a decode time.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_K6_chain4_traced.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py
+- data: {"first_logits_pcc_min":0.99966,"step_logits_pcc_min":0.99927,"token_agree":1.0,"free_running_equal":1.0,"layers":4}
+
+## E261007-0548-c44
+- date: 2026-10-07T05:48:03
+- commit: 40cb127e4da
+- branch: ssinghal/mimo-attn
+- host: 46
+- track: infra
+- status: verified
+- claim: Host .46: tt-metal device init failed ('Device 0 init: failed to initialize FW! Try resetting the board', timeout waiting for physical cores) at 05:43 for my traced chain test; combined with the asm agent's earlier 18 min 2500% CPU stall on .46 (E261007-0459-e2c) this is a second bad signature on .46: not used again; no reset attempted (not needed for my jobs). Also: my first 4-layer chain runs on .30 and .41 sat ~25 min at ~3000% CPU in test_decode_chain after the weights loaded with the OLD untraced moe_decode path and no output (killed own pids, hosts OK afterwards); the same test with the traced MiMoMoEDecode path finishes in a few minutes, so the stall was in the old decode MoE path (cause not isolated).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_K5_chain4_traced.log
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py
+
+## E261007-0604-6d3
+- date: 2026-10-07T06:04:36
+- commit: 40cb127e4da
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: FIRST GSM8K NUMBER, 48-layer model, 4x8 mesh host .30, greedy, non-thinking template (enable_thinking=false; prompts identical to gsm8k_128_nothink.json items 0..63), bfp8 weights, unified bf16-activation experts, exact router, prefill = MiMoModel.prefill_first_token (S=256, groups of 8 users/row), traced decode loop (capture once, 511 replays), 64 users = 16 per mesh row, ragged, max_new 512, scored with reference/score_gsm8k.extract: 56/64 correct = 87.5% (Wilson95 77.2-93.5), 63/64 finished with EOS (one hit 512 tokens). Decode step time with 64 live users: median 103.7 ms (p10-p90 103.4-104.0 ms) after warm-up, step 0 (capture+compile) 11.4 s; = 9.6 tok/s/user, ~617 tok/s total live. Session: dedicated single-scenario process, trace on, UNPAIRED, host-timed replay + candidate readback, 47 MoE layers dominate (traced MiMoMoEDecode ~1.5 ms/layer per moe agent). Prefill 51.5 s for the 64 prompts (4 grouped calls incl. compile, not a perf number). Weights from cache: 1131 tensors loaded in 613 s on this host (cold page cache); DRAM allocated 1625 MB/bank (of 4010) with 32 slots x 1024 positions.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_L1_gsm64.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
+- data: {"gsm8k_n":64,"gsm8k_correct":56,"acc":0.875,"step_ms_median":103.7,"users":64,"tok_s_user":9.6}
+
 ## E261007-0516-fa4
 - date: 2026-10-07T05:16:12
 - commit: cce07a4da2b
@@ -1244,3 +1280,26 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_alpha_L16_h47_d72e22e2fbf.log
 - paths: models/demos/blackhole/mimo_v26/tt, ttnn/cpp/ttnn/operations/experimental/deepseek_prefill
 - data: {"layer":16,"alpha":1.0038,"rel_l2":0.0047,"pcc":1.0}
+## E261007-0818-033
+- date: 2026-10-07T08:18:27
+- commit: d59a132dc5e
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: DETERMINISM: identical full-model runs are NOT token-identical (48 layers, same process, teacher forced on the same tokens, 32 users, 24 steps): live logits of whole mesh ROWS glitch transiently (same row, all its 8 users, 2-4 steps), different rows each run; eager decode glitches too (so it is not the trace); prefill logits and KV caches of live slots are bit-identical run to run (attn_M8_kvdet: prefill vs prefill 0 diffs; decode-written KV identical, only dead scratch slot differs), ttnn.all_reduce over mesh columns is clean (attn_N1_ar: trace of 96 chained all_reduces x 300 replays x 4 topology/num_links variants, 0 mismatches), the async host input copy lifetime was fixed (host tensors kept alive + synchronize) without effect. LOCALISED with a traced 48-layer decode step replayed 100x on identical inputs and state (attn_M13/M14, tests/test_decode_layer_determinism_traced.py): in 2-5 of 100 replays the MoE layer output (ffn_out) of ONE layer differs for LIVE users of mesh rows 1,2(,3) -- never row 0 -- by up to 2.6-14.8 absolute (e.g. L20 maxdiff 2.57, L24 14.8, L45 4.7) and the error propagates to the later layers; attention outputs of the same layer are identical until that point. So a rare race in the decode MoE path (router -> spread -> masked_bincount/offset_cumsum -> dispatch -> unified experts -> combine -> post_combine_reduce) corrupts some tokens' routed contribution, probability ~1e-3 per MoE-layer call, rows 1-3 only (dispatch/combine run along the mesh row axis). Not fixed; owner moe agent. Knobs added to probe: MIMO_DISP_LINKS / MIMO_DISP_WORKERS (dispatch/combine num_links/workers, default 2/2; variants being measured). It also means GSM8K accuracy numbers carry a small random error and cannot be reproduced bitwise until fixed.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_M14_ldet_default.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/decode.py
+- data: {"replays":100,"layers":48,"glitch_replays":"2-5 of 100","rows":[1,2,3],"row0_clean":true,"allreduce_stress_bad":0}
+
+## E261007-0827-805
+- date: 2026-10-07T08:27:01
+- commit: d59a132dc5e
+- branch: ssinghal/mimo-attn
+- host: 41
+- track: decode
+- status: verified
+- claim: GSM8K GATE on the NEW MoE numerics (merge d72e22e2fbf: bf16 activations + fp32 DEST/partials + HiFi3, library integ_d72e22e2fbf, router exact): 48 layers, 4x8, host .41, greedy, enable_thinking=false, gsm8k_128_nothink.json prompts (verified identical token ids), max_new 512, prefill = MiMoModel.prefill_first_token (S=256, groups of 8), traced decode loop, scored with reference/score_gsm8k.extract: n=128: 113/128 = 88.3% correct (Wilson95 81.6-92.8), gate >= 109 PASS, 128/128 finished with EOS before 512 tokens; first 64 users (B=64, run 2): 56/64 = 87.5% (77.2-93.5); repeat of the n=128 run in the same process: 112/128 = 87.5% (see determinism entry: runs are not token-identical). Decode step time (median over steady steps, p10-p90 123.1-123.8 ms; step 0 = trace capture + compile 13.9 s) 123.4 ms at B=128 live users (32 slots/row) = 8.10 tok/s/user, 1037 tok/s total; at B=64 123.3 ms = 8.11 tok/s/user, 519 tok/s total (step time independent of the number of live users). Session: dedicated process, scenarios sequential in one process, trace on, UNPAIRED, host-timed replay + candidate readback; previous biased-numerics runs were 103.8 ms/step and 88.3% (n=128, old library) so the precise numerics cost ~19 ms/step and did not change accuracy resolvably. Weights from cache: build ~11 min cold NFS on .41.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
+- data: {"gsm8k_n":128,"gsm8k_correct":113,"acc":0.8828,"gate_min_correct":109,"step_ms":123.4,"b":128,"tok_s_user":8.1,"tok_s_total":1037,"b64_correct":56,"b64_step_ms":123.3}

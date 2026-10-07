@@ -134,11 +134,11 @@ class MiMoModel:
         dts = ttnn.get_device_tensors(t)
         return torch.stack([ttnn.to_torch(dts[r * cols + col]).float().reshape(t.shape[2], -1) for r in range(rows)])
 
-    def prefill_first_token(self, tokens, lens, S, U):
+    def prefill_first_token(self, tokens, lens, S, U, slot0=0):
         """tokens [rows, U*S] int64 (each user right-padded to S), lens [rows, U] real lengths. Returns (first-token ids [rows,U], h_out host-free)."""
         h = self.embed_tokens(tokens)
         for lyr in self.layers:
-            h = self._step(lyr, h, S, U)
+            h = self._step(lyr, h, S, U, slot0)
         hh = self.rows_to_host(h)  # [rows, U*S, 4096]
         ttnn.deallocate(h)
         last = torch.zeros(tokens.shape[0], 32, HIDDEN)
@@ -164,7 +164,7 @@ class MiMoModel:
         return lg
 
     @staticmethod
-    def _step(lyr, h, S, U):
-        h2 = lyr.prefill(h, S, U)
+    def _step(lyr, h, S, U, slot0=0):
+        h2 = lyr.prefill(h, S, U, slot0=slot0)
         ttnn.deallocate(h)
         return h2

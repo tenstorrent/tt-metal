@@ -213,7 +213,7 @@ class MiMoDecoderLayer:
         return self.ffn_dense(x) if self.L == 0 else self.ffn_moe(x, route)
 
     # ------------------------------------------------------------------ prefill
-    def prefill(self, h, S, U, taps=None, route=None):
+    def prefill(self, h, S, U, taps=None, route=None, slot0=0):
         """h [1,1,U*S,4096] bf16 tile (U users of S tokens each, positions 0..S-1, user u uses KV slot u). Returns h_out (same shape).
         taps: dict to receive attn_in/attn_out/ffn_in/ffn_out (device tensors, caller deallocates)."""
         if S not in self.io:
@@ -223,7 +223,7 @@ class MiMoDecoderLayer:
         outs = []
         for u in range(U):
             xu = xn if U == 1 else ttnn.slice(xn, [0, 0, u * S, 0], [1, 1, (u + 1) * S, HIDDEN])
-            self.attn.prefill_set(io, 0, u)
+            self.attn.prefill_set(io, 0, slot0 + u)
             outs.append(self.attn.prefill_chunk(xu, io))
             if U > 1:
                 ttnn.deallocate(xu)
@@ -259,7 +259,7 @@ class MiMoDecoderLayer:
         return h2
 
     # ------------------------------------------------------------------ decode (32 slots per row)
-    def decode(self, h, cur_pos, rope_idx, taps=None):
+    def decode(self, h, cur_pos, rope_idx, taps=None, live=None):
         """h [1,1,32,4096] bf16 tile. Dead slots must hold zeros and cur_pos 0."""
         xn = self.rms(h, self.w_in)
         a = self.attn.decode(xn, cur_pos, rope_idx)
@@ -268,7 +268,7 @@ class MiMoDecoderLayer:
         if self.L == 0:
             f = self.ffn_dense(fn)
         else:
-            f = self.moe_decode(fn)
+            f = self.moe_decode(fn, live)
         h2 = ttnn.add(h1, f, dtype=ttnn.bfloat16)
         if taps is not None:
             taps.update(attn_out=a, ffn_in=fn, ffn_out=f)
@@ -277,8 +277,16 @@ class MiMoDecoderLayer:
                 ttnn.deallocate(t)
         return h2
 
-    def moe_decode(self, x):
-        """32 live-or-dead slots per row padded with 32 zero rows to 64 tokens (masked_bincount needs N % 64 == 0); dead rows are dropped from the output."""
+    def moe_decode(self, x, live=None):
+        """Decode MoE for the 32 slots of a mesh row. live: persistent device live-slot mask [1,1,64,1] (tt/decode.py LiveMask): traced path through
+        tt/moe_decode.MiMoMoEDecode (router -> dead-slot routing spread -> dispatch -> experts -> combine -> all-reduce, no host reads). Without a mask the old
+        untraceable path (zero pad rows, no spread, optional capacity check) is used."""
+        if live is not None:
+            if getattr(self, "moe_dec", None) is None:
+                from models.demos.blackhole.mimo_v26.tt.moe_decode import MiMoMoEDecode
+
+                self.moe_dec = MiMoMoEDecode(self.mesh, self.gate, self.moe)
+            return self.moe_dec.forward(x, live)
         B = x.shape[2]
         npad = 64 - B
         # route the B real slots with the gate; the npad padding rows get spread routing (round-robin over all experts) so they cannot pile onto the experts a

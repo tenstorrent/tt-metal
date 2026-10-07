@@ -107,6 +107,38 @@ def _k_mm():
     )
 
 
+def _row_mapper(mesh):
+    return ttnn.ShardTensor2dMesh(mesh, mesh.shape, dims=(0, None))
+
+
+def decode_pos_io(mesh, slots=32):
+    """Device-resident per-row decode position tensors shared by all layers: cur [rows*slots] sharded -> int32 [slots] per device, idx uint32 [1,slots]."""
+    rows = mesh.shape[0]
+    m = _row_mapper(mesh)
+    mk = lambda t, dt: ttnn.from_torch(t, device=mesh, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=m)
+    return dict(
+        cur=mk(torch.zeros(rows * slots, dtype=torch.int32), ttnn.int32),
+        idx=mk(torch.zeros(rows, slots, dtype=torch.int32), ttnn.uint32),
+    )
+
+
+def decode_pos_set(mesh, io, positions):
+    """Write per-row/per-slot positions into the persistent device tensors. Returns the HOST tensors: the host->device copy is asynchronous, the caller must keep
+    them alive (and synchronize) until the copy has executed, otherwise the device may read freed host memory (row-wide glitches seen as run-to-run nondeterminism).
+    """
+    rows = mesh.shape[0]
+    pos = torch.as_tensor(positions, dtype=torch.int32)
+    if pos.dim() == 1:
+        pos = pos.reshape(1, -1).expand(rows, -1)
+    assert pos.shape[0] == rows
+    m = _row_mapper(mesh)
+    h = lambda t, dt: ttnn.from_torch(t.contiguous(), dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=m)
+    hosts = [h(pos.reshape(-1), ttnn.int32), h(pos, ttnn.uint32)]
+    ttnn.copy_host_to_device_tensor(hosts[0], io["cur"])
+    ttnn.copy_host_to_device_tensor(hosts[1], io["idx"])
+    return hosts
+
+
 class MiMoAttention:
     def __init__(
         self,
@@ -272,16 +304,13 @@ class MiMoAttention:
 
     # ------------------------------------------------------------------ decode (32 user slots per row)
     def decode_io(self):
-        """Persistent decode inputs (cur_pos int32 RM [32], rope_idx uint32 RM [1,32]); refresh with decode_set."""
-        return dict(
-            cur=self._persist(torch.zeros(32, dtype=torch.int32), ttnn.int32),
-            idx=self._persist(torch.zeros(1, 32, dtype=torch.int32), ttnn.uint32),
-        )
+        """Persistent decode inputs, PER MESH ROW: cur_pos int32 RM [32] and rope_idx uint32 RM [1,32] on every device of row r (positions of row r's 32 slots).
+        Refresh with decode_set (positions [32] = same for all rows, or [rows,32])."""
+        return decode_pos_io(self.mesh)
 
     def decode_set(self, io, positions):
-        pos = torch.as_tensor(positions, dtype=torch.int32)
-        ttnn.copy_host_to_device_tensor(self._host(pos, ttnn.int32), io["cur"])
-        ttnn.copy_host_to_device_tensor(self._host(pos.reshape(1, -1), ttnn.uint32), io["idx"])
+        self._keep = decode_pos_set(self.mesh, io, positions)
+        ttnn.synchronize_device(self.mesh)
 
     def decode_inputs(self, positions):
         io = self.decode_io()
