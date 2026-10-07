@@ -631,9 +631,13 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, in0_cb, dst_tiles);
+#else
         for (uint32_t i = 0; i < dst_tiles; ++i) {
             pack_tile(i, in0_cb);
         }
+#endif
         tile_regs_release();
     }
     cb_in0.pop_front(num_tiles);
