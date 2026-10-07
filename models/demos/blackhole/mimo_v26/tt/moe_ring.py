@@ -218,7 +218,9 @@ def _staged(dec, tt_x, tt_scores, tt_indices, upto=99):
 
 
 # ----------------------------------------------------------------------------- DRAM headroom / automatic fallback
-RING_MB_PER_BANK_PER_LAYER = 54.0  # measured: 1268 MB per bank for 47 layers (ring copy ~214 MB per chip per layer)
+RING_MB_PER_BANK_PER_LAYER = (
+    27.0  # measured: 1268 MB per bank for 47 layers (ring copy ~214 MB per chip = 27 MB per bank per layer)
+)
 _DECISION = {}
 
 
