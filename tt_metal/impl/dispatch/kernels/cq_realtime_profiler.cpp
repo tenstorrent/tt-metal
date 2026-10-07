@@ -154,8 +154,6 @@ __attribute__((noinline)) bool realtime_profiler_drain_records() {
 __attribute__((noinline)) void realtime_profiler_sync() {
     DPRINT("REALTIME: entering sync\n");
 
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-
     uint32_t sync_count = 0;
     while (rt_profiler_msg->sync_request) {
         invalidate_l1_cache();
@@ -175,8 +173,10 @@ __attribute__((noinline)) void realtime_profiler_sync() {
             uint32_t slot_addr = rt_ring_data_addr(ring_buffer, ring_buffer->write_index);
             tt_l1_ptr uint32_t* l1_data = reinterpret_cast<tt_l1_ptr uint32_t*>(slot_addr);
 
-            uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-            uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+            // Portable wall clock (risc_common.h) — raw RISCV_DEBUG_REG_WALL_CLOCK_L macro not in scope on Quasar.
+            const uint64_t now = get_timestamp();
+            uint32_t time_lo = static_cast<uint32_t>(now);
+            uint32_t time_hi = static_cast<uint32_t>(now >> 32);
 
             l1_data[0] = time_hi;
             l1_data[1] = time_lo;
@@ -211,13 +211,8 @@ void kernel_main() {
 
         if (realtime_profiler_drain_records()) {
             if (pending_stall_cycles != 0) {
-                // No later record bounds this wait; end it now.
-                volatile tt_reg_ptr uint32_t* p_reg =
-                    reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-                const uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-                const uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
-                realtime_profiler_enqueue_stall_marker(
-                    (static_cast<uint64_t>(time_hi) << 32) | time_lo, pending_stall_cycles);
+                // No later record bounds this wait; end it now. Portable wall clock (risc_common.h).
+                realtime_profiler_enqueue_stall_marker(get_timestamp(), pending_stall_cycles);
                 pending_stall_cycles = 0;
             }
             noc_async_write_barrier();  // last record_rd_idx ack

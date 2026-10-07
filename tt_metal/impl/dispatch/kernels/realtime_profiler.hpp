@@ -75,10 +75,11 @@ volatile realtime_profiler_record_t* open_record(volatile tt_l1_ptr realtime_pro
 // is_start: true for kernel start timestamp, false for kernel end timestamp
 FORCE_INLINE
 void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* msg, bool is_start) {
-    // Read wall clock - LOW first to latch HIGH
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+    // Portable 64-bit wall clock (risc_common.h): tt-2xx reads the NEO wall-clock regs, tt-1xx the
+    // RISCV_DEBUG_REG_WALL_CLOCK_L register (whose raw macro is not in scope in the Quasar dispatch build).
+    const uint64_t now = get_timestamp();
+    uint32_t time_lo = static_cast<uint32_t>(now);
+    uint32_t time_hi = static_cast<uint32_t>(now >> 32);
 
     volatile realtime_profiler_record_t* record = open_record(msg);
     volatile realtime_profiler_timestamp_t* ts = is_start ? &record->kernel_start : &record->kernel_end;
