@@ -36,6 +36,9 @@ void PadCodegenDeviceOperation::validate_on_program_cache_miss(
         }
     }
     TT_FATAL(
+        !ttnn::operations::data_movement::pad_codegen::composes_via_bf16(input, operation_attributes),
+        "Nonzero pad of a block-float tensor must be padded through a bfloat16 copy");
+    TT_FATAL(
         ttnn::operations::data_movement::pad_codegen::supported_by_codegen(
             input, operation_attributes, optional_output),
         "Input is not supported by PadCodegen");

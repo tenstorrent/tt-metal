@@ -34,6 +34,9 @@ uint32_t cb_depth(uint32_t read_batch, uint32_t write_batch);
 // Aligned bytes of one TILE page.
 uint32_t tile_page_bytes(const Tensor& input);
 
+// A nonzero fill of a block-float tensor has no scalar page pattern, so the caller pads a bfloat16 copy instead.
+bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs);
+
 // The 32-bit word the kernels replicate into pad regions.
 uint32_t pack_pad_value(tt::tt_metal::DataType dtype, float value);
 

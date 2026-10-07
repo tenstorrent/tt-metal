@@ -528,6 +528,15 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
         return std::nullopt;
     }
 
+    if (pc::composes_via_bf16(input_4d, params)) {
+        const ttnn::Tensor decoded = ttnn::typecast(input_4d, DataType::BFLOAT16);
+        const auto bf16_params = pc::make_codegen_params(
+            decoded, front, after, value, memory_config_arg.value_or(input_tensor.memory_config()));
+        auto padded = ttnn::prim::pad_codegen(decoded, bf16_params);
+        auto encoded = ttnn::typecast(padded, input_tensor.dtype());
+        return ttnn::experimental::view(encoded, requested_logical_shape, requested_padded_shape);
+    }
+
     // The pad kernel copies whole tiles, so the unused lanes of partial border tiles are filled first.
     if (pc::has_partial_tile(input_4d)) {
         ttnn::prim::pad_codegen(input_4d, pc::make_fill_partial_tile_params(input_4d, value), input_4d);

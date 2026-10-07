@@ -128,8 +128,14 @@ uint64_t gate_l1_budget(const Tensor& input, const ttnn::prim::PadCodegenParams&
     return ceiling > reserved ? ceiling - reserved : 0;
 }
 
+uint32_t tile_page_bytes_as(const Tensor& input, DataType dtype) {
+    const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    return tt::round_up(input.tensor_spec().tile().get_tile_size(format), tt::tt_metal::hal::get_dram_alignment());
+}
+
 bool tile_fits_l1(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
-    const uint64_t tile_bytes = tile_page_bytes(input);
+    const uint64_t tile_bytes =
+        tile_page_bytes_as(input, composes_via_bf16(input, attrs) ? DataType::BFLOAT16 : input.dtype());
     const uint64_t budget = gate_l1_budget(input, attrs);
     if (attrs.fill_partial_tile) {
         const uint64_t face_bytes = 16ull * 16ull * input.element_size();
@@ -217,9 +223,10 @@ bool unit_batch(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) 
 
 }  // namespace
 
-uint32_t tile_page_bytes(const Tensor& input) {
-    const auto format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    return tt::round_up(input.tensor_spec().tile().get_tile_size(format), tt::tt_metal::hal::get_dram_alignment());
+uint32_t tile_page_bytes(const Tensor& input) { return tile_page_bytes_as(input, input.dtype()); }
+
+bool composes_via_bf16(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+    return input.dtype() == DataType::BFLOAT8_B && attrs.packed_pad_value != 0;
 }
 
 RmPageSizes rm_page_sizes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
@@ -357,7 +364,7 @@ bool supported_by_codegen(
         if (front_padded) {
             return false;
         }
-        if (input.dtype() == DataType::BFLOAT8_B && (has_partial_tile(input) || attrs.packed_pad_value != 0)) {
+        if (input.dtype() == DataType::BFLOAT8_B && has_partial_tile(input)) {
             return false;
         }
         if (has_partial_tile(input) && !fill_supported(input)) {
