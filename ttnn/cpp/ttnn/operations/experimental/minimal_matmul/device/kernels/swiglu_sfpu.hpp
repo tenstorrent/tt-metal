@@ -13,7 +13,7 @@
 // - bf16 DST, block-float output (block_float_output, set by the program descriptor for bfp8_b / bfp4_b): a
 //   sigmoid sized for the output's 7-bit mantissas. exp(-gate) is Schraudolph's 2**(xlog2 - 127) with a linear mantissa
 //   (_sfpu_exp_21f_bf16_ without its polynomial refinement; the bias shifted by 0.043 centres the error at ~3%), the
-//   reciprocal is the bare SFPARECIP (no Newton step) and nothing is rounded to bf16 in between (DST stores truncate).
+//   reciprocal is swiglu_recip below and nothing is rounded to bf16 in between (DST stores truncate).
 //   About a third of silu_tile + mul_binary_tile's SFPU time, and no less accurate against an fp32 SwiGLU once the
 //   output is bfp8.
 // - bf16 DST, any other output: silu_tile + mul_binary_tile's bf16 sigmoid and roundings, since a bf16 output would
@@ -27,6 +27,19 @@
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 
 namespace ckernel::sfpu {
+
+// The block-float sigmoid's reciprocal. Blackhole and Quasar have a one-instruction approximate reciprocal
+// (SFPARECIP / SFPNONLINEAR, ~7-bit mantissa), which is all a block-float output needs. Wormhole has no such
+// instruction, so it falls back to sfpu_reciprocal_iter's quadratic seed plus one Newton step - the reciprocal
+// silu_tile's bf16 sigmoid already uses, and still far cheaper than that sigmoid's exp. Both are programmed by
+// minimal_matmul_swiglu_init.
+sfpi_inline sfpi::vFloat swiglu_recip(sfpi::vFloat denominator) {
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+    return sfpi::approx_recip(denominator);
+#else
+    return sfpu_reciprocal_iter<1>(denominator);
+#endif
+}
 
 template <bool is_fp32_dest_acc_en, bool block_float_output, int ITERATIONS = 8>
 inline void calculate_minimal_matmul_swiglu(const uint gate_tile_idx, const uint up_tile_idx, const uint out_tile_idx) {
@@ -43,7 +56,7 @@ inline void calculate_minimal_matmul_swiglu(const uint gate_tile_idx, const uint
             // gives exp = 0 (sigmoid 1), 255 gives +inf (sigmoid 0).
             sfpi::vFloat xlog2 = sfpi::clamp(gate * -1.4426950216293334961f + 126.9570f, 0.0f, 255.0f);
             sfpi::vFloat exp_neg_gate = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
-            result = up * (gate * sfpi::approx_recip(1.0f + exp_neg_gate));
+            result = up * (gate * swiglu_recip(1.0f + exp_neg_gate));
         } else {
             sfpi::vFloat silu =
                 sfpi::convert<sfpi::vFloat16b>(gate * _sfpu_sigmoid_<false>(gate), sfpi::RoundMode::Nearest);
@@ -54,8 +67,9 @@ inline void calculate_minimal_matmul_swiglu(const uint gate_tile_idx, const uint
     }
 }
 
-// The fp32 path's _sfpu_sigmoid_ takes its reciprocal from sfpu_reciprocal_iter, which needs vConstFloatPrgm0 = 2.0f;
-// nothing on the binary SFPU init path programs it. The block-float path's constants are all SFPLOADI immediates.
+// _sfpu_sigmoid_ takes its reciprocal from sfpu_reciprocal_iter, whose seed lives in vConstFloatPrgm0..2; nothing on
+// the binary SFPU init path programs them. The block-float path's own constants are all SFPLOADI immediates, but on
+// Wormhole its swiglu_recip is sfpu_reciprocal_iter too, so it needs the same seed.
 inline void minimal_matmul_swiglu_init() { sigmoid_init</*APPROXIMATION_MODE=*/false>(); }
 
 }  // namespace ckernel::sfpu
