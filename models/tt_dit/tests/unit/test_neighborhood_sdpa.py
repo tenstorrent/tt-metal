@@ -654,18 +654,36 @@ def test_choose_sharded_brick_refuses_stride_with_h_split(expect_error):
 
 @pytest.mark.parametrize(
     "s5_2d, stride, expected",
-    [(None, None, True), ("1", None, True), ("0", None, False), (None, "2,4,4", False), ("1", "2,4,4", True)],
+    [
+        (None, (1, 1, 1), True),
+        ("1", (1, 1, 1), True),
+        ("0", (1, 1, 1), False),
+        ("false", (1, 1, 1), False),
+        ("False", (1, 1, 1), False),
+        (None, (2, 4, 4), False),
+        ("1", (2, 4, 4), True),
+    ],
 )
 def test_s5_2d_default_on(monkeypatch, s5_2d, stride, expected):
-    """The 2-D split is the default; DIFFVAE_S5_2D=0 or an unset flag with a GNA stride keeps 1-D."""
+    """The 2-D split is the default; DIFFVAE_S5_2D=0 or an unset flag with a config GNA stride keeps 1-D."""
     from models.tt_dit.models.vae.diffvae_ltx_stage5 import s5_2d_enabled
 
-    for name, value in (("DIFFVAE_S5_2D", s5_2d), ("DIFFVAE_GNA_STRIDE", stride)):
-        if value is None:
-            monkeypatch.delenv(name, raising=False)
-        else:
-            monkeypatch.setenv(name, value)
-    assert s5_2d_enabled() is expected
+    monkeypatch.delenv("DIFFVAE_GNA_STRIDE", raising=False)
+    if s5_2d is None:
+        monkeypatch.delenv("DIFFVAE_S5_2D", raising=False)
+    else:
+        monkeypatch.setenv("DIFFVAE_S5_2D", s5_2d)
+    assert s5_2d_enabled(stride) is expected
+
+
+def test_s5_2d_decided_from_config_stride(monkeypatch):
+    """A config stride alone (env unset, as pytest --diffvae-gna-stride and time_module pass it) keeps 1-D."""
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import DiffVAEStage5Config, s5_2d_enabled
+
+    monkeypatch.delenv("DIFFVAE_S5_2D", raising=False)
+    monkeypatch.delenv("DIFFVAE_GNA_STRIDE", raising=False)
+    assert s5_2d_enabled(DiffVAEStage5Config(gna_stride=(2, 4, 4)).gna_stride) is False
+    assert s5_2d_enabled(DiffVAEStage5Config().gna_stride) is True
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])

@@ -91,16 +91,16 @@ class Grid(NamedTuple):
         return self.t * self.h * self.w
 
 
-def s5_2d_enabled() -> bool:
-    """Whether stage 5 takes the 2-D split: on unless DIFFVAE_S5_2D=0.
+def s5_2d_enabled(gna_stride: tuple[int, int, int] = (1, 1, 1)) -> bool:
+    """Whether stage 5 takes the 2-D split: on unless DIFFVAE_S5_2D=0 (or false).
 
-    Left unset, a strided stage 5 (DIFFVAE_GNA_STRIDE) keeps the 1-D split, which it needs; an
-    explicit DIFFVAE_S5_2D=1 with a stride still fails in the brick choice.
+    Left unset, a strided stage 5 (the config's ``gna_stride``) keeps the 1-D split, which it
+    needs; an explicit DIFFVAE_S5_2D=1 with a stride still fails in the brick choice.
     """
     flag = os.environ.get("DIFFVAE_S5_2D")
     if flag is not None:
-        return flag != "0"
-    return os.environ.get("DIFFVAE_GNA_STRIDE", "1,1,1").replace(" ", "") == "1,1,1"
+        return flag not in ("0", "false", "False")
+    return tuple(gna_stride) == (1, 1, 1)
 
 
 @dataclass(frozen=True)
@@ -936,7 +936,7 @@ class DiffVAEStage5(Module):
         # The 2-D split (default; DIFFVAE_S5_2D=0 opts out). H goes over the axis TP would use, every
         # chip keeps all heads, and the band loop runs the whole volume; no head all-gather, no
         # replicated MLP.
-        two_d = s5_2d_enabled() and self._w_sharded and tp_axis is not None
+        two_d = s5_2d_enabled(self.config.gna_stride) and self._w_sharded and tp_axis is not None
         self.h_axis = tp_axis if two_d else None
         if two_d:
             tp_axis, tp_proj, slab_frames = None, False, None

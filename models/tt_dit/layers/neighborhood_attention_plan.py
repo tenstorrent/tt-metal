@@ -911,8 +911,8 @@ def _choose_sharded_brick(volume, context_window, stride, width_local, shard_cou
         if height_local is not None:
             # The strided brick ignores the H shard, so it need not divide it.
             raise ValueError(
-                f"DIFFVAE_GNA_STRIDE={','.join(map(str, stride))} cannot be combined with the 2-D "
-                "stage-5 split (DIFFVAE_S5_2D=1): unset DIFFVAE_S5_2D or set it to 0"
+                f"GNA stride {','.join(map(str, stride))} cannot be combined with the 2-D stage-5 split: "
+                "set DIFFVAE_S5_2D=0 (left unset, a strided stage 5 already keeps the 1-D split)"
             )
         return tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
 
