@@ -2,6 +2,7 @@
 # Round 3 eltwise binary (#58818 review): run the exhaustive bit dumps of a spec file. Each line:
 # "<pairs>|||<pytest args>[|||<extra env K=V ...>]", pairs "A|B;A|B" with each side "K=V,K=V" of EB_R3_* toggles (side A the
 # reference). usage: dump_run.sh <spec file>
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 cd /work
 SPEC=$1
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-}

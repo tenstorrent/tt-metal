@@ -3,6 +3,7 @@
 # the listed define lines removed from the kernel files; side PR: the files as committed. Each side in its own process with
 # its own kernel cache (the JIT hash does not cover the .cpp text); the module saves (main) and compares (PR).
 # usage: dump_kedit.sh <toggle file: "path|define line" per line> <pytest args...>
+[[ -n "${HWLOCK_HELD:-}" || -n "${GITHUB_ACTIONS:-}" || -n "${TT_METAL_MOCK_CLUSTER_DESC_PATH:-}" ]] || { echo "not under hwlock" >&2; exit 2; }
 cd /work
 TOG=$1; shift
 export PYTHONPATH=/work:/work/tests/eb_r3_ci:${PYTHONPATH:-}
