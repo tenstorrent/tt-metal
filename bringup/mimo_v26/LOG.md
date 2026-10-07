@@ -1498,3 +1498,14 @@
 - claim: COORDINATOR at df0495c0790: layer.py defaults now MIMO_EXPERT_OP=unified (was mm: the slow path; all earlier decode runs passed unified through --env) and MIMO_DEAD=spread32 (sentinel hangs deep traces, E261007-1432-926; spread32 = balanced dead-slot routing, 1000/1000 deep-trace replays at U=1,32). RISK: the unified op's numerics fix (fp32 DEST/partials, HiFi3, bf16 act, E261007-0745-795) and the dispatch knob exist only in the private relink library artifacts/integ_73c014eb46d/lib (LD_LIBRARY_PATH); the shared build_Release still has the old op (outputs ~1.5-2.4% too small): a run without LD_LIBRARY_PATH silently uses the old numerics. TODO: add a runtime guard (check the loaded _ttnncpp.so path via /proc/self/maps) and/or rebuild the shared build once when no job runs from it; to be done in the re-gate pass. Measured 48-layer step by MoE agent (E261007-1432-327, host .30, spread32 + unified + fast router + all_gather+sum): U=1 71.0 ms, U=8 90.1, U=32 106.2 vs spread+unified 105/107/114 and spread+mm 191/194/201.
 - evidence: -
 - paths: models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1446-7c5
+- date: 2026-10-07T14:46:49
+- commit: 883c1540cf1
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: COORDINATOR DECISIONS (spec decode): (1) DFlash drafter on device uses bf16 weights (bfp8 misses the 0.999 hidden PCC gate on the worst user: 0.99806 vs fp32 oracle 0.99809, bf16 0.99907; E261007-1446-a9a on branch ssinghal/mimo-spec). (2) Top-1 draft agreement gate: the coordinator's >=99% per position is unreachable at n=224 (bf16 CPU oracle vs fp32 oracle itself gives 0.9955,0.9866,0.9821,1.0,0.9911,0.9732,0.9821); redefined as: device not worse than that oracle floor per position (clarification, not a relaxation of the intent). (3) Verify design V1 approved: 1-token paged decode op with 8 virtual users per real user (E261007-1446-494), no C++; consequence: spec decode only for U<=4 users per row (8U <= 32 rows per mesh row), as in DSV4 (B=128 impossible with <=32 verify rows). (4) Hooks (capture hidden states of target layers 0,11,23,35,47 inside the traced decode step) per notes/spec_hooks.md on ssinghal/mimo-spec: decode agent implements the decode.py/layer.py part.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
