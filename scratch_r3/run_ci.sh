@@ -93,6 +93,6 @@ PY
 fi
 for tag in $(awk '!/^#/ && NF {print $1}' "$1" | sort -u); do
   echo "== reduce $tag (base head)"; PROF_BASE=head python $S/tools/prof_reduce.py $OUTD $tag 2>&1
-  for pr in ${CI_PAIRS//;/ }; do echo "== pairs $tag ($pr)"; PROF_PAIRS=$pr python $S/tools/prof_reduce.py $OUTD $tag 2>&1; done
+  for pr in ${CI_PAIRS:+${CI_PAIRS//;/ }}; do echo "== pairs $tag ($pr)"; PROF_PAIRS=$pr python $S/tools/prof_reduce.py $OUTD $tag 2>&1; done
 done
 tar -czf $R/generated/r3ci.tgz -C $R/generated r3ci 2>/dev/null; ls -la $R/generated/r3ci.tgz
