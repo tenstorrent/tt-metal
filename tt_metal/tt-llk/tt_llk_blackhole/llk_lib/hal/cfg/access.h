@@ -31,6 +31,10 @@ namespace hal::cfg
 
 /**
  * @brief Construct an assignment of a runtime value to field F in section S.
+ *
+ * @tparam F: Field descriptor selecting the bits to assign.
+ * @tparam S: Register section; must be within F.count.
+ * @param value: Unshifted field value; must fit the field width.
  */
 template <const Field& F, Sec S>
 inline constexpr FieldAssignment<F, S> set(const std::uint32_t value)
@@ -40,6 +44,10 @@ inline constexpr FieldAssignment<F, S> set(const std::uint32_t value)
 
 /**
  * @brief Construct an assignment of a compile-time value to field F in section S.
+ *
+ * @tparam F: Field descriptor selecting the bits to assign.
+ * @tparam S: Register section; must be within F.count.
+ * @tparam Value: Unshifted field value; must fit the field width.
  */
 template <const Field& F, Sec S, std::uint32_t Value>
 inline constexpr ConstantFieldAssignment<F, S, Value> set()
@@ -54,13 +62,13 @@ inline constexpr ConstantFieldAssignment<F, S, Value> set()
  * @ref write call. Field grouping can span GPR transfers. The transfer occurs
  * when write() consumes the operation.
  *
- * @tparam Anchor Field, or field group with a Raw anchor, identifying the first destination
+ * @tparam Anchor: Field, or field group with a Raw anchor, identifying the first destination
  *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
- * @tparam S Register section; must be within the anchor's count.
- * @tparam Size Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
- * @tparam Completion WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
- * @tparam GprIndex GPR index deduced from source.
- * @param source Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
+ * @tparam S: Register section; must be within the anchor's count.
+ * @tparam Size: Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
+ * @tparam Completion: WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
+ * @tparam GprIndex: GPR index deduced from source.
+ * @param source: Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
  */
 template <
     const auto& Anchor,
@@ -82,12 +90,12 @@ inline constexpr auto from_gpr(const hal::Gpr<GprIndex> source)
  *
  * The field's mask and bit position are ignored.
  *
- * @tparam A Access path; must be Access::MMIO.
- * @tparam Anchor Field, or field group with a Raw anchor, identifying the source register word.
- * @tparam S Register section; must be within the anchor's count.
- * @tparam WordOffset Word offset relative to the register word containing the anchor;
+ * @tparam A: Access path; must be Access::MMIO.
+ * @tparam Anchor: Field, or field group with a Raw anchor, identifying the source register word.
+ * @tparam S: Register section; must be within the anchor's count.
+ * @tparam WordOffset: Word offset relative to the register word containing the anchor;
  *         must stay within a multi-word anchor.
- * @tparam Target Thread-CFG bank: Current selects the issuing TRISC; BRISC requires
+ * @tparam Target: Thread-CFG bank: Current selects the issuing TRISC; BRISC requires
  *         an explicit T0, T1, or T2. Must be Current for state CFG.
  * @return The 32-bit state-CFG register word or zero-extended 16-bit thread-CFG register word.
  */
@@ -117,10 +125,10 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
 /**
  * @brief Read field F in section S through RISC MMIO.
  *
- * @tparam A Access path; must be Access::MMIO.
- * @tparam F Field descriptor selecting the bits to read.
- * @tparam S Register section; must be within F.count.
- * @tparam Target Thread-CFG bank: Current selects the issuing TRISC; BRISC requires
+ * @tparam A: Access path; must be Access::MMIO.
+ * @tparam F: Field descriptor selecting the bits to read.
+ * @tparam S: Register section; must be within F.count.
+ * @tparam Target: Thread-CFG bank: Current selects the issuing TRISC; BRISC requires
  *         an explicit T0, T1, or T2. Must be Current for state CFG.
  *
  * @return The field value, shifted down to bit zero.
@@ -138,10 +146,10 @@ inline __attribute__((always_inline)) std::uint32_t read()
  * No field extraction is performed.
  * Use @ref extract to select a field from a register word held as a C++ value.
  *
- * @tparam A Access path; must be Access::TensixCfgUnit.
- * @tparam F Field descriptor identifying the source register word.
- * @tparam S Register section; must be within F.count.
- * @tparam GprIndex Compile-time GPR index deduced from hal::gpr<Index>().
+ * @tparam A: Access path; must be Access::TensixCfgUnit.
+ * @tparam F: Field descriptor identifying the source register word.
+ * @tparam S: Register section; must be within F.count.
+ * @tparam GprIndex: Compile-time GPR index deduced from hal::gpr<Index>().
  */
 template <Access A, const Field& F, Sec S, std::uint32_t GprIndex>
 inline __attribute__((always_inline)) void read(hal::Gpr<GprIndex>)
@@ -167,10 +175,10 @@ inline __attribute__((always_inline)) void read(hal::Gpr<GprIndex>)
  *
  * Access::TensixCfgUnit uses TT instructions for this overload.
  *
- * @tparam A Access path: Access::MMIO or Access::TensixCfgUnit.
- * @tparam F Field descriptor selecting the bits to write.
- * @tparam S Register section; must be within F.count.
- * @param value Field value, before shifting to its bit position; must fit the field width.
+ * @tparam A: Access path: Access::MMIO or Access::TensixCfgUnit.
+ * @tparam F: Field descriptor selecting the bits to write.
+ * @tparam S: Register section; must be within F.count.
+ * @param value: Field value, before shifting to its bit position; must fit the field width.
  *
  * @note MMIO writes support only state CFG. For thread scope, Access::TensixCfgUnit
  *       uses SETC16 to replace the complete 16-bit register word. Other fields are
@@ -229,10 +237,10 @@ inline __attribute__((always_inline)) void write(const std::uint32_t section, co
 /**
  * @brief Write a compile-time value to field F in section S using immediate Tensix instructions.
  *
- * @tparam A Access path; must be Access::TensixCfgUnit.
- * @tparam F Field descriptor selecting the bits to write.
- * @tparam S Register section; must be within F.count.
- * @tparam Value Field value, before shifting to its bit position; must fit the field width.
+ * @tparam A: Access path; must be Access::TensixCfgUnit.
+ * @tparam F: Field descriptor selecting the bits to write.
+ * @tparam S: Register section; must be within F.count.
+ * @tparam Value: Field value, before shifting to its bit position; must fit the field width.
  *
  * @note State CFG uses RMWCIB only for register word bytes covered by the field mask.
  *       Thread CFG uses SETC16 to replace the complete 16-bit register word;
@@ -269,11 +277,11 @@ inline __attribute__((always_inline)) void write()
  *     set<AluAccCtrl::Fp32_enabled, Sec::S0>(fp32));
  * @endcode
  *
- * @tparam A Access path: Access::MMIO or Access::TensixCfgUnit; from_gpr requires Access::TensixCfgUnit.
- * @tparam First First operation type returned by @ref set or @ref from_gpr.
- * @tparam Rest Remaining operation types.
- * @param first First write operation.
- * @param rest Remaining write operations.
+ * @tparam A: Access path: Access::MMIO or Access::TensixCfgUnit; from_gpr requires Access::TensixCfgUnit.
+ * @tparam First: First operation type returned by @ref set or @ref from_gpr.
+ * @tparam Rest: Remaining operation types.
+ * @param first: First write operation.
+ * @param rest: Remaining write operations.
  */
 template <
     Access A,
@@ -288,14 +296,14 @@ inline __attribute__((always_inline)) void write(const First& first, const Rest&
 /**
  * @brief Transfer one or four GPR words to complete state-CFG register words.
  *
- * @tparam A Access path; must be Access::TensixCfgUnit.
- * @tparam Anchor Field, or field group with a Raw anchor, identifying the first destination
+ * @tparam A: Access path; must be Access::TensixCfgUnit.
+ * @tparam Anchor: Field, or field group with a Raw anchor, identifying the first destination
  *         register word; it must start at bit zero, and a multi-word anchor must cover the transfer.
- * @tparam S Register section; must be within the anchor's count.
- * @tparam Size Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
- * @tparam Completion WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
- * @tparam GprIndex GPR index deduced from source.
- * @param source Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
+ * @tparam S: Register section; must be within the anchor's count.
+ * @tparam Size: Transfer width: GprTransferSize::Bits32 or GprTransferSize::Bits128; defaults to Bits32.
+ * @tparam Completion: WRCFG completion policy; defaults to WrcfgCompletion::Deferred.
+ * @tparam GprIndex: GPR index deduced from source.
+ * @param source: Source GPR operand created with hal::gpr<Index>() or hal::gpr(index).
  * @note Emits WRCFG and its requested completion NOP. Access::TensixScalarUnit
  *       is unsupported because Blackhole does not handle REG2FLOP properly.
  */
@@ -318,12 +326,12 @@ inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source
  * write<Access::MMIO, Thcon[Reg0].TileDescriptor, Sec::S0, TILE_DESC_SIZE>(descriptor_words);
  * @endcode
  *
- * @tparam A Access path; must be Access::MMIO.
- * @tparam Anchor Field, or field group with a Raw anchor, identifying the first destination register word.
- * @tparam S Register section; must be within the anchor's count.
- * @tparam Count Number of register words to write; must not exceed ArrayCount or a multi-word anchor.
- * @tparam ArrayCount Source array length, deduced from values.
- * @param values Complete 32-bit register word values; the field's mask and bit position are ignored.
+ * @tparam A: Access path; must be Access::MMIO.
+ * @tparam Anchor: Field, or field group with a Raw anchor, identifying the first destination register word.
+ * @tparam S: Register section; must be within the anchor's count.
+ * @tparam Count: Number of register words to write; must not exceed ArrayCount or a multi-word anchor.
+ * @tparam ArrayCount: Source array length, deduced from values.
+ * @param values: Complete 32-bit register word values; the field's mask and bit position are ignored.
  */
 template <Access A, const auto& Anchor, Sec S, std::uint32_t Count, std::size_t ArrayCount>
 inline __attribute__((always_inline)) void write(const std::array<std::uint32_t, ArrayCount>& values)
