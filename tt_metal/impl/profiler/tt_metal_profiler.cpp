@@ -78,18 +78,19 @@ namespace tt::tt_metal {
 namespace detail {
 
 void setControlBuffer(
+    MetalContext& ctx,
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     std::vector<uint32_t>& control_buffer,
     bool force_slow_dispatch = false) {
 #if defined(TRACY_ENABLE)
-    ContextId context_id = extract_context_id(mesh_device, device);
-    if (!getDeviceProfilerState(context_id)) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
     const ChipId device_id = device->id();
-    const metal_SocDescriptor& soc_d = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_d = env.get_cluster().get_soc_desc(device_id);
 
     control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM] = soc_d.profiler_ceiled_core_count_perf_dram_bank;
 
@@ -97,19 +98,17 @@ void setControlBuffer(
     // classic guaranteed-slot layout + finish (accumulate is worker-core-only).
     // Computed once here; otherwise the flag stays zero and behavior is unchanged.
     std::vector<CoreCoord> dispatch_virtual_cores;
-    auto& metal_ctx = MetalContext::instance(context_id);
-    const bool tag_dispatch_cores = metal_ctx.rtoptions().get_profiler_accumulate();
+    const bool tag_dispatch_cores = env.get_rtoptions().get_profiler_accumulate();
     if (tag_dispatch_cores) {
-        const auto& dispatch_core_config = metal_ctx.get_dispatch_core_config();
-        for (const CoreCoord& core : tt::get_logical_dispatch_cores(
-                 MetalEnvAccessor(metal_ctx.get_env()).impl(), device_id, device->num_hw_cqs(), dispatch_core_config)) {
+        const auto& dispatch_core_config = ctx.get_dispatch_core_config();
+        for (const CoreCoord& core :
+             tt::get_logical_dispatch_cores(env, device_id, device->num_hw_cqs(), dispatch_core_config)) {
             dispatch_virtual_cores.push_back(
                 device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config)));
         }
     }
 
-    for (auto core :
-         MetalContext::instance(context_id).get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
+    for (auto core : env.get_cluster().get_virtual_routing_to_profiler_flat_id(device_id)) {
         const CoreCoord curr_core = core.first;
 
         control_buffer[kernel_profiler::FLAT_ID] = core.second;
@@ -119,25 +118,25 @@ void setControlBuffer(
                 ? 1
                 : 0;
 
-        writeToCoreControlBuffer(metal_ctx, mesh_device, device, curr_core, control_buffer, force_slow_dispatch);
+        writeToCoreControlBuffer(ctx, mesh_device, device, curr_core, control_buffer, force_slow_dispatch);
     }
 #endif
 }
 
-void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreCoord logical_core, bool doHeader) {
+void syncDeviceHost(
+    MetalContext& ctx, distributed::MeshDevice* mesh_device, IDevice* device, CoreCoord logical_core, bool doHeader) {
     ZoneScopedC(tracy::Color::Tomato3);
-    ContextId context_id = extract_context_id(mesh_device, device);
-    if (!MetalContext::instance(context_id).rtoptions().get_profiler_sync_enabled()) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!env.get_rtoptions().get_profiler_sync_enabled()) {
         return;
     }
     auto device_id = device->id();
     auto core = device->worker_core_from_logical_core(logical_core);
 
-    const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
+    const metal_SocDescriptor& soc_desc = env.get_cluster().get_soc_desc(device_id);
     auto phys_core = soc_desc.translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::NOC0);
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance(context_id).profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
 
     profiler_state_manager->device_host_time_pair.emplace(device_id, (std::vector<std::pair<uint64_t, uint64_t>>){});
     profiler_state_manager->smallest_host_time.emplace(device_id, 0);
@@ -174,7 +173,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
-    const auto& hal = MetalContext::instance(context_id).hal();
+    const auto& hal = env.get_hal();
     HalProgrammableCoreType core_type = device->get_programmable_core_type(core);
     auto dev_msgs_factory = hal.get_dev_msgs_factory(core_type);
     DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
@@ -187,7 +186,7 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
         int64_t writeStart = TracyGetCpuTime();
         uint32_t sinceStart = writeStart - hostStartTime;
 
-        MetalContext::instance().get_cluster().write_reg(&sinceStart, tt_cxy_pair(device_id, core), control_addr);
+        env.get_cluster().write_reg(&sinceStart, tt_cxy_pair(device_id, core), control_addr);
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
     tt_metal::slow_dispatch::WaitProgramDone(*device, sync_program);
@@ -207,8 +206,8 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
                     dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(dev_msgs::profiler_msg_t::Field::buffer) +
                     (kernel_profiler::CUSTOM_MARKERS * sizeof(uint32_t));
 
-    std::vector<std::uint32_t> sync_times = MetalContext::instance().get_cluster().read_core(
-        device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
+    std::vector<std::uint32_t> sync_times =
+        env.get_cluster().read_core(device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
 
     uint32_t preDeviceTime = 0;
     uint32_t preHostTime = 0;
@@ -314,20 +313,20 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
     // NOLINTEND
 }
 
-void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_sync_info) {
+void setShift(MetalContext& ctx, int device_id, int64_t shift, double scale, const SyncInfo& root_sync_info) {
     if (std::isnan(scale)) {
         return;
     }
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
     log_info(tt::LogMetal, "Device sync data for device: {}, delay: {} ns, freq scale: {}", device_id, shift, scale);
-    if (MetalContext::instance().rtoptions().get_profiler_mid_run_dump()) {
+    if (env.get_rtoptions().get_profiler_mid_run_dump()) {
         log_warning(
             tt::LogMetal,
             "Note that tracy mid-run data dumping is enabled. This means device-device sync is not as accurate. Please "
             "do not use tracy mid-run data dumping for sensitive device-device event analysis.");
     }
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
 
     auto device_profiler_it = profiler_state_manager->device_profiler_map.find(device_id);
     if (device_profiler_it != profiler_state_manager->device_profiler_map.end()) {
@@ -344,13 +343,13 @@ void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_s
     }
 }
 
-void peekDeviceData(distributed::MeshDevice* mesh_device, IDevice* device, std::vector<CoreCoord>& worker_cores) {
+void peekDeviceData(
+    MetalContext& ctx, distributed::MeshDevice* mesh_device, IDevice* device, std::vector<CoreCoord>& worker_cores) {
     ZoneScoped;
     auto device_id = device->id();
     std::string zoneName = fmt::format("peek {}", device_id);
     ZoneName(zoneName.c_str(), zoneName.size());
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     const auto& device_profiler_it = profiler_state_manager->device_profiler_map.find(device_id);
     if (device_profiler_it != profiler_state_manager->device_profiler_map.end()) {
         DeviceProfiler& device_profiler = device_profiler_it->second;
@@ -376,24 +375,28 @@ void peekDeviceData(distributed::MeshDevice* mesh_device, IDevice* device, std::
     }
 }
 
-void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
+void syncDeviceDevice(MetalContext& ctx, ChipId device_id_sender, ChipId device_id_receiver) {
     ZoneScopedC(tracy::Color::Tomato4);
     std::string zoneName = fmt::format("sync_device_device_{}->{}", device_id_sender, device_id_receiver);
     ZoneName(zoneName.c_str(), zoneName.size());
-    if (!MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!env.get_rtoptions().get_profiler_sync_enabled()) {
         return;
     }
 
-    IDevice* device_sender = detail::GetActiveDevice(device_id_sender);
-    IDevice* device_receiver = detail::GetActiveDevice(device_id_receiver);
+    const auto& device_manager = ctx.device_manager();
+    auto get_active_device = [&device_manager](ChipId id) -> IDevice* {
+        return device_manager->is_device_active(id) ? device_manager->get_active_device(id) : nullptr;
+    };
+    IDevice* device_sender = get_active_device(device_id_sender);
+    IDevice* device_receiver = get_active_device(device_id_receiver);
 
     if (device_sender != nullptr and device_receiver != nullptr) {
         constexpr std::uint16_t sample_count = 240;
         constexpr std::uint16_t sample_size = 16;
         constexpr std::uint16_t channel_count = 1;
 
-        const auto& connected_chips =
-            MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(device_id_sender);
+        const auto& connected_chips = env.get_cluster().get_ethernet_cores_grouped_by_connected_chips(device_id_sender);
 
         if (!connected_chips.contains(device_id_receiver) || connected_chips.at(device_id_receiver).empty()) {
             log_warning(
@@ -405,8 +408,8 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
         }
 
         CoreCoord eth_sender_core = connected_chips.at(device_id_receiver)[0];
-        auto eth_receiver_core = std::get<1>(MetalContext::instance().get_cluster().get_connected_ethernet_core(
-            std::make_tuple(device_id_sender, eth_sender_core)));
+        auto eth_receiver_core = std::get<1>(
+            env.get_cluster().get_connected_ethernet_core(std::make_tuple(device_id_sender, eth_sender_core)));
 
         const std::vector<uint32_t>& ct_args = {
             channel_count, static_cast<uint32_t>(sample_count), static_cast<uint32_t>(sample_size)};
@@ -459,11 +462,10 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
                 device_id_sender,
                 device_id_receiver);
         }
-        peekDeviceData(mesh_device_sender, device_sender, sender_cores);
-        peekDeviceData(mesh_device_receiver, device_receiver, receiver_cores);
+        peekDeviceData(ctx, mesh_device_sender, device_sender, sender_cores);
+        peekDeviceData(ctx, mesh_device_receiver, device_receiver, receiver_cores);
 
-        const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-            MetalContext::instance().profiler_state_manager();
+        const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
         TT_ASSERT(
             profiler_state_manager->device_profiler_map.at(device_id_sender).device_sync_new_markers.size() ==
             profiler_state_manager->device_profiler_map.at(device_id_receiver).device_sync_new_markers.size());
@@ -488,14 +490,14 @@ void syncDeviceDevice(ChipId device_id_sender, ChipId device_id_receiver) {
 }
 
 void setSyncInfo(
+    MetalContext& ctx,
     ChipId device_id,
     std::pair<double, int64_t> syncInfo,
     SyncInfo& root_sync_info,
     std::unordered_map<ChipId, std::unordered_map<ChipId, std::pair<double, int64_t>>>& deviceDeviceSyncInfo,
     const std::string& parentInfo = "") {
     ZoneScoped;
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     if (!profiler_state_manager->sync_set_devices.contains(device_id)) {
         profiler_state_manager->sync_set_devices.insert(device_id);
         if (deviceDeviceSyncInfo.contains(device_id)) {
@@ -506,28 +508,29 @@ void setSyncInfo(
                 childSyncInfo.second *= syncInfo.first;
                 childSyncInfo.second += syncInfo.second;
                 childSyncInfo.first *= syncInfo.first;
-                setSyncInfo(child_device.first, childSyncInfo, root_sync_info, deviceDeviceSyncInfo, parentInfoNew);
+                setSyncInfo(
+                    ctx, child_device.first, childSyncInfo, root_sync_info, deviceDeviceSyncInfo, parentInfoNew);
             }
         }
-        detail::setShift(device_id, syncInfo.second, syncInfo.first, root_sync_info);
+        detail::setShift(ctx, device_id, syncInfo.second, syncInfo.first, root_sync_info);
     }
 }
 
-void syncAllDevices(ChipId host_connected_device) {
+void syncAllDevices(MetalContext& ctx, ChipId host_connected_device) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
     // Check if profiler on host connected device is initialized
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     if (!profiler_state_manager->device_profiler_map.contains(host_connected_device)) {
         return;
     }
 
-    if (!MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
+    if (!env.get_rtoptions().get_profiler_sync_enabled()) {
         return;
     }
     // Update device_device_time_pair
     for (const auto& sender : profiler_state_manager->device_device_time_pair) {
         for (const auto& receiver : sender.second) {
-            syncDeviceDevice(sender.first, receiver.first);
+            syncDeviceDevice(ctx, sender.first, receiver.first);
         }
     }
 
@@ -594,7 +597,7 @@ void syncAllDevices(ChipId host_connected_device) {
 
     // Propagate sync info with DFS through sync tree
     profiler_state_manager->sync_set_devices.clear();
-    setSyncInfo(host_connected_device, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
+    setSyncInfo(ctx, host_connected_device, (std::pair<double, int64_t>){1.0, 0}, root_sync_info, deviceDeviceSyncInfo);
 }
 
 std::optional<ChipId> getUnvisitedDevice(const std::map<ChipId, bool>& visited_map) {
@@ -607,10 +610,11 @@ std::optional<ChipId> getUnvisitedDevice(const std::map<ChipId, bool>& visited_m
     return std::nullopt;
 }
 
-void ProfilerSync(ProfilerSyncState state) {
+void ProfilerSync(MetalContext& ctx, ProfilerSyncState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    if (!MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!env.get_rtoptions().get_profiler_sync_enabled()) {
         return;
     }
     // In accumulate mode, skip the dedicated device-host sync. Its kernel runs on
@@ -619,19 +623,18 @@ void ProfilerSync(ProfilerSyncState state) {
     // realtime (dispatch-core) profiler already provides device-host sync across
     // all reporting cores, so the dedicated pass is redundant here. This is
     // equivalent to running with sync disabled, which is a supported path.
-    if (MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+    if (env.get_rtoptions().get_profiler_accumulate()) {
         return;
     }
-    if (!getDeviceProfilerState(DEFAULT_CONTEXT_ID)) {
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
     TT_ASSERT(
-        !MetalContext::instance().device_manager()->is_dispatch_firmware_active(),
+        !ctx.device_manager()->is_dispatch_firmware_active(),
         "Profiler sync is not supported with fast dispatch enabled!");
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance(DEFAULT_CONTEXT_ID).profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     // Create a mapping of all connected devices to determine how to sync
     static std::unordered_map<ChipId, int> num_connected_devices;
     if (state == ProfilerSyncState::INIT) {
@@ -639,7 +642,7 @@ void ProfilerSync(ProfilerSyncState state) {
         constexpr int TOTAL_DEVICE_COUNT = 36;
         std::map<ChipId, bool> visited;
         for (int i = 0; i < TOTAL_DEVICE_COUNT; i++) {
-            if (MetalContext::instance().device_manager()->is_device_active(i)) {
+            if (ctx.device_manager()->is_device_active(i)) {
                 visited[i] = false;
             }
         }
@@ -658,13 +661,12 @@ void ProfilerSync(ProfilerSyncState state) {
                 ChipId sender_device_id = device_queue.front();
                 device_queue.pop();
 
-                if (!MetalContext::instance().device_manager()->is_device_active(sender_device_id)) {
+                if (!ctx.device_manager()->is_device_active(sender_device_id)) {
                     continue;
                 }
 
                 const auto& connected_chips =
-                    MetalContext::instance().get_cluster().get_ethernet_cores_grouped_by_connected_chips(
-                        sender_device_id);
+                    env.get_cluster().get_ethernet_cores_grouped_by_connected_chips(sender_device_id);
 
                 for (const auto& connected_chip : connected_chips) {
                     ChipId receiver_device_id = connected_chip.first;
@@ -690,7 +692,7 @@ void ProfilerSync(ProfilerSyncState state) {
 
     if (state == ProfilerSyncState::INIT) {
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto* root_device = MetalContext::instance().device_manager()->get_active_device(root_device_id);
+            auto* root_device = ctx.device_manager()->get_active_device(root_device_id);
             distributed::MeshDevice* mesh_device = nullptr;
             try {
                 mesh_device = root_device->get_mesh_device().get();
@@ -699,16 +701,16 @@ void ProfilerSync(ProfilerSyncState state) {
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
                 continue;
             }
-            syncDeviceHost(mesh_device, root_device, ProfilerStateManager::SYNC_CORE, true);
+            syncDeviceHost(ctx, mesh_device, root_device, ProfilerStateManager::SYNC_CORE, true);
             if (num_devices > 1) {
-                syncAllDevices(root_device->id());
+                syncAllDevices(ctx, root_device->id());
             }
         }
     }
     if (state == ProfilerSyncState::CLOSE_DEVICE and profiler_state_manager->do_sync_on_close) {
         profiler_state_manager->do_sync_on_close = false;
         for (auto [root_device_id, num_devices] : num_connected_devices) {
-            auto* root_device = MetalContext::instance().device_manager()->get_active_device(root_device_id);
+            auto* root_device = ctx.device_manager()->get_active_device(root_device_id);
             distributed::MeshDevice* mesh_device = nullptr;
             try {
                 mesh_device = root_device->get_mesh_device().get();
@@ -717,32 +719,41 @@ void ProfilerSync(ProfilerSyncState state) {
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
                 continue;
             }
-            syncDeviceHost(mesh_device, root_device, ProfilerStateManager::SYNC_CORE, false);
+            syncDeviceHost(ctx, mesh_device, root_device, ProfilerStateManager::SYNC_CORE, false);
             if (num_devices > 1) {
-                syncAllDevices(root_device->id());
+                syncAllDevices(ctx, root_device->id());
             }
         }
     }
 #endif
 }
 
+void ProfilerSync(ProfilerSyncState state) {
+#if defined(TRACY_ENABLE)
+    // TODO: Resolve the profiled context through the process-wide profiler instead of assuming the default one.
+    ProfilerSync(MetalContext::instance(), state);
+#endif
+}
+
 void ClearProfilerControlBuffer(IDevice* device) {
 #if defined(TRACY_ENABLE)
     std::vector<uint32_t> control_buffer(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    detail::setControlBuffer(nullptr, device, control_buffer);
+    detail::setControlBuffer(MetalContext::instance(extract_context_id(device)), nullptr, device, control_buffer);
 #endif
 }
 
 void InitDeviceProfiler(IDevice* device) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    if (!getDeviceProfilerState(extract_context_id(device))) {
+    auto& ctx = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
     // L1-accumulate is an internal runtime-team mode, not a general profiling mode.
     // Warn loudly, once per process, at the start of any accumulate run.
-    if (MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+    if (env.get_rtoptions().get_profiler_accumulate()) {
         static std::atomic<bool> accumulate_warned = false;
         if (!accumulate_warned.exchange(true)) {
             log_warning(
@@ -767,8 +778,7 @@ void InitDeviceProfiler(IDevice* device) {
 
     const ChipId device_id = device->id();
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     if (!profiler_state_manager->device_profiler_map.contains(device_id)) {
         if (firstInit.exchange(false)) {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, true);
@@ -779,12 +789,12 @@ void InitDeviceProfiler(IDevice* device) {
         profiler_state_manager->device_profiler_map.at(device_id).clearStateForDeviceReinit();
     }
 
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-    const auto& hal = MetalContext::instance().hal();
+    const auto& soc_desc = env.get_cluster().get_soc_desc(device_id);
+    const auto& hal = env.get_hal();
 
     const uint32_t num_cores_per_dram_bank = soc_desc.profiler_ceiled_core_count_perf_dram_bank;
-    const uint32_t bank_size_bytes =
-        get_profiler_dram_bank_size_per_risc_bytes() * hal.get_max_processors_per_core() * num_cores_per_dram_bank;
+    const uint32_t bank_size_bytes = get_profiler_dram_bank_size_per_risc_bytes(env.get_rtoptions()) *
+                                     hal.get_max_processors_per_core() * num_cores_per_dram_bank;
     const uint32_t profiler_size = hal.get_dev_size(HalDramMemAddrType::PROFILER);
     TT_ASSERT(bank_size_bytes <= profiler_size);
 
@@ -800,7 +810,7 @@ void InitDeviceProfiler(IDevice* device) {
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_DEFAULT] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
     }
 
-    if (MetalContext::instance().rtoptions().get_experimental_noc_debug_dump_enabled()) {
+    if (env.get_rtoptions().get_experimental_noc_debug_dump_enabled()) {
         // Split into two buffers. Assign the active DRAM buffer address to all control buffer indices.
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_NC_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
@@ -809,21 +819,20 @@ void InitDeviceProfiler(IDevice* device) {
         control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS_T2_0] = hal.get_dev_addr(HalDramMemAddrType::PROFILER);
     }
 
-    setControlBuffer(nullptr, device, control_buffer);
+    setControlBuffer(ctx, nullptr, device, control_buffer);
 
-    if (MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
+    if (env.get_rtoptions().get_profiler_noc_events_enabled()) {
         tt::tt_metal::dumpRoutingInfo(device, profiler.getNocTraceDataOutputDir());
         tt::tt_metal::dumpSocDescriptor(device, profiler.getNocTraceDataOutputDir());
     }
 #endif
 }
 
-bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
+bool areAllCoresDispatchCores(MetalContext& ctx, IDevice* device, const std::vector<CoreCoord>& virtual_cores) {
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
-    auto& metal_ctx = tt::tt_metal::MetalContext::instance(extract_context_id(device));
-    const auto& dispatch_core_config = metal_ctx.get_dispatch_core_config();
-    auto& env = MetalEnvAccessor(metal_ctx.get_env()).impl();
+    const auto& dispatch_core_config = ctx.get_dispatch_core_config();
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
     const CoreType dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core :
@@ -840,60 +849,56 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     return true;
 }
 
-bool skipReadingDeviceProfilerResults(const ProfilerReadState state) {
-    return !MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
-           state == ProfilerReadState::ONLY_DISPATCH_CORES;
+bool skipReadingDeviceProfilerResults(const llrt::RunTimeOptions& rtoptions, const ProfilerReadState state) {
+    return !rtoptions.get_profiler_do_dispatch_cores() && state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
-bool onlyProfileDispatchCores(const ProfilerReadState state) {
-    return MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores() &&
-           state == ProfilerReadState::ONLY_DISPATCH_CORES;
+bool onlyProfileDispatchCores(const llrt::RunTimeOptions& rtoptions, const ProfilerReadState state) {
+    return rtoptions.get_profiler_do_dispatch_cores() && state == ProfilerReadState::ONLY_DISPATCH_CORES;
 }
 
 #if defined(TRACY_ENABLE)
 // Shared implementation for reading device profiler results
 static void ReadDeviceProfilerResultsImpl(
+    MetalContext& ctx,
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
     ZoneScoped;
-    ContextId context_id = extract_context_id(mesh_device, device);
-    if (!getDeviceProfilerState(context_id)) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance(context_id).profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
     TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
     DeviceProfiler& profiler = profiler_it->second;
 
-    if (skipReadingDeviceProfilerResults(state)) {
+    if (skipReadingDeviceProfilerResults(env.get_rtoptions(), state)) {
         return;
     }
 
-    if (onlyProfileDispatchCores(state)) {
-        TT_ASSERT(areAllCoresDispatchCores(device, virtual_cores));
+    if (onlyProfileDispatchCores(env.get_rtoptions(), state)) {
+        TT_ASSERT(areAllCoresDispatchCores(ctx, device, virtual_cores));
 
         constexpr uint8_t maxLoopCount = 10;
         constexpr uint32_t loopDuration_us = 10000;
 
-        auto& context = MetalContext::instance(extract_context_id(device));
-        const auto& hal = context.hal();
+        const auto& hal = env.get_hal();
         for (const CoreCoord& core : virtual_cores) {
             bool is_core_done = false;
 
-            const HalProgrammableCoreType core_type =
-                tt::llrt::get_core_type(MetalEnvAccessor(context.get_env()).impl(), device->id(), core);
+            const HalProgrammableCoreType core_type = tt::llrt::get_core_type(env, device->id(), core);
 
             DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
             DeviceAddr control_vector_addr =
                 profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                                         dev_msgs::profiler_msg_t::Field::control_vector);
             for (int i = 0; i < maxLoopCount; i++) {
-                const std::vector<std::uint32_t> control_buffer = context.get_cluster().read_core(
+                const std::vector<std::uint32_t> control_buffer = env.get_cluster().read_core(
                     device->id(), core, control_vector_addr, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                 if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
                     is_core_done = true;
@@ -910,16 +915,14 @@ static void ReadDeviceProfilerResultsImpl(
         }
     }
 
-    TT_FATAL(
-        !MetalContext::instance().dprint_server(), "Debug print server is running, cannot read device profiler data");
+    TT_FATAL(!ctx.dprint_server(), "Debug print server is running, cannot read device profiler data");
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() ||
-        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+    if (env.get_rtoptions().get_profiler_trace_only() || env.get_rtoptions().get_profiler_accumulate()) {
         // Accumulate mode keeps the un-pushed residual in L1 (only flushing to DRAM when the
         // buffer is nearly full), so the L1 buffers must be read alongside DRAM.
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
-    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+    } else if (env.get_hal().get_arch() == tt::ARCH::QUASAR) {
         // Quasar uses the L1-only profiler path (no DRAM drain).
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
@@ -929,22 +932,24 @@ static void ReadDeviceProfilerResultsImpl(
 #endif
 
 void ReadDeviceProfilerResults(
+    MetalContext& ctx,
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
-    ContextId context_id = extract_context_id(mesh_device, device);
-    if (getDeviceDebugDumpEnabled(context_id)) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (getDeviceDebugDumpEnabled(env)) {
         return;
     }
 
-    ReadDeviceProfilerResultsImpl(mesh_device, device, virtual_cores, state, metadata);
+    ReadDeviceProfilerResultsImpl(ctx, mesh_device, device, virtual_cores, state, metadata);
 #endif
 }
 
 void ReadDeviceProfilerResultsInternal(
+    MetalContext& ctx,
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -954,26 +959,22 @@ void ReadDeviceProfilerResultsInternal(
     // Note: This function bypasses the getDeviceDebugDumpEnabled() check
     // It is intended only for use by ProfilerStateManager during cleanup
 #if defined(TRACY_ENABLE)
-    ContextId context_id = extract_context_id(mesh_device, device);
-    if (!getDeviceProfilerState(context_id)) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance(context_id).profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
     TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
     DeviceProfiler& profiler = profiler_it->second;
 
-    TT_FATAL(
-        !MetalContext::instance(context_id).dprint_server(),
-        "Debug print server is running, cannot read device profiler data");
+    TT_FATAL(!ctx.dprint_server(), "Debug print server is running, cannot read device profiler data");
 
-    if (include_l1 || MetalContext::instance(context_id).rtoptions().get_profiler_trace_only() ||
-        MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
+    if (include_l1 || env.get_rtoptions().get_profiler_trace_only() || env.get_rtoptions().get_profiler_accumulate()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
-    } else if (MetalContext::instance(context_id).hal().get_arch() == tt::ARCH::QUASAR) {
+    } else if (env.get_hal().get_arch() == tt::ARCH::QUASAR) {
         // Quasar uses the L1-only profiler path (no DRAM drain).
         profiler.readResults(mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
@@ -982,30 +983,28 @@ void ReadDeviceProfilerResultsInternal(
 #endif
 }
 
-bool dumpDeviceProfilerDataMidRun(const ProfilerReadState state) {
-    if (!MetalContext::instance().rtoptions().get_profiler_mid_run_dump()) {
+bool dumpDeviceProfilerDataMidRun(const llrt::RunTimeOptions& rtoptions, const ProfilerReadState state) {
+    if (!rtoptions.get_profiler_mid_run_dump()) {
         return false;
     }
 
     TT_FATAL(
-        MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
-            !MetalContext::instance().rtoptions().get_profiler_trace_only(),
+        rtoptions.get_profiler_mid_run_dump() && !rtoptions.get_profiler_trace_only(),
         "Cannot dump data mid-run if only profiling trace runs");
 
     TT_FATAL(
-        MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
-            !MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores(),
+        rtoptions.get_profiler_mid_run_dump() && !rtoptions.get_profiler_do_dispatch_cores(),
         "Cannot dump data mid-run if profiling dispatch cores");
 
-    return MetalContext::instance().rtoptions().get_profiler_mid_run_dump() && state == ProfilerReadState::NORMAL;
+    return rtoptions.get_profiler_mid_run_dump() && state == ProfilerReadState::NORMAL;
 }
 
-bool getProgramsPerfDataMidRun() {
-    return MetalContext::instance().rtoptions().get_profiler_mid_run_dump() &&
-           MetalContext::instance().rtoptions().get_profiler_cpp_post_process();
+bool getProgramsPerfDataMidRun(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.get_profiler_mid_run_dump() && rtoptions.get_profiler_cpp_post_process();
 }
 
 void ProcessDeviceProfilerResults(
+    MetalContext& ctx,
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
     ProfilerReadState state,
@@ -1013,47 +1012,46 @@ void ProcessDeviceProfilerResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    if (!getDeviceProfilerState(extract_context_id(device))) {
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
 
     auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
     TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
     DeviceProfiler& profiler = profiler_it->second;
 
-    if (skipReadingDeviceProfilerResults(state)) {
+    if (skipReadingDeviceProfilerResults(env.get_rtoptions(), state)) {
         return;
     }
 
-    if (MetalContext::instance().rtoptions().get_profiler_trace_only() ||
-        MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+    if (env.get_rtoptions().get_profiler_trace_only() || env.get_rtoptions().get_profiler_accumulate()) {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
-    } else if (MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR) {
+    } else if (env.get_hal().get_arch() == tt::ARCH::QUASAR) {
         // Quasar uses the L1-only profiler path (no DRAM drain).
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::L1, metadata);
     } else {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
     }
 
-    if (dumpDeviceProfilerDataMidRun(state)) {
+    if (dumpDeviceProfilerDataMidRun(env.get_rtoptions(), state)) {
         profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
     }
 #endif
 }
 
-std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const ProfilerReadState state) {
+std::vector<CoreCoord> getVirtualCoresForProfiling(
+    MetalContext& ctx, const IDevice* device, const ProfilerReadState state) {
     std::vector<CoreCoord> virtual_cores;
 
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
-    auto& metal_ctx = tt::tt_metal::MetalContext::instance(extract_context_id(device));
-    const auto& dispatch_core_config = metal_ctx.get_dispatch_core_config();
-    auto& env = MetalEnvAccessor(metal_ctx.get_env()).impl();
+    const auto& dispatch_core_config = ctx.get_dispatch_core_config();
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
 
-    if (!onlyProfileDispatchCores(state)) {
+    if (!onlyProfileDispatchCores(env.get_rtoptions(), state)) {
         for (const CoreCoord& core :
              tt::get_logical_compute_cores(env, device_id, device_num_hw_cqs, dispatch_core_config)) {
             const CoreCoord curr_core = device->worker_core_from_logical_core(core);
@@ -1083,21 +1081,21 @@ void ReadDeviceProfilerResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    ContextId context_id = extract_context_id(device);
-    if (!getDeviceProfilerState(context_id)) {
+    auto& ctx = MetalContext::instance(extract_context_id(device));
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
     // Manual reading of device profiler results is not supported when there is already another thread reading the
     // results
-    if (getDeviceDebugDumpEnabled(context_id)) {
+    if (getDeviceDebugDumpEnabled(env)) {
         return;
     }
 
     TT_ASSERT(device->is_initialized());
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance(context_id).profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
     TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
     DeviceProfiler& profiler = profiler_it->second;
@@ -1108,7 +1106,7 @@ void ReadDeviceProfilerResults(
     } catch (const std::exception&) {
         log_info(tt::LogMetal, "Device {} is not managed by MeshDevice", device->id());
     }
-    if (useFastDispatch(MetalContext::instance(context_id), mesh_device, device)) {
+    if (useFastDispatch(ctx, mesh_device, device)) {
         if (profiler.isLastFDReadDone() && state == ProfilerReadState::LAST_FD_READ) {
             ZoneScopedN("Skipping! Last FD dispatch is done");
             return;
@@ -1118,39 +1116,45 @@ void ReadDeviceProfilerResults(
         }
     }
 
-    const std::vector<CoreCoord> virtual_cores = getVirtualCoresForProfiling(device, state);
-    ReadDeviceProfilerResults(mesh_device, device, virtual_cores, state, metadata);
-    ProcessDeviceProfilerResults(device, virtual_cores, state, metadata);
+    const std::vector<CoreCoord> virtual_cores = getVirtualCoresForProfiling(ctx, device, state);
+    ReadDeviceProfilerResults(ctx, mesh_device, device, virtual_cores, state, metadata);
+    ProcessDeviceProfilerResults(ctx, device, virtual_cores, state, metadata);
 #endif
 }
 
-void SetDeviceProfilerDir(const std::string& output_dir) {
+void SetDeviceProfilerDir(distributed::MeshDevice& mesh_device, const std::string& output_dir) {
 #if defined(TRACY_ENABLE)
-    if (!getDeviceProfilerState(DEFAULT_CONTEXT_ID)) {
+    if (!getDeviceProfilerState(mesh_device.impl().metal_env())) {
         return;
     }
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+        mesh_device.impl().metal_context().profiler_state_manager();
     if (profiler_state_manager) {
-        for (auto& device_id : profiler_state_manager->device_profiler_map) {
-            profiler_state_manager->device_profiler_map.at(device_id.first).setOutputDir(output_dir);
+        for (const ChipId device_id : mesh_device.get_device_ids()) {
+            auto profiler_it = profiler_state_manager->device_profiler_map.find(device_id);
+            if (profiler_it != profiler_state_manager->device_profiler_map.end()) {
+                profiler_it->second.setOutputDir(output_dir);
+            }
         }
     }
 #endif
 }
 
-void FreshProfilerDeviceLog() {
+void FreshProfilerDeviceLog(distributed::MeshDevice& mesh_device) {
 #if defined(TRACY_ENABLE)
-    if (!getDeviceProfilerState(DEFAULT_CONTEXT_ID)) {
+    if (!getDeviceProfilerState(mesh_device.impl().metal_env())) {
         return;
     }
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+        mesh_device.impl().metal_context().profiler_state_manager();
     if (profiler_state_manager) {
-        for (auto& device_id : profiler_state_manager->device_profiler_map) {
-            profiler_state_manager->device_profiler_map.at(device_id.first).freshDeviceLog();
+        for (const ChipId device_id : mesh_device.get_device_ids()) {
+            auto profiler_it = profiler_state_manager->device_profiler_map.find(device_id);
+            if (profiler_it != profiler_state_manager->device_profiler_map.end()) {
+                profiler_it->second.freshDeviceLog();
+            }
         }
     }
 #endif
@@ -1185,17 +1189,17 @@ void ReadMeshDeviceProfilerResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    ContextId context_id = extract_context_id(&mesh_device);
-    if (!getDeviceProfilerState(context_id)) {
+    auto& ctx = mesh_device.impl().metal_context();
+    auto& env = mesh_device.impl().metal_env();
+    if (!getDeviceProfilerState(env)) {
         return;
     }
 
     TT_ASSERT(mesh_device.is_initialized());
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance(context_id).profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
 
-    if (useFastDispatch(MetalContext::instance(context_id), &mesh_device, &mesh_device)) {
+    if (useFastDispatch(ctx, &mesh_device, &mesh_device)) {
         for (auto device_id : mesh_device.get_device_ids()) {
             auto profiler_it = profiler_state_manager->device_profiler_map.find(device_id);
             TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
@@ -1218,11 +1222,11 @@ void ReadMeshDeviceProfilerResults(
     // At this point the kernels are done executing
     // Manual reading of device profiler results is not supported when there is already another thread reading the
     // results. Signal the debug dump thread to do a read instead.
-    if (getDeviceDebugDumpEnabled(context_id)) {
-        if (auto& profiler_state_manager = MetalContext::instance(context_id).profiler_state_manager()) {
+    if (getDeviceDebugDumpEnabled(env)) {
+        if (auto& profiler_state_manager = ctx.profiler_state_manager()) {
             profiler_state_manager->signal_debug_dump_read();
         }
-        if (auto& noc_debug_state = MetalContext::instance(context_id).noc_debug_state()) {
+        if (auto& noc_debug_state = ctx.noc_debug_state()) {
             noc_debug_state->process_accumulated_events_all_chips();
             noc_debug_state->finish_cores();
             if (state != ProfilerReadState::LAST_FD_READ) {
@@ -1237,14 +1241,14 @@ void ReadMeshDeviceProfilerResults(
     }
 
     for (IDevice* device : mesh_device.get_devices()) {
-        const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(device, state);
-        detail::ReadDeviceProfilerResults(&mesh_device, device, virtual_cores, state, metadata);
+        const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(ctx, device, state);
+        detail::ReadDeviceProfilerResults(ctx, &mesh_device, device, virtual_cores, state, metadata);
     }
 
     for (IDevice* device : mesh_device.get_devices()) {
-        mesh_device.enqueue_to_thread_pool([device, state, &metadata]() {
-            const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(device, state);
-            detail::ProcessDeviceProfilerResults(device, virtual_cores, state, metadata);
+        mesh_device.enqueue_to_thread_pool([&ctx, device, state, &metadata]() {
+            const std::vector<CoreCoord> virtual_cores = detail::getVirtualCoresForProfiling(ctx, device, state);
+            detail::ProcessDeviceProfilerResults(ctx, device, virtual_cores, state, metadata);
         });
     }
 
@@ -1332,12 +1336,14 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    if (!getDeviceProfilerState() || !detail::getProgramsPerfDataMidRun()) {
+    // TODO: Resolve the profiled context through the process-wide profiler instead of assuming the default one.
+    auto& ctx = MetalContext::instance();
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env) || !detail::getProgramsPerfDataMidRun(env.get_rtoptions())) {
         return {};
     }
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
 
     if (profiler_state_manager == nullptr) {
         log_warning(
@@ -1364,12 +1370,14 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    if (!getDeviceProfilerState(DEFAULT_CONTEXT_ID) || !detail::getProgramsPerfDataMidRun()) {
+    // TODO: Resolve the profiled context through the process-wide profiler instead of assuming the default one.
+    auto& ctx = MetalContext::instance();
+    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
+    if (!getDeviceProfilerState(env) || !detail::getProgramsPerfDataMidRun(env.get_rtoptions())) {
         return {};
     }
 
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance().profiler_state_manager();
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
 
     if (profiler_state_manager == nullptr) {
         log_warning(
@@ -1414,14 +1422,14 @@ std::map<ChipId, KernelDurationSummary> GetAllKernelDurationSummary(
 
 }  // namespace experimental
 
-void LaunchIntervalBasedProfilerReadThread(const std::vector<IDevice*>& active_devices) {
+void LaunchIntervalBasedProfilerReadThread(MetalContext& ctx, const std::vector<IDevice*>& active_devices) {
 #if defined(TRACY_ENABLE)
     std::unordered_map<ChipId, std::vector<CoreCoord>> virtual_cores_map;
     for (IDevice* device : active_devices) {
-        virtual_cores_map[device->id()] = detail::getVirtualCoresForProfiling(device, ProfilerReadState::NORMAL);
+        virtual_cores_map[device->id()] = detail::getVirtualCoresForProfiling(ctx, device, ProfilerReadState::NORMAL);
     }
 
-    MetalContext::instance().profiler_state_manager()->start_debug_dump_thread(active_devices, virtual_cores_map);
+    ctx.profiler_state_manager()->start_debug_dump_thread(active_devices, virtual_cores_map);
 #endif
 }
 
