@@ -67,6 +67,7 @@ CMakePresets.json @tenstorrent/metalium-developers-infra
 **/CMakeLists.txt @tenstorrent/metalium-developers-infra
 scripts/detect_undocumented_ttnn_ops.py @tenstorrent/metalium-developers-external-experience
 scripts/run_safe_pytest.sh @tenstorrent/metalium-developers-convolutions
+scripts/setup_harvesting.py @jvegaTT @ntarafdar @cfjchu @tenstorrent/metalium-developers-infra
 third_party/CMakeLists.txt @tenstorrent/metalium-developers-infra
 
 # Testing scripts and infra
