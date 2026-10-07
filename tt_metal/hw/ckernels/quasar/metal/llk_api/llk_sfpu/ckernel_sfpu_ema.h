@@ -197,6 +197,9 @@ inline void ema_clear_previous_output() { TTI_SFPLOADI(EMA_CARRY_REG, sfpi::SFPL
  * @note Where the output lands is fixed by the OUT_TILE_DELTA @ref init_ema recorded the body with:
  *       the production contract is EMA_OUTPUT_TILE_DELTA (input at dst_index, output at
  *       dst_index + 1), 0 writes in place.
+ * @note 32x32 tiles only: the walk covers four 16x16 faces and all 32 rows whatever the Dest tile
+ *       shape, so on a smaller tile it reads and writes past the selected tile. Callers must not use
+ *       it with tiny tiles.
  * @note Run this once per tile under VectorMode::RC_custom, not once per face - the chain spans the
  *       whole tile. It leaves the Dest RWC counter advanced part way into the tile, which
  *       @ref _llk_math_eltwise_sfpu_done_ resets.
