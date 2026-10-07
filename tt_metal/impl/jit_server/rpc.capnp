@@ -52,6 +52,8 @@ struct CompileRequest {
 struct ElfBlob {
     name @0 :Text;
     data @1 :Data;
+    # KERNEL_PROFILER diagnostics from this target's objects, including cache hits.
+    profilerZoneLog @2 :Text;
 }
 
 struct CompileResponse {

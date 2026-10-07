@@ -33,6 +33,18 @@
 
 namespace tt::jit_build::utils {
 
+std::string read_profiler_zone_log(const std::filesystem::path& path) {
+    std::ifstream log(path);
+    std::string result;
+    for (std::string line; std::getline(log, line);) {
+        if (line.find("KERNEL_PROFILER") != std::string::npos) {
+            result += line;
+            result += '\n';
+        }
+    }
+    return result;
+}
+
 bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
     TTZoneScopedD(JIT);
     TTZoneTextD(JIT, cmd.c_str(), cmd.length());

@@ -356,6 +356,9 @@ void build_target(
     tt::tt_metal::jit_server::ElfBlob blob;
     blob.name = target.target_name;
     blob.data = tt::jit_build::utils::read_file_bytes(elf_path);
+    for (const auto& obj : target.objs) {
+        blob.profiler_zone_log += tt::jit_build::utils::read_profiler_zone_log(out_dir + obj + ".log");
+    }
     response.elf_blobs.push_back(std::move(blob));
 }
 

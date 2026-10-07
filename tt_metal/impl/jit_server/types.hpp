@@ -28,6 +28,7 @@ struct CompileRequest {
 struct ElfBlob {
     std::string name;
     std::vector<std::uint8_t> data;
+    std::string profiler_zone_log;
 };
 
 struct FirmwareArtifact {

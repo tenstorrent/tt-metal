@@ -198,6 +198,13 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
         if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
             return false;
         }
+        if (MetalContext::instance(kernel->get_context_id()).rtoptions().get_profiler_enabled() &&
+            !std::filesystem::exists(
+                std::filesystem::path(bs.get_target_out_path(kernel->get_full_kernel_name())).parent_path() /
+                "remote_profiler.o.log")) {
+            // Caches produced before remote profiler metadata was transported must be refreshed.
+            return false;
+        }
     }
     return true;
 }
@@ -3239,6 +3246,24 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
+            if (build_env.build_env.get_rtoptions().get_profiler_enabled()) {
+                const uint32_t core_type =
+                    MetalContext::instance(device_context_id)
+                        .hal()
+                        .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
+                const uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
+                for (int i = 0; i < kernel->expected_num_binaries(); ++i) {
+                    const auto& state =
+                        BuildEnvManager::get_instance(extract_context_id(device))
+                            .get_kernel_build_state(
+                                device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+                    state.extract_zone_src_locations(
+                        std::filesystem::path(state.get_target_out_path(kernel->get_full_kernel_name()))
+                            .parent_path()
+                            .string() +
+                        "/");
+                }
+            }
             kernel->read_binaries(device, binary_root);
             kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);

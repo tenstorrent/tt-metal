@@ -126,6 +126,7 @@ CompileResponse read_compile_response(rpc::CompileResponse::Reader reader) {
         elf.name = blob.getName().cStr();
         auto data = blob.getData();
         elf.data.assign(data.begin(), data.end());
+        elf.profiler_zone_log = blob.getProfilerZoneLog().cStr();
         response.elf_blobs.push_back(std::move(elf));
     }
     return response;

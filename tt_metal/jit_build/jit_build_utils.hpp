@@ -87,6 +87,10 @@ void create_file(const std::string& file_path_str);
 // Throws std::runtime_error if the file cannot be read or if the read is incomplete.
 std::vector<std::uint8_t> read_file_bytes(const std::string& path);
 
+// Preserve only profiler pragma diagnostics, not the rest of a compiler's stdout/stderr.
+// Reading existing object logs also covers a remote server's warmed object-cache hits.
+std::string read_profiler_zone_log(const std::filesystem::path& path);
+
 // Read regular files in |dir| and return them as (filename, content) entries.
 // When |extensions| is non-empty, only files whose extension matches one of the
 // entries (e.g. ".h", ".cpp") are included.
