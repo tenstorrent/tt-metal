@@ -111,7 +111,7 @@
 #include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"  // calculate_div_int32_trunc / calculate_div_int32_floor
 #include "llk_sfpu/ckernel_sfpu_int_sum.h"          // add_int (Dest tile += the next tile) / sum_int_init
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
-#include "llk_sfpu/ckernel_sfpu_lcm.h"              // calculate_lcm (int lcm)
+#include "llk_sfpu/ckernel_sfpu_lcm.h"              // calculate_lcm / calculate_lcm_init (int lcm)
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
@@ -1314,6 +1314,11 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         isclose_init();
     }
+    else if constexpr (OP == BinaryOp::LCM)
+    {
+        // Records the GCD and tail replay bodies that calculate_lcm replays.
+        calculate_lcm_init();
+    }
     else if constexpr (OP == BinaryOp::FMOD)
     {
         fmod_binary_init<APPROXIMATION_MODE>();
@@ -1381,8 +1386,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         calculate_sfpu_logaddexp2_init<is_fp32_dest_acc_en>();
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID / LCM are stateless — no init
-    // (LCM records its replay bodies inside the calculate call).
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
 }
 
 /**

@@ -17,9 +17,13 @@
 namespace ckernel {
 namespace sfpu {
 
-// SFPMOV mod1: plain copy / copy with the sign bit inverted.
+// SFPMOV mod1: plain copy.
 constexpr std::uint32_t LCM_MOV_MOD_COPY = 0x0;
-constexpr std::uint32_t LCM_MOV_MOD_NEGATE = sfpi::SFPMOV_MOD1_COMPSIGN;
+
+// SFPMAD mod1 bit 0 inverts the sign of src_a before the multiply (assembly.yaml), so
+// t = 1 - g*y is a single MAD (-g)*y + 1 with no negated copy of g.
+constexpr std::uint32_t LCM_MAD_MOD_PLAIN = 0x0;
+constexpr std::uint32_t LCM_MAD_MOD_NEG_SRC_A = 0x1;
 
 // SFPIADD mod1[1:0] selects the operation; bit 2 keeps CC untouched.
 constexpr std::uint32_t LCM_IADD_MOD_ADD =
@@ -52,9 +56,9 @@ constexpr std::uint32_t LCM_CAST_MOD_INT_TO_FP32 = sfpi::SFPCAST_MOD1_SM32_TO_FP
 constexpr std::uint32_t LCM_GCD_REPLAY_SLOT = 0;
 constexpr std::uint32_t LCM_GCD_REPLAY_LEN = 16;
 
-// Replay slots [16, 31): the quotient and product tail, run once per row.
+// Replay slots [16, 30): the quotient and product tail, run once per row.
 constexpr std::uint32_t LCM_TAIL_REPLAY_SLOT = LCM_GCD_REPLAY_SLOT + LCM_GCD_REPLAY_LEN;
-constexpr std::uint32_t LCM_TAIL_REPLAY_LEN = 15;
+constexpr std::uint32_t LCM_TAIL_REPLAY_LEN = 14;
 
 // Operand magnitude ceiling in bits: q * |b| must stay below 2^31 and SFPMUL24 reads only the low 23 bits.
 constexpr int LCM_MAX_INPUT_BITS = 15;
@@ -102,7 +106,7 @@ inline void _calculate_lcm_gcd_step_() {
  *
  * @tparam MAX_INPUT_BITS: Operand magnitude budget in bits; sets the replay count.
  * @note Call only while the two-step body is live in replay slot @c LCM_GCD_REPLAY_SLOT —
- *       @ref calculate_lcm records it. On entry LREG2 = -a, LREG1 = b, LREG3 = k - 31; on exit
+ *       @ref calculate_lcm_init records it. On entry LREG2 = -a, LREG1 = b, LREG3 = k - 31; on exit
  *       LREG1 holds the gcd and the lanes whose operand hit zero are retired in the CC.
  */
 template <int MAX_INPUT_BITS>
@@ -113,6 +117,54 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
     for (int r = 0; r < LCM_GCD_REPLAY_COUNT; r++) {
         lltt::replay(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
     }
+}
+
+/**
+ * @brief Record the two lcm replay bodies: the two-step GCD reduction and the quotient/product tail.
+ *
+ * Every recorded instruction is an immediate that depends on neither the row, the face nor the
+ * tile, so recording once here leaves @ref calculate_lcm issuing only replays.
+ *
+ * @note Call before @ref calculate_lcm, and again before resuming lcm after any op that records
+ *       into replay slots [0, 30) — the usual *_tile_init convention.
+ */
+inline void calculate_lcm_init() {
+    // The next 16 instructions are captured into the replay buffer, not executed.
+    lltt::record(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
+
+    // Two steps with LREG2 and LREG0 trading roles: -a in LREG2 on entry and exit.
+    _calculate_lcm_gcd_step_<p_sfpu::LREG2, p_sfpu::LREG0>();
+    _calculate_lcm_gcd_step_<p_sfpu::LREG0, p_sfpu::LREG2>();
+
+    // Likewise recorded, not executed: the once-per-row quotient and product tail.
+    lltt::record(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN);
+
+    TTI_SFPENCC(0 /* imm12 */, LCM_ENCC_MOD_RESET);  // wake retired lanes; lreg1 = g
+
+    // Exact quotient q = |a| / g via reciprocal seed + two Newton-Raphson steps. The |a| cast sits
+    // between the LUT and the first MAD so y is not consumed by the instruction after SFPNONLINEAR.
+    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG0, LCM_CAST_MOD_INT_TO_FP32);         // lreg0 = float(g)
+    TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpnonlinear::RECIP_MODE);  // lreg2 = y ~ 1/g
+    TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG6, LCM_CAST_MOD_INT_TO_FP32);         // lreg6 = float(|a|)
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, LCM_MAD_MOD_NEG_SRC_A);  // t = 1 - g*y
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, LCM_MAD_MOD_PLAIN);         // y = t*y + y
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, LCM_MAD_MOD_NEG_SRC_A);  // t = 1 - g*y
+    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, LCM_MAD_MOD_PLAIN);         // y = t*y + y
+    TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG6, LCM_MAD_MOD_PLAIN);  // lreg6 = |a| * y
+    TTI_SFP_STOCH_RND(
+        p_sfpu::sfp_stochrnd_rnd_mod::NearEven,
+        0 /* imm8 */,
+        0 /* lreg_b */,
+        p_sfpu::LREG6,
+        p_sfpu::LREG6,
+        p_sfpu::sfp_stochrnd_mod::FP32_TO_UINT16);  // lreg6 = q, exact integer < 2^15
+
+    // lcm = q * |b| < 2^30 from the two SFPMUL24 halves. SFPSHFT/SFPIADD do not stall on a
+    // 2-cycle producer (TEN-4581), so each consumer sits two instructions after its SFPMUL24.
+    TTI_SFPMUL24(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG7, sfpi::SFPMUL24_MOD1_UPPER);    // lreg7 = (q*b) >> 23
+    TTI_SFPMUL24(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);    // lreg0 = low 23 bits
+    TTI_SFPSHFT(LCM_MUL24_HI_SHIFT, p_sfpu::LREG7, p_sfpu::LREG7, LCM_SHFT_MOD_IMM_FROM_C);  // lreg7 <<= 23
+    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG7, p_sfpu::LREG0, LCM_IADD_MOD_ADD);              // lreg0 = lo + hi
 }
 
 /**
@@ -137,9 +189,9 @@ inline void _calculate_lcm_gcd_sfp_rows_() {
  * @param dst_index_in1: Dest tile index of operand b.
  * @param dst_index_out: Dest tile index for the result; may alias either input.
  * @note Operands must satisfy |a|, |b| <= 2^MAX_INPUT_BITS - 1; larger inputs silently overflow.
- *       Needs no init call — the replay bodies are recorded on entry — but @c ADDR_MOD_7 must
- *       already be programmed by the generic SFPU addrmod setup.
- * @note Clobbers LREG0..LREG7, the CC state, and replay slots [0, 31).
+ * @note Call @ref calculate_lcm_init first: this only replays the bodies it records. @c ADDR_MOD_7
+ *       must already be programmed by the generic SFPU addrmod setup.
+ * @note Clobbers LREG0..LREG7 and the CC state.
  */
 template <
     bool SIGN_MAGNITUDE_FORMAT = false,
@@ -155,43 +207,6 @@ inline void calculate_lcm(
     const std::uint32_t in0_offset = dst_index_in0 * tile_stride;
     const std::uint32_t in1_offset = dst_index_in1 * tile_stride;
     const std::uint32_t out_offset = dst_index_out * tile_stride;
-
-    // The next 16 instructions are captured into the replay buffer, not executed.
-    lltt::record(LCM_GCD_REPLAY_SLOT, LCM_GCD_REPLAY_LEN);
-
-    // Two steps with LREG2 and LREG0 trading roles: -a in LREG2 on entry and exit.
-    _calculate_lcm_gcd_step_<p_sfpu::LREG2, p_sfpu::LREG0>();
-    _calculate_lcm_gcd_step_<p_sfpu::LREG0, p_sfpu::LREG2>();
-
-    // Likewise recorded, not executed: the once-per-row quotient and product tail.
-    lltt::record(LCM_TAIL_REPLAY_SLOT, LCM_TAIL_REPLAY_LEN);
-
-    TTI_SFPENCC(0 /* imm12 */, LCM_ENCC_MOD_RESET);  // wake retired lanes; lreg1 = g
-
-    // Exact quotient q = |a| / g via reciprocal seed + two Newton-Raphson steps.
-    TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG0, LCM_CAST_MOD_INT_TO_FP32);                      // lreg0 = float(g)
-    TTI_SFPCAST(p_sfpu::LREG4, p_sfpu::LREG6, LCM_CAST_MOD_INT_TO_FP32);                      // lreg6 = float(|a|)
-    TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpnonlinear::RECIP_MODE);               // lreg2 = y ~ 1/g
-    TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG3, LCM_MOV_MOD_NEGATE);                             // lreg3 = -g
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG0, 0 /* mod1 */);  // t = 1 - g*y
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, 0 /* mod1 */);     // y = t*y + y
-    TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG0, 0 /* mod1 */);  // t = 1 - g*y
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, 0 /* mod1 */);     // y = t*y + y
-    TTI_SFPMUL(p_sfpu::LREG6, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG6, 0 /* mod1 */);  // lreg6 = |a| * y
-    TTI_SFP_STOCH_RND(
-        p_sfpu::sfp_stochrnd_rnd_mod::NearEven,
-        0 /* imm8 */,
-        0 /* lreg_b */,
-        p_sfpu::LREG6,
-        p_sfpu::LREG6,
-        p_sfpu::sfp_stochrnd_mod::FP32_TO_UINT16);  // lreg6 = q, exact integer < 2^15
-
-    // lcm = q * |b| < 2^30 from the two SFPMUL24 halves. SFPSHFT/SFPIADD do not stall on a
-    // 2-cycle producer (TEN-4581), so each consumer sits two instructions after its SFPMUL24.
-    TTI_SFPMUL24(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG7, sfpi::SFPMUL24_MOD1_UPPER);    // lreg7 = (q*b) >> 23
-    TTI_SFPMUL24(p_sfpu::LREG6, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPMUL24_MOD1_LOWER);    // lreg0 = low 23 bits
-    TTI_SFPSHFT(LCM_MUL24_HI_SHIFT, p_sfpu::LREG7, p_sfpu::LREG7, LCM_SHFT_MOD_IMM_FROM_C);  // lreg7 <<= 23
-    TTI_SFPIADD(0 /* imm12 */, p_sfpu::LREG7, p_sfpu::LREG0, LCM_IADD_MOD_ADD);              // lreg0 = lo + hi
 
     for (int d = 0; d < ITERATIONS; d++) {
         // Explicit INT32 sfpmem for integer loads/stores (TEN-4674).
