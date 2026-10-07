@@ -668,7 +668,43 @@ def g_pre_perf(dev):
         run_case("pre_perf_chunked_64kcache", f, S=2048, start=start, Lc=Lc)
 
 
+def g_pre_dbg(dev):
+    """bisect which kwarg the chunked op binding rejects"""
+    Lc, start, S = 8192, 4096, 2048
+    qc, kc_, vc, sk = pf_inputs(S, 8, 1, seed=3, Sk=Lc)
+    pk, pt = make_paged(kc_)
+    pv192, _ = make_paged(pad_last(vc, DQK))
+    tq, tk, tv, tpt = tt(dev, qc), tt(dev, pk), tt(dev, pv192), tt(dev, pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+    variants = {
+        "min": dict(),
+        "pcfg": dict(program_config=pre_cfg(dev)),
+        "ckc": dict(compute_kernel_config=HIFI2()),
+        "scale": dict(scale=SCALE),
+        "window": dict(sliding_window_size=WINDOW),
+        "sink": dict(attention_sink=sink_tt(dev, sk, "scale")),
+        "kw_start": dict(),
+    }
+    for name, kw in variants.items():
+
+        def f():
+            if name == "kw_start":
+                o = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=tq,
+                    input_tensor_k=tk,
+                    input_tensor_v=tv,
+                    page_table_tensor=tpt,
+                    chunk_start_idx=start,
+                    **kw,
+                )
+            else:
+                o = ttnn.transformer.chunked_scaled_dot_product_attention(tq, tk, tv, tpt, start, **kw)
+            return {"shape": list(o.shape)}
+
+        run_case("pre_dbg", f, variant=name)
+
+
 GROUPS = dict(
+    pre_dbg=g_pre_dbg,
     dec_corr=g_dec_corr,
     dec_gqa=g_dec_gqa,
     dec_ring=g_dec_ring,
