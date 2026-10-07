@@ -12,7 +12,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.mimo_v26.tt.attention import decode_pos_io, decode_pos_set
-from models.demos.blackhole.mimo_v26.tt.layer import EPS, _k_norm
+from models.demos.blackhole.mimo_v26.tt.layer import EPS, _k_norm, rms_decode_sharded
 
 HIDDEN, SLOTS, T64 = 4096, 32, 64
 
@@ -105,7 +105,10 @@ class Decoder:
             feat = ttnn.concat(caps, dim=3) if len(caps) > 1 else caps[0]
             for c in caps if len(caps) > 1 else []:
                 ttnn.deallocate(c)
-        x = ttnn.rms_norm(h, epsilon=EPS, weight=m.w_norm, compute_kernel_config=_k_norm())
+        if os.environ.get("MIMO_NORM", "sharded") == "sharded" and h.shape[2] <= 32:
+            x = rms_decode_sharded(h, m.w_norm)
+        else:
+            x = ttnn.rms_norm(h, epsilon=EPS, weight=m.w_norm, compute_kernel_config=_k_norm())
         ttnn.deallocate(h)
         lg = ttnn.linear(
             x,
