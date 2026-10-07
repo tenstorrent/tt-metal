@@ -15,6 +15,14 @@ This folder holds the TTNN port we received from HPE and an optimized version fo
 
 Both match the float64 reference to a relative RMS error of about 1e-7 (PCC ≈ 1 − 1e-14).
 
+## How it was optimized
+
+I ran Claude Code with this prompt first:
+> /goal We want to run the ttnn for TensorOcean on our p150. Please go through the steps of checking for correctness and checking perf time etc, then fixing and optimizing it. Especially consider optimizations in the form of better parallelization or seeing if DRAM memory could be kept in L1 if possible. Make sure to check correctness and measure perf time as you go to ensure you're on the right track and aren't breaking the model. Try to make sure the perf and accuracy tests don't take too long. Make sure to first calculate a speed of light on p150 and continue iterating until you hit 90% of sol.
+
+Claude stopped once it hit 45% of its calculated speed of light. Afterwards I organized its work and files in its directory, asked it so that I understood the main optimizations made, and made sure I was able to run the accuracy and perf tests that it wrote. From analyzing its work I found out that it had "cheated": one of the optimizations it made involved reformatting the memory, which it did on the host CPU (very slowly) which wasn't measured by its own perf test. After clarifying the guidelines I used Claude Code to fix that issue by moving that slow CPU work onto the P150 device and then setting a goal to optimizing it further.
+
+
 ## What is timed
 
 One step = everything that changes per model time step, on the chip:
