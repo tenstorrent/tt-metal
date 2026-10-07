@@ -59,6 +59,13 @@ XPORT_GROUP_MAX = 8
 # transport placement (lamp L5): "eth" puts each port core next to its (direction, link) Ethernet core, per chip;
 # "simple" is the fixed chip-independent layout (first 4L cores of the transport row)
 XPORT_PLACEMENT = os.environ.get("MMRS_XPORT_PLACEMENT", "eth")
+# Perf observability (never on in production): MMRS_PERF_ZONES=1 compiles the kernels' permanent MaybeDeviceZoneScope
+# stage zones in (ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp; they need a --profile run too). MMRS_ABLATE is a
+# comma list of payload ablations (MATMUL, OPERANDS, XREADS, LINK; results are WRONG): each stubs one stage's payload and
+# keeps its synchronization, for /perf-measure's cumulative peeling.
+_PERF_DEFINES = ([("KERNEL_PERF_ZONES", "1")] if os.environ.get("MMRS_PERF_ZONES") else []) + [
+    (f"MMRS_ABLATE_{x.strip().upper()}", "1") for x in os.environ.get("MMRS_ABLATE", "").split(",") if x.strip()
+]
 INC_EVERY = 8  # arrival-counter increment cadence (blackhole-fabric rule 4)
 DEST_TILES_16B = 8  # DEST capacity in 16-bit tiles (half-sync); a 32-bit DEST (fp32_dest_acc_en) holds half
 XPORT_ADD_BLOCK_MAX = DEST_TILES_16B // 2  # transport add: tiles per CB handshake / DEST batch (always fp32 DEST)
@@ -623,6 +630,7 @@ def create_mesh_program_descriptor(
                 rt[c.x][c.y] = rd_rt[c.x][c.y]
             reader_kernels.append(
                 ttnn.KernelDescriptor(
+                    defines=_PERF_DEFINES,
                     kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_reader.cpp"),
                     core_ranges=_cset(cores),
                     compile_time_args=[
@@ -652,6 +660,7 @@ def create_mesh_program_descriptor(
                 rt[c.x][c.y] = wr_rt[c.x][c.y]
             writer_kernels.append(
                 ttnn.KernelDescriptor(
+                    defines=_PERF_DEFINES,
                     kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_writer.cpp"),
                     core_ranges=_cset(cores),
                     compile_time_args=[
@@ -689,6 +698,7 @@ def create_mesh_program_descriptor(
         kernels += reader_kernels + writer_kernels
         kernels.append(
             ttnn.KernelDescriptor(
+                defines=_PERF_DEFINES,
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_compute.cpp"),
                 core_ranges=rect_set,
                 compile_time_args=[
@@ -761,6 +771,7 @@ def create_mesh_program_descriptor(
 
         def xport_reader_kernel(cores, rt, target, has_a, has_b):
             return ttnn.KernelDescriptor(
+                defines=_PERF_DEFINES,
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_xport_reader.cpp"),
                 core_ranges=_cset(cores),
                 compile_time_args=[
@@ -785,6 +796,7 @@ def create_mesh_program_descriptor(
 
         def add_kernel(cores, rt, has_a, has_b):
             return ttnn.KernelDescriptor(
+                defines=_PERF_DEFINES,
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_xport_add.cpp"),
                 core_ranges=_cset(cores),
                 compile_time_args=[
@@ -931,6 +943,7 @@ def create_mesh_program_descriptor(
         if senders:
             kernels.append(
                 ttnn.KernelDescriptor(
+                    defines=_PERF_DEFINES,
                     kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_port_sender.cpp"),
                     core_ranges=_cset(senders),
                     compile_time_args=[
@@ -948,6 +961,7 @@ def create_mesh_program_descriptor(
             )
         kernels.append(
             ttnn.KernelDescriptor(
+                defines=_PERF_DEFINES,
                 kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_final_writer.cpp"),
                 core_ranges=_cset(finals),
                 compile_time_args=[CB_XPORT_SUM, xp.seg_tiles, xp.xport_group, xp.cap_segs, BF16_TILE_BYTES] + out_ct,

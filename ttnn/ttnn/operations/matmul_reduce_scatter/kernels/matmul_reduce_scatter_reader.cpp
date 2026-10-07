@@ -156,8 +156,11 @@ void kernel_main() {
             cb_act_operand, steps, kblock_pages, fresh, reserve_polling, [&]() { pipe.receive(); }, poll);
     }
 
-    while (popped < num_blocks) {
-        poll();
+    {
+        MaybeDeviceZoneScope("handoff_drain");  // last blocks' acks from the transport cores
+        while (popped < num_blocks) {
+            poll();
+        }
     }
     // Re-arm: every semaphore is zero between calls.
     // re-arm each kind's counter by its total (the cumulative count of its last block)

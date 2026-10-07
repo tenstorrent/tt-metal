@@ -225,3 +225,139 @@
   segment (ring-mock PCC 0.93). Fixed with a ceiling, and pinned in the new test.
 - Tests added: `test_matmul_reduce_scatter_waves.py`. It pins waves=2 for column waves (`-1`) and row waves (`-2`),
   asserts the plan took them, and covers the unwaved ragged-segment window (3/3).
+
+## Perf 1 — perf tournament round 1: transport add throughput (raw-LLK fp32-DEST add walk)
+
+All numbers: device kernel duration, steady-state calls (calls 3–5 of a profiled run), max over the 8 chips of a 2×4
+Blackhole LoudBox, FABRIC_2D, 14 KiB + 64 B packets, FOCUS = `640×2048×7168`, A bf16 / W bf8b, HiFi2,
+`fp32_dest_acc_en=False`, `cluster_axis=1`, `scatter_dim=-1`, Linear, 2 links. The focus config is in SUPPORTED, so no
+generality gap.
+
+### Instrumentation (permanent)
+- Restored `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`, which was missing on this branch.
+  `MaybeDeviceZoneScope` is opt-in: it needs `--profile` **and** the `KERNEL_PERF_ZONES` define.
+- Host switches:
+  - `MMRS_PERF_ZONES=1` adds `KERNEL_PERF_ZONES` to every kernel.
+  - `MMRS_ABLATE=MATMUL,OPERANDS,XREADS,LINK` stubs those stages' payloads and keeps their synchronization. Perf
+    only; the results are wrong.
+- Zones per kernel:
+  - Compute: `compute_matmul_block`, one per block.
+  - Injectors and receivers, per K-block: `inj_reserve`, `inj_read`, `inj_mcast`, `recv_reserve`, `recv_mcast`.
+  - Compute NCRISC: `handoff_drain`.
+  - Transport reader, per entry: `xr_wait_ready`, `xr_entry`.
+  - Transport add: `xadd_copy`, `xadd_add`.
+  - Port sender: `snd_fence`, `snd_entry` (per entry), `snd_tail`, `snd_drain_in`.
+  - Final writer: `fw_store`, `fw_rearm`.
+- Budget: FOCUS uses at most ~100 markers per RISC. That is under the 250 cap, and the zones cover each kernel's
+  span.
+
+### Measured breakdown (before)
+- **Whole op:** 166.9 µs median, same-session A/B (170–174 µs in the first run of the day). Per chip:
+  171 / 131 / 150 / 133 / 161 / 131 / 150 / 132. The interior chips are the long ones.
+- **Cumulative ablation peel (max over chips):**
+
+  | Payloads stubbed | Max over chips |
+  |---|---|
+  | none | 170 µs |
+  | LINK | 164 µs |
+  | LINK, XREADS | 140 µs |
+  | LINK, XREADS, MATMUL | 101 µs |
+  | all | 81 µs |
+  | MATMUL only | 128 µs |
+  | MATMUL, OPERANDS | 119.5 µs |
+
+  Compute side and transport side are **balanced**: removing either alone leaves the other holding the wall. The
+  links themselves are not binding (removing them saves 6 µs).
+- **Zones, slowest chip (dev 0, an interior chip):**
+  - The matmul runs ~25.6 µs per block when unstalled.
+  - The W line injector is serial: about 3.6 µs read plus 1.9 µs multicast per K-block.
+  - Block 3, the own block, is stalled about 30 µs in pack. With `handoff_depth = 2` it waits for block 0's
+    hand-off slot. A relay port holds that slot for ~73 µs while it waits for upstream arrivals.
+  - The finals start when the own block finishes (135 µs) and take ~27 µs.
+- **All-stubbed zones:** the relay ports are **add-bound**. One port adds its 280 tiles per block in 21–28 µs. The
+  link would carry those 280 bf16 tiles in about 16 µs at 36 GB/s. The 3-input final add takes ~33 µs.
+- **Ranked by headroom:**
+  1. Transport fp32-DEST add on one TRISC per port or final. It sits under the DM roof (the link needs 16 µs per
+     280 tiles), so it is not at a ceiling.
+  2. Hand-off back-pressure on interior chips (`handoff_depth = 2`).
+  3. Serial read-then-multicast in the W injector.
+  4. Links (not binding).
+
+### Portfolio floated (round cap: 1 experiment)
+- **A, selected:** faster transport add, both the 2-input relay add and the 3-input final add, at the same fp32-DEST
+  precision.
+- **B:** `handoff_depth` up to G when L1 fits. FOCUS would need +56 KB per compute core.
+- **C:** a fusion: do the own-block final add on the compute grid. This would supersede A for the tail.
+- **D:** overlap the W injector's read and multicast (read-ahead with `operand_depth = 3`).
+- **E:** spread the relay add over idle transport-row cores.
+
+B to E were not tested this round because of the cap. They are carried to round 2.
+
+### Verdicts
+- **A — `transport_add_throughput`: WIN.**
+  - Isolated bench (single core, inputs resident in L1, the op's CB cadence), 280 tiles with 7-tile segments:
+
+    | Variant | Baseline (`eltwise_chain`) | Raw LLK |
+    |---|---|---|
+    | 2-input | 9.83 µs | 6.14 µs |
+    | 3-input | 27.96 µs | 10.69 µs |
+    | Line-end 2-input | 10.95 µs | 6.16 µs |
+
+  - Sweep over segment sizes 1–12, long runs, and ring copy-through followed by the add: faster everywhere, except the
+    2-input add with 1-tile segments, which is flat. Flat is not an exception.
+  - Domain: everywhere. There are no exceptions.
+  - Precision: 2-input output is bit-identical to the baseline. 3-input output is *more* accurate: the running sum stays
+    in fp32 DEST, where the helper moved it DEST→srcA. Mismatches against the RNE fp32 sum went from 15007 to 4238
+    out of 57344 values.
+  - Artifacts: `perf_experiments/transport_add_throughput/` (bench, all variants, `results.jsonl`).
+
+### Graduated
+- `matmul_reduce_scatter_xport_add.cpp` replaced. The new add walk is the op's **only** path.
+  - The `eltwise_chain` BinaryFpu / DestReuseBinary / PackTile add code is deleted.
+  - The ring copy-through still uses the helper.
+  - No predicate, no carve-out.
+- How the new walk works:
+  - Each segment is waited for, added, pushed and popped on its own. That is the same no-lookahead contract as before.
+  - It uses one hoisted ELWADD (`acc_to_dest` for 3 inputs). The 3-input form is `dest += partial + A`, then
+    `dest += B + 0`, with srcB taken from the unpacker's zero filler.
+  - Per DEST block: one unpack config context, ELWADD MOP runs back to back, and one pack MOP.
+- The kernel-head comment states the measured bypass justification.
+- The `xadd_copy` / `xadd_add` zones carry over to the new path.
+
+### Whole op (same session, old kernel vs new, calls 3–5, max over chips)
+
+| Case | Before | After |
+|---|---|---|
+| FOCUS | 166.5–167.2 (median 166.9) | 160.4–164.2 (median 164.0) — **−2.9 µs median, −1.7 %** |
+| GLM `640×4096×6144` | 203.6–204.6 | 199.3–203.3 |
+| MiMo `2048×2048×4096` rows | 342.6–346.5 | 334.5–338.3 (**−10 µs**) |
+| small-K `640×512×7168` | 129.8–130.2 | 126.8–127.6 |
+| R2 `2048×4096×4096` | 410–446 | 410–422 (noise band, as in Refinement 4) |
+
+- The isolated stage win (final add −17 µs) only partly reaches the whole op.
+- Zones after the change: the FOCUS final on dev 0 still takes ~28 µs (132.5 → 160.3). It is now bound by its reads
+  and arrivals (gather plus two DRAM arrival reads per segment on NCRISC), not by the add.
+- The relay port's entry is still gated by upstream arrivals.
+- Block 3's hand-off stall is still there: compute ends at 128.5 µs where it would end at ~104 µs unstalled.
+- That stall and the final's read path are what round 2 should target first (B, C).
+
+### Correctness
+- `eval/golden_tests/matmul_reduce_scatter/`: `test_golden` 939/939 (run in 23 node-id slices) and
+  ring_mock + regression + fabric_configs 102/102.
+- Unit tests: acceptance + precision baseline, 64 passed / 1 skipped. They run on the router's default 4352 B payload
+  (2-tile segments), so they cover a second payload.
+- FOCUS production precision is unchanged: PCC 0.99986, rel-RMS 0.0241 against the 0.055 gate.
+
+### Guard set (one per kernel path × placement)
+- Covered: FOCUS (`-1`, R1), GLM (`-1`, R1), MiMo (`-2`, fp32 DEST), small-K (link-bound), R2 (streamed operands).
+- Ring and the line-end-only finals are covered by the golden suite.
+- No case regressed beyond noise.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `eltwise_chain` `BinaryFpu<Add>` + `DestReuseBinary<Add, DEST_TO_SRCA>` + `PackTile` (3-input final add) | capability | no 3-operand add that accumulates in fp32 DEST without moving DEST→srcA (the reuse path re-runs `add_init` + `add_reuse_dest_init` every DEST block and truncates the running sum to srcA precision); no zero-srcB operand for `dest += B + 0`; `add_block` / `pack_block` are per-tile loops, with no one-context unpack, back-to-back MOP or single multi-tile pack MOP issue | 27956 | 10690 | `matmul_reduce_scatter_xport_add.cpp:145-186` |
+| `eltwise_chain` `BinaryFpu<Add>` + `PackTile` (2-input relay / line-end add) | capability | per-tile unpack/math/pack issue inside a DEST block (one context and one MOP per tile instead of per block); CB handshakes per DEST block rather than per caller-defined unit (segment) | 9827 | 6142 | `matmul_reduce_scatter_xport_add.cpp:145-186` |
+
+All ideas measured: 1 graduated, 0 null. 4 floated ideas (B to E) are untested because of the round cap. FOCUS is
+faster by 2.9 µs median (−1.7 %) and MiMo by 10 µs, with no regression in the guard set.

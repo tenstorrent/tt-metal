@@ -11,6 +11,10 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_reduce_scatter_segments.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+// Stage zones (permanent; opt-in via KERNEL_PERF_ZONES): fw_store = the whole output store walk (includes waiting on
+// the final add), fw_rearm = waiting for the last arrival increments before re-arming.
 
 void kernel_main() {
     constexpr uint32_t cb_xport_sum = get_compile_time_arg_val(0);
@@ -35,41 +39,45 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr, tile_bytes);
 
     uint32_t pending = 0, rpos = 0;
-    for (uint32_t k = 0; k < num_entries; ++k) {
-        const uint32_t e = entries_idx + 4 * k;
-        const uint32_t count = get_arg_val<uint32_t>(e + 1);
-        const uint32_t wave_s0 = get_arg_val<uint32_t>(e + 2);
-        const uint32_t wave_s1 = get_arg_val<uint32_t>(e + 3);
-        uint32_t seg = get_arg_val<uint32_t>(e);
-        for (uint32_t i = 0; i < count; ++i) {
-            if (i > 0) {
-                seg = mmrs::next_wave_seg(seg, seg_stride, segs_per_row, wave_s0, wave_s1);
-            }
-            const uint32_t row = seg / segs_per_row;
-            const uint32_t c0 = (seg - row * segs_per_row) * seg_tiles;
-            const uint32_t valid = blk_n_tiles - c0 < seg_tiles ? blk_n_tiles - c0 : seg_tiles;
-            cb_wait_front(cb_xport_sum, seg_tiles * (pending + 1));
-            const uint32_t src = get_read_ptr(cb_xport_sum) + pending * seg_bytes;
-            const uint32_t page0 = row * blk_n_tiles + c0;
-            for (uint32_t t = 0; t < valid; ++t) {
-                noc_async_write(src + t * tile_bytes, out.get_noc_addr(page0 + t), tile_bytes);
-            }
-            ++pending;
-            if (pending == group || rpos + pending == cap_segs) {
-                noc_async_write_barrier();
-                cb_pop_front(cb_xport_sum, seg_tiles * pending);
-                rpos += pending;
-                if (rpos == cap_segs) {
-                    rpos = 0;
+    {
+        MaybeDeviceZoneScope("fw_store");
+        for (uint32_t k = 0; k < num_entries; ++k) {
+            const uint32_t e = entries_idx + 4 * k;
+            const uint32_t count = get_arg_val<uint32_t>(e + 1);
+            const uint32_t wave_s0 = get_arg_val<uint32_t>(e + 2);
+            const uint32_t wave_s1 = get_arg_val<uint32_t>(e + 3);
+            uint32_t seg = get_arg_val<uint32_t>(e);
+            for (uint32_t i = 0; i < count; ++i) {
+                if (i > 0) {
+                    seg = mmrs::next_wave_seg(seg, seg_stride, segs_per_row, wave_s0, wave_s1);
                 }
-                pending = 0;
+                const uint32_t row = seg / segs_per_row;
+                const uint32_t c0 = (seg - row * segs_per_row) * seg_tiles;
+                const uint32_t valid = blk_n_tiles - c0 < seg_tiles ? blk_n_tiles - c0 : seg_tiles;
+                cb_wait_front(cb_xport_sum, seg_tiles * (pending + 1));
+                const uint32_t src = get_read_ptr(cb_xport_sum) + pending * seg_bytes;
+                const uint32_t page0 = row * blk_n_tiles + c0;
+                for (uint32_t t = 0; t < valid; ++t) {
+                    noc_async_write(src + t * tile_bytes, out.get_noc_addr(page0 + t), tile_bytes);
+                }
+                ++pending;
+                if (pending == group || rpos + pending == cap_segs) {
+                    noc_async_write_barrier();
+                    cb_pop_front(cb_xport_sum, seg_tiles * pending);
+                    rpos += pending;
+                    if (rpos == cap_segs) {
+                        rpos = 0;
+                    }
+                    pending = 0;
+                }
             }
         }
+        if (pending > 0) {
+            noc_async_write_barrier();
+            cb_pop_front(cb_xport_sum, seg_tiles * pending);
+        }
     }
-    if (pending > 0) {
-        noc_async_write_barrier();
-        cb_pop_front(cb_xport_sum, seg_tiles * pending);
-    }
+    MaybeDeviceZoneScope("fw_rearm");
     if (expect_a > 0) {
         volatile tt_l1_ptr uint32_t* c = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a_addr);
         noc_semaphore_wait_min(c, expect_a);

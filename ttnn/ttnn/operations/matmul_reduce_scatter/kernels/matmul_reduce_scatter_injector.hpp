@@ -18,6 +18,12 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+// Stage zones (permanent; opt-in via KERNEL_PERF_ZONES), per K-block step: *_reserve = back-pressure from the compute
+// consumer (operand CB full), inj_read = DRAM issue + read barrier, inj_mcast / recv_mcast = multicast send (incl. the
+// receivers' ready handshake) / receive wait. MMRS_ABLATE_OPERANDS (perf ablation only, wrong results) drops the DRAM
+// reads and multicasts and keeps every CB credit.
 
 namespace mmrs {
 
@@ -78,10 +84,21 @@ FORCE_INLINE void inject_operand(
     Poll&& poll) {
     bool ahead = false;  // step s's reads were issued during step s - 1
     for (uint32_t s = 0; s < steps; ++s) {
-        reserve(kblock_pages);
+        {
+            MaybeDeviceZoneScope("inj_reserve");
+            reserve(kblock_pages);
+        }
         const uint32_t dst = get_write_ptr(cb);
+#ifdef MMRS_ABLATE_OPERANDS
+        const bool f = false;
+        (void)fresh;
+        (void)issue;
+        (void)send;
+#else
         const bool f = fresh(s);
+#endif
         if (f) {
+            MaybeDeviceZoneScope("inj_read");
             if (!ahead) {
                 issue(s, dst);
             }
@@ -96,6 +113,7 @@ FORCE_INLINE void inject_operand(
             }
         }
         if (f) {
+            MaybeDeviceZoneScope("inj_mcast");
             send(dst);
         }
         cb_push_back(cb, kblock_pages);
@@ -114,10 +132,19 @@ FORCE_INLINE void receive_operand(
     Receive&& receive,
     Poll&& poll) {
     for (uint32_t s = 0; s < steps; ++s) {
-        reserve(kblock_pages);
+        {
+            MaybeDeviceZoneScope("recv_reserve");
+            reserve(kblock_pages);
+        }
+#ifdef MMRS_ABLATE_OPERANDS
+        (void)fresh;
+        (void)receive;
+#else
         if (fresh(s)) {
+            MaybeDeviceZoneScope("recv_mcast");
             receive();
         }
+#endif
         cb_push_back(cb, kblock_pages);
         poll();
     }

@@ -25,6 +25,12 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "matmul_reduce_scatter_segments.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+// Stage zones (permanent; opt-in via KERNEL_PERF_ZONES): snd_fence = ready fence with the downstream peer, snd_entry =
+// one entry's packets (includes waiting on cb_xport_sum, i.e. on the reader / add upstream, and on router slots),
+// snd_tail = final flush, snd_drain_in = waiting for everything upstream sends into this chip. MMRS_ABLATE_LINK (perf
+// ablation only, wrong results) sends header-only atomic increments in place of the data packets.
 
 using namespace tt::tt_fabric;
 
@@ -95,6 +101,7 @@ void kernel_main() {
                 reinterpret_cast<uint32_t>(hdrs[0]), sizeof(PACKET_HEADER_TYPE));
         }
         if (num_blocks > 0) {
+            MaybeDeviceZoneScope("snd_fence");
             volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
             noc_semaphore_wait_min(ready, 1);
             noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
@@ -105,6 +112,7 @@ void kernel_main() {
         const uint64_t final_noc1 = get_noc_addr(final_x1, final_y1, final_sem_addr);
         uint32_t h = 0, unflushed = 0, rpos = 0;
         for (uint32_t k = 0; k < num_blocks; ++k) {
+            MaybeDeviceZoneScope("snd_entry");
             const uint32_t e = entries_idx + entry_stride * k;
             const uint32_t base = get_arg_val<uint32_t>(e) * segs_per_block;
             const uint32_t count = get_arg_val<uint32_t>(e + 2);
@@ -140,6 +148,16 @@ void kernel_main() {
                     inc = ((i + 1) % inc_every) == 0 || i + 1 == count;
                     ctr = relay_noc;
                 }
+#ifdef MMRS_ABLATE_LINK
+                (void)src;
+                (void)dst;
+                if (inc) {
+                    hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{ctr, 1, true});
+                    conn.wait_for_empty_write_slot();
+                    conn.send_payload_flush_blocking_from_address(
+                        reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+                }
+#else
                 if (inc) {
                     hdr->to_noc_fused_unicast_write_atomic_inc(
                         NocUnicastAtomicIncFusedCommandHeader{dst, ctr, 1, true}, bytes);
@@ -148,6 +166,7 @@ void kernel_main() {
                 }
                 conn.wait_for_empty_write_slot();
                 conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
+#endif
                 ++unflushed;
                 if (unflushed == group || rpos + unflushed == cap_segs) {
                     noc_async_writes_flushed();  // sources + headers of the in-flight packets have left L1
@@ -160,6 +179,7 @@ void kernel_main() {
                 }
             }
         }
+        MaybeDeviceZoneScope("snd_tail");
         if (unflushed > 0) {  // the tail (an entry may hold no segment of this port, so flush after the walk)
             noc_async_writes_flushed();
             cb_pop_front(cb_xport_sum, seg_tiles * unflushed);
@@ -167,6 +187,7 @@ void kernel_main() {
         conn.close();
     }
     if (expect_in > 0) {
+        MaybeDeviceZoneScope("snd_drain_in");
         volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(arrival_addr);
         noc_semaphore_wait_min(arrived, expect_in);
         noc_semaphore_inc(get_noc_addr(arrival_addr), 0u - expect_in);

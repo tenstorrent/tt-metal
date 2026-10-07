@@ -1,0 +1,5 @@
+{"event":"start","details":"transport_add_throughput: read xport_add kernel","ts":"2026-10-07T09:24:43+00:00"}
+{"event":"measure","details":"7x40: baseline 2in 9827ns, 3in 27956ns; raw replica 3in 22704; raw1 acc-pair+zero tile 3in 15870 (more precise); raw2 copy+acc 24990","ts":"2026-10-07T09:32:06+00:00"}
+{"event":"measure","details":"raw5 block unpack (1 ctx per DEST block) + block math (MOP xN) + acc-pair zeroSRC third input: 2in 8605ns (vs 9827), 3in 11459 ns (vs 27956), correct","ts":"2026-10-07T09:34:45+00:00"}
+{"event":"measure","details":"add_fast SEGWAIT+PACKBLOCK: 2in 6142ns (1.60x), 3in 10690 (2.6x); 3in unpack/math bound, trying first-pass-overwrite MOP swap","ts":"2026-10-07T09:37:49+00:00"}
+{"event":"complete","details":"WIN. add_final.cpp: 2in 9827->6142ns, 3in 27956->10690ns @seg7x40; sweep seg1..12 + copy-through + line-end all correct; flat only seg1 2-input; --dev blocked by env brisc fw size overflow","ts":"2026-10-07T09:43:23+00:00"}

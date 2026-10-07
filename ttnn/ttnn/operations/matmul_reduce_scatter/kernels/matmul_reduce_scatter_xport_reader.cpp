@@ -22,6 +22,12 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_reduce_scatter_segments.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+// Stage zones (permanent; opt-in via KERNEL_PERF_ZONES), per entry: xr_wait_ready = waiting for the compute grid to
+// finish the block (pipeline fill / compute-bound), xr_entry = the entry's gather + arrival walk (includes the
+// arrival-counter waits on upstream and back-pressure from the add / sender, so occupancy). MMRS_ABLATE_XREADS (perf
+// ablation only, wrong results) drops the gather and arrival NoC reads and keeps every wait and CB credit.
 
 void kernel_main() {
     constexpr uint32_t cb_partial_target = get_compile_time_arg_val(0);
@@ -91,7 +97,11 @@ void kernel_main() {
         const uint32_t wave_c0 = get_arg_val<uint32_t>(e + 7);
         const uint32_t wave_s0 = get_arg_val<uint32_t>(e + 8);
         const uint32_t wave_s1 = get_arg_val<uint32_t>(e + 9);
-        noc_semaphore_wait_min(ready, num_compute_cores * (k + 1));
+        {
+            MaybeDeviceZoneScope("xr_wait_ready");
+            noc_semaphore_wait_min(ready, num_compute_cores * (k + 1));
+        }
+        MaybeDeviceZoneScope("xr_entry");
         uint32_t seg = seg0;
         for (uint32_t idx = 0; idx < count; ++idx) {
             const uint32_t row = seg / segs_per_row;
@@ -139,21 +149,27 @@ void kernel_main() {
                 const uint32_t nco = get_arg_val<uint32_t>(ncoord_idx + nl);
                 const uint32_t x = m_on_y ? nco : mco;
                 const uint32_t y = m_on_y ? mco : nco;
+#ifndef MMRS_ABLATE_XREADS
                 noc_async_read(
                     get_noc_addr(x, y, handoff_base + hslot_off + (lr * core_n_tiles + lc) * tile_bytes),
                     dst,
                     run * tile_bytes);
+#endif
                 dst += run * tile_bytes;
                 c += run;
             }
             if (up) {
                 if constexpr (has_a) {
                     noc_semaphore_wait_min(arr_a, inc_base + idx / inc_every + 1);
+#ifndef MMRS_ABLATE_XREADS
                     noc_async_read(scr.get_noc_addr(base_a + seg), w_a + batch * seg_bytes, bytes);
+#endif
                 }
                 if constexpr (has_b) {
                     noc_semaphore_wait_min(arr_b, inc_base + idx / inc_every + 1);
+#ifndef MMRS_ABLATE_XREADS
                     noc_async_read(scr.get_noc_addr(base_b + seg), w_b + batch * seg_bytes, bytes);
+#endif
                 }
             }
             ++batch;
