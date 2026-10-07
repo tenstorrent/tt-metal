@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.demos.qwen38_27b_qb2.experiments.gdn_step.op import circular_buffer_pages, work_items
+from models.demos.qwen38_27b_qb2.tt.gdn_step.op import circular_buffer_pages, work_items
 
 
 @pytest.mark.parametrize("heads", [1, 12, 96, 120, 121, 192, 768])
@@ -70,3 +70,12 @@ def test_prefetch_capacity_preserves_output_ownership_and_l1_bound(splits):
     assert double[:6] == [2 * pages for pages in single[:6]]
     assert double[6:] == single[6:]  # The writer remains the sole output consumer.
     assert sum(double) * 4096 < 512 * 1024
+
+
+@pytest.mark.parametrize("splits", [1, 2, 4])
+def test_fused_normalization_keeps_private_scratch_within_l1(splits):
+    original = circular_buffer_pages(splits, 2)
+    fused = circular_buffer_pages(splits, 2, normalize_qk=True)
+    assert fused[: len(original)] == original
+    assert fused[len(original) :] == [4, 4, 1]
+    assert sum(fused) * 4096 < 512 * 1024

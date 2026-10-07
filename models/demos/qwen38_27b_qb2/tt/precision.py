@@ -3,6 +3,7 @@
 """Serializable full-model precision policy, shared by all construction callers."""
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,7 +30,12 @@ BASELINE = {
     "token_dtype": "uint32",
     "max_context": 262144,
     "decode_attention": "native",
+    "decode_recurrence": "native",
 }
+
+
+def precision_fingerprint(policy):
+    return hashlib.sha256(json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def load_precision(value=None):
@@ -47,10 +53,13 @@ def load_precision(value=None):
         policy = json.loads(Path(value).read_text())
     # Historical artifacts omitted this field and retain their native policy.
     policy.setdefault("decode_attention", "native")
+    policy.setdefault("decode_recurrence", "native")
     if set(policy) != set(BASELINE):
         raise ValueError("Precision policy must contain exactly the supported fields")
     if policy["decode_attention"] not in ("native", "accurate_full_tile"):
         raise ValueError("Unsupported decode attention policy")
+    if policy["decode_recurrence"] not in ("native", "single_step"):
+        raise ValueError("Unsupported decode recurrence policy")
     # These are explicit runtime contracts of the native norm/GDN/sampler and
     # replicated residual path. Reject unsupported requests instead of ignoring them.
     for key in (
@@ -104,4 +113,5 @@ def decoder_policy(policy, layer):
         "ccl_dtype": policy["ccl_dtype"],
         "kv_dtype": policy["kv_cache_dtype"],
         "decode_attention": policy.get("decode_attention", "native"),
+        "decode_recurrence": policy.get("decode_recurrence", "native"),
     }

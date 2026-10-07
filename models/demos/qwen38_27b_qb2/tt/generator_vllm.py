@@ -14,6 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator
 from models.demos.qwen38_27b_qb2.tt.model import ModelCache
+from models.demos.qwen38_27b_qb2.tt.precision import load_precision, precision_fingerprint
 
 
 class Qwen38ForCausalLM:
@@ -41,11 +42,17 @@ class Qwen38ForCausalLM:
         if os.getenv("QWEN_DECODE_BUCKETS", "0") == "1" and max_batch_size not in (1, 8, 16):
             raise ValueError("Bucketed decode requires max_num_seqs of 1, 8, or 16; capacity above 16 is unsupported")
         root = Path(__file__).parents[1]
+        precision = load_precision(kwargs.get("precision_config"))
+        expected = os.getenv("QWEN_EXPECTED_PRECISION_SHA256")
+        if expected and precision_fingerprint(precision) != expected:
+            raise ValueError("Serving precision differs from the qualified policy; refusing weight loading")
         generator = build_generator(
             root,
             mesh_device,
-            precision_config=root / "config/precision.json",
+            precision_config=precision,
         )
+        if generator.model.precision != precision:
+            raise ValueError("Constructed model ignored the selected serving precision")
         logger.info("Qwen3.8 vLLM precision: {}", generator.model.precision)
         return cls(generator, max_batch_size, max_seq_len)
 

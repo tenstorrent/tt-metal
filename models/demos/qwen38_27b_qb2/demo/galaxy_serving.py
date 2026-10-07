@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-side launch contract for the pinned eight-process TP4 serving stack."""
 
+import ast
 import hashlib
 import json
 import math
 import os
 import re
 from pathlib import Path
+
+from models.demos.qwen38_27b_qb2.tt.precision import precision_fingerprint
 
 PLUGIN_REVISION = "b7e4292e4193cba20abe9c7c68ce489201b2e36b"
 MODEL_NAME = "Qwen/Qwen3.8-27B"
@@ -27,18 +30,35 @@ OPTIMIZATION_ENV = {
 }
 
 
-def qualified_runtime_environment():
+def qualified_runtime_environment(precision=None):
     """Preserve the precision artifact covered by the G0 source check."""
     environment = dict(OPTIMIZATION_ENV)
     override = os.environ.get("QWEN_PRECISION_CONFIG")
     if override:
         environment["QWEN_PRECISION_CONFIG"] = override if override == "baseline" else str(Path(override).resolve())
+    if precision is not None:
+        environment["QWEN_EXPECTED_PRECISION_SHA256"] = precision_fingerprint(precision)
     return environment
+
+
+def verify_worker_precision(log, expected, *, require_all=True):
+    """Reject any reported mismatch during startup; require eight actual workers before eval."""
+    pattern = r"\([^\n)]*pid=(\d+)\).*Qwen3\.8 vLLM precision: (\{[^\n]*\})"
+    workers = {}
+    for pid, value in re.findall(pattern, log):
+        policy = ast.literal_eval(value)
+        if policy != expected:
+            raise ValueError(f"Serving worker {pid} precision differs from the qualified policy")
+        workers[int(pid)] = precision_fingerprint(policy)
+    if require_all and len(workers) != 8:
+        raise ValueError("Serving log must confirm qualified precision on all eight workers")
+    return workers
 
 
 def model_source_hashes(source):
     source = Path(source)
-    files = sorted((source / "tt").glob("*.py")) + [source / "config/precision.json"]
+    files = sorted(p for p in (source / "tt").rglob("*") if p.suffix in (".py", ".cpp", ".hpp", ".h"))
+    files.append(source / "config/precision.json")
     hashes = {str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     override = os.environ.get("QWEN_PRECISION_CONFIG")
     if override:

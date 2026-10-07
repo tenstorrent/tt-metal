@@ -1,7 +1,15 @@
-# Single-token GDN candidate
+# Single-token GDN candidate: historical standalone measurements
 
-This experiment implements the P1 recurrence from the Galaxy plan. It is **not
-imported by the qualified model**. The first TP4 hardware run passes compilation
+The runtime kernel and model adapter now live in `../../tt/gdn_step/`.
+`config/precision_single_step_gdn.json` opts decode into the in-place FP32
+recurrence with fused Q/K normalization. Prefill retains the native chunked
+scan, including one-token continuations. The default precision artifact is
+unchanged. Current real-weight integration results and limitations are in
+[`../../galaxy-evidence/gdn-model-integration-v1/README.md`](../../galaxy-evidence/gdn-model-integration-v1/README.md).
+The measurements below describe earlier standalone stages, before this opt-in
+integration and fused normalization.
+
+This experiment implements the P1 recurrence from the Galaxy plan. The first TP4 hardware run passes compilation
 and accuracy, including 4,096 changing-input steps, but misses the P1 latency
 target at every tested batch. CPU tests alone do not qualify the kernel.
 

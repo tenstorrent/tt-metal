@@ -28,6 +28,7 @@ from models.demos.qwen38_27b_qb2.demo.galaxy_serving import (
     server_command,
     verify_qualified_source,
     verify_worker_bindings,
+    verify_worker_precision,
 )
 from models.demos.qwen38_27b_qb2.tests.galaxy_api import validate_api
 from models.demos.qwen38_27b_qb2.tests.galaxy_http_sweep import run_http_sweep
@@ -74,6 +75,8 @@ def main(args):
         groups = qualified_groups(qualification)
         source = Path(__file__).resolve().parents[1]
         verify_qualified_source(qualification, source)
+        if not isinstance(qualification.get("precision"), dict):
+            raise ValueError("Qualification must record the effective model precision")
         plugin = subprocess.check_output(
             ["git", "-C", str(task / "vllm-plugin"), "rev-parse", "HEAD"], text=True
         ).strip()
@@ -86,7 +89,7 @@ def main(args):
             probe.bind(("127.0.0.1", args.port))
         checkpoint = Path(os.environ["MODEL_WEIGHTS_DIR"]).resolve()
         command = server_command(task, checkpoint, groups, port=args.port)
-        runtime_environment = qualified_runtime_environment()
+        runtime_environment = qualified_runtime_environment(qualification["precision"])
         report.update(
             plugin_revision=plugin,
             versions={name: importlib.metadata.version(name) for name in ("vllm", "torch", "transformers", "numpy")},
@@ -146,6 +149,9 @@ def main(args):
             while True:
                 if server.poll() is not None:
                     raise RuntimeError(f"Server exited before readiness with code {server.returncode}")
+                verify_worker_precision(
+                    (output / "server.log").read_text(errors="replace"), qualification["precision"], require_all=False
+                )
                 try:
                     ready = client.get(report["endpoint"] + "/health").is_success
                 except httpx.HTTPError:
@@ -156,6 +162,9 @@ def main(args):
                     raise TimeoutError("Galaxy serving readiness deadline exceeded")
                 time.sleep(5)
         report["worker_bindings"] = verify_worker_bindings((output / "server.log").read_text(errors="replace"), groups)
+        report["worker_precision"] = verify_worker_precision(
+            (output / "server.log").read_text(errors="replace"), qualification["precision"]
+        )
         report["state"] = "api_checks"
         write_receipt(receipt, report)
         asyncio.run(validate_api(report["endpoint"], output / "api.json", concurrency=128))

@@ -21,6 +21,8 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.qwen38_27b_qb2.tt.decode_attention import paged_decode
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start, packed_decode_conv
+from models.demos.qwen38_27b_qb2.tt.gdn_step.model_adapter import step_from_flat
+from models.demos.qwen38_27b_qb2.tt.gdn_step.workspace import DecodeWorkspace
 
 # Measured Blackhole 11x10 / eight-bank policy. Overrides are full experiment policies.
 DEFAULT_POLICY = {
@@ -260,6 +262,17 @@ class Qwen38Decoder(LightweightModule):
             )
         c = self.config
         width = 2 * c.linear_num_key_heads * c.linear_key_head_dim + c.linear_num_value_heads * c.linear_value_head_dim
+        if self.policy.get("decode_recurrence", "native") == "single_step":
+            if (c.linear_num_key_heads, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim) != (
+                4,
+                12,
+                128,
+                128,
+            ):
+                raise ValueError("Single-step GDN model integration currently requires TP4 Qwen head geometry")
+            if not hasattr(self, "gdn_decode_workspace"):
+                self.gdn_decode_workspace = DecodeWorkspace(self.device, c.linear_num_value_heads)
+            self.gdn_decode_workspace.prepare(batch_size)
         return DecoderState(
             recurrent=zeros(
                 [batch_size, c.linear_num_value_heads, c.linear_key_head_dim, c.linear_value_head_dim], ttnn.float32
@@ -843,7 +856,40 @@ class Qwen38Decoder(LightweightModule):
         attention = outputs[0] if b == 1 else ttnn.concat(outputs, dim=0)
         return self._attention_output(attention, gate)
 
-    def _delta(self, x, state):
+    def _delta_recurrence(self, q, k, v, g, beta, state, *, decode=False):
+        b, hv = q.shape[0], self.config.linear_num_value_heads
+        if decode and self.policy.get("decode_recurrence", "native") == "single_step":
+            if not hasattr(self, "gdn_decode_workspace"):
+                raise RuntimeError("Allocate the layer's GDN state before decode/trace capture")
+            return step_from_flat(q, k, v, g, beta, state.recurrent, self.gdn_decode_workspace.output(b))
+        # Native chunked scan remains the prefill path, including one-token
+        # prefill continuations. Its independent batch axis is split to fit one
+        # value head per core; caller-owned constants make it traceable.
+        grid = self.device.compute_with_storage_grid_size()
+        scan_batch = grid.x * grid.y // hv
+        outputs, states = [], []
+        for start in range(0, b, scan_batch):
+            end = min(start + scan_batch, b)
+            output_part, state_part = ttnn.transformer.chunk_gated_delta_rule(
+                q[start:end],
+                k[start:end],
+                v[start:end],
+                g[start:end],
+                beta[start:end],
+                initial_state=state.recurrent[start:end],
+                output_final_state=True,
+                output_head_major=True,
+                chunk_size=32,
+                **self.delta_constants,
+            )
+            outputs.append(output_part)
+            states.append(state_part)
+        output = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=0)
+        new_state = states[0] if len(states) == 1 else ttnn.concat(states, dim=0)
+        ttnn.copy(new_state, state.recurrent)
+        return output
+
+    def _delta(self, x, state, *, decode=False):
         if len(x.shape) == 4:
             b, t = x.shape[-2], 1
         else:
@@ -906,30 +952,7 @@ class Qwen38Decoder(LightweightModule):
             # log-decay make every padded recurrence step an identity, even
             # when its convolution Q/K/V values are nonzero.
             g, beta = [pad_time(a) for a in (g, beta)]
-        # The native scan assigns one value head to each core. Split only
-        # its independent batch axis, preserving the public batch contract.
-        grid = self.device.compute_with_storage_grid_size()
-        scan_batch = grid.x * grid.y // hv
-        outputs, states = [], []
-        for start in range(0, b, scan_batch):
-            end = min(start + scan_batch, b)
-            output_part, state_part = ttnn.transformer.chunk_gated_delta_rule(
-                q[start:end],
-                k[start:end],
-                v[start:end],
-                g[start:end],
-                beta[start:end],
-                initial_state=state.recurrent[start:end],
-                output_final_state=True,
-                output_head_major=True,
-                chunk_size=32,
-                **self.delta_constants,
-            )
-            outputs.append(output_part)
-            states.append(state_part)
-        output = outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=0)
-        new_state = states[0] if len(states) == 1 else ttnn.concat(states, dim=0)
-        ttnn.copy(new_state, state.recurrent)
+        output = self._delta_recurrence(q, k, v, g, beta, state, decode=decode)
         if padded_t != t:
             z = ttnn.pad(z, [(0, 0), (0, padded_t - t), (0, 0)], 0.0)
         output = ttnn.experimental.kda.sigmoid_gated_rms_norm(
@@ -953,7 +976,7 @@ class Qwen38Decoder(LightweightModule):
         attention = (
             self._full_decode(n, state, page_table, current_pos, cos, sin)
             if self.kind == "full_attention"
-            else self._delta(n, state)
+            else self._delta(n, state, decode=True)
         )
         return self._finish(x, attention)
 

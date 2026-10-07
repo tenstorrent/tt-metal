@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Experimental DRAM-backed, in-place FP32 single-token GDN recurrence.
+"""Opt-in DRAM-backed, in-place FP32 single-token GDN recurrence.
 
-Q/K must already be L2 normalized and Q scaled by 128**-0.5. Gates hold
+By default Q/K are L2 normalized and Q scaled by 128**-0.5; normalize_qk=True
+accepts raw Q/K and performs that preparation in FP32 inside the kernel. Gates hold
 exp(log_decay), beta in columns 0/1 (six alignment columns are ignored).
-This is the recurrence only: normalization, convolution, and output gating
-are not included in its latency. No qualified model imports this module.
+Convolution and output gating remain external. Full-model qualification is
+still required; report whether optional normalization is included in timing.
 """
 
 from pathlib import Path
@@ -24,18 +25,24 @@ def work_items(heads, grid_x, grid_y, value_splits=1):
     return [(i % grid_x, i // grid_x, i, cores, (items - 1 - i) // cores + 1) for i in range(cores)]
 
 
-def circular_buffer_pages(value_splits, input_buffer_items):
+def circular_buffer_pages(value_splits, input_buffer_items, *, normalize_qk=False):
     """Bound input lookahead while retaining one writer-owned output window."""
     if type(value_splits) is not int or value_splits not in (1, 2, 4):
         raise ValueError("Value splits must be 1, 2, or 4")
     if type(input_buffer_items) is not int or input_buffer_items not in (1, 2):
         raise ValueError("Input buffer items must be 1 or 2")
+    if type(normalize_qk) is not bool:
+        raise ValueError("normalize_qk must be a Boolean")
     columns = 4 // value_splits
     inputs = [4, 4, columns, 1, 1, 4 * columns]
-    return [pages * input_buffer_items for pages in inputs] + [columns, 4 * columns, columns, 1, 1]
+    return (
+        [pages * input_buffer_items for pages in inputs]
+        + [columns, 4 * columns, columns, 1, 1]
+        + ([4, 4, 1] if normalize_qk else [])
+    )
 
 
-def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1):
+def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1, normalize_qk=False):
     """Mutate state[heads,128,128]; write output[heads,128], all FP32 DRAM.
 
     The caller preallocates output and retains all tensors through trace
@@ -44,7 +51,7 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1)
     the complete runtime arguments on cache hits; its regression is exercised
     with two independently allocated tensor sets in the hardware test.
     """
-    pages_per_cb = circular_buffer_pages(value_splits, input_buffer_items)
+    pages_per_cb = circular_buffer_pages(value_splits, input_buffer_items, normalize_qk=normalize_qk)
     import ttnn
 
     mesh = state.device()
@@ -82,12 +89,15 @@ def step(q, k, v, gates, state, output, *, value_splits=1, input_buffer_items=1)
     modes = [ttnn.UnpackToDestMode.Default] * 64
     for cb in range(9):
         modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
+    if normalize_qk:
+        for cb in (11, 12, 13):
+            modes[cb] = ttnn.UnpackToDestMode.UnpackToDestFp32
     config.unpack_to_dest_mode = modes
     kernels = []
     for filename, args, ctargs, cfg in [
         ("reader.cpp", read_args, [value_columns, *accessors(tensors[:5])], ttnn.ReaderConfigDescriptor()),
         ("writer.cpp", write_args, [value_columns, *accessors([state, output])], ttnn.WriterConfigDescriptor()),
-        ("compute.cpp", compute_args, [value_columns], config),
+        ("compute.cpp", compute_args, [value_columns, int(normalize_qk)], config),
     ]:
         kernels.append(
             ttnn.KernelDescriptor(

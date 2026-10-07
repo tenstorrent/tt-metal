@@ -20,22 +20,34 @@ def utc_now():
     return datetime.now(timezone.utc).isoformat()
 
 
-def make_plan(replicas=1):
+def make_plan(replicas=1, *, batches=CONCURRENCIES, input_lengths=INPUT_LENGTHS):
     if replicas not in (1, 8):
         raise ValueError("Sweep supports one TP4 replica or eight independent replicas")
+    if not batches or not input_lengths or any(type(n) is not int or n <= 0 for n in (*batches, *input_lengths)):
+        raise ValueError("Batch sizes and input lengths must be positive integers")
+    if len(set(batches)) != len(batches) or len(set(input_lengths)) != len(input_lengths):
+        raise ValueError("Sweep axes must not repeat configurations")
     cells = []
-    for length in INPUT_LENGTHS:
-        for batch in CONCURRENCIES:
+    for length in input_lengths:
+        for batch in batches:
             pool_tokens = batch * ((length + 127 + 31) // 32 * 32)
             allowed = length + 127 <= MAX_CONTEXT and pool_tokens <= MAX_POOL_TOKENS
+            status = "implementation_guard" if batch > 32 else "queued" if allowed else "capacity_guard"
+            reason = (
+                "Batches above 32 require wider token buffers and a projection supporting multiple tile rows"
+                if batch > 32
+                else None
+                if allowed
+                else "Exceeds the current per-replica context or KV allocation guard"
+            )
             cells.append(
                 dict(
                     input_tokens=length,
                     batch_per_replica=batch,
                     concurrency=replicas * batch,
                     pool_tokens_per_replica=pool_tokens,
-                    status="queued" if allowed else "capacity_guard",
-                    reason=None if allowed else "Exceeds the current 1,179,648-token per-replica KV allocation guard",
+                    status=status,
+                    reason=reason,
                 )
             )
     return dict(
@@ -43,6 +55,8 @@ def make_plan(replicas=1):
         created_at=utc_now(),
         replicas=replicas,
         chips=4 * replicas,
+        batches=list(batches),
+        input_lengths=list(input_lengths),
         output_tokens=128,
         warmup_runs=1,
         measured_runs=3,
@@ -51,14 +65,17 @@ def make_plan(replicas=1):
             "including tokens beyond EOS. Warm measurements exclude weight loading and first-use compilation. "
             "TTFT includes request-state reset, prefill and first token readback. Decode uses device sampling "
             "and deferred history readback; HTTP and router overhead are not included. "
+            "Input throughput times prefill_forward through device synchronization, excluding reset, "
+            "sampling and readback. This native harness submits replica prefills sequentially; its "
+            "aggregate input rate reflects that schedule, not ideal parallel prefill capacity. "
             "Whole-Galaxy throughput is measured only when replicas=8, never multiplied from TP4 results."
         ),
-        capacity_note="Capacity-guard cells are not tested; they are not measured OOM failures.",
+        capacity_note="Capacity and implementation guards are not tested; they are not measured OOM failures.",
         cells=cells,
     )
 
 
-def summarize(samples, *, concurrency, output_tokens):
+def summarize(samples, *, concurrency, output_tokens, input_tokens=None):
     if not samples or output_tokens < 2 or concurrency < 1:
         raise ValueError("Expected positive concurrency, decode work and measured samples")
     for sample in samples:
@@ -69,7 +86,7 @@ def summarize(samples, *, concurrency, output_tokens):
     decode = statistics.median(row["decode_s"] for row in samples)
     elapsed = statistics.median(row["elapsed_s"] for row in samples)
     ttfts = [latency for row in samples for latency in row["ttft_s"]]
-    return dict(
+    result = dict(
         tokens_per_second_per_user=(output_tokens - 1) / decode,
         aggregate_decode_tokens_per_second=concurrency * (output_tokens - 1) / decode,
         aggregate_e2e_tokens_per_second=concurrency * output_tokens / elapsed,
@@ -80,6 +97,16 @@ def summarize(samples, *, concurrency, output_tokens):
         elapsed_s=elapsed,
         samples=len(samples),
     )
+    if input_tokens is not None:
+        if input_tokens < 1 or any(not 0 < row.get("prefill_s", 0) <= row["elapsed_s"] for row in samples):
+            raise ValueError("Input throughput requires positive input tokens and measured prefill duration")
+        prefill = statistics.median(row["prefill_s"] for row in samples)
+        result.update(
+            prefill_s=prefill,
+            aggregate_input_tokens_per_second=concurrency * input_tokens / prefill,
+            aggregate_e2e_input_tokens_per_second=concurrency * input_tokens / elapsed,
+        )
+    return result
 
 
 def save_report(report, directory):
@@ -100,8 +127,10 @@ def render(report, directory):
 
     directory = Path(directory)
     completed = [row for row in report["cells"] if row["status"] == "completed"]
-    supported = sum(row["status"] != "capacity_guard" for row in report["cells"])
-    colors = dict(zip(CONCURRENCIES, ("#2563eb", "#0d9488", "#a16207", "#9333ea", "#e11d48")))
+    supported = sum(row["status"] not in ("capacity_guard", "implementation_guard") for row in report["cells"])
+    batches = sorted({row["batch_per_replica"] for row in report["cells"]})
+    lengths = sorted({row["input_tokens"] for row in report["cells"]})
+    colors = {batch: plt.get_cmap("tab10")(index % 10) for index, batch in enumerate(batches)}
     http = report.get("measurement_mode") == "http"
     metrics = (
         (
@@ -118,12 +147,20 @@ def render(report, directory):
         ),
         ("ttft_p50_s", "Time to first token", "seconds (log scale)", True),
     )
+    if not http:
+        metrics += (
+            ("aggregate_input_tokens_per_second", "Aggregate input / prefill throughput", "input tokens/s", False),
+            ("aggregate_e2e_tokens_per_second", "Output throughput over entire request", "output tokens/s", False),
+        )
     with plt.rc_context({"font.size": 10, "axes.spines.top": False, "axes.spines.right": False}):
-        figure, axes = plt.subplots(1, 3, figsize=(16, 5.4), constrained_layout=True)
-        for axis, (key, title, ylabel, log_y) in zip(axes, metrics):
-            for batch in CONCURRENCIES:
+        rows_count = (len(metrics) + 2) // 3
+        figure, axes = plt.subplots(rows_count, 3, figsize=(16, 5.4 * rows_count), constrained_layout=True)
+        for axis in axes.flat[len(metrics) :]:
+            axis.set_visible(False)
+        for axis, (key, title, ylabel, log_y) in zip(axes.flat, metrics):
+            for batch in batches:
                 rows = sorted(
-                    [row for row in completed if row["batch_per_replica"] == batch],
+                    [row for row in completed if row["batch_per_replica"] == batch and key in row["summary"]],
                     key=lambda row: row["input_tokens"],
                 )
                 if rows:
@@ -139,8 +176,8 @@ def render(report, directory):
                 axis.axhline(40, color="#64748b", linestyle=":", linewidth=1, label="40 TSU planning target")
             axis.set_xscale("log", base=2)
             axis.set_xlim(100, MAX_CONTEXT * 1.15)
-            axis.set_xticks(INPUT_LENGTHS)
-            ticks = dict(zip(INPUT_LENGTHS, ("128", "8K", "32K", "55K", "128K", "~256K")))
+            axis.set_xticks(lengths)
+            ticks = {n: "~256K" if n == 262016 else f"{n // 1024}K" if n % 1024 == 0 else f"{n:,}" for n in lengths}
             axis.xaxis.set_major_formatter(FuncFormatter(lambda x, _: ticks.get(x, str(int(x)))))
             axis.tick_params(axis="x", labelrotation=35)
             axis.set_title(title, fontweight="bold")
@@ -154,11 +191,11 @@ def render(report, directory):
             handles, labels = axis.get_legend_handles_labels()
             if handles:
                 axis.legend(handles, labels, loc="best", fontsize=8)
-            if not completed:
+            if not any(key in row["summary"] for row in completed):
                 axis.text(
                     0.5,
                     0.45,
-                    "Sweep queued\nNo sweep measurements yet",
+                    "No measurements for this metric yet",
                     transform=axis.transAxes,
                     ha="center",
                     va="center",
@@ -190,6 +227,7 @@ def render(report, directory):
             flat = {**row, **row.get("summary", {})}
             writer.writerow({key: flat.get(key, "") for key in fields})
     rows = []
+    headers = "".join(f"<th>{html.escape(title)} ({html.escape(unit)})</th>" for _, title, unit, _ in metrics)
     for row in report["cells"]:
         summary = row.get("summary", {})
         values = [f"{row['input_tokens']:,}", str(row["concurrency"]), row["status"]]
@@ -222,7 +260,7 @@ status: <b>{html.escape(report['state'])}</b> · updated {html.escape(report.get
 <p><small>{html.escape(report['capacity_note'])} Near-256K uses 262,016 input tokens to leave room for 128 output tokens.
 No predicted values are drawn as measurements. Lines connect completed measured points only.</small></p>
 <button onclick="document.getElementById('results').hidden=!document.getElementById('results').hidden">Show / hide data table</button>
-<table id="results"><thead><tr><th>ISL</th><th>Concurrency</th><th>Status</th><th>Tokens/s/user</th><th>{'End-to-end' if http else 'Decode'} tokens/s</th><th>p50 TTFT (s)</th></tr></thead>
+<table id="results"><thead><tr><th>ISL</th><th>Concurrency</th><th>Status</th>{headers}</tr></thead>
 <tbody>{''.join(rows)}</tbody></table></html>"""
     (directory / "index.html").write_text(document + "\n")
 

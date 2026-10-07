@@ -13,6 +13,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.tests.sweep_report import render, save_report, summarize
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 
@@ -45,18 +46,21 @@ def run_batch(generators, prompts, output_tokens):
     batch, length = prompts.shape
     slots = tuple(range(batch))
     before = [gen.counters.copy() for gen in generators]
-    first_tokens, ttfts = [], []
+    first_tokens, ttfts, prefill_durations = [], [], []
     started = time.perf_counter()
     for gen in generators:
         gen.set_sampling_params(top_k=1, seed=0)
         gen.reset_recurrent_slots(list(slots))
         gen._reset_history()
+        prefill_started = time.perf_counter()
         logits = gen.prefill_forward(
             prompts,
             page_table=gen.page_table,
             kv_cache=gen.cache,
             prompt_lens=[length] * batch,
         )
+        ttnn.synchronize_device(gen.mesh)
+        prefill_durations.append(time.perf_counter() - prefill_started)
         gen.sample_prefill(logits)
         del logits
         first = gen._read_tokens()[:batch]
@@ -86,6 +90,8 @@ def run_batch(generators, prompts, output_tokens):
         counters.append(dict(gen.counters - initial_counters))
     return dict(
         ttft_s=ttfts,
+        prefill_s=sum(prefill_durations),
+        prefill_s_per_replica=prefill_durations,
         decode_s=finished - decode_started,
         elapsed_s=finished - started,
         output_sha256_per_replica=token_hashes,
@@ -114,10 +120,7 @@ def test_galaxy_perf_sweep():
             "environment": {key: value for key, value in os.environ.items() if key.startswith("QWEN_")},
         }
         source = Path(__file__).resolve().parents[1]
-        report["source_sha256"] = {
-            str(path.relative_to(source)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in sorted((source / "tt").glob("*.py"))
-        }
+        report["source_sha256"] = model_source_hashes(source)
         save_report(report, directory)
         render(report, directory)
         for replica in range(report["replicas"]):
@@ -135,7 +138,7 @@ def test_galaxy_perf_sweep():
         )
         base = generators[0].tokenizer.encode(passage, add_special_tokens=False)
         for cell in report["cells"]:
-            if cell["status"] == "capacity_guard":
+            if cell["status"] in ("capacity_guard", "implementation_guard"):
                 continue
             active_cell = cell
             cell["status"] = "running"
@@ -165,6 +168,7 @@ def test_galaxy_perf_sweep():
                 cell["samples"],
                 concurrency=cell["concurrency"],
                 output_tokens=report["output_tokens"],
+                input_tokens=length,
             )
             cell["status"] = "completed"
             save_report(report, directory)

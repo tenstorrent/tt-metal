@@ -1,0 +1,355 @@
+{
+  "state": "failed",
+  "passed": false,
+  "checkpoint": "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+  "precision": {
+    "config_id": "head_bfp4_lofi_accurate_decode_single_step_gdn",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "output": "bfloat4_b",
+      "gate": "bfloat4_b",
+      "up": "bfloat4_b",
+      "down": "bfloat4_b",
+      "head": "bfloat4_b"
+    },
+    "compute_fidelities": {
+      "attention": "LoFi",
+      "output": "LoFi",
+      "gate": "LoFi",
+      "up": "LoFi",
+      "down": "LoFi",
+      "head": "LoFi"
+    },
+    "fp32_dest_acc_en": true,
+    "layer_exceptions": {},
+    "activation_dtype": {
+      "attention": "bfloat16",
+      "mlp": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": "bfloat16",
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_dtype": "bfloat16",
+    "sampling_dtype": "bfloat16",
+    "norm_dtype": "bfloat16",
+    "embedding_dtype": "bfloat16",
+    "recurrent_dtype": "float32",
+    "convolution_dtype": "bfloat16",
+    "sensitive_compute_fidelity": "HiFi4",
+    "token_dtype": "uint32",
+    "max_context": 262144,
+    "final_norm_compute_fidelity": "HiFi2",
+    "decode_attention": "accurate_full_tile",
+    "decode_recurrence": "single_step"
+  },
+  "source_sha256": {
+    "tt/__init__.py": "501d5b563ca412fa21db82bf39117b5480ecf99bcaf11996b9c3d5f1093bb9a8",
+    "tt/decode_attention.py": "233021a907845fb954d689934cecd57b6879a6b9343b19c5e74888351637a6f8",
+    "tt/decode_conv.py": "7a80916276118500e04798f3de08058f2074552cbafb7d2a07ced16a67292e52",
+    "tt/decoder.py": "bd2e1c040eb9e27e02a8762ee5ae342d051c751e085020b90702e43517c633fa",
+    "tt/decoder_tp.py": "1c8815b901c1e6de4d28bf1249b528d6ed44185e39f6e2165556e283c013c283",
+    "tt/gdn_step/__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "tt/gdn_step/compute.cpp": "39f48077f1659c3ffadacaf8a79939be21162996b437a538ebb9846e2087c730",
+    "tt/gdn_step/model_adapter.py": "bc83cf73bf6a723863640228e0b0830a44d7f59de2a98dc179534efc2b52dd0a",
+    "tt/gdn_step/op.py": "593c4bde6c9dab671bc30a039a376f8783d418e30b06f9618e6ba432e34f07af",
+    "tt/gdn_step/reader.cpp": "15bdee856d2ed7e989ac5fe48c7eb75300eb49b129b2b01b54c82251233f701e",
+    "tt/gdn_step/workspace.py": "cd86b8da8ccd1d603150a7242a550e76609519aabcf106a1e5b34e3414d784d9",
+    "tt/gdn_step/writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d",
+    "tt/generator.py": "c30d9967baeaac24f55fe2be689fb6590106fc3e7711d02754664d8e15306bba",
+    "tt/generator_vllm.py": "2761aa20a8f939a42353780deb294d491fa59caff8fe434a936fa985716119b0",
+    "tt/model.py": "5a30843e69d55cc21b66fe8a182772a154b72ca5e990b88c98bf5a0e31418c28",
+    "tt/precision.py": "7eabece6dd41f7537ae35997d87bed545ce8fdcd7334b69c39bf48fd77b3f435",
+    "tt/topology.py": "915668bdd65c9fb5c7454273840324877b700d088dcca362d7b936cfcebbb37f",
+    "config/precision.json": "33a8fa95c118a85ceb53e6ba707ae4d6eb74631263d5120c1842afa6605628d1"
+  },
+  "cases": [
+    {
+      "batch": 1,
+      "passed": true,
+      "checks": [
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.999999998595914,
+            "max_head_relative_rms": 0.0002576981246389964,
+            "max_abs": 0.00035953521728515625
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999974905,
+            "max_head_relative_rms": 0.00042461629401418664,
+            "max_abs": 2.9847025871276855e-05
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.999999997325344,
+            "max_head_relative_rms": 0.00025379453652771457,
+            "max_abs": 0.0003026723861694336
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999991812,
+            "max_head_relative_rms": 0.0005166198081840136,
+            "max_abs": 9.445473551750183e-06
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999865233397,
+            "max_head_relative_rms": 0.00047729395909758835,
+            "max_abs": 0.0012526512145996094
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999999395675,
+            "max_head_relative_rms": 0.0005612320163857758,
+            "max_abs": 8.51750373840332e-05
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999980474198,
+            "max_head_relative_rms": 0.000251071457258339,
+            "max_abs": 0.0006773471832275391
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.999999999999902,
+            "max_head_relative_rms": 0.0006277431840758471,
+            "max_abs": 1.9963830709457397e-05
+          }
+        }
+      ],
+      "candidate": {
+        "samples_us": [
+          327.33860425651073,
+          327.16933637857437,
+          328.30236790080863,
+          328.7119946132104,
+          328.6265302449465
+        ],
+        "median_us": 328.30236790080863
+      },
+      "native": {
+        "samples_us": [
+          271.29823962847394,
+          271.1106402178605,
+          272.4072740723689,
+          272.7520962556203,
+          272.76547625660896
+        ],
+        "median_us": 272.4072740723689
+      },
+      "native_over_candidate": 0.8297450786424801
+    },
+    {
+      "batch": 8,
+      "passed": true,
+      "checks": [
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999495863897,
+            "max_head_relative_rms": 0.0007326572667809429,
+            "max_abs": 0.0006082057952880859
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999998396908572,
+            "max_head_relative_rms": 0.0008468996595375951,
+            "max_abs": 1.1380761861801147e-05
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999265783507,
+            "max_head_relative_rms": 0.0008359152065229528,
+            "max_abs": 0.000545501708984375
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999989545568676,
+            "max_head_relative_rms": 0.002306887033408453,
+            "max_abs": 2.008490264415741e-05
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.999999940794372,
+            "max_head_relative_rms": 0.0007258883739301015,
+            "max_abs": 0.0003649592399597168
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999996125930991,
+            "max_head_relative_rms": 0.00174251808373476,
+            "max_abs": 2.4516135454177856e-05
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999928541584,
+            "max_head_relative_rms": 0.00048243288743437716,
+            "max_abs": 0.00033992528915405273
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999997961431589,
+            "max_head_relative_rms": 0.001117904812360774,
+            "max_abs": 1.5325844287872314e-05
+          }
+        }
+      ],
+      "candidate": {
+        "samples_us": [
+          519.1841317961613,
+          519.6511279791594,
+          520.1685863236586,
+          520.8412650972605,
+          521.1884621530771
+        ],
+        "median_us": 520.1685863236586
+      },
+      "native": {
+        "samples_us": [
+          535.4743916541338,
+          536.8341070910295,
+          537.1258904536566,
+          537.004042416811,
+          536.8190972755352
+        ],
+        "median_us": 536.8341070910295
+      },
+      "native_over_candidate": 1.0320386913118997
+    },
+    {
+      "batch": 16,
+      "passed": true,
+      "checks": [
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.999999978094969,
+            "max_head_relative_rms": 0.0006791792923483887,
+            "max_abs": 0.0012335777282714844
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999989989271606,
+            "max_head_relative_rms": 0.002277418492155672,
+            "max_abs": 0.00011414289474487305
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999660753701,
+            "max_head_relative_rms": 0.0005598542648495076,
+            "max_abs": 0.0017495155334472656
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999912323566,
+            "max_head_relative_rms": 0.0012086220872021775,
+            "max_abs": 0.0001182258129119873
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999176843768,
+            "max_head_relative_rms": 0.0008463552596874118,
+            "max_abs": 0.002483367919921875
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.999995383702243,
+            "max_head_relative_rms": 0.003991449090243522,
+            "max_abs": 0.0001049041748046875
+          }
+        },
+        {
+          "state": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999999506321681,
+            "max_head_relative_rms": 0.0008076959769683913,
+            "max_abs": 0.0006732940673828125
+          },
+          "output": {
+            "passed": true,
+            "finite": true,
+            "min_head_pcc": 0.9999986429874044,
+            "max_head_relative_rms": 0.0026027606122917563,
+            "max_abs": 5.429983139038086e-05
+          }
+        }
+      ],
+      "candidate": {
+        "samples_us": [
+          673.5870614647865,
+          674.2657783130804,
+          674.6863946318626,
+          675.6695453077555,
+          675.3170086691777
+        ],
+        "median_us": 674.6863946318626
+      },
+      "native": {
+        "samples_us": [
+          1030.6405369192362,
+          1030.631208171447,
+          1031.6510684788227,
+          1031.108604123195,
+          1031.0588714977105
+        ],
+        "median_us": 1031.0588714977105
+      },
+      "native_over_candidate": 1.528204629145219
+    }
+  ],
+  "scope": "Layer 0 GDN projection, convolution, gates, recurrence, output norm and TP output projection; MLP excluded",
+  "reference": "FP32 recurrence on actual per-rank convolution outputs and gates, 64 traced updates with stationary input",
+  "measurement": "Five warm samples of 30 trace replays; native control is timing only",
+  "updated_at": "2026-10-07T17:08:57Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "active_batch": 32,
+  "error": {
+    "type": "AssertionError",
+    "message": "[{'output': {'finite': True, 'max_abs': 4.668533802032471e-05, 'max_head_relative_rms': 0.002279114172796886, 'min_head_pcc': 0.9999974451965847, ...}, 'state': {'finite': True, 'max_abs': 0.00142669677734375, 'max_head_relative_rms': 0.0007361069883808071, 'min_head_pcc': 0.9999999710828253, ...}}, {'output': {'finite': True, 'max_abs': 7.919222116470337e-05, 'max_head_relative_rms': 0.0012240205872026011, 'min_head_pcc': 0.9999992941112676, ...}, 'state': {'finite': True, 'max_abs': 0.000834345817565918, 'max_head_relative_rms': 0.0007311386016688113, 'min_head_pcc': 0.9999999367068141, ...}}, {'output': {'finite': True, 'max_abs': 8.460879325866699e-05, 'max_head_relative_rms': 0.010937593361372731, 'min_head_pcc': 0.9999436963772877, ...}, 'state': {'finite': True, 'max_abs': 0.0013740062713623047, 'max_head_relative_rms': 0.0006555668502762692, 'min_head_pcc': 0.9999999530167663, ...}}, {'output': {'finite': True, 'max_abs': 5.3063035011291504e-05, 'max_head_relative_rms': 0.0021478278071162754, 'min_head_pcc': 0.9999977650141578, ...}, 'state': {'finite': True, 'max_abs': 0.0011630058288574219, 'max_head_relative_rms': 0.0005989315462148938, 'min_head_pcc': 0.9999999615307794, ...}}]\nassert False\n +  where False = all(<generator object run_case.<locals>.<genexpr> at 0x7783667fd0e0>)"
+  }
+}

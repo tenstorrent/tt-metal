@@ -1,0 +1,2700 @@
+{
+  "state": "completed",
+  "passed": true,
+  "promoted_to_model": false,
+  "scope": "Standalone TP4 recurrence candidate; optional fused Q/K normalization; no convolution/output gating/model eval",
+  "precision": "FP32 compact vectors, tiled FP32 state, direct FP32 unpack and SFPU arithmetic",
+  "measurement": "Five warm samples of 100 trace replays; includes dispatch; no host readback in timing",
+  "source_sha256": {
+    "__init__.py": "c94ebc138e25c01aae5a492beeebe5fca1f7bbbb3a0be4c55c8d6198cba2f48f",
+    "compute.cpp": "eb5bdec63e5c49f4e7f750865d629aecda2dda32dea0552cb0f88c4b20bd65ee",
+    "model_adapter.py": "e750c66370691114ac8bbb015957b50047ac007b1b27f81048d71d819664f62d",
+    "op.py": "f428b429cf909e0711e5c8af8cbab7984b2a8790a7152b7edf5839d761afa81f",
+    "reader.cpp": "2589e5ca345e9e93521b1b1025b6552ef300959983f7a8a8b07f4c5ee81a694c",
+    "workspace.py": "cd86b8da8ccd1d603150a7242a550e76609519aabcf106a1e5b34e3414d784d9",
+    "writer.cpp": "2632705ff4fc977076094b537ff67175f819f78d996f550d78d9955277b7698d"
+  },
+  "cases": [
+    {
+      "batch": 1,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "heads_per_chip": 12,
+      "active_cores": 48,
+      "checks": [
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 6.237867843073042e-08,
+              "max_abs": 1.1920928955078125e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 6.237867843073042e-08,
+              "max_abs": 1.1920928955078125e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 6.237867843073042e-08,
+              "max_abs": 1.1920928955078125e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 6.237867843073042e-08,
+              "max_abs": 1.1920928955078125e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999956,
+              "max_head_relative_rms": 3.1012988703228784e-07,
+              "max_abs": 1.30385160446167e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999956,
+              "max_head_relative_rms": 3.1012988703228784e-07,
+              "max_abs": 1.30385160446167e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999956,
+              "max_head_relative_rms": 3.1012988703228784e-07,
+              "max_abs": 1.30385160446167e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999956,
+              "max_head_relative_rms": 3.1012988703228784e-07,
+              "max_abs": 1.30385160446167e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999984,
+              "max_head_relative_rms": 2.672116819641878e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999984,
+              "max_head_relative_rms": 2.672116819641878e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999984,
+              "max_head_relative_rms": 2.672116819641878e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999984,
+              "max_head_relative_rms": 2.672116819641878e-08,
+              "max_abs": 2.9802322387695312e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999966,
+              "max_head_relative_rms": 2.85260058828252e-07,
+              "max_abs": 1.30385160446167e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999966,
+              "max_head_relative_rms": 2.85260058828252e-07,
+              "max_abs": 1.30385160446167e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999966,
+              "max_head_relative_rms": 2.85260058828252e-07,
+              "max_abs": 1.30385160446167e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999966,
+              "max_head_relative_rms": 2.85260058828252e-07,
+              "max_abs": 1.30385160446167e-08
+            }
+          ]
+        },
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999964,
+              "max_head_relative_rms": 8.256559150390329e-08,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999964,
+              "max_head_relative_rms": 8.256559150390329e-08,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999964,
+              "max_head_relative_rms": 8.256559150390329e-08,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999964,
+              "max_head_relative_rms": 8.256559150390329e-08,
+              "max_abs": 2.384185791015625e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999563,
+              "max_head_relative_rms": 2.978056022811052e-07,
+              "max_abs": 1.5832483768463135e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999563,
+              "max_head_relative_rms": 2.978056022811052e-07,
+              "max_abs": 1.5832483768463135e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999563,
+              "max_head_relative_rms": 2.978056022811052e-07,
+              "max_abs": 1.5832483768463135e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999563,
+              "max_head_relative_rms": 2.978056022811052e-07,
+              "max_abs": 1.5832483768463135e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999976,
+              "max_head_relative_rms": 3.6736229965255264e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999976,
+              "max_head_relative_rms": 3.6736229965255264e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999976,
+              "max_head_relative_rms": 3.6736229965255264e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999976,
+              "max_head_relative_rms": 3.6736229965255264e-08,
+              "max_abs": 2.9802322387695312e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999643,
+              "max_head_relative_rms": 2.8095686301903436e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999643,
+              "max_head_relative_rms": 2.8095686301903436e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999643,
+              "max_head_relative_rms": 2.8095686301903436e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999643,
+              "max_head_relative_rms": 2.8095686301903436e-07,
+              "max_abs": 1.6763806343078613e-08
+            }
+          ]
+        }
+      ],
+      "traced_call_us": [
+        36.73795145004988,
+        36.80434077978134,
+        36.717820912599564,
+        36.724829114973545,
+        36.71862185001373
+      ],
+      "median_traced_call_us": 36.724829114973545,
+      "p1_target_us": 13.072,
+      "p1_latency_target_met": false,
+      "program_cache_entries_before": 1,
+      "program_cache_entries_per_call": [
+        2,
+        2,
+        2,
+        2
+      ],
+      "program_cache_entries_after": 2
+    },
+    {
+      "batch": 8,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "heads_per_chip": 96,
+      "active_cores": 120,
+      "checks": [
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999997,
+              "max_head_relative_rms": 8.563490274653446e-08,
+              "max_abs": 8.940696716308594e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999997,
+              "max_head_relative_rms": 8.563490274653446e-08,
+              "max_abs": 8.940696716308594e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999997,
+              "max_head_relative_rms": 8.563490274653446e-08,
+              "max_abs": 8.940696716308594e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999997,
+              "max_head_relative_rms": 8.563490274653446e-08,
+              "max_abs": 8.940696716308594e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999584,
+              "max_head_relative_rms": 3.241860967033188e-07,
+              "max_abs": 1.4901161193847656e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999584,
+              "max_head_relative_rms": 3.241860967033188e-07,
+              "max_abs": 1.4901161193847656e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999584,
+              "max_head_relative_rms": 3.241860967033188e-07,
+              "max_abs": 1.4901161193847656e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999584,
+              "max_head_relative_rms": 3.241860967033188e-07,
+              "max_abs": 1.4901161193847656e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999977,
+              "max_head_relative_rms": 2.6811254168552257e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999977,
+              "max_head_relative_rms": 2.6811254168552257e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999977,
+              "max_head_relative_rms": 2.6811254168552257e-08,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999977,
+              "max_head_relative_rms": 2.6811254168552257e-08,
+              "max_abs": 2.9802322387695312e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999963,
+              "max_head_relative_rms": 2.923510063816835e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999963,
+              "max_head_relative_rms": 2.923510063816835e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999963,
+              "max_head_relative_rms": 2.923510063816835e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999963,
+              "max_head_relative_rms": 2.923510063816835e-07,
+              "max_abs": 1.6763806343078613e-08
+            }
+          ]
+        },
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999953,
+              "max_head_relative_rms": 9.742597399837727e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999953,
+              "max_head_relative_rms": 9.742597399837727e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999953,
+              "max_head_relative_rms": 9.742597399837727e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999953,
+              "max_head_relative_rms": 9.742597399837727e-08,
+              "max_abs": 1.7881393432617188e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999576,
+              "max_head_relative_rms": 3.3959777858243006e-07,
+              "max_abs": 2.2351741790771484e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999576,
+              "max_head_relative_rms": 3.3959777858243006e-07,
+              "max_abs": 2.2351741790771484e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999576,
+              "max_head_relative_rms": 3.3959777858243006e-07,
+              "max_abs": 2.2351741790771484e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999576,
+              "max_head_relative_rms": 3.3959777858243006e-07,
+              "max_abs": 2.2351741790771484e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 3.704430178557246e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 3.704430178557246e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 3.704430178557246e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 3.704430178557246e-08,
+              "max_abs": 5.960464477539063e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999618,
+              "max_head_relative_rms": 3.106038191821073e-07,
+              "max_abs": 1.210719347000122e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999618,
+              "max_head_relative_rms": 3.106038191821073e-07,
+              "max_abs": 1.210719347000122e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999618,
+              "max_head_relative_rms": 3.106038191821073e-07,
+              "max_abs": 1.210719347000122e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999618,
+              "max_head_relative_rms": 3.106038191821073e-07,
+              "max_abs": 1.210719347000122e-08
+            }
+          ]
+        }
+      ],
+      "traced_call_us": [
+        108.77776890993118,
+        108.74663013964891,
+        108.7465276941657,
+        108.73451828956604,
+        108.75443927943707
+      ],
+      "median_traced_call_us": 108.74663013964891,
+      "p1_target_us": 34.576,
+      "p1_latency_target_met": false,
+      "program_cache_entries_before": 3,
+      "program_cache_entries_per_call": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "program_cache_entries_after": 4
+    },
+    {
+      "batch": 16,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "heads_per_chip": 192,
+      "active_cores": 120,
+      "checks": [
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 8.898743149411867e-08,
+              "max_abs": 1.1920928955078125e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 8.898743149411867e-08,
+              "max_abs": 1.1920928955078125e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 8.898743149411867e-08,
+              "max_abs": 1.1920928955078125e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 8.898743149411867e-08,
+              "max_abs": 1.1920928955078125e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999469,
+              "max_head_relative_rms": 3.4192929620131324e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999469,
+              "max_head_relative_rms": 3.4192929620131324e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999469,
+              "max_head_relative_rms": 3.4192929620131324e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999469,
+              "max_head_relative_rms": 3.4192929620131324e-07,
+              "max_abs": 2.60770320892334e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 2.8366601983391087e-08,
+              "max_abs": 3.5390257835388184e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 2.8366601983391087e-08,
+              "max_abs": 3.5390257835388184e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 2.8366601983391087e-08,
+              "max_abs": 3.5390257835388184e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999981,
+              "max_head_relative_rms": 2.8366601983391087e-08,
+              "max_abs": 3.5390257835388184e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999954,
+              "max_head_relative_rms": 3.263415225438401e-07,
+              "max_abs": 1.5832483768463135e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999954,
+              "max_head_relative_rms": 3.263415225438401e-07,
+              "max_abs": 1.5832483768463135e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999954,
+              "max_head_relative_rms": 3.263415225438401e-07,
+              "max_abs": 1.5832483768463135e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999954,
+              "max_head_relative_rms": 3.263415225438401e-07,
+              "max_abs": 1.5832483768463135e-08
+            }
+          ]
+        },
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999943,
+              "max_head_relative_rms": 1.1429595276483129e-07,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999943,
+              "max_head_relative_rms": 1.1429595276483129e-07,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999943,
+              "max_head_relative_rms": 1.1429595276483129e-07,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999943,
+              "max_head_relative_rms": 1.1429595276483129e-07,
+              "max_abs": 1.7881393432617188e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999293,
+              "max_head_relative_rms": 3.8125162253943284e-07,
+              "max_abs": 3.3527612686157227e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999293,
+              "max_head_relative_rms": 3.8125162253943284e-07,
+              "max_abs": 3.3527612686157227e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999293,
+              "max_head_relative_rms": 3.8125162253943284e-07,
+              "max_abs": 3.3527612686157227e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999293,
+              "max_head_relative_rms": 3.8125162253943284e-07,
+              "max_abs": 3.3527612686157227e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999978,
+              "max_head_relative_rms": 3.70985843703858e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999978,
+              "max_head_relative_rms": 3.70985843703858e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999978,
+              "max_head_relative_rms": 3.70985843703858e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999978,
+              "max_head_relative_rms": 3.70985843703858e-08,
+              "max_abs": 5.960464477539063e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999503,
+              "max_head_relative_rms": 3.4745730199369974e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999503,
+              "max_head_relative_rms": 3.4745730199369974e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999503,
+              "max_head_relative_rms": 3.4745730199369974e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999503,
+              "max_head_relative_rms": 3.4745730199369974e-07,
+              "max_abs": 1.862645149230957e-08
+            }
+          ]
+        }
+      ],
+      "traced_call_us": [
+        175.18079839646816,
+        175.37959851324558,
+        175.2357790246606,
+        175.34393817186356,
+        175.17218366265297
+      ],
+      "median_traced_call_us": 175.2357790246606,
+      "p1_target_us": 59.152,
+      "p1_latency_target_met": false,
+      "program_cache_entries_before": 5,
+      "program_cache_entries_per_call": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "program_cache_entries_after": 5
+    },
+    {
+      "batch": 32,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "heads_per_chip": 384,
+      "active_cores": 120,
+      "checks": [
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999969,
+              "max_head_relative_rms": 8.588393268824514e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999969,
+              "max_head_relative_rms": 8.588393268824514e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999969,
+              "max_head_relative_rms": 8.588393268824514e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999969,
+              "max_head_relative_rms": 8.588393268824514e-08,
+              "max_abs": 1.7881393432617188e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999951,
+              "max_head_relative_rms": 3.320913914785313e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999951,
+              "max_head_relative_rms": 3.320913914785313e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999951,
+              "max_head_relative_rms": 3.320913914785313e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999951,
+              "max_head_relative_rms": 3.320913914785313e-07,
+              "max_abs": 2.60770320892334e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 2.9236570439899154e-08,
+              "max_abs": 3.166496753692627e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 2.9236570439899154e-08,
+              "max_abs": 3.166496753692627e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 2.9236570439899154e-08,
+              "max_abs": 3.166496753692627e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 2.9236570439899154e-08,
+              "max_abs": 3.166496753692627e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999957,
+              "max_head_relative_rms": 3.143852595673503e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999957,
+              "max_head_relative_rms": 3.143852595673503e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999957,
+              "max_head_relative_rms": 3.143852595673503e-07,
+              "max_abs": 1.6763806343078613e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999957,
+              "max_head_relative_rms": 3.143852595673503e-07,
+              "max_abs": 1.6763806343078613e-08
+            }
+          ]
+        },
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999946,
+              "max_head_relative_rms": 9.776635110281875e-08,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999946,
+              "max_head_relative_rms": 9.776635110281875e-08,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999946,
+              "max_head_relative_rms": 9.776635110281875e-08,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999946,
+              "max_head_relative_rms": 9.776635110281875e-08,
+              "max_abs": 2.384185791015625e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999492,
+              "max_head_relative_rms": 3.528802149161377e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999492,
+              "max_head_relative_rms": 3.528802149161377e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999492,
+              "max_head_relative_rms": 3.528802149161377e-07,
+              "max_abs": 2.60770320892334e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999492,
+              "max_head_relative_rms": 3.528802149161377e-07,
+              "max_abs": 2.60770320892334e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 3.834724331546787e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 3.834724331546787e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 3.834724331546787e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999979,
+              "max_head_relative_rms": 3.834724331546787e-08,
+              "max_abs": 5.960464477539063e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999533,
+              "max_head_relative_rms": 3.1549482875493174e-07,
+              "max_abs": 1.4901161193847656e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999533,
+              "max_head_relative_rms": 3.1549482875493174e-07,
+              "max_abs": 1.4901161193847656e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999533,
+              "max_head_relative_rms": 3.1549482875493174e-07,
+              "max_abs": 1.4901161193847656e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999533,
+              "max_head_relative_rms": 3.1549482875493174e-07,
+              "max_abs": 1.4901161193847656e-08
+            }
+          ]
+        }
+      ],
+      "traced_call_us": [
+        308.39405953884125,
+        308.57513193041086,
+        308.6230019107461,
+        308.62710904330015,
+        308.51312913000584
+      ],
+      "median_traced_call_us": 308.57513193041086,
+      "p1_target_us": 108.304,
+      "p1_latency_target_met": false,
+      "program_cache_entries_before": 6,
+      "program_cache_entries_per_call": [
+        6,
+        6,
+        6,
+        6
+      ],
+      "program_cache_entries_after": 6
+    },
+    {
+      "batch": 64,
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "heads_per_chip": 768,
+      "active_cores": 120,
+      "checks": [
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 9.329732801187861e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 9.329732801187861e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 9.329732801187861e-08,
+              "max_abs": 1.7881393432617188e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999962,
+              "max_head_relative_rms": 9.329732801187861e-08,
+              "max_abs": 1.7881393432617188e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999483,
+              "max_head_relative_rms": 3.5141883026695016e-07,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999483,
+              "max_head_relative_rms": 3.5141883026695016e-07,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999483,
+              "max_head_relative_rms": 3.5141883026695016e-07,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999483,
+              "max_head_relative_rms": 3.5141883026695016e-07,
+              "max_abs": 2.9802322387695312e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 2.9620708639988185e-08,
+              "max_abs": 3.725290298461914e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 2.9620708639988185e-08,
+              "max_abs": 3.725290298461914e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 2.9620708639988185e-08,
+              "max_abs": 3.725290298461914e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999982,
+              "max_head_relative_rms": 2.9620708639988185e-08,
+              "max_abs": 3.725290298461914e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999946,
+              "max_head_relative_rms": 3.3894934352535233e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999946,
+              "max_head_relative_rms": 3.3894934352535233e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999946,
+              "max_head_relative_rms": 3.3894934352535233e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.999999999999946,
+              "max_head_relative_rms": 3.3894934352535233e-07,
+              "max_abs": 1.862645149230957e-08
+            }
+          ]
+        },
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999934,
+              "max_head_relative_rms": 1.124874324927359e-07,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999934,
+              "max_head_relative_rms": 1.124874324927359e-07,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999934,
+              "max_head_relative_rms": 1.124874324927359e-07,
+              "max_abs": 2.384185791015625e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999934,
+              "max_head_relative_rms": 1.124874324927359e-07,
+              "max_abs": 2.384185791015625e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999282,
+              "max_head_relative_rms": 3.822903308393909e-07,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999282,
+              "max_head_relative_rms": 3.822903308393909e-07,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999282,
+              "max_head_relative_rms": 3.822903308393909e-07,
+              "max_abs": 2.9802322387695312e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999282,
+              "max_head_relative_rms": 3.822903308393909e-07,
+              "max_abs": 2.9802322387695312e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999972,
+              "max_head_relative_rms": 3.8558417944003546e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999972,
+              "max_head_relative_rms": 3.8558417944003546e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999972,
+              "max_head_relative_rms": 3.8558417944003546e-08,
+              "max_abs": 5.960464477539063e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999972,
+              "max_head_relative_rms": 3.8558417944003546e-08,
+              "max_abs": 5.960464477539063e-08
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999497,
+              "max_head_relative_rms": 3.42669728613135e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999497,
+              "max_head_relative_rms": 3.42669728613135e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999497,
+              "max_head_relative_rms": 3.42669728613135e-07,
+              "max_abs": 1.862645149230957e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999497,
+              "max_head_relative_rms": 3.42669728613135e-07,
+              "max_abs": 1.862645149230957e-08
+            }
+          ]
+        }
+      ],
+      "traced_call_us": [
+        596.42578009516,
+        596.3689833879471,
+        596.4259710162878,
+        596.5062882751226,
+        596.31850104779
+      ],
+      "median_traced_call_us": 596.42578009516,
+      "p1_target_us": 206.608,
+      "p1_latency_target_met": false,
+      "program_cache_entries_before": 7,
+      "program_cache_entries_per_call": [
+        7,
+        7,
+        7,
+        7
+      ],
+      "program_cache_entries_after": 7
+    }
+  ],
+  "long_horizon": [
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 256,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999722,
+          "max_head_relative_rms": 2.30216521464617e-07,
+          "max_abs": 8.344650268554688e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999722,
+          "max_head_relative_rms": 2.30216521464617e-07,
+          "max_abs": 8.344650268554688e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999722,
+          "max_head_relative_rms": 2.30216521464617e-07,
+          "max_abs": 8.344650268554688e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999722,
+          "max_head_relative_rms": 2.30216521464617e-07,
+          "max_abs": 8.344650268554688e-07
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999313,
+          "max_head_relative_rms": 3.839850779744689e-07,
+          "max_abs": 6.705522537231445e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999313,
+          "max_head_relative_rms": 3.839850779744689e-07,
+          "max_abs": 6.705522537231445e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999313,
+          "max_head_relative_rms": 3.839850779744689e-07,
+          "max_abs": 6.705522537231445e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999313,
+          "max_head_relative_rms": 3.839850779744689e-07,
+          "max_abs": 6.705522537231445e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 512,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999656,
+          "max_head_relative_rms": 2.588488323576176e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999656,
+          "max_head_relative_rms": 2.588488323576176e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999656,
+          "max_head_relative_rms": 2.588488323576176e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999656,
+          "max_head_relative_rms": 2.588488323576176e-07,
+          "max_abs": 1.1920928955078125e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999132,
+          "max_head_relative_rms": 4.250017225544048e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999132,
+          "max_head_relative_rms": 4.250017225544048e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999132,
+          "max_head_relative_rms": 4.250017225544048e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999132,
+          "max_head_relative_rms": 4.250017225544048e-07,
+          "max_abs": 7.450580596923828e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 768,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999628,
+          "max_head_relative_rms": 2.7380030641970035e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999628,
+          "max_head_relative_rms": 2.7380030641970035e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999628,
+          "max_head_relative_rms": 2.7380030641970035e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999628,
+          "max_head_relative_rms": 2.7380030641970035e-07,
+          "max_abs": 1.1920928955078125e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998991,
+          "max_head_relative_rms": 4.516261531286936e-07,
+          "max_abs": 5.960464477539063e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998991,
+          "max_head_relative_rms": 4.516261531286936e-07,
+          "max_abs": 5.960464477539063e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998991,
+          "max_head_relative_rms": 4.516261531286936e-07,
+          "max_abs": 5.960464477539063e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998991,
+          "max_head_relative_rms": 4.516261531286936e-07,
+          "max_abs": 5.960464477539063e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 1024,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999615,
+          "max_head_relative_rms": 2.7921055022437745e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999615,
+          "max_head_relative_rms": 2.7921055022437745e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999615,
+          "max_head_relative_rms": 2.7921055022437745e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999615,
+          "max_head_relative_rms": 2.7921055022437745e-07,
+          "max_abs": 1.1920928955078125e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999094,
+          "max_head_relative_rms": 4.250395698819825e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999094,
+          "max_head_relative_rms": 4.250395698819825e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999094,
+          "max_head_relative_rms": 4.250395698819825e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999094,
+          "max_head_relative_rms": 4.250395698819825e-07,
+          "max_abs": 7.450580596923828e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 1280,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999607,
+          "max_head_relative_rms": 2.8200445120558237e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999607,
+          "max_head_relative_rms": 2.8200445120558237e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999607,
+          "max_head_relative_rms": 2.8200445120558237e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999607,
+          "max_head_relative_rms": 2.8200445120558237e-07,
+          "max_abs": 1.430511474609375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999207,
+          "max_head_relative_rms": 4.0912105652083544e-07,
+          "max_abs": 1.043081283569336e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999207,
+          "max_head_relative_rms": 4.0912105652083544e-07,
+          "max_abs": 1.043081283569336e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999207,
+          "max_head_relative_rms": 4.0912105652083544e-07,
+          "max_abs": 1.043081283569336e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999207,
+          "max_head_relative_rms": 4.0912105652083544e-07,
+          "max_abs": 1.043081283569336e-07
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 1536,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999596,
+          "max_head_relative_rms": 2.838270580710993e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999596,
+          "max_head_relative_rms": 2.838270580710993e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999596,
+          "max_head_relative_rms": 2.838270580710993e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999596,
+          "max_head_relative_rms": 2.838270580710993e-07,
+          "max_abs": 1.1920928955078125e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999145,
+          "max_head_relative_rms": 4.164744350274243e-07,
+          "max_abs": 8.568167686462402e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999145,
+          "max_head_relative_rms": 4.164744350274243e-07,
+          "max_abs": 8.568167686462402e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999145,
+          "max_head_relative_rms": 4.164744350274243e-07,
+          "max_abs": 8.568167686462402e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999145,
+          "max_head_relative_rms": 4.164744350274243e-07,
+          "max_abs": 8.568167686462402e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 1792,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999597,
+          "max_head_relative_rms": 2.8276155151223136e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999597,
+          "max_head_relative_rms": 2.8276155151223136e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999597,
+          "max_head_relative_rms": 2.8276155151223136e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999597,
+          "max_head_relative_rms": 2.8276155151223136e-07,
+          "max_abs": 1.430511474609375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999098,
+          "max_head_relative_rms": 4.3679941469389043e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999098,
+          "max_head_relative_rms": 4.3679941469389043e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999098,
+          "max_head_relative_rms": 4.3679941469389043e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999098,
+          "max_head_relative_rms": 4.3679941469389043e-07,
+          "max_abs": 7.450580596923828e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 2048,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999601,
+          "max_head_relative_rms": 2.8252746132226584e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999601,
+          "max_head_relative_rms": 2.8252746132226584e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999601,
+          "max_head_relative_rms": 2.8252746132226584e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999601,
+          "max_head_relative_rms": 2.8252746132226584e-07,
+          "max_abs": 1.430511474609375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999215,
+          "max_head_relative_rms": 4.0886085936263075e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999215,
+          "max_head_relative_rms": 4.0886085936263075e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999215,
+          "max_head_relative_rms": 4.0886085936263075e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999215,
+          "max_head_relative_rms": 4.0886085936263075e-07,
+          "max_abs": 8.195638656616211e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 2304,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999598,
+          "max_head_relative_rms": 2.818073908986555e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999598,
+          "max_head_relative_rms": 2.818073908986555e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999598,
+          "max_head_relative_rms": 2.818073908986555e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999598,
+          "max_head_relative_rms": 2.818073908986555e-07,
+          "max_abs": 1.1920928955078125e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999029,
+          "max_head_relative_rms": 4.461596773986031e-07,
+          "max_abs": 1.043081283569336e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999029,
+          "max_head_relative_rms": 4.461596773986031e-07,
+          "max_abs": 1.043081283569336e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999029,
+          "max_head_relative_rms": 4.461596773986031e-07,
+          "max_abs": 1.043081283569336e-07
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999029,
+          "max_head_relative_rms": 4.461596773986031e-07,
+          "max_abs": 1.043081283569336e-07
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 2560,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.999999999999961,
+          "max_head_relative_rms": 2.8182346927372923e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.999999999999961,
+          "max_head_relative_rms": 2.8182346927372923e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.999999999999961,
+          "max_head_relative_rms": 2.8182346927372923e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.999999999999961,
+          "max_head_relative_rms": 2.8182346927372923e-07,
+          "max_abs": 1.430511474609375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999056,
+          "max_head_relative_rms": 4.4063002696711933e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999056,
+          "max_head_relative_rms": 4.4063002696711933e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999056,
+          "max_head_relative_rms": 4.4063002696711933e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999056,
+          "max_head_relative_rms": 4.4063002696711933e-07,
+          "max_abs": 7.450580596923828e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 2816,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999609,
+          "max_head_relative_rms": 2.7936942925583734e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999609,
+          "max_head_relative_rms": 2.7936942925583734e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999609,
+          "max_head_relative_rms": 2.7936942925583734e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999609,
+          "max_head_relative_rms": 2.7936942925583734e-07,
+          "max_abs": 1.1920928955078125e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999114,
+          "max_head_relative_rms": 4.254988341723589e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999114,
+          "max_head_relative_rms": 4.254988341723589e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999114,
+          "max_head_relative_rms": 4.254988341723589e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999114,
+          "max_head_relative_rms": 4.254988341723589e-07,
+          "max_abs": 8.940696716308594e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 3072,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999606,
+          "max_head_relative_rms": 2.80247019063234e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999606,
+          "max_head_relative_rms": 2.80247019063234e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999606,
+          "max_head_relative_rms": 2.80247019063234e-07,
+          "max_abs": 1.1920928955078125e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999606,
+          "max_head_relative_rms": 2.80247019063234e-07,
+          "max_abs": 1.1920928955078125e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999123,
+          "max_head_relative_rms": 4.245078134702782e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999123,
+          "max_head_relative_rms": 4.245078134702782e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999123,
+          "max_head_relative_rms": 4.245078134702782e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999123,
+          "max_head_relative_rms": 4.245078134702782e-07,
+          "max_abs": 8.195638656616211e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 3328,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999589,
+          "max_head_relative_rms": 2.8429076399126553e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999589,
+          "max_head_relative_rms": 2.8429076399126553e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999589,
+          "max_head_relative_rms": 2.8429076399126553e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999589,
+          "max_head_relative_rms": 2.8429076399126553e-07,
+          "max_abs": 1.430511474609375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999036,
+          "max_head_relative_rms": 4.6395700691910166e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999036,
+          "max_head_relative_rms": 4.6395700691910166e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999036,
+          "max_head_relative_rms": 4.6395700691910166e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999036,
+          "max_head_relative_rms": 4.6395700691910166e-07,
+          "max_abs": 8.940696716308594e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 3584,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999544,
+          "max_head_relative_rms": 2.984770818764423e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999544,
+          "max_head_relative_rms": 2.984770818764423e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999544,
+          "max_head_relative_rms": 2.984770818764423e-07,
+          "max_abs": 1.430511474609375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999544,
+          "max_head_relative_rms": 2.984770818764423e-07,
+          "max_abs": 1.430511474609375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999031,
+          "max_head_relative_rms": 4.622740431183179e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999031,
+          "max_head_relative_rms": 4.622740431183179e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999031,
+          "max_head_relative_rms": 4.622740431183179e-07,
+          "max_abs": 8.195638656616211e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999031,
+          "max_head_relative_rms": 4.622740431183179e-07,
+          "max_abs": 8.195638656616211e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 3840,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999553,
+          "max_head_relative_rms": 3.031972876169739e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999553,
+          "max_head_relative_rms": 3.031972876169739e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999553,
+          "max_head_relative_rms": 3.031972876169739e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999553,
+          "max_head_relative_rms": 3.031972876169739e-07,
+          "max_abs": 1.6689300537109375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.99999999999989,
+          "max_head_relative_rms": 4.7016098050564847e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.99999999999989,
+          "max_head_relative_rms": 4.7016098050564847e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.99999999999989,
+          "max_head_relative_rms": 4.7016098050564847e-07,
+          "max_abs": 8.940696716308594e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.99999999999989,
+          "max_head_relative_rms": 4.7016098050564847e-07,
+          "max_abs": 8.940696716308594e-08
+        }
+      ]
+    },
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 4096,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999516,
+          "max_head_relative_rms": 3.104157131174918e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999516,
+          "max_head_relative_rms": 3.104157131174918e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999516,
+          "max_head_relative_rms": 3.104157131174918e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999516,
+          "max_head_relative_rms": 3.104157131174918e-07,
+          "max_abs": 1.6689300537109375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998792,
+          "max_head_relative_rms": 4.907896055337186e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998792,
+          "max_head_relative_rms": 4.907896055337186e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998792,
+          "max_head_relative_rms": 4.907896055337186e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998792,
+          "max_head_relative_rms": 4.907896055337186e-07,
+          "max_abs": 7.450580596923828e-08
+        }
+      ]
+    }
+  ],
+  "decay_only": [
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "steps": 64,
+      "state": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999506,
+          "max_head_relative_rms": 3.1043517967027967e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999506,
+          "max_head_relative_rms": 3.1043517967027967e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999506,
+          "max_head_relative_rms": 3.1043517967027967e-07,
+          "max_abs": 1.6689300537109375e-06
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999999506,
+          "max_head_relative_rms": 3.1043517967027967e-07,
+          "max_abs": 1.6689300537109375e-06
+        }
+      ],
+      "output": [
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998889,
+          "max_head_relative_rms": 4.94848010193109e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998889,
+          "max_head_relative_rms": 4.94848010193109e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998889,
+          "max_head_relative_rms": 4.94848010193109e-07,
+          "max_abs": 7.450580596923828e-08
+        },
+        {
+          "passed": true,
+          "finite": true,
+          "min_head_pcc": 0.9999999999998889,
+          "max_head_relative_rms": 4.94848010193109e-07,
+          "max_abs": 7.450580596923828e-08
+        }
+      ]
+    }
+  ],
+  "value_splits": [
+    4
+  ],
+  "input_buffer_items": [
+    2
+  ],
+  "normalize_qk": true,
+  "multiwave_rebinding": [
+    {
+      "value_splits": 4,
+      "input_buffer_items": 2,
+      "normalize_qk": true,
+      "heads": 193,
+      "steps_per_allocation": 32,
+      "checks": [
+        {
+          "allocation": 0,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999462,
+              "max_head_relative_rms": 3.314000385478881e-07,
+              "max_abs": 6.556510925292969e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999462,
+              "max_head_relative_rms": 3.314000385478881e-07,
+              "max_abs": 6.556510925292969e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999462,
+              "max_head_relative_rms": 3.314000385478881e-07,
+              "max_abs": 6.556510925292969e-07
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999462,
+              "max_head_relative_rms": 3.314000385478881e-07,
+              "max_abs": 6.556510925292969e-07
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998443,
+              "max_head_relative_rms": 5.785589708260603e-07,
+              "max_abs": 3.91155481338501e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998443,
+              "max_head_relative_rms": 5.785589708260603e-07,
+              "max_abs": 3.91155481338501e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998443,
+              "max_head_relative_rms": 5.785589708260603e-07,
+              "max_abs": 3.91155481338501e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998443,
+              "max_head_relative_rms": 5.785589708260603e-07,
+              "max_abs": 3.91155481338501e-08
+            }
+          ]
+        },
+        {
+          "allocation": 1,
+          "state": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999474,
+              "max_head_relative_rms": 3.245487127350268e-07,
+              "max_abs": 1.0728836059570312e-06
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999474,
+              "max_head_relative_rms": 3.245487127350268e-07,
+              "max_abs": 1.0728836059570312e-06
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999474,
+              "max_head_relative_rms": 3.245487127350268e-07,
+              "max_abs": 1.0728836059570312e-06
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999999474,
+              "max_head_relative_rms": 3.245487127350268e-07,
+              "max_abs": 1.0728836059570312e-06
+            }
+          ],
+          "output": [
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998149,
+              "max_head_relative_rms": 6.220839149600792e-07,
+              "max_abs": 3.5390257835388184e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998149,
+              "max_head_relative_rms": 6.220839149600792e-07,
+              "max_abs": 3.5390257835388184e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998149,
+              "max_head_relative_rms": 6.220839149600792e-07,
+              "max_abs": 3.5390257835388184e-08
+            },
+            {
+              "passed": true,
+              "finite": true,
+              "min_head_pcc": 0.9999999999998149,
+              "max_head_relative_rms": 6.220839149600792e-07,
+              "max_abs": 3.5390257835388184e-08
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "updated_at": "2026-10-07T17:40:40Z",
+  "device_ids": [
+    0,
+    4,
+    12,
+    8
+  ],
+  "active_input_buffer_items": 2,
+  "active_batch": 64,
+  "active_value_splits": 4,
+  "p1_latency_target_met": false
+}

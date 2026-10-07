@@ -7,6 +7,7 @@ set -euo pipefail
 # import only the Python model modifications from the separate Metal worktree.
 QWEN_TASK_ROOT=${1:?Provide the isolated Qwen runtime directory}
 QWEN_RUN_DIR=${2:?Provide a new receipt directory}
+QWEN_MODEL_SOURCE=${3:-$QWEN_TASK_ROOT/metal-galaxy}
 if [[ -n "${QWEN_WAIT_FOR_UNIT:-}" ]]; then
     echo "Waiting for $QWEN_WAIT_FOR_UNIT before qualification"
     while true; do
@@ -21,7 +22,7 @@ fi
 mkdir "$QWEN_RUN_DIR"
 export PATH="$QWEN_TASK_ROOT/python_env/bin:$PATH"
 export TT_METAL_HOME="$QWEN_TASK_ROOT/metal"
-export PYTHONPATH="$QWEN_TASK_ROOT/metal-galaxy:$TT_METAL_HOME:$TT_METAL_HOME/tools"
+export PYTHONPATH="$QWEN_MODEL_SOURCE:$TT_METAL_HOME:$TT_METAL_HOME/tools"
 export LD_LIBRARY_PATH="$QWEN_TASK_ROOT/metal-install/lib:$QWEN_TASK_ROOT/metal-build/lib:${LD_LIBRARY_PATH:-}"
 export TT_METAL_CACHE="$QWEN_TASK_ROOT/jit-cache-metal-galaxy"
 export MODEL_WEIGHTS_DIR=${MODEL_WEIGHTS_DIR:?Set the pinned checkpoint directory}
@@ -30,7 +31,7 @@ export OMP_NUM_THREADS=8
 export PYTHONUNBUFFERED=1
 unset TT_METAL_SLOW_DISPATCH_MODE TT_METAL_ALLOCATOR_MODE_HYBRID
 unset TT_METAL_DEVICE_PROFILER TT_METAL_PROFILER_MID_RUN_DUMP TT_METAL_PROFILER_CPP_POST_PROCESS
-cd "$QWEN_TASK_ROOT/metal-galaxy"
+cd "$QWEN_MODEL_SOURCE"
 python - <<'PY'
 from pathlib import Path
 from models.demos.qwen38_27b_qb2.tt import model
@@ -47,5 +48,5 @@ if [[ "${QWEN_GALAXY_REPLICAS:-1}" != 1 ]]; then
     QWEN_TEST_TIMEOUT=5400
 fi
 exec /bin/bash "$QWEN_TASK_ROOT/source/scripts/run_safe_pytest.sh" \
-    "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/tests/$QWEN_TEST" \
+    "$QWEN_MODEL_SOURCE/models/demos/qwen38_27b_qb2/tests/$QWEN_TEST" \
     -vv -s --timeout="$QWEN_TEST_TIMEOUT" --junitxml="$QWEN_RUN_DIR/full-model.xml"

@@ -16,6 +16,7 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
+from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.tests.galaxy_prompt import qualification_prompt
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 from models.demos.qwen38_27b_qb2.tt.model import checkpoint_path
@@ -47,6 +48,10 @@ def test_full_model_galaxy_replica():
         output.write_text(
             json.dumps(
                 {
+                    "state": "completed",
+                    "passed": True,
+                    "precision": gen.model.precision,
+                    "source_sha256": model_source_hashes(Path(__file__).resolve().parents[1]),
                     "parent_mesh": [8, 4],
                     "replica_mesh": [1, 4],
                     "replicas_executed": 1,

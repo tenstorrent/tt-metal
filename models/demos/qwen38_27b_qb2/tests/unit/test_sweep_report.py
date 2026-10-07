@@ -44,3 +44,27 @@ def test_missing_request_latencies_rejected(expect_error):
     sample = dict(decode_s=2, elapsed_s=4, ttft_s=[1], trace_captures=0)
     with expect_error(ValueError, "Invalid measurement"):
         summarize([sample], concurrency=2, output_tokens=128)
+
+
+def test_input_rate_uses_timed_prefill_without_confusing_ttft_or_decode():
+    sample = dict(prefill_s=2, decode_s=3, elapsed_s=6, ttft_s=[2.5, 3], trace_captures=0)
+    metrics = summarize([sample], concurrency=2, output_tokens=301, input_tokens=8192)
+    assert metrics["aggregate_input_tokens_per_second"] == 8192
+    assert metrics["aggregate_decode_tokens_per_second"] == 200
+    assert metrics["aggregate_e2e_tokens_per_second"] == 602 / 6
+    assert metrics["aggregate_e2e_input_tokens_per_second"] == 16384 / 6
+
+
+def test_input_rate_rejects_missing_prefill_timing(expect_error):
+    sample = dict(decode_s=2, elapsed_s=4, ttft_s=[1], trace_captures=0)
+    with expect_error(ValueError, "measured prefill duration"):
+        summarize([sample], concurrency=1, output_tokens=128, input_tokens=8192)
+
+
+def test_wider_batch_plan_marks_implementation_limit_separately_from_memory():
+    plan = make_plan(batches=(16, 32, 64), input_lengths=(8192, 131072))
+    status = {(row["input_tokens"], row["batch_per_replica"]): row["status"] for row in plan["cells"]}
+    assert status[(8192, 32)] == "queued"
+    assert status[(8192, 64)] == "implementation_guard"
+    assert status[(131072, 16)] == "capacity_guard"
+    assert status[(131072, 64)] == "implementation_guard"

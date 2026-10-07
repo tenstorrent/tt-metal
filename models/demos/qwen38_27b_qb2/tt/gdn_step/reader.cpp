@@ -3,8 +3,8 @@
 #include "api/dataflow/dataflow_api.h"
 
 // One work item is a (user, local value head, value-column partition).
-// Q/K are already L2-normalized;
-// Q includes the attention scale. Gates contain exp(g) and sigmoid(beta).
+// Q/K are either already normalized/scaled or raw vectors for the compute
+// kernel's normalize_qk specialization. Gates contain exp(g) and sigmoid(beta).
 // Small vectors are compact row-major DRAM pages. Only the recurrent state
 // uses tiled DRAM storage. The reader constructs the broadcast views in L1.
 void kernel_main() {

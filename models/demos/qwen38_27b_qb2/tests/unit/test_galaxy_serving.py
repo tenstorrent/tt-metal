@@ -123,3 +123,17 @@ def test_qualified_override_reaches_server_workers(tmp_path, monkeypatch):
     assert qualified_runtime_environment()["QWEN_PRECISION_CONFIG"] == str(candidate.resolve())
     monkeypatch.setenv("QWEN_PRECISION_CONFIG", "baseline")
     assert qualified_runtime_environment()["QWEN_PRECISION_CONFIG"] == "baseline"
+
+
+def test_changed_nested_kernel_requires_new_qualification(tmp_path, expect_error):
+    (tmp_path / "tt/gdn_step").mkdir(parents=True)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/precision.json").write_text('{"policy": "single_step"}\n')
+    kernel = tmp_path / "tt/gdn_step/compute.cpp"
+    kernel.write_text("// first kernel\n")
+    receipt = dict(source_sha256=model_source_hashes(tmp_path))
+    assert "tt/gdn_step/compute.cpp" in receipt["source_sha256"]
+    assert verify_qualified_source(receipt, tmp_path)
+    kernel.write_text("// different kernel\n")
+    with expect_error(ValueError, "differs"):
+        verify_qualified_source(receipt, tmp_path)

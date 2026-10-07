@@ -18,12 +18,15 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.qwen38_27b_qb2.experiments.gdn_step import op
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
+from models.demos.qwen38_27b_qb2.tt.gdn_step import op
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
 
 
-def reference(state, q, k, v, gates):
+def reference(state, q, k, v, gates, *, normalize_qk=False):
+    if normalize_qk:
+        q = q * torch.rsqrt(q.square().sum(-1, keepdim=True) + 1e-6) * 128**-0.5
+        k = k * torch.rsqrt(k.square().sum(-1, keepdim=True) + 1e-6)
     decayed = state * gates[:, 0, None, None]
     prediction = torch.einsum("hk,hkv->hv", k, decayed)
     delta = gates[:, 1, None] * (v - prediction)
@@ -86,11 +89,13 @@ def check(tensor, expected):
     return results
 
 
-def capture(mesh, calls, *, value_splits=1, input_buffer_items=1):
+def capture(mesh, calls, *, value_splits=1, input_buffer_items=1, normalize_qk=False):
     trace = ttnn.begin_trace_capture(mesh, cq_id=0)
     try:
         for arguments in calls:
-            op.step(*arguments, value_splits=value_splits, input_buffer_items=input_buffer_items)
+            op.step(
+                *arguments, value_splits=value_splits, input_buffer_items=input_buffer_items, normalize_qk=normalize_qk
+            )
     except BaseException:
         ttnn.end_trace_capture(mesh, trace, cq_id=0)
         ttnn.release_trace(mesh, trace)
@@ -99,8 +104,8 @@ def capture(mesh, calls, *, value_splits=1, input_buffer_items=1):
     return trace
 
 
-def short_case(mesh, batch, *, value_splits=1, input_buffer_items=1):
-    variant = dict(value_splits=value_splits, input_buffer_items=input_buffer_items)
+def short_case(mesh, batch, *, value_splits=1, input_buffer_items=1, normalize_qk=False):
+    variant = dict(value_splits=value_splits, input_buffer_items=input_buffer_items, normalize_qk=normalize_qk)
     heads = batch * 12
     # Two simultaneously live sets of identically shaped allocations exercise
     # cache-hit address replacement, including the in-place state destination.
@@ -112,7 +117,7 @@ def short_case(mesh, batch, *, value_splits=1, input_buffer_items=1):
     initial_entries = mesh.num_program_cache_entries()
     for index in [0, 1, 0, 1]:
         q, k, v, gates, _ = hosts[index]
-        expected[index], output = reference(expected[index], q, k, v, gates)
+        expected[index], output = reference(expected[index], q, k, v, gates, normalize_qk=normalize_qk)
         op.step(*devices[index], **variant)
         ttnn.synchronize_device(mesh)
         cache_entries.append(mesh.num_program_cache_entries())
@@ -151,6 +156,7 @@ def short_case(mesh, batch, *, value_splits=1, input_buffer_items=1):
         batch=batch,
         value_splits=value_splits,
         input_buffer_items=input_buffer_items,
+        normalize_qk=normalize_qk,
         heads_per_chip=heads,
         active_cores=len(op.work_items(heads, grid.x, grid.y, value_splits)),
         checks=checks,
@@ -164,8 +170,8 @@ def short_case(mesh, batch, *, value_splits=1, input_buffer_items=1):
     )
 
 
-def long_horizon(mesh, report, path, *, value_splits=1, input_buffer_items=1):
-    variant = dict(value_splits=value_splits, input_buffer_items=input_buffer_items)
+def long_horizon(mesh, report, path, *, value_splits=1, input_buffer_items=1, normalize_qk=False):
+    variant = dict(value_splits=value_splits, input_buffer_items=input_buffer_items, normalize_qk=normalize_qk)
     heads = 12
     # All steps change inputs; a 64-step cycle avoids timing thousands of H2D
     # uploads. The reference executes every recurrence, including all cycles.
@@ -185,7 +191,7 @@ def long_horizon(mesh, report, path, *, value_splits=1, input_buffer_items=1):
         for cycle in range(64):
             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
             for values in hosts:
-                expected, expected_output = reference(expected, *values)
+                expected, expected_output = reference(expected, *values, normalize_qk=normalize_qk)
             if cycle % 4 == 3:
                 checkpoint = dict(
                     **variant,
@@ -206,16 +212,16 @@ def long_horizon(mesh, report, path, *, value_splits=1, input_buffer_items=1):
     decay_inputs = [upload(mesh, value) for value in [q, k, v, gates]]
     for _ in range(64):
         op.step(*decay_inputs, state, output, **variant)
-        expected, expected_output = reference(expected, q, k, v, gates)
+        expected, expected_output = reference(expected, q, k, v, gates, normalize_qk=normalize_qk)
     report["decay_only"].append(
         dict(**variant, steps=64, state=check(state, expected), output=check(output, expected_output))
     )
     save(path, report)
 
 
-def multiwave_rebinding(mesh, *, value_splits, input_buffer_items):
+def multiwave_rebinding(mesh, *, value_splits, input_buffer_items, normalize_qk=False):
     """Exercise CB wrap/tails and alternating live allocations inside a trace."""
-    variant = dict(value_splits=value_splits, input_buffer_items=input_buffer_items)
+    variant = dict(value_splits=value_splits, input_buffer_items=input_buffer_items, normalize_qk=normalize_qk)
     heads = 193  # Uneven work over 120 cores for every supported partition.
     hosts = [stimulus(heads, 810000 + i) for i in range(2)]
     devices = [buffers(mesh, values) for values in hosts]
@@ -233,7 +239,9 @@ def multiwave_rebinding(mesh, *, value_splits, input_buffer_items):
         for _ in range(16):
             ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
             for index in order:
-                expected[index], outputs[index] = reference(expected[index], *hosts[index][:4])
+                expected[index], outputs[index] = reference(
+                    expected[index], *hosts[index][:4], normalize_qk=normalize_qk
+                )
         checks = [
             dict(allocation=i, state=check(arguments[4], expected[i]), output=check(arguments[5], outputs[i]))
             for i, arguments in enumerate(devices)
@@ -253,12 +261,13 @@ def test_gdn_step_candidate():
     buffer_items = [int(part) for part in os.getenv("QWEN_GDN_INPUT_BUFFER_ITEMS", "1,2").split(",")]
     assert buffer_items and len(set(buffer_items)) == len(buffer_items)
     assert all(part in (1, 2) for part in buffer_items)
+    normalize_qk = os.getenv("QWEN_GDN_NORMALIZE_QK", "0") == "1"
     torch.set_num_threads(8)
     report = dict(
         state="opening",
         passed=False,
         promoted_to_model=False,
-        scope="Standalone TP4 recurrence candidate; no convolution/normalization/output gating or model eval",
+        scope="Standalone TP4 recurrence candidate; optional fused Q/K normalization; no convolution/output gating/model eval",
         precision="FP32 compact vectors, tiled FP32 state, direct FP32 unpack and SFPU arithmetic",
         measurement="Five warm samples of 100 trace replays; includes dispatch; no host readback in timing",
         source_sha256={
@@ -271,6 +280,7 @@ def test_gdn_step_candidate():
         decay_only=[],
         value_splits=value_splits,
         input_buffer_items=buffer_items,
+        normalize_qk=normalize_qk,
         multiwave_rebinding=[],
     )
     save(path, report)
@@ -283,7 +293,7 @@ def test_gdn_step_candidate():
         report["device_ids"] = list(mesh.get_device_ids())
         for depth in buffer_items:
             for partitions in value_splits:
-                variant = dict(value_splits=partitions, input_buffer_items=depth)
+                variant = dict(value_splits=partitions, input_buffer_items=depth, normalize_qk=normalize_qk)
                 report["active_input_buffer_items"] = depth
                 for batch in [1, 8, 16, 32, 64]:
                     report.update(state="short_case", active_batch=batch, active_value_splits=partitions)

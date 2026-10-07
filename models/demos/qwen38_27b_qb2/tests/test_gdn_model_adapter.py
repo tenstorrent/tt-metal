@@ -13,9 +13,9 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.qwen38_27b_qb2.experiments.gdn_step.model_adapter import step_from_flat
 from models.demos.qwen38_27b_qb2.tests.test_gdn_step_candidate import accuracy, reference
 from models.demos.qwen38_27b_qb2.tests.test_long_context_attention import save
+from models.demos.qwen38_27b_qb2.tt.gdn_step.model_adapter import step_from_flat
 from models.demos.qwen38_27b_qb2.tt.generator import configure_fabric
 
 
