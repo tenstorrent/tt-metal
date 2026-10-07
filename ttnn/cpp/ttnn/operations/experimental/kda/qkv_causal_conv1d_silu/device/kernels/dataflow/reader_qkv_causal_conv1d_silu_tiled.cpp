@@ -111,24 +111,24 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
 
         if (block != loaded_block) {
             weights.reserve_back(tap_count * block_ct);
+            // The row broadcast reads only each tap tile's row 0, which spans the first rows of faces 0 and 1.
+            const auto read_tap_row = [&](const auto& tap, uint32_t source_ct, uint32_t slot) {
+                for (uint32_t column = 0; column < 2; ++column) {
+                    noc.async_read(
+                        tap,
+                        weights,
+                        face_row_bytes,
+                        {.page_id = source_ct, .offset_bytes = column * face_bytes},
+                        {.offset_bytes = slot * tile_bytes + column * face_bytes});
+                }
+            };
             for (uint32_t ct = 0; ct < block_ct; ++ct) {
                 const uint32_t source_ct = ct_start + ct;
                 // The weight DFB is laid out as [tap][channel tile].
-                noc.async_read(tap0, weights, tile_bytes, {.page_id = source_ct}, {.offset_bytes = ct * tile_bytes});
-                noc.async_read(
-                    tap1, weights, tile_bytes, {.page_id = source_ct}, {.offset_bytes = (block_ct + ct) * tile_bytes});
-                noc.async_read(
-                    tap2,
-                    weights,
-                    tile_bytes,
-                    {.page_id = source_ct},
-                    {.offset_bytes = (2 * block_ct + ct) * tile_bytes});
-                noc.async_read(
-                    tap3,
-                    weights,
-                    tile_bytes,
-                    {.page_id = source_ct},
-                    {.offset_bytes = (3 * block_ct + ct) * tile_bytes});
+                read_tap_row(tap0, source_ct, ct);
+                read_tap_row(tap1, source_ct, block_ct + ct);
+                read_tap_row(tap2, source_ct, 2 * block_ct + ct);
+                read_tap_row(tap3, source_ct, 3 * block_ct + ct);
             }
             noc.async_read_barrier();
             weights.push_back(tap_count * block_ct);
