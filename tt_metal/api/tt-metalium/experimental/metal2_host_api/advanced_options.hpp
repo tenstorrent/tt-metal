@@ -4,9 +4,9 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>

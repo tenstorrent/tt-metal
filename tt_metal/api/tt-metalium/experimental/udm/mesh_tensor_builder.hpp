@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 #include <optional>
@@ -11,6 +12,7 @@
 #include <tt-metalium/experimental/udm/types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shape.hpp>
 
 namespace tt::tt_metal::experimental::udm {
 

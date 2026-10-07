@@ -6,11 +6,12 @@
 
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <optional>
 #include <span>
-#include <unordered_map>
+#include <string>
+#include <utility>
 #include <variant>
-#include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>

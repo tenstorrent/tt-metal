@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstddef>
+#include <utility>
 #include <vector>
 #include <cstdint>
 #include <string>

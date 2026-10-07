@@ -8,7 +8,6 @@
 #include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
 #include <tt_stl/span.hpp>
-#include <algorithm>
 #include <cstddef>
 #include <functional>
 #include <optional>

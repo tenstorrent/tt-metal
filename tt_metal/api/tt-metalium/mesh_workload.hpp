@@ -4,9 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
+#include <memory>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <umd/device/types/core_coordinates.hpp>
+#include <unordered_map>
 
 namespace tt::tt_metal::distributed {
 

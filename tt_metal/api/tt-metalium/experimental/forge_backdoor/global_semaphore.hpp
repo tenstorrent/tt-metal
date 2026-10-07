@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal::experimental {
 // clang-format off

@@ -4,16 +4,23 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <set>
+#include <string>
 #include <unordered_set>
 
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt_stl/span.hpp>
 
 #include <map>
 #include <memory>

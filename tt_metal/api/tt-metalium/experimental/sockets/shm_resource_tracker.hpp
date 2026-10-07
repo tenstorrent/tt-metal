@@ -7,7 +7,7 @@
 #include <mutex>
 #include <set>
 #include <string>
-#include <unistd.h>
+#include <sys/types.h>
 
 namespace tt::tt_metal::distributed {
 
