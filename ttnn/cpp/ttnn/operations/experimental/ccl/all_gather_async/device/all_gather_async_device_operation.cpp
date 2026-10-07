@@ -231,14 +231,13 @@ AllGatherAsyncDeviceOperation::topology_return_value_t AllGatherAsyncDeviceOpera
     // cluster_axis the op spans the whole mesh and every placement becomes Replicate. The helper expands a
     // collapsed 1-D label to one placement per mesh axis first (the per-axis edit used to land on index 0 for any
     // cluster_axis) and refuses a gather that would interleave the shards of a 1-D-mapped tensor. `args.dim` is
-    // already normalised (all_gather_async_build_operation_args). No honest label (nullopt, already warned about):
-    // {} keeps the union default.
-    const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
-        tensor_args.input_tensor, args.cluster_axis, args.dim);
-    if (!output_topology.has_value()) {
-        return {};
-    }
-    return {*output_topology};
+    // already normalised (all_gather_async_build_operation_args). No honest label (nullopt, already reported): the
+    // output keeps the input's label. Returning {} would instead hand the framework the union over every tensor
+    // argument, the persistent output buffer's label included.
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto output_topology =
+        ttnn::operations::ccl::common::all_gather_output_topology(input_tensor, args.cluster_axis, args.dim);
+    return {output_topology.value_or(input_tensor.tensor_topology())};
 }
 
 std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(

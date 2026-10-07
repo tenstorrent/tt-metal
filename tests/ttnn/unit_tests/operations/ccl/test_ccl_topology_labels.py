@@ -60,7 +60,7 @@ def strict_ccl_topology():
 
 @pytest.fixture
 def warn_only_ccl_topology():
-    """Run the test in the shipping default (warn and keep the union label), whatever TTNN_CONFIG_OVERRIDES says."""
+    """Run the test in the shipping default (warn and keep the input's label), whatever TTNN_CONFIG_OVERRIDES says."""
     yield from _with_strict_ccl_topology(False)
 
 
@@ -326,9 +326,9 @@ def test_all_gather_collapsed_shard_outer_axis_other_dim(mesh_device, all_gather
 
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", TWO_AXIS_MESHES, indirect=True, ids=TWO_AXIS_MESH_IDS)
-def test_all_gather_collapsed_shard_outer_axis_warn_only_keeps_union_label(mesh_device, warn_only_ccl_topology):
-    """The default (warn-only) mode: the refused gather still runs, logs a warning, and the output keeps the union
-    default label -- the input's {N}, [Shard(3)] -- instead of the old {N}, [Replicate] over-claim."""
+def test_all_gather_collapsed_shard_outer_axis_warn_only_keeps_input_label(mesh_device, warn_only_ccl_topology):
+    """The default (warn-only) mode: the refused gather still runs, logs a warning, and the output keeps the input's
+    label -- {N}, [Shard(3)] -- instead of the old {N}, [Replicate] over-claim."""
     torch.manual_seed(5)
     _, _, num_devices = _mesh(mesh_device)
     tt_input = _from_torch(
@@ -500,8 +500,8 @@ def test_all_reduce_async_collapsed_shard(mesh_device, cluster_axis, rs_ag_branc
     control: before this change the composite branch returned {N}, [Replicate] for either axis (the inner
     all_broadcast edited index 0, the local sum kept it) -- along the columns that claims the two rows identical, and
     the same over-claim is what tt-train's force_replicate_axes papered over. Along the rows the gather itself would
-    now be refused as interleaving; the all_reduce passes require_contiguous_gather=false because it sums the gathered
-    pieces rather than keeping them."""
+    now be refused as interleaving; all_reduce runs its intermediates inside the helper's CallerRelabelsScope because
+    it sums the gathered pieces rather than keeping them and labels the result itself."""
     torch.manual_seed(12)
     rows, cols, num_devices = _mesh(mesh_device)
     if tuple(mesh_device.shape)[cluster_axis] == 1:
@@ -522,6 +522,30 @@ def test_all_reduce_async_collapsed_shard(mesh_device, cluster_axis, rs_ag_branc
     else:
         assert _placements(tt_output) == [REPLICATE, SHARD(3)]
         expected = torch.cat([sum(pieces[r * cols + c] for r in range(rows)) for c in range(cols)], dim=3)
+    assert torch.equal(_compose_by_label(tt_output), expected)
+
+
+@pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
+@pytest.mark.parametrize("mesh_device", MESHES, indirect=True, ids=MESH_IDS)
+def test_all_reduce_async_collapsed_shard_scattered_on_the_sharded_dim(mesh_device, strict_ccl_topology):
+    """all_reduce of {N}, [Shard(3)] along the outer axis when finding_scatter_dim picks dim 3 itself: with `rows`
+    tiles per device along dim 3 the reduce_scatter + all_gather branch scatters the sharded dim. The intermediates
+    have no honest label -- the reduce_scatter leaves device (r, c) with piece c * R + r (column-major) and the
+    all_gather of it interleaves -- but the result is labelled from the input: [Replicate, Shard(3)], one column sum
+    per column. Negative control: before CallerRelabelsScope the prim all_gather hook refused the intermediate
+    ("would interleave") and this call failed under strict mode although the label it returns is right."""
+    torch.manual_seed(15)
+    rows, cols, num_devices = _mesh(mesh_device)
+    if rows == 1:
+        pytest.skip("reducing along a size-1 mesh axis is rejected by the op")
+    full = _integers([1, 1, 32, 32 * rows * num_devices])
+    tt_input = _from_torch(full, mesh_device, ttnn.ShardTensorToMesh(mesh_device, dim=3))
+
+    tt_output = _all_reduce_async(tt_input, mesh_device, cluster_axis=0)
+
+    pieces = _pieces(full, num_devices)
+    assert _placements(tt_output) == [REPLICATE, SHARD(3)]
+    expected = torch.cat([sum(pieces[r * cols + c] for r in range(rows)) for c in range(cols)], dim=3)
     assert torch.equal(_compose_by_label(tt_output), expected)
 
 

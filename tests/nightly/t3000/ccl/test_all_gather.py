@@ -1296,25 +1296,26 @@ def test_all_gather_nd_sharded(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "mapper_dim, gather_dim, expect_replicated",
+    "mapper_dim, gather_dim",
     [
         # The mapper keeps the dim as the caller spelled it while the gather dim is normalized, so the two
         # have to be compared as axes: -1 and 3 are the same axis of a rank-4 tensor.
-        (-1, -1, True),
+        (-1, -1),
         # Different axes: a whole-mesh (cluster_axis=None) gather still leaves every device with every shard
         # concatenated along dim 3, so all devices hold identical bytes and the honest label is Replicate. The
         # earlier expectation that Shard(-2) survived was wrong: that label said the devices held distinct rows.
-        (-2, 3, True),
+        (-2, 3),
         # No Shard placement anywhere to begin with; gathering must not introduce a spurious one.
-        (None, -1, True),
+        (None, -1),
     ],
     ids=["same_axis", "different_axis", "already_replicated"],
 )
 @pytest.mark.parametrize(
     "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
 )
-def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim, expect_replicated):
-    # A whole-mesh gather leaves every device with the same bytes, and the output topology has to say so.
+def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim):
+    # A whole-mesh gather leaves every device with the same bytes, and the output topology has to say so,
+    # whatever the input was sharded on.
     devices = mesh_device.get_num_devices()
     mesh_mapper = (
         ttnn.ReplicateTensorToMesh(mesh_device)
@@ -1332,7 +1333,7 @@ def test_all_gather_output_topology(mesh_device, mapper_dim, gather_dim, expect_
     tt_output = ttnn.all_gather(tt_input, dim=gather_dim)
 
     actual = [repr(p) for p in tt_output.tensor_topology().placements()]
-    expected = ["PlacementReplicate()"] if expect_replicated else [f"PlacementShard({mapper_dim})"]
+    expected = ["PlacementReplicate()"]
     assert actual == expected, f"FAILED output_topology: expected {expected}, got {actual}"
 
 
