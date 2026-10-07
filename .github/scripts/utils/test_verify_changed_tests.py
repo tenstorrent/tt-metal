@@ -75,6 +75,14 @@ class Repo:
     def git(self, *args: str) -> None:
         subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True)
 
+    def commit(self, message: str = "change") -> None:
+        """Commit on top of base, leaving self.base where it is.
+
+        Deletions and renames only leave the index once committed.
+        """
+        self.git("add", "-A")
+        self.git("commit", "-m", message)
+
     def commit_base(self) -> None:
         self.git("add", "-A")
         self.git("commit", "-m", "base")
@@ -169,8 +177,7 @@ def test_team_change_needs_no_hardware(repo: Repo):
 
 
 def test_timeout_change_needs_hardware(repo: Repo):
-    """A timeout is behavioural: verify_time_budget.py proves the new ceiling fits the
-    team's budget, not that the test still finishes inside it. Only hardware shows that."""
+    """verify_time_budget.py proves the ceiling fits the budget, not that the test fits it."""
     repo.write(
         "tests/pipeline_reorg/sample_unit_tests.yaml",
         BASE_TESTS_YAML.replace("      timeout: 10\n    wh_n300_civ2", "      timeout: 12\n    wh_n300_civ2"),
@@ -179,7 +186,7 @@ def test_timeout_change_needs_hardware(repo: Repo):
     assert code == 0
     assert payload["status"] == "run"
     assert payload["metadata_only"] == []
-    # A touched entry runs every SKU it declares, not just the one whose timeout moved.
+    # A touched entry runs every SKU it declares.
     assert sorted(leg["sku"] for leg in payload["run_legs"]) == ["wh_n150_civ2", "wh_n300_civ2"]
 
 
@@ -845,19 +852,47 @@ def test_yaml_edit_and_source_edit_do_not_double_count(src_repo: Repo):
     assert code == 0, stderr
     alpha = [leg for leg in payload["run_legs"] if leg["name"] == "src alpha"]
     assert len(alpha) == 1
-    # The yaml diff wins the reason; a changed entry is a changed entry.
+    # The yaml diff wins the reason.
     assert alpha[0]["reason"] == "changed"
 
 
 def test_unedited_malformed_yaml_does_not_fail_someone_elses_pr(src_repo: Repo):
-    """The source pass sweeps every yaml. A broken one the PR never opened is not
-    this PR's problem -- but editing it still fails closed (see the tests above)."""
+    """A broken yaml the PR never opened is not its problem; editing one still fails closed."""
     src_repo.write("tests/pipeline_reorg/broken_tests.yaml", "not:\n  - a list of entries\n")
     src_repo.commit_base()
     src_repo.write("tests/ttnn/unit_tests/test_alpha.py", "def test_alpha(): assert True\n")
     code, payload, stderr = src_repo.scope()
     assert code == 0, stderr
     assert sorted(leg["name"] for leg in payload["run_legs"]) == ["src alpha", "src beta"]
+
+
+def test_deleting_a_named_test_file_still_scopes_its_entry(src_repo: Repo):
+    """Resolving only against HEAD would reject the token and miss the broken cmd."""
+    src_repo.git("rm", "-q", "tests/ttnn/unit_tests/test_alpha.py")
+    src_repo.commit("delete alpha")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert "src alpha" in {leg["name"] for leg in payload["run_legs"]}
+
+
+def test_renaming_a_named_test_file_still_scopes_its_entry(src_repo: Repo):
+    """Rename detection reports only the new path, so the old one must come from base."""
+    src_repo.git("mv", "tests/ttnn/unit_tests/test_alpha.py", "tests/ttnn/unit_tests/test_renamed.py")
+    src_repo.commit("rename alpha")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert "src alpha" in {leg["name"] for leg in payload["run_legs"]}
+
+
+def test_deleted_build_output_is_still_not_a_source_reference(src_repo: Repo):
+    """The base-revision union must not start matching generated paths."""
+    src_repo.write("build/test/tt_metal/gamma", "binary\n")
+    src_repo.commit("add build output")
+    src_repo.git("rm", "-q", "build/test/tt_metal/gamma")
+    src_repo.commit("remove build output")
+    code, payload, stderr = src_repo.scope()
+    assert code == 0, stderr
+    assert not any(leg["name"] == "src gamma" for leg in payload["run_legs"])
 
 
 def test_no_source_scope_restores_yaml_only_behaviour(src_repo: Repo):
@@ -871,8 +906,7 @@ def test_no_source_scope_restores_yaml_only_behaviour(src_repo: Repo):
 
 
 def test_llk_yaml_legs_carry_the_llk_working_directory(repo: Repo):
-    """Their pipelines run from tt_metal/tt-llk, so `cd tests/python_tests` in a
-    cmd is relative to the LLK tree, not tt-metal's."""
+    """Their pipelines run from tt_metal/tt-llk, so a cmd's `cd` is relative to that."""
     repo.write("tests/pipeline_reorg/llk_perf_tests.yaml", BASE_TESTS_YAML)
     code, payload, _ = repo.scope(llk_workdir_files="llk_perf_tests.yaml")
     assert code == 0
