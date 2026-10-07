@@ -298,15 +298,37 @@ class DeepseekV41ForCausalLM:
                 raise RuntimeError(f"decode of logical slot {i} (user {p}) that was never prefilled")
         t0 = time.perf_counter()
         self.m.admit_idle_users()  # idle / released users own no pages: pool.ensure would fail (KeyError) stepping all B users
+        t_in = time.perf_counter()
         out = self.m.decode_forward(tok_B, pos_B, enable_trace=bool(enable_trace), reload_inputs=True)
         for i, p, pos in rows:
             self.book.note_fed(p, pos, int(tok_B[p]))
         self.timing["decode"] = time.perf_counter() - t0
         self._calls["decode"] += 1
+        self._decode_stats(t_in, time.perf_counter())
         if device_sampling:
             return VS.scatter_rows(out.reshape(-1, 1).to(torch.int32), rows, W)
         logits = self.m.read_logits().float()  # [B, vocab] host
         return VS.scatter_rows(logits.reshape(self.B, 1, -1), rows, W)
+
+    def _decode_stats(self, t_in, t_out):
+        """Every DSV41_VLLM_STATS_EVERY (default 256) decode calls log the mean adapter time per call (host prep + device step + read, ``model:`` breakdown) next to the mean wall time
+        BETWEEN calls (plugin scheduling / sampling / output processing), to separate device time from serving overhead.
+        """
+        st = self.__dict__.setdefault("_dstat", {"n": 0, "in": 0.0, "gap": 0.0, "last_out": None, "gn": 0})
+        st["n"] += 1
+        st["in"] += t_out - t_in
+        if st["last_out"] is not None and t_in - st["last_out"] < 2.0:  # skip idle gaps (no running request)
+            st["gap"] += t_in - st["last_out"]
+            st["gn"] += 1
+        st["last_out"] = t_out
+        every = int(os.environ.get("DSV41_VLLM_STATS_EVERY", "256"))
+        if every > 0 and st["n"] % every == 0:
+            n, gn = st["n"], max(st["gn"], 1)
+            logger.info(
+                f"DSV4.1 decode stats over {n} calls: in-adapter {1e3 * st['in'] / n:.1f} ms/call, between-calls (plugin/scheduler/sampling) {1e3 * st['gap'] / gn:.1f} ms/call, "
+                f"last model timing { {k: round(v * 1e3, 1) for k, v in self.m.timing.items() if k.startswith('decode')} }"
+            )
+            st.update(n=0, **{"in": 0.0, "gap": 0.0, "gn": 0})
 
     # ---- request lifecycle / warmup ---------------------------------------------------------------------------------------------------------
     def release_request(self, slot):
