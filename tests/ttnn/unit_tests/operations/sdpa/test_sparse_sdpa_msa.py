@@ -149,17 +149,21 @@ def _assert_kv_cache_parity(device, q, k, v, indices, kv_cache_blocks, **kw):
 
 
 @run_for_blackhole()
-@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["q_bf16", "q_fp8"])
 @pytest.mark.parametrize("kv_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["kv_bf16", "kv_bfp8"])
-@pytest.mark.parametrize("kv_cache_blocks", [0, 1, 2, 16, 10_000], ids=["auto", "n1", "n2", "n16", "n_clamped"])
-def test_msa_native_kv_cache_byte_identical(device, q_dtype, kv_dtype, kv_cache_blocks):
+@pytest.mark.parametrize("kv_cache_blocks", [0, 1, 2, 16], ids=["auto", "n1", "n2", "n16"])
+def test_msa_native_kv_cache_byte_identical(device, kv_dtype, kv_cache_blocks):
     # Random 16-of-20 selections over several tokens per core (sorted rows). n1: the depth-1 build. n2: the
     # smallest run-ahead build (2 slots, every block a miss). n16: hits and evictions over the 20-block set.
-    # auto / n_clamped: the whole set resident; N clamps to what fits.
+    # auto: the whole set resident. Q is never cached, so fp8 Q only shrinks the Q CBs in the L1 budget: one
+    # auto run covers it, as does the clamp of an oversized count to what fits.
     d, H, S, topk, nblk = _D, 16, 1024, 16, 20
     T = nblk * BLK_KV
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=13)
-    _assert_kv_cache_parity(device, q, k, v, indices, kv_cache_blocks, q_dtype=q_dtype, kv_dtype=kv_dtype)
+    off, _ = _assert_kv_cache_parity(device, q, k, v, indices, kv_cache_blocks, kv_dtype=kv_dtype)
+    if kv_cache_blocks == 0:
+        clamped = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=10_000, kv_dtype=kv_dtype)
+        assert torch.equal(off, clamped)
+        _assert_kv_cache_parity(device, q, k, v, indices, 0, q_dtype=ttnn.fp8_e4m3, kv_dtype=kv_dtype)
 
 
 @run_for_blackhole()
@@ -192,35 +196,21 @@ def test_msa_native_kv_cache_gqa_group_boundary(device):
 @run_for_blackhole()
 def test_msa_native_kv_cache_program_cache(device):
     # Off, auto and an explicit slot count differ in CB layout and kernel constants, so they are distinct
-    # programs; a repeated auto call must hit the cached one (override_runtime_arguments on the cache program).
-    d, H, S, topk, nblk = _D, 16, 64, 16, 20
-    T = nblk * BLK_KV
-    q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=5)
-    device.clear_program_cache()
-    off = run_op_msa_native(q, k, v, indices, device)
-    assert device.num_program_cache_entries() == 1
-    auto = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=0)
-    assert device.num_program_cache_entries() == 2
-    again = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=0)
-    assert device.num_program_cache_entries() == 2, "a repeated auto call must hit its cached program"
-    n8 = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=8)
-    assert device.num_program_cache_entries() == 3
-    for out in (auto, again, n8):
-        assert torch.equal(off, out)
-
-
-@run_for_blackhole()
-def test_msa_native_kv_cache_auto_follows_free_l1(device):
-    # auto is sized below the lowest live L1 buffer and the resolved slot count is part of the program-cache
-    # key: pinning L1 after a roomy warm-up must select a new, smaller program instead of hitting one whose
-    # CBs would clash with the pinned buffer at launch.
+    # programs, and a repeated auto call must hit the cached one. The resolved slot count is part of the key:
+    # pinning L1 after a roomy warm-up must select a new, smaller program instead of hitting one whose CBs
+    # would clash with the pinned buffer at launch.
     d, H, S, topk, nblk = _D, 16, 64, 16, 20
     T = nblk * BLK_KV
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=17)
     device.clear_program_cache()
     off = run_op_msa_native(q, k, v, indices, device)
+    assert device.num_program_cache_entries() == 1
     roomy = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=0)
     assert device.num_program_cache_entries() == 2
+    again = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=0)
+    assert device.num_program_cache_entries() == 2, "a repeated auto call must hit its cached program"
+    n8 = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=8)
+    assert device.num_program_cache_entries() == 3
     info = ttnn._ttnn.reports.get_device_info(device)
     keep = 512 * 1024  # per bank: room for the base CBs plus a few 64 KiB bf16 slots, far fewer than roomy got
     tiles_per_bank = (info.l1_bank_size - keep) // 2048
@@ -233,10 +223,11 @@ def test_msa_native_kv_cache_auto_follows_free_l1(device):
     )
     try:
         tight = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=0)
-        assert device.num_program_cache_entries() == 3, "less free L1 must select a new program, not hit"
+        assert device.num_program_cache_entries() == 4, "less free L1 must select a new program, not hit"
     finally:
         ttnn.deallocate(pinned)
-    assert torch.equal(off, roomy) and torch.equal(off, tight)
+    for out in (roomy, again, n8, tight):
+        assert torch.equal(off, out)
 
 
 @run_for_blackhole()
