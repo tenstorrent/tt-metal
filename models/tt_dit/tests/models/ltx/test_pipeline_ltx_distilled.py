@@ -441,9 +441,19 @@ def test_pipeline_distilled(
 
             # LTX_E2E_SEEDS=0,1,2: one pure-replay gen per listed seed (gen #1, #2, ...) instead of a
             # single gen #1 at SEED, so a multi-seed timing and quality sample shares one trace capture.
-            replay_seeds = [int(s) for s in os.environ.get("LTX_E2E_SEEDS", str(seed)).split(",")]
-            for gen, gen_seed in enumerate(replay_seeds, start=1):
-                logger.info(f"=== traced steady-state pass (gen #{gen}, seed {gen_seed}, pure replay) ===")
+            # A seed written "N+" runs with LTX_E2E_AB_ENV set, so "0,0+,1,1+" A/Bs every seed in one session.
+            ab_env = dict(kv.split("=", 1) for kv in os.environ.get("LTX_E2E_AB_ENV", "").split())
+            replay_tokens = os.environ.get("LTX_E2E_SEEDS", str(seed)).split(",")
+            replay_seeds = [int(s.rstrip("+")) for s in replay_tokens]
+            for gen, (token, gen_seed) in enumerate(zip(replay_tokens, replay_seeds), start=1):
+                arm_on = token.endswith("+")
+                for k, v in ab_env.items():
+                    if arm_on:
+                        os.environ[k] = v
+                    else:
+                        os.environ.pop(k, None)
+                arm = f", ab={'on' if arm_on else 'off'}" if ab_env else ""
+                logger.info(f"=== traced steady-state pass (gen #{gen}, seed {gen_seed}, pure replay{arm}) ===")
                 run(prompt=replay_prompt(gen), number=gen, seed=gen_seed)
                 check_output_with_clip(replay_prompt(gen), gen)
                 check_output_with_vbench(replay_prompt(gen), gen)
@@ -451,7 +461,6 @@ def test_pipeline_distilled(
             # steady-state step time (not only the first replay after capture) is on the record.
             # LTX_E2E_AB_ENV="K=V K2=V2": set on the even extra gens (#2, #4, ...) and unset on the odd ones,
             # so one session A/Bs pipeline flags read at call time against interleaved baseline gens.
-            ab_env = dict(kv.split("=", 1) for kv in os.environ.get("LTX_E2E_AB_ENV", "").split())
             for extra in range(int(os.environ.get("LTX_E2E_EXTRA_REPLAYS", "0"))):
                 gen = len(replay_seeds) + extra + 1
                 arm_on = extra % 2 == 0
