@@ -91,7 +91,7 @@ iwyu_tool.py -p "$out" -j "$(nproc)" -- \
 echo "$status" > "$out/iwyu-exit-code.txt"
 echo "IWYU report written to $out/iwyu.txt"
 
-python3 "$script_dir/summarize_host_iwyu.py" --rewrite-c-headers "$out/iwyu.txt"
+python3 "$script_dir/summarize_host_iwyu.py" --rewrite-suggestions "$out/iwyu.txt" "$repo_root"
 
 python3 "$script_dir/summarize_host_iwyu.py" "$out/iwyu.txt" "$status" \
   "Include What You Use (tt_metal API headers, report-only)" iwyu-api-headers-report | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"

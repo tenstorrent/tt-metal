@@ -20,5 +20,11 @@
   # use of RepeatedPtrField (iterating a repeated message field) would
   # otherwise be told to include that nonexistent header. Generated .pb.h files
   # export <google/protobuf/repeated_field.h>, so this maps to it.
-  { "include": ["\"net/proto2/public/repeated_field.h\"", "private", "<google/protobuf/repeated_field.h>", "public"] }
+  { "include": ["\"net/proto2/public/repeated_field.h\"", "private", "<google/protobuf/repeated_field.h>", "public"] },
+
+  # fmt: format.h and friends include "base.h" relative to their own directory,
+  # and IWYU recommends that spelling verbatim for anything declared in it
+  # (e.g. fmt::formatter), which does not resolve for a caller. The documented
+  # spelling is <fmt/base.h>.
+  { "include": ["\"base.h\"", "private", "<fmt/base.h>", "public"] }
 ]

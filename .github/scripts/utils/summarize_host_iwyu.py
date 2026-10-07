@@ -5,7 +5,7 @@
 """Summarise a native include-what-you-use report as Markdown.
 
 Usage: summarize_host_iwyu.py <iwyu.txt> <analyzer exit code> [<title> <artifact name>]
-       summarize_host_iwyu.py --rewrite-c-headers <iwyu.txt>   (rewrites the report in place)
+       summarize_host_iwyu.py --rewrite-suggestions <iwyu.txt> <repo root>   (rewrites the report in place)
 
 Reads the concatenated iwyu_tool.py output written by run_host_iwyu.sh and
 prints a step-summary table plus a histogram of the headers IWYU asked for most
@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import collections
 from dataclasses import dataclass, field
+import os
 import re
 import sys
 
@@ -42,28 +43,56 @@ class Summary:
         return self.files_with_advice + self.clean + self.errors
 
 
-# IWYU 0.24 (the release matching the image's LLVM 20) recommends the C spelling
-# of the C compatibility headers for symbols such as size_t or uint32_t. Applying
-# that verbatim trips clang-tidy's modernize-deprecated-headers, and IWYU's own
-# mapping file cannot override it. IWYU 0.27 recommends the <c*> headers in C++
-# mode (include-what-you-use#1126); drop this once the image runs IWYU >= 0.27.
-# The set is the one modernize-deprecated-headers enforces.
+# IWYU recommends include spellings that are wrong for this repo; the report is
+# rewritten so that recommendations can be applied as written. Only recommendation
+# lines are touched (they start in column 0). "- #include ..." removals name a line
+# that exists in the source and stay verbatim.
+#
+# 1. C compatibility headers. IWYU 0.24 (the release matching the image's LLVM 20)
+#    recommends <stddef.h>, <stdint.h> and friends for size_t, uint32_t, ... which
+#    trips clang-tidy's modernize-deprecated-headers, and IWYU's mapping file cannot
+#    override it. IWYU 0.27 recommends the <c*> headers in C++ mode
+#    (include-what-you-use#1126); drop this part once the image runs IWYU >= 0.27.
+#    The set is the one modernize-deprecated-headers enforces.
 C_COMPAT_HEADERS = (
     "assert ctype errno fenv float inttypes limits locale math setjmp signal "
     "stdarg stddef stdint stdio stdlib string time uchar wchar wctype"
 ).split()
-# Only recommendation lines, which start in column 0 ("- #include ..." removals
-# name a line that exists in the source and must stay verbatim).
 C_COMPAT_INCLUDE = re.compile(r"^#include <(%s)\.h>( *)" % "|".join(C_COMPAT_HEADERS), re.M)
 
+# 2. Project headers. The verification translation units put several directories on
+#    the include path, and IWYU spells a header it newly recommends as a quoted path
+#    relative to the first of them ("core_coord.hpp"). The repo spells these as
+#    <tt-metalium/core_coord.hpp>, <tt_stl/...> and so on; tt_metal/api has no quoted
+#    includes at all. (root relative to the repo, include prefix), in lookup order.
+PROJECT_INCLUDE_ROOTS = (
+    ("tt_metal/api/tt-metalium", "tt-metalium/"),
+    ("tt_metal/api", ""),
+    ("tt_stl", ""),
+    ("tt_metal/hostdevcommon/api", ""),
+)
+QUOTED_INCLUDE = re.compile(r'^#include "([^"]+)"( *)', re.M)
 
-def rewrite_c_headers(text: str) -> str:
-    def cxx(match: re.Match) -> str:
+
+def _realign(new: str, old: str, padding: str) -> str:
+    # Keep the "// for ..." comments aligned where the new spelling is not longer.
+    return f"#include {new}" + " " * max(len(padding) + len(old) - len(new), 1)
+
+
+def rewrite_suggestions(text: str, repo_root: str) -> str:
+    def c_header(match: re.Match) -> str:
         old, new = f"<{match.group(1)}.h>", f"<c{match.group(1)}>"
-        # Keep the "// for ..." comments aligned.
-        return f"#include {new}" + " " * max(len(match.group(2)) + len(old) - len(new), 1)
+        return _realign(new, old, match.group(2))
 
-    return C_COMPAT_INCLUDE.sub(cxx, text)
+    def project_header(match: re.Match) -> str:
+        path = match.group(1)
+        for root, prefix in PROJECT_INCLUDE_ROOTS:
+            if os.path.exists(os.path.join(repo_root, root, path)):
+                new = f"<{prefix}{path}>"
+                return _realign(new, f'"{path}"', match.group(2))
+        return match.group(0)
+
+    return QUOTED_INCLUDE.sub(project_header, C_COMPAT_INCLUDE.sub(c_header, text))
 
 
 def parse_report(text: str) -> Summary:
@@ -107,11 +136,11 @@ def render_markdown(
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 3 and argv[1] == "--rewrite-c-headers":
+    if len(argv) == 4 and argv[1] == "--rewrite-suggestions":
         with open(argv[2], errors="replace") as report:
             text = report.read()
         with open(argv[2], "w") as report:
-            report.write(rewrite_c_headers(text))
+            report.write(rewrite_suggestions(text, argv[3]))
         return 0
     if len(argv) not in (3, 5):
         print(f"usage: {argv[0]} <iwyu.txt> <analyzer exit code> [<title> <artifact name>]", file=sys.stderr)

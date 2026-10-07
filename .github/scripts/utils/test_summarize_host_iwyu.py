@@ -6,7 +6,10 @@
 
 import unittest
 
-from summarize_host_iwyu import FORWARD_DECLARATION, parse_report, render_markdown, rewrite_c_headers
+import os
+import tempfile
+
+from summarize_host_iwyu import FORWARD_DECLARATION, parse_report, render_markdown, rewrite_suggestions
 
 # Verbatim (trimmed) iwyu_tool.py output from include-what-you-use 0.24 with
 # --cxx17ns, as run by run_host_iwyu.sh. Two files with advice, one already
@@ -107,16 +110,30 @@ class RenderMarkdownTests(unittest.TestCase):
         self.assertNotIn("iwyu-host-report", markdown)
 
 
-class RewriteCHeadersTests(unittest.TestCase):
+class RewriteSuggestionsTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tempfile.TemporaryDirectory()
+        self.addCleanup(self.root.cleanup)
+        for path in (
+            "tt_metal/api/tt-metalium/core_coord.hpp",
+            "tt_metal/api/tt-metalium/experimental/fabric/fabric_types.hpp",
+            "tt_metal/api/internal/reload_table.hpp",
+            "tt_stl/tt_stl/span.hpp",
+            "tt_metal/hostdevcommon/api/hostdevcommon/common_values.hpp",
+        ):
+            full = os.path.join(self.root.name, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            open(full, "w").close()
+
+    def rewrite(self, text):
+        return rewrite_suggestions(text, self.root.name)
+
     def test_recommended_c_headers_become_cxx_headers(self):
-        report = (
-            "a.hpp should add these lines:\n"
-            "#include <stddef.h>                    // for size_t\n"
-            "#include <stdint.h>                    // for uint32_t\n"
-        )
         self.assertEqual(
-            rewrite_c_headers(report),
-            "a.hpp should add these lines:\n"
+            self.rewrite(
+                "#include <stddef.h>                    // for size_t\n"
+                "#include <stdint.h>                    // for uint32_t\n"
+            ),
             "#include <cstddef>                     // for size_t\n"
             "#include <cstdint>                     // for uint32_t\n",
         )
@@ -125,19 +142,38 @@ class RewriteCHeadersTests(unittest.TestCase):
         untouched = (
             "#include <sys/types.h>  // for ssize_t\n"
             "#include <unistd.h>  // for read\n"
-            '#include "stdint.h"  // quoted\n'
             "#include <fmt/base.h>  // for format\n"
             "#include <cstdint>  // already C++\n"
         )
-        self.assertEqual(rewrite_c_headers(untouched), untouched)
+        self.assertEqual(self.rewrite(untouched), untouched)
+
+    def test_quoted_project_headers_get_the_repo_spelling(self):
+        self.assertEqual(
+            self.rewrite(
+                '#include "core_coord.hpp"  // for CoreCoord\n'
+                '#include "experimental/fabric/fabric_types.hpp"  // for X\n'
+                '#include "internal/reload_table.hpp"  // for Y\n'
+                '#include "tt_stl/span.hpp"  // for Span\n'
+                '#include "hostdevcommon/common_values.hpp"  // for Z\n'
+            ),
+            "#include <tt-metalium/core_coord.hpp> // for CoreCoord\n"
+            "#include <tt-metalium/experimental/fabric/fabric_types.hpp> // for X\n"
+            "#include <internal/reload_table.hpp>  // for Y\n"
+            "#include <tt_stl/span.hpp>  // for Span\n"
+            "#include <hostdevcommon/common_values.hpp>  // for Z\n",
+        )
+
+    def test_quoted_headers_outside_the_project_roots_are_left_alone(self):
+        untouched = '#include "not_ours.h"  // for N\n#include "string.h"  // quoted C header\n'
+        self.assertEqual(self.rewrite(untouched), untouched)
 
     def test_removals_name_existing_lines_and_stay_verbatim(self):
-        removal = "- #include <stddef.h>  // lines 10-10\n"
-        self.assertEqual(rewrite_c_headers(removal), removal)
+        removal = '- #include <stddef.h>  // lines 10-10\n- #include "core_coord.hpp"  // lines 11-11\n'
+        self.assertEqual(self.rewrite(removal), removal)
 
-    def test_histogram_counts_the_cxx_spelling(self):
+    def test_histogram_counts_the_rewritten_spelling(self):
         report = "a.hpp should add these lines:\n#include <stddef.h>  // for size_t\n\n"
-        self.assertIn("#include <cstddef>", parse_report(rewrite_c_headers(report)).additions)
+        self.assertIn("#include <cstddef>", parse_report(self.rewrite(report)).additions)
 
 
 if __name__ == "__main__":
