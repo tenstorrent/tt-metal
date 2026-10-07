@@ -33,3 +33,9 @@
 - `ttp push --own` fails its check twice (exit 4): ~/fasth3/tt-metal/build -> build_Release, which no
   longer exists on g15blx02, so `import ttnn` in the root conftest fails (_ttnncpp.so). t188's 04:53 push
   hit the same. Not a code failure; the task branch stays local until the g15 build is back.
+
+## ab1 result (blx01 job 754, 05:36-05:40 UTC)
+- OFF arm OK: warm gen#1-5 E2E 5.726/5.697/5.785/5.721/5.721 s (mean 5.730); peak DRAM 20.15 GiB/chip; no drop.
+- ON arm FAILED at 86 s: TT_FATAL minimal_matmul_split.cpp:46 `N_per_chunk % TILE_WIDTH == 0`
+  (replicated audio QKV/FFN fused split matmul: chunk width not tile-aligned when N is not divided by TP).
+  Log: blx01 /var/tmp/fasth3/t189/res/ab1/on/run.log line 1039. Needs a code fix (standard tier), then rerun.
