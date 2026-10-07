@@ -41,7 +41,7 @@ def test_completion_observes_device_writes(monkeypatch):
     assert migrated == [0, 1, 2]
 
 
-def test_device_failure_does_not_publish_completion(monkeypatch):
+def test_device_failure_does_not_publish_completion(monkeypatch, expect_error):
     migrated = []
 
     def synchronize(device):
@@ -49,7 +49,7 @@ def test_device_failure_does_not_publish_completion(monkeypatch):
 
     monkeypatch.setattr("ttnn.synchronize_device", synchronize)
     model = SimpleNamespace(layers=[lambda value, **kwargs: value], mesh_device=object(), is_last_rank=False)
-    with pytest.raises(RuntimeError, match="device failed"):
+    with expect_error(RuntimeError, "device failed"):
         Model._forward_layers_and_head(model, object(), None, None, on_layer_complete=migrated.append)
     assert migrated == []
 
