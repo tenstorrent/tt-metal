@@ -117,7 +117,7 @@ class MiMoPrefillMoE:
             g_ = ttnn.matmul(t_, self.gate_projs[l], compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
             u_ = ttnn.matmul(t_, self.up_projs[l], compute_kernel_config=self.ckc, dtype=ttnn.bfloat16)
             h_ = ttnn.multiply(
-                g_, u_, lhs_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)], dtype=ttnn.bfloat16
+                g_, u_, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)], dtype=ttnn.bfloat16
             )
             ttnn.deallocate(g_)
             ttnn.deallocate(u_)
