@@ -48,8 +48,8 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "weight_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "cluster_axis": [0, 1],

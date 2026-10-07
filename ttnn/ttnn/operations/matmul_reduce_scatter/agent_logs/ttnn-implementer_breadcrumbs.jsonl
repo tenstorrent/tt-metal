@@ -10,3 +10,5 @@
 {"event":"hypothesis","detail":"ring tiny-shape hang: sender defers arrival increments across blocks (every 8 segs of stream); ring has no line end so wait cycle","ts":"2026-10-07T01:47:35+00:00"}
 {"event":"fix_applied","detail":"per-block increment cadence; add kernel row-blocked grid(segs, seg_tiles) to remove cross-segment lookahead (also fixed pre-existing Linear G=8 256x256 hang)","ts":"2026-10-07T01:47:35+00:00"}
 {"event":"test_run","detail":"ring_mock 72/72, unit 53p/1s, fabric_configs+regression 30/30, golden slice 13/13, FOCUS perf 211us unchanged","ts":"2026-10-07T01:47:36+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-10-07T02:56:38+00:00"}
+{"event":"test_run","status":"pass","test":"test_golden.py -k 640x2048_2048x7168 BFLOAT8_B|BFLOAT4_B","result":"80 passed","ts":"2026-10-07T03:01:36+00:00"}
