@@ -46,7 +46,7 @@ class Shared:
 
     def __init__(self, md, n_tokens, cf=4, num_links=2, workers=2):
         self.md, self.N, self.cf = md, n_tokens, cf
-        assert n_tokens % 64 == 0
+        assert n_tokens % 32 == 0
         self.epc, self.meta_len, self.max_buf, self.max_per_expert = compute_constants(
             n_tokens, NUM_ROUTED, TOPK, ROWS * COLS, ROWS, cf
         )
