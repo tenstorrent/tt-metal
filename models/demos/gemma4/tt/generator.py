@@ -108,6 +108,56 @@ def _build_vision_state_dict(full_state_dict, vision_args):
     return {f"visual.{k}": v for k, v in vision_sd.items()}
 
 
+VISION_KEY_PREFIXES = ("model.vision_tower.", "model.vision_embedder.", "model.embed_vision.")
+
+
+def load_vision_state_dict(model_path):
+    """The vision-side tensors of a Gemma-4 checkpoint, read for real from safetensors.
+
+    The text model's warm weight cache (models/common/weight_cache.py) replaces the HF
+    state dict with a dataless placeholder (``torch.empty`` per manifest entry) once its
+    tensorbins are complete. The vision encoders are not part of that cache, so on a
+    warm run they must read their weights from the checkpoint themselves: the 31B
+    SigLIP tower and the 12B unified embedder (~1.1 GB / ~80 MB) via the safetensors
+    index, selecting only the vision keys. Hub ids resolve to the local snapshot.
+    """
+    import glob
+    import json as _json
+    from pathlib import Path
+
+    path = Path(model_path)
+    if not path.is_dir():
+        from huggingface_hub import snapshot_download
+
+        path = Path(snapshot_download(str(model_path), local_files_only=True))
+    from safetensors import safe_open
+
+    out = {}
+    for fn in sorted(glob.glob(str(path / "*.safetensors"))):
+        with safe_open(fn, "pt") as f:
+            for k in f.keys():
+                if k.startswith(VISION_KEY_PREFIXES):
+                    t = f.get_tensor(k)
+                    out[k] = t.to(torch.bfloat16) if t.dtype == torch.float32 else t
+    if not out:
+        raise FileNotFoundError(f"no vision tensors ({VISION_KEY_PREFIXES}) under {path}")
+    return out
+
+
+def vision_state_dict_for(state_dict, model_path):
+    """``state_dict`` itself when it carries real vision tensors, else the real ones from disk."""
+    if getattr(state_dict, "is_placeholder", False):
+        logger.info("Warm text weight cache: loading the vision tensors from the checkpoint")
+        return load_vision_state_dict(model_path)
+    probe = [k for k in state_dict if k.startswith(VISION_KEY_PREFIXES)][:2]
+    for k in probe:
+        v = state_dict[k].float()
+        if not torch.isfinite(v).all() or v.abs().max() > 1e6:
+            logger.warning(f"vision tensor {k} is not real data; reloading the vision tensors from the checkpoint")
+            return load_vision_state_dict(model_path)
+    return state_dict
+
+
 def _vision_encoder_seq_len(num_patches: int, max_qkv_mm_seq_len: int = 2048) -> int:
     """Padded encoder seq length (multiple of max_qkv_mm_seq_len) >= num_patches."""
     return ((num_patches // max_qkv_mm_seq_len) + 1) * max_qkv_mm_seq_len
@@ -2238,14 +2288,10 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
             os.environ.setdefault("HF_MODEL", model_path)
             # Share the text model's mesh/CCL setup so the vision tower's TP
             # all-reduces reuse the same semaphores and link/topology tuning.
-            # Guard: a loader that hands out tensors backed by freed memory shows up
-            # here first (the text model never touches these). Measured 2026-10-07:
-            # NaN / inf / 1e34 values in every vision tensor via the AutoModel
-            # fallback; the loader now resolves hub ids to the local snapshot.
-            for _k in [k for k in state_dict if "vision" in k or "embed_vision" in k][:4]:
-                _v = state_dict[_k].float()
-                if not torch.isfinite(_v).all() or _v.abs().max() > 1e6:
-                    raise ValueError(f"vision weight {_k} is corrupt (max {_v.abs().max()}): stale state dict memory?")
+            # The text model's warm weight cache hands over a dataless placeholder
+            # dict; the vision encoders are not in that cache, so take their tensors
+            # from the checkpoint (measured 2026-10-07: NaN / inf / 1e34 otherwise).
+            state_dict = vision_state_dict_for(state_dict, model_path)
             if has_unified_vision_weights(state_dict):
                 # 12B "unified": no SigLIP tower; raw patches project straight to text space.
                 vision_tower = Gemma4UnifiedVisionEmbedder(
