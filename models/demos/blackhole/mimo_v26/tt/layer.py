@@ -19,6 +19,7 @@ from models.demos.blackhole.mimo_v26.tt.router import MiMoGate
 
 EPS = 1e-6
 EXPERT_OP = os.environ.get("MIMO_EXPERT_OP", "mm")  # loop | mm | unified (bf16-activation paths: loop, mm)
+# MIMO_DEAD default is spread: sentinel hangs the traced decode at >= 24 layers (LOG E261007-1202-527)
 ROUTER_MODE = os.environ.get("MIMO_ROUTER_MODE", "exact")
 
 
@@ -290,7 +291,7 @@ class MiMoDecoderLayer:
                     self.gate,
                     self.moe,
                     router=os.environ.get("MIMO_ROUTER", "exact"),
-                    dead=os.environ.get("MIMO_DEAD", "sentinel"),
+                    dead=os.environ.get("MIMO_DEAD", "spread"),
                 )
             return self.moe_dec.forward(x, live)
         B = x.shape[2]
