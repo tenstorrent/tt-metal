@@ -324,7 +324,7 @@ class MiMoDecoderLayer:
                     self.mesh,
                     self.gate,
                     self.moe,
-                    router=os.environ.get("MIMO_ROUTER", "exact"),
+                    router=os.environ.get("MIMO_ROUTER", "fast"),
                     dead=os.environ.get("MIMO_DEAD", "spread32"),
                 )
             return self.moe_dec.forward(x, live)
