@@ -5,6 +5,7 @@
 #include <internal/service/inter_process_counter_channel.hpp>
 
 #include "inter_process_counter_layout.hpp"
+#include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -34,26 +35,59 @@ std::string posix_errno_str() { return std::strerror(errno); }
     throw std::runtime_error("InterProcessCounterChannel: " + op + " failed (" + detail + "): " + posix_errno_str());
 }
 
+// Creates the segment name exclusively.
+//
+// The tracker is touched first so that its one-time stale scan (run when the
+// instance is constructed) happens before this segment exists: that scan
+// unlinks every name listed in a dead owner's manifest, and must not find a
+// manifest naming shm_path while our fresh segment holds the name.
+//
+// If the name is already taken, the stale scan runs once more and the open is
+// retried: a copy left by a killed predecessor is listed in that predecessor's
+// manifest and gets reaped, whereas a live owner's segment (live in this pid
+// namespace) survives the scan and the retry fails with EEXIST like the first
+// attempt.
+int open_fresh_counter_segment(const std::string& shm_path) {
+    ShmResourceTracker::instance();
+    constexpr int kFlags = O_CREAT | O_EXCL | O_RDWR;
+    int fd = ::shm_open(shm_path.c_str(), kFlags, S_IRUSR | S_IWUSR);
+    if (fd == -1 && errno == EEXIST) {
+        ShmResourceTracker::cleanup_stale_resources();
+        fd = ::shm_open(shm_path.c_str(), kFlags, S_IRUSR | S_IWUSR);
+    }
+    return fd;
+}
+
 }  // namespace
 
 // =============================================================================
 // Owner-side construction.
 //
 // Creates the SHM segment fresh:
-//   shm_open(O_CREAT|O_EXCL|O_RDWR)   ← fails if a stale segment exists
+//   shm_open(O_CREAT|O_EXCL|O_RDWR)   ← see open_fresh_counter_segment:
+//                                       a dead owner's copy is reaped
+//                                       and the open retried; fails only
+//                                       for a live or unattributable holder
 //   ftruncate to sizeof(InterProcessCounterSegment)
 //   mmap PROT_READ|PROT_WRITE, MAP_SHARED
+//   register with ShmResourceTracker
+//
+// The registration is what ties the segment's lifetime to the owner
+// process: the tracker unlinks it on SIGINT/SIGTERM and at exit, and
+// lists it in this process's manifest so the next owner reaps it if
+// this process is killed outright (SIGKILL, OOM): open_fresh_counter_segment
+// runs the stale scan when it finds the name taken.
 //
 // On any failure mid-way, undo what was done so we don't leak a half-
 // initialised segment on /dev/shm.
 // =============================================================================
 InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_name) :
-    shm_path_(shm_name),
-    role_(Role::Owner),
-    fd_(::shm_open(shm_path_.c_str(), O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR)) {
+    shm_path_(shm_name), role_(Role::Owner), fd_(open_fresh_counter_segment(shm_path_)) {
     if (fd_ == -1) {
-        // EEXIST here means a previous run left a stale segment; the
-        // owner is responsible for unlinking it before re-creating.
+        // EEXIST here means the name is held by a segment the stale scan
+        // could not attribute to a dead process (a live owner, or a pid
+        // in use again); the owner is responsible for unlinking it before
+        // re-creating.
         throw_posix("shm_open(O_CREAT|O_EXCL)", shm_path_);
     }
 
@@ -94,6 +128,21 @@ InterProcessCounterChannel::InterProcessCounterChannel(const std::string& shm_na
     // connector's `had_clean_prior_shutdown()` returns true — there
     // was no predecessor to have exited uncleanly.
     seg_->prior_clean_shutdown = 1;
+
+    // Last step; if registering throws, undo like the earlier failure paths so
+    // no unregistered segment is left behind.
+    try {
+        ShmResourceTracker::instance().track_shm(shm_path_);
+    } catch (...) {
+        ::munmap(seg_, sizeof(InterProcessCounterSegment));
+        seg_ = nullptr;
+        ::shm_unlink(shm_path_.c_str());
+        log_warning(
+            LogMetal,
+            "InterProcessCounterChannel: registering {} with ShmResourceTracker failed; segment unlinked",
+            shm_path_);
+        throw;
+    }
 }
 
 // =============================================================================
@@ -236,8 +285,9 @@ bool InterProcessCounterChannel::had_clean_prior_shutdown() const {
 // =============================================================================
 // shutdown() — idempotent, role-dispatched.
 //
-//   * Owner    : munmap → close(fd) → shm_unlink. Segment removed
-//                from /dev/shm; any still-attached connector's
+//   * Owner    : munmap → close(fd) → shm_unlink → untrack (only if
+//                the name is gone). Segment removed from /dev/shm; any
+//                still-attached connector's
 //                mapping survives until that connector itself unmaps
 //                (POSIX semantics), but no new connector can find
 //                the name.
@@ -268,11 +318,14 @@ void InterProcessCounterChannel::shutdown() {
         fd_ = -1;
     }
     if (role_ == Role::Owner) {
-        // Best-effort: if a previous shutdown() already unlinked or
-        // some external party removed the file, shm_unlink will
-        // fail — but we've already nulled seg_ / fd_ so the second
-        // call is a no-op anyway via the exchange guard above.
-        ::shm_unlink(shm_path_.c_str());
+        // Drop the registration only once the name is gone (unlinked here
+        // or already removed by someone else). If the unlink fails for any
+        // other reason the segment stays tracked, so the tracker's exit and
+        // signal paths retry it and the manifest still names it for the
+        // next owner's stale scan, as NamedShm::unlink does.
+        if (::shm_unlink(shm_path_.c_str()) == 0 || errno == ENOENT) {
+            ShmResourceTracker::instance().untrack_shm(shm_path_);
+        }
     }
 }
 

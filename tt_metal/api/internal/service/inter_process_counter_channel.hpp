@@ -55,9 +55,20 @@ public:
     // layout: shm_open(O_CREAT|O_EXCL|O_RDWR), ftruncate to
     // sizeof(InterProcessCounterSegment), mmap.
     //
-    // Throws std::runtime_error if a segment with this shm_name
-    // already exists. The owner is responsible for unlinking a stale
-    // segment from a prior crashed run before constructing here.
+    // The segment is registered with ShmResourceTracker, so it is
+    // unlinked when the owner exits or receives SIGINT/SIGTERM. If the
+    // name is already taken when constructing, the tracker's stale scan
+    // runs and the exclusive open is retried, which removes a copy left
+    // by an owner that was killed outright (it is listed in that owner's
+    // manifest) without touching the segment of an owner that is alive
+    // in this pid namespace. Owner liveness is judged with kill(2), so a
+    // live owner in another pid namespace sharing /dev/shm would look
+    // dead; owners that share names must share a pid namespace.
+    //
+    // Throws std::runtime_error if a segment with this shm_name still
+    // exists after that (a live owner, or the previous owner's pid in use
+    // again). The owner is then responsible for unlinking it before
+    // constructing here.
     //
     // shm_name must be a POSIX-shm-valid string: leading '/' and no
     // other slashes.
