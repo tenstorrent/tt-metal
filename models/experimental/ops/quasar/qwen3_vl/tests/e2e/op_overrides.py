@@ -220,6 +220,18 @@ WORKAROUNDS = [
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("transformer.scaled_dot_product_attention"),
     ),
+    *[
+        Workaround(
+            name=f"quasar_experimental_{alias}",
+            target=f"ttnn.{alias}",
+            reason="base binary_ng builds Gen1 DataMovementKernels, which Quasar rejects; the stop-gap "
+            "ttnn.experimental.quasar.multiply runs, incl. input_tensor_a_activations=[SILU] (QUASAR_GAPS Q12)",
+            remove_when="base ttnn.multiply (binary_ng) is ported to Quasar",
+            applies=_on_quasar,
+            rewrite=_to_experimental_quasar("multiply"),
+        )
+        for alias in ("mul", "multiply")
+    ],
     Workaround(
         name="quasar_rms_norm_bf16_dest",
         target="ttnn.rms_norm",
