@@ -13,27 +13,14 @@
 using namespace ckernel;
 #include "params.h" // TWO_PASS_*, IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en
 
-// Shifted two-pass per-column statistics on Quasar (the _two_pass_* helpers of ckernel_sfpu_welfords.h).
-//
-// STREAM: the TILE_CNT tiles go through Dest twice, in blocks of TWO_PASS_TILES_PER_BLOCK (0 = one
-//   block), one Dest section per block. The first sweep is pass one (shifted sums; the first tile
-//   initialises the anchor), the second is pass two (centred M2), so the LREG state crosses section
-//   handoffs and bank flips in both passes. The last block of the second sweep finalises into tile
-//   TWO_PASS_FINAL_DST of its section with the layout TWO_PASS_FINALIZE selects.
-// COMBINE: one section; each TWO_PASS_BLOCK_TILES-tile block runs both passes in place, block 0
-//   spills its state to tiles TWO_PASS_STATE_DST/+1 and later blocks Chan-combine into it; the
-//   combined state is then finalised as a row.
-// SWITCH: one section, single accumulator; two groups of TWO_PASS_BLOCK_TILES tiles each, swapped
-//   through group slots TWO_PASS_GROUP_A/B of tiles TWO_PASS_STATE_DST/+1, then group A is finalised
-//   to its raw slot.
-// The last tile only covers rows [TWO_PASS_START_ROW, +TWO_PASS_NUM_ROWS) when TWO_PASS_PARTIAL_LAST_TILE.
+// Two-pass statistics. STREAM sends the tiles through Dest once per pass, one block per section, so the
+// state crosses section handoffs; COMBINE and SWITCH run in-place blocks within one section.
 
 constexpr std::uint32_t two_pass_tiles_per_block(std::uint32_t tile_cnt)
 {
     return (TWO_PASS_MODE == 0 && TWO_PASS_TILES_PER_BLOCK > 0) ? TWO_PASS_TILES_PER_BLOCK : tile_cnt;
 }
 
-// Sweeps of the tile stream through Dest: STREAM reads it once per pass.
 constexpr std::uint32_t TWO_PASS_SWEEPS = TWO_PASS_MODE == 0 ? 2 : 1;
 
 #ifdef LLK_TRISC_UNPACK
@@ -89,7 +76,6 @@ using namespace ckernel::sfpu;
 namespace
 {
 
-// fp32 bit pattern of 1/n (or of n itself), computed on the RISC-V as a host would.
 std::uint32_t fp32_reciprocal_bits(std::uint32_t n)
 {
     return __builtin_bit_cast(std::uint32_t, 1.0f / static_cast<float>(n));
@@ -134,7 +120,7 @@ void pass_two(std::uint32_t dst_index, RowWindow w)
     SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _two_pass_update_rows_, (TWO_PASS_DUAL), dst_index, VectorMode::RC_custom, w.start, w.num);
 }
 
-// Both passes over tiles [first_tile, first_tile + count) still in Dest (dst = tile - dst_base).
+// Both passes over tiles [first_tile, first_tile + count) already in Dest.
 std::uint32_t two_pass_in_place(std::uint32_t dst_base, std::uint32_t first_tile, std::uint32_t count, std::uint32_t last_tile)
 {
     std::uint32_t rows = 0;
@@ -214,8 +200,7 @@ void finalize(std::uint32_t dst_index, std::uint32_t rows)
     }
 }
 
-// Park the retained anchor in Dest and in a state slot, clearing LREG7 in between, so the split
-// finaliser only sees the right anchor if both round trips work.
+// LREG7 is cleared between each store and load, so the split output proves both round trips.
 void anchor_round_trip(std::uint32_t dst_index)
 {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(dest_sync, is_fp32_dest_acc_en, _two_pass_store_anchor_to_dst_, dst_index, VectorMode::RC_custom);
@@ -299,7 +284,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     else if constexpr (TWO_PASS_MODE == 1)
     {
-        // Block 0 spills to the state tiles; later blocks Chan-combine into them.
         std::uint32_t total_rows = 0;
         for (std::uint32_t first = 0; first < params.TILE_CNT; first += TWO_PASS_BLOCK_TILES)
         {
@@ -323,7 +307,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     fp32_bits(block_rows));
             }
         }
-        // The combined state is still in LREG4/LREG5 (LREG6 cleared), so finalise it with LREG6 unused.
+        // Combine leaves the merged state in LREG4/LREG5 with LREG6 cleared.
         SFPU_UNARY_CALL(
             dest_sync,
             is_fp32_dest_acc_en,
@@ -400,7 +384,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, tiles_per_block);
-    // The second STREAM sweep overwrites the first one's (unchanged) tiles in L1.
     for (std::uint32_t sweep = 0; sweep < TWO_PASS_SWEEPS; ++sweep)
     {
         for (std::uint32_t block = 0; block < num_blocks; ++block)

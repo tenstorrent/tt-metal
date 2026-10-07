@@ -15,20 +15,8 @@
 using namespace ckernel;
 #include "params.h" // WELFORDS_*, IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en
 
-// Welford's running per-column mean / variance on Quasar.
-//
-// The TILE_CNT tiles go through Dest in blocks of WELFORDS_TILES_PER_BLOCK (0 = all of them in one
-// block), one Dest section per block, so a multi-block run carries the LREG4/LREG5 state across
-// section handoffs and bank flips. Dest tile indices below are relative to the current section.
-//
-//   T0 unpack: stage each block of buffer_A from L1 into Dest (unpack-to-dest).
-//   T1 math:   fold every tile's rows, in order, into the running state held in LREG4/LREG5
-//              (the last tile only over [WELFORDS_START_ROW, +WELFORDS_NUM_ROWS) when
-//              WELFORDS_PARTIAL_LAST_TILE). With WELFORDS_SAVE_RESTORE the state is saved to
-//              Dest tile WELFORDS_STATE_DST of the current block before global tile
-//              WELFORDS_SAVE_AFTER_TILES, cleared, and restored. The finalize, in the last block,
-//              writes mean to tile WELFORDS_FINAL_DST and variance to the tile after it.
-//   T2 pack:   pack each block; Python compares only the lanes the kernel wrote.
+// Welford running per-column mean / variance. Tiles stream through Dest one WELFORDS_TILES_PER_BLOCK
+// block per section, so the LREG4/LREG5 state crosses section handoffs; Dest indices are per section.
 
 constexpr std::uint32_t welfords_tiles_per_block(std::uint32_t tile_cnt)
 {
@@ -82,7 +70,7 @@ using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-// fp32 bit patterns of 1/(i+1); an empty array selects the kernel's RISC-V division fallback.
+// An empty LUT selects the kernel's RISC-V division fallback.
 template <std::size_t SIZE>
 constexpr std::array<std::uint32_t, SIZE> make_welfords_reciprocal_lut()
 {
@@ -178,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if (block == num_blocks - 1)
         {
-            // variance = M2 / N over every processed row, so the divisor index is N - 1.
+            // variance = M2 / N, so the divisor index is N - 1.
             const std::uint32_t rows_processed = last_tile * TILE_R_DIM + (WELFORDS_PARTIAL_LAST_TILE ? WELFORDS_NUM_ROWS : TILE_R_DIM);
             const std::uint32_t scale_idx      = rows_processed - 1;
             if constexpr (WELFORDS_FACE_LAYOUT)

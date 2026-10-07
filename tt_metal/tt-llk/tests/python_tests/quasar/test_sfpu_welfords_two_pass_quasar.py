@@ -33,19 +33,17 @@ FORMATS = [
     for fmt in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32)
 ]
 
-# (atol, rtol) per format: two output steps of relative slack plus a near-zero floor.
+# (atol, rtol): two output steps of relative slack plus a near-zero floor.
 TOLERANCE = {
     DataFormat.Float16_b: (0.02, 2.0**-6),
     DataFormat.Float16: (0.005, 2.0**-9),
     DataFormat.Float32: (1e-4, 1e-4),
 }
 
-# Modes and finalisers of sfpu_welfords_two_pass_quasar_test.cpp.
 STREAM, COMBINE, SWITCH = 0, 1, 2
 ROW, RAW, SPLIT, COMBINED, ROW_VAR_ONLY = 0, 1, 2, 3, 4
 
-# A raw group slot covers 4 Dest units; lane (r, c) of the statistics registers tracks tile
-# column QUAD_COLUMN[r](c) after the row-quad transpose.
+# After the row-quad transpose, statistics lane (r, c) tracks tile column QUAD_COLUMN[r](c).
 GROUP_UNITS = 4
 LANE_COLUMNS = 8
 QUAD_COLUMN = (
@@ -169,11 +167,7 @@ SCENARIOS = {
 
 
 def make_stimuli(tile_count, torch_format):
-    """Row-major [32, 32 * tile_count] block; tile t is columns [32t, 32t + 32).
-
-    Each tile column has its own offset and spread, so a lane permutation or a dropped or
-    duplicated row shows up as a wrong statistic.
-    """
+    """Row-major [32, 32 * tile_count]; per-column offset and spread expose lane or row mix-ups."""
     torch.manual_seed(0)
     column = torch.arange(TILE_DIM, dtype=torch.float32)
     offset = (column - 15.5) * 0.25
@@ -188,7 +182,7 @@ def tile_view(block, tile):
 
 
 def selected_rows(block, scenario, tiles):
-    """Rows of the given tiles each kernel pass folds, stacked in order, as float64."""
+    """The rows of `tiles` the kernel folds, in order, as float64."""
     rows = []
     for t in tiles:
         view = tile_view(block, t).to(torch.float64)
@@ -245,13 +239,7 @@ def row_slot(tile, stat, row=0):
 @pytest.mark.parametrize("formats", FORMATS, ids=lambda f: f.input_format.name)
 @pytest.mark.parametrize("scenario_name", list(SCENARIOS))
 def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
-    """Shifted two-pass per-column mean / population variance (the _two_pass_* helpers).
-
-    STREAM scenarios stream the tiles through Dest once per pass, over one or several Dest
-    sections, and check each finaliser (row, raw group, split row with a retained and
-    round-tripped anchor, cross-lane combined group, row without mean). COMBINE checks the
-    Chan merge of in-place blocks; SWITCH checks swapping single-accumulator group state.
-    """
+    """Shifted two-pass per-column mean / population variance (the _two_pass_* helpers)."""
     scenario = SCENARIOS[scenario_name]
     scenario.validate()
     dest_acc = (
