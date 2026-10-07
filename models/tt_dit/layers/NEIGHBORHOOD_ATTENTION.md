@@ -294,7 +294,7 @@ origin table's contents are a runtime buffer.
 
 The factory makes one work item per `(batch, head, query chunk)`, bricks varying fastest so a core's
 items are spatially adjacent. It picks the mask mode: a chunk wider than the stride needs a mask per
-brick (reachable only under `DIFFVAE_NA_UNSAFE_CHUNK`); otherwise one tile per gather slot broadcasts
+brick (stride-1 plans chunk two bricks along T by default, so stage 5 runs this way); otherwise one tile per gather slot broadcasts
 down the chunk. `cb_mask` is sized to a whole work item so its pages cycle back to the same L1
 addresses every item, which is what lets the reader skip rewriting them for a run of unclamped
 bricks; that size must agree with `interior_table_supported` in the reader. `cb_resident_mask` holds
@@ -589,12 +589,11 @@ build it from the `--diffvae-*` options (`pytest --help`, group "LTX-2.5 DiffVAE
 
 All default off. The wrong-output probes of the 2026-09-10 mask investigation (`SKIP_KV`,
 `MASK_MEMSET_ONLY`, `TABLE_ALWAYS`) and the `PER_BRICK_MASK` override were removed on 2026-09-11
-once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from the environment.
+once that investigation closed. The op itself reads nothing from the environment.
 
 | variable                       | does                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------ |
 | `DIFFVAE_NA_CHUNK_BRICKS`      | force the query chunk, in BRICKS (`t,h,w`)                               |
-| `DIFFVAE_NA_UNSAFE_CHUNK`      | lift the plan's `chunk == stride` check, needed with the above at stride 1. The factory then switches to per-brick masks on its own — see `neighborhood_plan.cpp` |
 | `DIFFVAE_NA_HALO_TOPOLOGY`     | `ring` retries the halo on ring — see the deadlock note in `_halo_exchange` |
 | `DIFFVAE_NA_HALO_LINKS`        | halo link count only                                                     |
 | `DIFFVAE_TP_TRACE`             | sync and log around every step of the sharded executor, so a hang names the op |
