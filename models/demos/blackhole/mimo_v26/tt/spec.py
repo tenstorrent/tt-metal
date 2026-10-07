@@ -9,6 +9,7 @@ Round:  d1..d7 = drafter(anchor, ctx = target hidden states of positions < pos)
         k = number of leading j (1..7) with d_j == p_{j-1};  committed = d1..dk + p_k;  new anchor = p_k at pos+k+1;  hidden states of rows 0..k go to the drafter.
 Ragged acceptance per user is handled with per-row/per-slot positions of the decode path and the `valid` mask of the drafter append.
 """
+import os
 import time
 
 import torch
@@ -33,7 +34,8 @@ class SpecEngine:
         self.rows = model.mesh.shape[0]
         self.dec = Decoder(model, trace=trace, U=U, block=BLK, capture=tuple(cap))
         self.trace = trace
-        self.dr.use_trace = trace
+        self.dr_trace = trace and os.environ.get("SPEC_DR_TRACE", "1") == "1"
+        self.dr.use_trace = self.dr_trace
         self.stats = dict(rounds=[], t_draft=[], t_verify=[], t_append=[])
 
     def place(self, n):
@@ -90,7 +92,7 @@ class SpecEngine:
         self.alive = alive
         t0 = time.perf_counter()
         dr.set_round(self.anchor, self.pos)
-        d, _ = dr.draft(use_trace=self.trace)  # [rows,U,7]
+        d, _ = dr.draft(use_trace=self.dr_trace)  # [rows,U,7]
         t_draft = time.perf_counter() - t0
         block = torch.cat([self.anchor[:, :, None], d], 2)  # [rows,U,8]
         t0 = time.perf_counter()
