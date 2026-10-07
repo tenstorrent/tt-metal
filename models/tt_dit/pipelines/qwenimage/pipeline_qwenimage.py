@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
@@ -13,10 +14,11 @@ import tqdm
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
 from loguru import logger
+from PIL import Image
 
 import ttnn
 from models.tt_dit.models.transformers.transformer_qwenimage import QwenImageCheckpoint
-from models.tt_dit.models.vae.vae_wan_2d import WanVaeDecoder2DAdapter
+from models.tt_dit.models.vae.vae_wan_2d import WanVaeDecoder2DAdapter, WanVaeEncoder2DAdapter
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.cfg import CFGCombiner, create_submeshes, submesh_shape
@@ -24,13 +26,8 @@ from models.tt_dit.pipelines.events import PipelineEventCallback, SectionEnd, Se
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.qwenimage.text_encoder import TextEncoder
 from models.tt_dit.solvers import EulerSolver, calculate_shift
-from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices
+from models.tt_dit.utils.tensor import from_torch, from_torch_to_devices, zeros
 from models.tt_dit.utils.tracing import Tracer
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from PIL import Image
 
 _VAE_SCALE_FACTOR = 8
 _LATENT_CHANNELS = 16
@@ -98,6 +95,7 @@ class QwenImagePipelineConfig:
 
     use_torch_text_encoder: bool
     use_torch_vae_decoder: bool
+    use_torch_vae_encoder: bool
 
     height: int
     width: int
@@ -118,6 +116,7 @@ class QwenImagePipelineConfig:
         vae_parallel_config: VaeHWParallelConfig | None = None,
         use_torch_text_encoder: bool = False,
         use_torch_vae_decoder: bool = False,
+        use_torch_vae_encoder: bool = False,
         height: int = 1024,
         width: int = 1024,
         cfg_enabled: bool = True,
@@ -146,12 +145,19 @@ class QwenImagePipelineConfig:
             vae_parallel_config=vae_parallel_config,
             use_torch_text_encoder=use_torch_text_encoder,
             use_torch_vae_decoder=use_torch_vae_decoder,
+            use_torch_vae_encoder=use_torch_vae_encoder,
             height=height,
             width=width,
             cfg_enabled=cfg_enabled,
             sequence_length_buckets=tuple(sequence_length_buckets),
             checkpoint_name=checkpoint_name,
         )
+
+
+class _InpaintInputs(NamedTuple):
+    image_latents: ttnn.Tensor
+    noise: ttnn.Tensor
+    mask: ttnn.Tensor
 
 
 class QwenImagePipeline(PipelineAPIMixin):
@@ -209,6 +215,12 @@ class QwenImagePipeline(PipelineAPIMixin):
             for bucket in config.sequence_length_buckets
         }
         self._image_processor = VaeImageProcessor(vae_scale_factor=_VAE_SCALE_FACTOR * 2)
+        self._mask_processor = VaeImageProcessor(
+            vae_scale_factor=_VAE_SCALE_FACTOR * 2,
+            do_normalize=False,
+            do_binarize=True,
+            do_convert_grayscale=True,
+        )
 
         # The encoder is loaded before the transformers, for memory efficiency.
         logger.info("creating text encoder...")
@@ -223,6 +235,10 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         logger.info("creating transformers...")
         self._checkpoint = QwenImageCheckpoint(config.checkpoint_name)
+        p = self._checkpoint.patch_size
+        self._latents_height = self._height // _VAE_SCALE_FACTOR
+        self._latents_width = self._width // _VAE_SCALE_FACTOR
+        self._latents_sequence_length = (self._latents_height // p) * (self._latents_width // p)
         self._transformers = [
             self._checkpoint.build(ccl_manager=m, parallel_config=config.dit_parallel_config, is_fsdp=False)
             for m in self._ccl_managers
@@ -236,6 +252,27 @@ class QwenImagePipeline(PipelineAPIMixin):
             use_torch=config.use_torch_vae_decoder,
         )
 
+        logger.info("creating VAE encoder...")
+        self._vae_encoder = WanVaeEncoder2DAdapter(
+            checkpoint_name=config.checkpoint_name,
+            parallel_config=config.vae_parallel_config,
+            ccl_manager=self._ccl_managers[-1],
+            use_torch=config.use_torch_vae_encoder,
+        )
+
+        # The inpainting inputs of each submesh, patchified like the latents. Allocated before the
+        # traces.
+        inpaint_shape = [1, self._latents_sequence_length, _LATENT_CHANNELS * p * p]
+        mesh_axes = [None, self._sp_axis, None]
+        self._inpaint_inputs = [
+            _InpaintInputs(
+                image_latents=zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
+                noise=zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
+                mask=zeros(inpaint_shape, device=d, mesh_axes=mesh_axes),
+            )
+            for d in self._devices
+        ]
+
         logger.info("pipeline allocation run...")
         self._warm_up(traced=False)
 
@@ -243,8 +280,9 @@ class QwenImagePipeline(PipelineAPIMixin):
         self._warm_up(traced=True)
 
     def _warm_up(self, *, traced: bool) -> None:
-        # Only the transformer is captured here. The text encoder and the VAE decoder are captured
-        # on their first traced call.
+        image = Image.new("RGB", (self._width, self._height))
+        mask_image = Image.new("L", (self._width, self._height), 255)
+
         for bucket in sorted(self._sequence_length_buckets, reverse=True):
             # Each "a " is one token, and the trailing space and the template suffix add six more, so
             # this comes to two tokens short of the bucket, which the 32-token spacing keeps above
@@ -256,8 +294,12 @@ class QwenImagePipeline(PipelineAPIMixin):
                 num_inference_steps=2,
                 cfg_scale=2 if self._cfg_enabled else 1,
                 traced=traced,
+                # The text encoder and the VAE are captured on their first traced call.
                 encoder_traced=False,
                 vae_traced=False,
+                image=image,
+                mask_image=mask_image,
+                strength=1.0,
             )
 
     def __call__(
@@ -272,13 +314,27 @@ class QwenImagePipeline(PipelineAPIMixin):
         traced: bool = True,
         vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
+        image: Image.Image | None = None,
+        mask_image: Image.Image | None = None,
+        strength: float = 0.6,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
+        """Generates an image from the prompt.
+
+        Inpainting: pass ``image`` and ``mask_image``. The white part of the mask is regenerated,
+        the rest is kept. ``strength`` sets how much the white part may change: 1 ignores what was
+        there, lower values stay closer to it.
+        """
         prompt_count = len(prompts)
 
         if cfg_scale > 1 and not self._cfg_enabled:
             msg = "cfg_scale > 1 requires CFG to be enabled"
             raise ValueError(msg)
+
+        if (image is None) != (mask_image is None):
+            msg = "inpainting needs both image and mask_image"
+            raise ValueError(msg)
+        inpaint = image is not None
 
         vae_traced = vae_traced if vae_traced is not None else traced
         encoder_traced = encoder_traced if encoder_traced is not None else traced
@@ -287,11 +343,6 @@ class QwenImagePipeline(PipelineAPIMixin):
 
         assert num_images_per_prompt == 1, "generating multiple images is not supported"
         assert prompt_count == 1, "generating multiple images is not supported"
-
-        latents_height = self._height // _VAE_SCALE_FACTOR
-        latents_width = self._width // _VAE_SCALE_FACTOR
-        p = self._checkpoint.patch_size
-        latents_sequence_length = (latents_height // p) * (latents_width // p)
 
         on_event(SectionStart("total"))
 
@@ -311,19 +362,29 @@ class QwenImagePipeline(PipelineAPIMixin):
         prompt_sequence_lengths = [c.shape[1] for c in torch_contexts]
 
         logger.info("preparing timesteps...")
-        mu = calculate_shift(latents_sequence_length, self._solvers[0].scheduler)
+        mu = calculate_shift(self._latents_sequence_length, self._solvers[0].scheduler)
         sigmas = np.linspace(1.0, 1 / num_inference_steps, num_inference_steps)
         for solver in self._solvers:
             solver.set_schedule(sigmas=sigmas, mu=mu)
         timesteps = self._solvers[0].timesteps
 
+        # Inpainting skips the first steps of the schedule, by the same rounding as diffusers.
+        first_step = int(max(num_inference_steps - min(num_inference_steps * strength, num_inference_steps), 0))
+        if inpaint and first_step >= num_inference_steps:
+            msg = f"strength {strength} leaves no denoising steps"
+            raise ValueError(msg)
+        first_step = first_step if inpaint else 0
+
         logger.info("preparing inputs...")
         context = [from_torch(c, device=d) for c, d in zip(torch_contexts, self._devices, strict=True)]
-        latents = self._random_latents(batch_size=prompt_count * num_images_per_prompt, seed=seed)
+        noise = self._random_latents(batch_size=prompt_count * num_images_per_prompt, seed=seed, inpaint=inpaint)
+        if inpaint:
+            noise = self._prepare_inpainting(image, mask_image, noise=noise, first_step=first_step, traced=vae_traced)
+        latents = from_torch_to_devices(noise, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
         ropes = [
             self._checkpoint.rope_tables(
-                latents_height=latents_height,
-                latents_width=latents_width,
+                latents_height=self._latents_height,
+                latents_width=self._latents_width,
                 prompt_sequence_length=length,
                 device=device,
                 sp_axis=self._sp_axis,
@@ -335,7 +396,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         logger.info("denoising...")
         on_event(SectionStart("denoising"))
 
-        for step, t in enumerate(tqdm.tqdm(timesteps)):
+        for step, t in enumerate(tqdm.tqdm(timesteps[first_step:]), start=first_step):
             on_event(SectionStart(f"denoising_step_{step}"))
 
             velocity_preds = []
@@ -353,11 +414,11 @@ class QwenImagePipeline(PipelineAPIMixin):
                     tracer(
                         submesh_idx=idx,
                         latents=latents[idx],
-                        prompt=context[idx] if step == 0 else tracer.inputs["prompt"],
+                        prompt=context[idx] if step == first_step else tracer.inputs["prompt"],
                         timestep=timestep,
-                        spatial_rope=spatial_rope if step == 0 else tracer.inputs["spatial_rope"],
-                        prompt_rope=prompt_rope if step == 0 else tracer.inputs["prompt_rope"],
-                        spatial_sequence_length=latents_sequence_length,
+                        spatial_rope=spatial_rope if step == first_step else tracer.inputs["spatial_rope"],
+                        prompt_rope=prompt_rope if step == first_step else tracer.inputs["prompt_rope"],
+                        spatial_sequence_length=self._latents_sequence_length,
                         prompt_sequence_length=prompt_sequence_lengths[idx],
                         traced=traced,
                         tracer_blocking_execution=False,
@@ -375,6 +436,14 @@ class QwenImagePipeline(PipelineAPIMixin):
                 solver.step(step=step, latent=latents[idx], velocity_pred=velocity_preds[idx])
                 for idx, solver in enumerate(self._solvers)
             ]
+
+            if inpaint:
+                # Outside the mask, the latents are replaced by the image latents, noised to the
+                # level of the next step.
+                sigma_next = self._solvers[0].sigmas[step + 1]
+                for idx, inputs in enumerate(self._inpaint_inputs):
+                    known = inputs.noise * sigma_next + inputs.image_latents * (1 - sigma_next)
+                    latents[idx] = known + inputs.mask * (latents[idx] - known)
 
             self.synchronize_devices()  # for time profiling
             on_event(SectionEnd(f"denoising_step_{step}"))
@@ -399,7 +468,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         for d in self._devices:
             ttnn.synchronize_device(d)
 
-    def _random_latents(self, *, batch_size: int, seed: int) -> list[ttnn.Tensor]:
+    def _random_latents(self, *, batch_size: int, seed: int, inpaint: bool) -> torch.Tensor:
         torch.manual_seed(seed)
 
         shape = [
@@ -409,11 +478,57 @@ class QwenImagePipeline(PipelineAPIMixin):
             self._width // _VAE_SCALE_FACTOR,
         ]
 
+        if inpaint:
+            # The reference samples the VAE latent distribution of the image before drawing the
+            # noise. Its spread is negligible, so the image is encoded to the mean, but the draw is
+            # repeated so that the noise matches.
+            torch.randn(shape, dtype=torch.bfloat16)
+
         # Noise is drawn in bfloat16 and channels first like in the reference implementation.
         noise = torch.randn(shape, dtype=torch.bfloat16)
-        latents = self._transformers[0].patchify(noise.permute(0, 2, 3, 1).float())
+        return self._transformers[0].patchify(noise.permute(0, 2, 3, 1).float())
 
-        return from_torch_to_devices(latents, devices=self._devices, mesh_axes=[None, self._sp_axis, None])
+    def _prepare_inpainting(
+        self,
+        image: Image.Image,
+        mask_image: Image.Image,
+        *,
+        noise: torch.Tensor,
+        first_step: int,
+        traced: bool,
+    ) -> torch.Tensor:
+        """Fill the inpainting inputs and return the image latents noised to the first step."""
+        image_latents = self._encode_image(image, traced=traced)
+        mask = self._latent_mask(mask_image)
+
+        for d, buffers in zip(self._devices, self._inpaint_inputs, strict=True):
+            for source, buffer in (
+                (image_latents, buffers.image_latents),
+                (noise, buffers.noise),
+                (mask, buffers.mask),
+            ):
+                host = from_torch(
+                    source,
+                    device=d,
+                    mesh_axes=[None, self._sp_axis, None],
+                    on_host=True,
+                )
+                ttnn.copy_host_to_device_tensor(host, buffer)
+
+        sigma = self._solvers[0].sigmas[first_step]
+        return sigma * noise + (1 - sigma) * image_latents
+
+    def _encode_image(self, image: Image.Image, *, traced: bool) -> torch.Tensor:
+        pixels = self._image_processor.preprocess(image, height=self._height, width=self._width)
+        latents = self._vae_encoder.encode(pixels.to(torch.float32), traced=traced)
+        return self._transformers[0].patchify(latents)
+
+    def _latent_mask(self, mask_image: Image.Image) -> torch.Tensor:
+        mask = self._mask_processor.preprocess(mask_image, height=self._height, width=self._width)
+        mask = torch.nn.functional.interpolate(
+            mask, size=(self._height // _VAE_SCALE_FACTOR, self._width // _VAE_SCALE_FACTOR)
+        )
+        return self._transformers[0].patchify(mask.repeat(1, _LATENT_CHANNELS, 1, 1).permute(0, 2, 3, 1))
 
     def _decode_latents(self, tt_latents: ttnn.Tensor, *, traced: bool) -> list[Image.Image]:
         # Sync because we don't pass a persistent buffer or a barrier semaphore.

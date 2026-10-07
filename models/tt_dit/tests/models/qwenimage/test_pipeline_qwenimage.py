@@ -4,15 +4,20 @@
 
 import itertools
 import os
+from pathlib import Path
 
+import numpy as np
 import pytest
 from loguru import logger
+from PIL import Image, ImageFilter
 
 import ttnn
 
 from ....parallel.config import DiTParallelConfig, EncoderParallelConfig
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
 from ....utils.test import line_params_req_exact_devices
+
+DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / "gemma3" / "dog.jpg"
 
 
 @pytest.mark.parametrize(
@@ -155,3 +160,44 @@ def test_qwenimage_pipeline(
             if prompt[0] == "q":
                 break
             run(prompt=prompt, number=i, seed=i)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{**line_params_req_exact_devices, "l1_small_size": 32768, "trace_region_size": 150000000}],
+    ids=["line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 2), (2, 4), (4, 8)], ids=["2x2", "2x4", "4x8"], indirect=True)
+def test_qwenimage_inpaint(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    if is_ci_env:
+        monkeypatch.setenv("TT_DIT_CACHE_DIR", "/tmp/TT_DIT_CACHE")
+
+    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device)
+
+    image = Image.open(DOG_IMAGE_PATH).convert("RGB")
+    # Repaints the dog, with a margin around it.
+    mask = Image.new("L", (512, 512), 0)
+    mask.paste(255, (130, 20, 430, 425))
+    (inpainted,) = pipeline(
+        prompts=["A ginger cat standing on a skateboard."],
+        num_inference_steps=50,
+        seed=0,
+        image=image,
+        mask_image=mask,
+    )
+
+    image.save("qwenimage_inpaint_input.png")
+    inpainted.save("qwenimage_inpaint_output.png")
+
+    before = np.asarray(image, dtype=np.float32)
+    after = np.asarray(inpainted.resize(image.size), dtype=np.float32)
+    inside = np.asarray(mask) > 0
+    # Masks are blended at latent resolution, so the band along the mask edge may change too.
+    edge = np.asarray(mask.filter(ImageFilter.MaxFilter(33))) > 0
+    outside_diff = np.abs(after - before)[~edge].mean()
+    inside_diff = np.abs(after - before)[inside].mean()
+    logger.info(f"mean absolute change outside the mask {outside_diff:.2f}, inside {inside_diff:.2f}")
+    assert outside_diff < 5
+    # Some of the box stays background, so only the change relative to the outside is meaningful.
+    assert inside_diff > 3 * outside_diff
