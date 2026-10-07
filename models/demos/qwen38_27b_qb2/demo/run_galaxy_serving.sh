@@ -41,6 +41,19 @@ groups = galaxy_serving.qualified_groups(receipt)
 galaxy_serving.verify_qualified_source(receipt, Path(galaxy_serving.__file__).resolve().parents[1])
 print("QUALIFIED_GROUPS", groups, flush=True)
 PY
+if [[ -n "${QWEN_GDN_STEP_EXPERIMENT_DIR:-}" ]]; then
+    # This isolated candidate is never imported by the qualified model. Record
+    # its result before the resident server takes the shared device lock, but
+    # do not make baseline GPQA contingent on an experimental kernel passing.
+    # The baseline's G0/source gates below still apply; dirty devices are reset
+    # under the lock before serving, including after a candidate timeout.
+    echo "Running isolated GDN candidate; baseline model source is unchanged"
+    QWEN_CANDIDATE_STATUS=0
+    /bin/bash "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/demo/run_gdn_step_candidate.sh" \
+        "$QWEN_TASK_ROOT" "$QWEN_GDN_STEP_EXPERIMENT_DIR" \
+        > "$QWEN_GDN_STEP_EXPERIMENT_DIR.log" 2>&1 || QWEN_CANDIDATE_STATUS=$?
+    echo "GDN candidate exit status: $QWEN_CANDIDATE_STATUS; continuing qualified baseline without promotion"
+fi
 exec 9>/tmp/tt-device.lock
 echo "Waiting for the shared device lock before serving"
 flock 9

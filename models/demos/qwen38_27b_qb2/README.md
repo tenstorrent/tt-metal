@@ -110,15 +110,15 @@ readback. These are native generator timings, excluding HTTP/router overhead.
 Default model knobs match the initial Galaxy baseline. This sweep does not
 qualify model accuracy or the future optimized configuration.
 
-Current job: `qwen38-perf-sweep-tp4-v1-20261006.service`, measuring the TP4 grid
+Completed job: `qwen38-perf-sweep-tp4-v1-20261006.service`, measuring the TP4 grid
 after the first replica/fabric attempts. Results are under
 `TASK_ROOT/perf-sweep-tp4-v1/`; `index.html` is
 the artifact entrypoint and updates after each completed cell. Five host tests
 validate the metric accounting and reject cold captures as warm measurements.
-The first twenty-four cells are measured and preserved in
+All twenty-seven supported cells are measured and preserved in
 [`galaxy-evidence/perf-sweep-tp4-v1/index.html`](galaxy-evidence/perf-sweep-tp4-v1/index.html)
-(HTML plus PNG/SVG/PDF/CSV/JSON). This is a partial snapshot; three cells remain and
-the host job continues. At ISL 128, C=1/2/4/8/16 measured
+(HTML plus PNG/SVG/PDF/CSV/JSON). The hardware test passed in 2 h 3 min,
+including setup, compilation, warmups and repeated full prefills. At ISL 128, C=1/2/4/8/16 measured
 38.79/31.08/24.85/20.48/12.15 tokens/s/user, with aggregate decode throughput
 38.79/62.16/99.39/163.84/194.40 tokens/s. This baseline has substantial batch
 overhead and does not meet the optimized high-batch targets.
@@ -134,7 +134,9 @@ At 55K, C1 measures 30.57 tokens/s/user and 9.65 s TTFT; C8 measures
 16.33 tokens/s/user (130.64 aggregate) and 78.14 s TTFT.
 At 128K, C1/C2/C4/C8 measure 31.87/26.12/19.19/13.75 tokens/s/user;
 C4 delivers 76.76 aggregate with 113.14 s TTFT and C8 delivers 109.99 aggregate
-with 226.45 s TTFT. The remaining points are near-256K, C1/C2/C4.
+with 226.45 s TTFT. Near-256K C1/C2/C4 measured 27.24/22.22/15.60 tokens/s/user,
+or 27.24/44.44/62.40 aggregate decode tokens/s, with p50 TTFT
+75.19/150.71/301.46 s. Higher-batch cells marked capacity guard were not run.
 
 Initialize with `--replicas 8`
 for the follow-up: throughput is measured on all eight replicas rather than
@@ -251,18 +253,37 @@ Client decode timing ends at stream completion, including any suppressed
 special-token tail. This fixes a measurement bug that could otherwise inflate
 fixed-length throughput by stopping at the final visible text.
 
-The persistent job is `qwen38-galaxy-serving-v3-20261006.service`, queued behind
+The persistent job is `qwen38-galaxy-serving-v4-20261006.service`, queued behind
 `qwen38-attention-tuning-v1-20261006.service`, which follows profile-v2. It has a 48-hour enclosing deadline
 including queue time, a 256 GiB host-memory limit and a 32-core CPU quota. It
 keeps the endpoint resident after the evaluations and sweep. Stop this owned
-job with `systemctl --user stop qwen38-galaxy-serving-v3-20261006.service`;
+job with `systemctl --user stop qwen38-galaxy-serving-v4-20261006.service`;
 weights and caches remain. The next device job resets a pessimistic dirty
 marker through the normal safe-runner path.
 
-Receipts are under `TASK_ROOT/galaxy-serving-v3/`: `deployment.json`,
+Receipts are under `TASK_ROOT/galaxy-serving-v4/`: `deployment.json`,
 `server.log`, `api.json`, `gpqa/`, and `http-sweep/`. Connect after readiness
 using `ssh -L 8000:127.0.0.1:8000 ttuser@10.228.203.98`; the served model is
 `Qwen/Qwen3.8-27B` at `/v1/chat/completions`.
+
+Before starting the resident server, v4 runs the isolated
+[`experiments/gdn_step`](experiments/gdn_step/README.md) candidate via
+`QWEN_GDN_STEP_EXPERIMENT_DIR=TASK_ROOT/gdn-step-candidate-v1`. It removes the
+32-token padded recurrence and temporary DRAM state copy in a standalone
+FP32/SFPU kernel. Twelve CPU scheduling/accuracy-gate tests pass; device
+compilation, long-horizon accuracy, and latency remain pending. The candidate
+is never promoted automatically and a failed candidate does not stop baseline
+GPQA. The waiting v3 wrapper alone was replaced; live hardware jobs were not
+interrupted. Baseline G0/model-source checks still gate serving.
+
+Fabric v2 completed all eight 2D-torus neighbor-exchange variants (one/two
+links and four packet types), with zero failed tests. Its enclosing service
+nevertheless exited 1: the upstream script's EXIT cleanup used a final false
+conditional when no rank file existed. This was reproduced without hardware
+and fixed with an explicit `if`; six host cases cover successful/failed runs
+with empty/present/absent rank files. The historical service status remains
+failed, while its raw test log records success. Eight-replica qualification
+then used the normal safe-runner recovery and started loading at 05:41 UTC.
 
 All 41 launch, benchmark, mocked-HTTP and real-plugin host tests pass, including
 the actual vLLM argument parser. The full DP8 dataset preparation preserves the
