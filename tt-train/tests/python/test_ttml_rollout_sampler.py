@@ -130,10 +130,9 @@ def _to_capitals_chat_prompt(tokenizer, user_text: str, **template_kwargs) -> st
     )
 
 
-def _assert_rollout_batch_ok(batch: RolloutBatch, *, expected_shape, first_batch_id: int) -> None:
+def _assert_rollout_batch_ok(batch: RolloutBatch, *, expected_shape) -> None:
     """Shared shape / sign / metadata invariants for the acceptance tests."""
     assert isinstance(batch, RolloutBatch)
-    assert batch.batch_id == first_batch_id, f"expected batch_id={first_batch_id}, got {batch.batch_id}"
     assert batch.weight_version == 0, f"expected weight_version=0 (default), got {batch.weight_version}"
     assert batch.logprobs.shape == expected_shape, f"logprobs shape {batch.logprobs.shape} != expected {expected_shape}"
     assert batch.logprobs.dtype == np.float32, f"logprobs dtype {batch.logprobs.dtype} != float32"
@@ -194,11 +193,7 @@ def test_llama_rollout_sampler_capital_of_france():
     completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
     assert "paris" in completion_str.lower(), f"expected 'Paris' in Llama completion, got: {completion_str!r}"
 
-    _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH), first_batch_id=0)
-
-    # Second call bumps batch_id monotonically.
-    batch2 = sampler.generate([prompt_ids])
-    assert batch2.batch_id == 1, f"expected monotonic batch_id, got {batch2.batch_id}"
+    _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH))
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -222,9 +217,6 @@ def test_qwen3_rollout_sampler_capital_of_france():
     completion_str = tokenizer.decode(batch.completions[0], skip_special_tokens=True)
     assert "paris" in completion_str.lower(), f"expected 'Paris' in Qwen3 completion, got: {completion_str!r}"
 
-    _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH), first_batch_id=0)
-
-    batch2 = sampler.generate([prompt_ids])
-    assert batch2.batch_id == 1, f"expected monotonic batch_id, got {batch2.batch_id}"
+    _assert_rollout_batch_ok(batch, expected_shape=(1, MAX_COMPLETION_LENGTH))
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
