@@ -4,8 +4,8 @@
 
 """The fast untilize and the plain pack untilize give the same bytes on Blackhole, so the untilize helper may pick
 either for a row (tt-metal#58736). Every bf16 bit pattern, special values included, and every bfp8_b tile byte pair (each
-of the 256 shared exponents with each of the 256 sign and mantissa bytes, written as raw tile bytes), untilized to bf16 at
-the widths the helper moves to the plain pack untilize with a 16-bit DEST, and a few it keeps on the fast untilize.
+of the 256 shared exponents with each of the 256 sign and mantissa bytes, written as raw tile bytes), untilized to bf16
+with a 16-bit DEST: rows of one fast untilize chunk (5 to 8 tiles) and of several (9 tiles and more).
 """
 
 import pytest
@@ -206,7 +206,7 @@ def _bfp8_raw_tiles(width):
     return torch.cat([exponents, datums], dim=1), tile_rows * TILE
 
 
-@pytest.mark.parametrize("width", [5, 6, 7, 8, 16])
+@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 13, 16, 24])
 def test_fast_and_pack_untilize_match_bf16(device, width):
     values = _bf16_patterns(width)
     tt_in = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

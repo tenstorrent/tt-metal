@@ -44,22 +44,11 @@ constexpr bool has_supported_fast_untilize_format() {
     return supported_input && supported_output;
 }
 
-#ifdef ARCH_BLACKHOLE
-// With a 16-bit DEST in half sync, a row of 5 to 7 tiles packs faster as one plain pack untilize block than as the fast
-// untilize's strided 2 + 3, 4 + 2 or 4 + 3 tile chunks (tt-metal#58736).
-template <uint32_t block_width_tiles>
-constexpr bool pack_untilize_is_faster() {
-    return block_width_tiles >= 5 && block_width_tiles <= 7 && !get_fp32_dest_acc_enabled() &&
-           !get_dst_full_sync_enabled();
-}
-#endif
-
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
 constexpr bool can_use_fast_untilize() {
 #ifdef ARCH_BLACKHOLE
     return block_width_tiles >= 2 && dfb_has_32x32_tiles<input_dfb>() && dfb_has_32x32_tiles<output_dfb>() &&
-           has_supported_fast_untilize_format<input_dfb, output_dfb>() &&
-           !pack_untilize_is_faster<block_width_tiles>();
+           has_supported_fast_untilize_format<input_dfb, output_dfb>();
 #else
     return false;
 #endif
