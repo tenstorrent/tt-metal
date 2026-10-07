@@ -150,14 +150,21 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
+#if defined(LLK_FN_NOPS_FIXED_HELPERS) // experiment: LLK_FN_NOPS leaves the zone helpers where they are
+#define LLK_ZONE_HELPER_ATTR __attribute__((patchable_function_entry(0, 0)))
+#else
+#define LLK_ZONE_HELPER_ATTR
+#endif
+
 // Only the two wall clock reads are inline. The bookkeeping and both records (written after the end read, so no L1
 // store lands in the window) are out of line and noipa, so they cannot change the kernel code around them.
-__attribute__((noipa, section(".text.llk_zone.reserve"))) inline void zone_reserve()
+LLK_ZONE_HELPER_ATTR __attribute__((noipa, section(".text.llk_zone.reserve"))) inline void zone_reserve()
 {
     reserved_words_count += ZONE_START_WORDS + ZONE_END_WORDS;
 }
 
-__attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record(std::uint16_t id16, std::uint64_t start_timestamp, std::uint64_t end_timestamp)
+LLK_ZONE_HELPER_ATTR __attribute__((noipa, section(".text.llk_zone.record"))) inline void zone_record(
+    std::uint16_t id16, std::uint64_t start_timestamp, std::uint64_t end_timestamp)
 {
     reserved_words_count -= ZONE_START_WORDS + ZONE_END_WORDS;
     write_entry_at(EntryType::ZONE_START, id16, start_timestamp);
