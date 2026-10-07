@@ -23,7 +23,7 @@ def open_mesh(trace_mb=256):
     return ttnn.open_mesh_device(ttnn.MeshShape(4, 8), trace_region_size=trace_mb * 1024 * 1024)
 
 
-def open_mesh_full(trace_mb=512):
+def open_mesh_full(trace_mb=int(os.environ.get("ATTN_TRACE_MB", "512"))):
     import faulthandler
 
     faulthandler.dump_traceback_later(
