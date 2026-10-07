@@ -139,7 +139,7 @@ def test_moe_real_layer(mesh_device):
     )
     # (B) device exact router
     gw, gb = load_gate(LAYER)
-    gate = MiMoGate(md, gw.to(torch.bfloat16), gb, bias_shift=0.0, batch_per_device=N)
+    gate = MiMoGate(md, gw.to(torch.bfloat16), gb, bias_shift=0.0, batch_per_device=None)
     wtB, ixB = gate.route(xt, "exact")
     ixh = torch.stack(
         [ttnn.to_torch(ttnn.get_device_tensors(ixB)[r * COLS]).reshape(N, TOPK).long() for r in range(ROWS)]
