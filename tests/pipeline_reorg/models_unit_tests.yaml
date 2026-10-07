@@ -801,7 +801,10 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      timeout: 15
+      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
+      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
+      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
+      timeout: 30
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
