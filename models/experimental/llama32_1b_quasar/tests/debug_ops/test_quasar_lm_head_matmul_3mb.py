@@ -288,3 +288,26 @@ def test_lm_head_full_sequence_3mb(qsr_device):
     logger.info(f"[lm_head-full] concat {tuple(o.shape)} PCC={pcc:.4f}")
     assert tuple(o.shape)[-1] == _VOCAB, f"vocab width {tuple(o.shape)[-1]} != {_VOCAB}"
     assert pcc > 0.99, f"full lm_head sequence PCC {pcc}"
+
+
+# Fresh-context repro of the EXACT e2e lm_head concat that hangs in decode-compile: 16 interleaved DRAM
+# inputs of [1,1,32,2048] (+ a 1280 tail) -> concat(dim=-1) -> [1,1,32,32000] DRAM. In the e2e this hangs
+# with a TINY program (DFB cap 2) -> NOT a footprint clash. If this PASSES on a fresh device, the e2e hang
+# is cross-program state (stale tile counters) accumulated before it, not the concat op itself.
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("n_inputs", [16, 47, 63], ids=["n16", "n47", "n63"])
+def test_lm_head_concat_3mb(qsr_device, n_inputs):
+    dev = qsr_device
+    torch.manual_seed(0)
+    widths = [2048] * (n_inputs - 1) + [1280]
+    parts = [torch.randn(1, 1, 32, w, dtype=torch.bfloat16) for w in widths]
+    tts = [_dram_bf16(p, dev) for p in parts]
+    logger.info(f"[lm_head-concat] {n_inputs} inputs, total width {sum(widths)} -> concat(dim=-1) DRAM; starting")
+    out = ttnn.concat(tts, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.synchronize_device(dev)  # hangs HERE if the concat is the problem in a fresh context
+    o = ttnn.to_torch(out)
+    ref = torch.cat([p.float() for p in parts], dim=-1)
+    pcc = _pcc(o, ref)
+    logger.info(f"[lm_head-concat] n={n_inputs} DONE shape={tuple(o.shape)} PCC={pcc:.4f}")
+    assert tuple(o.shape)[-1] == sum(widths)
+    assert pcc > 0.99, f"concat n={n_inputs} PCC {pcc}"
