@@ -50,52 +50,53 @@ Bound by compute. Target: 70% compute utilization (60% for SDPA)
 
 ## Per op
 
-\* DRAM-bound at every T.
+Every op as the code runs it: the ttnn call and its device time, per layer averaged over the 6 layers
+of that type, with its share of the layer. Up to 320 tokens a MoE pass runs its
+experts stacked (1x128): every expert's weights side by side in one matmul, the routing weights
+applied before w2. Larger passes run transposed (2x288, 8x256): the tokens as columns, the routing
+weights applied after w2.
 
-### 1x128: DRAM-bound
+### Embedding, once a forward
 
-| 1x128 | compute | DRAM | bound | target, ms | current, ms |
-|---|---|---|---|---|---|
-| embedding + norm\* | 1% | 6% | DRAM | 0.003 | 0.022 |
-| QKV | 17% | 54% | DRAM | 0.146 | 0.159 |
-| SDPA | 6% | 0% | FPU | 0.008 | 0.088 |
-| out_proj | 9% | 28% | DRAM | 0.046 | 0.104 |
-| add + norm1\* | 1% | 1% | DRAM | 0.015 | 0.231 |
-| fc1 + GELU | 20% | 42% | DRAM | 0.096 | 0.137 |
-| fc2 | 12% | 36% | DRAM | 0.092 | 0.153 |
-| add + norm2\* | 1% | 1% | DRAM | 0.019 | 0.232 |
-| expert w1 + GELU | 37% | 39% | DRAM | 0.461 | 0.606 |
-| expert w2\* | 11% | 55% | DRAM | 0.473 | 0.431 |
-| dispatch + combine\* | 9% | 9% | DRAM | 0.084 | 0.110 |
+| op | ttnn call | 1x128 us | % of forward | 2x288 us | % of forward | 8x256 us | % of forward |
+|---|---|---|---|---|---|---|---|
+| token embedding lookup | `ttnn.embedding` | 6.2 | 0.2 | 11.6 | 0.2 | 18.4 | 0.1 |
+| embedding norm | `ttnn.layer_norm` | 15.9 | 0.6 | 16.5 | 0.3 | 24.1 | 0.2 |
 
-### 2x288: the switch
+### Dense layer
 
-| 2x288 | compute | DRAM | bound | target, ms | current, ms |
-|---|---|---|---|---|---|
-| embedding + norm\* | 2% | 25% | DRAM | 0.012 | 0.028 |
-| QKV | 40% | 36% | DRAM | 0.174 | 0.301 |
-| SDPA | 19% | 0% | FPU | 0.075 | 0.233 |
-| out_proj | 30% | 22% | FPU | 0.057 | 0.133 |
-| add + norm1\* | 3% | 17% | DRAM | 0.069 | 0.250 |
-| fc1 + GELU | 38% | 21% | SFPU | 0.180 | 0.329 |
-| fc2 | 43% | 30% | FPU | 0.115 | 0.189 |
-| add + norm2\* | 3% | 21% | DRAM | 0.086 | 0.253 |
-| expert w1 + GELU | 53% | 22% | SFPU | 1.436 | 1.893 |
-| expert w2\* | 25% | 54% | DRAM | 0.759 | 0.844 |
-| dispatch + combine\* | 1% | 51% | DRAM | 0.377 | 0.445 |
+| op | ttnn call | 1x128 us | % | 2x288 us | % | 8x256 us | % |
+|---|---|---|---|---|---|---|---|
+| QKV projection | `ttnn.linear`; `ttnn.experimental.minimal_matmul` above 1024 tokens | 13.3 | 9.3 | 25.1 | 11.4 | 67.4 | 13.8 |
+| head split | `ttnn.experimental.nlp_create_qkv_heads` | 13.2 | 9.2 | 15.6 | 7.1 | 22.7 | 4.7 |
+| rotary on q and k | `ttnn.experimental.rotary_embedding_hf` x2 | 8.3 | 5.8 | 14.4 | 6.6 | 42.2 | 8.7 |
+| attention | `ttnn.transformer.scaled_dot_product_attention` | 7.3 | 5.1 | 19.6 | 8.9 | 33.0 | 6.8 |
+| head concat | `ttnn.experimental.nlp_concat_heads` | 5.2 | 3.6 | 5.6 | 2.6 | 7.1 | 1.5 |
+| attention output projection | `ttnn.linear`; `minimal_matmul` above 1024 tokens | 8.6 | 6.0 | 11.0 | 5.0 | 31.0 | 6.4 |
+| residual add + norm1 | `ttnn.layer_norm` | 19.3 | 13.5 | 20.8 | 9.5 | 27.6 | 5.7 |
+| fc1 + GELU (FFN up-projection) | `ttnn.linear` + `ttnn.gelu`; one `ttnn.matmul` with the GELU fused above 1024 tokens | 22.8 | 15.9 | 54.8 | 25.0 | 140.0 | 28.8 |
+| fc2 (FFN down-projection) | `ttnn.linear`; `minimal_matmul` above 1024 tokens | 25.5 | 17.8 | 31.5 | 14.4 | 87.9 | 18.1 |
+| residual add + norm2 | `ttnn.layer_norm` | 19.6 | 13.7 | 20.8 | 9.5 | 27.8 | 5.7 |
+| **layer total** | | 143.0 | **100** | 219.3 | **100** | 486.7 | **100** |
 
-### 8x256: compute-bound
+### MoE layer
 
-| 8x256 | compute | DRAM | bound | target, ms | current, ms |
-|---|---|---|---|---|---|
-| embedding + norm\* | 5% | 58% | DRAM | 0.041 | 0.043 |
-| QKV | 53% | 20% | FPU | 0.613 | 0.812 |
-| SDPA | 36% | 0% | FPU | 0.238 | 0.395 |
-| out_proj | 39% | 8% | FPU | 0.204 | 0.371 |
-| add + norm1\* | 9% | 45% | DRAM | 0.246 | 0.331 |
-| fc1 + GELU | 53% | 11% | SFPU | 0.638 | 0.840 |
-| fc2 | 54% | 11% | FPU | 0.409 | 0.527 |
-| add + norm2\* | 8% | 51% | DRAM | 0.307 | 0.362 |
-| expert w1 + GELU | 71% | 18% | SFPU | 5.107 | 5.031 |
-| expert w2\* | 40% | 54% | DRAM | 1.697 | 1.898 |
-| dispatch + combine\* | 2% | 63% | DRAM | 1.341 | 1.280 |
+| op | ttnn call | 1x128 us | % | 2x288 us | % | 8x256 us | % |
+|---|---|---|---|---|---|---|---|
+| QKV projection | `ttnn.linear`; `ttnn.experimental.minimal_matmul` above 1024 tokens | 13.2 | 4.0 | 25.0 | 3.5 | 67.9 | 4.0 |
+| head split | `ttnn.experimental.nlp_create_qkv_heads` | 13.2 | 4.0 | 15.4 | 2.2 | 22.6 | 1.3 |
+| rotary on q and k | `ttnn.experimental.rotary_embedding_hf` x2 | 8.8 | 2.7 | 14.5 | 2.0 | 42.4 | 2.5 |
+| attention | `ttnn.transformer.scaled_dot_product_attention` | 7.3 | 2.2 | 19.3 | 2.7 | 32.9 | 1.9 |
+| head concat | `ttnn.experimental.nlp_concat_heads` | 5.2 | 1.6 | 5.8 | 0.8 | 7.2 | 0.4 |
+| attention output projection | `ttnn.linear`; `minimal_matmul` above 1024 tokens | 8.6 | 2.6 | 11.1 | 1.6 | 30.8 | 1.8 |
+| residual add + norm1 | `ttnn.layer_norm` | 19.3 | 5.9 | 21.0 | 2.9 | 27.5 | 1.6 |
+| router scores | `ttnn.linear` + `ttnn.add` | 9.0 | 2.8 | 14.3 | 2.0 | 24.4 | 1.4 |
+| router softmax + top-2 | `ttnn.softmax` + `ttnn.topk` | 21.9 | 6.7 | 22.3 | 3.1 | 23.3 | 1.4 |
+| routing weights from the top-2 | `ttnn.slice`, `ttnn.typecast`, `ttnn.matmul`, `ttnn.eq`, `ttnn.matmul`, `ttnn.multiply` | 11.5 | 3.5 | 12.8 | 1.8 | 15.8 | 0.9 |
+| x transposed (transposed pass) | `ttnn.transpose` | - | - | 5.4 | 0.8 | 16.4 | 1.0 |
+| expert w1 + GELU, all 8 experts | `ttnn.matmul`, GELU fused | 101.0 | 30.8 | 315.6 | 44.3 | 838.5 | 49.5 |
+| apply the routing weights | stacked: `ttnn.matmul`, `ttnn.multiply_`, `ttnn.reshard`; transposed: `ttnn.permute`, `ttnn.typecast`, `ttnn.multiply` | 18.4 | 5.6 | 37.1 | 5.2 | 113.1 | 6.7 |
+| expert w2 | `ttnn.linear` with the bias, stacked; `ttnn.matmul` transposed | 71.9 | 21.9 | 140.6 | 19.7 | 316.4 | 18.7 |
+| sum over experts + bias (transposed pass) | `ttnn.experimental.fast_reduce_nc`, `ttnn.transpose`, `ttnn.add` | - | - | 31.8 | 4.5 | 83.8 | 4.9 |
+| residual add + norm2 | `ttnn.layer_norm` | 19.0 | 5.8 | 21.3 | 3.0 | 32.6 | 1.9 |
+| **layer total** | | 328.4 | **100** | 713.1 | **100** | 1,695.6 | **100** |
