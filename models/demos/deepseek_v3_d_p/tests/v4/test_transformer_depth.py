@@ -76,6 +76,38 @@ def _upload_streams(mesh_device, streams):
     )
 
 
+def _log_layer_breakdown(truth, dev, label, outlier_frac=0.001):
+    """Log where a layer's whole-tensor PCC comes from; ``truth`` and ``dev`` are ``[1, S, n, D]``.
+
+    The head and the final norm see each token's streams only up to that token's scale, so a whole-tensor
+    PCC can fall on per-token magnitude alone while the output stays right. Per-token cosine is
+    scale-invariant, and the outlier split shows whether a few large-norm tokens carry the PCC.
+    """
+    n = truth.shape[2]
+    streams = [comp_pcc(truth[:, :, s], dev[:, :, s])[1] for s in range(n)]
+    logger.info(f"{label} per-stream PCC: " + " ".join(f"{p:.4f}" for p in streams))
+
+    t, d = truth[0].flatten(1), dev[0].flatten(1)
+    cos = torch.nn.functional.cosine_similarity(t, d, dim=-1)
+    logger.info(
+        f"{label} per-token cosine: mean {cos.mean():.4f}, p1 {torch.quantile(cos, 0.01):.4f}, "
+        f"min {cos.min():.4f} at token {int(cos.argmin())}"
+    )
+
+    t_norm, d_norm = t.norm(dim=-1), d.norm(dim=-1)
+    ratio = d_norm / t_norm
+    top = t_norm.topk(max(1, int(outlier_frac * t.shape[0]))).indices
+    keep = torch.ones(t.shape[0], dtype=torch.bool)
+    keep[top] = False
+    _, pcc_rest = comp_pcc(t[keep], d[keep])
+    logger.info(
+        f"{label} norm ratio dev/golden: median {ratio.median():.4f}; top {top.numel()} golden-norm tokens "
+        f"(norm {t_norm[top].min():.1f}..{t_norm[top].max():.1f} vs median {t_norm.median():.1f}) "
+        f"ratio {ratio[top].min():.4f}..{ratio[top].max():.4f}, cosine min {cos[top].min():.4f}, "
+        f"first positions {sorted(top.tolist())[:8]}; PCC without them {pcc_rest:.6f}"
+    )
+
+
 def _end_to_end(trace, checkpoint, final, label):
     """Log the last rank's next-token predictions against vLLM's top-k at each chunk's last position.
 
@@ -188,9 +220,11 @@ def run_depth(mesh_device, device_params, num_links, model_config, first, count,
     failures = []
     for i in graded:
         truth = trace.decoder_output(i).reshape(1, SEQ_CACHE, n, hidden)
-        _, pcc = comp_pcc(truth, per_layer.pop(i))
-        del truth
+        dev = per_layer.pop(i)
+        _, pcc = comp_pcc(truth, dev)
         logger.info(f"[{label}] layer {i} PCC: {pcc:.6f}")
+        _log_layer_breakdown(truth, dev, f"[{label}] layer {i}")
+        del truth, dev
         if pcc < layer_floor(config, i, floor):
             failures.append(f"layer {i} {pcc:.6f} < {layer_floor(config, i, floor)}")
     if is_last:
