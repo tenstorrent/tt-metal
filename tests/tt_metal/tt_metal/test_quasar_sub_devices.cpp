@@ -82,6 +82,7 @@ distributed::MeshWorkload create_l1_write_workload(
             .unique_id = kernel_name,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
+            .compile_time_args = {{"cached_write", 1u}},
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
             .hw_config = experimental::DataMovementHardwareConfig{}}},
         .work_units = {experimental::WorkUnitSpec{

@@ -21,16 +21,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// This test requires simulator environment
-TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
-    // Skip if simulator is not available
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-
-    auto mesh_device = devices_[0];
-
+static void run_single_dm_l1_write(const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t cached_write) {
     // Single-core L1 MeshBuffer on node {0,0}: the kernel writes `value` to buf->address() and we
     // read it back through the mesh command queue.
     const CoreRangeSet shard_grid(CoreRange({0, 0}, {0, 0}));
@@ -49,8 +40,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     auto buf = distributed::MeshBuffer::create(global_cfg, local_cfg, mesh_device.get());
     const uint32_t address = buf->address();
     const uint32_t value = 0x12345678;
-    env_var = std::getenv("TT_METAL_DPRINT_CORES");
-    if (env_var == nullptr) {
+    if (std::getenv("TT_METAL_DPRINT_CORES") == nullptr) {
         std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
                      "the Data Movement kernels."
                   << std::endl;
@@ -72,6 +62,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
 
             OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 2,
+        .compile_time_args = {{"cached_write", cached_write}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"address"},
@@ -91,7 +82,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
@@ -109,6 +100,21 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     distributed::EnqueueReadMeshBuffer(cq, outputs, buf, /*blocking=*/true);
 
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
+}
+
+// This test requires simulator environment
+TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    }
+    run_single_dm_l1_write(devices_[0], 1u);
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1WriteUncached) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
+    }
+    run_single_dm_l1_write(devices_[0], 0u);
 }
 
 // First check for the full-grid tests: confirm the grid is 8x4 (32 nodes), then host-write and
@@ -205,6 +211,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
         .unique_id = DM_KERNEL,
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = 2,
+        .compile_time_args = {{"cached_write", 1u}},
         .runtime_arg_schema = {.runtime_arg_names = {"address", "value"}},
         .hw_config = experimental::DataMovementHardwareConfig{},
     };

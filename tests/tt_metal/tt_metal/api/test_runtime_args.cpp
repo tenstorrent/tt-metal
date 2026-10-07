@@ -1134,6 +1134,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMergeProgramRunArgs) {
             .unique_id = id,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
             .num_threads = 1,
+            .compile_time_args = {{"cached_write", 1u}},
             .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
             .hw_config = experimental::DataMovementHardwareConfig{},
         };
@@ -1189,6 +1190,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarUpdateProgramRunArgs) {
         .unique_id = DM_KERNEL,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_l1_write.cpp",
         .num_threads = unit_tests::runtime_args::kQuasarNumUserDms,
+        .compile_time_args = {{"cached_write", 1u}},
         .runtime_arg_schema = {.runtime_arg_names = {"address"}, .common_runtime_arg_names = {"value"}},
         .hw_config = experimental::DataMovementHardwareConfig{},
     };
