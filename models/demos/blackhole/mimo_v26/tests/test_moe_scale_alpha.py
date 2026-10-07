@@ -134,8 +134,14 @@ def test_moe_scale_alpha(mesh_device):
             )
         print(f"RESULT op={opname} (d) device weights vs dequantised bf16 (gate, slot 0): {ratios}", flush=True)
         um = MiMoPrefillMoE(
-            md, wts, ckc=make_ckc("hifi2", fp32acc=True, packer_l1_acc=(op != "fused")), expert_op=op, cf=4
+            md,
+            wts,
+            ckc=make_ckc("hifi4" if "hifi4" in opname else "hifi2", fp32acc=True, packer_l1_acc=(op != "fused")),
+            expert_op=op,
+            cf=4,
         )
+        if "f32int" in opname:
+            um.mm_interm = ttnn.float32
         x_rm = lambda: ttnn.reshape(ttnn.to_layout(xt, ttnn.ROW_MAJOR_LAYOUT), [1, N, HIDDEN])
         # A: expert outputs per slot from combine
         comb = um.forward(x_rm(), wtd, ixd, upto=4)
