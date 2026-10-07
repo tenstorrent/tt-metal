@@ -777,3 +777,15 @@
 - paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py
 - supersedes: E261007-0401-3fc
 - data: {"free_chain_l5_vs_bf16":0.99973,"ffn_only_l5":0.99926,"dec_l5_min":0.98723}
+
+## E261007-0458-0a3
+- date: 2026-10-07T04:58:52
+- commit: 43f8c5f81d5
+- branch: ssinghal/mimo-asm
+- host: 48
+- track: asm
+- status: verified
+- claim: FULL 48-LAYER MODEL first token + 1 decode step on real GSM8K prompts (chat template), 4x8 mesh, unified bf16-activation experts, bfp8 weights (bf16 embedding/lm_head), exact router, ONE process, TWO ISLs (S=128 lens 102/101/100/95 then S=256 lens 94/92/90/89; 16 users each; prompts right-padded with pad id): all 32 first tokens are '<think>' (id 151667) and the decode-step tokens are coherent reasoning openers ('Let', 'First', 'She', 'Total', 'Steve', 'Monday', ...), all logits finite. Weights: 1131 cached tensors loaded in 69.7 s on a warm cache (938 s cold NFS); test 187 s after load. mm expert op on the same 48-layer build also loaded (L1 of the first prefill hit an L1 clash from per-gate L1 buffers, fixed in 43f8c5f81d5). No accuracy claim (no GSM8K scoring yet; no CPU full-model reference by policy).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_smoke48u_43f8c5f81d5.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_smoke_model.py
+- data: {"layers":48,"first_token":"<think>","isl":[128,256]}
