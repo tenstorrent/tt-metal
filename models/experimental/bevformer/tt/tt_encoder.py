@@ -21,7 +21,7 @@ ego shift included.
 import ttnn
 from models.experimental.bevformer.model_config import GRID_DTYPE
 from models.experimental.bevformer.reference.point_sampling_3d_2d import bev_reference_points, camera_geometry
-from models.experimental.bevformer.tt.tt_common import layer_norm
+from models.experimental.bevformer.tt.tt_common import TtFFN, layer_norm
 from models.experimental.bevformer.tt.tt_ms_deformable_attention import fp32_grid_sample_config
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import (
     TTSpatialCrossAttention,
@@ -52,6 +52,7 @@ class TTBEVFormerLayer:
     ):
         """``params`` is one entry of ``create_bevformer_encoder_parameters(...).layers``."""
         self.params = params
+        self.ffn = TtFFN(params.ffn)
         self.temporal_self_attention = TTTemporalSelfAttention(
             params.tsa,
             device,
@@ -82,10 +83,7 @@ class TTBEVFormerLayer:
         query = layer_norm(query, self.params.norms[0])
         query = self.spatial_cross_attention(query, value, sca_frame)
         query = layer_norm(query, self.params.norms[1])
-        ffn = self.params.ffn
-        hidden = ttnn.linear(query, ffn.linear1.weight, bias=ffn.linear1.bias, activation="relu")
-        hidden = ttnn.linear(hidden, ffn.linear2.weight, bias=ffn.linear2.bias)
-        return layer_norm(hidden, self.params.norms[2], residual=query)
+        return layer_norm(self.ffn(query), self.params.norms[2], residual=query)
 
 
 class TTBEVFormerEncoder:

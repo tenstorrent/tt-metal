@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Blocks shared across the port: the LayerNorm helper that passes the module's eps, used by the
-encoder and the decoder, and the conv the ResNet101-DCN backbone and the FPN share.
+"""Blocks shared across the port: the LayerNorm helper, the encoder's and decoder's FFN, and the conv
+the ResNet101-DCN backbone and the FPN share.
 
 The conv's weights are prepared once, in the constructor, for one interleaved DRAM input dtype
 and layout. A later call with a different input fails. A 1x1 stride-1 conv whose
@@ -25,6 +25,19 @@ def layer_norm(x, params, residual=None):
     return ttnn.layer_norm(
         x, weight=params.weight, bias=params.bias, epsilon=params.eps, residual_input_tensor=residual
     )
+
+
+class TtFFN:
+    """The encoder's and decoder's FFN, Linear-ReLU-Linear, without the residual: the layer adds it
+    inside the LayerNorm that follows. ``params`` from ``model_preprocessing.preprocess_ffn_parameters``."""
+
+    def __init__(self, params):
+        self.params = params
+
+    def __call__(self, x):
+        p = self.params
+        y = ttnn.linear(x, p.linear1.weight, bias=p.linear1.bias, activation="relu")
+        return ttnn.linear(y, p.linear2.weight, bias=p.linear2.bias)
 
 
 class TtnnConv2D:
