@@ -43,16 +43,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces_B);
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
+        const auto bfd_a =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src);
+        const auto bfd_b =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src);
         _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
-        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-            ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-            CT_DIM,
-            RT_DIM,
-            KT_DIM);
+        _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM);
         PROFILER_SYNC();
     }
     {
@@ -103,8 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
 
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*EN_INT32_MATH_FORMAT*/>(
-            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -271,9 +267,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, params.num_faces);
-        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(params.buffer_C[0]), formats.pack_dst);
+        const auto bfd_pack =
+            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(params.buffer_C[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_matmul_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
+        _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/);
         PROFILER_SYNC();
     }
     {

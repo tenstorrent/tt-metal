@@ -302,6 +302,12 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         pack_init(dfb_reduction_out);
 #endif
+        // This buffer is reserved exactly once per kernel invocation. Where it resolves to dfb::ex2, the
+        // reader kernel pops it as soon as it has signalled the second-stage reader, without waiting for
+        // that core's NOC gather to finish, so the pages keep their contents only because nothing
+        // reserves them again. If there were ever a second reserve here, or a loop around this block,
+        // would overwrite partials that the second-stage reader has not yet read, so additional
+        // synchronization would be needed.
         DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
             .reserve_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
 

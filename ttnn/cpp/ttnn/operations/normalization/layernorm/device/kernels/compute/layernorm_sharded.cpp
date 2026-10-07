@@ -332,7 +332,6 @@ void kernel_main() {
         reduce_uninit();
         dfb_ex.push_back(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         reconfig_data_format(dfb_ex_external_id, dfb_scaler_global_id);
-        dfb_ex.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
     }
 
     // x - E[x]
@@ -522,9 +521,12 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
             pack_init(dfb_ex2pe_id);
 #endif
+            // The reduction result above was packed into dfb_ex2 by this kernel. The loop below
+            // reads dfb_ex2 back by tile index across the whole count, so wait for the whole
+            // count.
+            dfb_ex2.wait_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
-                dfb_ex2.wait_front(1);
                 dfb_ex2pe.reserve_back(1);
                 tile_regs_acquire();
                 add_init(dfb_ex2_id, dfb_eps);
@@ -538,6 +540,10 @@ void kernel_main() {
                 dfb_ex2pe.push_back(1);
                 tile_regs_release();
             }
+            // Pop the count that the wait above claimed. enable_sqrt is the complement of the
+            // condition under which the receiver kernel waits and pops dfb_ex2 as its first-stage
+            // reduce buffer, so exactly one of the two kernels pops dfb_ex2.
+            dfb_ex2.pop_front(static_cast<uint16_t>(num_tiles_per_allgather_worker));
         }
     }
 
@@ -608,10 +614,12 @@ void kernel_main() {
     // which is never pushed and so must not be popped (see the x - E[x] pass above).
     dfb_xmm.pop_front(num_tiles_per_block);
 #endif
-    dfb_im.wait_front(num_tiles_per_block);
 
 #ifdef FUSE_GAMMA
     {
+        // The intermediate tiles were packed and pushed above. Wait for them before the loop
+        // below reads them back by tile index.
+        dfb_im.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_im_id, dfb_gamma_id);
         if constexpr (!do_beta) {
             pack_reconfig_data_format(dfb_out_id);
@@ -659,12 +667,14 @@ void kernel_main() {
         }
         dfb_outgamma.push_back(num_tiles_per_block);
         dfb_im.pop_front(num_tiles_per_block);
-        dfb_outgamma.wait_front(num_tiles_per_block);
     }
 #endif
 
 #ifdef FUSE_BETA
     {
+        // The fusion buffer carries the gamma stage's output when gamma is fused, and this kernel's
+        // own intermediate tiles when it is not. Wait for them here in either case.
+        dfb_fusion.wait_front(num_tiles_per_block);
         reconfig_data_format(dfb_fusion_id, dfb_beta_id);
         pack_reconfig_data_format(dfb_out_id);
         add_bcast_rows_init(dfb_fusion_id, dfb_beta_id);
@@ -705,8 +715,17 @@ void kernel_main() {
         }
         dfb_out.push_back(num_tiles_per_block);
         dfb_fusion.pop_front(num_tiles_per_block);
-        dfb_out.wait_front(num_tiles_per_block);
     }
+#endif
+#ifdef FUSE_GAMMA
+    // Gamma is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_gamma.pop_front(block_w);
+#endif
+#ifdef FUSE_BETA
+    // Beta is read by tile index across every row of the block, so it is waited once rather
+    // than per row. Pop it here to balance the buffer.
+    dfb_beta.pop_front(block_w);
 #endif
     // The single scaler tile is waited by both reductions (E[x] and Var[x]) but never popped;
     // pop it once at the end so the buffer is left balanced.
