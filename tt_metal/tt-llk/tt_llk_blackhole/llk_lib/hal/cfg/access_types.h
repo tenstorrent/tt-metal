@@ -13,8 +13,9 @@ namespace hal::cfg
  * @brief How a configuration access reaches hardware.
  *
  * MMIO uses the TRISC/BRISC memory-mapped path. TensixCfgUnit emits SETC16 for
- * thread CFG and RMWCIB/WRCFG/RDCFG for state CFG. TensixScalarUnit emits
- * REG2FLOP for GPR-backed THCON writes.
+ * thread CFG and RMWCIB/WRCFG/RDCFG for state CFG. TensixScalarUnit is unsupported
+ * because Blackhole does not handle REG2FLOP properly. Use TensixCfgUnit (WRCFG)
+ * for GPR-backed writes.
  */
 enum class Access : std::uint8_t
 {
@@ -39,7 +40,7 @@ enum class ThreadTarget : std::uint8_t
 };
 
 /**
- * @brief Width of a GPR-backed WRCFG or REG2FLOP transfer.
+ * @brief Width of a GPR-backed WRCFG transfer.
  */
 enum class GprTransferSize : std::uint8_t
 {
