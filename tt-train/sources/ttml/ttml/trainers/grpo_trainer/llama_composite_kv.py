@@ -42,6 +42,7 @@ class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
         kv_cache: ttml.models.KvCache,
         layer_idx: int,
         new_tokens: int,
+        position_ids=None,
     ) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
@@ -50,7 +51,7 @@ class GroupedQueryAttentionCompositeKV(GroupedQueryAttention):
             q, kv, self.num_heads, self.num_groups
         )
 
-        token_pos = kv_cache.get_cache_position()
+        token_pos = kv_cache.get_cache_position() if position_ids is None else position_ids
         q_heads = ttml.ops.rope.rope(q_heads, self.rope_params, token_pos)
         k_heads = ttml.ops.rope.rope(k_heads, self.rope_params, token_pos)
 
