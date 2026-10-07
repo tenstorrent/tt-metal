@@ -1860,7 +1860,26 @@ void call_binary_sfpu_operation(
     // matching how every production llk_math_eltwise_binary_sfpu_* wrapper
     // dispatches into _calculate_sfpu_binary_ / _calculate_*_shift_.
     static_assert(ITERATIONS == 8 || ITERATIONS == 32, "Binary SFPU tests support legacy 8/32 iteration values; execution uses 8 rows per face.");
+#if defined(ARCH_BLACKHOLE)
+    // The entry points the compute API issues as one 32-row call on Blackhole run that way here too.
+    constexpr bool is_int32 = MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32);
+    constexpr bool one_call = BINOP == BinaryOp::DIV || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::POW || BINOP == BinaryOp::XLOGY ||
+                              ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL) && !is_int32) || BINOP == BinaryOp::LT ||
+                              BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE ||
+                              BINOP == BinaryOp::MAX || BINOP == BinaryOp::MIN || BINOP == BinaryOp::FMOD || BINOP == BinaryOp::REMAINDER ||
+                              BINOP == BinaryOp::ATAN2 || BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::LOGADDEXP || BINOP == BinaryOp::LOGADDEXP2 ||
+                              BINOP == BinaryOp::EQ_INT || BINOP == BinaryOp::NE_INT || BINOP == BinaryOp::MAX_INT32 || BINOP == BinaryOp::MIN_INT32 ||
+                              BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32 || BINOP == BinaryOp::REMAINDER_INT32 ||
+                              BINOP == BinaryOp::REMAINDER_UINT32 || BINOP == BinaryOp::FMOD_INT32;
+    constexpr int PER_FACE_ITERATIONS = one_call ? 32 : 8;
+    if constexpr (one_call)
+    {
+        LLK_ASSERT(vector_mode == ckernel::VectorMode::RC, "one 32-row call covers a full tile only");
+        vector_mode = ckernel::VectorMode::None;
+    }
+#else
     constexpr int PER_FACE_ITERATIONS = 8;
+#endif
     if constexpr (BINOP == BinaryOp::DIV)
     {
         // Route DIV to the dedicated production kernel (calculate_sfpu_binary_div),
@@ -2067,15 +2086,6 @@ void call_binary_sfpu_operation(
     {
         // float elementwise max/min (SFPSWAP min/max). Operands read from two dst tiles.
         constexpr bool IS_MAX = (BINOP == BinaryOp::MAX);
-#if defined(ARCH_BLACKHOLE)
-        if (vector_mode == ckernel::VectorMode::RC)
-        {
-            // One 32-row call, as binary_max_tile and binary_min_tile issue it.
-            SFPU_BINARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_max_min, (IS_MAX, 32), dst_index_in0, dst_index_in1, dst_index_out, ckernel::VectorMode::None);
-            return;
-        }
-#endif
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, calculate_binary_max_min, (IS_MAX, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }

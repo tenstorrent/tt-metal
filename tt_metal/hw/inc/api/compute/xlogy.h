@@ -30,6 +30,17 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#ifdef ARCH_BLACKHOLE
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_sfpu_binary,
+        (APPROX, BinaryOp::XLOGY, 32 /* ITERATIONS */, is_fp32_dest_acc_en),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None)));
+#else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -39,6 +50,7 @@ ALWI void xlogy_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+#endif
 }
 
 /**

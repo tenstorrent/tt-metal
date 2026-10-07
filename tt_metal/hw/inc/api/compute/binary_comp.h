@@ -84,6 +84,17 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
+#ifdef ARCH_BLACKHOLE
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_eq_int,
+        (APPROX, 32 /* ITERATIONS */, OP, data_format),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::None);
+#else
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -93,6 +104,7 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC);
+#endif
 }
 
 }  // namespace detail
