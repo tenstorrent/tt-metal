@@ -444,12 +444,12 @@ std::vector<tt::tt_metal::CoreCoord> get_logical_fabric_mux_cores_wh_b0_worker_f
     return logical_fabric_mux_cores;
 }
 
-const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
+const std::tuple<uint32_t, tt_metal::CoreRange>& get_physical_worker_grid_config(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    static std::unordered_map<uint64_t, std::tuple<uint32_t, CoreRange>> physical_grid_config_cache = {};
+    static std::unordered_map<uint64_t, std::tuple<uint32_t, tt_metal::CoreRange>> physical_grid_config_cache = {};
     tt_fabric::FabricTensixConfig fabric_tensix_config_phys = env.get_fabric_tensix_config();
     tt_metal::DispatchCoreAxis resolved_axis_phys =
         tt_metal::resolve_dispatch_core_axis(dispatch_core_config, env.get_cluster().arch(), fabric_tensix_config_phys);
@@ -469,7 +469,8 @@ const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
         tt::tt_metal::CoreCoord tensix_worker_start_phys = soc_desc.get_physical_tensix_core_from_logical(tt::tt_metal::CoreCoord(0, 0));
         tt::tt_metal::CoreCoord tensix_worker_end_phys = soc_desc.get_physical_tensix_core_from_logical(
             tt::tt_metal::CoreCoord(tensix_num_worker_cols - 1, tensix_num_worker_rows - 1));
-        CoreRange tensix_worker_physical_grid = CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
+        tt_metal::CoreRange tensix_worker_physical_grid =
+            tt_metal::CoreRange(tensix_worker_start_phys, tensix_worker_end_phys);
         physical_grid_config_cache.insert(
             {config_hash, std::make_tuple(tensix_num_worker_cores, tensix_worker_physical_grid)});
     }
