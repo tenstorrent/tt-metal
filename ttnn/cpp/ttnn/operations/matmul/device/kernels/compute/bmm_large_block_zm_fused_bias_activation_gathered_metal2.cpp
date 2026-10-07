@@ -54,6 +54,8 @@ FORCE_INLINE void reload_from_dfb_to_dst(
 }
 
 void kernel_main() {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::intermed0);
+
     constexpr auto in0_block_w = get_arg(args::in0_block_w);              // inner block size in tiles
     constexpr auto in0_num_subblocks = get_arg(args::in0_num_subblocks);  // outer row block size (in inner row blocks)
     constexpr auto in0_block_num_tiles =
@@ -101,7 +103,6 @@ void kernel_main() {
     // subblocks have to spill them to the partials buffer between blocks.
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(in0_dfb_id, in1_dfb_id, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
 
     bool enable_reload = false;
@@ -117,7 +118,7 @@ void kernel_main() {
 #if defined PACK_RELU
         if (last_out) {
             // if last block we pack the final result with relu enabled
-            PACK((llk_pack_relu_config(ReluConfig::zero())));
+            pack_relu_config(ReluConfig::zero());
         }
 #endif
 
@@ -181,11 +182,11 @@ void kernel_main() {
 #endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                    PACK((pack_reconfig_data_format(mm_out_dfb_id)));
+                    pack_reconfig_data_format(mm_out_dfb_id);
 #endif
 
 #ifdef PACKER_L1_ACC
-                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_reconfig_l1_acc(0);
 #endif
 
                     const uint32_t start_dst_index = 0;
@@ -209,9 +210,9 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
                     if (block == 0) {  // no accumulation for first iteration
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_l1_acc(0);
                     } else if (block == 1) {
-                        PACK((llk_pack_reconfig_l1_acc(1)));
+                        pack_reconfig_l1_acc(1);
                     }
 #endif
 

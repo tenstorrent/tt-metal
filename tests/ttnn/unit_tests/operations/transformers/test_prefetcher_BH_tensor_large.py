@@ -1847,6 +1847,8 @@ def test_tensor_prefetcher_gather_in0_pipes(
         dtype,
         distribution_strategy,
         out_subblock_w=out_subblock_w,
+        # The receivers per bank a GlobalCircularBuffer config carries; pipes ignore it.
+        num_global_cb_receivers=recv_per_bank,
     )
     # Before any matmul runs on the receiver grid: pipe rings come from the persistent L1 arena,
     # which refuses a core that a live Program (one a program-cache hit keeps alive) has sealed.
@@ -1938,6 +1940,21 @@ def test_tensor_prefetcher_gather_in0_pipes_rejects_workers_short_of_N(device, e
     program_config.out_subblock_w = 1
     _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
     with expect_error(RuntimeError, "does not cover the weight's N"):
+        _linear_over_pipes(setup, pipes)
+
+
+def test_tensor_prefetcher_gather_in0_pipes_rejects_hop_cores(device, expect_error):
+    """Every ring core computes the output block of its own activation shard, so the ring has no room
+    for hop cores that only forward in0."""
+    setup = _streaming_gather_in0_setup(
+        device, "qkv_small_bf16", 1, 1, 2, ttnn.bfloat16, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    # One row below the ring, so the shared gather_in0 check that hop cores stay off the
+    # activation's shard grid passes.
+    hop_core = ttnn.CoreCoord(0, setup["program_config"].compute_with_storage_grid_size.y)
+    setup["program_config"].hop_cores = ttnn.CoreRangeSet({ttnn.CoreRange(hop_core, hop_core)})
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], 2 * setup["entry_size"])
+    with expect_error(RuntimeError, "does not support hop_cores"):
         _linear_over_pipes(setup, pipes)
 
 

@@ -17,7 +17,6 @@
 
 #include <stdint.h>
 
-#include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
@@ -41,9 +40,8 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in2(dfb::in2);
 
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb::in0);
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
-    constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
+    const uint32_t shard_size_bytes = shard_size_in_tiles * dfb_in0.get_tile_size();
 
     // in0 is this core's own shard, already resident: the buffer borrows the activation's L1, so
     // publishing it to compute moves no data.

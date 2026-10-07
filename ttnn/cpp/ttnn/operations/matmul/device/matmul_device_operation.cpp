@@ -2125,10 +2125,11 @@ void validate_matmul_mcast1d_config(
                 config_name);
         }
 
-        if (!attributes.global_cb.has_value()) {
+        // Receivers per bank is a GlobalCircularBuffer layout; each PrefetcherPipe names its own receivers.
+        if (!attributes.global_cb.has_value() && attributes.prefetcher_pipes.empty()) {
             TT_FATAL(
                 program_config.num_global_cb_receivers == 1,
-                "{}: Num global CB receivers must be 1 when global CB is not provided.",
+                "{}: Num global CB receivers must be 1 when neither a global CB nor prefetcher_pipes is provided.",
                 config_name);
         }
 
