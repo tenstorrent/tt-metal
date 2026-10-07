@@ -597,8 +597,7 @@ manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, co
     return receiver;
 }
 
-// Every sender and receiver channel in the router's shape, each indexed [vc][channel].
-manifest::Channels collect_channels(const ManifestRouterInputs& inputs, const manifest::RouterShape& shape) {
+ChannelContext make_channel_context(const ManifestRouterInputs& inputs) {
     const auto& config = inputs.erisc_builder.config;
     const auto* allocator = dynamic_cast<const FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(allocator != nullptr, "Fabric manifest: the router's channel allocator is not statically sized");
@@ -606,7 +605,7 @@ manifest::Channels collect_channels(const ManifestRouterInputs& inputs, const ma
         inputs.named_ct_args_per_risc, "CHANNEL_BUFFER_SIZE", static_cast<uint32_t>(config.channel_buffer_size_bytes));
 
     const auto assigned_streams = inputs.stream_assignment.named_args();
-    const ChannelContext ctx{
+    return {
         .inputs = inputs,
         .allocator = *allocator,
         .producer_slots = builder::RouterProducerSlots(
@@ -617,7 +616,11 @@ manifest::Channels collect_channels(const ManifestRouterInputs& inputs, const ma
         .trimming = inputs.erisc_builder.get_channel_trimming_overrides(),
         .assigned_streams = NamedArgs(assigned_streams.begin(), assigned_streams.end()),
     };
+}
 
+// Every sender and receiver channel in the router's shape, each indexed [vc][channel].
+manifest::Channels collect_channels(const ChannelContext& ctx, const manifest::RouterShape& shape) {
+    const auto& inputs = ctx.inputs;
     manifest::Channels channels;
     channels.senders.resize(builder_config::MAX_NUM_VCS);
     channels.receivers.resize(builder_config::MAX_NUM_VCS);
@@ -643,6 +646,128 @@ manifest::Channels collect_channels(const ManifestRouterInputs& inputs, const ma
     return channels;
 }
 
+// Receivers forwarding on the same VC share its edges, so they must forward on the same NoC. Returns, per VC,
+// whether a serviced receiver forwards on it.
+std::array<bool, builder_config::MAX_NUM_VCS> check_forwarding_receivers(const manifest::Channels& channels) {
+    std::array<const manifest::ReceiverChannel*, builder_config::MAX_NUM_VCS> first_on_vc{};
+    std::array<bool, builder_config::MAX_NUM_VCS> forwarded_on{};
+    for (const auto& receivers : channels.receivers) {
+        for (const auto& receiver : receivers) {
+            if (!receiver.forwards_on.has_value()) {
+                continue;
+            }
+            const uint32_t vc = *receiver.forwards_on;
+            forwarded_on.at(vc) = true;
+            auto& first = first_on_vc.at(vc);
+            if (first == nullptr) {
+                first = &receiver;
+                continue;
+            }
+            TT_FATAL(
+                first->forward_noc.noc == receiver.forward_noc.noc,
+                "Fabric manifest: two receivers forward on VC{}'s edges, on NoC {} and NoC {}",
+                vc,
+                static_cast<uint32_t>(first->forward_noc.noc),
+                static_cast<uint32_t>(receiver.forward_noc.noc));
+        }
+    }
+    return forwarded_on;
+}
+
+// The router's edges on `vc`, ordered by edge. The kernel takes edge n's free-slots register from
+// VC<vc>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<n>_STREAM_ID, and its teardown semaphore by the edge's rank among the
+// router's edges, VC0's before VC1's. It builds VC1's edges only under FABRIC_2D_VC1_ACTIVE, and gives VC2 none.
+std::vector<manifest::DownstreamEdge> collect_downstream_edges(
+    const ChannelContext& ctx, uint32_t vc, bool forwarded_on) {
+    const auto& inputs = ctx.inputs;
+    const auto& erisc_builder = inputs.erisc_builder;
+    const auto& config = erisc_builder.config;
+    const auto& adapter = *erisc_builder.receiver_channel_to_downstream_adapter;
+    const auto& connections = adapter.get_downstream_connections(vc);
+    if (vc == 2) {
+        TT_FATAL(
+            connections.empty(), "Fabric manifest: the router has VC2 downstream edges, which the kernel never uses");
+        return {};
+    }
+    check_named_arg(
+        inputs.named_ct_args_per_risc,
+        fmt::format("NUM_DOWNSTREAM_SENDERS_VC{}", vc),
+        static_cast<uint32_t>(connections.size()));
+    TT_FATAL(
+        vc == 0 || connections.empty() || inputs.kernel_defines.contains("FABRIC_2D_VC1_ACTIVE"),
+        "Fabric manifest: the router has VC1 downstream edges, but no FABRIC_2D_VC1_ACTIVE to build them");
+
+    const auto my_direction = builder::routing_direction_to_eth_direction(inputs.location.direction);
+    std::vector<manifest::DownstreamEdge> edges;
+    uint32_t mask = 0;
+    for (const auto& [direction, core] : connections) {
+        const uint32_t slot = ctx.is_2d_fabric ? get_receiver_channel_compact_index(my_direction, direction) : 0;
+        TT_FATAL((mask & (1u << slot)) == 0, "Fabric manifest: VC{} has two downstream edges in slot {}", vc, slot);
+        mask |= 1u << slot;
+
+        std::optional<uint32_t> landing_compact;
+        if (ctx.is_2d_fabric) {
+            const auto id = adapter.get_downstream_sender_channel_id(vc, slot);
+            TT_FATAL(id.has_value(), "Fabric manifest: VC{} edge {} has no landing channel", vc, slot + 1);
+            landing_compact = static_cast<uint32_t>(*id);
+        }
+        edges.push_back({
+            .edge = slot + 1,
+            .target = {.direction = direction},
+            .landing_channel =
+                builder::get_downstream_sender_channel_for_vc(ctx.is_2d_fabric, vc, my_direction, direction),
+            .landing_compact = landing_compact,
+            .core = core,
+            .free_slots =
+                assigned_stream(ctx, fmt::format("VC{}_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_{}_STREAM_ID", vc, slot + 1)),
+        });
+    }
+    TT_FATAL(
+        mask == adapter.get_downstream_edm_mask_for_vc(vc),
+        "Fabric manifest: VC{}'s downstream edges are in slots {:#x}, but the kernel is given {:#x}",
+        vc,
+        mask,
+        adapter.get_downstream_edm_mask_for_vc(vc));
+    std::ranges::sort(edges, {}, &manifest::DownstreamEdge::edge);
+
+    const size_t teardown_base = vc == 1 ? adapter.get_downstream_connections(0).size() : 0;
+    for (size_t rank = 0; rank < edges.size(); ++rank) {
+        auto& edge = edges[rank];
+        const size_t teardown_index = teardown_base + rank;
+        TT_FATAL(
+            teardown_index < config.num_fwd_paths,
+            "Fabric manifest: VC{} edge {} takes teardown semaphore {}, but the kernel has {}",
+            vc,
+            edge.edge,
+            teardown_index,
+            config.num_fwd_paths);
+        // The kernel takes the address from its runtime args.
+        const size_t teardown_address =
+            config.receiver_channels_downstream_teardown_semaphore_address.at(teardown_index);
+        TT_FATAL(
+            erisc_builder.receiver_channels_downstream_teardown_semaphore_id.at(teardown_index) == teardown_address,
+            "Fabric manifest: teardown semaphore {}'s runtime arg does not hold its address",
+            teardown_index);
+        edge.teardown_sem = l1_value<uint32_t>(inputs, teardown_address);
+        TT_FATAL(
+            !forwarded_on || edge.free_slots.stream_id != k_unused_stream_id,
+            "Fabric manifest: a receiver forwards on VC{} edge {}, but its free_slots stream register is not allocated",
+            vc,
+            edge.edge);
+    }
+    return edges;
+}
+
+std::vector<std::vector<manifest::DownstreamEdge>> collect_router_edges(
+    const ChannelContext& ctx, const manifest::Channels& channels) {
+    const auto forwarded_on = check_forwarding_receivers(channels);
+    std::vector<std::vector<manifest::DownstreamEdge>> edges;
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        edges.push_back(collect_downstream_edges(ctx, vc, forwarded_on[vc]));
+    }
+    return edges;
+}
+
 }  // namespace
 
 manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
@@ -654,13 +779,16 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
     check_credit_transport_args(inputs);
 
     auto shape = collect_shape(inputs);
-    auto channels = collect_channels(inputs, shape);
+    const auto ctx = make_channel_context(inputs);
+    auto channels = collect_channels(ctx, shape);
+    auto edges = collect_router_edges(ctx, channels);
     return {
         .identity = collect_identity(inputs.location),
         .link = collect_link(inputs),
         .shape = shape,
         .credit_counters = collect_credit_counters(inputs),
         .channels = std::move(channels),
+        .intra_chip_downstream_edges = std::move(edges),
     };
 }
 
