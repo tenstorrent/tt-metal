@@ -57,8 +57,8 @@ def test_streamed_accumulation_equals_single_linear():
         ((), "must not be empty"),
     ],
 )
-def test_invalid_target_order_fails(target_ids, message):
-    with pytest.raises(ValueError, match=message):
+def test_invalid_target_order_fails(target_ids, message, expect_error):
+    with expect_error(ValueError, message):
         slice_dflash_fc_weight(
             torch.empty(HIDDEN, max(1, len(target_ids)) * HIDDEN),
             hidden_size=HIDDEN,
@@ -66,8 +66,8 @@ def test_invalid_target_order_fails(target_ids, message):
         )
 
 
-def test_invalid_fc_and_activation_widths_fail_loudly():
-    with pytest.raises(ValueError, match="does not match expected"):
+def test_invalid_fc_and_activation_widths_fail_loudly(expect_error):
+    with expect_error(ValueError, "does not match expected"):
         slice_dflash_fc_weight(
             torch.empty(HIDDEN, len(TARGETS) * HIDDEN + 1),
             hidden_size=HIDDEN,
@@ -76,7 +76,7 @@ def test_invalid_fc_and_activation_widths_fail_loudly():
 
     activations = {layer_id: torch.zeros(3, HIDDEN) for layer_id in TARGETS}
     activations[TARGETS[-1]] = torch.zeros(3, HIDDEN + 1)
-    with pytest.raises(ValueError, match=f"layer {TARGETS[-1]} has shape"):
+    with expect_error(ValueError, f"layer {TARGETS[-1]} has shape"):
         reference_accumulate_reduced_hidden(
             activations,
             torch.zeros(HIDDEN, len(TARGETS) * HIDDEN),
@@ -122,10 +122,10 @@ def test_checkpoint_contract_validates_metadata_and_fc(tmp_path):
         ({"target_ids": (1, 3, 5, 9, 7)}, "unique and increasing"),
     ],
 )
-def test_checkpoint_metadata_mismatch_fails(tmp_path, kwargs, expected):
+def test_checkpoint_metadata_mismatch_fails(tmp_path, kwargs, expected, expect_error):
     checkpoint = tmp_path / "drafter"
     _write_checkpoint(checkpoint, **kwargs)
-    with pytest.raises(ValueError, match=expected):
+    with expect_error(ValueError, expected):
         DFlashPrefillConfig.from_checkpoint(
             checkpoint,
             expected_hidden_size=HIDDEN,
@@ -134,10 +134,10 @@ def test_checkpoint_metadata_mismatch_fails(tmp_path, kwargs, expected):
         )
 
 
-def test_checkpoint_missing_key_and_bad_fc_shape_fail(tmp_path):
+def test_checkpoint_missing_key_and_bad_fc_shape_fail(tmp_path, expect_error):
     missing = tmp_path / "missing"
     _write_checkpoint(missing, weights={"other.weight": torch.zeros(1)})
-    with pytest.raises(KeyError, match="fc.weight"):
+    with expect_error(KeyError, "fc.weight"):
         DFlashPrefillConfig.from_checkpoint(
             missing,
             expected_hidden_size=HIDDEN,
@@ -150,7 +150,7 @@ def test_checkpoint_missing_key_and_bad_fc_shape_fail(tmp_path):
         malformed,
         weights={"fc.weight": torch.zeros(HIDDEN, len(TARGETS) * HIDDEN + 1)},
     )
-    with pytest.raises(ValueError, match="expected"):
+    with expect_error(ValueError, "expected"):
         DFlashPrefillConfig.from_checkpoint(
             malformed,
             expected_hidden_size=HIDDEN,
@@ -159,7 +159,7 @@ def test_checkpoint_missing_key_and_bad_fc_shape_fail(tmp_path):
         )
 
 
-def test_handoff_real_range_excludes_padded_tail():
+def test_handoff_real_range_excludes_padded_tail(expect_error):
     result = DFlashPrefillResult(
         slot_id=3,
         actual_start=1024,
@@ -175,7 +175,7 @@ def test_handoff_real_range_excludes_padded_tail():
     assert result.layout.sequence == "sp_block_cyclic"
     assert result.layout.feature == "tp_width_sharded"
 
-    with pytest.raises(ValueError, match="outside chunk"):
+    with expect_error(ValueError, "outside chunk"):
         DFlashPrefillResult(
             slot_id=0,
             actual_start=1024,
@@ -186,7 +186,7 @@ def test_handoff_real_range_excludes_padded_tail():
         )
 
 
-def test_adapter_resolves_drafter_path_only_when_opted_in(monkeypatch, tmp_path):
+def test_adapter_resolves_drafter_path_only_when_opted_in(monkeypatch, tmp_path, expect_error):
     monkeypatch.setenv("TT_HF_DRAFT_MODEL", str(tmp_path / "draft"))
     monkeypatch.delenv("PREFILL_DFLASH", raising=False)
     assert _resolve_dflash_checkpoint_path() is None
@@ -195,5 +195,5 @@ def test_adapter_resolves_drafter_path_only_when_opted_in(monkeypatch, tmp_path)
     assert _resolve_dflash_checkpoint_path() == tmp_path / "draft"
 
     monkeypatch.delenv("TT_HF_DRAFT_MODEL")
-    with pytest.raises(ValueError, match="TT_HF_DRAFT_MODEL"):
+    with expect_error(ValueError, "TT_HF_DRAFT_MODEL"):
         _resolve_dflash_checkpoint_path()
