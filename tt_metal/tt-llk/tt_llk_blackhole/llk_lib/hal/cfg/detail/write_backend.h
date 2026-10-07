@@ -203,10 +203,20 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
     {
         if constexpr (GprIndex == hal::detail::DynamicGprIndex)
         {
+            LLK_ASSERT(transfer.source.index < 64u, "WRCFG GPR index must be in [0, 63]");
+            if constexpr (Size == GprTransferSize::Bits128)
+            {
+                LLK_ASSERT((transfer.source.index & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");
+            }
             TT_WRCFG(transfer.source.index, Size == GprTransferSize::Bits128, F.addr32(S));
         }
         else
         {
+            static_assert(GprIndex < 64u, "WRCFG GPR index must be in [0, 63]");
+            if constexpr (Size == GprTransferSize::Bits128)
+            {
+                static_assert((GprIndex & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");
+            }
             TTI_WRCFG(GprIndex, Size == GprTransferSize::Bits128, F.addr32(S));
         }
         if constexpr (Completion == WrcfgCompletion::Wait)
