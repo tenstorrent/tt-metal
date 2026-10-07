@@ -22,8 +22,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("num_inference_steps", [5])
+@pytest.mark.parametrize("schedule_kind", ["default", "timesteps", "sigmas"])
 def test_euler_discrete_scheduler(
-    device, input_shape, num_inference_steps, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location
+    device, input_shape, num_inference_steps, schedule_kind, is_ci_env, is_ci_v2_env, sdxl_base_pipeline_location
 ):
     if input_shape == (1, 1, 64 * 64, 4) and is_blackhole():
         pytest.skip("512x512 not supported on Blackhole")
@@ -64,12 +65,23 @@ def test_euler_discrete_scheduler(
         scheduler.config.final_sigmas_type,
     )
 
-    # emulate two runs of the pipeline with different num_inference_steps to ensure that the scheduler is set up correctly
-    for _num_inference_steps in [1, num_inference_steps]:
+    delta_address = tt_scheduler.tt_sigma_delta.buffer_address()
+    # Rebuild short and long schedules without changing the buffer captured by trace.
+    for _num_inference_steps in [1, num_inference_steps, 50]:
         logger.debug(f"Testing with num_inference_steps: {_num_inference_steps}")
         # this is called from pipeline_stable_diffusion_xl.py __call__() step #4
         scheduler.set_timesteps(num_inference_steps=_num_inference_steps)
-        tt_scheduler.set_timesteps(num_inference_steps=_num_inference_steps)
+        if schedule_kind == "timesteps":
+            tt_scheduler.set_timesteps(timesteps=scheduler.timesteps.tolist())
+        elif schedule_kind == "sigmas":
+            tt_scheduler.set_timesteps(sigmas=scheduler.sigmas.tolist())
+        else:
+            tt_scheduler.set_timesteps(num_inference_steps=_num_inference_steps)
+
+        assert tt_scheduler.tt_sigma_delta.buffer_address() == delta_address
+        expected_deltas = (scheduler.sigmas[1:] - scheduler.sigmas[:-1]).to(torch.bfloat16)
+        actual_deltas = torch.stack([ttnn.to_torch(t).reshape(()) for t in tt_scheduler.tt_sigma_deltas])
+        assert torch.equal(actual_deltas, expected_deltas)
 
         assert_with_pcc(
             scheduler.timesteps, torch.cat([ttnn.to_torch(t).unsqueeze(0) for t in tt_scheduler.timesteps]), 0.999
@@ -91,6 +103,7 @@ def test_euler_discrete_scheduler(
         # emulating the pipeline_stable_diffusion_xl.py __call__() step #9
         for i, t in enumerate(scheduler.timesteps):
             signpost(f"euler_discrete_scheduler_step {i=}")
+            assert torch.equal(ttnn.to_torch(tt_scheduler.tt_sigma_delta).reshape(()), expected_deltas[i])
             ref_scaled_latent = scheduler.scale_model_input(ref_latent, scheduler.timesteps[i])
             tt_scaled_latent = tt_scheduler.scale_model_input(tt_latent, None)
             torch_scaled_latent = ttnn.from_device(tt_scaled_latent).to_torch()

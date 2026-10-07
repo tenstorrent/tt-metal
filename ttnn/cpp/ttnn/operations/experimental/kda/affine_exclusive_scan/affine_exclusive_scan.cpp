@@ -12,8 +12,15 @@ ttnn::Tensor affine_exclusive_scan(
     const ttnn::Tensor& b,
     const ttnn::Tensor& initial_state,
     uint32_t groups_per_head,
+    const ttnn::Tensor& actual_start,
+    uint32_t local_rows,
+    const ttnn::Tensor& tail_a,
+    const ttnn::Tensor& tail_b,
+    const ttnn::Tensor& tail_entry_states,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t sequence_parallel_axis,
+    const std::optional<Tensor>& actual_end) {
     TT_FATAL(
         a.storage_type() == StorageType::DEVICE && a.buffer() != nullptr,
         "affine_exclusive_scan: a must be an allocated device tensor");
@@ -27,12 +34,25 @@ ttnn::Tensor affine_exclusive_scan(
     const auto kernel_config = init_device_compute_kernel_config(
         a.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi2,
+        tt::tt_metal::MathFidelity::HiFi2,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
     return ttnn::experimental::prim::affine_exclusive_scan(
-        a, b, initial_state, groups_per_head, output_memory_config, kernel_config);
+        a,
+        b,
+        initial_state,
+        groups_per_head,
+        tail_a,
+        tail_b,
+        tail_entry_states,
+
+        output_memory_config,
+        kernel_config,
+        actual_start,
+        sequence_parallel_axis,
+        local_rows,
+        actual_end);
 }
 
 }  // namespace ttnn::experimental::kda

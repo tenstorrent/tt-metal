@@ -8,12 +8,14 @@
 #include <boost/move/utility_core.hpp>
 #include <fmt/format.h>
 #include <mesh_coord.hpp>
+#include "distributed/mesh_coord_utils.hpp"
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
+#include <iterator>
 #include <numeric>
 #include <optional>
 #include <ostream>
@@ -631,6 +633,55 @@ MeshCoordinateRangeSet subtract(const MeshCoordinateRange& parent, const MeshCoo
         }
     }
     return complement_set;
+}
+
+void partition_mesh_coordinate_ranges(
+    std::vector<MeshCoordinateRange>& partitions, const MeshCoordinateRange& partitioning_range) {
+    bool intersection_found = false;
+    std::vector<size_t> invalid_indices;
+    for (size_t i = 0; i < partitions.size(); ++i) {
+        auto& existing = partitions[i];
+        TT_FATAL(
+            existing.dims() == partitioning_range.dims(),
+            "Mismatching mesh range dimensions: {} != {}",
+            existing.dims(),
+            partitioning_range.dims());
+        if (!existing.intersects(partitioning_range)) {
+            continue;
+        }
+        intersection_found = true;
+        const auto intersection = *existing.intersection(partitioning_range);
+        if (intersection != existing) {
+            invalid_indices.push_back(i);
+            const auto complement_set = subtract(existing, intersection);
+            for (const auto& complement : complement_set.ranges()) {
+                partitions.push_back(complement);
+            }
+            partitions.push_back(intersection);
+        }
+    }
+
+    if (!intersection_found) {
+        partitions.push_back(partitioning_range);
+        return;
+    }
+    if (invalid_indices.empty()) {
+        return;
+    }
+
+    auto invalid_index = invalid_indices.begin();
+    const auto new_end =
+        std::remove_if(std::next(partitions.begin(), *invalid_index), partitions.end(), [&](auto& value) {
+            if (invalid_index == invalid_indices.end()) {
+                return false;
+            }
+            if (*invalid_index == static_cast<size_t>(&value - partitions.data())) {
+                ++invalid_index;
+                return true;
+            }
+            return false;
+        });
+    partitions.erase(new_end, partitions.end());
 }
 
 std::vector<MeshCoordinate> MeshCoordinateRangeSet::coords() const {

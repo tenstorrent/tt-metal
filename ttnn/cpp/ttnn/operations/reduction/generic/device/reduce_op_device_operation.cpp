@@ -46,17 +46,19 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Block-float output is TILE-only, got output_layout {} with dtype {}",
         operation_attributes.output_layout,
         operation_attributes.output_dtype);
-    // TILE H-axis split stage 1: tiled compute, ROW_MAJOR SUM partials (one row per slice).
+    // TILE H-axis split stage 1: tiled compute, ROW_MAJOR partials (one row per slice).
     // dim must be H: compute_output_specs sizes H from num_h_slices. num_h_slices > 1 is what
-    // makes the factory pick the RM writer.
+    // makes the factory pick the RM writer. AVG arrives already lowered to SUM.
     const bool tile_h_split = tensor_args.layout() == Layout::TILE && operation_attributes.num_h_slices > 1 &&
                               operation_attributes.dim == tt::tt_metal::ReduceOpDim::H &&
                               operation_attributes.output_layout == Layout::ROW_MAJOR &&
-                              operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM;
+                              (operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+                               operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX ||
+                               operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN);
     TT_FATAL(
         operation_attributes.num_h_slices == 1 || operation_attributes.row_major_h_dense_path || tile_h_split,
         "num_h_slices > 1 (H-axis split) requires the row-major H dense path, or a TILE H-reduce "
-        "emitting ROW_MAJOR SUM partials (got layout {}, dim {}, output_layout {}, math_op {})",
+        "emitting ROW_MAJOR SUM/MAX/MIN partials (got layout {}, dim {}, output_layout {}, math_op {})",
         tensor_args.layout(),
         operation_attributes.dim,
         operation_attributes.output_layout,
@@ -84,11 +86,11 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
             "{} only supports BFLOAT16 and FLOAT32, got {}",
             path_name,
             tensor_args.dtype());
-        // After dispatcher lowering, only SUM reaches the factory (mean=AVG → SUM + scaler).
-        // MAX/MIN are excluded from the RM path entirely; they take the tilize+tile-reduce path.
         TT_FATAL(
-            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM,
-            "{}: math_op must be SUM (mean lowered from AVG), got {}",
+            operation_attributes.math_op == tt::tt_metal::ReduceOpMath::SUM ||
+                operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MAX ||
+                operation_attributes.math_op == tt::tt_metal::ReduceOpMath::MIN,
+            "{}: math_op must be SUM (mean lowered from AVG), or MAX/MIN as the TILE H-split's stage 2, got {}",
             path_name,
             operation_attributes.math_op);
         TT_FATAL(
@@ -131,7 +133,8 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         }
         // INT32 MIN/MAX/SUM is supported via the SFPU reduce path (format deduced from the input CB
         // in compute_kernel_lib::reduce). See common.hpp.
-        const bool is_int32_sfpu_reduce = use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
+        const bool is_int32_sfpu_reduce = tensor_args.dtype() == DataType::INT32 &&
+                                          use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
                 tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
@@ -230,6 +233,32 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a ReduceParams field must be a deliberate choice — hash it below, or
+    // exclude it like the two scalars, which the kernels read as runtime args.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 15,
+        "ReduceParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ReduceDeviceOperation>,
+        operation_attributes.math_op,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.negate,
+        operation_attributes.scaler_mode,
+        operation_attributes.row_major_w_dense_path,
+        operation_attributes.row_major_h_dense_path,
+        operation_attributes.use_sfpu_reduce,
+        operation_attributes.num_h_slices,
+        operation_attributes.output_layout,
+        tensor_args);
+}
+
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
@@ -268,6 +297,7 @@ ttnn::Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate,
     float post_mul_scaler,
+    ScalerMode scaler_mode,
     bool row_major_w_dense_path,
     bool row_major_h_dense_path,
     bool use_sfpu_reduce,
@@ -284,6 +314,7 @@ ttnn::Tensor reduce(
             sub_core_grids,
             negate,
             post_mul_scaler,
+            scaler_mode,
             row_major_w_dense_path,
             row_major_h_dense_path,
             use_sfpu_reduce,

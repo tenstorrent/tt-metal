@@ -17,6 +17,7 @@ from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_ma
 
 from .operations import (
     PREFILL_SDPA_MAX_SEQ,
+    _paged_fill_cache,
     apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
@@ -238,6 +239,60 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     return (k_owned, v_owned)
 
 
+def _read_sliding_tail_from_paged_cache(
+    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype, kv_local
+):
+    """Rebuild the prior-window K/V tail from the paged cache (APC cache-hit resumes carry no stash).
+
+    Returns the last ``min(sliding_window, chunk_offset)`` tokens, or None when the range is not block-aligned.
+    """
+    if page_table is None or chunk_offset is None or chunk_offset <= 0:
+        return None
+    cache_kv, block_size, cache_hd = (int(k_cache.padded_shape[i]) for i in (1, 2, 3))
+    if cache_kv != int(kv_local) or cache_hd != int(head_dim):
+        # Shared HMA buffers take the first layer's (sliding) view, which is
+        # the layout read here; any other allocation view is a bug upstream.
+        raise ValueError(
+            f"sliding tail reconstruction needs the layer's own KV view ({kv_local}x{head_dim}); "
+            f"the shared buffer is allocated as {tuple(k_cache.padded_shape)}"
+        )
+    try:
+        take = min(int(sliding_window), int(chunk_offset))
+        start = chunk_offset - take
+        if chunk_offset % block_size or start % block_size:
+            return None
+        row = page_table
+        if isinstance(row, ttnn.Tensor):
+            row = ttnn.to_torch(ttnn.get_device_tensors(row)[0])
+        if row.dim() > 1:
+            row = row[user_id]
+        lb0, lb1 = start // block_size, chunk_offset // block_size
+        blocks = [int(b) for b in row[lb0:lb1]]
+        if not blocks or any(b < 0 or b >= int(k_cache.padded_shape[0]) for b in blocks):
+            return None
+        k_parts = [ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
+        v_parts = [ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
+        k_tail = ttnn.concat(k_parts, dim=2) if len(k_parts) > 1 else k_parts[0]
+        v_tail = ttnn.concat(v_parts, dim=2) if len(v_parts) > 1 else v_parts[0]
+        # Block slices are always partial (one block of a many-block pool), so
+        # they own fresh storage — safe to free once concat copied them out.
+        for p in k_parts + v_parts:
+            if p is not k_tail and p is not v_tail:
+                p.deallocate(True)
+        # Paged pools may hold bfp8 (GEMMA4_KV_BFP8); the [tail | chunk] concat
+        # requires the activations' dtype.
+        if out_dtype is not None and k_tail.dtype != out_dtype:
+            k_cast = ttnn.typecast(k_tail, out_dtype)
+            v_cast = ttnn.typecast(v_tail, out_dtype)
+            k_tail.deallocate(True)
+            v_tail.deallocate(True)
+            k_tail, v_tail = k_cast, v_cast
+        return (k_tail, v_tail)
+    except Exception as e:
+        logger.warning("Gemma4 sliding prefill: paged tail reconstruction failed: {}", e)
+        return None
+
+
 def _zero_extend_ring_fill(t, modulo):
     """Right-pad a bounded ring fill with zeros out to the full window.
 
@@ -271,6 +326,61 @@ def _zero_extend_ring_fill(t, modulo):
     return out
 
 
+def _ring_fill_page_table(page_table, chunk_offset, modulo, block_size):
+    """Rotate a bounded ring page table so fill row 0 lands in slot ``chunk_offset % modulo``.
+
+    ``paged_fill_cache`` has no start offset: it writes row r to slot r % modulo,
+    while decode reads position p from slot p % modulo. A resumed chunk that
+    starts off the ring grid (a vLLM scheduler chunk resumed at a ragged offset)
+    would otherwise overwrite the ring from slot 0. Returns ``page_table`` itself
+    when no rotation is needed, else a new tensor that the caller deallocates.
+    """
+    shift = int(chunk_offset) % int(modulo)
+    if shift == 0:
+        return page_table
+    if shift % int(block_size) != 0:
+        raise ValueError(
+            f"bounded ring fill at chunk offset {chunk_offset} needs a rotation of {shift} slots, "
+            f"which is not a whole number of {block_size}-token blocks"
+        )
+    ring_blocks = int(modulo) // int(block_size)
+    rows = int(page_table.shape[0])
+    ring = page_table
+    if int(page_table.shape[-1]) != ring_blocks:
+        # Not deallocated: the slice may share storage with the persistent table.
+        ring = ttnn.slice(page_table, [0, 0], [rows, ring_blocks])
+    return ttnn.roll(ring, -(shift // int(block_size)), -1)
+
+
+def _restore_resumed_fill_padding(fill, valid_seq_len, chunk_offset, modulo, tail, tail_end):
+    """Give a resumed fill's padding rows the K/V the ring already holds in their slots.
+
+    ``paged_fill_cache`` writes whole tiles, so rows ``[valid_seq_len, tile end)``
+    overwrite the slots of positions ``modulo`` earlier. When the ring equals the
+    window those positions are still being attended. A resumed chunk shorter than
+    the ring does not contain them, but the previous chunk's sliding ``tail``
+    (positions ``[tail_end - rows, tail_end)``) does. A chunk that reaches the
+    ring is repaired by ``_merge_bounded_boundary_fill`` instead. Returns ``fill``
+    when nothing needs restoring; otherwise deallocates it and returns a new tensor.
+    """
+    v = int(valid_seq_len)
+    rows = int(fill.shape[-2])
+    if not chunk_offset or tail is None or tail_end is None or v >= rows or v >= int(modulo):
+        return fill
+    first = int(chunk_offset) + v - int(modulo)
+    tail_start = int(tail_end) - int(tail.shape[-2])
+    if first < tail_start:
+        # Older than the tail: with ring headroom these slots are outside the window.
+        return fill
+    b, h, _, d = (int(fill.shape[i]) for i in range(4))
+    head = ttnn.slice(fill, [0, 0, 0, 0], [b, h, v, d])
+    # Not deallocated: the slice may share storage with the tail, which the sliding SDPA still reads.
+    wrapped = ttnn.slice(tail, [0, 0, first - tail_start, 0], [b, h, first - tail_start + rows - v, d])
+    out = ttnn.concat([head, wrapped], dim=2)
+    fill.deallocate(True)
+    return out
+
+
 def flush_deferred_bounded_fills(layers):
     """Merge + ``paged_fill_cache`` for stashed bounded ring fills.
 
@@ -290,7 +400,7 @@ def flush_deferred_bounded_fills(layers):
                 k_f = _zero_extend_ring_fill(p["k_fill"], _mod)
                 v_f = _zero_extend_ring_fill(p["v_fill"], _mod)
                 try:
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         p["k_cache"],
                         k_f,
                         p["page_table"],
@@ -298,7 +408,7 @@ def flush_deferred_bounded_fills(layers):
                         block_size=p["block_size"],
                         **p["paged_modulo_kwargs"],
                     )
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         p["v_cache"],
                         v_f,
                         p["page_table"],
@@ -320,28 +430,38 @@ def flush_deferred_bounded_fills(layers):
         v_fill = pending["v_fill"]
         k_merged = k_fill
         v_merged = v_fill
+        fill_page_table = pending["page_table"]
+        chunk_offset = pending.get("chunk_offset", 0)
         try:
             k_merged = _merge_bounded_boundary_fill(k_fill, pending["valid_seq_len"], pending["modulo"])
             v_merged = _merge_bounded_boundary_fill(v_fill, pending["valid_seq_len"], pending["modulo"])
-            k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
-            v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
-            ttnn.experimental.paged_fill_cache(
+            # Zeroing the rest of the ring clears a previous occupant's KV; on a
+            # resumed chunk those slots hold this request's own in-window KV.
+            if chunk_offset == 0:
+                k_merged = _zero_extend_ring_fill(k_merged, pending["modulo"])
+                v_merged = _zero_extend_ring_fill(v_merged, pending["modulo"])
+            fill_page_table = _ring_fill_page_table(
+                pending["page_table"], chunk_offset, pending["modulo"], pending["block_size"]
+            )
+            _paged_fill_cache(
                 pending["k_cache"],
                 k_merged,
-                pending["page_table"],
+                fill_page_table,
                 batch_idx=pending["user_id"],
                 block_size=pending["block_size"],
                 **pending["paged_modulo_kwargs"],
             )
-            ttnn.experimental.paged_fill_cache(
+            _paged_fill_cache(
                 pending["v_cache"],
                 v_merged,
-                pending["page_table"],
+                fill_page_table,
                 batch_idx=pending["user_id"],
                 block_size=pending["block_size"],
                 **pending["paged_modulo_kwargs"],
             )
         finally:
+            if fill_page_table is not pending["page_table"]:
+                fill_page_table.deallocate(True)
             seen = set()
             for t in (k_fill, v_fill, k_merged, v_merged):
                 if t is None or id(t) in seen:
@@ -370,6 +490,7 @@ def _prefill_forward_single(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    sliding_tail_end=None,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
 
@@ -420,6 +541,31 @@ def _prefill_forward_single(
         fill_page_table = page_table
     else:
         fill_page_table = chunk_page_table if is_chunked else page_table
+    # Hybrid kv-cache groups: ``chunk_page_table`` is sliced from the full-attention group's table, but a
+    # sliding layer's blocks live in its own ``page_table``; slice that at the chunk's block range (eager only).
+    _own_chunk_slice = None
+    if (
+        is_chunked
+        and chunk_offset is not None
+        and page_table is not None
+        and config.cache_position_modulo is None
+        and fill_page_table is chunk_page_table
+    ):
+        _bs = (
+            effective_block_size(
+                kv_cache[0], config.head_dim, 1 if weights.kv_replicated else max(1, config.num_key_value_heads // tp)
+            )
+            if kv_cache is not None
+            else 0
+        )
+        # Column count on THIS layer's block grid: the chunk table was sliced on the
+        # full-attention group's grid, whose block size can differ (TP=4: 128 vs 64).
+        _cols = max(1, -(-int(hidden_states.shape[-2]) // _bs)) if _bs > 0 else int(chunk_page_table.shape[-1])
+        _c0 = chunk_offset // _bs if _bs > 0 else -1
+        if _c0 >= 0 and _c0 + _cols <= int(page_table.shape[-1]):
+            _rows = int(page_table.shape[0])
+            _own_chunk_slice = ttnn.slice(page_table, [0, _c0], [_rows, _c0 + _cols])
+            fill_page_table = _own_chunk_slice
 
     xqkv = apply_qkv_projection(hidden_states, weights)
 
@@ -485,6 +631,10 @@ def _prefill_forward_single(
                 # cap): may still kernel-cap-fill in-graph.
                 if valid_seq_len is not None:
                     v = min(int(valid_seq_len), int(tt_k.shape[-2]))
+                    if os.environ.get("GEMMA4_DEBUG_RING_FILL") == "1":
+                        from loguru import logger as _rl
+
+                        _rl.info(f"[ring-fill] DEFERRED-STASH branch: v={v} rows={int(tt_k.shape[-2])}")
                     tile_end = ((v + TILE_HEIGHT - 1) // TILE_HEIGHT) * TILE_HEIGHT
                     tile_end = min(tile_end, int(tt_k.shape[-2]))
                     if tile_end <= 0:
@@ -518,6 +668,15 @@ def _prefill_forward_single(
                         else:
                             k_stash = ttnn.clone(tt_k)
                             v_stash = ttnn.clone(tt_v)
+                        if sliding_tail_in is not None:
+                            k_tail_src, v_tail_src = sliding_tail_in
+                            modulo = int(config.cache_position_modulo)
+                            k_stash = _restore_resumed_fill_padding(
+                                k_stash, v, chunk_offset, modulo, k_tail_src, sliding_tail_end
+                            )
+                            v_stash = _restore_resumed_fill_padding(
+                                v_stash, v, chunk_offset, modulo, v_tail_src, sliding_tail_end
+                            )
                         config._deferred_bounded_fill = {
                             "k_cache": k_cache,
                             "v_cache": v_cache,
@@ -529,15 +688,23 @@ def _prefill_forward_single(
                             "paged_modulo_kwargs": paged_modulo_kwargs,
                             "valid_seq_len": v,
                             "modulo": int(config.cache_position_modulo),
+                            "chunk_offset": chunk_offset or 0,
                         }
                 elif not is_chunked:
                     # Traced / single-chunk with get_last_token=-1: kernel-cap fill.
                     k_fill, v_fill = tt_k, tt_v
                     fill_kwargs = {}
+                    if os.environ.get("GEMMA4_DEBUG_RING_FILL") == "1":
+                        from loguru import logger as _rl
+
+                        _rl.info(
+                            f"[ring-fill] KERNEL-CAP branch: valid_seq_len={valid_seq_len} "
+                            f"rows={int(tt_k.shape[-2])} modulo={config.cache_position_modulo}"
+                        )
                     valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
                     if valid_dev is not None:
                         fill_kwargs["valid_seq_len_tensor"] = valid_dev
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         k_cache,
                         k_fill,
                         fill_page_table,
@@ -546,7 +713,7 @@ def _prefill_forward_single(
                         **paged_modulo_kwargs,
                         **fill_kwargs,
                     )
-                    ttnn.experimental.paged_fill_cache(
+                    _paged_fill_cache(
                         v_cache,
                         v_fill,
                         fill_page_table,
@@ -582,7 +749,7 @@ def _prefill_forward_single(
                             [0, 0, 0, 0],
                             [tt_v.shape[0], tt_v.shape[1], tile_end, tt_v.shape[3]],
                         )
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     k_cache,
                     k_fill,
                     fill_page_table,
@@ -590,7 +757,7 @@ def _prefill_forward_single(
                     block_size=eff_bs,
                     **paged_modulo_kwargs,
                 )
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     v_cache,
                     v_fill,
                     fill_page_table,
@@ -601,6 +768,8 @@ def _prefill_forward_single(
         else:
             ttnn.fill_cache(k_cache, tt_k, batch_idx=user_id)
             ttnn.fill_cache(v_cache, tt_v, batch_idx=user_id)
+    if _own_chunk_slice is not None:
+        _own_chunk_slice.deallocate(True)
 
     # 6. SDPA (causal prefill, scale=1.0)
     # The non-chunked SDPA silently returns WRONG results at seq_len >= 32768
@@ -642,6 +811,29 @@ def _prefill_forward_single(
         )
         hist = ((sliding_window + 31) // 32) * 32
         use_persistent_tail = isinstance(chunk_start_idx, ttnn.Tensor)
+        # No stash on an APC cache-hit resume (or after a failed stash); on the unbounded substrate the prior
+        # window still sits in the paged pool, so rebuild the tail from there. Eager path only.
+        if (
+            sliding_tail_in is None
+            and not use_persistent_tail
+            and chunk_offset is not None
+            and chunk_offset > 0
+            and config.cache_position_modulo is None
+            and kv_cache is not None
+        ):
+            # Use kv_cache directly: for KV-shared layers it already points at the source layer's filled cache.
+            _paged_k, _paged_v = kv_cache
+            sliding_tail_in = _read_sliding_tail_from_paged_cache(
+                _paged_k,
+                _paged_v,
+                page_table,
+                user_id,
+                chunk_offset,
+                sliding_window,
+                config.head_dim,
+                tt_k.dtype,
+                kv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+            )
         if sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in
             # Traced short first-buckets stash an unpadded tail (< hist); pad
@@ -701,15 +893,13 @@ def _prefill_forward_single(
             sdpa_full.deallocate(True)
         else:
             # No in-memory tail. Correct for the first chunk (chunk_offset==0).
-            # Continuation without a tail (e.g. prior scheduler chunk took the
-            # single-chunk path and failed to stash — see post-SDPA stash below)
-            # silently drops the prior window; log so the ~9k remnant cliff is
-            # diagnosable if it regresses.
+            # A continuation reaching here could not rebuild the tail from the paged cache; windowed SDPA then
+            # misses the prior window for tokens spanning the chunk boundary.
             if chunk_offset is not None and chunk_offset > 0:
                 logger.warning(
-                    "Gemma4 sliding prefill: chunk_start={} without sliding_tail_in; "
-                    "windowed SDPA will miss prior-chunk K/V (vLLM chunked prefill "
-                    "remnant < sliding_window).",
+                    "Gemma4 sliding prefill: chunk_start={} without sliding_tail_in "
+                    "and no paged-cache tail; windowed SDPA will miss prior-chunk "
+                    "K/V for this chunk.",
                     chunk_offset,
                 )
             tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
@@ -772,6 +962,7 @@ def _prefill_forward_single(
             scale=1.0,
             base_offset=chunk_offset_tensor if chunk_offset_tensor is not None else chunk_offset,
             num_kv_heads=nkv_local,
+            mesh_config=mesh_config,
         )
     elif long_seq and config.is_sliding and sliding_window is not None:
         tt_sdpa = chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, config.head_dim, scale=1.0)
@@ -781,7 +972,15 @@ def _prefill_forward_single(
         k_cache, v_cache = kv_cache
         nkv_local = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = chunked_prefill_sdpa(
-            tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0, num_kv_heads=nkv_local
+            tt_q,
+            k_cache,
+            v_cache,
+            page_table,
+            user_id,
+            config.head_dim,
+            scale=1.0,
+            num_kv_heads=nkv_local,
+            mesh_config=mesh_config,
         )
     elif long_seq:
         raise RuntimeError(
@@ -882,6 +1081,7 @@ def prefill_forward(
     chunk_start_idx=None,
     chunk_page_table=None,
     sliding_tail_in=None,
+    sliding_tail_end=None,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -898,6 +1098,8 @@ def prefill_forward(
             blocks (used for the offset ``paged_fill_cache``). None => single chunk.
         sliding_tail_in: previous chunk's last ``sliding_window`` K/V for
             sliding-window layers under generator chunking (None otherwise).
+        sliding_tail_end: absolute position one past the last row of
+            ``sliding_tail_in`` (None when unknown).
 
     Returns ``(tt_out, kept_kv, sliding_tail_out)``; the batched path returns
     ``sliding_tail_out=None`` (it does not chunk the sequence).
@@ -920,6 +1122,7 @@ def prefill_forward(
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
+            sliding_tail_end=sliding_tail_end,
         )
 
     tp = mesh_config.tp if mesh_config else 1
@@ -1092,7 +1295,7 @@ def prefill_forward(
                         if _t is not _orig:
                             _t.deallocate(True)
                     continue
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     k_cache,
                     _k_merged,
                     page_table,
@@ -1100,7 +1303,7 @@ def prefill_forward(
                     block_size=eff_bs,
                     **paged_modulo_kwargs,
                 )
-                ttnn.experimental.paged_fill_cache(
+                _paged_fill_cache(
                     v_cache,
                     _v_merged,
                     page_table,

@@ -127,15 +127,6 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(get_defines(UnaryOpType::GELU, std::vector<float>{0}, "0", idst));
             break;
-        case BinaryOpType::LOGADDEXP:
-            // PRE_IN0_0 ===> Applies prescaling for first input
-            // PRE_IN1_0 ====> Applies prescaling for second input
-            defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::LOG, std::nullopt, "0", idst));
-            break;
         case BinaryOpType::RSUB:
             //  rsub(a,b) = b - a
             defines.merge(get_defines(UnaryOpType::NEG, std::nullopt, "PRE_IN0_0"));
@@ -166,13 +157,6 @@ std::map<std::string, std::string> get_defines(
             defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
             op_name = "mul_tiles";
             op_binary_type = "EltwiseBinaryType::ELWMUL";
-            break;
-        case BinaryOpType::LOGADDEXP2:
-            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
-            defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
-            op_name = "add_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWADD";
-            defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
             break;
         case BinaryOpType::HYPOT:
             // Hypot: sqrt(a^2 + b^2)
@@ -397,22 +381,6 @@ std::map<std::string, std::string> get_defines_fp32(
         case BinaryOpType::LCM:
             new_defines.insert({"BINOP_INIT", fmt::format("lcm_tile_init();")});
             op_name = "lcm_tile";
-            break;
-        case BinaryOpType::LOGADDEXP:
-            // PRE_IN0_0 ===> Applies prescaling for first input
-            // PRE_IN1_0 ====> Applies prescaling for second input
-            new_defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN0_0"));
-            new_defines.merge(get_defines(UnaryOpType::EXP, std::vector<float>{0}, "PRE_IN1_0"));
-            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
-            op_name = "add_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LOG, std::nullopt, "0", idst1));
-            break;
-        case BinaryOpType::LOGADDEXP2:
-            new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN0_0"));
-            new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));
-            new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
-            op_name = "add_binary_tile";
-            new_defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst1));
             break;
         case BinaryOpType::LDEXP:
             new_defines.merge(get_defines(UnaryOpType::EXP2, std::nullopt, "PRE_IN1_0"));

@@ -43,7 +43,7 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
     const std::uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     const std::uint32_t NC = N * C;
 
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
 
     const auto shard_spec = a.shard_spec().value();
     const auto all_cores = shard_spec.grid;
@@ -163,10 +163,10 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_B, .accessor_name = "src1"}},
         // Legacy reader index 4 ("batch_offset") is fed tile_offset.
         .runtime_arg_schema = {.runtime_arg_names = {"Ht", "Wt", "offset", "batch_offset", "w_blk", "batch_b"}},
-        .hw_config = ttnn::create_reader_datamovement_config(device->arch()),
+        .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = ComputeGen1Config{};  // legacy ComputeConfigDescriptor{} defaults
+    ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};  // legacy ComputeConfigDescriptor{} defaults
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(

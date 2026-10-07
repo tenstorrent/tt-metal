@@ -69,10 +69,10 @@ export MIG="$ENGINE/disaggregation/migration/build_RelWithDebInfo"
 #   longbook_5120  (5120 tok  -> 1 chunk)
 #   longbook_10240 (10240 tok -> 2 chunks)   <- what the manifests use
 #   longbook_56320 (55218 tok -> 11 chunks)  <- full length
-export GOLDEN=/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240
+export GOLDEN=/mnt/weka/model-cache/scratch/minimax/MiniMax-M3-cache/prefill/golden/longbook_10240
 ```
 
-The checkpoint (`/mnt/models/MiniMaxAI/MiniMax-M3-ref/`, config + tilized weight cache) comes from the
+The checkpoint (`/mnt/weka/model-weights/llm/minimax/MiniMax-M3/`, config + tilized weight cache) comes from the
 adapter default; override with `PREFILL_HF_MODEL` / `TT_CACHE_PATH` in the binding's `global_env`, not the
 shell. Shape constraints: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0`; 5120 satisfies
 both at SP=8.
@@ -327,7 +327,7 @@ Configuration notes:
 | cache length | 10240 | `PREFILL_MAX_SEQ_LEN` | `model.max_seq_len` |
 | mesh | 8 × 4 | `PREFILL_SP` / `PREFILL_TP` | `transport.sp` / `.tp` |
 | H2D socket | `m3_prefill` | `PREFILL_H2D_SERVICE_ID` | `transport.h2d_service_id` |
-| index dtype | bf16 | `M3_INDEX_CACHE_BF16` | `env.M3_INDEX_CACHE_BF16` |
+| index dtype | bf8 | `M3_INDEX_CACHE_BF16` | `env.M3_INDEX_CACHE_BF16` |
 | KV table | `/tmp/m3_kv_chunk_table.pb` | `PREFILL_MIGRATION_TABLE_PATH` | `migration.table_path` |
 | sentinel | `/tmp/m3_migration_done.sentinel` | `MIGRATION_DONE_FILE` | `migration.done_file` |
 | queues | `/mig_ep1_*` | `PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE` | `migration.{cmd,table,resp}_queue` |
