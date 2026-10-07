@@ -74,8 +74,25 @@ struct SiblingRouterRef {
 // The chip's local worker, as the producer of a sender channel.
 struct LocalWorker {};
 
+// The router's tensix mux, which in mux mode feeds the worker channel with the worker's and the siblings' VC0
+// traffic.
+struct LocalTensixMux {};
+
 // Who writes into a sender channel.
-using SenderChannelProducer = std::variant<LocalWorker, SiblingRouterRef>;
+using SenderChannelProducer = std::variant<LocalWorker, LocalTensixMux, SiblingRouterRef>;
+
+// Why a channel's step runs or not.
+enum class ChannelStatus : uint32_t {
+    // An ERISC runs the channel's step.
+    ACTIVE,
+    // The kernel does not run the channel's VC on this router (no FABRIC_2D_VC<n>_SERVICED).
+    VC_NOT_SERVICED,
+    // A VC0 sender other than the worker channel, in mux mode. The tensix mux carries its traffic into the worker
+    // channel, and the channel has no buffer slots.
+    MUX,
+    // The applied channel trimming profile turned the channel off.
+    TRIMMED,
+};
 
 // A NoC command buffer.
 enum class NocCmdBuf : uint32_t {
@@ -147,6 +164,7 @@ struct SenderChannelControlInfo {
 
 // A sender channel that takes packets from its producer and sends them over Ethernet to the peer's receiver.
 struct SenderChannel {
+    ChannelStatus status = ChannelStatus::ACTIVE;
     // IDs of the ERISCs that run the channel's step.
     std::vector<uint32_t> serviced_by;
     // Null when nothing feeds the channel.
@@ -162,6 +180,7 @@ struct SenderChannel {
 // A receiver channel that takes packets from the peer's senders over Ethernet, delivers them locally, and forwards
 // them to sibling routers' senders.
 struct ReceiverChannel {
+    ChannelStatus status = ChannelStatus::ACTIVE;
     // IDs of the ERISCs that run the channel's step.
     std::vector<uint32_t> serviced_by;
     // The VC whose downstream edges the channel's step is given. Null when no ERISC runs the step, or when the step
