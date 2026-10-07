@@ -822,3 +822,24 @@
 - claim: DECISIONS (coordinator, 2026-10-07, at 4169b64e156): (1) GSM8K gate protocol uses chat template with enable_thinking=false ('<think></think>' after the assistant tag, chat_template.jinja line 93); thinking-mode accuracy not measured. (2) File ownership for the next stage: tt/attention.py decode + tt/decode.py + tt/generator.py = attn agent; tt/prefill.py = asm agent; tt/moe*.py router*.py = moe agent; tt/kv_pool.py shared, layout agreed via LOG/notes; tt/layer.py tt/model.py changes via coordinator. (3) Per-layer gate for layers 6..47: reference agent runs the CPU oracle teacher-forced on DEVICE-captured per-layer inputs (mimo-device-s128b16), not a full CPU model run. (4) Spec decode drafter choice (MTP-3 vs DFlash) pending user decision; MTP oracle hypotheses built on device-captured hidden states first.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+## E261007-0529-93f
+- date: 2026-10-07T05:29:09
+- commit: 56601b284bb
+- branch: ssinghal/mimo-moe
+- host: 35
+- track: moe
+- status: verified
+- claim: Decode-sized MoE in a TRACE on 4x8 (MiMoMoEDecode: exact router + dead-slot spread via device mask + dispatch + unified bf16-activation op (patched .so, MOE_UNI_BF16_*) + combine + post_combine_reduce + all-reduce over columns), REAL layers 1-5 (real gate/bias/256 experts bfp8/dump hidden states), 32 slots/row padded to 64 tokens. Trace output bit-identical to eager (5 layers). PCC vs dump ffn_out (live tokens) 0.9993-0.99997 except L1 rows 0.991-0.998 at few users (routing flips). Traced time (host-timed, 30 warm replays of ONE trace holding 5 layers): 1.52 ms/layer at users/row 1, 8, 16 and 32 alike (7.60-7.63 ms per 5 layers) => 47 layers = ~72 ms/token for MoE alone (hint). Per-layer stage deltas (cumulative traces, users 32): pad+router+spread 0.288, bincount/offset_cumsum 0.091, dispatch 0.028, experts (unified) 0.775, combine 0.098, post_combine_reduce 0.192, all_reduce+slice 0.053 = 1.525 ms. Exact router alone in trace 0.241 ms/layer (x47 = 11.3 ms)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_E_decode_trace_stages_15f4a1426e7.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/router.py
+
+## E261007-0529-48e
+- date: 2026-10-07T05:29:09
+- commit: 56601b284bb
+- branch: ssinghal/mimo-moe
+- host: 35
+- track: moe
+- status: verified
+- claim: B decision data: single-card moe_compute (bfp4, compute_only, K=4096 N=2048, 8 experts, top-8) traced: 0.396 / 0.393 / 0.392 ms per call at T=32 / 16 / 8 tokens (independent of T => weight-read bound: 107 MB bfp4 / 0.393 ms = 273 GB/s). The unified op's expert stage on the real 4x8 trace: 0.775 ms for 214 MB bfp8 = 276 GB/s, i.e. the same effective bandwidth. A bfp8 moe_compute would read 2x bytes => ~0.79 ms, no gain over the unified op; only bfp4 would halve it (0.39 ms, NOT authorised). The expert stage of MoE at bfp8 is therefore ~0.775 ms x 47 = 36 ms/token at this bandwidth, above the 26 ms whole-model roofline (which assumed 450 GB/s). Recommendation: do NOT port the bfp8 moe_compute patch (no speed gain); remaining non-expert MoE overhead is 0.75 ms/layer (router 0.29, post_combine_reduce 0.19, combine 0.10, bincount 0.09) = 35 ms/token, the part worth optimising
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_E_mc_timing3_h47_56601b284bb.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/router.py
