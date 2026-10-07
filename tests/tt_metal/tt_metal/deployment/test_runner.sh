@@ -311,10 +311,24 @@ done
 
 # DIDT runs once, after all iterations, regardless of whether any iteration above failed.
 emit_banner "DIDT (single run after all iterations)"
+didt_reset_ok=1
+if [ "$SKIP_RESET" -eq 0 ]
+then
+	if ! run_reset "Resetting boards ($RESET_CMD)..."
+	then
+		didt_reset_ok=0
+	fi
+fi
 failures=0
 passes=0
-run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
-	didt_ok=1 || didt_ok=0
+if [ "$didt_reset_ok" -eq 0 ]
+then
+	emit_status "DIDT tests:" failed
+	didt_ok=0
+else
+	run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
+		didt_ok=1 || didt_ok=0
+fi
 
 emit_banner "DEPLOYMENT TEST SUITE - RESULTS SUMMARY (${iterations_run}/${ITERATIONS} iterations ran)"
 emit "$(printf '%-20s %s' 'Host:'            "$(hostname)")"

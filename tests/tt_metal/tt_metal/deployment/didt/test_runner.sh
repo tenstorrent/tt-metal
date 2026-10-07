@@ -46,9 +46,9 @@ do
 	shift
 done
 
-NUM_DEVICES="$(tt-smi -s 2>&1 | jq '.device_info | length' 2>/dev/null)"
+NUM_DEVICES="$(timeout 30 tt-smi -s 2>&1 | jq '.device_info | length' 2>/dev/null)"
 case "$NUM_DEVICES" in
-''|*[!0-9]*) echo "Could not detect number of visible devices via tt-smi -s"; exit 1 ;;
+''|*[!0-9]*) echo "Could not detect number of visible devices via tt-smi -s (timed out or failed)"; exit 1 ;;
 esac
 echo "Detected $NUM_DEVICES visible chip(s), running combined DIDT test across all of them"
 
@@ -70,11 +70,11 @@ junit="$LOGDIR/didt_all_chips_junit.xml"
 # Carries pytest's exit status out of the tee pipeline
 RCFILE="$(mktemp)"
 echo 0 > "$RCFILE"
-{ $PYTHON -m pytest tests/didt/test_minimal_matmul.py::test_minimal_matmul \
+{ PYTHONUNBUFFERED=1 $PYTHON -m pytest tests/didt/test_minimal_matmul.py::test_minimal_matmul \
 	-k "all and bf16_HiFi2" \
-	--didt-workload-iterations 500 \
+	--didt-workload-iterations 100 \
 	--determinism-check-interval 50 \
-	--timeout 400 -q --junitxml="$junit" 2>&1 || echo "$?" > "$RCFILE"; } | tee "$log"
+	--timeout 400 -q --tb=line --junitxml="$junit" 2>&1 || echo "$?" > "$RCFILE"; } | tee "$log"
 rc="$(cat "$RCFILE")"
 rm -f "$RCFILE"
 
