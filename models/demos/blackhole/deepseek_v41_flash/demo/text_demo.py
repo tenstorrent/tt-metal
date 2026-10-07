@@ -270,13 +270,25 @@ def _run_demo(
             if cache is not None:
                 cache[key] = (model_args, model, generator)
     tokenizer = model_args.tokenizer
-    spec_k = int(
-        os.environ.get("DSV41_SPEC", "0")
-    )  # speculative decoding: k drafts per round (DSpark drafter), 0 = off
-    if spec_k and batch_size >= 128 and os.environ.get("DSV41_SPEC_B128") != "1":
-        # measured at 40 layers (GSM8K, B=128): k=1 0.69x, k=3 0.85x of plain decode (chunked 64/128-row verify rounds of 243/400 ms): spec decode is OFF by default for B >= 128
-        logger.info(f"DSV41_SPEC={spec_k} ignored at batch {batch_size}: plain decode (DSV41_SPEC_B128=1 forces the spec runner)")
-        spec_k = 0
+    # speculative decoding mode of this batch size: ONE resolution shared with the build (tt/spec_policy.py: adaptive by default for B=4..32, plain for B>=64 / explicit DSV41_SPEC=0 / a
+    # context too long for the spec runners; explicit DSV41_SPEC* variables override)
+    from models.demos.blackhole.deepseek_v41_flash.tt import spec_policy
+
+    spec_choice = spec_policy.resolve_apply(padded_batch, mesh_rows, model.max_ctx)
+    generator.spec_choice = spec_choice
+    if spec_choice.on and model.pool.ring_rows < 128 + 127 and os.environ.get("DSV41_SPEC_FULL_REPLAY") != "1":
+        logger.warning(
+            f"!!! spec decode: plain (model built with ring_rows {model.pool.ring_rows} < {spec_policy.RING_ROWS_SPEC}: built without spec); {spec_choice.describe()} dropped"
+        )
+        spec_choice = generator.spec_choice = spec_policy.SpecChoice("plain", reason="pool ring rows too small")
+    spec_k = (
+        spec_choice.k if spec_choice.on else 0
+    )  # k drafts per round (DSpark drafter); the largest candidate when adaptive; 0 = plain
+    (logger.warning if "context too long" in spec_choice.reason else logger.info)(
+        ("!!! " if "context too long" in spec_choice.reason else "")
+        + spec_choice.describe()
+        + f" [batch {batch_size}, padded {padded_batch}, max_seq_len {model.max_ctx}]"
+    )
     if spec_k and os.environ.get("DSV41_SPEC_EARLY") == "1" and not hasattr(generator, "spec"):
         # build the spec runner(s) BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on that trace's scratch memory and
         # are overwritten by its replays (a later prefill then hangs the spec traces)
@@ -496,6 +508,24 @@ def _run_demo(
             )
         num_tokens_generated_decode.append(iteration)
         generator.m.release_trace()  # next repeat batch re-captures (page table / state changed)
+        if spec_k and not hasattr(generator, "spec") and not spec_choice.explicit:
+            # default mode only: never OOM / hang by default. The runners (+111 MiB/bank) and their trace capture (+31) are built after the prefills: skip the spec pass with a loud line if
+            # the DRAM left cannot hold them (an explicit DSV41_SPEC* setting is trusted)
+            import ttnn
+
+            generator.m.release_trace()
+            ttnn.synchronize_device(mesh_device)
+            mv = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+            ok, msg = spec_policy.dram_check(
+                mv.total_bytes_free_per_bank / 2**20,
+                mv.largest_contiguous_bytes_free_per_bank / 2**20,
+                users_per_row,
+            )
+            if not ok:
+                logger.warning(f"!!! spec decode: plain (context too long for spec): {msg}; the spec pass is skipped")
+                spec_k = 0
+            else:
+                logger.info(f"spec decode: DRAM check passed: {msg}")
         if spec_k:
             # ---- speculative pass on the SAME prompts: a fresh prefill (the plain decode advanced the state), drafter seeding from the prompt tail, spec loop ----
             plain_gen = [all_outputs[u][decoding_pos[u] :] for u in range(padded_batch)]
@@ -514,7 +544,7 @@ def _run_demo(
                 ):  # frees only ~11 MiB/bank and (at ISL > 512) invalidated the decode key slab: off by default
                     generator.m.prefill_model.teardown_dyn()
                 generator.enable_spec(spec_k)
-            adaptive = os.environ.get("DSV41_SPEC_ADAPT") == "1"
+            adaptive = spec_choice.mode == "adaptive"
             policies = (
                 [p_ for p_ in os.environ.get("DSV41_SPEC_POLICIES", "adapt").split(",") if p_] if adaptive else [None]
             )
@@ -585,11 +615,15 @@ def _run_demo(
                         f"rounds {len(mh)}, mean accepted {sum(mh) / max(len(mh), 1):.2f}, tokens {len(gen_sp[u])}"
                     )
                 X0_ = getattr(generator.spec, "X0", None)
-                if X0_ is not None:  # quality of the seeded first drafts vs the plain greedy continuation (drafter / seeding diagnostic)
+                if (
+                    X0_ is not None
+                ):  # quality of the seeded first drafts vs the plain greedy continuation (drafter / seeding diagnostic)
                     hit_ = [0] * (X0_.shape[1] - 1)
                     for u in range(batch_size):
                         for j_ in range(X0_.shape[1] - 1):
-                            hit_[j_] += int(len(plain_gen[u]) > 1 + j_ and int(X0_[u, 1 + j_]) == int(plain_gen[u][1 + j_]))
+                            hit_[j_] += int(
+                                len(plain_gen[u]) > 1 + j_ and int(X0_[u, 1 + j_]) == int(plain_gen[u][1 + j_])
+                            )
                     logger.info(
                         f"SPEC seed draft check: first-block draft j matches the plain continuation for {hit_} of {batch_size} users (j=1..); user0 X0 {X0_[0].tolist()} plain {plain_gen[0][:X0_.shape[1]]}"
                     )

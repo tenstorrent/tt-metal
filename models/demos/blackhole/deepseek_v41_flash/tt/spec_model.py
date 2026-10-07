@@ -110,7 +110,9 @@ def _moe_view(moe, Tn, buffers):
 class SpecRunner:
     def __init__(self, model, k, max_pos=None, drafter=None, draft=True):
         """``drafter``: an existing (root) drafter of a sibling runner (adaptive verification length): shared weights + rings, viewed for this block size."""
-        assert (0 if drafter is not None else 1) <= k <= BLOCK  # k = 0: plain-like round (adaptive scheduler's no-spec mode), only as a sibling of a real runner
+        assert (
+            (0 if drafter is not None else 1) <= k <= BLOCK
+        )  # k = 0: plain-like round (adaptive scheduler's no-spec mode), only as a sibling of a real runner
         self.m, self.k, self.n = model, k, k + 1
         self.draft = draft
         self.md, self.U, self.rows, self.cols, self.B = model.md, model.U, model.rows, model.cols, model.B
@@ -432,7 +434,9 @@ class AdaptiveSpec:
 
     def __init__(self, model, ks, max_pos=None, seed_k=None):
         ks = sorted(set(ks))
-        self.plain_ok = 0 in ks  # k = 0 candidate: no-spec rounds (verify 1 row/user + write_main, no drafting) with a probe round (with drafting) every DSV41_SPEC_PROBE rounds
+        self.plain_ok = (
+            0 in ks
+        )  # k = 0 candidate: no-spec rounds (verify 1 row/user + write_main, no drafting) with a probe round (with drafting) every DSV41_SPEC_PROBE rounds
         ks = [k for k in ks if k > 0]
         os.environ.setdefault(
             "DSV41_SPEC_CALIB", "3"
@@ -450,8 +454,12 @@ class AdaptiveSpec:
         self.probe_every = int(os.environ.get("DSV41_SPEC_PROBE", "16"))
         self.runner0 = self.probe0 = None
         if self.plain_ok:
-            self.runner0 = SpecRunner(model, 0, max_pos=max_pos, drafter=first.drafter_root, draft=False)  # the fast plain round
-            self.probe0 = SpecRunner(model, 0, max_pos=max_pos, drafter=first.drafter_root, draft=True)  # a round with drafting at the same n = 1: refreshes drafts + confidence
+            self.runner0 = SpecRunner(
+                model, 0, max_pos=max_pos, drafter=first.drafter_root, draft=False
+            )  # the fast plain round
+            self.probe0 = SpecRunner(
+                model, 0, max_pos=max_pos, drafter=first.drafter_root, draft=True
+            )  # a round with drafting at the same n = 1: refreshes drafts + confidence
             first.siblings += [self.runner0, self.probe0]
         self.k, self.n = max(ks), max(ks) + 1
         self.log = model.log
@@ -532,7 +540,11 @@ class AdaptiveSpec:
         cal = []  # (user, k, conf[5], m): drafts of this round's block vs outcome
         top = self.m.max_ctx - self.n - 1
         last_pol = self.policy
-        stale, since_probe, nprobe = False, 0, 0  # stale: the drafts / confidence in X5 / conf belong to an earlier position (after no-draft k = 0 rounds)
+        stale, since_probe, nprobe = (
+            False,
+            0,
+            0,
+        )  # stale: the drafts / confidence in X5 / conf belong to an earlier position (after no-draft k = 0 rounds)
         while not bool(done.all()):
             if cyc is not None:
                 self.policy = cyc[0][(len(walls) // cyc[1]) % len(cyc[0])]
@@ -540,7 +552,10 @@ class AdaptiveSpec:
             probe_due = since_probe >= self.probe_every or self.policy not in ("adapt", "k0") or self.policy != last_pol
             last_pol = self.policy
             if stale and self.policy != "k0" and probe_due:
-                k, probing = 0, True  # refresh drafts + confidence with a drafting k = 0 round, then let the scheduler decide again
+                k, probing = (
+                    0,
+                    True,
+                )  # refresh drafts + confidence with a drafting k = 0 round, then let the scheduler decide again
             elif stale:
                 k = 0
             else:
@@ -681,9 +696,7 @@ class AdaptiveSpec:
 
 
 def default_ks(U):
-    """Candidate verification lengths per users-per-mesh-row with fast / supported row counts T = U * (1 + k) (mHC fast paths 4 / 8 / 16 / 24 / 32; T <= 32; T = 5..7 pad to 8;
-    T = 2 / 3 are not supported). T > 32 needs the chunked verify (DSV41_SPEC_ROWS=1): B=64 (U=16) {1: T=32, 3: T=64}, B=128 (U=32) {1: T=64, 3: T=128}."""
-    table = {1: [3, 5], 2: [1, 3, 5], 4: [1, 3, 5], 8: [1, 3]}
-    if os.environ.get("DSV41_SPEC_ROWS") == "1" and U in (16, 32):
-        return [1, 3]
-    return table.get(U, [k for k in (1, 3) if U * (1 + k) <= 32] or [1])
+    """Candidate verification lengths per users-per-mesh-row (table and rationale in tt/spec_policy.py; the chunked verify rows follow DSV41_SPEC_ROWS)."""
+    from models.demos.blackhole.deepseek_v41_flash.tt.spec_policy import default_ks as _dk
+
+    return _dk(U, os.environ.get("DSV41_SPEC_ROWS") == "1")
