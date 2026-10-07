@@ -1498,3 +1498,27 @@
 - claim: COORDINATOR at df0495c0790: layer.py defaults now MIMO_EXPERT_OP=unified (was mm: the slow path; all earlier decode runs passed unified through --env) and MIMO_DEAD=spread32 (sentinel hangs deep traces, E261007-1432-926; spread32 = balanced dead-slot routing, 1000/1000 deep-trace replays at U=1,32). RISK: the unified op's numerics fix (fp32 DEST/partials, HiFi3, bf16 act, E261007-0745-795) and the dispatch knob exist only in the private relink library artifacts/integ_73c014eb46d/lib (LD_LIBRARY_PATH); the shared build_Release still has the old op (outputs ~1.5-2.4% too small): a run without LD_LIBRARY_PATH silently uses the old numerics. TODO: add a runtime guard (check the loaded _ttnncpp.so path via /proc/self/maps) and/or rebuild the shared build once when no job runs from it; to be done in the re-gate pass. Measured 48-layer step by MoE agent (E261007-1432-327, host .30, spread32 + unified + fast router + all_gather+sum): U=1 71.0 ms, U=8 90.1, U=32 106.2 vs spread+unified 105/107/114 and spread+mm 191/194/201.
 - evidence: -
 - paths: models/demos/blackhole/mimo_v26/tt/layer.py
+
+## E261007-1446-a9a
+- date: 2026-10-07T14:46:11
+- commit: 30d012c92bb
+- branch: ssinghal/mimo-spec
+- host: 30,47
+- track: spec
+- status: verified
+- claim: DFlash drafter ON DEVICE (tt/dflash.py: 5 SWA layers, window 1024 via 1024-slot left-aligned ctx cache, per-head q/k norm, partial rotary 64/128, V x0.612, sink as an extra zero key, fc over concat of layers [0,11,23,35,47] K-sharded + all-reduce, hidden_norm, mask_embedding.pt vector for the 7 mask rows, target embedding table and lm_head, TP8 over mesh columns, rows = user groups) vs reference/dflash_ref.py teacher-forced on the device captures mimo-device-s128b16 (16 sequences, 14 anchors p=16..120 step 8 = 224 (user,anchor) samples per position, anchor token = gold). Draft hidden rows (7/user, after final norm) PCC: bf16 weights vs bf16 CPU oracle min 0.99876 mean 0.99977; vs fp32 CPU oracle min 0.99907 (bf16-oracle-vs-fp32 floor min 0.99963); bfp8 weights vs bf16 oracle min 0.99806 mean 0.99964, vs fp32 min 0.99809 -> bfp8 misses 0.999 on the worst user, bf16 weights (367 MB/chip) pass: USE BF16 for the drafter. Top-1 draft token agreement per position 1..7 (device lm_head path identical to CPU head): bf16 weights vs bf16 oracle 0.9955 0.9911 0.9777 0.9911 0.9911 0.9821 0.9732; bfp8 1.0 0.9911 0.9866 0.9911 0.9911 0.9732 0.9732; vs fp32 oracle bf16-weights 1.0 .9866 .9866 .9911 1.0 .9732 .9732 and the bf16 CPU oracle itself vs fp32: .9955 .9866 .9821 1.0 .9911 .9732 .9821 -> device agreement is AT the bf16-vs-fp32 noise floor (near-tie argmax flips), the >=99% per-position gate is not reachable by any bf16 implementation at n=224 (not hidden). U=1 and U=4 users per row both run (first run U=1: PCC min 0.99818 bfp8 / 0.9986 bf16 at p=120). Context is rebuilt from hn each round (probe version, not the incremental ring). Not done: drafter KV append/ring, trace, hidden-state capture in decode (see notes/spec_hooks.md).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_dff_bf16_u4_30d012c92bb.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tests/test_dflash_device.py
+- data: {"hidden_pcc_min_bf16_vs_fp32":0.99907,"hidden_pcc_mean_bf16":0.99977,"hidden_pcc_min_bf8_vs_fp32":0.99809,"top1_agree_min_bf16_vs_bf16oracle":0.9732,"fp32_floor_top1_min":0.9732}
+
+## E261007-1446-494
+- date: 2026-10-07T14:46:11
+- commit: 03832654772
+- branch: ssinghal/mimo-spec
+- host: 48
+- track: spec
+- status: verified
+- claim: VERIFY attention op probe (8 query tokens per user, causal in the block), one BH chip per-chip TP8 shapes (8 Q heads, 1 KV, QK 192, V pad 192): (V1) the existing 1-token paged decode op with 8 virtual users per real user (page-table row repeated, cur_pos=pos+t, KV of the block pre-written) is CORRECT incl. sliding window 128 + sink: PCC min SWA 0.999581-0.999648, GA 0.999362-0.999621 (B=1/4, positions 127/128/1999/2030, cache 2048); cost per layer per chip: GA 64k cache B=1 1.005 ms (1-token decode 0.222), B=4 3.81, B=8 7.71 ms; SWA 0.044/0.121/0.077 ms (B=1/4/8; floor-limited). (V2) chunked prefill SDPA with a 32-row q tile per user is REJECTED: TT_FATAL chunk_start_idx must be a multiple of q_chunk_size (32) -> arbitrary block start impossible; GA 64k B=1 6.07 ms. Folding the 8 tokens into the head dim needs a C++ change (no LSE/mask). Design + KV rollback + MoE sizing in bringup/mimo_v26/notes/spec_verify.md; capture hooks proposal in notes/spec_hooks.md. KV speculative write op (paged_update_cache with virtual users) and MoE at 8U tokens are NOT probed.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/spec_verify_probe_03832654772.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/probe_verify_ops.py
+- data: {"v1_pcc_min":0.999362,"v1_ga64k_b4_ms":3.81,"v1_ga64k_b8_ms":7.71,"v2_rejected":1}
