@@ -9,7 +9,13 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, LoRAColParallelLinear, RowParallelLinear
+from ....layers.linear import (
+    ColParallelLinear,
+    LoRAColParallelLinear,
+    RowParallelLinear,
+    maybe_cast_activation,
+    resolve_output_dtype,
+)
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -265,6 +271,13 @@ class WanAttention(Module):
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
+
+        # This path calls the AGMM directly (not ColParallelLinear.forward), so honour the
+        # linear's quant settings here too: cast the SDPA output before the TP gather when the
+        # preset asks for it, and pin the output back to bf16 (residual stream, fused norms).
+        x = maybe_cast_activation(x, getattr(to_out, "activation_dtype", None))
+        if getattr(to_out, "pin_output_bf16", False):
+            dtype = resolve_output_dtype(dtype, x)
 
         if isinstance(to_out, RowParallelLinear):
             # Row-parallel form: matmul on the un-gathered K = D/tp slice, strided reduce-scatter
