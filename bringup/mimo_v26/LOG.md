@@ -891,3 +891,90 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_ps48_16_65536_990094ad6bc.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_prefill_scale.py
 - data: {"free_mb_bank":{"4_4096":2321.0,"16_4096":2278.3,"4_65536":2000.2,"16_65536":1805.7},"tok_s_4k":21900,"tok_s_64k":18400}
+## E261007-0529-93f
+- date: 2026-10-07T05:29:09
+- commit: 56601b284bb
+- branch: ssinghal/mimo-moe
+- host: 35
+- track: moe
+- status: verified
+- claim: Decode-sized MoE in a TRACE on 4x8 (MiMoMoEDecode: exact router + dead-slot spread via device mask + dispatch + unified bf16-activation op (patched .so, MOE_UNI_BF16_*) + combine + post_combine_reduce + all-reduce over columns), REAL layers 1-5 (real gate/bias/256 experts bfp8/dump hidden states), 32 slots/row padded to 64 tokens. Trace output bit-identical to eager (5 layers). PCC vs dump ffn_out (live tokens) 0.9993-0.99997 except L1 rows 0.991-0.998 at few users (routing flips). Traced time (host-timed, 30 warm replays of ONE trace holding 5 layers): 1.52 ms/layer at users/row 1, 8, 16 and 32 alike (7.60-7.63 ms per 5 layers) => 47 layers = ~72 ms/token for MoE alone (hint). Per-layer stage deltas (cumulative traces, users 32): pad+router+spread 0.288, bincount/offset_cumsum 0.091, dispatch 0.028, experts (unified) 0.775, combine 0.098, post_combine_reduce 0.192, all_reduce+slice 0.053 = 1.525 ms. Exact router alone in trace 0.241 ms/layer (x47 = 11.3 ms)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_E_decode_trace_stages_15f4a1426e7.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/router.py
+
+## E261007-0529-48e
+- date: 2026-10-07T05:29:09
+- commit: 56601b284bb
+- branch: ssinghal/mimo-moe
+- host: 35
+- track: moe
+- status: verified
+- claim: B decision data: single-card moe_compute (bfp4, compute_only, K=4096 N=2048, 8 experts, top-8) traced: 0.396 / 0.393 / 0.392 ms per call at T=32 / 16 / 8 tokens (independent of T => weight-read bound: 107 MB bfp4 / 0.393 ms = 273 GB/s). The unified op's expert stage on the real 4x8 trace: 0.775 ms for 214 MB bfp8 = 276 GB/s, i.e. the same effective bandwidth. A bfp8 moe_compute would read 2x bytes => ~0.79 ms, no gain over the unified op; only bfp4 would halve it (0.39 ms, NOT authorised). The expert stage of MoE at bfp8 is therefore ~0.775 ms x 47 = 36 ms/token at this bandwidth, above the 26 ms whole-model roofline (which assumed 450 GB/s). Recommendation: do NOT port the bfp8 moe_compute patch (no speed gain); remaining non-expert MoE overhead is 0.75 ms/layer (router 0.29, post_combine_reduce 0.19, combine 0.10, bincount 0.09) = 35 ms/token, the part worth optimising
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_E_mc_timing3_h47_56601b284bb.log
+- paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/router.py
+## E261007-0516-fa4
+- date: 2026-10-07T05:16:12
+- commit: cce07a4da2b
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: dataset
+- status: verified
+- claim: GSM8K gate sets with enable_thinking=False (template appends '<think></think>' after '<|im_start|>assistant\\n'): /mnt/tt-data/ssinghal/mimo-dumps/gsm8k/gsm8k_128_nothink.json sha256 858aa02ca82df59cbfb881943e6039b272fdb38539b4a404c58e14caff82190b (max 137 prompt tokens), /mnt/tt-data/ssinghal/mimo-dumps/gsm8k/gsm8k_512_nothink.json sha256 4095204002434c3e96bf6e260384395260cfe43b4c9064f7b1cf001079086c10 (max 150). Verified: every prompt equals the old thinking-default prompt + '<think></think>' (same questions/order); scorer on gold solutions = 512/512. Old sets kept unchanged (gsm8k_128.json, gsm8k_512.json). Regenerate: gsm8k_set --n N --no-thinking --out ...
+- evidence: /mnt/tt-data/ssinghal/mimo-dumps/gsm8k/gsm8k_512_nothink.json
+- paths: models/demos/blackhole/mimo_v26/reference/gsm8k_set.py
+
+## E261007-0540-c3b
+- date: 2026-10-07T05:40:37
+- commit: 4718774ea4d
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: correctness
+- status: verified
+- claim: PER-LAYER GATE L6-47 (device captures mimo-device-s128b16, teacher-forced: CPU oracle fp32 and bf16 run on each layer's DEVICE h_in; 16x128 real GSM8K tokens; table in /mnt/tt-data/ssinghal/mimo-logs/ref_device_vs_oracle_L6-47.jsonl, summary via probes/device_vs_oracle.py). Device vs fp32 oracle, rel L2 / floor (oracle bf16 vs fp32, same input): attn_out median 0.029/0.010 (SWA, ratio 2.9x), 0.030/0.0077 (global, 3.9x); ffn_out median 0.044/0.023 (1.9x SWA), 0.047/0.020 (2.4x global); h_out median 0.0023/0.0013 (SWA), 0.0018/0.0012 (global). Min PCC device-vs-fp32: SWA attn 0.99943 (L18), ffn 0.99763 (L6), h_out 0.99957 (L8); global attn 0.99948 (L17), ffn 0.99884 (L23), h_out 0.99964 (L47). Floor min PCC 0.9989 (ffn). FLAGGED (device error >=5x its floor): L6 SWA attn_out 5.6x; L16 SWA ffn_out 10.2x (rel 0.0119 vs 0.0012) and h_out 5.5x; L41 global ffn_out 5.8x and h_out 5.6x; next worst L17 global attn 4.4x, L47 global attn 3.7x/ffn 3.9x. No layer below PCC 0.9976 on any quantity; no systematic SWA/global gap beyond global attn ~1.3x worse ratio. ROUTER: device vs fp32 oracle (on oracle ffn_in) identical 8-expert sets median 94.8% SWA / 94.6% global (min 77.2% L7, 78.3% L8, 85.7% L6) vs floor median 97.8%/98.2%; but the fp32 router run on the DEVICE ffn_in reproduces the device sets for >=98.7% of tokens in every layer (min L7 98.7%, rest >=99.0%) => the device router op itself is right, flips come from ffn_in differences (earlier layers L6-8 worst). Near-tie share of flips (fp32 route_gap<0.01): 96.6-100% in every layer, i.e. all flips are near-ties.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/ref_device_vs_oracle_L6-47.jsonl
+- paths: models/demos/blackhole/mimo_v26/reference/probes/device_vs_oracle.py, models/demos/blackhole/mimo_v26/reference/ref_layer.py
+- data: {"swa": {"n": 35, "attn_out": {"min_pcc_dev_vs_fp32": 0.9994280338287354, "min_pcc_floor": 0.9998753666877747, "median_rel_dev": 0.02922009862959385, "median_rel_floor": 0.009965920820832253, "median_ratio": 2.9031930380016235, "argmin_pcc_layer": 18}, "ffn_out": {"min_pcc_dev_vs_fp32": 0.9976307153701782, "min_pcc_floor": 0.9988591074943542, "median_rel_dev": 0.04369692504405975, "median_rel_floor": 0.02291366085410118, "median_ratio": 1.8858154472183226, "argmin_pcc_layer": 6}, "h_out": {"min_pcc_dev_vs_fp32": 0.9995651841163635, "min_pcc_floor": 0.9998465776443481, "median_rel_dev": 0.0023199869319796562, "median_rel_floor": 0.0013270527124404907, "median_ratio": 1.7344244550224144, "argmin_pcc_layer": 8}, "router": {"median_set_equal_dev": 0.94775390625, "median_set_equal_floor": 0.97802734375, "min_set_equal_dev": 0.77197265625, "min_set_equal_dev_vs_router_on_dev_ffn_in": 0.98681640625, "min_near_tie_share_of_flips_tau0.01": 0.9655172228813171}}, "global": {"n": 7, "attn_out": {"min_pcc_dev_vs_fp32": 0.9994773864746094, "min_pcc_floor": 0.9999620318412781, "median_rel_dev": 0.029929591342806816, "median_rel_floor": 0.0076560028828680515, "median_ratio": 3.909297292687898, "argmin_pcc_layer": 17}, "ffn_out": {"min_pcc_dev_vs_fp32": 0.9988360404968262, "min_pcc_floor": 0.9995326399803162, "median_rel_dev": 0.04708743095397949, "median_rel_floor": 0.019828787073493004, "median_ratio": 2.43977421819306, "argmin_pcc_layer": 23}, "h_out": {"min_pcc_dev_vs_fp32": 0.9996418356895447, "min_pcc_floor": 0.9999626278877258, "median_rel_dev": 0.001813865383155644, "median_rel_floor": 0.0012090299278497696, "median_ratio": 2.269878716682899, "argmin_pcc_layer": 47}, "router": {"median_set_equal_dev": 0.94580078125, "median_set_equal_floor": 0.982421875, "min_set_equal_dev": 0.9111328125, "min_set_equal_dev_vs_router_on_dev_ffn_in": 0.99609375, "min_near_tie_share_of_flips_tau0.01": 0.9819819927215576}}, "flagged_ratio_ge_5": [[6, "swa", "attn_out", 5.6], [16, "swa", "ffn_out", 10.2], [16, "swa", "h_out", 5.5], [41, "global", "ffn_out", 5.8], [41, "global", "h_out", 5.6]]}
+
+## E261007-0540-a8e
+- date: 2026-10-07T05:40:37
+- commit: 4718774ea4d
+- branch: ssinghal/mimo-ref
+- host: DC16-2-BG-0204-u20-44
+- track: tool
+- status: inferred
+- claim: MTP-3 CPU oracle reference/mtp_ref.py (hypotheses in MTP_NOTES.md; no full model): load_mtp(k), mtp_layer (eh_proj on concat of enorm(embed(tok t+1+k)) / hnorm(h_prev), input_layernorm, SWA attention window 128 with sinks, pre_mlp_layernorm, dense FFN, final_layernorm) and evaluate(h_last pre-model.norm [B,S,4096], tokens [B,S+n+1], n_layers) = top-1 accuracy of predicting token t+2+k for 16 variants (concat order eh|he x h_src pre|post x head_norm final|final+norm x chain pre|post) with the shared lm_head. Only crash-tested on a stand-in hidden state (tests/test_mtp_ref.py passes, 76 s); NO accuracy measured: needs device-captured L47 h_out (pre model.norm) with the token stream. Status inferred: structure is a hypothesis.
+- evidence: models/demos/blackhole/mimo_v26/tests/test_mtp_ref.py
+- paths: models/demos/blackhole/mimo_v26/reference/mtp_ref.py, models/demos/blackhole/mimo_v26/tests/test_mtp_ref.py
+
+## E261007-0542-8b2
+- date: 2026-10-07T05:42:28
+- commit: 6ce28192ecf
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: CORRECTION (coordinator): briefs/COMMON.md listed 'bfp8 attention weights default' among decisions already made. The user's decisions covered only routed experts bfp8. bfp8 qkv/o is the coordinator's working assumption inherited from the study (o_proj is bf16 in the checkpoint, qkv fp8 128x128 block). Evidence so far: attention PCC with bfp8 vs bf16 weights differs by about 0.0001 on L1/L5 at S=128 (attn agent E261007-0247-b41 and earlier); device-vs-oracle layers 6-47 run median 2-4x above the bf16-vs-fp32 oracle floor, which excludes weight quantisation (E261007-0540-c3b). To be put to the user; a bf16 o_proj switch is kept available (cost ~0.2 GB/chip extra).
+- evidence: -
+- paths: bringup/mimo_v26/briefs
+
+## E261007-0550-d25
+- date: 2026-10-07T05:50:36
+- commit: fcfc8f0f421
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER DECISIONS 2026-10-07: (1) spec decode drafter = the model card's 5-layer SWA DFlash-style drafter predicting 7 tokens per forward pass (model card README section 'Speculative Decoder'; block size 8 = 1 verified + 7 drafted; checkpoint dir dflash/), NOT the in-checkpoint MTP-3 (interpretation of 'MTP 7 token prediction': the card calls the DFlash drafter an MTP drafter; coordinator to confirm in the report). (2) bfp8 attention weights confirmed (keep bfp8 qkv/o; supersedes the open question in E261007-0542-8b2). (3) GSM8K threshold: user asked to use a different benchmark prompt set from the model card; the README publishes only agentic suites (DeepSWE, ProgramBench, Terminal Bench, OSWorld ...) with no runnable prompts or example messages, so no such set exists locally: clarification requested, GSM8K non-thinking n=128 remains the interim runnable proxy with threshold not yet set.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0553-ce8
+- date: 2026-10-07T05:53:58
+- commit: bde698a68ac
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER DECISIONS 2026-10-07: drafter confirmed = DFlash-style 5-layer drafter in the checkpoint dflash/ dir (7 draft tokens, block 8). GSM8K gate set to 85%: scorecard gsm8k min_n=128, min_correct=109 on gsm8k_128_nothink.json (sha256 858aa02c...2190b), non-thinking. Supersedes the provisional n=64/55 template value.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json

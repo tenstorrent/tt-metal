@@ -13,7 +13,7 @@ Rules
 - Log every measurement, decision, failure, retraction with `log_tool.py add` (commit first; tree must be clean). Numbers need commit+host+log path+shape.
   Use `--status inferred` for anything not measured at that commit. Log dir: `/mnt/tt-data/ssinghal/mimo-logs/<track>_<what>.log`.
   Do not quote numbers from stale/superseded/inferred entries. Real text prompts only (no random tokens) for any accuracy or routing claim.
-- Decisions already made (do not re-ask): routed experts bfp8, KV replication OK, MTP last, 64k first milestone, no full-model CPU run, bfp8 attention weights default.
+- Decisions already made (do not re-ask): routed experts bfp8, KV replication OK, MTP last, 64k first milestone, no full-model CPU run, (NOT a user decision: bfp8 attention weights are a working assumption, see LOG correction; the user has only decided routed experts bfp8).
 - ASK the coordinator (write it in your final report / stop) before: lowering precision (bfp4, fp8 KV), skipping/weakening a gate, deleting data, C++ rebuild in a shared build
   (use a private build dir and ask), installing packages, pushing, scope changes.
 - STOP and report when: a gate fails twice for the same cause, host faulty/hang with the same signature twice, blocked on another track, or 3 h without a measured result.
