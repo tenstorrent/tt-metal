@@ -22,6 +22,9 @@ SCALE = DQK**-0.5
 WINDOW = 128
 OUT = os.environ.get("PROBE_OUT", "/tmp/probe_sdpa.jsonl")
 BS = 64  # paged block size
+SINK_MULT = float(
+    os.environ.get("PROBE_SINK_MULT", "1")
+)  # study: real L1 sinks in [0.56,1.14]; >1 makes the sink convention testable
 
 
 def rec(case, **kw):
@@ -168,7 +171,7 @@ class DecodeCase:
         self.K = (torch.randn(B, nkv, Lc, DQK, generator=g) * 1.0).bfloat16()
         self.V = (torch.randn(B, nkv, Lc, DV, generator=g) * 0.7).bfloat16()
         self.sink = (
-            (torch.rand(nh, generator=g) * 0.58 + 0.56).bfloat16() if swa else None
+            ((torch.rand(nh, generator=g) * 0.58 + 0.56) * SINK_MULT).bfloat16() if swa else None
         )  # study: L1 sinks in [0.56, 1.14]
         pk, self.pt = make_paged(self.K)
         pv, _ = make_paged(self.V)
@@ -311,7 +314,7 @@ def g_dec_ring(dev):
                     Vr[b, 0, t % ring] = Vh[b, 0, t]
                     kpos[b, t % ring] = t
             q = torch.randn(B, nh, DQK, generator=g).bfloat16()
-            sink = (torch.rand(nh, generator=g) * 0.58 + 0.56).bfloat16()
+            sink = ((torch.rand(nh, generator=g) * 0.58 + 0.56) * SINK_MULT).bfloat16()
             ref = ref_decode(q, Kr, Vr, torch.tensor(posl), sink=sink, window=WINDOW, nkv=1, key_pos=kpos)
             pk, pt = make_paged(Kr)
             pv, _ = make_paged(pad_last(Vr, DQK))
@@ -381,7 +384,7 @@ def pf_inputs(S, nh, nkv, seed=0, Sk=None):
     q = torch.randn(1, nh, S, DQK, generator=g).bfloat16()
     k = torch.randn(1, nkv, Sk, DQK, generator=g).bfloat16()
     v = (torch.randn(1, nkv, Sk, DV, generator=g) * 0.7).bfloat16()
-    sink = (torch.rand(nh, generator=g) * 0.58 + 0.56).bfloat16()
+    sink = ((torch.rand(nh, generator=g) * 0.58 + 0.56) * SINK_MULT).bfloat16()
     return q, k, v, sink
 
 
@@ -472,7 +475,9 @@ def g_pre_corr(dev):
             pk, pt = make_paged(kc_)
             pv192, _ = make_paged(pad_last(vc, DQK))
             pv128, _ = make_paged(vc)
-            args = dict(scale=SCALE, program_config=pre_cfg(dev), compute_kernel_config=HIFI2())
+            args = dict(
+                program_config=pre_cfg(dev), compute_kernel_config=HIFI2()
+            )  # scale omitted: noconvert float binding rejects python float; default = DH**-0.5 = 192**-0.5
             if swa:
                 args.update(sliding_window_size=WINDOW, attention_sink=sink_tt(dev, sk, "scale"))
             tpt = tt(dev, pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
@@ -506,7 +511,6 @@ def g_pre_corr(dev):
                     DV,
                     tpt,
                     start,
-                    scale=SCALE,
                     program_config=pre_cfg(dev),
                     compute_kernel_config=HIFI2(),
                 )
@@ -638,7 +642,7 @@ def g_pre_perf(dev):
                     bench(
                         dev,
                         lambda: ttnn.transformer.chunked_scaled_dot_product_attention(
-                            tq, tk, tv, tpt, start, scale=SCALE, program_config=cfg, compute_kernel_config=HIFI2()
+                            tq, tk, tv, tpt, start, program_config=cfg, compute_kernel_config=HIFI2()
                         ),
                         n,
                     ),
@@ -653,7 +657,6 @@ def g_pre_perf(dev):
                             tv,
                             tpt,
                             start,
-                            scale=SCALE,
                             program_config=cfg,
                             compute_kernel_config=HIFI2(),
                             sliding_window_size=WINDOW,
@@ -721,6 +724,7 @@ if __name__ == "__main__":
         rec(
             "env",
             groups=groups,
+            sink_mult=SINK_MULT,
             grid=str(dev.compute_with_storage_grid_size()),
             arch=str(dev.arch()) if hasattr(dev, "arch") else "?",
         )
