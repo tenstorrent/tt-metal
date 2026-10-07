@@ -76,6 +76,7 @@ void kernel_main() {
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
         exp_cb_out.reserve_back(num_tiles_per_cycle);
 
+        EB_R3_EXTRA_INIT(cb_post_lhs, cb_post_rhs);
         tile_regs_acquire();
         BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
         PROCESS_POST_ACTIVATIONS(0);

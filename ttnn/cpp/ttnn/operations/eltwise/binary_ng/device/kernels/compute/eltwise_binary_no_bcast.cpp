@@ -46,7 +46,7 @@ void kernel_main() {
     pack_block_contiguous_init(cb_out.get_cb_id());
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT)
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
 
@@ -60,9 +60,10 @@ void kernel_main() {
 
         cb_out.reserve_back(n);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
 #endif
+        EB_R3_EXTRA_INIT(cb_post_lhs.get_cb_id(), cb_post_rhs.get_cb_id());
         tile_regs_acquire();
 #if BINARY_NG_BLOCK
         if constexpr (BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL) {

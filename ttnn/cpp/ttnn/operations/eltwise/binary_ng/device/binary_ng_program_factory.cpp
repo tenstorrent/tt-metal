@@ -1406,6 +1406,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         block_section && (c_data_format == tt::DataFormat::Float16_b || c_data_format == tt::DataFormat::Float32) &&
         std::getenv("EB_R3_NO_BLOCK_PACK") == nullptr;  // CI measurement toggle, not in the PR
     compute_kernel_defines["BINARY_NG_BLOCK"] = block_section ? "1" : "0";
+    compute_kernel_defines["EB_R3_P58725"] = std::getenv("EB_R3_P58725") != nullptr ? "1" : "0";  // CI only
+    compute_kernel_defines["EB_R3_PROBE_INIT"] = std::getenv("EB_R3_PROBE_INIT") != nullptr ? "1" : "0";  // CI only
     compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = block_pack ? "1" : "0";
 
     KernelDescriptor compute_desc;

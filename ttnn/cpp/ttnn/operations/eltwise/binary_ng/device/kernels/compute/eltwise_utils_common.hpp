@@ -29,6 +29,19 @@
 #define PROCESS_ACTIVATIONS_(op) PROCESS_##op##_ACTIVATIONS
 #define HAS_ACTIVATIONS(op) P_COMPL(IS_EMPTY(PROCESS_ACTIVATIONS(op, 0)))
 
+// CI only (round 3 #58725 review): EB_R3_P58725 1 skips the per-chunk re-init after a post activation alone (Blackhole);
+// EB_R3_PROBE_INIT 1 adds one more binary init before each binary op (a compute-sensitivity probe).
+#if defined(ARCH_BLACKHOLE) && defined(EB_R3_P58725) && EB_R3_P58725
+#define BINARY_POST_REINIT 0
+#else
+#define BINARY_POST_REINIT HAS_ACTIVATIONS(POST)
+#endif
+#if defined(EB_R3_PROBE_INIT) && EB_R3_PROBE_INIT
+#define EB_R3_EXTRA_INIT(l, r) binary_tiles_init<true, BINARY_OP_TYPE>(l, r)
+#else
+#define EB_R3_EXTRA_INIT(l, r)
+#endif
+
 // Physical LHS means the tensor in c_0, not necessarily the mathematical LHS.
 // This is a FORMAT reference, not necessarily the buffer supplying the next tile:
 // binary_ng_program_factory gives the LHS broadcast temporary (c_5) the same
