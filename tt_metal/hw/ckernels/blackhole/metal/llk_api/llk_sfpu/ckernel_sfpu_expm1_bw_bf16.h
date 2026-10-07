@@ -33,6 +33,9 @@ inline void calculate_expm1_bw_bf16() {
         v_if(g0_c >= 255.0f) { g0 = std::numeric_limits<float>::infinity(); }
         v_endif;
         vFloat product0 = grad * g0;
+        v_if(g0_c < 1.0f) { product0 = 0.0f; }
+        v_elseif(setsgn(grad, 0) == 0.0f && setsgn(x, 0) < 712.0f) { product0 = 0.0f; }
+        v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);
         vFloat result = scaled0;
         // A NaN compares by its sign; select it by its BF16 encoding: exponent all ones, mantissa nonzero.
