@@ -83,7 +83,8 @@ def main():
                 pos[r, s] = len(prompts[i])
             toks = torch.randint(1000, 100000, (ROWS, U, blk), generator=g)
             dead = torch.zeros(ROWS, U, dtype=torch.bool)
-            cap = tuple(range(NL))
+            cap = tuple(int(v) for v in E("DEC_CAPTURE", ",".join(str(i) for i in range(NL))).split(","))
+            NC = len(cap)
             # 1. verify on a fresh prefill
             gen.prefill(prompts, S)
             kv_pre = kv_rows(model, mesh, pos, U, blk)
@@ -112,7 +113,7 @@ def main():
             gen.prefill(prompts, S)
             sd = Decoder(model, trace=trace, U=U, block=1, capture=cap)
             aseq = torch.zeros(ROWS, U, blk, dtype=torch.long)
-            fseq = torch.zeros(ROWS, U, blk, NL * 4096)
+            fseq = torch.zeros(ROWS, U, blk, NC * 4096)
             for t in range(blk):
                 sd.set_inputs(toks[:, :, t], pos + t, dead)
                 a, b = sd.run()
@@ -210,13 +211,13 @@ def main():
                     ),
                     5,
                 )
-                for l in range(NL)
+                for l in range(len(cap))
             ]
             per_t0 = [
                 round(
                     min(pcc(fvr[r, u, 0, sl(l, 0)], fseq[r, u, 0, sl(l, 0)]) for r in range(ROWS) for u in range(U)), 5
                 )
-                for l in range(NL)
+                for l in range(len(cap))
             ]
             rec(
                 "verify_vs_sequential",
