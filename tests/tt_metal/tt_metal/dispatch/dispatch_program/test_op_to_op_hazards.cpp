@@ -46,6 +46,7 @@
 
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -321,7 +322,7 @@ void expect_buf_rw(
     const std::string& kernel_name) {
     auto kernel = wl.get_programs()[range].impl().get_kernel_by_spec_name(kernel_name);
     ASSERT_NE(kernel, nullptr) << "no kernel '" << kernel_name << "' in workload";
-    const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.get_devices()[0]);
+    const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.impl().get_devices()[0]);
     if (kernel_name == "writer") {
         EXPECT_FALSE(rw.opaque) << "writer is analyzable";
         EXPECT_TRUE(rw.reads.empty()) << "writer reads nothing";
@@ -347,7 +348,7 @@ void expect_buf_rw(
 // RAW hazard, DRAM: producer writes W to DRAM X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -370,7 +371,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
 // RAW hazard, L1: producer writes W to L1 X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -394,7 +395,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
 // serial/overlap timing probe (long stalls on two different nodes) used later to confirm concurrency.
 TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -421,7 +422,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
 // WAR hazard: consumer reads X (stalled) -> Y; producer then writes W to X; barrier => Y == D (original).
 TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -446,7 +447,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
 // WAR-free (disjoint): consumer reads Z (doped W) -> Y; producer writes a DISJOINT X => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -471,7 +472,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
 // WAW: two producers write X (W1 then W2); consumer reads X -> Y; barrier => Y == W2 (last write wins).
 TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -493,7 +494,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
 // Transitive N/N+1/N+2: N writes X=W (stalled), N+1 touches a disjoint buffer, N+2 reads X -> Z => Z == W.
 TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -522,7 +523,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
 // buffer usage, so a future detector must conservatively KEEP the barrier. Passes today.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->impl().get_devices()[0])) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -550,7 +551,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
 // the bound-but-unaccessed tensor absent. This is what a single-tensor test cannot catch.
 TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     if (skip_if_not_gen1(dev)) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
@@ -604,7 +605,7 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEndpoint) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     const exp::NodeCoord node{0, 0};
 
     // DRAM interleaved unless the path needs otherwise: LocalTensorAccessor needs L1, ShardView a sharded tensor.
@@ -768,7 +769,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyO
 // real read still resolves.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwUnresolvedSlotIsOpaque) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     auto in = alloc(*md, BufferType::DRAM);
 
     exp::KernelSpec k{
