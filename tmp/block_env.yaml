@@ -1,8 +1,0 @@
-TT_METAL_HOME: /home/smarton/fasth3/tt-metal/tt-project/worktrees/t22
-PYTHONPATH: /home/smarton/fasth3/tt-metal/tt-project/worktrees/t22:/home/smarton/fasth3/tt-metal/tt-project/worktrees/t22/ttnn:/home/smarton/fasth3/tt-metal/tt-project/worktrees/t22/tools
-PYTHON_ENV_DIR: /home/smarton/fasth3/tt-metal/python_env
-TT_METAL_CACHE: /home/smarton/fasth3/tt-metal/tt-project/worktrees/t7/tmp/tt-metal-cache
-LTX_CHECKPOINT: /home/losullivan/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors
-HF_HUB_OFFLINE: "1"
-LTX_SKIP_PCC: "1"
-LTX_PROFILE_ITERS: "3"
