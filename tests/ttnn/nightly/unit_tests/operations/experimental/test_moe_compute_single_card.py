@@ -160,6 +160,8 @@ def _run_moe_compute_single_card_test(
     compute_only=True,
     skip_on_ci=False,
     matmul_xfail_on_bh=False,
+    activation_limit=None,
+    weight_initializer=None,
 ):
     """
     Single-card MoE compute test body. cluster_axis is fixed to None
@@ -315,9 +317,13 @@ def _run_moe_compute_single_card_test(
 
     w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
 
-    torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
-    torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
-    torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    if weight_initializer is None:
+        torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
+        torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
+        torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
+    else:
+        assert not has_bias and not compute_only
+        torch_w0, torch_w1, torch_w2 = weight_initializer(num_layers, experts_per_device, hidden_size, N)
 
     # Bias tensors (mirrors test_moe_compute_6U.run_moe_compute_test bias block).
     # Use the same _bias_std and PyTorch shape conventions so the prepare-with-bias
@@ -345,6 +351,7 @@ def _run_moe_compute_single_card_test(
         torch_b1=torch_b1,
         torch_b2=torch_b2,
         activation_type=activation_type,
+        activation_limit=activation_limit,
     )
 
     w0_w1_mem_config, w2_mem_config, _, _ = get_weight_mem_configs(
@@ -415,7 +422,18 @@ def _run_moe_compute_single_card_test(
             optional_cross_device_semaphore=None,
             activation_type=activation_type,
             compute_only=compute_only,
+            activation_limit=activation_limit,
         )
+
+    def check_structured_combine(tt_combine_output):
+        # Exact BFP4 weights leave no quantization error: check the gain as well as the correlation.
+        actual = ttnn.to_torch(ttnn.get_device_tensors(tt_combine_output)[0]).float()
+        expected = combine_goldens[0][layer_id].float()
+        assert tuple(actual.shape) == tuple(expected.shape)
+        assert bool(torch.isfinite(actual).all())
+        relative_l2 = torch.linalg.vector_norm(actual - expected) / torch.linalg.vector_norm(expected).clamp_min(1e-8)
+        logger.info(f"Structured weights combine relative L2: {float(relative_l2):.8f}")
+        assert relative_l2 < 0.03
 
     def deallocate_l1_moe_compute_outputs(output_tensors):
         # Slots 3 and 4 share a backing buffer; deallocating slot 4 releases the shared L1 output.
@@ -592,6 +610,8 @@ def _run_moe_compute_single_card_test(
     assert matmul_all_passed, "Matmul output tensor verification failed!"
     if not compute_only:
         assert combine_all_passed, "Combine output tensor verification failed!"
+        if weight_initializer is not None:
+            check_structured_combine(combine_output_tensor)
 
         # Exercise the cached-program path with a fresh optional output tensor. This catches stale
         # FullLocal combine runtime arguments, especially output addresses patched on cache hit.
@@ -618,6 +638,8 @@ def _run_moe_compute_single_card_test(
         )
         logger.info(f"Combine Output Tensor Cache Hit: {'PASSED' if cache_hit_combine_all_passed else 'FAILED'}")
         assert cache_hit_combine_all_passed, "Combine output tensor cache-hit verification failed!"
+        if weight_initializer is not None:
+            check_structured_combine(cache_hit_combine_output_tensor)
 
         deallocate_l1_moe_compute_outputs(cache_hit_outputs)
         ttnn.deallocate(cache_hit_outputs[5])
@@ -884,12 +906,9 @@ def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
     )
 
 
-# Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
-    """compute_only=True with cluster_axis set must raise (loud rejection per spec)."""
-    # Build minimal valid input shapes; we do NOT need the op to actually run --
-    # validation must reject the bad arg combination before kernel launch.
+def _minimal_rejection_inputs(mesh_device):
+    """Valid input shapes for argument-validation tests: the op must reject the bad argument combination
+    before any kernel launch, so the weights are placeholders."""
     hidden_size = 7168
     tokens_per_device = 32
     experts = 8
@@ -928,8 +947,6 @@ def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, 
         dtype=ttnn.uint16,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-    # Dummy weights -- shapes don't matter; the failure should fire at the public
-    # API validation step before the device op runs.
     dummy_weight = torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16)
     tt_w0_w1 = ttnn.from_torch(
         dummy_weight,
@@ -945,25 +962,138 @@ def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, 
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    return (tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2)
 
+
+def _call_moe_compute_for_rejection(mesh_device, **overrides):
+    kwargs = dict(
+        layer_id=0,
+        output_height_shard_dim=4,
+        intermediate_size=2048,
+        has_bias=False,
+        cluster_axis=None,
+        topology=None,
+        num_links=None,
+        mux_core_range_set=None,
+        optional_output_tensor=None,
+        optional_cross_device_semaphore=None,
+        activation_type=MoEActivationFunction.SILU,
+        compute_only=False,
+    )
+    kwargs.update(overrides)
+    return ttnn.experimental.moe_compute(*_minimal_rejection_inputs(mesh_device), **kwargs)
+
+
+# Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
+    """compute_only=True with cluster_axis set must raise (loud rejection per spec)."""
     with expect_error(RuntimeError, r"compute_only.*cluster_axis"):
-        ttnn.experimental.moe_compute(
-            tt_sparse,
-            tt_indices,
-            tt_scores,
-            tt_mapping,
-            tt_w0_w1,
-            tt_w2,
-            layer_id=0,
-            output_height_shard_dim=4,
-            intermediate_size=2048,
-            has_bias=False,
-            cluster_axis=1,  # <-- conflicting with compute_only=True
-            topology=None,
-            num_links=None,
-            mux_core_range_set=None,
-            optional_output_tensor=None,
-            optional_cross_device_semaphore=None,
-            activation_type=MoEActivationFunction.SILU,
-            compute_only=True,
+        _call_moe_compute_for_rejection(mesh_device, compute_only=True, cluster_axis=1)
+
+
+def _clamp_boundary_weights(layers, experts, hidden, intermediate):
+    """Power-of-two sparse projections, exact in BFP4: every gate / up output is one scaled input and every
+    down output one scaled activation. Inputs cover [-0.5, 0.5), so gate x32 and up x64 reach both clamp
+    limits, and the negative gate branch stays unbounded."""
+    assert intermediate <= hidden
+    gate = torch.zeros((layers, experts, hidden, intermediate), dtype=torch.bfloat16)
+    up = torch.zeros_like(gate)
+    down = torch.zeros((layers, experts, intermediate, hidden), dtype=torch.bfloat16)
+    columns = torch.arange(intermediate)
+    gate[:, :, columns, columns] = 32.0
+    up[:, :, (columns + 17) % hidden, columns] = 64.0
+    down[:, :, columns, columns] = 1 / 32
+    return gate, up, down
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize("tokens", [1, 4])
+@pytest.mark.parametrize("activation_limit", [0.125, 10.0])
+def test_moe_compute_single_card_clamped_silu(mesh_device, mesh_shape, tokens, activation_limit):
+    """CLAMPED_SILU in FullLocal with exact weights; the small limit clips both gate and up."""
+    hidden_size = 4096
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=2,
+        tokens_per_device=tokens,
+        selected_experts_k=2,
+        N=2048,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.CLAMPED_SILU,
+        activation_limit=activation_limit,
+        compute_only=False,
+        weight_initializer=_clamp_boundary_weights,
+    )
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "activation_limit, error",
+    [
+        (None, "activation_limit is required for CLAMPED_SILU"),
+        (0.0, "activation_limit must be finite and positive"),
+        (-0.0, "activation_limit must be finite and positive"),
+        (-1.0, "activation_limit must be finite and positive"),
+        (float("nan"), "activation_limit must be finite and positive"),
+        (float("inf"), "activation_limit must be finite and positive"),
+        (-float("inf"), "activation_limit must be finite and positive"),
+    ],
+    ids=["missing", "zero", "negative-zero", "negative", "nan", "positive-inf", "negative-inf"],
+)
+def test_moe_compute_clamped_silu_rejects_invalid_limit(mesh_device, mesh_shape, expect_error, activation_limit, error):
+    before = mesh_device.num_program_cache_entries()
+    with expect_error(RuntimeError, error):
+        _call_moe_compute_for_rejection(
+            mesh_device, activation_type=MoEActivationFunction.CLAMPED_SILU, activation_limit=activation_limit
         )
+    assert mesh_device.num_program_cache_entries() == before
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "activation_type", [None, MoEActivationFunction.SILU, MoEActivationFunction.SWIGLU, MoEActivationFunction.GELU]
+)
+def test_moe_compute_other_activations_reject_limit(mesh_device, mesh_shape, expect_error, activation_type):
+    before = mesh_device.num_program_cache_entries()
+    with expect_error(RuntimeError, "must be omitted for other activations"):
+        _call_moe_compute_for_rejection(mesh_device, activation_type=activation_type, activation_limit=10.0)
+    assert mesh_device.num_program_cache_entries() == before
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 500000}], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_clamped_silu_limit_is_program_cache_key(mesh_device, mesh_shape):
+    """A second limit compiles one new program; returning to the first hits its cached program."""
+    mesh_device.disable_and_clear_program_cache()
+    mesh_device.enable_program_cache()
+    hidden_size = 512
+    ring_n = effective_matmul_ring_size(mesh_device)
+    cache_entries = []
+    for activation_limit in (0.125, 10.0, 0.125):
+        _run_moe_compute_single_card_test(
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            experts_per_device=2,
+            tokens_per_device=4,
+            selected_experts_k=2,
+            N=max(256, 32 * ring_n),
+            hidden_size=hidden_size,
+            output_height_shard_dim=4,
+            output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+            dtype=ttnn.bfloat16,
+            activation_type=MoEActivationFunction.CLAMPED_SILU,
+            activation_limit=activation_limit,
+            compute_only=False,
+            weight_initializer=_clamp_boundary_weights,
+        )
+        ttnn.synchronize_device(mesh_device)
+        cache_entries.append(mesh_device.num_program_cache_entries())
+    assert cache_entries[1] == cache_entries[0] + 1, "changing the clamp must compile exactly one new MoE program"
+    assert cache_entries[2] == cache_entries[1], "returning to the original clamp must hit its cached program"

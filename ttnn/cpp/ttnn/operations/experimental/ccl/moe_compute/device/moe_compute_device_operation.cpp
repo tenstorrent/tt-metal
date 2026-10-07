@@ -19,6 +19,8 @@
 
 #include <umd/device/types/arch.hpp>
 
+#include <cmath>
+
 namespace ttnn::experimental::prim {
 namespace detail {
 
@@ -427,8 +429,19 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
     const std::optional<uint32_t>& bh_ring_size,
-    const std::optional<uint32_t>& num_shared_experts_per_device) {
+    const std::optional<uint32_t>& num_shared_experts_per_device,
+    const std::optional<float>& activation_limit) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
+    using Activation = ttnn::experimental::prim::detail::MoEActivationFunction;
+
+    const Activation resolved_activation = activation_type.value_or(Activation::SILU);
+    TT_FATAL(
+        (resolved_activation == Activation::CLAMPED_SILU) == activation_limit.has_value(),
+        "activation_limit is required for CLAMPED_SILU and must be omitted for other activations");
+    TT_FATAL(
+        !activation_limit.has_value() || (std::isfinite(*activation_limit) && *activation_limit > 0.0f),
+        "activation_limit must be finite and positive, got {}",
+        activation_limit.value_or(0.0f));
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
     const auto& indices_shape = tilize_expert_indices_tensor.tensor_spec().logical_shape();
@@ -587,7 +600,8 @@ std::vector<ttnn::Tensor> moe_compute(
                                                : experimental::prim::MoEComputePath::FullCcl),
             .bh_ring_size = ring_n,
             .combine_params = combine_params,
-            .activation_type = activation_type.value_or(experimental::prim::detail::MoEActivationFunction::SILU)},
+            .activation_type = resolved_activation,
+            .activation_limit = activation_limit.value_or(0.0f)},
         OperationType::tensor_args_t{
             .tilize_input_tensor = tilize_input_tensor,
             .tilize_expert_indices_tensor = tilize_expert_indices_tensor,

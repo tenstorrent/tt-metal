@@ -47,6 +47,11 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 };
 
 template <>
+inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU>() {
+    PACK((llk_math_eltwise_binary_sfpu_swiglu_init()));
+};
+
+template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
     PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
 };
@@ -108,6 +113,25 @@ struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::S
         PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(0, 1, 0)));
         if constexpr (kPairs == 2) {
             PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
+        }
+    }
+};
+
+#ifdef TRISC_PACK
+// silu(min(gate, limit)) * clamp(up, -limit, limit)
+struct ClampedSiluConfig {
+    static constexpr float alpha = 1.0f;
+    static constexpr float clamp_limit =
+        __builtin_bit_cast(float, get_named_compile_time_arg_val("activation_limit_bits"));
+};
+#endif
+
+template <uint32_t kPairs>
+struct PackActivation<ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU, kPairs> {
+    static inline void compute() {
+        PACK((llk_math_eltwise_binary_sfpu_swiglu<false, ClampedSiluConfig, /*AddUpBias=*/false>(0, 1, 0)));
+        if constexpr (kPairs == 2) {
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<false, ClampedSiluConfig, /*AddUpBias=*/false>(2, 3, 2)));
         }
     }
 };

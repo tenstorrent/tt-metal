@@ -770,7 +770,7 @@ def _get_base_pcc_threshold(activation_type, has_bias):
     act_threshold = None
     if activation_type == MoEActivationFunction.SWIGLU:
         act_threshold = SWIGLU_PCC_THRESHOLD
-    elif activation_type == MoEActivationFunction.SILU:
+    elif activation_type in (MoEActivationFunction.SILU, MoEActivationFunction.CLAMPED_SILU):
         act_threshold = SILU_PCC_THRESHOLD
     elif activation_type == MoEActivationFunction.GELU:
         act_threshold = GELU_PCC_THRESHOLD
@@ -1373,7 +1373,10 @@ def compute_matmul_golden(
     torch_b1=None,
     torch_b2=None,
     activation_type=MoEActivationFunction.SILU,
+    activation_limit=None,
 ):
+    if (activation_type == MoEActivationFunction.CLAMPED_SILU) != (activation_limit is not None):
+        raise ValueError("activation_limit is required for CLAMPED_SILU and must be omitted for other activations")
     tokens = tokens_per_device * devices
 
     # (L, D, E/D, T, H) -> (L, E, T, H)
@@ -1421,6 +1424,10 @@ def compute_matmul_golden(
         torch_silu_output_ref = torch.nn.functional.silu(torch_w0_output_ref)
         # (L, E, T, K) @ (L, E, K, N) -> (L, E, T, N)
         torch_intermediate_ref = torch_silu_output_ref * torch_w1_output_ref  # (L, E, T, N)
+    elif activation_type == MoEActivationFunction.CLAMPED_SILU:
+        torch_intermediate_ref = torch.nn.functional.silu(
+            torch_w0_output_ref.clamp(max=activation_limit)
+        ) * torch_w1_output_ref.clamp(min=-activation_limit, max=activation_limit)
     elif activation_type == MoEActivationFunction.SWIGLU:
         torch_intermediate_ref = _swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)  # (L, E, T, N)
     elif activation_type == MoEActivationFunction.GELU:

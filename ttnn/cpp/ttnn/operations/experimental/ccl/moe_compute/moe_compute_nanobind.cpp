@@ -26,14 +26,15 @@ void bind_moe_compute(nb::module_& mod) {
     nb::enum_<ttnn::experimental::prim::detail::MoEActivationFunction>(mod, "MoEActivationFunction")
         .value("SILU", ttnn::experimental::prim::detail::MoEActivationFunction::SILU)
         .value("SWIGLU", ttnn::experimental::prim::detail::MoEActivationFunction::SWIGLU)
-        .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU);
+        .value("GELU", ttnn::experimental::prim::detail::MoEActivationFunction::GELU)
+        .value("CLAMPED_SILU", ttnn::experimental::prim::detail::MoEActivationFunction::CLAMPED_SILU);
     ttnn::bind_function<"moe_compute", "ttnn.experimental.">(
         mod,
         R"doc(
         Experimental fused MoE compute supporting arbitrary ``(hidden_size, intermediate_size)`` pairs.
 
         This operation performs the expert matmuls (gate/up projection via W0/W1, down
-        projection via W2) and activation (SILU, SwiGLU, or GELU) in a fused compute kernel.
+        projection via W2) and activation (SILU, SwiGLU, GELU, or clamped SiLU) in a fused compute kernel.
         Tile distribution across the matmul ring (12 cores on Wormhole; 7 or 8 cores on
         Blackhole depending on whether one DRAM bank is fused off — auto-detected from the
         live DRAM-bank count) is derived at compile time from ``hidden_size`` and
@@ -113,7 +114,11 @@ void bind_moe_compute(nb::module_& mod) {
 
         - ``activation_type`` (optional, default ``None`` ≡ ``SILU``): The expert FFN
           activation function — one of ``ttnn.experimental.MoEActivationFunction``
-          ``{SILU, SWIGLU, GELU}`` — applied between the W0/W1 and W2 projections.
+          ``{SILU, SWIGLU, GELU, CLAMPED_SILU}`` — applied between the W0/W1 and W2 projections.
+
+        - ``activation_limit`` (optional): required for ``CLAMPED_SILU`` and rejected for
+          every other activation; a finite positive ``L`` giving
+          ``silu(min(gate, L)) * clamp(up, -L, L)`` (no additive up bias). Part of the program cache key.
 
         - ``compute_only`` (default ``False``): When ``True``, run only the expert
           matmuls and skip the A2A combine. The op then returns **5** tensors (the
@@ -241,7 +246,8 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
-        nb::arg("num_shared_experts_per_device") = nb::none());
+        nb::arg("num_shared_experts_per_device") = nb::none(),
+        nb::arg("activation_limit") = nb::none());
 }
 
 void bind_get_moe_combine_cores(nb::module_& mod) {
