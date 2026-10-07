@@ -72,7 +72,7 @@ Program CreateEltwiseAddProgram(
         "tt_metal/programming_examples/contributed/vecadd/kernels/add.cpp",
         target_tensix_core,
         ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
             .fp32_dest_acc_en = false,
             .math_approx_mode = false,
             .compile_args = {},
