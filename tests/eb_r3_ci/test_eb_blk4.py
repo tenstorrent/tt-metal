@@ -116,3 +116,25 @@ def test_blk4_bcast(device, op, mem, kind, d, do, act):
     shape, mc = _mem(mem)
     b_shape = (1, 1, shape[2], 1) if kind == "col" else (1, 1, 1, 1)
     _run(device, op, shape, mc, d, d, do, b_shape=b_shape, act=act, mcb=ttnn.DRAM_MEMORY_CONFIG)
+
+
+# #58725 / #58726: sharded column and scalar broadcasts whose per-tile operand carries an activation (rsub's NEG, the logical
+# ops' NEZ), one tile per section on main.
+OPACT = [(op, m, k) for op in ("rsub", "logical_and", "logical_or") for m in ("hs8_t128", "hs32_t128") for k in ("col", "scalar")]
+
+
+@pytest.mark.parametrize("op, mem, kind", OPACT, ids=["-".join(c) for c in OPACT])
+def test_blk4_opact(device, op, mem, kind):
+    shape, mc = _mem(mem)
+    torch.manual_seed(0)
+    a = torch.rand(shape, dtype=torch.bfloat16) - 0.5
+    b = torch.rand((1, 1, shape[2], 1) if kind == "col" else (1, 1, 1, 1), dtype=torch.bfloat16) - 0.5
+    ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+    tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    fn = {"rsub": ttnn.rsub, "logical_and": ttnn.logical_and, "logical_or": ttnn.logical_or}[op]
+    for _ in range(3):
+        out = fn(ta, tb, memory_config=mc)
+    af, bf = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+    ref = {"rsub": lambda: bf - af, "logical_and": lambda: torch.logical_and(af, bf).float(), "logical_or": lambda: torch.logical_or(af, bf).float()}[op]()
+    got = ttnn.to_torch(out).float()
+    assert torch.allclose(got, ref, rtol=0.05, atol=0.05), float((got - ref).abs().max())

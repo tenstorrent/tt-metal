@@ -105,9 +105,11 @@ ALWI void process_tile(
     // Sharded operand and output: up to a DEST section of tiles against the one broadcast tile per acquire.
     for (uint32_t j = tile_start; j < freq;) {
         const uint32_t n = (freq - j) < BCAST_OTHER_CHUNK ? (freq - j) : BCAST_OTHER_CHUNK;
+        PREPROCESS(
+            OTHER_OP, CircularBuffer(CB_PRE_OTHER), CircularBuffer(CB_POST_OTHER), CircularBuffer(cb_out), n);
         EXP_CB_POST_OTHER.wait_front(n);
         exp_dfb_out.reserve_back(n);
-#if BINARY_POST_REINIT
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();

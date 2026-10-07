@@ -962,6 +962,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     bool eb_fpu_no_operand_act = false;  // CI (ci4)
     bool eb_post_ok = false;             // CI (ci4)
     bool eb_bcast_post_ok = false;       // CI (ci4)
+    bool eb_bcast_opact_ok = false;      // CI (ci4)
     {
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
         ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
@@ -1035,6 +1036,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         const bool eb_zero_point = !post_activations.empty() && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
         eb_post_ok = post_activations.empty() || (std::getenv("EB_R3_BLK_POST") != nullptr && !eb_zero_point);
         eb_bcast_post_ok = post_activations.empty() || (std::getenv("EB_R3_BCAST_POST") != nullptr && !eb_zero_point);
+        eb_bcast_opact_ok = !is_sfpu_op && std::holds_alternative<OpConfig::FpuBinaryOp>(op_config.binary_op) &&
+                            std::getenv("EB_R3_BCAST_OPACT") != nullptr;
 
         add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
@@ -1108,6 +1111,13 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
+    // CI (ci4): intermediate CBs hold a broadcast section when operand activations may run there.
+    const uint32_t eb_inter_tiles =
+        (std::getenv("EB_R3_BCAST_OPACT") != nullptr && a_sharded && c_sharded &&
+         (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+          operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B))
+            ? (fp32_dest_acc_en ? 4u : 8u)
+            : 1u;
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1134,7 +1144,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = a_intermediate_single_tile_size * num_tiles_per_cycle,
+            .total_size = a_intermediate_single_tile_size * std::max<uint32_t>(num_tiles_per_cycle, eb_inter_tiles),
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
@@ -1165,7 +1175,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle,
+            .total_size = b_intermediate_single_tile_size * std::max<uint32_t>(num_tiles_per_cycle, eb_inter_tiles),
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
@@ -1413,7 +1423,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                  compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalar &&
                                  num_tiles_per_cycle > 1 && eb_n >= static_cast<uint32_t>(eb_r3_env_int("EB_R3_BU_MIN", 16)) &&
                                  std::getenv("EB_R3_BLK_SCALAR") != nullptr;
-    const bool bcast_sections = eb_bh && eb_fpu_no_operand_act && eb_bcast_post_ok && !is_where_op &&
+    const bool bcast_sections = eb_bh && (eb_fpu_no_operand_act || eb_bcast_opact_ok) && eb_bcast_post_ok && !is_where_op &&
                                 (compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeColBcastNg ||
                                  compute_kernel == CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeScalarBcastNg) &&
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
