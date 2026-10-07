@@ -100,7 +100,6 @@ class MathOperation(Enum):
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
     Relu = OpSpec("relu", MathOpType.SFPU_UNARY)
-    # Row scatter-add of Dest tile idst into tile idst + 1 driven by a 32-byte L1 row mask.
     ReshuffleRows = OpSpec("reshuffle_rows", MathOpType.SFPU_UNARY)
     Rsqrt = OpSpec("rsqrt", MathOpType.SFPU_UNARY)
     Sigmoid = OpSpec("sigmoid", MathOpType.SFPU_UNARY)
@@ -264,8 +263,7 @@ class MathOperation(Enum):
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
     SfpuLogaddexp = OpSpec("LOGADDEXP", MathOpType.SFPU_BINARY)
     SfpuLogaddexp2 = OpSpec("LOGADDEXP2", MathOpType.SFPU_BINARY)
-    # reshuffle_rows as the fuser drives it: tile in0 scatter-added into tile in1 = in0 + 1 (in place)
-    # under the fixed row mask RESHUFFLE_ROWS_FUSER_MASK of the Quasar test dispatch.
+    # Fuser-only binary form of reshuffle_rows with a fixed mask (in1 = in0 + 1, out = in1).
     SfpuReshuffleRows = OpSpec("RESHUFFLE_ROWS", MathOpType.SFPU_BINARY)
     SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
     SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)

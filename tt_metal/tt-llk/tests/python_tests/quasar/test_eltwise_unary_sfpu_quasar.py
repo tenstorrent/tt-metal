@@ -1371,14 +1371,8 @@ def test_cumsum_tilized_dest_quasar(cumsum_formats_dest_acc):
     ), f"cumsum mismatch:\ngot\n{result}\nexpected\n{expected}"
 
 
-# ---------------------------------------------------------------------------
-# reshuffle_rows: row scatter-add from Dest tile idst into tile idst + 1.
-#
-# Not part of the random sweep above: the op needs a 32-byte destination-row mask in L1 and
-# consumes tiles in (input, accumulator) pairs, so it carries its own stimulus and oracle.
-# The mask is written verbatim into buffer_B; the shared C++ source hands the kernel
-# buffer_B[0] - 16, like embedding_backward does with its CB tile address.
-# ---------------------------------------------------------------------------
+# reshuffle_rows: needs an L1 row mask (written to buffer_B) and (input, accumulator) tile pairs,
+# so it has its own stimulus and oracle instead of joining the random sweep.
 RESHUFFLE_NO_DESTINATION = ReshuffleRowsGolden.NO_DESTINATION
 
 
@@ -1393,10 +1387,7 @@ def _reshuffle_mixed_mask() -> List[int]:
     ]
 
 
-# Each mask names what it pins. The many-to-one masks make every row re-read the quad the
-# previous row just stored (the Dest store -> load hazard); reverse crosses the face-pair
-# boundary (15 <-> 16) and the tile corners (0 <-> 31) and never keeps a row in its own
-# LREG lane.
+# Many-to-one masks hit the Dest store -> reload hazard; reverse crosses the face-pair boundary.
 RESHUFFLE_MASKS = {
     "identity": list(range(DEFAULT_TILE_R_DIM)),
     "reverse": [DEFAULT_TILE_R_DIM - 1 - i for i in range(DEFAULT_TILE_R_DIM)],
@@ -1407,25 +1398,19 @@ RESHUFFLE_MASKS = {
     ],
     "all_to_last": [DEFAULT_TILE_R_DIM - 1] * DEFAULT_TILE_R_DIM,
     "mixed": _reshuffle_mixed_mask(),
-    # Every non-sentinel out-of-range target must be skipped too, not just 255: 32 would alias
-    # into accumulator row 16, 47 into row 31, 48+ would walk into the next Dest tile.
+    # Every target >= 32 must be skipped, not just 255 (32 would alias row 16, 48+ the next tile).
     "out_of_range": [
         [32, 47, 48, 254, 64, 100, 128, 200][(i // 2) % 8] if i % 2 else i
         for i in range(DEFAULT_TILE_R_DIM)
     ],
 }
 
-# Two tile rows of (input, accumulator) pairs: the second pair runs at a non-zero Dest index.
+# Two pairs, so the second runs at a non-zero Dest index.
 RESHUFFLE_DIMS = [64, 64]
 
 
 def _reshuffle_stimulus(dimensions) -> torch.Tensor:
-    """
-    Half-integers in [-2, 2]. A full 32-row pile-up plus the accumulator stays within
-    +-66 in steps of 0.5 (at most 8 significant bits), so every partial sum is exact in
-    Float16, Float16_b and Float32 and the oracle can demand bit equality: a single lost or
-    doubled row shows up instead of hiding inside a tolerance.
-    """
+    """Half-integers in [-2, 2]: every partial sum is exact in all formats, so the check is bit-exact."""
     return torch.randint(-4, 5, tuple(dimensions)).to(torch.float32) / 2
 
 
@@ -1451,10 +1436,7 @@ def _reshuffle_mask_buffer(mask: List[int]) -> torch.Tensor:
     ],
 )
 def test_reshuffle_rows_quasar(reshuffle_variant_mask):
-    """
-    reshuffle_rows against an exact oracle: every accumulator tile must equal its initial
-    value plus the mask-selected input rows, and every input tile must come back unchanged.
-    """
+    """Accumulators must match exactly and input tiles must come back unchanged."""
     (format_variant, mask_name) = reshuffle_variant_mask[0]
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc

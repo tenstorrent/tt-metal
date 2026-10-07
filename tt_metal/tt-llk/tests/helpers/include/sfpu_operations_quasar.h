@@ -591,8 +591,7 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
  * @param first Whether this tile starts a fresh top-to-bottom accumulation chain; only cumsum
  *        reads it. Defaults to true so each tile is independent.
  * @param fill_const_value Constant written by fill; other operations ignore it.
- * @param idx_addr L1 byte address of the destination-row mask minus its 16-byte header; only
- *        reshuffle_rows reads it (input tile at dst_index, accumulator at dst_index + 1).
+ * @param idx_addr reshuffle_rows only: L1 address of the row mask minus its 16-byte header.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -807,8 +806,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::reshuffle_rows)
     {
-        // Whole-tile scatter-add from tile dst_index into tile dst_index + 1, run once per tile.
-        // _sfpu_check_ only validates dst_index, so bound the accumulator tile here as well.
+        // _sfpu_check_ only validates dst_index; the accumulator is dst_index + 1.
         LLK_ASSERT(
             (dst_index + 1 < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()),
             "reshuffle_rows accumulator tile dst_index + 1 exceeds max dest tiles");
@@ -1207,11 +1205,8 @@ void call_unary_sfpu_operation_quasar(
     }
 }
 
-// Fixed destination-row mask BinaryOp::RESHUFFLE_ROWS feeds calculate_reshuffle_rows (the fuser has
-// no way to hand an SFPU op an L1 buffer). Preceded by the kernel's RESHUFFLE_MASK_HEADER_BYTES so
-// its address can be passed as idx_addr as is. It mixes in-place, swapped and face-pair-crossing
-// rows, many-to-one targets, the 255 sentinel and other out-of-range targets (32, 47, 48, 64, 100,
-// 254). Must stay in sync with RESHUFFLE_ROWS_FUSER_MASK in helpers/golden_generators.py.
+// Fixed mask for BinaryOp::RESHUFFLE_ROWS, since the fuser cannot pass an L1 buffer.
+// Keep in sync with RESHUFFLE_ROWS_FUSER_MASK in helpers/golden_generators.py.
 alignas(4) inline constexpr std::uint8_t RESHUFFLE_ROWS_FUSER_MASK[ckernel::sfpu::RESHUFFLE_MASK_HEADER_BYTES + TILE_R_DIM] = {
     0,  0,  0,  0,  0,   0,  0, 0,  0,  0,   0,  0,  0,  0,   0,  0, // header, skipped by the kernel
     31, 30, 16, 15, 255, 32, 0, 0,  0,  47,  5,  5,  48, 254, 17, 3, //
@@ -1735,8 +1730,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
     else if constexpr (OP == BinaryOp::RESHUFFLE_ROWS)
     {
-        // calculate_reshuffle_rows scatter-adds the tile it is pointed at into the one after it, so it
-        // fits the binary harness only with in1 = in0 + 1 and out = in1. One call per tile.
+        // The kernel always accumulates into the tile after in0.
         LLK_ASSERT(src1_tile == src0_tile + 1 && dst_tile == src1_tile, "RESHUFFLE_ROWS needs in1 = in0 + 1 and out = in1");
         LLK_ASSERT(
             (dst_tile < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()),

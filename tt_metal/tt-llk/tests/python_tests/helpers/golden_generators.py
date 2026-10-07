@@ -4009,8 +4009,7 @@ class EltwiseBinaryGolden(FidelityMasking):
         return (t1 >= t2).to(torch.int32)
 
 
-# The fixed destination-row mask of BinaryOp::RESHUFFLE_ROWS in the Quasar test dispatch
-# (RESHUFFLE_ROWS_FUSER_MASK in sfpu_operations_quasar.h, after its 16 header bytes). Keep in sync.
+# Keep in sync with RESHUFFLE_ROWS_FUSER_MASK in sfpu_operations_quasar.h.
 RESHUFFLE_ROWS_FUSER_MASK = [
     *(31, 30, 16, 15, 255, 32, 0, 0, 0, 47, 5, 5, 48, 254, 17, 3),
     *(1, 2, 31, 31, 100, 8, 9, 15, 16, 255, 20, 21, 22, 64, 7, 0),
@@ -4634,16 +4633,11 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         return torch.nn.functional.logsigmoid(t1.to(torch.float32))
 
     def _reshuffle_rows(self, tensor, src_idx, dst_idx, data_format):
-        """
-        reshuffle_rows on a tilized Dest image: every row ``i`` of tile ``src_idx`` with
-        ``RESHUFFLE_ROWS_FUSER_MASK[i] < 32`` is added into row ``mask[i]`` of tile ``dst_idx``,
-        in row order, each partial sum rounded to ``data_format`` as the per-row Dest store does.
-        """
+        """reshuffle_rows on a tilized Dest image; rounds after every row like the Dest store."""
         result = tensor.clone()
         torch_format = format_dict[data_format]
 
         def tile_row(tile, row):
-            # Row r of a tilized 32x32 tile: 16 datums in the left face, 16 in the one beside it.
             face = (row // FACE_DIM) * 2
             base = tile * ELEMENTS_PER_TILE + face * FACE_DIM * FACE_DIM
             start = base + (row % FACE_DIM) * FACE_DIM
@@ -5332,18 +5326,8 @@ class TilizeGolden:
 @register_golden
 class ReshuffleRowsGolden:
     """
-    Row scatter-add of the reshuffle_rows SFPU op (embedding-backward accumulation).
-
-    The op consumes 32x32 tiles in (input, accumulator) pairs: for every input row ``i`` with
-    ``mask[i] < 32`` it adds the whole row into accumulator row ``mask[i]``; 255 skips the row.
-    Rows are applied in order, so several input rows may land on one accumulator row. The input
-    tile is left unchanged.
-
-    ``operand`` is the logical (untilized) ``[rows, cols]`` tensor; tile ``2k`` is the input
-    and tile ``2k + 1`` (the tile to its right) the accumulator, which matches the row-major
-    tile order of ``tilize_block``. The sums are taken in float32 and rounded to
-    ``data_format`` once at the end, so the caller must pick stimuli whose partial sums are
-    exact in the Dest format.
+    reshuffle_rows on (input, accumulator) tile pairs 2k / 2k+1 of an untilized tensor.
+    Rounds only once at the end, so stimuli must keep every partial sum exact.
     """
 
     NO_DESTINATION = 255

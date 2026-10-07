@@ -200,8 +200,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (SFPU_UNARY_OPERATION == SfpuType::reshuffle_rows)
                     {
-                        // Tiles come in (input, accumulator) pairs: tile i is scattered into tile i + 1,
-                        // steered by the raw row mask in buffer_B (the kernel skips a 16-byte header).
+                        // (input, accumulator) tile pairs; the kernel skips a 16-byte header before the mask.
                         if (i % 2 == 0)
                         {
                             test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
