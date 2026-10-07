@@ -100,7 +100,9 @@ jobs:
             echo "node not found; skipping node probes" > "$out/0"
           fi
           wait
-          echo "proxy env: https_proxy=${https_proxy:-<unset>} HTTPS_PROXY=${HTTPS_PROXY:-<unset>} NODE_USE_ENV_PROXY=${NODE_USE_ENV_PROXY:-<unset>}"
+          # Proxy URLs can embed credentials: report only whether each is set.
+          state() { [ -n "${!1:-}" ] && echo set || echo unset; }
+          echo "proxy env: https_proxy=$(state https_proxy) HTTPS_PROXY=$(state HTTPS_PROXY) NODE_USE_ENV_PROXY=${NODE_USE_ENV_PROXY:-<unset>}"
           cat "$out"/* 2>/dev/null
 
       - name: Checkout repository
