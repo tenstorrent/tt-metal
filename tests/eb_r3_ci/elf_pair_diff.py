@@ -3,7 +3,9 @@
 lines; per TRISC, the disassembly with addresses and branch targets masked, diffed. usage: elf_pair_diff.py <cache A> <cache B> <kernel name>..."""
 import difflib, glob, os, re, shutil, subprocess, sys
 
-od = shutil.which("riscv-tt-elf-objdump") or next(iter(glob.glob("/work/runtime/sfpi/compiler/bin/riscv-tt-elf-objdump") + glob.glob("/**/riscv-tt-elf-objdump", recursive=True)), None)
+od = shutil.which("riscv-tt-elf-objdump") or next((p for p in ("/opt/tenstorrent/sfpi/compiler/bin/riscv-tt-elf-objdump", "/work/runtime/sfpi/compiler/bin/riscv-tt-elf-objdump") if os.path.exists(p)), None)
+if od is None:
+    sys.exit("ELFDIFF no objdump")
 A, B, names = sys.argv[1], sys.argv[2], sys.argv[3:]
 
 
