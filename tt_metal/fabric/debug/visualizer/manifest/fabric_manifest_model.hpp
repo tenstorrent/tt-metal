@@ -114,6 +114,8 @@ struct NocForwardConfig {
     tt::tt_metal::NOC noc = tt::tt_metal::NOC::NOC_0;
     NocCmdBuf data_cmd_buf = NocCmdBuf::WR_CMD_BUF;
     NocCmdBuf sync_cmd_buf = NocCmdBuf::WR_CMD_BUF;
+
+    bool operator==(const NocForwardConfig&) const = default;
 };
 
 // A router's L1 credit counter arrays, shared by every VC that uses counter credits. The to_sender arrays are
@@ -203,6 +205,23 @@ struct Channels {
     std::vector<std::vector<ReceiverChannel>> receivers;
 };
 
+// A persistent connection on one VC from this router to a sender channel of a router on the same chip and routing
+// plane. The receivers forwarding on the VC write through it. In mux mode a VC0 edge into a sibling ends at the
+// sibling's tensix mux instead.
+struct DownstreamEdge {
+    // The kernel's EDGE_<n>: the sibling's compact index among this router's other directions, plus one.
+    uint32_t edge = 0;
+    SiblingRouterRef target;
+    // On the edge's VC.
+    uint32_t landing_channel = 0;
+    // The landing channel's compact index on the sibling. The builder records it only in 2D.
+    std::optional<uint32_t> landing_compact;
+    // The NoC core the connection writes to: the sibling's ERISC, or its tensix mux.
+    tt::tt_metal::CoreCoord core;
+    StreamRef free_slots;
+    L1Region teardown_sem;
+};
+
 // Information about a router.
 struct Router {
     RouterIdentity identity;
@@ -211,6 +230,8 @@ struct Router {
     // Always reserved, although not always used. Whether a VC uses them is its mesh's credit_transport backing.
     L1CreditCounters credit_counters;
     Channels channels;
+    // Indexed [vc], by edge.
+    std::vector<std::vector<DownstreamEdge>> intra_chip_downstream_edges;
 };
 
 // Information about a chip.
