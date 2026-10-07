@@ -163,5 +163,10 @@ safe runner passes before the next launch. The recovery service is
 `qwen38-gdn-perf-sweeps-v4-20261007.service`, using immutable source snapshot
 `gdn-integration-source-v9`, the same native runtime, a 14-hour outer limit,
 six hours per variant and the shared device lock. The 12 completed native
-measurements were verified reusable before launch. The candidate sweep is
-queued after the remaining native cells; full-Galaxy scaling remains pending.
+measurements were verified reusable before launch. The native control has
+now completed: 24 measured cells, one recorded OOM at B32 / 32K, plus ten
+unattempted capacity/implementation guards. Automatic recovery closed the
+failed process cleanly and finished the other cells in a second process.
+The complete baseline graphs and raw attempts are in
+[`../gdn-native-sweep-v4/`](../gdn-native-sweep-v4/README.md). The candidate
+sweep has started at 128K / B8; full-Galaxy scaling remains pending.
