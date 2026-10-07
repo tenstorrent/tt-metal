@@ -34,6 +34,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TINY_PACK_MODE,
 )
 from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
 from helpers.utils import passed_test
@@ -44,6 +45,7 @@ def _make_config(
     num_tiles,
     formats,
     dest_acc,
+    pack_mode=0,
 ):
     """Build TestConfig for a given tile shape and tile count."""
     tile_r, tile_c = tile_dims
@@ -89,7 +91,7 @@ def _make_config(
     configuration = TestConfig(
         "sources/pack_tiny_tile_block_test.cpp",
         formats,
-        templates=[],
+        templates=[TINY_PACK_MODE(pack_mode)],
         runtimes=[
             DEST_INDEX(0),
             TILE_COUNT(tile_cnt_A),
@@ -145,15 +147,17 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
+    pack_mode=[0, 1, 2],
 )
 def test_pack_tiny_tile_block(
     formats,
     dest_acc,
     tile_dims,
     num_tiles,
+    pack_mode,
 ):
     configuration, golden_tensor, torch_format = _make_config(
-        tile_dims, num_tiles, formats, dest_acc
+        tile_dims, num_tiles, formats, dest_acc, pack_mode
     )
 
     res_from_L1 = configuration.run().result

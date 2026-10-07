@@ -143,7 +143,8 @@ ALWI void pack_block(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t n
 // clang-format off
 /**
  * Like `pack_block` (same arguments, same effect on the CB write pointer); on Blackhole a block of full 32x32 tiles in a
- * plain format, one tile per CB page, is one packer program run. Other outputs and architectures take `pack_block`.
+ * plain format, one tile per CB page, is one packer program run, and any other block runs the per-tile program once per
+ * tile with the L1 address programmed once. Other architectures take `pack_block`.
  *
  * Return value: None
  *
