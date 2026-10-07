@@ -121,3 +121,9 @@ Real-token N=4096 (hot experts): dispatch/combine `Topology.Ring` over the 4 row
 | isl4k_b16 (3720) | 9.61 s / 10.70 s | 9.53 / 10.53 | 9.31 / 10.37 | 9.20 / 10.29 (second session: a 9.61-9.50 / 10.64) |
 | isl8k_b4 (7443) | 4.75 s / 6.18 s | 4.71 / 6.70* | 4.60 / 6.02 | not run |
 (* host-side noise; replay time is the comparable number.) 6-layer traced chunk logits: bit-identical to the unflagged run for c and d.
+
+### MoE overlap re-measured on main df4ffc9f838 (ported as 62a893e7838 / 6fca7020e68 / 01c49e743da / 5c09e3dbab2 on ssinghal/dsv4p1-pf-overlap2; flags default OFF)
+Grid env (no MEMLOG, SPEC=0, 40 layers), in-process A/B via tools/mo_grid.sh, modes a=base, b=batched router, c=b+shared||dispatch, d=c+ring topology, e=ring topology only. TTFT ms, 4k (3720 tokens):
+* B=16 .43 (logs/mogrid_b16_h43.log): a 8755 / 8753 (first a 10626 = cold), b 8715, c 8604, d 8501 / 8474, e 8634  -> d -3.0%, c -1.7%, e -1.4%, b -0.4%. Outputs identical in all modes (16 users).
+* B=32 .44 (logs/mogrid_b32_h44.log): a 17495 / 16940, c 16589, d 16361 -> c -3.6%, d -4.9% vs mean(a). BUT in c and d the 32 identical prompts no longer give identical outputs (row groups of 8 users diverge at the 2nd generated token; a: all 32 equal): not bit-identical at U=8 per row. Cause not investigated.
+Long ISL not run (scope: 4k only until a confirmed gain).
