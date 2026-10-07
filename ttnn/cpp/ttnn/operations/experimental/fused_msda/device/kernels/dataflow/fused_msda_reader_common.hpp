@@ -149,9 +149,20 @@ struct LevelGeom {
     uint32_t height;       // H_l
     uint32_t width;        // W_l
     uint32_t start_index;  // sum_{k<l} H_k * W_k
-    float inv_width;       // 1 / W_l, precomputed: the RISC has no FP divide
-    float inv_height;      // 1 / H_l
+    // Precomputed: the RISC has no FP divide.
+    float inv_width;
+    float inv_height;
 };
+
+// One pixel of offset must be one pixel after to_pixel(). A size-1 axis with
+// align_corners collapses onto pixel 0, so the scale is 0 instead of 1/(extent-1).
+inline float pixel_offset_scale(uint32_t extent) {
+    if constexpr (ALIGN_CORNERS) {
+        return extent > 1u ? (1.0f / static_cast<float>(extent - 1u)) : 0.0f;
+    } else {
+        return 1.0f / static_cast<float>(extent);
+    }
+}
 
 // Normalized (x, y) -> continuous pixel coordinates on level `g`.
 // See README.md §3 for the four (LOC_IN_GRID_SPACE, ALIGN_CORNERS) cases.
@@ -274,8 +285,8 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
         levels[l].height = h;
         levels[l].width = w;
         levels[l].start_index = get_arg_val<uint32_t>(5 + 3 * l + 2);
-        levels[l].inv_width = 1.0f / static_cast<float>(w);
-        levels[l].inv_height = 1.0f / static_cast<float>(h);
+        levels[l].inv_width = pixel_offset_scale(w);
+        levels[l].inv_height = pixel_offset_scale(h);
     }
 
     Noc noc;

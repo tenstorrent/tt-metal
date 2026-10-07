@@ -101,15 +101,20 @@ out = ttnn.experimental.fused_msda_from_offsets(
 V2 is **only** a fused location generator. It computes, per `(b, q, h, l, p)`:
 
 ```text
-loc = reference_points[b, q, r(l, p)] + sampling_offsets[b, q, h, l, p] / [W_l, H_l]
+loc = reference_points[b, q, r(l, p)] + sampling_offsets[b, q, h, l, p] * scale_l
+
+scale_l = [1/W_l, 1/H_l]               align_corners = false
+scale_l = [1/(W_l-1), 1/(H_l-1)]       align_corners = true, axis wider than 1
+scale_l = 0                            align_corners = true, singleton axis
 ```
 
 and then runs the identical bilinear + weight + reduce path as V1. `r(l, p)`
 depends on `reference_mode` — see §7.
 
 `sampling_offsets` are **raw**, in feature-map pixel units (spec §13 Option A).
-The `/ [W_l, H_l]` normalization happens in the reader. No BEVFormer-specific
-pre-folding is baked into the op.
+`scale_l` is the pixel spacing of the mapping in §3, so one offset unit moves
+one pixel for either `align_corners`. The normalization happens in the reader.
+No BEVFormer-specific pre-folding is baked into the op.
 
 ### 2.3 Output shape
 
@@ -293,7 +298,7 @@ reader_msda_v2.cpp ─┘        (geometry, staging, tile scatter)
 1. stage attention weights and locations/offsets (+ reference points for V2)
    for all `v_rows` rows into L1 arenas — one `noc.async_read` per page;
 2. for each `(l, p)`: obtain `(x, y)` — V1 reads it, V2 computes
-   `ref + off/[W_l, H_l]` — then map to `(px, py)`, `x0 = floor(px)`,
+   `ref + off * scale_l` (`scale_l` from §2.2) — then map to `(px, py)`, `x0 = floor(px)`,
    `y0 = floor(py)`, `dx`, `dy`, and the four per-corner in-bounds flags;
 3. for each of the four corners: issue `v_rows` NoC reads of the `D`-wide value
    stick at page `(b*S + level_start[l] + cy*W_l + cx) * H + h`, scatter them

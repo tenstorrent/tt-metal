@@ -6,7 +6,10 @@
 // never materialized. Instead of reading a location, the reader forms it from a
 // reference point and a raw sampling offset:
 //
-//     loc = reference_points[b, q, r(l, p)] + sampling_offsets[b, q, h, l, p] / [W_l, H_l]
+//     loc = reference_points[b, q, r(l, p)]
+//         + sampling_offsets[b, q, h, l, p] * pixel_offset_scale([W_l, H_l])
+//
+// The scale matches to_pixel(), so one offset unit is one feature-map pixel.
 //
 // r(l, p) depends on REF_MODE:
 //   0 (level):  R == L, r = l         — DINO-family deformable decoders
@@ -51,8 +54,8 @@ struct ReferencePlusOffset {
         const uint32_t ref_idx = (REF_MODE == 0) ? l : (p % NUM_REFS);
         CoreLocalMem<volatile uint16_t> ref(ref_arena_l1 + (r * NUM_REFS + ref_idx) * ref_stick_nbytes);
         CoreLocalMem<volatile uint16_t> off(fused_msda::staged_loc_addr(off_arena_l1, r, l, p));
-        // Offsets are raw, in feature-map pixel units; inv_width / inv_height
-        // are precomputed per level so this stays a multiply.
+        // Offsets are raw feature-map pixels. inv_width / inv_height are
+        // precomputed so this stays a multiply.
         x = fused_msda::bf16_to_float(ref[0]) + fused_msda::bf16_to_float(off[0]) * g.inv_width;
         y = fused_msda::bf16_to_float(ref[1]) + fused_msda::bf16_to_float(off[1]) * g.inv_height;
     }

@@ -70,11 +70,13 @@ ttnn::Tensor fused_msda(
 //
 //   sampling_locations[b, q, h, l, p]
 //       == reference_points[b, q, r(l, p)]
-//        + sampling_offsets[b, q, h, l, p] / [W_l, H_l]
+//        + sampling_offsets[b, q, h, l, p] * scale_l
 //
-// sampling_offsets are raw, in feature-map pixel units; the reader applies the
-// per-level normalization. reference_points must be (B, Q, R, 2) normalized
-// (x, y) in [0, 1]; the 4-D box form is rejected rather than reinterpreted.
+// sampling_offsets are raw, in feature-map pixel units. scale_l is
+// [1/W_l, 1/H_l] when align_corners is false and [1/(W_l-1), 1/(H_l-1)] when
+// it is true, matching the pixel spacing of to_pixel(); a singleton axis has
+// scale 0. reference_points must be (B, Q, R, 2) normalized (x, y) in [0, 1];
+// the 4-D box form is rejected rather than reinterpreted.
 ttnn::Tensor fused_msda_from_offsets(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,

@@ -118,7 +118,11 @@ void bind_fused_msda(nb::module_& mod) {
 
             sampling_locations[b, q, h, l, p] =
                 reference_points[b, q, r(l, p)]
-                + sampling_offsets[b, q, h, l, p] / [W_l, H_l]
+                + sampling_offsets[b, q, h, l, p] * scale_l
+
+        scale_l is [1/W_l, 1/H_l] when align_corners is false and
+        [1/(W_l-1), 1/(H_l-1)] when it is true (0 on a singleton axis), so one
+        offset unit is one feature-map pixel under either mapping.
 
         Args:
             * :attr:`value`: (B, S, H, D) or packed (B, S, H*D) ROW_MAJOR bfloat16
@@ -126,7 +130,7 @@ void bind_fused_msda(nb::module_& mod) {
               in [0, 1]. The 4-D box form is rejected, not reinterpreted.
             * :attr:`sampling_offsets`: (B, Q, H, L, P, 2) or packed (B, Q, H, L*P*2)
               ROW_MAJOR bfloat16. Raw, in feature-map pixel units — the reader applies
-              the per-level / [W_l, H_l] normalization.
+              scale_l (1/[W_l, H_l], or 1/[W_l-1, H_l-1] when align_corners is set).
             * :attr:`attention_weights`: as in fused_msda
             * :attr:`spatial_shapes`: as in fused_msda
             * :attr:`reference_mode`:

@@ -69,13 +69,25 @@ def _msda_reference(
     return out.reshape(B, H, D, Q).permute(0, 3, 1, 2).reshape(B, Q, H * D).contiguous()
 
 
-def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, reference_mode):
-    """The V2 frontend, in PyTorch. (B, Q, R, 2) + (B, Q, H, L, P, 2) -> (B, Q, H, L, P, 2)."""
+def _offset_scale(extent: int, align_corners: bool) -> float:
+    """Normalized delta of one feature-map pixel. 0 on a singleton align_corners axis."""
+    if align_corners:
+        return 0.0 if extent <= 1 else 1.0 / (extent - 1)
+    return 1.0 / extent
+
+
+def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, reference_mode, align_corners=False):
+    """The V2 frontend, in PyTorch. (B, Q, R, 2) + (B, Q, H, L, P, 2) -> (B, Q, H, L, P, 2).
+
+    Offsets are feature-map pixels; align_corners selects the same spacing as the reader.
+    """
     B, Q, H, L, P, _ = sampling_offsets.shape
     R = reference_points.shape[2]
     loc = torch.empty_like(sampling_offsets)
     for lvl, (h_, w_) in enumerate(spatial_shapes):
-        norm = torch.tensor([1.0 / w_, 1.0 / h_], dtype=sampling_offsets.dtype)
+        norm = torch.tensor(
+            [_offset_scale(w_, align_corners), _offset_scale(h_, align_corners)], dtype=sampling_offsets.dtype
+        )
         for p in range(P):
             r = lvl if reference_mode == "level" else (p % R)
             # reference_points is head-invariant: (B, Q, 2) broadcast over H
@@ -208,14 +220,36 @@ def test_locations_from_offsets_reference_matches_bevformer_pillar_layout():
 # ---------------------------------------------------------------------------
 # V1 correctness
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("B", [1, 2])
-@pytest.mark.parametrize("Q", [1, 31, 32, 33, 256])
-@pytest.mark.parametrize("H", [1, 8])
-@pytest.mark.parametrize("L,spatial_shapes", [(1, [(10, 10)]), (4, [(16, 20), (8, 10), (4, 5), (2, 3)])])
-@pytest.mark.parametrize("P", [1, 4, 8])
-@pytest.mark.parametrize("D", [16, 32, 64])
-@pytest.mark.parametrize("align_corners", [False, True])
-def test_fused_msda_v1(device, B, Q, H, L, spatial_shapes, P, D, align_corners):
+_V1_ONE_LEVEL = [(10, 10)]
+_V1_FOUR_LEVELS = [(16, 20), (8, 10), (4, 5), (2, 3)]
+
+
+# Pairwise cover of the boundary values, not the full product. H=8 with D=16
+# is omitted: that per-head stride is rejected by
+# test_fused_msda_rejects_unaligned_per_head_stride.
+@pytest.mark.parametrize(
+    "B,Q,H,spatial_shapes,P,D,align_corners",
+    [
+        (1, 33, 1, _V1_ONE_LEVEL, 1, 32, False),
+        (1, 1, 1, _V1_FOUR_LEVELS, 4, 16, False),
+        (1, 1, 1, _V1_ONE_LEVEL, 8, 64, True),
+        (1, 31, 8, _V1_FOUR_LEVELS, 1, 32, True),
+        (2, 31, 8, _V1_ONE_LEVEL, 4, 64, False),
+        (2, 32, 1, _V1_FOUR_LEVELS, 8, 16, True),
+        (2, 256, 8, _V1_ONE_LEVEL, 8, 32, False),
+        (1, 256, 1, _V1_FOUR_LEVELS, 1, 64, True),
+        (1, 32, 8, _V1_ONE_LEVEL, 4, 32, False),
+        (2, 33, 8, _V1_FOUR_LEVELS, 4, 64, True),
+        (2, 1, 1, _V1_ONE_LEVEL, 1, 16, False),
+        (1, 31, 1, _V1_ONE_LEVEL, 8, 16, False),
+        (1, 33, 1, _V1_ONE_LEVEL, 8, 16, False),
+        (1, 256, 1, _V1_ONE_LEVEL, 4, 16, False),
+        (1, 32, 1, _V1_ONE_LEVEL, 1, 64, False),
+        (1, 1, 8, _V1_ONE_LEVEL, 1, 32, False),
+    ],
+)
+def test_fused_msda_v1(device, B, Q, H, spatial_shapes, P, D, align_corners):
+    L = len(spatial_shapes)
     if not _per_head_stride_supported(H, D):
         pytest.skip(
             f"head_dim {D} gives a {D * 2}-byte per-head output stride, which this device's "
@@ -526,6 +560,46 @@ def test_fused_msda_v2_bevformer_pillar_shape(device):
         )
     ).to(torch.float32)
     _assert_close(_msda_reference(value, loc, attn, spatial_shapes), out)
+
+
+def test_fused_msda_v2_one_pixel_offset(device):
+    """An offset of +1 feature-map pixel must sample the next pixel exactly.
+
+    Width 5 with align_corners spaces pixels by 1/4, so a scale of 1/5 lands
+    between pixels and this check fails.
+    """
+    extent = 5
+    spatial_shapes = [(extent, extent)]
+    B, Q, heads, L, P, D = 1, 2, 1, 1, 1, 16
+
+    value = torch.zeros(B, extent * extent, heads, D)
+    for y in range(extent):
+        for x in range(extent):
+            value[0, y * extent + x, 0, :] = float(y * extent + x)
+    value = _bf16(value)
+
+    # align_corners places pixel i at i/(extent-1).
+    ref = _bf16(torch.full((B, Q, 1, 2), 1.0 / (extent - 1)))
+    offsets = torch.zeros(B, Q, heads, L, P, 2)
+    offsets[0, 0, 0, 0, 0, 0] = 1.0
+    offsets[0, 1, 0, 0, 0, 1] = 1.0
+
+    out = ttnn.to_torch(
+        ttnn.experimental.fused_msda_from_offsets(
+            _to_device(value, device),
+            _to_device(ref, device),
+            _to_device(_bf16(offsets), device),
+            _to_device(torch.ones(B, Q, heads, L, P), device),
+            spatial_shapes,
+            reference_mode="level",
+            align_corners=True,
+        )
+    ).to(torch.float32)
+
+    expected = torch.zeros(B, Q, heads * D)
+    expected[0, 0, :] = float(1 * extent + 2)  # (x=2, y=1)
+    expected[0, 1, :] = float(2 * extent + 1)  # (x=1, y=2)
+    torch.testing.assert_close(out, expected, rtol=0, atol=1e-2)
 
 
 def test_fused_msda_program_cache_hit_readdresses(device):
