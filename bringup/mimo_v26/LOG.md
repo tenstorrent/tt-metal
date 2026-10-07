@@ -453,3 +453,15 @@
 - claim: HANDOFF track 0 (ref). Worktree /mnt/tt-data/ssinghal/mimo/wt/ref, branch ssinghal/mimo-ref. Package models/demos/blackhole/mimo_v26/reference/: loader.py (load_layer, rank-blocked qkv, fp8/fp4 dequant), hf_layer.py (HF layer with real weights), ref_layer.py (independent oracle), ref_prefill_dump.py (chain dumps), single_layer.py (teacher-forced any-layer CLI), prompts.py, gsm8k_set.py + score_gsm8k.py, MTP_NOTES.md, probes/. DONE+logged: qkv per-TP4-rank layout proof, fp4 low-nibble-first + e8m0 bias 127, conventions == HF, gate (a) PCC 0.99999994 L0/L1/L5 + chain L0-5 + identical router sets, dumps S=128 b16 (bf16+fp32), S=512 b4 (bf16+fp32), S=2048 b1, S=8192 b1 (L0-5, dir /mnt/tt-data/ssinghal/mimo-dumps/mimo-prefill-s*), noise floor, GSM8K 128/512 sets + scorer, MTP notes. NOT done / unverified: decode-step dumps never compared to a device; no L6-47 dumps (policy: use single_layer on device-captured h); GSM8K threshold has no published number; MTP-3 structure inferred only; fp4 e8m0 bias magnitude only plausibility-checked; layers beyond L5 only exercised on random input (L20, L46, L47) not real hidden states; transformers 5.12 vs checkpoint's 5.3 mask API difference handled in harness; mask/HF equality checked only in the SDPA-free eager path. Composition: other tracks read dumps via torch.load(layer_L.pt)['prefill'|'state'|'decode']; ring slot p%128 for SWA; V in cache already x0.707; router weights are normalised unbiased sigmoid. Skill defects: see SKILL_DEFECTS.md items 4-7 (kit pycache tracked, host list stale, sgl.py 404 + no checkpoint, skill lacked local-weights step -> fixed in tt-model-reference).
 - evidence: bringup/mimo_v26/SKILL_DEFECTS.md
 - paths: models/demos/blackhole/mimo_v26, bringup/mimo_v26/SKILL_DEFECTS.md
+
+## E261007-0253-fcc
+- date: 2026-10-07T02:53:39
+- commit: db7dbcd991c
+- branch: ssinghal/mimo
+- host: 30
+- track: attn
+- status: verified
+- claim: MERGED-COMMIT re-check of attention gate (merge protocol step 5): test_attention_dump.py ATTN_LAYERS=1,5 on db7dbcd991c, host .30, 4x8 mesh, bfp8 weights, teacher forced vs track-0 dump mimo-prefill-s128b16 (B=16, S=128, 4 users/row). Prefill attn_out PCC min L1 (SWA) 0.99973, L5 (GA) 0.99997 (>=0.999 gate); K cache 0.99999/0.99999, V cache 0.99988/0.99996; 3 decode steps min 0.99998/0.99996; V-pad dims exactly 0; column spread 0. Same values as branch run.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/integ_attn_dump_db7dbcd991c.log
+- paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests
+- data: {"layer_type":"swa_moe+global_moe attention","pcc":0.99973,"pcc_swa":0.99973,"pcc_ga":0.99997,"kv_pcc_min":0.99988,"decode_pcc_min":0.99996}
