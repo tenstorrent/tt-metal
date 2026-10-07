@@ -32,7 +32,7 @@ except ImportError:
 
 import ttnn
 from models.common.llama_models import create_vision_mask
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
+from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
@@ -1299,7 +1299,12 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         tt_data_parallel: int = 1,
         **kwargs,
     ) -> int:
-        if "gpt-oss-120b" in model_name.lower() and num_devices == 32 and tt_data_parallel == 4 and is_blackhole():
+        if (
+            "gpt-oss-120b" in model_name.lower()
+            and num_devices == 32
+            and tt_data_parallel == 4
+            and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        ):
             # Allow two long contexts in each BH Galaxy lane. The plugin
             # adds its per-user block padding to this per-lane token budget.
             return 262_144
