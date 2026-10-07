@@ -311,8 +311,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // Single source of truth for the dst-accumulator mode: drives DST_CAPACITY,
     // the ComputeConfig below, and (via -DFP32_DEST_ACC_EN) the compute kernel's
     // SwiGLU-OAI dst budget + SFPU fp32-dest template, so they can't drift.
-    constexpr bool kFp32DestAccEn = false;
-    constexpr uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
+    // MiMo patch: MOE_UNI_FP32_DEST=1 turns on fp32 DEST accumulation (default off = original). bf16 DEST accumulation
+    // over a K block costs ~2% typical per-slot error (MiMo scale-bias study).
+    const bool kFp32DestAccEn = [] {
+        const char* v = std::getenv("MOE_UNI_FP32_DEST");
+        return v != nullptr && v[0] == '1';
+    }();
+    const uint32_t DST_CAPACITY = kFp32DestAccEn ? 4u : 8u;
     const uint32_t gu_out_subblock_h = 1;
     uint32_t gu_sub_w = 1;
     for (uint32_t cand = DST_CAPACITY; cand >= 1; --cand) {
