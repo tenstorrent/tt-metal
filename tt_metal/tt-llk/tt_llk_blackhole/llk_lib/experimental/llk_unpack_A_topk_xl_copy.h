@@ -78,7 +78,7 @@ inline void _llk_unpack_topk_xl_copy_(
             TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, p_unpacr_nop::CLR_SRC_NEGINF, p_unpacr_nop::CLR_SRC);
             TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
         }
-        set_dst_write_addr(unp_cfg_context, unpack_dst_format);
+        set_dst_write_addr(unp_cfg_context);
         wait_for_dest_available();
     }
 
@@ -91,7 +91,7 @@ inline void _llk_unpack_topk_xl_copy_(
 
     if (is_32bit_input(unpack_src_format, unpack_dst_format))
     {
-        unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
+        unpack_to_dest_tile_done(unp_cfg_context);
     }
 
     switch_config_context(unp_cfg_context);

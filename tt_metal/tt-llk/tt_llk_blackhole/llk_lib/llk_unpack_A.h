@@ -429,7 +429,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            set_dst_write_addr(unp_cfg_context, unpack_dst_format);
+            set_dst_write_addr(unp_cfg_context);
             wait_for_dest_available();
         }
     }
@@ -447,7 +447,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
+            unpack_to_dest_tile_done(unp_cfg_context);
         }
     }
 
@@ -517,7 +517,7 @@ inline void _llk_unpack_A_block_(
         wait_for_next_context(2);
         cfg[(unp_cfg_context == 0) ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32] = address;
         semaphore_post(semaphore::UNPACK_SYNC);
-        set_dst_write_addr(unp_cfg_context, unpack_dst_format);
+        set_dst_write_addr(unp_cfg_context);
         wait_for_dest_available();
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 #pragma GCC unroll 0
@@ -526,7 +526,7 @@ inline void _llk_unpack_A_block_(
             ckernel::ckernel_template::run();
         }
         t6_semaphore_get(semaphore::UNPACK_SYNC);
-        unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
+        unpack_to_dest_tile_done(unp_cfg_context);
         switch_config_context(unp_cfg_context);
         return;
     }

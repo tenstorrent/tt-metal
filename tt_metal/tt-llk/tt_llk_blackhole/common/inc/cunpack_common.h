@@ -1006,6 +1006,40 @@ inline void wait_for_dest_available()
     TTI_SEMGET(semaphore::t6_sem(semaphore::MATH_DONE));
 }
 
+// The srcA Z stride stays at canonical_unpA_z_stride of the operand's dst format, which its configure or srca reconfig programmed.
+inline void unpack_to_dest_tile_done(std::uint32_t &context_id)
+{
+    t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
+    // Restore config context
+    if (context_id == 0)
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(4 * 16);
+    }
+    else
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(0);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(4 * 16);
+    }
+    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x4); // re-enable address bit swizzle
+}
+
+inline void set_dst_write_addr(const std::uint32_t &context_id)
+{
+    std::uint32_t dst_byte_addr = 16 * (4 + mailbox_read(ThreadId::MathThreadId)); // Apply fixed offset of 4*16 to dest address
+    TTI_SETC16(SRCA_SET_Base_ADDR32, 0x0);                                         // Disable address bit swizzle
+    if (context_id == 0)
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(1);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(dst_byte_addr);
+    }
+    else
+    {
+        cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(1);
+        cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(dst_byte_addr);
+    }
+}
+
 // Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.
 // This pairs with set_dst_write_addr to bracket the unpack-to-dest section: rather than
 // snapshotting the prior register value into a GPR, we recompute the canonical baseline so the
