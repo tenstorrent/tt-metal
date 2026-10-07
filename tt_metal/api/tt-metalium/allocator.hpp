@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <vector>
 #include <unordered_set>
+#include <unordered_map>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
