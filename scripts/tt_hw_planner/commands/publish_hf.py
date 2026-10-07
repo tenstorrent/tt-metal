@@ -506,6 +506,39 @@ def _detect_arch_and_type(demo_dir: Path) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _detect_mistral_format(demo_dir, model_root, weights) -> tuple:
+    """Architecture for a MISTRAL-FORMAT native checkpoint, which ships params.json (+
+    consolidated.safetensors / tekken.json) and NO HF config.json -- so _detect_arch_and_type finds
+    nothing. Such a checkpoint is a Mistral causal-LM backbone, so report MistralForCausalLM (a stock
+    generator) and the adapter can be scaffolded like any model. Looks in the demo, the model root,
+    then the (cached) weights repo. Returns (arch, model_type) or (None, None)."""
+    import glob as _g
+
+    cands = []
+    for base in (demo_dir, model_root):
+        if base:
+            cands += _g.glob(str(Path(base) / "**" / "params.json"), recursive=True)
+    if not cands and weights:
+        try:
+            from huggingface_hub import snapshot_download
+
+            repo = weights if Path(weights).is_dir() else snapshot_download(weights, allow_patterns=["params.json"])
+            p = Path(repo) / "params.json"
+            if p.is_file():
+                cands.append(str(p))
+        except Exception:
+            pass
+    for p in cands:
+        try:
+            d = json.loads(Path(p).read_text())
+        except Exception:
+            continue
+        # mistral-format spec markers, and NOT an HF config (which carries 'architectures'):
+        if {"dim", "n_layers", "n_heads"} <= set(d) and "architectures" not in d:
+            return "MistralForCausalLM", "mistral"
+    return None, None
+
+
 def _pick_base_generator(arch: str, model_type: str | None) -> tuple[str, bool]:
     """(stock_generator_class, is_stub) for an arch. Stock arches map to a supported generator
     (is_stub=False, trivially servable). Novel arches pick the closest base (hybrid vs plain) and
@@ -1112,6 +1145,15 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
             arch_det, mtype = _detect_arch_and_type(Path(mr))
     if not arch_det and getattr(args, "hf_arch", None):
         arch_det, mtype = args.hf_arch, None
+    if not arch_det:
+        # Mistral-format native checkpoints (no HF config.json) -- e.g. Voxtral -- are Mistral
+        # causal-LM backbones; detect them so the adapter still scaffolds and the container builds.
+        _mr2 = (state.get("model") or {}).get("root")
+        arch_det, mtype = _detect_mistral_format(
+            Path(demo_dir), Path(_mr2) if _mr2 else None, getattr(args, "weights", None)
+        )
+        if arch_det:
+            print(f"  [publish-hf] no HF config.json; detected mistral-format checkpoint -> {arch_det}")
     # Servability is decided by the architecture: a plugin built-in (stock generator) serves; a novel
     # arch gets a scaffolded stub and is NOT servable until an adapter is written. Drives honest card
     # labeling below — the tool never claims a stub package can serve.
