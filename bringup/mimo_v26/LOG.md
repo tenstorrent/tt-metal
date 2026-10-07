@@ -832,3 +832,14 @@
 - claim: DECISIONS (coordinator, 2026-10-07, at 4169b64e156): (1) GSM8K gate protocol uses chat template with enable_thinking=false ('<think></think>' after the assistant tag, chat_template.jinja line 93); thinking-mode accuracy not measured. (2) File ownership for the next stage: tt/attention.py decode + tt/decode.py + tt/generator.py = attn agent; tt/prefill.py = asm agent; tt/moe*.py router*.py = moe agent; tt/kv_pool.py shared, layout agreed via LOG/notes; tt/layer.py tt/model.py changes via coordinator. (3) Per-layer gate for layers 6..47: reference agent runs the CPU oracle teacher-forced on DEVICE-captured per-layer inputs (mimo-device-s128b16), not a full CPU model run. (4) Spec decode drafter choice (MTP-3 vs DFlash) pending user decision; MTP oracle hypotheses built on device-captured hidden states first.
 - evidence: -
 - paths: bringup/mimo_v26/scorecard.json
+
+## E261007-0514-f37
+- date: 2026-10-07T05:14:25
+- commit: 0972f38a750
+- branch: ssinghal/mimo-asm
+- host: DC16-2-BG-0204-u20-44
+- track: asm
+- status: inferred
+- claim: KV POOL LAYOUT PROPOSAL for the decode agent (not yet exercised on device): see bringup/mimo_v26/notes/kv_pool.md and tt/kv_pool.py (KVLayout). Per-layer per-device [nblocks,1,64,192] bf16 K and V (V padded), slots 0..U-1 own blocks, slots U..31 alias a scratch region; GA table [32, max_pos/64] contiguous per slot; SWA ring R = CH/64+8 blocks, logical block i -> ring block i%R, decode modulo R*64; one table per layer KIND shared by all layers; per-row lengths. 64k DRAM per chip for all caches: U=4 2.06 GiB, U=8 4.03 GiB (arithmetic, not measured).
+- evidence: -
+- paths: bringup/mimo_v26/notes/kv_pool.md, models/demos/blackhole/mimo_v26/tt/kv_pool.py
