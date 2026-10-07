@@ -16,9 +16,9 @@ on:
 
 permissions:
   contents: read
-  # A PR conversation comment is an issue comment, and it is created through that endpoint below,
-  # so this is the only write needed and `pull-requests` stays at none.
-  issues: write
+  # What `GITHUB_TOKEN` is checked for when commenting on a pull request. `issues: write`
+  # instead returns `Resource not accessible by integration`, whatever the endpoint used.
+  pull-requests: write
 
 env:
   ORACLE: tenstorrent/tt-eltwise-accuracy-report
@@ -126,7 +126,5 @@ jobs:
             body="$body missing \`ACCURACY_REPORT_DISPATCH_TOKEN\`."
             body="$body [Log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
           fi
-          # The issues endpoint, not `gh pr comment`: that resolves the pull request first, which
-          # would need `pull-requests` read on top of the write this already has.
-          gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -f body="$body" --silent
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
           [ "$STARTED" = true ]
