@@ -40,6 +40,7 @@
 //   - Shared gathers placed after TopK so sender BRISC doesn't block routed mcasts
 //   - Gated Reduce placed after routed mcasts to overlap with DRAM matmuls
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
 #include "../../unified_kernels/kernel_op_api.hpp"
 #include "../../unified_kernels/kernel_utils.hpp"
 #include "../../unified_kernels/mcast.hpp"

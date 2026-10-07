@@ -25,6 +25,7 @@
 // - Each row: [Qnope heads 0-7 (1024)] [Qrope heads 0-7 (512)] = 1536 elements
 // - Total: 8 rows × 1536 = 12288 elements
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_DEST_REUSE true
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 #include "../../../unified_kernels/rmsnorm.hpp"
