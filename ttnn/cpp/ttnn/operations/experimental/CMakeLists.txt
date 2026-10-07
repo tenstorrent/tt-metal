@@ -66,6 +66,7 @@ add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(plusone)
+add_subdirectory(binary_practice_quasar)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
 add_subdirectory(tensor_prefetcher)
@@ -112,6 +113,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
         TTNN::Ops::Experimental::PlusOne
+        TTNN::Ops::Experimental::BinaryPracticeQuasar
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::TensorPrefetcher
@@ -163,6 +165,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FFT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::BinaryPracticeQuasar>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TensorPrefetcher>

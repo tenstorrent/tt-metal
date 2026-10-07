@@ -1,0 +1,11 @@
+# Source files for ttnn_op_experimental_binary_practice_quasar.
+
+set(TTNN_OP_EXPERIMENTAL_BINARY_PRACTICE_QUASAR_API_HEADERS binary_practice_quasar.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_BINARY_PRACTICE_QUASAR_SRCS
+    device/binary_practice_quasar_device_operation.cpp
+    device/binary_practice_quasar_program_factory.cpp
+    binary_practice_quasar.cpp
+)
+
+set(TTNN_OP_EXPERIMENTAL_BINARY_PRACTICE_QUASAR_NANOBIND_SRCS binary_practice_quasar_nanobind.cpp)
