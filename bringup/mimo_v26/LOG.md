@@ -1141,3 +1141,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/asm_gate_pf_s128b16_463ad8a432f.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/prefill.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py, models/demos/blackhole/mimo_v26/tests/test_prefill_handoff.py
 - data: {"pcc":0.98713}
+
+## E261007-0606-30d
+- date: 2026-10-07T06:06:46
+- commit: b9d1b2c3b11
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: COORDINATOR DECISION: first_token gate left MISSING. E261007-0604-642 (21/22 top-1 agreement) compares a 6-layer truncated device model with a CPU final norm + lm_head on the L5 dump; counting it for the 48-layer gate would weaken the gate. A 48-layer reference does not exist by policy. Options for the user: drop the gate in favour of the GSM8K 85% gate, or allow the hosted xiaomi/mimo-v2.6-flash as a first-token oracle. Also noted: decode_phase PASS (E261007-0604-8da) uses the device's own chunked-prefill state, not a reference-prefilled state as the gate note says; layer_pcc gates are device-vs-dump teacher-forced (equivalent in effect, different wording from the gate note).
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
