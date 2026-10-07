@@ -324,9 +324,10 @@ def test_log_sigmoid(device, h, w, low, high):
 def test_log_sigmoid_float32_special_values(device):
     # The bfloat16 special-values test in test_activation.py covers the branch that
     # carries the explicit NaN restore. This one covers the other branch: an fp32
-    # input forces fp32_dest_acc_en, which selects the fp32 residual and skips that
-    # restore, so NaN propagation here rests on _sfpu_exp_fp32_accurate_ alone -- and
-    # that function's underflow path is written differently on the two architectures.
+    # input forces fp32_dest_acc_en, which selects the fp32 residual. On Wormhole and
+    # Blackhole that path skips the restore, so NaN propagation here rests on
+    # _sfpu_exp_fp32_accurate_ alone -- and that function's underflow path is written
+    # differently on the two architectures. (Quasar restores NaN on both paths.)
     # fp32 in / fp32 DEST is also the one configuration that carries a NaN to L1
     # unrounded, so this is where the question is decidable at all.
     torch_input_tensor = torch.zeros((32, 32), dtype=torch.float32)
