@@ -219,8 +219,8 @@ ttnn::Tensor pad_impl(
                 pc::supported_by_codegen(input_tensor, params), "ttnn.pad: input is not supported by the codegen path");
             return ttnn::prim::pad_codegen(input_tensor, params);
         }
-        if (pc::supported_by_codegen(input_tensor, params) && !pc::is_demoted(input_tensor, params) &&
-            pc::supported_execution_controls(use_multicore, sub_core_grids)) {
+        if (pc::supported_execution_controls(use_multicore, sub_core_grids) && !pc::is_demoted(input_tensor, params) &&
+            pc::supported_by_codegen(input_tensor, params)) {
             return ttnn::prim::pad_codegen(input_tensor, params);
         }
     }
@@ -523,8 +523,8 @@ std::optional<ttnn::Tensor> pad_tile_codegen(
     if (route == PadRoute::Codegen) {
         TT_FATAL(pc::supported_by_codegen(input_4d, params), "ttnn.pad: input is not supported by the codegen path");
     } else if (
-        !pc::supported_by_codegen(input_4d, params) || pc::is_demoted(input_4d, params) ||
-        !pc::supported_execution_controls(use_multicore, sub_core_grids)) {
+        !pc::supported_execution_controls(use_multicore, sub_core_grids) || pc::is_demoted(input_4d, params) ||
+        !pc::supported_by_codegen(input_4d, params)) {
         return std::nullopt;
     }
 

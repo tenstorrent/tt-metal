@@ -187,10 +187,8 @@ struct Demotion {
 };
 
 // Unsettled: no mechanism is on record for any row; exact matches over [1,1,H,W] inputs (rank-2 [32,64] arrives
-// as [1,1,32,64]) and unit batch dims.
-constexpr std::array<Demotion, 13> kDemotions = {{
-    {ttnn::TILE_LAYOUT, tt::tt_metal::BufferType::DRAM, {14336, 80, 0, 0, 0, 16}, 0, kAllDtypes},
-    {ttnn::TILE_LAYOUT, tt::tt_metal::BufferType::DRAM, {14336, 80, 0, 0, 0, 16}, 1, kAllDtypes},
+// as [1,1,32,64]) and unit batch dims. Tile rows are covered by tile_pad_adds_no_tiles.
+constexpr std::array<Demotion, 11> kDemotions = {{
     {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 16, 32}, 0, kAllDtypes},
     {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 16, 32}, 2, kI32 | kU32},
     {ttnn::ROW_MAJOR_LAYOUT, tt::tt_metal::BufferType::DRAM, {32, 32, 0, 32, 32, 32}, 0, kAllDtypes},
@@ -375,9 +373,24 @@ bool supported_by_codegen(
     return rm_fits_l1(input, attrs);
 }
 
+// Padding that stays inside the input's existing tiles: native copies without staging, codegen only adds launch cost.
+bool tile_pad_adds_no_tiles(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
+    if (input.layout() != ttnn::TILE_LAYOUT) {
+        return false;
+    }
+    const auto& s = input.logical_shape();
+    const auto tile = input.tensor_spec().tile();
+    return attrs.N_out == s[0] && attrs.C_out == s[1] &&
+           tt::div_up(attrs.H_out, tile.get_height()) == tt::div_up(s[2], tile.get_height()) &&
+           tt::div_up(attrs.W_out, tile.get_width()) == tt::div_up(s[3], tile.get_width());
+}
+
 bool is_demoted(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs) {
     if (attrs.fill_partial_tile) {
         return false;
+    }
+    if (tile_pad_adds_no_tiles(input, attrs)) {
+        return true;
     }
     const uint32_t dtype = dtype_index(input.dtype());
     if (dtype >= kNumDtypes || !unit_batch(input, attrs)) {
