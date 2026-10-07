@@ -11,7 +11,6 @@
 using namespace tt::tt_metal;
 
 int main() {
-    TT_FATAL(std::getenv("TT_METAL_DEVICE_PROFILER") != nullptr, "Enable TT_METAL_DEVICE_PROFILER=1");
     auto mesh_device = distributed::MeshDevice::create_unit_mesh(0);
     auto program = CreateProgram();
     CreateKernel(
@@ -22,6 +21,8 @@ int main() {
     distributed::MeshWorkload workload;
     workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, true);
-    ReadMeshDeviceProfilerResults(*mesh_device);
+    if (std::getenv("TT_METAL_DEVICE_PROFILER") != nullptr) {
+        ReadMeshDeviceProfilerResults(*mesh_device);
+    }
     return mesh_device->close() ? 0 : 1;
 }
