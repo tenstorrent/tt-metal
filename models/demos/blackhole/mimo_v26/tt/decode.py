@@ -208,6 +208,15 @@ class Decoder:
                 ttnn.deallocate(t)
         return out
 
+    @staticmethod
+    def accept_prefix(argmax, tokens):
+        """Greedy spec-decode acceptance. tokens [rows,U,block] = [last accepted token, draft_1..draft_{block-1}], argmax [rows,U,block] = target greedy token after each block
+        position (from verify). Draft j is accepted iff argmax[j-1] == tokens[j] for all earlier drafts too. Returns n_acc [rows,U] (0..block-1); the tokens to emit this round
+        are argmax[..., :n_acc+1] (the accepted drafts equal argmax[..., :n_acc], the last one is the bonus token) and the next block starts with argmax[..., n_acc].
+        """
+        ok = argmax[..., :-1] == tokens[..., 1:]
+        return torch.cumprod(ok.long(), dim=-1).sum(-1)
+
     def verify(self, tokens, positions, dead):
         """Spec-decode verify: tokens [rows,U,block] (last accepted token + drafts), positions [rows,U] of token 0, dead [rows,U]. One traced step over U*block virtual users.
         Returns (argmax [rows,U,block] long: the target's greedy next token after each block position, max logit [rows,U,block]); self.feat holds the captured hidden states.
