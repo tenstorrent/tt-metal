@@ -22,6 +22,12 @@ from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import Deepseek
 PKG = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _legacy_whole_batch_path_by_default(monkeypatch):
+    """Interleaved prefill is the adapter's DEFAULT (generator_vllm._interleave_on); the tests of the whole-batch path run with DSV41_VLLM_INTERLEAVE=0, the interleave tests set it to 1."""
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "0")
+
+
 @pytest.fixture
 def expect_error():
     """Local stand-in of the repo conftest fixture so that this hardware-free file also runs with ``--noconftest`` (the repo conftest brings up a device mesh)."""
@@ -212,7 +218,7 @@ HOT = SimpleNamespace(temperature=[0.8] * 8, top_k=[-1] * 8, enable_log_probs=[F
 def test_capabilities_declared():
     c = DeepseekV41ForCausalLM.model_capabilities
     assert c["supports_sample_on_device"] and c["max_device_top_k"] == 1
-    assert not c["supports_prefix_caching"] and not c["supports_chunked_prefill"] and not c["supports_async_decode"]
+    assert not c["supports_prefix_caching"] and not c["supports_async_decode"]
     assert not c["supports_device_penalties"]
 
 
@@ -602,16 +608,21 @@ def interleave_gen(monkeypatch):
     return DeepseekV41ForCausalLM(gen, 8, 4096), m
 
 
-def test_chunked_prefill_capability_is_opt_in(monkeypatch):
+def test_chunked_prefill_capability_is_on_by_default(monkeypatch):
     import models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm as GV
 
-    assert DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is False  # default: off
-    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "1")
-    try:
-        assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is True
-    finally:
-        monkeypatch.delenv("DSV41_VLLM_INTERLEAVE")
-        importlib.reload(GV)
+    monkeypatch.delenv("DSV41_VLLM_INTERLEAVE")
+    monkeypatch.setattr("sys.argv", ["vllm", "serve"])
+    assert (
+        importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is True
+    )  # default ON
+    monkeypatch.setattr("sys.argv", ["vllm", "serve", "--speculative-config", "{}"])
+    assert (
+        importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is False
+    )  # spec launch: whole-prompt path
+    monkeypatch.setenv("DSV41_VLLM_INTERLEAVE", "0")
+    assert importlib.reload(GV).DeepseekV41ForCausalLM.model_capabilities["supports_chunked_prefill"] is False
+    importlib.reload(GV)
 
 
 def test_interleaved_prefill_does_not_reprefill_live_users(interleave_gen):

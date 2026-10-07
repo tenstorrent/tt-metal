@@ -42,6 +42,7 @@ How the vLLM concepts map onto the model
 """
 
 import os
+import sys
 import time
 
 import torch
@@ -50,6 +51,17 @@ from loguru import logger
 from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
 
 _PAD_TOKEN = 0
+
+
+def _interleave_on():
+    """Interleaved / chunked prefill (INTERLEAVE_NOTES.md) is the DEFAULT of the vLLM interface: a prefill call costs ``DSV41_PREFILL_UP`` users per mesh row instead of the whole padded batch, the decode
+    trace stays captured across prefills and live requests are not re-prefilled. ``DSV41_VLLM_INTERLEAVE=0`` selects the older whole-batch path; a server launched with ``--speculative-config`` uses it too
+    (the drafter seeding needs whole-prompt prefill hand-off states). Read at import time (the capability dict below), from the server's own command line.
+    """
+    v = os.environ.get("DSV41_VLLM_INTERLEAVE")
+    if v is not None:
+        return v == "1"
+    return not any(a.startswith("--speculative") for a in sys.argv)
 
 
 def _resolve_weights_dir(hf_config):
@@ -76,7 +88,7 @@ class DeepseekV41ForCausalLM:
     model_capabilities = {
         "supports_prefix_caching": False,
         # chunked prefill / interleaving of prefill with decode (INTERLEAVE_NOTES.md): only with DSV41_VLLM_INTERLEAVE=1
-        "supports_chunked_prefill": os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1",
+        "supports_chunked_prefill": _interleave_on(),
         "supports_async_decode": False,
         "supports_sample_on_device": True,
         # device sampling = greedy only: temperature > 0 with top_k != 1 falls back to host sampling on the logits this class returns
@@ -105,7 +117,12 @@ class DeepseekV41ForCausalLM:
             os.environ.setdefault(
                 "DSV41_CKPT", ckpt
             )  # tt/model_args.py reads it at import time: set before the model modules are imported
-        if os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1":
+        if _interleave_on():
+            os.environ["DSV41_VLLM_INTERLEAVE"] = "1"
+            os.environ.setdefault(
+                "DSV41_PREFILL_UP", "1"
+            )  # prefill slots per mesh row: 4 prompts per replay, no filler cost
+            os.environ.setdefault("DSV41_VLLM_CHUNK", "512")
             os.environ.setdefault(
                 "DSV41_PF_UMASK", "1"
             )  # carried prefill state of users outside a replay stays intact (read when the prefill trace is built)
@@ -129,7 +146,7 @@ class DeepseekV41ForCausalLM:
 
         a, _, b = os.environ.get("DSV41_LAYERS", "0-39").partition("-")
         layer_ids = list(range(int(a), int(b or a) + 1))
-        if os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1":
+        if _interleave_on():
             # the prefill windows cover positions up to S_pad (a multiple of the chunk) and the RoPE tables of the model reach max_ctx + 128: round the model context up
             chunk = int(os.environ.get("DSV41_VLLM_CHUNK", "512"))
             max_seq_len = -(-int(max_seq_len) // chunk) * chunk
@@ -238,7 +255,7 @@ class DeepseekV41ForCausalLM:
         self.B = int(self.m.B)
         self.slots = VS.SlotTable(self.max_num_seqs, self.B)
         self.book = VS.TokenBook(self.B, self.max_seq_len + 1024)
-        self.interleave = os.environ.get("DSV41_VLLM_INTERLEAVE", "0") == "1"
+        self.interleave = _interleave_on()
         self.inprog = VS.PrefillTracker()  # users prefilled in chunks and not decoding yet (interleave mode)
         self.s_pad_cur = 0
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")
