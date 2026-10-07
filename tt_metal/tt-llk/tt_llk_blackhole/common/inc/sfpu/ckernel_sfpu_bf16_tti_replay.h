@@ -133,8 +133,8 @@
 //
 // Blackhole indexes all eight sections directly from its three-bit field and
 // has no base indirection, so both macros are no-ops there and BH stays frozen.
-#define TT_REPLAY_ADDRMOD_ENTER() ckernel::math::set_addr_mod_base()
-#define TT_REPLAY_ADDRMOD_EXIT() ckernel::math::clear_addr_mod_base()
+#define TT_REPLAY_ADDRMOD_ENTER() ((void)0)
+#define TT_REPLAY_ADDRMOD_EXIT()  ((void)0)
 
 // ============================================================================
 // AddrMod OPERAND WIDTH -- the reason BH-transcribed bodies corrupt on Wormhole
@@ -184,22 +184,37 @@
 // section number to addr_mod_t{...}.set(), which is arch-independent.
 // Sections 7 (dst hold) and 6 (dst advance) are the same on every arch; only
 // the operand encoding differs, so derive it from the field width.
-#define TT_ADDRMOD_DST_HOLD ckernel::ADDR_MOD_3  // section 7 via the +4 base
-#define TT_ADDRMOD_DST_ADV ckernel::ADDR_MOD_2   // section 6 via the +4 base
+#define TT_ADDRMOD_DST_HOLD ckernel::ADDR_MOD_7
+#define TT_ADDRMOD_DST_ADV  ckernel::ADDR_MOD_6
+
+namespace sfpi
+{
+constexpr std::uint32_t kTtiReplaySlots = 32;
+
+constexpr bool tti_replay_fits(std::uint32_t body_slots)
+{
+    return body_slots >= 1 && body_slots <= kTtiReplaySlots;
+}
+} // namespace sfpi
 
 // Record the next BODY_SLOTS instructions into replay slot 0 AND execute them.
 // ENTER is folded in (and EXIT into TT_REPLAY_TILE_EPILOGUE) so the pairing
 // cannot drift as bodies are added: every recorded body gets the Wormhole
 // section base, and every per-tile sequence must already end with the epilogue.
 #define TT_REPLAY_RECORD(BODY_SLOTS)       \
-    do {                                   \
+    do                                     \
+    {                                      \
         TT_REPLAY_ADDRMOD_ENTER();         \
         TTI_REPLAY(0, (BODY_SLOTS), 1, 1); \
     } while (0)
 // Re-issue the recorded body N_REST more times (one vector / pair each).
-#define TT_REPLAY_REST(BODY_SLOTS, N_REST)                                                                         \
-    do {                                                                                                           \
-        _Pragma("GCC unroll 32") for (int _r = 0; _r < (int)(N_REST); _r++) { TTI_REPLAY(0, (BODY_SLOTS), 0, 0); } \
+#define TT_REPLAY_REST(BODY_SLOTS, N_REST)                                  \
+    do                                                                      \
+    {                                                                       \
+        _Pragma("GCC unroll 32") for (int _r = 0; _r < (int)(N_REST); _r++) \
+        {                                                                   \
+            TTI_REPLAY(0, (BODY_SLOTS), 0, 0);                              \
+        }                                                                   \
     } while (0)
 
 // Re-issue a recorded core, then execute a non-recorded terminal on the SAME
@@ -211,7 +226,8 @@
 // while recording" failure.
 // Mandatory per-tile epilogue: re-zero the D-RWC counter (hazard rule 2).
 #define TT_REPLAY_TILE_EPILOGUE()                                                      \
-    do {                                                                               \
+    do                                                                                 \
+    {                                                                                  \
         TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D); \
         TT_REPLAY_ADDRMOD_EXIT();                                                      \
     } while (0)

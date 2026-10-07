@@ -6,9 +6,9 @@
 
 #include "api/compute/common_globals.h"
 
-// Blackhole and Wormhole only: ckernel_sfpu_softsign_bw_bf16.h exists under those ckernel trees.
-// Quasar keeps the composite; the generated kernel is not built there.
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+// Blackhole only: ckernel_sfpu_softsign_bw_bf16.h exists under that ckernel tree.
+// Wormhole and Quasar keep the composite.
+#if defined(ARCH_BLACKHOLE)
 
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_softsign_bw_bf16.h"
@@ -53,4 +53,4 @@ ALWI void softsign_bw_tile_init() {
 
 }  // namespace ckernel
 
-#endif  // ARCH_BLACKHOLE || ARCH_WORMHOLE
+#endif  // ARCH_BLACKHOLE

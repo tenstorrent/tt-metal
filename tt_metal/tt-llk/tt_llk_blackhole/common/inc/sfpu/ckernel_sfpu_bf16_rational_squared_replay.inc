@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The certified body is 18 slots, plus 2 for the exponent-FF NaN class tail. Fusing the gradient
-// multiply (FUSE_GRAD_SINGLE_ROUNDING) adds 2 more and retires the separate gradient pass.
-constexpr uint32_t kSquaredAbsDenominatorCertifiedSlots = 20u;
-constexpr uint32_t kSquaredAbsDenominatorBodySlots = kSquaredAbsDenominatorCertifiedSlots + 2u;
+// multiply (FUSE_GRAD_SINGLE_ROUNDING) adds 6 more and retires the separate gradient pass: the two
+// products, their gap, and the flushed-reciprocal guard (setcc, move, gap, endcc).
+constexpr uint32_t kSquaredAbsDenominatorCertifiedSlots = 18u;
+constexpr uint32_t kSquaredAbsDenominatorBodySlots = kSquaredAbsDenominatorCertifiedSlots + 6u;
 constexpr bool kSquaredAbsDenominatorTtiReplay =
     (TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS == kSquaredAbsDenominatorCertifiedSlots) &&
     tti_replay_fits(kSquaredAbsDenominatorBodySlots);
@@ -87,21 +88,18 @@ inline void squared_abs_denominator_tti_replay_tile() {
         ckernel::p_sfpu::LREG6,
         0);  // reciprocal * grad
     TTI_SFPNOP;
+    // Where the reciprocal flushed to 0 (|x| from 2^126, or an infinite or NaN x) an infinite grad would
+    // make 0 * inf = NaN: reciprocal * grad is 0 there for any grad, as the composite's flushed factor is.
+    TTI_SFPSETCC(0, ckernel::p_sfpu::LREG2, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);  // CC: reciprocal == 0
+    TTI_SFPMOV(0, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG6, 0);  // reciprocal * grad = +0
+    TTI_SFPNOP;  // move-consumer gap
+    TTI_SFPENCC(3, 0, 0, 10);  // CC-balanced replay body
     TTI_SFPMUL(
         ckernel::p_sfpu::LREG6,
         ckernel::p_sfpu::LREG2,
         ckernel::p_sfpu::LCONST_0,
-        ckernel::p_sfpu::LREG6,
-        0);  // grad * reciprocal * reciprocal
-    TTI_SFPNOP;
-    // den * 0 is +0 for every finite ingress and a positive NaN for every exponent-FF one: it
-    // leaves each finite result unchanged and turns infinite and NaN ingress into NaN.
-    TTI_SFPMAD(
-        ckernel::p_sfpu::LREG7,
-        ckernel::p_sfpu::LCONST_0,
-        ckernel::p_sfpu::LREG6,
         ckernel::p_sfpu::LREG0,
-        0);  // result + den * 0
+        0);  // grad * reciprocal * reciprocal
     // The load-macro itself is the result-MUL hazard gap.  Captured T1 RNE
     // fires at issue+1, then the fixed store advances the same destination
     // row at issue+3. L4 is dead after the second Newton update.

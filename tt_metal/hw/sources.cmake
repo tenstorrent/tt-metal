@@ -408,8 +408,5 @@ set(HW_JIT_API_HEADERS
     ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalization_owner.inc
     ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalize.inc
     ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_squared_replay.inc
-    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalization_owner.inc
-    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_gradient_finalize.inc
-    ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_bf16_rational_squared_wh_replay.inc
     inc/api/compute/softsign_bw.h
 )

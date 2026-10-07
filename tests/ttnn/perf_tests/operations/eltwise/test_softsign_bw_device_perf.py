@@ -21,10 +21,7 @@ SHAPES = [(512, 512), (1024, 1024)]
 REPEATS = 5
 MARGIN = 0.05
 # The boards whose calls the fused program serves.
-FUSED_BOARDS = (
-    "blackhole",
-    "wormhole_b0",
-)
+FUSED_BOARDS = ("blackhole",)
 PATH = "tests/ttnn/perf_tests/operations/eltwise/test_softsign_bw_device_perf.py"
 
 

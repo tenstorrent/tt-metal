@@ -11,7 +11,7 @@
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_conversions.h"
-#include "ckernel_sfpu_bf16_tti_replay.h"
+#include "sfpu/ckernel_sfpu_bf16_tti_replay.h"
 #pragma push_macro("TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS")
 #undef TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS
 
@@ -23,9 +23,9 @@ using ::sfpi::DataLayout;
 // Rational n1/d1, 2 segments, range [-10.0, 10.0]
 
 // rational template: squared_abs_denominator_rational. y = 1 / (1 + abs(x))^2.
-#define TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS 20u
+#define TT_TARGET_BH_BF16_SQUARED_ABS_DENOMINATOR_TTI_BODY_SLOTS 18u
 
-#include "ckernel_sfpu_bf16_rational_squared_replay.inc"
+#include "sfpu/ckernel_sfpu_bf16_rational_squared_replay.inc"
 static_assert(kSquaredAbsDenominatorTtiReplay);
 inline void tile() { squared_abs_denominator_tti_replay_tile(); }
 
