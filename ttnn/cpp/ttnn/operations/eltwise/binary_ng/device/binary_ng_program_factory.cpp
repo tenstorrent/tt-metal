@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -1472,7 +1473,16 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.core_ranges = all_device_cores;
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
     compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
+    MathFidelity eb_r3_fidelity = MathFidelity::HiFi4;  // CI toggle EB_R3_FIDELITY (dump branch), not in the PR
+    if (const char* f = std::getenv("EB_R3_FIDELITY"); f != nullptr) {
+        const std::string fs(f);
+        eb_r3_fidelity = fs == "LoFi"    ? MathFidelity::LoFi
+                         : fs == "HiFi2" ? MathFidelity::HiFi2
+                         : fs == "HiFi3" ? MathFidelity::HiFi3
+                                         : MathFidelity::HiFi4;
+    }
     compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = eb_r3_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
     };
