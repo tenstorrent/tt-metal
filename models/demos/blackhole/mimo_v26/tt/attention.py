@@ -396,6 +396,10 @@ class MiMoAttention:
                     st = ttnn.to_memory_config(st, kv_mem_u)
                     ttnn.experimental.paged_update_cache(cache, st, update_idxs_tensor=upd[t], page_table=pt_u, **extra)
                     ttnn.deallocate(st)
+                    for _ in range(
+                        int(os.environ.get("MIMO_VERIFY_GAP", "0"))
+                    ):  # debug: delay between back-to-back updates of the same tile
+                        ttnn.deallocate(ttnn.relu(self.cos_tab))
         else:
             kr = ttnn.to_memory_config(kr, kv_mem)
             v = ttnn.to_memory_config(v, kv_mem)
