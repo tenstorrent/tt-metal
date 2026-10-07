@@ -1,6 +1,6 @@
-# logsigmoid(x) from the Blackhole SFPI port. The kernel takes x (Dest tile 0) and exp(-x)
-# (tile 1); both come from input_A, the second made on device by Neg and Exp on its own copy.
-# Kept to |x| <= 30 so exp(-x) stays finite.
+# logsigmoid(x) from the Blackhole SFPI port. The kernel reads x (Dest tile 0) and computes
+# exp(-|x|) itself. It is driven as a BinarySfpu op, so tile 1 holds a second copy of input_A
+# that the kernel ignores.
 #
 # Generated for the Quasar port of the Blackhole SFPI kernels, using only existing fuser features:
 # dest_acc is fixed per file (hence the _dest16 / _dest32 pairs), every float input goes through
@@ -48,18 +48,6 @@ operations:
   - math:
       - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 0}}
       - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 32], indexes: {in0: 0, dest: 1}}
-      - type: "UnarySfpu"
-        operation: [Neg]
-        approximation_mode: false
-        iterations: 32
-        block_size: [32, 32]
-        indexes: {dest: 1}
-      - type: "UnarySfpu"
-        operation: [Exp]
-        approximation_mode: false
-        iterations: 32
-        block_size: [32, 32]
-        indexes: {dest: 1}
       - type: "BinarySfpu"
         operation: [SfpuLogsigmoid]
         approximation_mode: false

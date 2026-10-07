@@ -111,7 +111,7 @@
 #include "llk_sfpu/ckernel_sfpu_isclose.h"          // calculate_sfpu_isclose / isclose_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp.h"        // calculate_sfpu_logaddexp / calculate_sfpu_logaddexp_init
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
-#include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
+#include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid_binary (x -> logsigmoid(x))
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_shift.h"            // calculate_binary_left_shift / right / logical right
@@ -1339,8 +1339,14 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         calculate_sfpu_logaddexp2_init<is_fp32_dest_acc_en>();
     }
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        // The residual's low coefficients live in the program constant registers and differ by
+        // destination precision.
+        logsigmoid_init<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
+    }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
-    // ADD / SUB / GT / LT / LE / GE / COPY_DEST / LOGSIGMOID are stateless — no init.
+    // ADD / SUB / GT / LT / LE / GE / COPY_DEST are stateless — no init.
 }
 
 /**
@@ -1789,9 +1795,17 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
     }
     else if constexpr (OP == BinaryOp::LOGSIGMOID)
     {
-        // logsigmoid(x) = -softplus(-x): src0 holds x, src1 holds exp(-x), which the caller computes
-        // first (the YAML case runs Neg + Exp on a copy of x), as the Blackhole compute path does.
-        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_logsigmoid, (APPROXIMATION_MODE, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+        // logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)): the kernel computes the exponential itself, so
+        // src1 is ignored; the binary adapter keeps the harness's src0 / src1 / dst placement.
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_logsigmoid_binary,
+            (APPROXIMATION_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            VectorMode::RC);
     }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
