@@ -3436,36 +3436,6 @@ AssignedMeshes SatPlacementEnumerationSession::next() {
     }
 
     AssignedMeshes assigned = decode_sat_placement(result);
-    // Host-cap post-check against the PSD: the cap is encoded over seat groups, so re-count the hosts the chosen
-    // ASICs really sit on. With the unlabelled-seat rule in the encoder this never fires; it exists so a
-    // regression surfaces as a rejected model and a warning instead of a silent over-cap placement.
-    const std::size_t armed_cap = constraints_.max_same_rank_groups_used();
-    if (armed_cap > 0 && physical_system_descriptor_ != nullptr) {
-        std::set<std::string> hosts_used;
-        for (const PlacedMesh& placed : assigned) {
-            for (const tt::tt_metal::AsicID& asic : placed.placement.asics) {
-                hosts_used.insert(physical_system_descriptor_->get_host_name_for_asic(asic));
-            }
-        }
-        if (hosts_used.size() > armed_cap) {
-            std::string host_list;
-            for (const std::string& h : hosts_used) {
-                host_list += (host_list.empty() ? "" : ",") + h;
-            }
-            log_warning(
-                tt::LogFabric,
-                "SAT joint placement: capped solve (k={}) returned a placement spanning {} host(s) [{}]; rejecting it "
-                "and asking for the next model",
-                armed_cap,
-                hosts_used.size(),
-                host_list);
-            remember_yielded(assigned);
-            if (master_solve_ != nullptr) {
-                master_solve_->block_assigned(assigned);
-            }
-            return next();
-        }
-    }
     remember_yielded(assigned);
     if (stats_ != nullptr) {
         bool lists_complete = true;
