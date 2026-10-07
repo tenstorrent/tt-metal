@@ -131,3 +131,25 @@
 - claim: Attention track handoff after Phase A (module NOT designed or written, waiting for coordinator ack on the pad/native decision E261007-0114-2df). Worktree /mnt/tt-data/ssinghal/mimo/wt/attn, branch ssinghal/mimo-attn. Probe: models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py; repro: launch.py --worktree $PWD --commit <tip> --host 30 --env PROBE=<group[,..]> --env PROBE_OUT=<jsonl> [--env PROBE_SINK_MULT=5] -- python models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py; groups dec_corr dec_gqa dec_ring dec_perf pre_corr pre_gqa pre_perf edge pre_long. Logs /mnt/tt-data/ssinghal/mimo-logs/attn_probe*. Not done/unverified: real MiMo weights and activations (all data is random with real shapes), bfp8 weights, RoPE/V*0.707 path, TP8 mesh run (single chip only), 32-chip behaviour, determinism across hosts, bfp8 KV (not asked), 1 KV head per chip assumes KV replication for GA, trace-compatibility of chunk_start_idx_tensor variant (chunk_start_idx int variant only tested), decode with ragged positions at B>32 per chip, timing is host-wall with 20 calls (no device profiler).
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_probeB_pre_perf.jsonl
 - paths: models/demos/blackhole/mimo_v26/tests/probe_sdpa_ops.py
+
+## E261007-0135-20d
+- date: 2026-10-07T01:35:54
+- commit: 9df3eedb884
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: DECISION (coordinator, from attn probe E261007-0114-2df, not yet merged here): bring-up uses V padded to 192 for SWA and global attention (non-MLA decode with ring cache, chunked SDPA with window+sink; sink input = sink/scale). Native V=128 decode is 13-17% faster on global 64k decode (paired, 1 chip, wall clock) and is a later perf item; the C++ route (chunked MLA prefill with explicit V) needs user approval for a private build.
+- evidence: -
+- paths: bringup/mimo_v26
+
+## E261007-0135-56e
+- date: 2026-10-07T01:35:54
+- commit: 9df3eedb884
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: DECISION (coordinator): checkpoint downloaded from HF XiaomiMiMo/MiMo-V2.6-Flash-RL into /mnt/tt-data/MiMo-V2.6-Flash-RL (user approved download and location 2026-10-07; whole repo, ~173 GB, log /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log). MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL. Hosts approved by user for use (health-check each first): 30 35 40 41 43 44 46 47 48.
+- evidence: -
+- paths: bringup/mimo_v26
