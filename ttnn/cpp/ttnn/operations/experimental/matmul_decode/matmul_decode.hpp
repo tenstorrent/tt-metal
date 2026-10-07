@@ -62,4 +62,17 @@ Tensor matmul_decode(
     float rms_norm_epsilon = 1.0e-6F,
     uint32_t rms_norm_group_size = 0);
 
+// Decode matmul C = A @ B for large K and small N, with no activation gather and no global
+// synchronization. A is ROW_MAJOR WIDTH_SHARDED [M, K] (shard [M, Kc], M <= 32); B is TILE
+// HEIGHT_SHARDED [K, N] on the same cores (shard [Kc, N]), so core i holds the i-th K-slice of
+// both. Each core computes its [M, N] partial locally, and the partials are summed up a tree of
+// fan-in `reduce_fan_in` in which every core synchronizes only with its own parent and children.
+// The ROW_MAJOR [M, N] result lands on the first core of A's grid (row-major order), as a
+// single-core WIDTH_SHARDED L1 tensor.
+Tensor matmul_decode_large_k(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    std::optional<const DataType> dtype = std::nullopt,
+    uint32_t reduce_fan_in = 2);
+
 }  // namespace ttnn::experimental

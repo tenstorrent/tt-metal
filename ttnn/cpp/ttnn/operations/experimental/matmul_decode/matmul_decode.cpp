@@ -5,6 +5,7 @@
 #include "matmul_decode.hpp"
 
 #include "device/matmul_decode_device_operation.hpp"
+#include "device/matmul_decode_large_k_device_operation.hpp"
 
 namespace ttnn::experimental {
 
@@ -44,6 +45,14 @@ Tensor matmul_decode(
         rms_norm_gamma,
         rms_norm_epsilon,
         rms_norm_group_size);
+}
+
+Tensor matmul_decode_large_k(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    std::optional<const DataType> dtype,
+    uint32_t reduce_fan_in) {
+    return ttnn::prim::matmul_decode_large_k(input_tensor_a, input_tensor_b, dtype, reduce_fan_in);
 }
 
 }  // namespace ttnn::experimental

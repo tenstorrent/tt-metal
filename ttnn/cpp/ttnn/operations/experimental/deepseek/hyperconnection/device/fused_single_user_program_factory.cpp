@@ -85,6 +85,9 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
     const CoreRangeSet all_cores = collapse_cores.merge(post_cores).merge(comb_cores);
 
     const uint32_t tile_size_bytes = tile_size(datatype_to_dataformat_converter(fused_w.dtype()));
+    // A ROW_MAJOR fused_w is one row, read and multicast as-is; a tiled one is a whole tile.
+    const bool fused_w_row_major = fused_w.layout() == Layout::ROW_MAJOR;
+    const uint32_t fused_w_read_bytes = fused_w_row_major ? fused_w.buffer()->page_size() : tile_size_bytes;
     const uint32_t d_tiles = static_cast<uint32_t>(hidden_streams.padded_shape()[-1]) / constants::TILE_WIDTH;
     const uint32_t d_tiles_per_core = d_tiles / kCollapseCoreCount;
     const uint32_t num_streams = operation_attributes.num_streams;
@@ -192,6 +195,8 @@ FusedSingleUserProgramFactory::cached_program_t FusedSingleUserProgramFactory::c
             receiver_ready_sem_id,
             static_cast<uint32_t>(sender_noc.x),
             static_cast<uint32_t>(sender_noc.y),
+            fused_w_row_major ? 1u : 0u,
+            fused_w_read_bytes,
         };
         TensorAccessorArgs(fused_w.buffer()).append_to(args);
         TensorAccessorArgs(pre_bias.buffer()).append_to(args);
