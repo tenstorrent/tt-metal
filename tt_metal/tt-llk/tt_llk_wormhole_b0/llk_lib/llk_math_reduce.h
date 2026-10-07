@@ -33,16 +33,15 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
  * Only used for MAX pool (GMPOOL does column wise max of SrcA only).
  *
  * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
+ * @note The MOVD2B/ELWADD below read the Src zero-substitution flag (FlushDenormals = !flag): a datum whose
+ *       low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction. The flag is held in
+ *       PRESERVE for the whole op by @ref _llk_math_reduce_init_ (MAX/REDUCE_ROW) and returned to the
+ *       operand-driven baseline by @ref _llk_math_reduce_uninit_; toggling it here per face row cost two
+ *       FPU pipe drains (STALLWAIT + cfg write) per face row.
  */
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
-    // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
-    // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
-    // return it to the operand driven baseline.
-    math::_configure_preserve_zero_flag_state_();
-
     if constexpr (is_int_fpu_en)
     {
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
@@ -71,9 +70,6 @@ inline void reduce_row_perform_transpose()
     TTI_ZEROSRC(0, 1, 0, 1);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_1, 0);
-
-    // Restore the operand-driven baseline for the currently configured formats.
-    math::_configure_default_zero_flag_state_();
 }
 
 /**
@@ -484,18 +480,34 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
-    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
-    // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
-    // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
-    math::_configure_default_zero_flag_state_();
+    // Src zero-substitution flag ownership for the whole op:
+    //  - MAX/REDUCE_ROW: hold PRESERVE. Its per-face-row transpose (reduce_row_perform_transpose) moves the
+    //    pooled row through SrcB with MOVD2B/ELWADD, which flush any datum with a zero low byte when the flag
+    //    is at the operand default. Setting it once here instead of around every transpose removes two FPU
+    //    pipe drains (STALLWAIT + cfg write) per face row; GMPOOL itself does not consult the flag.
+    //  - Everything else: establish the operand-driven DEFAULT, mirroring _llk_math_matmul_init_ /
+    //    _llk_math_eltwise_binary_init_, so a preceding copy_init that left PRESERVE cannot leak into the
+    //    pool instructions.
+    // _llk_math_reduce_uninit_ returns the flag to the operand-driven baseline.
+    if constexpr (type == PoolType::MAX && dim == ReduceDim::REDUCE_ROW)
+    {
+        math::_configure_preserve_zero_flag_state_();
+    }
+    else
+    {
+        math::_configure_default_zero_flag_state_();
+    }
 }
 
 /**
  * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
  *
+ * Returns the Src zero-substitution flag to the operand-driven baseline; MAX/REDUCE_ROW holds it in
+ * PRESERVE for the whole op (see @ref _llk_math_reduce_init_). Skip-if-set, so a no-op for the other paths.
+ *
  * @note Reverses @ref _llk_math_reduce_init_
  */
 inline void _llk_math_reduce_uninit_()
 {
+    math::_configure_default_zero_flag_state_();
 }
