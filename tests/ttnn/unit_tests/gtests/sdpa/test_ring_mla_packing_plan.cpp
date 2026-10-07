@@ -193,7 +193,9 @@ TEST(RingMLAPackingPlan, SourceTilesClipToTouchedSlabs) {
 }
 
 TEST(RingMLAPackingPlan, RowBoundsSkipPaddedRowsAndClipToLogicalEnd) {
-    const auto rows_from = [](std::vector<uint32_t> tiles) { return [tiles](uint32_t row) { return tiles[row]; }; };
+    const auto rows_from = [](const std::vector<uint32_t>& tiles) {
+        return [tiles](uint32_t row) { return tiles[row]; };
+    };
     auto bounds = packed_kv_row_bounds(3, 100, 40, rows_from({50, 51, 52}));
     EXPECT_EQ(bounds.visible_end, 50u);
     EXPECT_EQ(bounds.masked_from, 53u);
