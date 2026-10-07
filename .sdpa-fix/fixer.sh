@@ -449,8 +449,10 @@ $(git -C "$TT_METAL_DIR" show --format= "$csha" | head -c 6000)"
       [[ -z "$v" ]] && continue
       $FIXLIB mark --state keep --extra "$(jq -nc --arg i "$id" --argjson v "$v" '{checked: {($i): $v}}')" "$sig"
       fixes=$(jq -r .fixes <<<"$v"); conf=$(jq -r .confidence <<<"$v"); reason=$(jq -r .reason <<<"$v")
-      log "  scan $short: $id ($kind) → fixes=$fixes ($conf) $reason"
-      [[ "$fixes" == "true" && "$conf" != "low" ]] || continue
+      log "  scan $short: $id ($kind) → fixes=$fixes symptom_match=$(jq -r .symptom_match <<<"$v") ($conf) $reason"
+      # Only a sure verdict is shown to people: high confidence AND the same
+      # failure mode. Anything less stays a cached "no" in the ledger.
+      [[ "$fixes" == "true" && "$conf" == "high" && "$(jq -r .symptom_match <<<"$v")" == "true" ]] || continue
       n="${id#pr:}"; [[ "$id" == pr:* ]] || n=""
       if [[ "$kind" == "merged" ]]; then
         $FIXLIB mark --state fixed_upstream \

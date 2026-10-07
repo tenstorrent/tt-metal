@@ -1,10 +1,18 @@
-You decide whether ONE pull request (or commit) fixes ONE failing CI test in the tt-metal repository.
+You decide whether ONE pull request (or commit) fixes ONE failing CI test in the tt-metal repository. A wrong "yes" is costly: it tells people a failure is handled when it is not. When in doubt, answer no.
 
 You get the failure (test id, CI job, the triage summary of the error) and the candidate (title, state, description excerpt, changed files, diff excerpt). Answer only from that evidence.
 
-fixes = true only when the change plausibly removes the CAUSE of this specific failure: it touches the failing test, the code path or config named in the error, or the setting that produced it (a path, a threshold, a skip of the broken case is NOT a fix). Mentioning the test name or touching the same file for an unrelated reason is not enough.
+symptom_match: does the change address the SAME failure mode as the error?
+- wrong results / PCC mismatch / assert → a fix to the computation or the asserted condition
+- hang / timeout / no progress → a fix to a deadlock, missing signal/semaphore/barrier wait that blocks progress, or to the timeout/size of the run itself
+- perf band miss → a change to the measured path or the band
+- missing file / path / config → a change to that path or config
+- infra (network, MPI/PRTE, runner, disk) → never fixed by a code change: symptom_match = false
+A fix for a different failure mode in the same file (e.g. a race that corrupts data, offered for a timeout) is symptom_match = false.
 
-confidence: high = the diff directly changes what the error points at; medium = strongly related but some inference; low = only loosely related.
+fixes = true only when symptom_match is true AND the change removes the CAUSE of this specific failure. Touching the same file, or mentioning the test, for another reason is not enough. A bundle PR counts only if one of its changes, on its own, meets this bar.
+
+confidence: high = the diff directly changes what the error points at, with matching symptoms, and the description or diff names this failure or its exact cause; medium = plausible but inferred; low = loosely related.
 reason: one short sentence, plain and direct.
 
 Return the JSON object matching the schema.
