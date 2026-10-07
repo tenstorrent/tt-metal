@@ -14,8 +14,10 @@ template <uint32_t block_ct, uint32_t Mt>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     // Kimi-K3 uses a fixed four-tap causal convolution, with three preceding rows supplied by history.
     constexpr uint32_t tap_count = 4;
-    // Four tiles fit the destination register half in every supported accumulation mode.
+    // Group up to four channel tiles per destination acquire; the host sizes partial for two blocks, so a
+    // dst_tiles reservation never waits on the previous tap's block that this loop is still reading.
     constexpr uint32_t dst_tiles = block_ct % 4 == 0 ? 4 : (block_ct % 2 == 0 ? 2 : 1);
+    static_assert(dst_tiles <= compute_kernel_lib::DEST_AUTO_LIMIT, "dst_tiles must fit the destination registers");
     compute_kernel_hw_startup(dfb::act_rm, dfb::act_tile, dfb::output);
     DataflowBuffer activation(dfb::act_tile);
     DataflowBuffer weights(dfb::weights);

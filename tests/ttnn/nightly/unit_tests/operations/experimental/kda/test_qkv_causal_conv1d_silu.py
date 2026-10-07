@@ -48,11 +48,15 @@ class _BenchmarkCase:
 
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Real-time-profiler medians on a Galaxy Blackhole device (2026-09-28).
+# Recalibrated 2026-10-07 on one Blackhole Galaxy device, firmware 19.12.0.0, after
+# the reader stopped rereading DRAM once per tap. Seven real-time-profiler sessions
+# produced 83377-83469 ns, 46238-46438 ns, and 50555-50631 ns; the inline references
+# are their medians. The 5% symmetric margin leaves 2.3-4.2 us on both sides,
+# against an observed spread of 76-200 ns.
 _PRODUCTION_CASES = (
-    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=83_757),
-    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=46_575),
-    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=50_944),
+    _BenchmarkCase("single-block", widths=(512, 512, 512), channel_chunk_size=1536, expected_duration_ns=83_401),
+    _BenchmarkCase("multiple-blocks", widths=(1024, 1024, 1024), channel_chunk_size=768, expected_duration_ns=46_345),
+    _BenchmarkCase("asymmetric-split", widths=(512, 256, 128), channel_chunk_size=896, expected_duration_ns=50_579),
 )
 
 
@@ -488,6 +492,23 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_channel_chunk_size(
             taps_tt,
             widths=widths,
             channel_chunk_size=channel_chunk_size,
+            actual_start=zero_actual_start,
+        )
+
+
+def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
+    zero_actual_start, device: ttnn.Device, expect_error: Callable
+) -> None:
+    # One 96-tile channel block needs about 2.4 MB of DFBs and window per core.
+    widths = (1024, 1024, 1024)
+    _, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, widths=widths, sequence=32)
+    with expect_error(RuntimeError, "channel_chunk_size = 3072 needs .* bytes of L1 per core"):
+        _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            widths=widths,
+            channel_chunk_size=3072,
             actual_start=zero_actual_start,
         )
 

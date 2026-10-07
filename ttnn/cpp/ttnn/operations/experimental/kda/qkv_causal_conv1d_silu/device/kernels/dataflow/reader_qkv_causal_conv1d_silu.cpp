@@ -74,6 +74,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
     constexpr uint32_t block_row_bytes = block_ct * tile_width * sizeof(uint16_t);
     constexpr uint32_t block_offset_scale = tile_width * sizeof(uint16_t);
+    // Every row and tap offset into DRAM and the L1 window is a multiple of block_row_bytes.
+    static_assert(block_row_bytes % L1_ALIGNMENT == 0 && block_row_bytes % DRAM_ALIGNMENT == 0);
     const uint32_t tile_bytes = weights.get_entry_size();
 
     UnicastEndpoint self;

@@ -20,13 +20,6 @@
 
 namespace ttnn::experimental::prim {
 
-namespace {
-
-// Kimi-K3 supplies four learned causal-convolution taps; one channel block of weights is queued per tap.
-constexpr uint32_t tap_count = 4;
-
-}  // namespace
-
 ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory::create_mesh_workload_artifacts(
     const QkvCausalConv1dSiluParams& attrs,
     const QkvCausalConv1dSiluInputs& in,
@@ -93,15 +86,16 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 && history.dtype() == DataType::BFLOAT16,
         "qkv_causal_conv1d_silu: activation window staging requires BF16 input and history");
-    const uint32_t window_bytes =
-        (tt::constants::TILE_HEIGHT + tap_count - 1) * block_ct * tt::constants::TILE_WIDTH * input.element_size();
+    // validate_on_program_cache_miss checks qkv_causal_conv1d_silu_l1_bytes against the free L1 per core.
+    const auto window_bytes =
+        static_cast<uint32_t>(qkv_causal_conv1d_silu_window_bytes(block_ct, input.element_size()));
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
-        make_dfb(act_rm_dfb_name, 2 * block_ct),
-        make_dfb(act_tile_dfb_name, block_ct),
-        make_dfb(weights_dfb_name, tap_count * block_ct),
-        make_dfb(partial_dfb_name, 2 * block_ct),
-        make_dfb(output_dfb_name, 2 * block_ct),
+        make_dfb(act_rm_dfb_name, qkv_causal_conv1d_silu_act_rm_blocks * block_ct),
+        make_dfb(act_tile_dfb_name, qkv_causal_conv1d_silu_act_tile_blocks * block_ct),
+        make_dfb(weights_dfb_name, qkv_causal_conv1d_silu_tap_count * block_ct),
+        make_dfb(partial_dfb_name, qkv_causal_conv1d_silu_partial_blocks * block_ct),
+        make_dfb(output_dfb_name, qkv_causal_conv1d_silu_output_blocks * block_ct),
     };
 
     tt::tt_metal::experimental::KernelSpec reader{
