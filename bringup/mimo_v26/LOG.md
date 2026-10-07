@@ -1303,3 +1303,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_P1_gate128.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py
 - data: {"gsm8k_n":128,"gsm8k_correct":113,"acc":0.8828,"gate_min_correct":109,"step_ms":123.4,"b":128,"tok_s_user":8.1,"tok_s_total":1037,"b64_correct":56,"b64_step_ms":123.3}
+
+## E261007-0835-aff
+- date: 2026-10-07T08:35:40
+- commit: ae6a9e0d77a
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER REQUIREMENT 2026-10-07: decode must support users per mesh row U in {1,2,4,8,16,32} (B=4U) like DSV4 branch ssinghal/dsv4p1 (one build, reconfigure per U). Status at ae6a9e0d77a: decode always runs 32 slots/row (flat 123.4 ms/step at B=64 and B=128, E261007-0827-805), not acceptable. Assigned: decode agent = U-parametrised Decoder/Generator + reconfigure + step-time table vs U; prefill agent = 64k decode + needle test; MoE agent = decode race first, then small-U MoE (min 64 tokens/row, empty-expert skipping) per notes/small_u_moe.md.
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
