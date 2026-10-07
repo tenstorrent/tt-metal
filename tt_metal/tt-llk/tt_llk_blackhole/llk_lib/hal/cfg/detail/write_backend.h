@@ -193,6 +193,8 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
     else
     {
         static_assert(A == Access::TensixCfgUnit, "GPR-backed cfg::write requires Access::TensixCfgUnit");
+        constexpr std::uint32_t wr128b = Size == GprTransferSize::Bits128 ? ckernel::p_cfg::WRCFG_128b : ckernel::p_cfg::WRCFG_32b;
+
         if constexpr (Size == GprTransferSize::Bits128)
         {
             static_assert((F.addr32(S) & 0x3u) == 0u, "128-bit GPR cfg::write destination must be four-word aligned");
@@ -204,7 +206,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
             {
                 LLK_ASSERT((transfer.source.index & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");
             }
-            TT_WRCFG(transfer.source.index, Size == GprTransferSize::Bits128, F.addr32(S));
+            TT_WRCFG(transfer.source.index, wr128b, F.addr32(S));
         }
         else
         {
@@ -213,7 +215,7 @@ inline __attribute__((always_inline)) void write_gpr(const GprWrite<F, S, GprInd
             {
                 static_assert((GprIndex & 0x3u) == 0u, "128-bit WRCFG source GPR must be four-word aligned");
             }
-            TTI_WRCFG(GprIndex, Size == GprTransferSize::Bits128, F.addr32(S));
+            TTI_WRCFG(GprIndex, wr128b, F.addr32(S));
         }
         if constexpr (Completion == WrcfgCompletion::Wait)
         {
