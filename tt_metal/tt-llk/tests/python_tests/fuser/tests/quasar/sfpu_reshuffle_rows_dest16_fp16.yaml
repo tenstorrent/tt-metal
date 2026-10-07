@@ -1,16 +1,5 @@
-# reshuffle_rows (embedding-backward row scatter-add): every row i of Dest tile 0 is added into row
-# mask[i] of Dest tile 1, which is packed. The fuser cannot hand an SFPU op an L1 buffer, so the
-# BinaryOp::RESHUFFLE_ROWS test dispatch drives the kernel with one fixed 32-entry mask
-# (RESHUFFLE_ROWS_FUSER_MASK): in-place, swapped and face-pair-crossing rows (15 <-> 16, 0 <-> 31),
-# up to four input rows piled onto one output row, the 255 sentinel and the other out-of-range
-# targets 32, 47, 48, 64, 100 and 254, which must be skipped too. Other masks are covered by
-# test_reshuffle_rows_quasar.
-# Stimuli are half-integers in [-2, 2], so every partial sum is exact in the Dest format and a lost,
-# doubled or misplaced row cannot hide inside the comparison tolerance.
-#
-# Generated for the Quasar reshuffle_rows kernel, using only existing fuser features:
-# dest_acc is fixed per file (hence the _dest16 / _dest32 files), every float input goes through
-# the FPU datacopy path, and stimuli are finite intervals and points (no inf, NaN, -0 or INT_MIN).
+# reshuffle_rows with the fixed RESHUFFLE_ROWS_FUSER_MASK (the fuser cannot pass an L1 mask).
+# Half-integer stimuli keep every sum exact, hence atol/rtol 0.
 
 dest_acc: false
 
