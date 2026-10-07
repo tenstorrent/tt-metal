@@ -111,6 +111,9 @@ BCK = {
     "col_w21": ("col", 672, 49),
     "scalar_w32": ("scalar", 1024, 64),
     "scalar_w33": ("scalar", 1056, 64),
+    # bfp8_b a and b: the column broadcast kernel also runs with fp32 DEST (a section of 4 tiles), every bfp8_b datum as a
+    "col8_w32": ("col8", 1024, 64),
+    "col8_w21": ("col8", 672, 49),
 }
 BCAST = [(k, op, o) for k in BCK for op in ("add", "sub", "mul") for o in ("bf16", "bfp8", "fp32")]
 
@@ -127,7 +130,7 @@ def test_bcast_sec(device, kind, op, out_dt):
     t0 = time.time()
     form, W, ncores = BCK[kind]
     B = b16_set()
-    NBc = 64 if form == "col" else ncores  # b values per call
+    NBc = 64 if form in ("col", "col8") else ncores  # b values per call
     nb = B.size
     diffs = make_diffs(f"bsec_{kind}_{op}_{out_dt}", op)
     gy, gx = _grid(ncores)
@@ -137,7 +140,15 @@ def test_bcast_sec(device, kind, op, out_dt):
         if done >= maxc:
             break
         bsel = B[(np.arange(NBc) + c0) % nb]
-        if form == "col":
+        if form == "col8":
+            R = -(-65536 // W) * NBc
+            r = np.arange(R)
+            a = np.resize(bfp_table("bfp8"), R * W).reshape(R, W)
+            a = np.roll(a.reshape(-1), c0 * 4099).reshape(R, W)
+            bcol = bsel[r % NBc]
+            ashape, bshape = (1, 1, R, W), (1, 1, R, 1)
+            b_el = np.repeat(bcol, W)
+        elif form == "col":
             rows_per_block = -(-65536 // W)  # rows holding every pattern once
             R = rows_per_block * NBc
             r = np.arange(R)
@@ -156,10 +167,16 @@ def test_bcast_sec(device, kind, op, out_dt):
             bcol = bsel
             b_el = np.repeat(bsel, per_b)
         mc = ttnn.create_sharded_memory_config(ashape, core_grid=ttnn.CoreGrid(y=gy, x=gx), strategy=ttnn.ShardStrategy.HEIGHT)
-        ta = ttnn.from_torch(bf16_from_bits(a.reshape(-1)).reshape(ashape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
-        tb = ttnn.from_torch(bf16_from_bits(bcol).reshape(bshape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        av = f32_of_bf16(a.reshape(-1))
-        bv = f32_of_bf16(b_el)
+        if form == "col8":
+            ta = ttnn.from_torch(torch.from_numpy(np.ascontiguousarray(a, dtype=np.float32)).reshape(ashape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+            tb = ttnn.from_torch(torch.from_numpy(f32_of_bf16(bcol)).reshape(bshape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            av = tensor_vals(ta)
+            bv = np.repeat(tensor_vals(tb), W)
+        else:
+            ta = ttnn.from_torch(bf16_from_bits(a.reshape(-1)).reshape(ashape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc)
+            tb = ttnn.from_torch(bf16_from_bits(bcol).reshape(bshape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            av = f32_of_bf16(a.reshape(-1))
+            bv = f32_of_bf16(b_el)
         run_chunk(device, diffs, lambda: out_bits(_op(op, ta, tb, out_dt, mc)), av, bv)
         ttnn.deallocate(ta)
         ttnn.deallocate(tb)
