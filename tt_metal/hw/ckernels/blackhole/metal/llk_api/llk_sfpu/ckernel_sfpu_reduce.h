@@ -433,14 +433,22 @@ inline void horizontal_reduce() {
     horizontal_reduce_add<is_integer_mode>();
 }
 
+// MASK = LReg[15] << 30: LReg[15] holds twice the lane index, so the sign bit marks the odd lanes of every 8-lane row.
+template <std::uint32_t MASK>
+inline void load_odd_lane_mask() {
+    TTI_SFPSHFT(30, p_sfpu::LTILEID, MASK, 5 /* ARG_IMM | ARG_IMM_USE_VC */);
+}
+
 /**
- * @brief Moves the odd lanes of SRC into DST. LReg[15] holds twice the lane index, so its bit 1 shifted to the sign
- *        marks the odd lanes of every 8-lane row. Clobbers TMP; leaves every lane enabled.
+ * @brief Moves the odd lanes of SRC into DST. Writes the odd-lane mask to MASK first unless mask_ready; leaves every
+ *        lane enabled.
  */
-template <std::uint32_t SRC, std::uint32_t DST, std::uint32_t TMP>
+template <std::uint32_t SRC, std::uint32_t DST, std::uint32_t MASK, bool mask_ready>
 inline void merge_odd_lanes() {
-    TTI_SFPSHFT(30, p_sfpu::LTILEID, TMP, 5 /* ARG_IMM | ARG_IMM_USE_VC: TMP = LReg[15] << 30 */);
-    TTI_SFPSETCC(0, TMP, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    if constexpr (!mask_ready) {
+        load_odd_lane_mask<MASK>();
+    }
+    TTI_SFPSETCC(0, MASK, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
     TTI_SFPMOV(0, SRC, DST, 0);
     TTI_SFPENCC(0, 0, 0, 0);
 }
@@ -469,16 +477,17 @@ struct RowFoldSwap {
  * lanes, and a last rotate brings A's total to lane 0 of LREG0. Only column 0 of each row holds the result.
  *
  * In: LREG0 / LREG4 = per-column partials of the two 4-row groups. Out: column 0 of LREG0 / LREG4. Clobbers
- * LREG1, LREG2, LREG5. The fold must be associative and commutative (integer add, extreme), so the result equals
- * horizontal_reduce's whatever the pairing; the float sum keeps horizontal_reduce.
+ * LREG1, LREG5 and, unless mask_ready (MASK already holds load_odd_lane_mask's pattern), MASK. The fold must be
+ * associative and commutative (integer add, extreme), so the result equals horizontal_reduce's whatever the pairing;
+ * the float sum keeps horizontal_reduce.
  */
-template <typename Fold>
+template <typename Fold, std::uint32_t MASK = p_sfpu::LREG2, bool mask_ready = false>
 inline void horizontal_reduce_merged() {
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     Fold::template apply<p_sfpu::LREG0, p_sfpu::LREG1>();
     Fold::template apply<p_sfpu::LREG4, p_sfpu::LREG5>();
-    merge_odd_lanes<p_sfpu::LREG0, p_sfpu::LREG4, p_sfpu::LREG2>();
+    merge_odd_lanes<p_sfpu::LREG0, p_sfpu::LREG4, MASK, mask_ready>();
 
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
@@ -520,6 +529,10 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
 #else
     constexpr bool fused_vertical_swap = !clear_high_bits;
 #endif
+    // The fused path leaves LREG6 free, so the odd-lane mask is written once per tile.
+    if constexpr (fused_vertical_swap) {
+        load_odd_lane_mask<p_sfpu::LREG6>();
+    }
 
 #pragma GCC unroll 2
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++) {
@@ -600,7 +613,11 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
                 TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
             }
 
-            horizontal_reduce_merged<RowFoldSwap>();
+            if constexpr (fused_vertical_swap) {
+                horizontal_reduce_merged<RowFoldSwap, p_sfpu::LREG6, true>();
+            } else {
+                horizontal_reduce_merged<RowFoldSwap>();
+            }
 
             // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
             // final, packer-visible result (single column tile); otherwise it is intermediate and stays
