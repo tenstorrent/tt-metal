@@ -16,16 +16,13 @@ same rig: a new previous BEV and shift written into the captured buffers and the
 in place with the same geometry, checked against the reference.
 """
 
-import subprocess
-
 import pytest
 import torch
-from loguru import logger
-from tracy import signpost
 
 import ttnn
 from models.experimental.bevformer.model_config import ENCODER_NUM_LAYERS, GRID_DTYPE, SPATIAL_SHAPES
 from models.experimental.bevformer.tests.common import (
+    signposted_trace,
     BEV_SHAPES,
     assert_pcc,
     build_reference_encoder,
@@ -36,13 +33,6 @@ from models.experimental.bevformer.tests.common import (
 )
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_encoder_parameters
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
-
-
-def _head_sha():
-    try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], text=True).strip()
-    except (subprocess.CalledProcessError, OSError):
-        return "unknown"
 
 
 def _to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
@@ -59,7 +49,6 @@ def _to_device(tensor, device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
     indirect=True,
 )
 def test_encoder_perf(device, reset_seeds, num_layers):
-    logger.info(f"device-perf run of commit {_head_sha()}")
     bev_h, bev_w = BEV_SHAPES["base"]
     torch_model = build_reference_encoder(num_layers)
     inputs = random_encoder_inputs((bev_h, bev_w), 1)
@@ -105,19 +94,7 @@ def test_encoder_perf(device, reset_seeds, num_layers):
     # Doubles as the warmup: this call compiles the kernels and fills the program cache.
     check(torch_output, tt_model(**tt_inputs))
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    tt_output = tt_model(**tt_inputs)
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-
-    ttnn.synchronize_device(device)
-    # Drains and resets the device profiler buffers so the signposted region starts from
-    # empty; the warmup's markers would otherwise eat into the same budget.
-    ttnn.ReadDeviceProfiler(device)
-    signpost("start")
-    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-    signpost("stop")
-
-    try:
+    with signposted_trace(device, lambda: tt_model(**tt_inputs)) as (trace_id, tt_output):
         check(torch_output, tt_output)
         # The next frame of the same rig through the same trace: the replay must read the new
         # previous BEV and shift from the captured buffers; the refilled plan keeps its geometry.
@@ -134,5 +111,3 @@ def test_encoder_perf(device, reset_seeds, num_layers):
         tt_model.prepare_frame(inputs["img_metas"], plan=plan)
         ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
         check(reference(next_prev_bev, next_shift), tt_output)
-    finally:
-        ttnn.release_trace(device, trace_id)
