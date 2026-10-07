@@ -86,7 +86,7 @@ std::string assemble_device_op_json(
     const OpProfileData& data,
     ttsl::hash::hash_t program_hash,
     ChipId device_id,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     bool program_cache_hit,
     const tt::tt_metal::Program& program);
 
@@ -327,7 +327,7 @@ inline std::string op_meta_data_serialized_json(
     const device_operation_t& /*operation*/,
     uint32_t operation_id,
     auto device_id,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device,
     const auto& program,
     const auto& operation_attributes,
     const auto& tensor_args,
@@ -414,7 +414,7 @@ inline std::string op_meta_data_serialized_json(
                     operation,                                                                                        \
                     op_id,                                                                                            \
                     device_id,                                                                                        \
-                    mesh_device,                                                                                      \
+                    *mesh_device,                                                                                     \
                     program,                                                                                          \
                     operation_attributes,                                                                             \
                     tensor_args,                                                                                      \

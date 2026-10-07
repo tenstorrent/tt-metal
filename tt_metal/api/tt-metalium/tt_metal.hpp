@@ -28,7 +28,9 @@ class Program;
 
 namespace detail {
 
-[[deprecated("DispatchStateCheck is an internal API and will be removed after 2026-11-06.")]]
+[[deprecated(
+    "DispatchStateCheck is an internal API: the runtime validates the dispatch mode itself. It "
+    "will be removed after 2026-11-06.")]]
 bool DispatchStateCheck(bool isFastDispatch);
 
 [[deprecated("Use distributed::MeshDevice::create_unit_meshes instead. This API will be removed after 2026-09-27.")]]
@@ -81,8 +83,8 @@ void ReleaseOwnership();
  * | device_id   | ID of the device to look for                    | ChipId                  | Valid device IDs | Yes |
  */
 [[deprecated(
-    "Use the owning distributed::MeshDevice instead (e.g. MeshDevice::get_device). GetActiveDevice will be removed "
-    "after 2026-11-06.")]]
+    "Use the owning distributed::MeshDevice and address chips by MeshCoordinate instead. GetActiveDevice will be "
+    "removed after 2026-11-06.")]]
 IDevice* GetActiveDevice(ChipId device_id);
 
 /**

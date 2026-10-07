@@ -61,14 +61,16 @@ After instrumenting your kernels, the profiling data is automatically collected 
 
 .. code-block:: c++
 
-    // Run the program
-    tt::tt_metal::EnqueueProgram(cq, program, false);
-    tt::tt_metal::Finish(cq);
+    // Run the workload
+    auto mesh_device = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(/*device_id=*/0);
+    auto& cq = mesh_device->mesh_command_queue();
+    tt::tt_metal::distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+    tt::tt_metal::distributed::Finish(cq);
 
     // Also reads profiler results from the device
-    tt::tt_metal::CloseDevice(device);
+    mesh_device->close();
 
-If for any reason you need to manually trigger the reading of profiling results (for example, more then 1000 kernel runs before device close), you can call ``ReadMeshDeviceProfilerResults``:
+If for any reason you need to manually trigger the reading of profiling results (for example, more than 1000 kernel runs before device close), you can call ``ReadMeshDeviceProfilerResults``:
 
 .. code-block:: c++
 
