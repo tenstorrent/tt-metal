@@ -1165,6 +1165,13 @@ def _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device):
     ncores = max(int(dev.x) * int(dev.y), 1)
     per_bank_budget = 3_800_000  # under the ~3.88 MB L1 bank size, leaving headroom for other allocations
 
+    # Only the small-L1 (3 MB/node) variant needs the grouped concat; the regular 4 MB flow is left unchanged.
+    try:
+        _v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+        _small_l1 = 0 < int(_v.total_bytes_per_bank) < 3_500_000
+    except Exception:
+        _small_l1 = False
+
     def _l1_output_fits(tensors):
         # concat output volume == sum of input volumes; L1-interleaved spreads it across `ncores` banks.
         total_bytes = 0
@@ -1177,6 +1184,12 @@ def _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device):
             except Exception:
                 return True  # can't estimate -> don't coerce
         return (total_bytes / ncores) <= per_bank_budget
+
+    # Max inputs per device concat on the small-L1 Quasar variant. The device concat has an input-count
+    # limit (test_quasar_lm_head_matmul_3mb::test_lm_head_concat_3mb: n16 passes fresh, n47 hangs fresh),
+    # and in the accumulated decode-compile context even the lm_head's 16-input full-vocab concat
+    # hangs/segfaults. Concat in groups of <= this, then concat the groups, so no single concat is wide.
+    _CONCAT_GROUP = 8
 
     def _f(tensors, *args, **kwargs):
         try:
@@ -1193,6 +1206,25 @@ def _install_quasar_concat_l1_overflow_to_dram(monkeypatch, mesh_device):
                 kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
         except Exception as e:
             logger.warning(f"[llama-e2e][quasar] concat L1->DRAM check failed ({e}); passing through")
+        # Grouped concat for many inputs (the lm_head full-vocab assembly) so no single device concat
+        # exceeds _CONCAT_GROUP inputs. Intermediate groups go to DRAM; the final concat keeps the
+        # (possibly DRAM-coerced) requested memory_config. Falls back to a single concat on any error.
+        try:
+            if _small_l1 and isinstance(tensors, (list, tuple)) and len(tensors) > _CONCAT_GROUP:
+                dim = kwargs.get("dim", args[0] if args else 0)
+                final_mc = kwargs.get("memory_config", ttnn.DRAM_MEMORY_CONFIG)
+                groups = []
+                for i in range(0, len(tensors), _CONCAT_GROUP):
+                    grp = list(tensors[i : i + _CONCAT_GROUP])
+                    groups.append(
+                        grp[0] if len(grp) == 1 else orig(grp, dim=dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    )
+                logger.warning(
+                    f"[llama-e2e][quasar] grouped concat: {len(tensors)} inputs -> {len(groups)} group(s) of <= {_CONCAT_GROUP}"
+                )
+                return orig(groups, dim=dim, memory_config=final_mc)
+        except Exception as e:
+            logger.warning(f"[llama-e2e][quasar] grouped concat failed ({e}); single concat")
         return orig(tensors, *args, **kwargs)
 
     try:
