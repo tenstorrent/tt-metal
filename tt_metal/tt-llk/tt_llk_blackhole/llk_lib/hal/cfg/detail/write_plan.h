@@ -53,12 +53,13 @@ inline constexpr WriteOperandMeta write_operand_meta()
 struct WriteGroup
 {
     RegisterScope scope {};
-    std::uint32_t addr = 0;
-    std::uint32_t mask = 0;
-    std::uint32_t data = 0;
-    bool all_constant  = true;
-    std::size_t first  = 0;
-    std::size_t count  = 0;
+    std::uint32_t addr         = 0;
+    std::uint32_t mask         = 0;
+    std::uint32_t data         = 0;
+    std::uint32_t runtime_mask = 0;
+    bool all_constant          = true;
+    std::size_t first          = 0;
+    std::size_t count          = 0;
 };
 
 template <std::size_t Count>
@@ -133,6 +134,10 @@ inline constexpr WritePlan<Count> build_write_plan(const std::array<WriteOperand
         destination.addr  = operand.addr;
         destination.mask |= operand.mask;
         destination.data |= operand.data;
+        if (!operand.is_constant)
+        {
+            destination.runtime_mask |= operand.mask;
+        }
         destination.all_constant &= operand.is_constant;
         ++destination.count;
     }
