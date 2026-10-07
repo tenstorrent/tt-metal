@@ -10,6 +10,7 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/host_region.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
@@ -1072,6 +1073,17 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         mesh_command_queues_.clear();
     }
 
+    // Release the pinned host region first: it names pages the NIC was told about, and
+    // unpinning must happen while the cluster is still live. release() runs ahead of the
+    // overlays being unmapped, which is why this cannot wait for the destructor.
+    // Released, NOT reset: a later host_region() returns this same object, so a leg and the
+    // mesh never hold two different regions. It dies with its last holder -- this mesh or a
+    // RingAlias -- and clear_aliases() on a released region is safe. release() is idempotent,
+    // so the second close_impl() from ~MeshDevice is harmless.
+    if (host_region_) {
+        host_region_->release();
+    }
+
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
     if (realtime_profiler_) {
@@ -1790,6 +1802,16 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
             std::make_unique<TensorPrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
     }
     return *tensor_prefetcher_;
+}
+
+std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
+    if (!host_region_) {
+        // A closed mesh has no live PCIe endpoint to provision against; a fresh region here
+        // would only hide the caller's mistake.
+        TT_FATAL(is_initialized(), "host_region() on a closed mesh: there is no PCIe endpoint to provision against");
+        host_region_ = std::make_shared<experimental::HostRegion>();
+    }
+    return host_region_;
 }
 
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
