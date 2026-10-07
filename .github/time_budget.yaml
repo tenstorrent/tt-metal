@@ -382,7 +382,7 @@ models:
     bh_quietbox_2: 62
   unit_tier1:
     wh_llmbox: 155
-    wh_n150: 373  # +240 Minimax H3 Ref2VA Memory Test (mock device, cold host JIT)
+    wh_n150: 373
     wh_galaxy: 260
     wh_galaxy_perf: 65
     bh_p150: 20
