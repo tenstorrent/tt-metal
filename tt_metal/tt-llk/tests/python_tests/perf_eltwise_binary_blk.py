@@ -31,6 +31,8 @@ CASES = [
     ("bfp8in_bf16out_add_lofi", InputOutputFormat(DataFormat.Bfp8_b, DataFormat.Float16_b), MathOperation.Elwadd, MathFidelity.LoFi),
     ("bf16_mul_hifi4", InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b), MathOperation.Elwmul, MathFidelity.HiFi4),
     ("bf16_mul_hifi2", InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b), MathOperation.Elwmul, MathFidelity.HiFi2),
+    ("fp32_add_lofi", InputOutputFormat(DataFormat.Float32, DataFormat.Float32), MathOperation.Elwadd, MathFidelity.LoFi),
+    ("bf16in_fp32out_add_lofi", InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32), MathOperation.Elwadd, MathFidelity.LoFi),
 ]
 
 
@@ -39,15 +41,20 @@ CASES = [
     case=[c[0] for c in CASES],
     variant=list(VARIANTS),
     input_dimensions=[[64, 32], [128, 32], [256, 32], [512, 32]],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     run_types=[ALL_PERF_RUN_TYPES],
 )
-def test_perf_eltwise_binary_blk(perf_report, case, variant, input_dimensions, run_types):
+def test_perf_eltwise_binary_blk(perf_report, case, variant, input_dimensions, dest_acc, run_types):
     _, formats, op, fid = next(c for c in CASES if c[0] == case)
+    if dest_acc == DestAccumulation.Yes and formats.output_format != DataFormat.Float32:
+        pytest.skip("fp32 DEST rows for the Float32 outputs only")
+    if dest_acc == DestAccumulation.Yes and input_dimensions[0] > 128:
+        pytest.skip("4 tiles per section with fp32 DEST")
     per_face = VARIANTS[variant]
     if variant == "pt_bu_bp" and formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("the block pack takes no per-tile exponent section")
     _run_eltwise_binary_test(
-        DestAccumulation.No,
+        dest_acc,
         DestSync.Half,
         False,
         formats,

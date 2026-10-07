@@ -18,8 +18,10 @@
     export TT_LLK_DISABLE_ASSERTS=1
     pytest -q --override-ini=log_cli=false -n 10 --timeout=600 --junitxml=pytest-report-blackhole-1.xml -k functional perf_eltwise_binary_blk.py || true
     pytest -q --override-ini=log_cli=false --compile-producer -n 10 -m perf --timeout=600 perf_eltwise_binary_blk.py
-    pytest -q --override-ini=log_cli=false --compile-consumer -m perf --timeout=600 perf_eltwise_binary_blk.py || true
-    find .. ../.. /tmp -name "perf_eltwise_binary_blk*.post.csv" 2>/dev/null | while read -r f; do echo "=== $f"; cat "$f"; done
+    for pass in 1 2; do
+      pytest -q --override-ini=log_cli=false --compile-consumer -m perf --timeout=600 perf_eltwise_binary_blk.py || true
+      find .. ../.. /tmp -name "perf_eltwise_binary_blk*.post.csv" 2>/dev/null | while read -r f; do echo "=== pass $pass $f"; cat "$f"; rm -f "$f"; done
+    done
   skus:
     bh_p150b_civ2:
       timeout: 60
