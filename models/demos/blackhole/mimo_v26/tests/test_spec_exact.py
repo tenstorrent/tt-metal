@@ -79,6 +79,18 @@ def test_spec_exact(mesh_device):
     eos = load_eos()
     # ---- plain greedy
     gen = ChunkedGenerator(model, max_pos, pf, trace=TRACE, keep_logits=False, U=U, eos=eos)
+    # ONE traced prefill shared by the plain and the spec run (a second traced-prefill replay after decode ops hangs the device, see LOG): the KV it wrote below the
+    # prompt length is never modified by plain decode (writes start at position n), spec rounds overwrite positions >= n before reading them.
+    rows = 4
+    per_row = [[] for _ in range(rows)]
+    for i, p in enumerate(prompts):
+        per_row[i % rows].append(list(p))
+    pre = pf.prefill(per_row, capture_feats=True)
+    ft = pf.first_tokens(pre["last"])
+    ids = torch.zeros(rows, U, dtype=torch.long)
+    for (r_, u_), (t_, _) in ft.items():
+        ids[r_, u_] = t_
+    gen.prefill = lambda prompts_, S=None: (ids, None)
     r = gen.generate(prompts, NEW, S=maxlen)
     plain = r["tokens"]
     steady = sorted(r["times"][5:])
@@ -92,7 +104,7 @@ def test_spec_exact(mesh_device):
     gen.dec.release()
     # ---- spec
     eng = SpecEngine(model, pf, dr, U, max_pos, eos, cap=cap, trace=TRACE)
-    eng.start(prompts, NEW)
+    eng.start(prompts, NEW, res=pre)
     t0 = time.perf_counter()
     out = eng.run()
     wall = time.perf_counter() - t0

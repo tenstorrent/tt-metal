@@ -90,7 +90,7 @@ class SpecEngine:
         return [(i % self.rows, i // self.rows) for i in range(n)]
 
     # ------------------------------------------------------------------ start: chunked prefill with captures -> drafter context
-    def start(self, prompts, max_new):
+    def start(self, prompts, max_new, res=None):
         rows, U = self.rows, self.U
         n = len(prompts)
         self.place_ = self.place(n)
@@ -98,7 +98,8 @@ class SpecEngine:
         for i, p in enumerate(prompts):
             per_row[i % rows].append(list(p))
         t0 = time.time()
-        res = self.pf.prefill(per_row, capture_feats=True)
+        if res is None:
+            res = self.pf.prefill(per_row, capture_feats=True)
         ft = self.pf.first_tokens(res["last"])
         self.t_prefill = time.time() - t0
         self.pos = torch.zeros(rows, U, dtype=torch.long)
