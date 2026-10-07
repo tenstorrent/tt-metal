@@ -46,6 +46,7 @@ def test_galaxy_layer_profile():
     configure_fabric(topology=ttnn.Topology.Linear)
     parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
     gen = None
+    mesh = None
     report = dict(
         passed=False,
         state="loading",
@@ -128,12 +129,25 @@ def test_galaxy_layer_profile():
         raise
     finally:
         try:
-            output.write_text(json.dumps(report, indent=2) + "\n")
-        finally:
             try:
                 if gen is not None:
                     for layer, name, method in originals:
                         setattr(layer, name, method)
                     gen.close()
             finally:
-                ttnn.close_mesh_device(parent)
+                try:
+                    # Profiling activates the parent's profiler/CQ too. Flush
+                    # and release the child before closing its parent mesh.
+                    if mesh is not None:
+                        ttnn.close_mesh_device(mesh)
+                finally:
+                    ttnn.close_mesh_device(parent)
+        except BaseException as error:
+            report.update(
+                state="failed",
+                passed=False,
+                cleanup_error=dict(type=type(error).__name__, message=str(error)[:1000]),
+            )
+            raise
+        finally:
+            output.write_text(json.dumps(report, indent=2) + "\n")

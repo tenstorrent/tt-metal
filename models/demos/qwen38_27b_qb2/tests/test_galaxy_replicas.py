@@ -22,6 +22,7 @@ from transformers import AutoTokenizer
 import ttnn
 from models.demos.qwen38_27b_qb2.demo.galaxy_serving import model_source_hashes
 from models.demos.qwen38_27b_qb2.tests.galaxy_prompt import qualification_prompt
+from models.demos.qwen38_27b_qb2.tests.replica_timing import completion_times
 from models.demos.qwen38_27b_qb2.tt.generator import build_generator, configure_fabric
 from models.demos.qwen38_27b_qb2.tt.model import checkpoint_path
 
@@ -46,10 +47,10 @@ def decode_window(generators, prompt, output_tokens, read_order):
                 record_history=True,
             )
     enqueue_s = time.perf_counter() - started
-    completed = [None] * len(generators)
-    for i in read_order:
-        ttnn.synchronize_device(generators[i].mesh)
-        completed[i] = time.perf_counter() - started
+    completed = [
+        timestamp - started
+        for timestamp in completion_times([gen.mesh for gen in generators], ttnn.synchronize_device, read_order)
+    ]
     rows = []
     for i, gen in enumerate(generators):
         delta = gen.counters - counters[i]
@@ -64,7 +65,13 @@ def decode_window(generators, prompt, output_tokens, read_order):
                 counters=dict(delta),
             )
         )
-    return dict(replicas=rows, enqueue_s=enqueue_s, wall_s=max(completed), completion_read_order=read_order)
+    return dict(
+        replicas=rows,
+        enqueue_s=enqueue_s,
+        wall_s=max(completed),
+        completion_read_order=read_order,
+        completion_method="independent_host_waiters",
+    )
 
 
 @pytest.mark.skipif(
@@ -95,6 +102,7 @@ def test_concurrent_galaxy_replicas():
         isolated=[],
         concurrent=[],
         timing_scope="traced decode plus device sampling; synchronized host completion; no prefill/readback",
+        completion_method="independent_host_waiters",
         passed=False,
         prompt_tokens=prompt,
         loaded=[],

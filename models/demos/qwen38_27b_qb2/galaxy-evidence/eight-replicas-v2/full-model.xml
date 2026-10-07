@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="2582.760" timestamp="2026-10-07T05:41:47.266915+00:00" hostname="bh-glx-EXP-d02u07"><testcase classname="models.demos.qwen38_27b_qb2.tests.test_galaxy_replicas" name="test_concurrent_galaxy_replicas" time="2581.659"><properties><property name="start_timestamp" value="2026-10-07T05:41:48" /><property name="end_timestamp" value="2026-10-07T06:24:50" /></properties><failure message="AssertionError: [{'concurrent_tpot_ms': 27.745187891221892, 'isolated_tpot_ms': 25.744016865253684, 'ratio': 1.0777334413833903, 'replica': 0}, {'concurrent_tpot_ms': 27.74385740159182, 'isolated_tpot_ms': 25.748132038714846, 'ratio': 1.0775095202974805, 'replica': 1}, {'concurrent_tpot_ms': 27.75976505482525, 'isolated_tpot_ms': 27.76261058995339, 'ratio': 0.9998975047710691, 'replica': 2}, {'concurrent_tpot_ms': 27.761582274165914, 'isolated_tpot_ms': 25.74924764582726, 'ratio': 1.0781512009988672, 'replica': 3}, {'concurrent_tpot_ms': 27.763423645560902, 'isolated_tpot_ms': 25.741016646245804, 'ratio': 1.0785674873338795, 'replica': 4}, {'concurrent_tpot_ms': 27.76558991286933, 'isolated_tpot_ms': 27.73860524459852, 'ratio': 1.0009728199393177, 'replica': 5}, ...]&#10;assert False&#10; +  where False = all(&lt;generator object test_concurrent_galaxy_replicas.&lt;locals&gt;.&lt;genexpr&gt; at 0x6ff5e06ac900&gt;)">@pytest.mark.skipif(
+        os.getenv("QWEN_GALAXY_REPLICAS", "1") == "1", reason="explicit multi-replica allocated-Galaxy test"
+    )
+    def test_concurrent_galaxy_replicas():
+        count = int(os.environ["QWEN_GALAXY_REPLICAS"])
+        assert 2 &lt;= count &lt;= 8
+        output_tokens, repeats = 128, 5
+        output = Path(os.environ["QWEN_GALAXY_RECEIPT"])
+        prompt = qualification_prompt(AutoTokenizer.from_pretrained(checkpoint_path(), local_files_only=True))
+        source_sha256 = model_source_hashes(Path(__file__).resolve().parents[1])
+        torch.set_num_threads(8)
+        assert ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        configure_fabric(topology=ttnn.Topology.Linear)
+        parent = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), trace_region_size=200000000)
+        generators = []
+        report = dict(
+            parent_mesh=[8, 4],
+            replica_mesh=[1, 4],
+            topology="linear",
+            replicas_requested=count,
+            replicas_executed=0,
+            state="loading",
+            output_tokens=output_tokens,
+            repeats=repeats,
+            warmup=[],
+            isolated=[],
+            concurrent=[],
+            timing_scope="traced decode plus device sampling; synchronized host completion; no prefill/readback",
+            passed=False,
+            prompt_tokens=prompt,
+            loaded=[],
+            source_sha256=source_sha256,
+        )
+        try:
+            for i in range(count):
+                mesh = parent.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(i, 0))
+                started = time.perf_counter()
+                gen = build_generator(Path(__file__).resolve().parents[1], mesh, topology=ttnn.Topology.Linear)
+                generators.append(gen)
+                assert len(gen.model.layers) == 64
+                report["loaded"].append(
+                    dict(replica=i, setup_s=time.perf_counter() - started, device_ids=list(mesh.get_device_ids()))
+                )
+                output.write_text(json.dumps(report, indent=2) + "\n")
+                print(f"GALAXY_REPLICA_LOADED replica={i} seconds={time.perf_counter() - started:.3f}", flush=True)
+            assert len({id(gen.model.ccl) for gen in generators}) == count
+            report["state"] = "warming"
+            reference = None
+            for i, gen in enumerate(generators):
+                tokens = gen.generate(prompt, output_tokens)
+                if reference is None:
+                    reference = tokens
+                assert tokens == reference, f"Replica {i} differs from replica 0 during warmup"
+                report["warmup"].append(dict(replica=i, perf=dict(gen.last_perf)))
+                report["replicas_executed"] = i + 1
+                output.write_text(json.dumps(report, indent=2) + "\n")
+                print(f"GALAXY_REPLICA_WARMED replica={i}", flush=True)
+            assert len({id(gen.cache) for gen in generators}) == count
+            report["reference_tokens"] = reference
+            report["text"] = generators[0].tokenizer.decode(reference)
+            report["state"] = "isolated"
+            for i, gen in enumerate(generators):
+                samples = [decode_window([gen], prompt, output_tokens, [0]) for _ in range(repeats)]
+                report["isolated"].append(dict(replica=i, samples=samples))
+                assert all(row["replicas"][0]["output_tokens"] == reference for row in samples)
+                output.write_text(json.dumps(report, indent=2) + "\n")
+                print(f"GALAXY_ISOLATED_COMPLETE replica={i}", flush=True)
+            report["state"] = "concurrent"
+            for repeat in range(repeats):
+                order = [(repeat + i) % count for i in range(count)]
+                result = decode_window(generators, prompt, output_tokens, order)
+                report["concurrent"].append(result)
+                assert all(row["output_tokens"] == reference for row in result["replicas"])
+                output.write_text(json.dumps(report, indent=2) + "\n")
+                print(f"GALAXY_CONCURRENT_COMPLETE repeat={repeat} seconds={result['wall_s']:.3f}", flush=True)
+            comparisons = []
+            for i in range(count):
+                isolated = statistics.median(row["replicas"][0]["tpot_ms"] for row in report["isolated"][i]["samples"])
+                concurrent = statistics.median(row["replicas"][i]["tpot_ms"] for row in report["concurrent"])
+                comparisons.append(
+                    dict(replica=i, isolated_tpot_ms=isolated, concurrent_tpot_ms=concurrent, ratio=concurrent / isolated)
+                )
+            report["comparisons"] = comparisons
+            report["aggregate_decode_tokens_per_s"] = (
+                count * (output_tokens - 1) / statistics.median(row["wall_s"] for row in report["concurrent"])
+            )
+&gt;           assert all(row["ratio"] &lt;= 1.03 for row in comparisons), comparisons
+E           AssertionError: [{'concurrent_tpot_ms': 27.745187891221892, 'isolated_tpot_ms': 25.744016865253684, 'ratio': 1.0777334413833903, 'replica': 0}, {'concurrent_tpot_ms': 27.74385740159182, 'isolated_tpot_ms': 25.748132038714846, 'ratio': 1.0775095202974805, 'replica': 1}, {'concurrent_tpot_ms': 27.75976505482525, 'isolated_tpot_ms': 27.76261058995339, 'ratio': 0.9998975047710691, 'replica': 2}, {'concurrent_tpot_ms': 27.761582274165914, 'isolated_tpot_ms': 25.74924764582726, 'ratio': 1.0781512009988672, 'replica': 3}, {'concurrent_tpot_ms': 27.763423645560902, 'isolated_tpot_ms': 25.741016646245804, 'ratio': 1.0785674873338795, 'replica': 4}, {'concurrent_tpot_ms': 27.76558991286933, 'isolated_tpot_ms': 27.73860524459852, 'ratio': 1.0009728199393177, 'replica': 5}, ...]
+E           assert False
+E            +  where False = all(&lt;generator object test_concurrent_galaxy_replicas.&lt;locals&gt;.&lt;genexpr&gt; at 0x6ff5e06ac900&gt;)
+
+../metal-galaxy/models/demos/qwen38_27b_qb2/tests/test_galaxy_replicas.py:156: AssertionError</failure></testcase></testsuite></testsuites>

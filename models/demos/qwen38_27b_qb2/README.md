@@ -34,7 +34,10 @@ selects `tests/test_galaxy_replicas.py` with a 90-minute test deadline. The test
 loads eight independent full models, warms each, then compares five isolated
 decode windows per replica against five concurrent windows. It requires exact
 greedy token equality and at most 3% median TPOT regression for each replica.
-Concurrent decode enqueues traces on all submeshes before waiting for completion;
+Concurrent decode enqueues traces on all submeshes before independent host
+waiters timestamp each replica's completion (the pinned sync binding releases
+the GIL). A slow replica must not inflate later observations of faster replicas.
+These observations remain host upper bounds, not device timestamps;
 prefill is outside the timed interval. This is a G0 test, not a serving benchmark
 or proof of long-context/batched performance. A two-replica run is available for
 bring-up but does not pass the eight-replica gate.
@@ -82,6 +85,26 @@ the TP4 sweep. Corrected fabric and eight-replica jobs are queued behind that
 sweep as `qwen38-fabric-torus-neighbors-v2-20261006.service` and
 `qwen38-metal-galaxy-eight-replicas-v2-20261006.service`. Neither gate is passed
 yet. Raw failure/host-test receipts are retained in `galaxy-evidence/`.
+
+The v2 eight-replica run completed all isolated and concurrent windows with
+identical tokens. Its original serial completion observations failed the 3%
+gate: faster replicas measured about 25.74 ms when observed first, then about
+27.76 ms when observed after a slower replica. The latter already took about
+27.76 ms in isolation. `galaxy-evidence/eight-replicas-v2/` preserves that failed
+receipt; it is not relabeled as passing. The timing harness now records each
+completion inside its own waiter, with CPU regressions that require independent
+waits and preserve the faster timestamp even when its future is joined last.
+The unchanged 3% per-replica gate requires a new hardware run.
+
+The v2 layer profiler exercised all six reduced-model cases but failed when
+closing the parent mesh while its profiled child still held a command queue.
+No usable per-op CSV was produced. Cleanup now closes the child first and saves
+the final receipt after teardown, recording any cleanup failure explicitly.
+The persistent retry order is the isolated GDN candidate, profile-v3,
+attention-tuning-v2, eight-replicas-v3, then serving-v5. All hardware jobs share
+the device lock; the serving gate still requires a passing G0 receipt and
+matching model-source hashes. CPU timing regressions pass, but the revised
+hardware timing and profiler teardown remain unverified until those jobs finish.
 
 ## Measured input-length and concurrency sweep
 
