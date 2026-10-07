@@ -418,13 +418,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
 
             if constexpr (write_result_inplace) {
                 pack_reconfig_data_format(in0_cb);
-#ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, in0_cb, dst_tiles);
-#else
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_cb);
                 }
-#endif
                 // Granular write output to enable following matmul unpack to start early.
                 cb_in0.push_back(dst_tiles);
             }
@@ -526,13 +522,9 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-                pack_block_mop(0, out_cb, dst_tiles);
-#else
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, out_cb);
                 }
-#endif
                 tile_regs_release();
             }
         }
@@ -586,13 +578,9 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
             cb_in0.pop_front(dst_tiles);
             cb_in0.reserve_back(dst_tiles);
             tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-            pack_block_mop(0, in0_cb, dst_tiles);
-#else
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, in0_cb);
             }
-#endif
             cb_in0.push_back(dst_tiles);
             tile_regs_release();
         }
@@ -1208,13 +1196,9 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
         cb_out.pop_front(subblock_h);
 
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
-        pack_block_mop(0, out_cb, subblock_h);
-#else
         for (uint32_t i = 0; i < subblock_h; i++) {
             pack_tile(i, out_cb);
         }
-#endif
         tile_regs_release();
         cb_out.push_back(subblock_h);
     }
