@@ -33,6 +33,7 @@ inline void calculate_clamp(uint min_val, uint max_val) {
 template <bool MIN_NEG, bool MAX_NEG, int ITERATIONS>
 inline void clamp_int32_rows() {
     sfpi::l_reg[sfpi::LRegs::LReg0].in_use();
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
         if constexpr (MIN_NEG) {
