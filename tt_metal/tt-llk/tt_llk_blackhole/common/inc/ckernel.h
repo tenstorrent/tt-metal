@@ -809,23 +809,12 @@ union bstatus_u
 
 inline void init_prng_seed(const std::uint32_t seed)
 {
-    // A later seed of the same kernel waits out the previous one first; the kernel's first seed only settles.
-    static bool prng_seeded = false;
-    if (prng_seeded)
-    {
-#pragma GCC unroll 0
-        for (int i = 0; i < 300; i++)
-        {
-            TTI_SFPNOP;
-        }
-    }
+    // The seed for PRNG should at least be initialized during chip boot-up time.
     volatile std::uint32_t tt_reg_ptr *cfg = get_cfg_pointer();
     cfg[PRNG_SEED_Seed_Val_ADDR32]         = seed;
-    prng_seeded                            = true;
 
     // TODO: ckernel::wait does not work properly. Use ckernel::wait when fixed.
-#pragma GCC unroll 0
-    for (int i = 0; i < 300; i++)
+    for (int i = 0; i < 600; i++)
     {
         TTI_SFPNOP;
     }
