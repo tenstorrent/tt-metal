@@ -29,6 +29,12 @@ PY
 python -m pytest models/demos/qwen38_27b_qb2/tests/unit -q --junitxml="$QWEN_RUN_DIR/unit.xml"
 export QWEN_GALAXY_SMOKE=1
 export QWEN_GALAXY_RECEIPT="$QWEN_RUN_DIR/full-model.json"
+QWEN_TEST=test_galaxy_smoke.py
+QWEN_TEST_TIMEOUT=1800
+if [[ "${QWEN_GALAXY_REPLICAS:-1}" != 1 ]]; then
+    QWEN_TEST=test_galaxy_replicas.py
+    QWEN_TEST_TIMEOUT=5400
+fi
 exec /bin/bash "$QWEN_TASK_ROOT/source/scripts/run_safe_pytest.sh" \
-    "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/tests/test_galaxy_smoke.py" \
-    -vv -s --junitxml="$QWEN_RUN_DIR/full-model.xml"
+    "$QWEN_TASK_ROOT/metal-galaxy/models/demos/qwen38_27b_qb2/tests/$QWEN_TEST" \
+    -vv -s --timeout="$QWEN_TEST_TIMEOUT" --junitxml="$QWEN_RUN_DIR/full-model.xml"

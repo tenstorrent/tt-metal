@@ -31,15 +31,19 @@ def test_full_model_galaxy_replica():
         started = time.perf_counter()
         gen = build_generator(Path(__file__).resolve().parents[1], mesh, topology=ttnn.Topology.Linear)
         setup_s = time.perf_counter() - started
+        print(f"GALAXY_SETUP_COMPLETE seconds={setup_s:.3f}", flush=True)
         prompt = gen.tokenizer.apply_chat_template(
             [{"role": "user", "content": "Explain in one short sentence why leaves are green."}],
             tokenize=False,
             add_generation_prompt=True,
         )
         tokens = gen.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        print("GALAXY_FIRST_GENERATION_BEGIN", flush=True)
         first = gen.generate(tokens, 128)
         cold_perf = dict(gen.last_perf)
+        print(f"GALAXY_FIRST_GENERATION_COMPLETE {cold_perf}", flush=True)
         second = gen.generate(tokens, 128)
+        print(f"GALAXY_WARM_GENERATION_COMPLETE {gen.last_perf}", flush=True)
         assert first == second, "Repeated greedy generation diverged"
         assert first and all(0 <= token < gen.model.config.vocab_size for token in first)
         output.write_text(

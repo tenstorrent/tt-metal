@@ -24,6 +24,20 @@ performance in `QWEN_GALAXY_RECEIPT`. Enable it with `QWEN_GALAXY_SMOKE=1` and
 set `MODEL_WEIGHTS_DIR` to the pinned checkpoint. Hardware runs must be serialized.
 `demo/run_galaxy_qualification.sh` is the bounded-job entrypoint for the isolated
 task layout used during this bring-up; it runs the host tests before hardware.
+The first hardware attempt hit pytest's inherited 300-second deadline during
+weight loading; it did not reach inference. The entrypoint now allows 1800
+seconds for a single replica while retaining the device-operation timeout.
+
+For the G0 concurrency gate, set `QWEN_GALAXY_REPLICAS=8` when launching that
+entrypoint in a persistent job with a deadline of at least 100 minutes. It
+selects `tests/test_galaxy_replicas.py` with a 90-minute test deadline. The test
+loads eight independent full models, warms each, then compares five isolated
+decode windows per replica against five concurrent windows. It requires exact
+greedy token equality and at most 3% median TPOT regression for each replica.
+Concurrent decode enqueues traces on all submeshes before waiting for completion;
+prefill is outside the timed interval. This is a G0 test, not a serving benchmark
+or proof of long-context/batched performance. A two-replica run is available for
+bring-up but does not pass the eight-replica gate.
 
 At initial publication, 66 host tests pass (plus 40 subtests). The full model
 hardware test is running; performance, eight concurrent replicas, long-context
