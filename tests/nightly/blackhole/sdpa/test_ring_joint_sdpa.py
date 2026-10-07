@@ -39,6 +39,7 @@ import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_sdpa_chunk_sizes
 from models.demos.gpt_oss_d_p.tt.attention.kv_cache import bounded_blockcyclic_positions, sliding_capacity_tokens
 
 # ============================================================================
@@ -5843,10 +5844,15 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
 }
 
 
+def get_matmul_peak_multiplier(model):
+    """Return matmul throughput relative to the HiFi2 perf-model baseline."""
+    return 2.0 if model.matmul_math_fidelity == ttnn.MathFidelity.LoFi else 1.0
+
+
 # Gemma 4 31B production chunked-prefill shapes. Keep these performance-only so they do not
 # implicitly join the Kimi accuracy/determinism matrix or the derived ring_mla configurations.
-GEMMA4_CHUNKED_PER_DEVICE_CHUNK = 1024
 GEMMA4_CHUNKED_TOTAL_SEQ = 262144
+GEMMA4_CHUNKED_PERF_CHUNK_SIZES = (2048, 4096, 8192)
 GEMMA4_CHUNKED_PERF_MODEL_CONFIGS = {}
 if MESH_CONFIG.is_galaxy:
     GEMMA4_CHUNKED_PERF_MODEL_CONFIGS = {
@@ -5866,7 +5872,7 @@ if MESH_CONFIG.is_galaxy:
             q_chunk_sizes=list(range(32, 129, 32)),
             # q=128, k=320 exceeds L1 capacity; stop at k=288 to keep the Cartesian sweep fully runnable.
             k_chunk_sizes=list(range(32, 320, 32)),
-            seq_len=GEMMA4_CHUNKED_PER_DEVICE_CHUNK,  # Per-device portion of the global chunk.
+            seq_len=GEMMA4_CHUNKED_TOTAL_SEQ,  # unused by chunked path
             scale=1.0,
             topology=Topology.Linear,
             total_seq=GEMMA4_CHUNKED_TOTAL_SEQ,
@@ -5885,9 +5891,9 @@ if MESH_CONFIG.is_galaxy:
             is_causal=True,
             q_dtype=ttnn.bfloat16,
             kv_dtype=ttnn.bfloat8_b,
-            q_chunk_sizes=[64, 128],
+            q_chunk_sizes=[128],
             k_chunk_sizes=[128],
-            seq_len=GEMMA4_CHUNKED_PER_DEVICE_CHUNK,  # Per-device portion of the global chunk.
+            seq_len=GEMMA4_CHUNKED_TOTAL_SEQ,  # unused by chunked path
             sliding_window_size=1024,
             scale=1.0,
             topology=Topology.Linear,
@@ -5897,24 +5903,69 @@ if MESH_CONFIG.is_galaxy:
     }
 
 
-# Performance-only union. Correctness and determinism continue to use
-# CHUNKED_PREFILL_MODEL_CONFIGS and therefore remain unchanged.
-CHUNKED_PERF_MODEL_CONFIGS = {
-    **CHUNKED_PREFILL_MODEL_CONFIGS,
-    **GEMMA4_CHUNKED_PERF_MODEL_CONFIGS,
-}
+@dataclass(frozen=True)
+class ChunkedPerfConfig:
+    """One chunked-prefill perf case: the model plus the ring SDPA tuning it runs with."""
+
+    model: ModelConfig
+    chunk_size: int  # Global chunk; each ring device holds chunk_size // sp_size Q rows.
+    q_chunk_size: int
+    k_chunk_size: int
+    max_k_splits: int = 1
+    segmented_accumulation: bool = False
+
+    @property
+    def tuning_id(self):
+        return f"ksplit{self.max_k_splits}-{'seg' if self.segmented_accumulation else 'unseg'}"
+
+    @property
+    def id(self):
+        qk_id = get_test_case_id(self.model, self.q_chunk_size, self.k_chunk_size)
+        return f"{qk_id}-chunk{self.chunk_size}-{self.tuning_id}"
 
 
-def get_chunked_perf_workload(model, mesh_config):
-    """Return (global chunk size, total sequence) without changing existing chunked model configs."""
-    if model.total_seq is None:
-        return CHUNKED_PREFILL_CHUNK_SIZE, CHUNKED_PREFILL_TOTAL_SEQ
-    return model.seq_len * mesh_config.sp_size, model.total_seq
+def generate_chunked_perf_configs(model, chunk_sizes, max_k_splits=(1,), segmented_accumulation=(False,)):
+    """Every runnable combination of chunk size, the model's Q/K chunks and the given ring SDPA tuning."""
+    configs = []
+    for chunk_size, q_chunk_size, k_chunk_size, k_splits, segmented in product(
+        chunk_sizes, model.q_chunk_sizes, model.k_chunk_sizes, max_k_splits, segmented_accumulation
+    ):
+        # Segmented accumulation needs at most one (head, Q chunk) unit per SDPA core.
+        num_q_chunks = math.ceil(chunk_size // MESH_CONFIG.sp_size / q_chunk_size)
+        if segmented and num_q_chunks * model.nhq > MESH_CONFIG.sdpa_cores:
+            continue
+        configs.append(ChunkedPerfConfig(model, chunk_size, q_chunk_size, k_chunk_size, k_splits, segmented))
+    return configs
 
 
-def get_matmul_peak_multiplier(model):
-    """Return matmul throughput relative to the HiFi2 perf-model baseline."""
-    return 2.0 if model.matmul_math_fidelity == ttnn.MathFidelity.LoFi else 1.0
+def gemma4_production_perf_config(model, chunk_size):
+    """The ring SDPA tuning Gemma 4 uses in production for this chunk size."""
+    q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation = ring_sdpa_chunk_sizes(
+        chunk_size // MESH_CONFIG.sp_size,
+        sliding=model.sliding_window_size is not None,
+        num_heads=model.nhq,
+        num_cores=MESH_CONFIG.sdpa_cores,
+    )
+    return ChunkedPerfConfig(model, chunk_size, q_chunk_size, k_chunk_size, max_k_splits, segmented_accumulation)
+
+
+GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS = [
+    gemma4_production_perf_config(model, chunk_size)
+    for model in GEMMA4_CHUNKED_PERF_MODEL_CONFIGS.values()
+    for chunk_size in GEMMA4_CHUNKED_PERF_CHUNK_SIZES
+]
+# Global attention also sweeps K splits and segmented accumulation (production's tuning is one of the
+# combinations); sliding-window attention has a single tuning.
+GEMMA4_CHUNKED_PERF_SWEEP_CONFIGS = [
+    config
+    for model in GEMMA4_CHUNKED_PERF_MODEL_CONFIGS.values()
+    for config in generate_chunked_perf_configs(
+        model,
+        GEMMA4_CHUNKED_PERF_CHUNK_SIZES,
+        max_k_splits=(1, 3) if model.sliding_window_size is None else (1,),
+        segmented_accumulation=(False, True) if model.sliding_window_size is None else (False,),
+    )
+]
 
 
 # ring_mla (latent-V) chunked-prefill configs are identical to the classic separate-V configs
@@ -5994,7 +6045,6 @@ def _generate_chunked_configs(model_configs):
 
 
 CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs(CHUNKED_PREFILL_MODEL_CONFIGS)
-CHUNKED_PERF_CONFIGS, CHUNKED_PERF_CONFIG_IDS = _generate_chunked_configs(CHUNKED_PERF_MODEL_CONFIGS)
 RING_MLA_CHUNKED_CONFIGS, RING_MLA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(RING_MLA_CHUNKED_MODEL_CONFIGS)
 MINIMAX3_GQA_CHUNKED_CONFIGS, MINIMAX3_GQA_CHUNKED_CONFIG_IDS = _generate_chunked_configs(
     MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS
@@ -6021,23 +6071,6 @@ CHUNKED_TEST_CONFIGS, CHUNKED_TEST_CONFIG_IDS = _generate_chunked_test_configs(
     CHUNKED_CONFIGS,
     CHUNKED_CONFIG_IDS,
 )
-CHUNKED_PERF_TEST_CONFIGS, CHUNKED_PERF_TEST_CONFIG_IDS = _generate_chunked_test_configs(
-    CHUNKED_PERF_MODEL_CONFIGS,
-    CHUNKED_PERF_CONFIGS,
-    CHUNKED_PERF_CONFIG_IDS,
-)
-CHUNKED_PERF_TEST_CONFIGS = [
-    (
-        model_name,
-        qk_configs,
-        get_chunked_perf_workload(CHUNKED_PERF_MODEL_CONFIGS[model_name], MESH_CONFIG)[0],
-    )
-    for model_name, qk_configs in CHUNKED_PERF_TEST_CONFIGS
-]
-CHUNKED_PERF_TEST_CONFIG_IDS = [
-    f"{config_id}-chunk{chunk_size}"
-    for (_, _, chunk_size), config_id in zip(CHUNKED_PERF_TEST_CONFIGS, CHUNKED_PERF_TEST_CONFIG_IDS)
-]
 RING_MLA_CHUNKED_TEST_CONFIGS, RING_MLA_CHUNKED_TEST_CONFIG_IDS = _generate_chunked_test_configs(
     RING_MLA_CHUNKED_MODEL_CONFIGS,
     RING_MLA_CHUNKED_CONFIGS,
@@ -7027,32 +7060,26 @@ def test_ring_joint_attention_minimax3_gqa_chunked_reuse_kv_hang_regression():
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
-    "model_name,qk_configs,chunk_size",
-    CHUNKED_PERF_TEST_CONFIGS,
-    ids=CHUNKED_PERF_TEST_CONFIG_IDS,
+    "model_name,qk_configs",
+    CHUNKED_TEST_CONFIGS,
+    ids=CHUNKED_TEST_CONFIG_IDS,
 )
 def test_ring_joint_attention_chunked_perf_impl(model_name, qk_configs, chunk_size, reuse_kv_buffer):
-    """Ring joint SDPA chunked prefill without the CPU reference. use_ring_mla selects ring_mla for
-    models whose K/V share one packed tensor; reuse_kv uses one fixed-capacity cache across chunks;
-    fresh_kv uses a per-chunk right-sized input."""
+    """Classic separate-K/V ring joint SDPA chunked prefill without the CPU reference (profiled by
+    test_ring_joint_attention_create_chunked_perf_table). reuse_kv: one oversized cache reused across
+    chunks; fresh_kv: a per-chunk right-sized input."""
     mesh_config = MESH_CONFIG
-    model = CHUNKED_PERF_MODEL_CONFIGS[model_name]
-    _, total_seq = get_chunked_perf_workload(model, mesh_config)
 
     run_ring_joint_sdpa_chunked(
         mesh_config,
-        model,
+        CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
         chunk_size=chunk_size,
-        total_seq=total_seq,
         qk_configs=qk_configs,
         persistent_buffer_mode="reuse_max",
         do_check=False,
         reuse_kv_buffer=reuse_kv_buffer,
-        sliding_window_size=model.sliding_window_size,
-        use_ring_mla=model.use_ring_mla,
-        matmul_math_fidelity=model.matmul_math_fidelity,
-        nd_sharded_kv_cache=model.nd_sharded_kv_cache,
     )
 
 
@@ -7223,7 +7250,7 @@ def _run_chunked_perf_table(
     if ring_size < 2:
         pytest.skip(f"Ring joint chunked prefill requires at least 2 devices, got {ring_size}")
 
-    _, total_seq = get_chunked_perf_workload(model, mesh_config)
+    total_seq = model.total_seq or CHUNKED_PREFILL_TOTAL_SEQ
     n_chunks = total_seq // chunk_size
 
     # Single-chunk mode: when RING_JOINT_CHUNKED_CHUNK_ID is set, the accuracy subprocess
@@ -7347,20 +7374,19 @@ def _run_chunked_perf_table(
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.timeout(1200)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
 @pytest.mark.parametrize(
     "model_name,q_chunk_size,k_chunk_size",
-    CHUNKED_PERF_CONFIGS,
-    ids=CHUNKED_PERF_CONFIG_IDS,
+    CHUNKED_CONFIGS,
+    ids=CHUNKED_CONFIG_IDS,
 )
-def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size):
+def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_size, chunk_size):
     """Per-chunk math-util + duration table for the classic separate-K/V chunked-prefill path,
     profiling the reuse_kv variant (one oversized cache reused across chunks). Per-chunk device time
     tracks the logical_n-bounded gather, exposing whether the gather honours that bound."""
-    model = CHUNKED_PERF_MODEL_CONFIGS[model_name]
-    chunk_size, _ = get_chunked_perf_workload(model, MESH_CONFIG)
     _run_chunked_perf_table(
         MESH_CONFIG,
-        model,
+        CHUNKED_PREFILL_MODEL_CONFIGS[model_name],
         model_name,
         q_chunk_size,
         k_chunk_size,
@@ -7675,44 +7701,89 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_perf():
     )
 
 
-GEMMA4_CHUNKED_PERF_CHECK_CONFIGS = [
-    # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
-    # Global: three-run median on a 4x8 Blackhole Galaxy with the ND-sharded K/V cache, 16.26 / 16.26 /
-    # 16.27 ms (43.73-43.78%); utilization uses the LoFi peak.
-    ("gemma4_global", 96, 256, 8, 43.77, 0.01),
-    # SWA: the ~0.45 ms duration and ~6% utilization are much smaller than global's, so small absolute
-    # run-to-run changes are large relative ones; the margin has to be higher.
-    ("gemma4_swa", 128, 128, 8, 5.81, 0.18),
-]
+# === GEMMA 4 CHUNKED-PREFILL PERF ===
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
+@pytest.mark.parametrize("perf_config", GEMMA4_CHUNKED_PERF_SWEEP_CONFIGS, ids=lambda config: config.id)
+def test_ring_joint_attention_gemma4_chunked_perf_impl(perf_config, reuse_kv_buffer):
+    """Gemma 4 chunked prefill without the CPU reference (profiled by
+    test_ring_joint_attention_gemma4_create_chunked_perf_table)."""
+    model = perf_config.model
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        model,
+        chunk_size=perf_config.chunk_size,
+        total_seq=model.total_seq,
+        qk_configs=[(perf_config.q_chunk_size, perf_config.k_chunk_size)],
+        persistent_buffer_mode="reuse_max",
+        do_check=False,
+        reuse_kv_buffer=reuse_kv_buffer,
+        # A single profiled chunk only needs its own Q rows resident.
+        use_compact_single_chunk_q=get_chunked_only_chunk_id(model.total_seq // perf_config.chunk_size) is not None,
+        sliding_window_size=model.sliding_window_size,
+        use_ring_mla=model.use_ring_mla,
+        matmul_math_fidelity=model.matmul_math_fidelity,
+        nd_sharded_kv_cache=model.nd_sharded_kv_cache,
+        max_k_splits=perf_config.max_k_splits,
+        segmented_accumulation=perf_config.segmented_accumulation,
+    )
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("perf_config", GEMMA4_CHUNKED_PERF_SWEEP_CONFIGS, ids=lambda config: config.id)
+def test_ring_joint_attention_gemma4_create_chunked_perf_table(perf_config):
+    """Per-chunk math-util + duration table for one Gemma 4 perf case, profiling its reuse_kv variant."""
+    _run_chunked_perf_table(
+        MESH_CONFIG,
+        perf_config.model,
+        perf_config.model.name,
+        perf_config.q_chunk_size,
+        perf_config.k_chunk_size,
+        perf_config.chunk_size,
+        accuracy_test_name="test_ring_joint_attention_gemma4_chunked_perf_impl",
+        subdir="ttnn_ring_joint_sdpa_gemma4_chunked_performance",
+        label=(
+            f"Ring Joint Gemma 4 Chunked-Prefill (reuse KV buffer, max_k_splits={perf_config.max_k_splits}, "
+            f"segmented_accumulation={perf_config.segmented_accumulation})"
+        ),
+        id_suffix=f"-{perf_config.tuning_id}-reuse_kv",
+    )
+
+
+# Sliding-window kernels run ~0.3-0.5 ms, so, as for GPT-OSS, the band absorbs quantization and host noise.
+GEMMA4_SWA_PERF_MARGIN = 0.10
+# Three-run medians on the 4x8 Blackhole Galaxy (SP=8, TP=4).
+# Global values use LoFi peak throughput.
+GEMMA4_CHUNKED_PERF_CHECK_CONFIGS = {
+    # (model_name, chunk_size): (expected_util, margin)
+    ("gemma4_global", 2048): (33.69, DEFAULT_PERF_MARGIN),
+    ("gemma4_global", 4096): (50.10, DEFAULT_PERF_MARGIN),
+    ("gemma4_global", 8192): (44.80, DEFAULT_PERF_MARGIN),
+    ("gemma4_swa", 2048): (2.15, GEMMA4_SWA_PERF_MARGIN),
+    ("gemma4_swa", 4096): (3.91, GEMMA4_SWA_PERF_MARGIN),
+    ("gemma4_swa", 8192): (6.50, GEMMA4_SWA_PERF_MARGIN),
+}
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize(
-    "model_name,q_chunk_size,k_chunk_size,ring_size_expected,expected_util,margin",
-    GEMMA4_CHUNKED_PERF_CHECK_CONFIGS,
-    ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in GEMMA4_CHUNKED_PERF_CHECK_CONFIGS],
-)
+@pytest.mark.parametrize("perf_config", GEMMA4_CHUNKED_PRODUCTION_PERF_CONFIGS, ids=lambda config: config.id)
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 @pytest.mark.skipif(
     MESH_CONFIG.is_galaxy and not is_high_power(),
     reason="galaxy perf job requires a high-power (>=130W TDP) host; guards the exabox.tenstorrent.com/power=14kw label",
 )
-def test_ring_joint_attention_gemma4_chunked_perf_check(
-    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
-):
+def test_ring_joint_attention_gemma4_chunked_perf_check(perf_config):
     """Measure Gemma 4's final production chunk against the full 256K cache capacity."""
-    if MESH_CONFIG.sp_size != ring_size_expected:
-        pytest.skip(f"Expected ring size {ring_size_expected}, current topology has ring size {MESH_CONFIG.sp_size}")
-    if model_name not in GEMMA4_CHUNKED_PERF_MODEL_CONFIGS:
-        pytest.skip(f"Gemma 4 chunked perf model {model_name} is unavailable on this mesh")
+    if MESH_CONFIG.sp_size != 8:
+        pytest.skip(f"Expected ring size 8, current topology has ring size {MESH_CONFIG.sp_size}")
 
-    model = GEMMA4_CHUNKED_PERF_MODEL_CONFIGS[model_name]
-    chunk_size = model.seq_len * MESH_CONFIG.sp_size
-    assert model.total_seq is not None
+    model = perf_config.model
+    chunk_size = perf_config.chunk_size
     assert model.total_seq % chunk_size == 0
     perf_chunk = model.total_seq // chunk_size - 1
-    config_id = f"{get_test_case_id(model, q_chunk_size, k_chunk_size)}-chunk{chunk_size}-reuse_kv"
+    expected_util, margin = GEMMA4_CHUNKED_PERF_CHECK_CONFIGS[(model.name, chunk_size)]
 
     runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, topology=model.topology)
     try:
@@ -7724,7 +7795,7 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(
                     model,
                     chunk_size=chunk_size,
                     total_seq=model.total_seq,
-                    qk_configs=[(q_chunk_size, k_chunk_size)],
+                    qk_configs=[(perf_config.q_chunk_size, perf_config.k_chunk_size)],
                     persistent_buffer_mode="reuse_max",
                     do_check=False,
                     reuse_kv_buffer=True,
@@ -7733,6 +7804,8 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(
                     use_ring_mla=model.use_ring_mla,
                     matmul_math_fidelity=model.matmul_math_fidelity,
                     nd_sharded_kv_cache=model.nd_sharded_kv_cache,
+                    max_k_splits=perf_config.max_k_splits,
+                    segmented_accumulation=perf_config.segmented_accumulation,
                     runtime=runtime,
                 ),
             )
@@ -7761,7 +7834,7 @@ def test_ring_joint_attention_gemma4_chunked_perf_check(
     lower = expected_util * (1 - margin)
     upper = expected_util * (1 + margin)
     logger.info(
-        f"Gemma 4 chunked perf check {config_id}: duration={duration_ns/1e6:.3f} ms, "
+        f"Gemma 4 chunked perf check {perf_config.id}: duration={duration_ns/1e6:.3f} ms, "
         f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
         f"profiler_records={len(perf_records)}, effective_cores={effective_cores}, "
         f"matmul_math_fidelity={model.matmul_math_fidelity}"
