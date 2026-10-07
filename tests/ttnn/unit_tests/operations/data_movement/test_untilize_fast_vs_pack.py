@@ -3,9 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The fast untilize and the plain pack untilize give the same bytes on Blackhole, so the untilize helper may pick
-either for a row (tt-metal#58736). Every bf16 bit pattern, special values included, and every bfp8_b tile byte pair (each
-of the 256 shared exponents with each of the 256 sign and mantissa bytes, written as raw tile bytes), untilized to bf16
-with a 16-bit DEST: rows of one fast untilize chunk (5 to 8 tiles) and of several (9 tiles and more).
+either for a row (tt-metal#58736). Every bf16 bit pattern, special values included, every bfp8_b tile byte pair (each of
+the 256 shared exponents with each of the 256 sign and mantissa bytes, written as raw tile bytes) and every bfp4_b
+exponent with every 4-bit code, untilized to bf16 with a 16-bit DEST: rows of one fast untilize chunk (5 to 8 tiles)
+and of several (9 tiles and more).
 """
 
 import pytest
@@ -195,14 +196,26 @@ def _bf16_patterns(width):
 
 
 def _bfp8_raw_tiles(width):
-    # Raw Bfp8_b tiles: 64 shared exponent bytes (one per 16-datum face row), then 1024 sign and mantissa bytes. Face row
-    # g of the input takes exponent g // 16 and the bytes (g % 16) * 16 to (g % 16) * 16 + 15, so the 4096 face rows of
-    # 64 tiles carry every exponent with every sign and mantissa byte.
+    # Raw Bfp8_b tiles: 64 shared exponent bytes (one per 16-datum face row), then 1024 sign and mantissa bytes. Face
+    # row g of the input takes exponent g // 16 and the bytes (g % 16) * 16 to (g % 16) * 16 + 15, so the 4096 face rows
+    # of 64 tiles carry every exponent with every sign and mantissa byte.
     tile_rows = -(-64 // width)
     num_tiles = tile_rows * width
     face_row = torch.arange(num_tiles * 64) % 4096
     exponents = (face_row // 16).to(torch.uint8).reshape(num_tiles, 64)
     datums = ((face_row % 16).unsqueeze(1) * 16 + torch.arange(16)).to(torch.uint8).reshape(num_tiles, 1024)
+    return torch.cat([exponents, datums], dim=1), tile_rows * TILE
+
+
+def _bfp4_raw_tiles(width):
+    # Raw Bfp4_b tiles: 64 shared exponent bytes, then 512 bytes of two 4-bit sign and mantissa codes each. Every face
+    # row holds all 16 codes, and face row g takes exponent g % 256, so 4 tiles carry every exponent with every code.
+    tile_rows = -(-4 // width)
+    num_tiles = tile_rows * width
+    face_row = torch.arange(num_tiles * 64)
+    exponents = (face_row % 256).to(torch.uint8).reshape(num_tiles, 64)
+    codes = torch.arange(8) * 2
+    datums = ((codes + 1) * 16 + codes).to(torch.uint8).repeat(num_tiles * 64).reshape(num_tiles, 512)
     return torch.cat([exponents, datums], dim=1), tile_rows * TILE
 
 
@@ -219,3 +232,10 @@ def test_fast_and_pack_untilize_match_bfp8(device, width):
     # One page per tile: a row-major uint8 tensor of the raw tile bytes, read into a Bfp8_b input CB.
     tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     _compare(device, tt_in, ttnn.bfloat8_b, num_rows, width)
+
+
+@pytest.mark.parametrize("width", [5, 6, 7, 8, 9, 12, 16, 24])
+def test_fast_and_pack_untilize_match_bfp4(device, width):
+    raw, num_rows = _bfp4_raw_tiles(width)
+    tt_in = ttnn.from_torch(raw, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    _compare(device, tt_in, ttnn.bfloat4_b, num_rows, width)
