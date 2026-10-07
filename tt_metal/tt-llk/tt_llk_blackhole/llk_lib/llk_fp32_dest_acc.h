@@ -44,25 +44,22 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
 
     tensix_sync();
 
-    // Every mailbox read below lands in a volatile local, so it is consumed even when LLK_ASSERT is
-    // compiled out: the store into the local cannot issue until the read returns, and nothing after
-    // it -- Tensix instruction pushes and the config writes among them -- can issue before that.
     if constexpr (thread_id == ThreadId::UnpackThreadId)
     {
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
-        volatile std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
+        const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
     }
     else if constexpr (thread_id == ThreadId::PackThreadId)
     {
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
-        volatile std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
+        const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
     }
     else
     {
-        volatile std::uint32_t unpack_ready = mailbox_read(ThreadId::UnpackThreadId);
-        volatile std::uint32_t pack_ready   = mailbox_read(ThreadId::PackThreadId);
+        const std::uint32_t unpack_ready = mailbox_read(ThreadId::UnpackThreadId);
+        const std::uint32_t pack_ready   = mailbox_read(ThreadId::PackThreadId);
         LLK_ASSERT(unpack_ready == fp32_dest_acc::UNPACK_READY, "Unexpected dest-acc message from unpack thread.");
         LLK_ASSERT(pack_ready == fp32_dest_acc::PACK_READY, "Unexpected dest-acc message from pack thread.");
 

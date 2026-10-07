@@ -7,9 +7,8 @@ When the handshake returns on UNPACK and PACK, the dest-acc config MATH just pro
 already be in effect. Each released thread reads the field back after every enable and disable,
 over many cycles.
 
-The kernel is built with LLK_ASSERT compiled out, as tt-metal builds kernels by default: a
-compiled-in assert consumes the handshake's mailbox reads and would hide a handshake whose reads
-are not consumed on their own.
+The kernel is built with LLK_ASSERT compiled out, as tt-metal builds kernels by default, so the
+handshake runs with the mailbox values unchecked, exactly as it does in production.
 """
 
 import pytest

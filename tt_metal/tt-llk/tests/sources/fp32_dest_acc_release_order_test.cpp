@@ -5,11 +5,9 @@
 // Regression test for the mid-kernel FP32 dest-acc handshake (`_llk_set_fp32_dest_acc_`): when it
 // returns on UNPACK and PACK, the dest-acc config MATH just programmed must already be in effect.
 //
-// Built with LLK_ASSERT compiled out, as tt-metal builds kernels by default. Each mailbox read in
-// the handshake is otherwise checked only by an LLK_ASSERT, and an assert that is compiled in
-// consumes the read and hides a handshake whose reads are not consumed on their own. The harness
-// enables asserts by default, so this file switches them off itself rather than depending on how
-// it is run.
+// Built with LLK_ASSERT compiled out, as tt-metal builds kernels by default, so the handshake runs
+// with its mailbox values unchecked, exactly as it does in production. The harness enables asserts
+// by default, so this file switches them off itself rather than depending on how it is run.
 #undef ENABLE_LLK_ASSERT
 
 #include <cstdint>
