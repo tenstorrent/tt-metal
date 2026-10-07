@@ -743,6 +743,13 @@ def key_phase_enabled() -> bool:
     return os.environ.get("DIFFVAE_NA_KEY_PHASE") != "0"
 
 
+def lean_layout_enabled() -> bool:
+    """Whether the keep-bricked W-sharded path skips the untilize/tilize pairs that only change a
+    tensor's layout label: V's head split, the tilize between halo exchange and key-phase rebrick,
+    and the output's untilize. On with ``DIFFVAE_S5_LEAN=1``; the values are unchanged."""
+    return os.environ.get("DIFFVAE_S5_LEAN") == "1"
+
+
 def key_phase_geometry(volume, context_window, brick, owned_height, owned_width):
     """``(resident, low)``: the K/V region one device holds under a key phase, and the sites it
     starts below the owned region on each axis.

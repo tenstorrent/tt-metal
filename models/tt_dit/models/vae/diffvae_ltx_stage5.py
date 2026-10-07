@@ -28,7 +28,7 @@ from ...layers.feedforward import SwiGLU
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.neighborhood_attention import NAKernel, neighborhood_attention_3d, resolve_na_kernel
-from ...layers.neighborhood_attention_plan import window_bounds
+from ...layers.neighborhood_attention_plan import lean_layout_enabled, window_bounds
 from ...layers.neighborhood_permute import (
     SITES_PER_BRICK,
     brick_count,
@@ -649,7 +649,12 @@ class _NeighborhoodAttention3D(Module):
             ):
                 q = prep(self._rope(self._normed(self.q_norm, lane(0), scale=self.scale), tables))
                 k = prep(self._rope(self._normed(self.k_norm, lane(1)), tables))
-                v = prep(lane(2))
+                if brick is not None and sharded and lean_layout_enabled():
+                    # The W-sharded executor untilizes V into site-major rows, which the packed
+                    # (sites, heads * head_dim) slice already is.
+                    v = slice_last(packed, 2 * width, 3 * width)
+                else:
+                    v = prep(lane(2))
                 ttnn.deallocate(packed)
         else:
 
