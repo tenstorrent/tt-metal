@@ -243,13 +243,12 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
- * @tparam clear_scalar_scratch: REDUCE_SCALAR MAX only: false when the scratch row already holds this tile's pooled rows.
  * @param dst_index: Tile index into the destination register.
  * @param tensor_shape: Tensor shape describing tile dimensions.
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this
  *       function, and @ref _llk_math_reduce_uninit_ after it to restore modified state.
  */
-template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false, bool clear_scalar_scratch = true>
+template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape tensor_shape)
 {
     LLK_VALIDATE_TENSOR_SHAPE_MATH("_llk_math_reduce_", tensor_shape);
@@ -307,7 +306,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        if constexpr (type == PoolType::MAX && clear_scalar_scratch)
+        if constexpr (type == PoolType::MAX)
         {
             // GMPOOL takes the max with the scratch row; a tile copied into DST leaves it 0, not undefined (minus infinity)
             TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 4);
@@ -363,9 +362,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
  *
  * Tile i goes to the destination tile dst_index + i * dst_stride (a stride of 0 accumulates the block into one tile).
  * When @ref reduce_block_holds_scaler holds, the scaler stays in SrcA for a chunk of @ref REDUCE_BLOCK_MAX_TILES tiles:
- * each tile releases only SrcB and the chunk releases SrcA once. A REDUCE_SCALAR block with stride 0 pools every tile
- * into the scratch row and transposes it once, at the last tile, so SUM and AVG round in a different order than per
- * tile calls. Every other case runs @ref _llk_math_reduce_ per tile.
+ * each tile releases only SrcB and the chunk releases SrcA once. Every other case runs @ref _llk_math_reduce_ per tile.
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
@@ -418,25 +415,6 @@ inline void _llk_math_reduce_block_(
                 TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
                 num_tiles -= chunk;
             }
-            return;
-        }
-    }
-
-    if constexpr (dim == ReduceDim::REDUCE_SCALAR)
-    {
-        if (num_tiles > 1 && dst_stride == 0)
-        {
-            // Every tile but the last only pools its faces into the scratch row; the last tile's call transposes it once
-            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-            if constexpr (type == PoolType::MAX)
-            {
-                TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 4);
-            }
-            for (std::uint32_t pooled = 0; pooled < (num_tiles - 1) * tensor_shape.total_num_faces(); pooled++)
-            {
-                reduce_pool_op<type, is_high_fidelity(math_fidelity), p_setrwc::CLR_AB, 4>();
-            }
-            _llk_math_reduce_<type, dim, is_fp32_dest_acc_en, math_fidelity, is_int_fpu_en, false>(dst_index, tensor_shape);
             return;
         }
     }
