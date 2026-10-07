@@ -604,11 +604,6 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
     program_packer_destination(address);
 
     ckernel::ckernel_template::run();
-
-    {
-        T6MutexLockGuard<mutex_ADC> guard(mutex::THREAD2_ADC);
-        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101); // reset z counters
-    }
 }
 
 /**
