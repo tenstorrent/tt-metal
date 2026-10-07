@@ -13,16 +13,42 @@ All device-side, no host reads: valid inside ttnn.begin_trace_capture / execute_
 bias top-8) and overflow a chip's dispatch buffer, so their routing is replaced by a round-robin spread (spread_pad_routing) with weight 1/8.
 Requires MOE_UNI_BF16_X/INTERMED/OUT=1 in the environment of the process that builds the op (and the patched _ttnncpp.so) for bf16 activations.
 """
+import os
+
 import torch
 
 import ttnn
-from models.demos.blackhole.mimo_v26.tt.moe_prefill import COLS, HIDDEN, ROWS, TOPK, spread_pad_routing
+from models.demos.blackhole.mimo_v26.tt.moe_prefill import (  # noqa: F401
+    COLS,
+    HIDDEN,
+    ROWS,
+    TOPK,
+    free,
+    hold_begin,
+    hold_end,
+    spread_pad_routing,
+)
 
 SLOTS = 64  # masked_bincount needs tokens % 64 == 0: 32 decode slots + 32 pad rows per mesh row
 
 
+def dead_routing(dead):
+    """Routing (idx [1,SLOTS,TOPK] int, w [1,SLOTS,TOPK]) given to dead/pad slots. "spread32" (default of the decode path): round-robin over ONE expert per chip (ids col*32+row*8, 32 experts =
+    1/8 of the expert weights), weight 0: every chip still gets dead-slot tokens every layer, so fabric traffic stays balanced. "sentinel" (expert id 256, never dispatched, cheapest) HANGS deep traced
+    decode (combine multicast barrier, ~per-replay probability at 48 layers: LOG moe track); "spread": all 256 experts (touches every expert's weights every call).
+    """
+    sidx, sw = spread_pad_routing(1, SLOTS)
+    if dead == "sentinel":
+        return torch.full_like(sidx, 256), torch.zeros_like(sw)
+    if dead == "spread32":
+        ids = torch.tensor([c * 32 + r * 8 for c in range(8) for r in range(4)])
+        slot = torch.arange(SLOTS).unsqueeze(1) * TOPK + torch.arange(TOPK).unsqueeze(0)
+        return ids[slot % 32].reshape(1, SLOTS, TOPK), torch.zeros_like(sw)
+    return sidx, sw
+
+
 class MiMoMoEDecode:
-    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None, router="exact", dead="sentinel"):
+    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None, router="exact", dead="spread32"):
         """router: \"exact\" (original, 64-row ttnn path) or \"fast\" (router_select kernel on the 32 live slots; identical expert sets on all 47 layers)."""
         self.router = router
         self.dead = dead  # "sentinel": dead slots get expert id 256 (= num experts, dispatch table -1): never dispatched, so cost scales with live tokens; "spread": old round-robin
@@ -30,9 +56,7 @@ class MiMoMoEDecode:
         self.mesh, self.gate, self.moe, self.do_ar = mesh, gate, moe, all_reduce
         rep = ttnn.ReplicateTensorToMesh(mesh)
         # spread routing for the 64 slots of one mesh row, expert ids exact in bf16 (<= 256), weights 1/8
-        sidx, sw = spread_pad_routing(1, SLOTS)
-        if dead == "sentinel":
-            sidx, sw = torch.full_like(sidx, 256), torch.zeros_like(sw)
+        sidx, sw = dead_routing(dead)
         self.sp_idx = ttnn.from_torch(
             sidx.reshape(1, 1, SLOTS, TOPK).bfloat16(),
             device=mesh,
@@ -100,6 +124,27 @@ class MiMoMoEDecode:
         w2 = ttnn.reshape(ttnn.to_layout(w2, ttnn.ROW_MAJOR_LAYOUT), [T, 1, 1, TOPK])
         return w2, i2
 
+    def _column_reduce(self, part, B):
+        """Sum the 8 per-column partials of the first B rows. MIMO_MOE_AR=ag_sum (default; race agent, commit feabf363015): slice to the B live rows, all_gather over the column axis and
+        sum locally (ttnn.all_reduce = reduce_scatter + all_gather left one 32-column tile of one device stale in ~1e-3 of the calls behind dispatch/combine). MIMO_MOE_AR=rs: old all_reduce.
+        """
+        mode = os.environ.get("MIMO_MOE_AR", "ag_sum")
+        if (
+            mode == "rs64"
+        ):  # the pre-merge behaviour: all_reduce of the full 64-row partial, then slice (hang repro for the sentinel path)
+            full = ttnn.all_reduce(part, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            o = ttnn.slice(full, [0, 0, 0, 0], [1, 1, B, HIDDEN])
+            free(full)
+            return o
+        x = ttnn.slice(part, [0, 0, 0, 0], [1, 1, B, HIDDEN])
+        if mode == "rs":
+            return ttnn.all_reduce(x, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        g = ttnn.all_gather(x, dim=0, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        free(x)
+        o = ttnn.sum(g, dim=0, keepdim=True)
+        free(g)
+        return o
+
     def forward(self, x, mask, upto=99):
         """upto (stage-timing hook): 0 = pad+router+spread, 1..4 = moe stages (counts, dispatch, experts, combine), 5 = full moe without all-reduce."""
         B = x.shape[2]
@@ -138,9 +183,10 @@ class MiMoMoEDecode:
         part = self.moe.forward(x_rm, wts2, idx2, upto=min(upto, 99) if upto <= 4 else 99)
         if upto <= 5:
             return part
-        out = ttnn.all_reduce(part, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if self.do_ar else part
         if self.do_ar:
-            ttnn.deallocate(part)
-        o = ttnn.slice(out, [0, 0, 0, 0], [1, 1, B, HIDDEN])
-        ttnn.deallocate(out)
+            o = self._column_reduce(part, B)
+            free(part)
+            return o
+        o = ttnn.slice(part, [0, 0, 0, 0], [1, 1, B, HIDDEN])
+        free(part)
         return o

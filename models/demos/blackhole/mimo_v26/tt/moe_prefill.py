@@ -25,6 +25,31 @@ EPC = NUM_ROUTED // (ROWS * COLS)  # 8
 W_DTYPE = ttnn.bfloat8_b
 
 
+_HOLD = None
+
+
+def hold_begin():
+    """Start holding every intermediate the MoE would free (race/hang fix, see notes/determinism.md): inside a trace capture a freed buffer is reused by the NEXT layer's
+    dispatch/combine/CCL outputs at the same address; chips are not synchronised across layers (rows only meet inside dispatch/combine), so a fast chip's next-layer remote
+    writes can land in a buffer a slower chip still reads from the previous layer. Call before ttnn.begin_trace_capture, keep the list hold_end() returns alive until the trace is released.
+    """
+    global _HOLD
+    _HOLD = []
+
+
+def hold_end():
+    global _HOLD
+    h, _HOLD = _HOLD, None
+    return h
+
+
+def free(t):
+    if _HOLD is not None:
+        _HOLD.append(t)
+    else:
+        ttnn.deallocate(t)
+
+
 def global_expert(row, col, local):
     return ExpertMapping.get_global_expert_idx(
         group=col,
@@ -148,6 +173,21 @@ class MiMoPrefillMoE:
             ttnn.deallocate(p_)
         return o
 
+    def _row_sync(self, tag):
+        """MIMO_SYNC=<letters> (c=after counts, d=after dispatch, e=after experts, k=after combine): tiny all_gather over the mesh ROW axis = a barrier between the 4 chips of a dispatch
+        group at that point (experiment for the deep-trace combine hang / decode glitch)."""
+        if tag not in os.environ.get("MIMO_SYNC", ""):
+            return
+        if getattr(self, "_sync_src", None) is None:
+            self._sync_src = ttnn.from_torch(
+                torch.zeros(1, 1, 32, 32).bfloat16(),
+                device=self.md,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
+            )
+        free(ttnn.all_gather(self._sync_src, dim=0, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+
     def forward(self, x_rm, scores, indices, keep_counts=False, upto=99):
         """x_rm [1,N,D] bf16 ROW_MAJOR; scores [N,1,1,k] bf16 RM; indices [N,1,1,k] uint16 RM (router outputs; N = tokens of this mesh row)."""
         md = self.md
@@ -156,7 +196,7 @@ class MiMoPrefillMoE:
         dp = ttnn.experimental.deepseek_prefill
         idx_t = ttnn.to_layout(ttnn.reshape(indices, [N, TOPK]), ttnn.TILE_LAYOUT)
         hist = dp.masked_bincount(idx_t, sh.dispatch_table, NUM_ROUTED, TOPK)
-        ttnn.deallocate(idx_t)
+        free(idx_t)
         offsets, counts, region_offsets, _ = dp.offset_cumsum(
             hist,
             cluster_axis=0,
@@ -165,9 +205,10 @@ class MiMoPrefillMoE:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             use_l1_small_for_semaphores=True,
         )
-        ttnn.deallocate(hist)
+        free(hist)
         if keep_counts:
             self.last_counts = counts
+        self._row_sync("c")
         if upto == 1:  # stage-timing hook: counts only
             return offsets, counts, region_offsets
         disp, meta = dp.dispatch(
@@ -192,7 +233,8 @@ class MiMoPrefillMoE:
             num_workers_per_sender=sh.workers,
             use_l1_small_for_semaphores=True,
         )
-        ttnn.deallocate(offsets)
+        free(offsets)
+        self._row_sync("d")
         if upto == 2:  # stage-timing hook: after dispatch
             return disp, meta, counts, region_offsets
         disp2 = ttnn.reshape(disp, [sh.max_buf, x_rm.shape[2]])
@@ -261,7 +303,8 @@ class MiMoPrefillMoE:
                 compute_kernel_config=self.ckc,
                 activation=ttnn.RoutedExpertActivation.Silu,
             )
-        ttnn.deallocate(disp)
+        free(disp)
+        self._row_sync("e")
         if upto == 3:  # stage-timing hook: after the expert op
             return out, meta, counts, region_offsets
         out5 = ttnn.reshape(out, [1, 1, sh.max_buf, out.shape[-1]])
@@ -282,19 +325,20 @@ class MiMoPrefillMoE:
             use_fp8_combine=False,
             use_l1_small_for_semaphores=True,
         )
-        ttnn.deallocate(out)
-        ttnn.deallocate(meta)
+        free(out)
+        free(meta)
+        self._row_sync("k")
         if upto == 4:  # stage-timing hook: after combine
             return comb
         if not keep_counts:
-            ttnn.deallocate(counts)
-        ttnn.deallocate(region_offsets)
+            free(counts)
+        free(region_offsets)
         w5 = ttnn.reshape(scores, [1, 1, N, TOPK, 1])
         i5 = ttnn.reshape(indices, [1, 1, N, TOPK])
         summed = dp.post_combine_reduce(
             comb, w5, i5, sh.dispatch_table, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        ttnn.deallocate(comb)
+        free(comb)
         return summed
 
 
