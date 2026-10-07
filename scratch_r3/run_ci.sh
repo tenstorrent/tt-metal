@@ -48,7 +48,7 @@ while read -r tag v tests conf kexp; do
   echo "== $tag $v ($i) $tests $(date -u +%T)"
   timeout -s INT -k 60 ${CI_LIMIT:-900} python -m tracy -r -p --no-web-server -o $OUT -m pytest "${C[@]}" -p mm_prof_plugin -p no:cacheprovider -o timeout_method=thread -q -rfE "${K[@]}" "${T[@]}" > $OUTD/log_${tag}_${i}_$v.txt 2>&1
   rc=$?; echo "== $tag $v ($i) rc=$rc $(date -u +%T): $(grep -E 'passed|failed' $OUTD/log_${tag}_${i}_$v.txt | tail -1)"
-  [[ $rc -ne 0 ]] && tail -30 $OUTD/log_${tag}_${i}_$v.txt
+  if [[ $rc -ne 0 ]] || ! grep -q passed $OUTD/log_${tag}_${i}_$v.txt; then tail -40 $OUTD/log_${tag}_${i}_$v.txt; fi
   echo "== compute ELFs of $v:"; elfsum $TT_METAL_CACHE
 done < "$1"
 place $S/variants/head
