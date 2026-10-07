@@ -3,9 +3,9 @@
 """Ring joint SDPA with precision recipes on a 1x2 Blackhole mesh, against an FP64 reference.
 
 Recipes and their numerics: tech_reports/FlashAttention/SDPAPrecisionRecipes.md. Dense recipe coverage lives in
-tests/ttnn/unit_tests/operations/sdpa/test_sdpa_recipes.py; this file covers what the ring adds: K/V arriving
-shard by shard, joint K/V and logical lengths (host scalars or device tensors). Exp ring:
-test_exp_ring_joint_sdpa_recipes.py.
+operations/sdpa/test_sdpa_recipes.py under tests/ttnn/unit_tests/ (fast subset) and tests/ttnn/nightly/unit_tests/
+(sweeps); this file covers what the ring adds: K/V arriving shard by shard, joint K/V and logical lengths (host
+scalars or device tensors). Exp ring: test_exp_ring_joint_sdpa_recipes.py.
 """
 
 import os
@@ -15,7 +15,7 @@ import torch
 import ttnn
 
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.unit_tests.operations.sdpa.test_sdpa_recipes import L2_PCT_BOUND, VARIANTS, l2_pct, reference
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import L2_PCT_BOUND, VARIANTS, l2_pct, reference
 
 RING = 2
 
