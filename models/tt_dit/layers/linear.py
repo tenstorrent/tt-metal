@@ -412,7 +412,17 @@ class ColParallelLinear(Module):
             # (M, K) must be unit; _forward_fabric_agmm widens rank-3 activations to satisfy that.
             fabric_cfg = get_fabric_agmm_config(M, K, N, (self.chunks or 1), full_grid)
             has_unit_batch = len(x.padded_shape) <= 4 and all(d == 1 for d in list(x.padded_shape)[:-2])
-            if fabric_cfg is not None and self.chunks in (None, 1) and has_unit_batch and addcmul_a is None:
+            # The strided op has no output dtype override (its output follows in0 / in1), so a
+            # pinned bf16 output on a block-float activation must take the all_gather_minimal_matmul
+            # path below, which honours `dtype`.
+            dtype_ok = dtype is None or dtype == x.get_dtype()
+            if (
+                fabric_cfg is not None
+                and self.chunks in (None, 1)
+                and has_unit_batch
+                and addcmul_a is None
+                and dtype_ok
+            ):
                 return self._forward_fabric_agmm(
                     x, weight, fabric_cfg, parallel_config, compute_kernel_config, dtype, use_persistent_buffer
                 )

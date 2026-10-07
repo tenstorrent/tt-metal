@@ -150,6 +150,11 @@ class WanTransformerBlock(Module):
         # byte-identical to before.
         self._table_rows: tuple[ttnn.Tensor, ...] | None = None
         self._table_rows_src: ttnn.Tensor | None = None
+        # Output dtype of norm1 / norm2 / norm3 (None = input dtype, bf16). Set by
+        # `apply_quant_config` (QuantConfig.norm_output_dtype) for the bf8-activation presets so
+        # the qkv / cross to_q / ff1 gathers move block-float pages; the matmuls pin their
+        # outputs back to bf16. The 14B never sets it.
+        self.norm_output_dtype: ttnn.DataType | None = None
 
         self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -313,7 +318,9 @@ class WanTransformerBlock(Module):
             modulation
         )
 
-        spatial_normed_1BND = self.norm1(spatial_1BND, dynamic_weight=scale1_msa_1B1D, dynamic_bias=shift_msa_1B1D)
+        spatial_normed_1BND = self.norm1(
+            spatial_1BND, dynamic_weight=scale1_msa_1B1D, dynamic_bias=shift_msa_1B1D, dtype=self.norm_output_dtype
+        )
 
         # Self attention on spatial with fused residual addcmul
         # Fuses: spatial_1BND = spatial_1BND + to_out(attn_output) * gate_msa_1B1D
@@ -328,7 +335,7 @@ class WanTransformerBlock(Module):
         )
 
         # Cross attention on prompt
-        spatial_normed_1BND = self.norm2(spatial_1BND)
+        spatial_normed_1BND = self.norm2(spatial_1BND, dtype=self.norm_output_dtype)
 
         attn_output_1BND = self.attn2(
             spatial_1BND=spatial_normed_1BND,
@@ -340,7 +347,9 @@ class WanTransformerBlock(Module):
         spatial_1BND = spatial_1BND + attn_output_1BND
 
         # Feed Forward
-        spatial_normed_1BND = self.norm3(spatial_1BND, dynamic_weight=c_scale1_msa_1B1D, dynamic_bias=c_shift_msa_1B1D)
+        spatial_normed_1BND = self.norm3(
+            spatial_1BND, dynamic_weight=c_scale1_msa_1B1D, dynamic_bias=c_shift_msa_1B1D, dtype=self.norm_output_dtype
+        )
 
         if self.ccl_manager.topology == ttnn.Topology.Linear:
             if self.parallel_config.tensor_parallel.factor > 1:

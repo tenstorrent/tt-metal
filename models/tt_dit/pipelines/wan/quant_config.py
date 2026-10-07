@@ -14,7 +14,7 @@ Usage:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from loguru import logger
 
@@ -67,6 +67,17 @@ class QuantConfig:
 
     # Ring SDPA (self-attention only; cross-attention stays default)
     ring_sdpa: SDPAQuantConfig = field(default_factory=SDPAQuantConfig)
+
+    # Sprint 7 (A1). `activation_dtype` on the LinearQuantConfigs was dead until 2026-10-07:
+    # `_apply_linear_config` never assigned it, so every preset still gathered bf16 activations
+    # over the TP ring. It is wired for real only when this flag is set, so the measured presets
+    # (`all_bf8_lofi` ...) keep their exact behaviour; `all_bf8_lofi_act8*` opt in.
+    apply_activation_dtype: bool = False
+    # Output dtype the block's norm1 / norm2 / norm3 emit (None = the input dtype, bf16). With
+    # bfloat8_b the AGMM gathers of qkv, cross to_q and ff1 move half the bytes with no extra
+    # program (the fused norms take `dtype=`); their outputs are pinned back to bf16 because the
+    # fused norms require a bf16 input.
+    norm_output_dtype: ttnn.DataType | None = None
 
     @staticmethod
     def default() -> QuantConfig:
@@ -198,6 +209,48 @@ def _all_bf8_lofi_sdpa_lofi() -> QuantConfig:
 QuantConfig.all_bf8_lofi_sdpa_lofi = staticmethod(_all_bf8_lofi_sdpa_lofi)
 
 
+def _all_bf8_lofi_act8() -> QuantConfig:
+    """`all_bf8_lofi` with bfloat8_b activations actually fed to the TP all-gathers (sprint 7, A1).
+
+    norm1 / norm2 / norm3 emit bfloat8_b, so the qkv, cross-attention to_q and ff1 AGMMs gather
+    half the bytes of the bf16 preset with no extra program; every AGMM output is pinned back to
+    bf16 (the fused norms and the residual stream require bf16). The two to_out projections keep
+    their bf16 input (the SDPA output): casting it costs a program per call, so that variant is
+    `all_bf8_lofi_act8_out8`, to be measured against this one. The three N=768 projections are
+    fabric-bound (~10.8 MB per call at ~41 GB/s, notes 7.11), so the bytes are the lever:
+    expected up to ~23 ms/step at 720p across them plus a share on qkv / ff1. PCC-gated; the
+    bit-exact gates do not exercise it (opt-in preset).
+    """
+    base = QuantConfig.all_bf8_lofi()
+    base.apply_activation_dtype = True
+    base.norm_output_dtype = ttnn.bfloat8_b
+    # The SDPA outputs feeding the two to_out projections stay bf16 here (no cast program);
+    # the hoisted prompt K/V projection keeps bf16 in and out (norm_k needs bf16).
+    base.self_attn_out = replace(base.self_attn_out, activation_dtype=None)
+    base.cross_attn_out = replace(base.cross_attn_out, activation_dtype=None)
+    base.cross_attn_kv = replace(base.cross_attn_kv, activation_dtype=None)
+    return base
+
+
+def _all_bf8_lofi_act8_out8() -> QuantConfig:
+    """`all_bf8_lofi_act8` plus a bfloat8_b cast of the SDPA outputs into the two to_out AGMMs.
+
+    Adds one typecast program per to_out call (120 per step) to halve the bytes of the two
+    remaining bf16 gathers (`attn1.to_out`, `attn2.to_out`, both fabric-bound). Measure against
+    `all_bf8_lofi_act8`: the cast pays off only if the gather saving exceeds its launch cost.
+    New LoFi combination (bf8 in0 with the bf16 to_out weight): run the 20 s PCC test under a
+    watchdog first.
+    """
+    base = _all_bf8_lofi_act8()
+    base.self_attn_out = replace(base.self_attn_out, activation_dtype=ttnn.bfloat8_b)
+    base.cross_attn_out = replace(base.cross_attn_out, activation_dtype=ttnn.bfloat8_b)
+    return base
+
+
+QuantConfig.all_bf8_lofi_act8 = staticmethod(_all_bf8_lofi_act8)
+QuantConfig.all_bf8_lofi_act8_out8 = staticmethod(_all_bf8_lofi_act8_out8)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -230,7 +283,9 @@ def _make_sdpa_compute_config(arch, sc: SDPAQuantConfig):
     )
 
 
-def _apply_linear_config(linear, lc: LinearQuantConfig, arch, name: str) -> None:
+def _apply_linear_config(
+    linear, lc: LinearQuantConfig, arch, name: str, *, apply_activation_dtype: bool = False
+) -> None:
     """Apply quantization + compute config to a single linear layer."""
     if lc.weight_dtype != ttnn.bfloat16 and linear.weight._data is not None:
         _quantize_weight(linear.weight, lc.weight_dtype)
@@ -239,6 +294,14 @@ def _apply_linear_config(linear, lc: LinearQuantConfig, arch, name: str) -> None
         logger.debug(f"  {name}: weights -> {lc.weight_dtype}")
 
     linear.compute_config = _make_linear_compute_config(arch, lc)
+
+    if apply_activation_dtype and hasattr(linear, "activation_dtype"):
+        # ColParallelLinear: cast the activation before its TP all-gather (a no-op when the
+        # producer already emitted that dtype) and pin the matmul output back to bf16 so the
+        # residual stream and the fused norms (bf16 input only) never see a block-float tensor.
+        linear.activation_dtype = lc.activation_dtype
+        linear.pin_output_bf16 = lc.activation_dtype is not None
+        logger.debug(f"  {name}: activation_dtype -> {lc.activation_dtype}, pin_output_bf16={linear.pin_output_bf16}")
 
 
 # ---------------------------------------------------------------------------
@@ -272,25 +335,29 @@ def apply_quant_config(model, config: QuantConfig) -> None:
 
     logger.info(f"Applying quant config to {n_blocks} transformer blocks")
 
+    act = {"apply_activation_dtype": config.apply_activation_dtype}
     for idx, block in enumerate(model.blocks):
+        # Norm output dtype (A1): what norm1 / norm2 / norm3 hand to the qkv, cross to_q and ff1 gathers.
+        block.norm_output_dtype = config.norm_output_dtype
+
         # Self-attention linears
-        _apply_linear_config(block.attn1.to_qkv, config.self_attn_qkv, arch, f"blocks[{idx}].attn1.to_qkv")
-        _apply_linear_config(block.attn1.to_out, config.self_attn_out, arch, f"blocks[{idx}].attn1.to_out")
+        _apply_linear_config(block.attn1.to_qkv, config.self_attn_qkv, arch, f"blocks[{idx}].attn1.to_qkv", **act)
+        _apply_linear_config(block.attn1.to_out, config.self_attn_out, arch, f"blocks[{idx}].attn1.to_out", **act)
 
         # Self-attention mm_compute_kernel_config (used by matmuls in attention forward)
         block.attn1.mm_compute_kernel_config = _make_linear_compute_config(arch, config.self_attn_qkv)
 
         # Cross-attention linears
-        _apply_linear_config(block.attn2.to_q, config.cross_attn_q, arch, f"blocks[{idx}].attn2.to_q")
-        _apply_linear_config(block.attn2.to_kv, config.cross_attn_kv, arch, f"blocks[{idx}].attn2.to_kv")
-        _apply_linear_config(block.attn2.to_out, config.cross_attn_out, arch, f"blocks[{idx}].attn2.to_out")
+        _apply_linear_config(block.attn2.to_q, config.cross_attn_q, arch, f"blocks[{idx}].attn2.to_q", **act)
+        _apply_linear_config(block.attn2.to_kv, config.cross_attn_kv, arch, f"blocks[{idx}].attn2.to_kv", **act)
+        _apply_linear_config(block.attn2.to_out, config.cross_attn_out, arch, f"blocks[{idx}].attn2.to_out", **act)
 
         # Cross-attention mm_compute_kernel_config
         block.attn2.mm_compute_kernel_config = _make_linear_compute_config(arch, config.cross_attn_q)
 
         # FFN linears
-        _apply_linear_config(block.ffn.ff1, config.ffn_ff1, arch, f"blocks[{idx}].ffn.ff1")
-        _apply_linear_config(block.ffn.ff2, config.ffn_ff2, arch, f"blocks[{idx}].ffn.ff2")
+        _apply_linear_config(block.ffn.ff1, config.ffn_ff1, arch, f"blocks[{idx}].ffn.ff1", **act)
+        _apply_linear_config(block.ffn.ff2, config.ffn_ff2, arch, f"blocks[{idx}].ffn.ff2", **act)
 
         # FFN block-level compute config
         block.ff_compute_kernel_config = _make_linear_compute_config(arch, config.ffn_ff1)
@@ -328,6 +395,10 @@ def apply_quant_config(model, config: QuantConfig) -> None:
 
     logger.info(f"  Weight dtypes: {weight_dtypes}")
     logger.info(f"  Math fidelities: {fidelities}")
+    logger.info(
+        f"  Activations: apply_activation_dtype={config.apply_activation_dtype}, "
+        f"norm_output_dtype={config.norm_output_dtype}"
+    )
     logger.info(
         f"  Ring SDPA: input_dtype={config.ring_sdpa.input_dtype}, "
         f"fidelity={config.ring_sdpa.math_fidelity}, fp32_acc={config.ring_sdpa.fp32_dest_acc}"
@@ -394,6 +465,8 @@ def quant_config_from_env(var: str = QUANT_CONFIG_ENV) -> tuple[str, QuantConfig
             "all_lofi",
             "all_bf8_lofi",
             "all_bf8_lofi_sdpa_lofi",
+            "all_bf8_lofi_act8",
+            "all_bf8_lofi_act8_out8",
         ]
         msg = f"{var}={name!r} is not a QuantConfig preset; expected one of {presets}"
         raise ValueError(msg)
