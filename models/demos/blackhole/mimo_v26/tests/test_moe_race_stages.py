@@ -225,7 +225,8 @@ def main_body(md, dec, xdev, layers, mask_dev):
     t_e = []
     run_all(t_e)
     ttnn.synchronize_device(md)
-    names = [(i, k) for i, t in enumerate(t_e) for k in t]
+    keep = os.environ.get("MIMO_TAPS", "sw,si,hist,offsets,counts,roff,part,final").split(",")
+    names = [(i, k) for i, t in enumerate(t_e) for k in t if k in keep]
     ref_f = {(i, k): ttnn.clone(tf(t_e[i][k])) for (i, k) in names}
     ttnn.synchronize_device(md)
 
@@ -266,6 +267,36 @@ def main_body(md, dec, xdev, layers, mask_dev):
                 i, k = names[j]
                 by_name.setdefault(f"L{layers[i]}.{k}", []).append((r, c, float(f[r, c, j])))
             events.append({"rep": rep, "taps": by_name})
+            for r, c, j in bad.tolist():
+                i, k = names[j]
+                if k == "final" and "part" in t_tr[i]:
+                    di = r * COLS + c
+                    fin = ttnn.to_torch(ttnn.get_device_tensors(t_tr[i]["final"])[di]).float().reshape(-1, HIDDEN)
+                    rf = ttnn.to_torch(ttnn.get_device_tensors(ref_f[(i, "final")])[di]).float().reshape(-1, HIDDEN)
+                    parts = [
+                        ttnn.to_torch(ttnn.get_device_tensors(t_tr[i]["part"])[r * COLS + kk])
+                        .float()
+                        .reshape(-1, HIDDEN)
+                        for kk in range(COLS)
+                    ]
+                    sm = sum(parts)[: fin.shape[0]]
+                    nz = (fin != rf).nonzero()
+                    rows_ = sorted({int(a) for a, _ in nz.tolist()})
+                    cols_ = [int(b) for _, b in nz.tolist()]
+                    det = {
+                        "layer": layers[i],
+                        "dev": (r, c),
+                        "rows": rows_,
+                        "col_min": min(cols_),
+                        "col_max": max(cols_),
+                        "n": len(cols_),
+                        "glitch_first8": fin[nz[0][0], cols_[0] : cols_[0] + 8].tolist(),
+                        "ref_first8": rf[nz[0][0], cols_[0] : cols_[0] + 8].tolist(),
+                        "sumparts_first8": sm[nz[0][0], cols_[0] : cols_[0] + 8].tolist(),
+                        "part_cols_first": [p_[nz[0][0], cols_[0]].item() for p_ in parts],
+                        "ref_eq_sumparts": bool(torch.allclose(rf, sm, atol=0.1, rtol=0.02)),
+                    }
+                    print("RESULT DETAIL", json.dumps(det), flush=True)
             print("RESULT EVENT", json.dumps(events[-1]), flush=True)
     print(
         f"RESULT staged race stress: layers={layers} live={LIVE} replays={REPS} ({REPS * len(layers)} layer-calls) in {time.time() - t0:.0f}s: "
