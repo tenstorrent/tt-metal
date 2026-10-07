@@ -616,6 +616,20 @@ class Model:
         assert active is None, "partial prefill (active mask) needs the traced-chunk path (DSV41_PREFILL_DYN != 0)"
         return self.prefill_forward_legacy(tokens, prompt_lens, chunk, max_new_tokens, want_logits, hook)
 
+    def _filler_tokens(self, n_rows, width):
+        """Token ids for the rows of users that are NOT prefilled in a partial (serving) prefill: the model computes those rows anyway (every row of the batch goes through every layer).
+        A constant filler (token 0) routes all of them to the SAME experts (hash-routed layers 0-2 by token id, learned layers by the identical hidden states): ~16k identical tokens per
+        chunk on a few experts, far from the balanced routing of a real batch. The vLLM serving sweep hung deterministically (all devices in ReduceScatter, 4 devices in the unified-MoE
+        CombineDeviceOperation, log dsv4-logs/triage/vllm_hang_run2_full.log) on the 5th request in a row; diverse deterministic pseudo-random ids keep the routing spread like a batch of
+        real prompts. Cached per shape."""
+        cache = self.__dict__.setdefault("_filler_cache", {})
+        key = (n_rows, width)
+        if key not in cache:
+            g = torch.Generator().manual_seed(20260507)
+            cache.clear()  # one shape at a time (S_pad changes rarely)
+            cache[key] = torch.randint(1000, int(self.args.vocab_size), (n_rows, width), generator=g)
+        return cache[key]
+
     def admit_idle_users(self):
         """Serving / vLLM interface only: ``decode_forward`` steps ALL B users (``pool.ensure`` grows every user), so a user that was never prefilled or whose request finished
         (``pool.release``) needs an allocator entry: it gets ONE page (it decodes a pad token at position 0). -> True when the page table changed (uploaded).
@@ -760,6 +774,8 @@ class Model:
             n = int(lens[b])
             tp[b, :n] = tokens[b, :n].long()
             tp[b, n:] = tokens[b, n - 1]
+        if active is not None and not bool(active.all()):
+            tp[~active] = self._filler_tokens(int((~active).sum()), S_pad)
         if active is not None and self.host_rows is not None:
             # the ragged hash writes every user's token history (``cache``): keep the history of the inactive (decoding) users
             st_cache, keep = self.hasher.st.cache, (~active).nonzero().reshape(-1)
