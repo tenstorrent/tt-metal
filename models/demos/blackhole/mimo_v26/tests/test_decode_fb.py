@@ -38,8 +38,7 @@ def main():
             ms, toks = {False: [], True: []}, {}
             for rd in range(rounds):
                 for fb in (False, True):
-                    gen.dec.release()
-                    gen.dec.feedback = fb
+                    gen.dec.set_feedback(fb)
                     r = gen.generate(prompts, steps, S=S)
                     t = r["times"][3:]
                     ms[fb].append(round(sorted(t)[len(t) // 2] * 1e3, 3))

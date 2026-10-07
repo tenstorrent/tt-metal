@@ -163,20 +163,31 @@ class Decoder:
         self.max_pos, self.eos, self.N = max_pos if max_pos is not None else 1 << 20, tuple(sorted(eos)), chunk
         self.c0 = 0  # host mirror of the device step counter (ring write index)
         if self.feedback:
-            # device-resident decode state (float32 tiles, row sharded): alive flag, position of the token being fed, and a [N,B] ring of sampled tokens written at the
-            # device step counter, so the host only enqueues trace replays and reads the ring once per chunk of N steps
-            rep = ttnn.ReplicateTensorToMesh(self.mesh)
-            mk = lambda t, mm=rep: ttnn.from_torch(
-                t, device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=mm
-            )
-            self.alive = mk(torch.zeros(self.rows, 1, self.B, 1), self.rowmap)
-            self.posf = mk(torch.zeros(self.rows, 1, self.B, 1), self.rowmap)
-            self.cnt = mk(torch.zeros(1, 1, 1, 1))
-            self.iota = mk(torch.arange(self.N, dtype=torch.float32).reshape(1, 1, self.N, 1))
-            self.ring = mk(torch.zeros(1, 1, self.N, self.B))
+            self._init_fb_state()
         self._tr = None
         self.out = None
         self.steps = 0
+
+    def _init_fb_state(self):
+        # device-resident decode state (float32 tiles, row sharded): alive flag, position of the token being fed, and a [N,B] ring of sampled tokens written at the
+        # device step counter, so the host only enqueues trace replays and reads the ring once per chunk of N steps
+        rep = ttnn.ReplicateTensorToMesh(self.mesh)
+        mk = lambda t, mm=rep: ttnn.from_torch(
+            t, device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, mesh_mapper=mm
+        )
+        self.alive = mk(torch.zeros(self.rows, 1, self.B, 1), self.rowmap)
+        self.posf = mk(torch.zeros(self.rows, 1, self.B, 1), self.rowmap)
+        self.cnt = mk(torch.zeros(1, 1, 1, 1))
+        self.iota = mk(torch.arange(self.N, dtype=torch.float32).reshape(1, 1, self.N, 1))
+        self.ring = mk(torch.zeros(1, 1, self.N, self.B))
+
+    def set_feedback(self, flag):
+        """switch between host-fed and device-resident decode (drops the trace; the next run re-captures)"""
+        assert self.block == 1
+        self.release()
+        self.feedback = bool(flag)
+        if flag and not hasattr(self, "alive"):
+            self._init_fb_state()
 
     def _persist_u(self, t):
         return ttnn.from_torch(
@@ -457,6 +468,9 @@ class Decoder:
     def close(self):
         """release the trace and every U-dependent device buffer (tokens, positions, live mask)"""
         self.release()
+        for n_ in ("alive", "posf", "cnt", "iota", "ring"):
+            if hasattr(self, n_):
+                ttnn.deallocate(getattr(self, n_))
         for t in (
             (self.tok, self.pos["cur"], self.pos["idx"])
             + tuple(self.upd or ())
