@@ -361,3 +361,24 @@ B to E were not tested this round because of the cap. They are carried to round 
 
 All ideas measured: 1 graduated, 0 null. 4 floated ideas (B to E) are untested because of the round cap. FOCUS is
 faster by 2.9 µs median (−1.7 %) and MiMo by 10 µs, with no regression in the guard set.
+
+## Post-run perf work (manual, after the eval run)
+- Date: 2026-10-07. Full log with every experiment (worked / did not): `WORKLOG_post_run.md`.
+- Shipped (defaults):
+  - Hand-off depth up to G slots when L1 allows (eval Perf 2, not committed by the run).
+  - Transport add on the public compute API (one hoisted ELWADD init, `dest += partial + A; dest += B + 0` with a
+    one-tile zero CB, per-segment CB handshakes) instead of Perf 1's raw-LLK walk: within ~1-3 us, no TTI/LLK
+    internals.
+  - Diagonal line injectors (`Mcast1DSenderPlacement.Diagonal`) + NoC rule: the block-invariant operand reads on NoC0,
+    the streamed one on NoC1 (`MMRS_INJ`, `MMRS_A_NOC` / `MMRS_W_NOC` override). Removes the injector "column trap".
+  - Final cores per link is a knob (`FINALS_PER_LINK`, default 3; the placement lowers it to 2 when 3 would need an
+    extra transport row, e.g. an 8-wide grid at L=2).
+- Perf (2x4 LoudBox, 2 links, 14400 B payload, slowest chip, median): FOCUS ~153-157 us (honest unfused matmul +
+  fabric_reduce_scatter 225.5), GLM ~200-203 (256.6), MiMo ~267-273 (391.9).
+- Off-by-default knobs left in for future work (each measured no-win or worse, see the worklog): `MMRS_W_ROT`
+  (rotating W senders, + resident prefetch), `MMRS_PORT_ARR` (relay arrival reads on the sender BRISC),
+  `MMRS_XPORT_NOC_SWAP`, `OPERAND_DEPTH` / `INJECT_READ_AHEAD`, ablation `MMRS_ABLATE=ARRREADS`.
+- Validation: op unit suite (53 passed / 1 skipped), golden ring-mock + fabric-configs + regression 102/102. Not run:
+  full golden suite and Wormhole.
+- `tests/ttnn/unit_tests/operations/matmul_reduce_scatter/test_mmrs_ab.py`: in-process A/B harness (one mesh open
+  per payload, device time read in-process, ~1 min for 3 cases x N variants).

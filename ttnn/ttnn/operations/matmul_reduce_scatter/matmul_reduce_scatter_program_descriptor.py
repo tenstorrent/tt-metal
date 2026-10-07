@@ -81,7 +81,7 @@ _PERF_DEFINES = ([("KERNEL_PERF_ZONES", "1")] if os.environ.get("MMRS_PERF_ZONES
 XPORT_NOC_SWAP = int(os.environ.get("MMRS_XPORT_NOC_SWAP", "0"))
 PORT_ARR = int(os.environ.get("MMRS_PORT_ARR", "0"))
 W_ROT = int(os.environ.get("MMRS_W_ROT", "0"))
-FINALS_PER_LINK = int(os.environ.get("MMRS_FINALS_PER_LINK", "2"))
+FINALS_PER_LINK = int(os.environ.get("MMRS_FINALS_PER_LINK", "3"))
 INC_EVERY = 8  # arrival-counter increment cadence (blackhole-fabric rule 4)
 DEST_TILES_16B = 8  # DEST capacity in 16-bit tiles (half-sync); a 32-bit DEST (fp32_dest_acc_en) holds half
 XPORT_ADD_BLOCK_MAX = DEST_TILES_16B // 2  # transport add: tiles per CB handshake / DEST batch (always fp32 DEST)
@@ -386,6 +386,7 @@ class Placement:
     grid_x: int
     grid_y: int
     transport_rows: int
+    finals_per_link: int = 2  # F: final cores per link (FINALS_PER_LINK, lowered when it would cost a compute row)
     mode: str = "simple"  # "eth" (ports under their Ethernet cores) or "simple" (first 4L cores of the row)
     fwd_ports: dict = field(default_factory=dict)  # coord -> [logical CoreCoord per link]
     bwd_ports: dict = field(default_factory=dict)
@@ -431,13 +432,17 @@ def _plan_placement(mesh_device, num_links, groups=None, links=None):
     receive side). Falls back to the fixed layout [fwd l, bwd l, final (l,0), final (l,1)] per link."""
     grid = mesh_device.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
-    F = FINALS_PER_LINK
+    # F finals per link, but never more than fit in the transport row(s) the 2-finals layout needs anyway: an extra
+    # transport row would cost a whole compute row (e.g. F=3, L=2 needs 10 cores: fits an 11-wide grid, not 8-wide)
+    F = max(1, FINALS_PER_LINK)
+    while F > 2 and _cdiv((2 + F) * num_links, gx) > _cdiv(4 * num_links, gx):
+        F -= 1
     n_xport = (2 + F) * num_links
     t_rows = _cdiv(n_xport, gx)
     if t_rows >= gy:
         raise ValueError("matmul_reduce_scatter: the core grid has no rows left for compute")
     row_cores = [(x, y) for y in range(t_rows) for x in range(gx)]
-    pl = Placement(grid_x=gx, grid_y=gy, transport_rows=t_rows)
+    pl = Placement(grid_x=gx, grid_y=gy, transport_rows=t_rows, finals_per_link=F)
     place = _eth_placer(mesh_device) if groups is not None else None
     for coord, (_, prev, nxt) in (groups or {None: (0, None, None)}).items():
         fwd, bwd, taken = [None] * num_links, [None] * num_links, set()
@@ -533,8 +538,9 @@ def create_mesh_program_descriptor(
     sem_block_ack = sems[4:7]  # one ack counter per consumer kind: fwd ports, bwd ports, finals
     G = blk.G
     L = num_links
-    FL = FINALS_PER_LINK * L  # final cores per chip
-    defs = _PERF_DEFINES + [("MMRS_FINALS_PER_LINK", str(FINALS_PER_LINK))]
+    F = pl.finals_per_link
+    FL = F * L  # final cores per chip
+    defs = _PERF_DEFINES + [("MMRS_FINALS_PER_LINK", str(F))]
     cm, cn = blk.core_m_tiles, blk.core_n_tiles
     block_tiles = cm * cn
     rect = compute_rect(pl, blk)
@@ -622,7 +628,7 @@ def create_mesh_program_descriptor(
         order_rt, w_order_rt, cum = [], [], [0, 0, 0]  # cumulative acks per consumer kind (each kind acks in order)
         for b, (j, wv) in enumerate(units):
             kind = 2 if j == p else (0 if j in fwd else 1)
-            cum[kind] += FINALS_PER_LINK * L if kind == 2 else L
+            cum[kind] += FL if kind == 2 else L
             a_row = (j * blk.blk_m_tiles if rows_wave else 0) + win[wv].r0
             order_rt += [a_row, kind, cum[kind], int(not (blk.a_resident and b > 0))]
             w_col = (0 if rows_wave else j * blk.blk_n_tiles) + win[wv].c0
@@ -836,14 +842,7 @@ def create_mesh_program_descriptor(
         def add_kernel(cores, rt, has_a, has_b):
             return ttnn.KernelDescriptor(
                 defines=defs,
-                kernel_source=str(
-                    KERNEL_DIR
-                    / (
-                        "matmul_reduce_scatter_xport_add_raw.cpp"
-                        if os.environ.get("MMRS_XADD_RAW") == "1"
-                        else "matmul_reduce_scatter_xport_add.cpp"
-                    )
-                ),
+                kernel_source=str(KERNEL_DIR / "matmul_reduce_scatter_xport_add.cpp"),
                 core_ranges=_cset(cores),
                 compile_time_args=[
                     CB_XPORT_PARTIAL,
@@ -908,7 +907,7 @@ def create_mesh_program_descriptor(
                             G if (d == "bwd" and j == peer_p) else j,
                             *wn.segs(l, L, xp.segs_per_row),
                             int(fin),
-                            *[wn.segs(l + h * L, FL, xp.segs_per_row)[1] if fin else 0 for h in range(FINALS_PER_LINK)],
+                            *[wn.segs(l + h * L, FL, xp.segs_per_row)[1] if fin else 0 for h in range(F)],
                             wn.s0,
                             wn.s1,
                             j,  # this chip's arrival slot of block j (the relay reader's base_a)
@@ -917,7 +916,7 @@ def create_mesh_program_descriptor(
                 expect_in = sum(_incs(e[5]) for e in entries if e[3])  # arrival increments upstream sends here
                 rc = virt(peer_opp[l])  # peer chip's opposite-direction port
                 pc = virt(peer_same[l])  # downstream port of the same (direction, link)
-                fins = [virt(peer_finals[FINALS_PER_LINK * l + h]) for h in range(FINALS_PER_LINK)]
+                fins = [virt(peer_finals[F * l + h]) for h in range(F)]
                 pn = node(peer)
                 args = [
                     scr_addr,
@@ -949,7 +948,7 @@ def create_mesh_program_descriptor(
         has_fb = int(nxt is not None and len(sched[groups[nxt][0]][1]) > 0)
         rd_final, add_final, wr_final = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for i, core in enumerate(finals):  # final (l, h) = index l F + h: segments l + h L, stride F L
-            first = i // FINALS_PER_LINK + (i % FINALS_PER_LINK) * L
+            first = i // F + (i % F) * L
             entries = xport_entries([p], [True], lambda j: j, lambda j: G, first, FL)
             rd_final[core.x][core.y] = xport_reader_rt(FL, entries, sem_arr_fwd, sem_arr_bwd, sem_block_ack[2])
             add_final[core.x][core.y] = [0, sum(e[5] for e in entries)]

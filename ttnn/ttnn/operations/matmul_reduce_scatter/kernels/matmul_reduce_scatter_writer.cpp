@@ -84,6 +84,18 @@ void kernel_main() {
             recv_pipe.emplace(mc_w.receiver(noc));
         }
         const uint32_t line_off = get_arg_val<uint32_t>(order_idx + 2 * num_blocks);
+        // Resident W (fresh only in the first unit): every K-block owns its own CB slot (capacity = one K pass) and
+        // the CB is empty at start, so each sender issues its resident K-block reads up front, in parallel with the
+        // other senders' reads; the multicasts then go out in round order.
+        const bool w_resident = num_blocks > 1 && !fresh(num_k_blocks);
+        if (w_resident) {
+            const uint32_t base = get_write_ptr(cb_weight_operand);
+            for (uint32_t s = 0; s < num_k_blocks; ++s) {
+                if (mc_w.should_send(line_off + s)) {
+                    issue_w(s, base + s * kblock_bytes);
+                }
+            }
+        }
         uint32_t round = line_off;
         for (uint32_t s = 0; s < steps; ++s) {
             {
@@ -95,7 +107,9 @@ void kernel_main() {
                 if (mc_w.should_send(round)) {
                     {
                         MaybeDeviceZoneScope("inj_read");
-                        issue_w(s, dst);
+                        if (!w_resident) {
+                            issue_w(s, dst);
+                        }
                         noc_async_read_barrier();
                     }
                     MaybeDeviceZoneScope("inj_mcast");

@@ -7,8 +7,8 @@ slowest chip, median (test_mmrs_ab.py, in-process profiler). Default payload 144
 
 Already applied before this log:
 - Perf 2 hand-off depth (G slots when L1 fits) — from the eval run, uncommitted.
-- Public-API transport add (`xport_add.cpp`) replacing the raw-LLK one (A/B: within ~1-3 us; raw kept as
-  `xport_add_raw.cpp`, `MMRS_XADD_RAW=1`).
+- Public-API transport add (`xport_add.cpp`) replacing Perf 1's raw-LLK one (A/B over two rounds: within ~1-3 us;
+  the raw-LLK version was removed).
 - Diagonal line injectors (`MMRS_INJ=diag`, default) + NoC rule: block-invariant operand reads on NoC0, streamed on
   NoC1 (`MMRS_A_NOC/MMRS_W_NOC=auto`). MiMo 329 -> 271 us, FOCUS/GLM flat.
 
@@ -97,3 +97,53 @@ gating; relay reader then only gathers. Correct (unit suite passes).
 With the arrival reads ablated the pump structure itself costs only ~5-9 us (FOCUS 145.3 -> 154.6), so the loss is
 the DRAM reads travelling on NoC1 (BRISC): up the DRAM columns and along the transport row, where the fabric sends
 also go. Kept in the code as an off-by-default knob (MMRS_PORT_ARR).
+
+### 8. Swap the transport cores' NoCs (readers NoC1, senders / final writers NoC0) — FAR WORSE, off
+Idea: the transport row is the TOP grid row, so NoC0 (east->south) gathers from the compute rows wrap the torus.
+Correct, but FOCUS 156.7 -> 293.2, GLM 203.2 -> 341.5, MiMo 267.3 -> 517.8: the fabric writes to the Ethernet row
+(one row up) then wrap the whole column on NoC0. The existing assignment is right. Knob MMRS_XPORT_NOC_SWAP (off).
+
+### 9. MiMo timeline and K-block granularity
+MiMo (F=3): blocks end 54.7 / 95.6 / 136.5 / 177.4 us (~41 us/block, ~14 us extra on block 0: the resident W's first
+K-block lands only at ~8-11 us and the W load runs to ~39 us). Line-end ports send 3 blocks from ~55 to ~244 us
+(~33 GB/s/link); interior finals end ~265. MiMo ~= fill 55 + link-bound transfer 190 + interior tail ~25.
+K_BLOCKS_MIN sweep (FOCUS): 2 -> 161.8, 4 -> 163.2, 8 -> 160.2 (noise), 16 -> 175.1 (worse; also lowers GLM
+precision: PCC vs the 4-K-block result 0.99959, more bf16 L1-accumulation passes with fp32 DEST off). GLM/MiMo
+sweep not finished (device taken by another job). Keep 4.
+
+### 10. Parallel prefetch of the resident W K-blocks (W_ROT=1 path) — WORSE for MiMo, off
+With rotating W senders, each resident K-block has its own CB slot, so every round's sender issues its DRAM reads at
+kernel start. Correct (unit suite passes). FOCUS 153.0 -> 153.3, GLM 202.5 -> 204.5, MiMo 268.3 -> 294.0.
+All four resident K-blocks now compete for DRAM / NoC0 at once, so K-block 0 (the one compute needs first) lands
+later, not earlier. The fill wants the first K-block early (priority), not the whole resident load in parallel.
+
+## Summary (end of this session)
+Defaults now: diagonal injectors + resident/streamed NoC rule, public-API transport add, hand-off depth G, and
+FINALS_PER_LINK=3 (was 2). Everything else tried is an off-by-default knob.
+
+| case | honest unfused | start of log | now (F=3) |
+|---|---|---|---|
+| FOCUS | 225.5 | ~156 | ~153-157 |
+| GLM | 256.6 | ~202 | ~200-203 |
+| MiMo | 391.9 | ~271-275 | ~267-273 |
+(medians move ~±3-4 us run to run; F=3 is a consistent ~2-3 us on FOCUS, flat elsewhere)
+
+What bounds each case now:
+- All: line-end ports must push 3 blocks through 2 links (~33-34 GB/s/link). That starts only when block 0 is done.
+- Fill = one block of matmul (~24.5 us FOCUS, ~41 us MiMo; the matmul is ~compute-bound at ~80-87%/core) + ~6 us
+  (FOCUS) / ~14 us (MiMo) to land the first operand K-block.
+- Interior chips: relay ports forward at only ~20-28 GB/s/link because each relay reader pulls two 14 KB streams per
+  packet on one NCRISC (own partial gather + arrival from DRAM scratch). Removing the arrival DRAM reads (ablation)
+  is worth 10-15 us on all three cases.
+
+Did not work: deeper operand buffers / read-ahead, rotating W senders, bigger transport groups, other INC_EVERY,
+arrival reads on the sender's BRISC (NoC1 congestion), swapping the transport NoCs, more/fewer K-blocks.
+
+Next levers (bigger changes):
+1. L1 landing for relay arrivals (design R5): fabric writes land in the relay port's L1 ring instead of DRAM scratch,
+   with credits returned via the opposite-direction port. Removes the arrival DRAM write + read (the 10-15 us above).
+2. Faster first operand K-block (MiMo ~14 us of fill): parallel prefetch of all resident K-blocks was tried (#10) and
+   is worse; what is left is making K-block 0 itself land sooner (e.g. split only K-block 0's read across the line's
+   cores, each reading and multicasting a slice), keeping the later K-blocks behind it.
+3. Push-based hand-off (compute cores write their partials into the port's L1) to take the gather off the relay
+   reader; needs credits from port to compute cores.
