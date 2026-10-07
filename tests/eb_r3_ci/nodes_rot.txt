@@ -1,0 +1,6 @@
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding.py::test_rotary_embedding_prefill[sincos_dtype=DataType.BFLOAT16-input_dtype=DataType.BFLOAT16-out_sharded=False-in_sharded=False-cache_size=2048-W=1-Z=71-Y=128-X=64]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding.py::test_rotary_embedding_prefill[sincos_dtype=DataType.BFLOAT16-input_dtype=DataType.BFLOAT16-out_sharded=False-in_sharded=False-cache_size=2048-W=1-Z=32-Y=32-X=32]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding.py::test_rotary_embedding_decode[sincos_dtype=DataType.BFLOAT16-input_dtype=DataType.BFLOAT16-out_sharded=False-in_sharded=False-token_idx=0-cache_size=2048-W=1-Z=71-Y=32-X=64]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_prefill[sincos_dtype=DataType.BFLOAT16-input_dtype=DataType.BFLOAT16-out_sharded=False-in_sharded=False-cache_size=2048-W=1-Z=71-Y=128-X=64]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_decode_per_batch_position[head_dim=32]
+tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py::test_rotary_embedding_hf_decode_per_batch_position[head_dim=128]

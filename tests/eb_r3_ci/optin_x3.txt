@@ -1,0 +1,10 @@
+ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/compute_indexer_score.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/compute/fused_recurrent_gated_delta_rule.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/transformer/gated_delta_attn/device/kernels/compute/gated_delta_attn.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/kernels/compute/rotary_embedding_llama_sharded.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/device/kernels/compute/rotary_embedding_llama_sharded.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/compute/layernorm_post_allgather_welford.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm/device/kernels/moreh_layer_norm_large_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_large_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+ttnn/cpp/ttnn/operations/moreh/moreh_layer_norm_backward/device/kernels/moreh_layer_norm_backward_input_grad_large_kernel.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true

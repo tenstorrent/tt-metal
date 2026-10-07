@@ -1,0 +1,2 @@
+ttnn/cpp/ttnn/operations/experimental/topk_router_gpt/device/kernels/compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
+models/demos/wormhole/bge_m3/tt/custom_ops/balanced_layernorm/kernels/compute.cpp|#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
