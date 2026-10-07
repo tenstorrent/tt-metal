@@ -1,0 +1,2 @@
+# item 2, full cross product (every bf16 pattern against every bfp8_b datum under every shared exponent, both orders), output bf16
+EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi2|EB_R3_FIDELITY=HiFi2;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi3|EB_R3_FIDELITY=HiFi3;EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi4;EB_R3_FIDELITY=HiFi4|EB_R3_FIDELITY=HiFi3|||tests/eb_r3_ci/test_eb_dump_bng.py -k "test_nob_cross and mul-bf16 and bfp8"

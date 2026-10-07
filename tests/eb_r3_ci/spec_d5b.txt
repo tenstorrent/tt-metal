@@ -1,0 +1,3 @@
+# item 5: column and scalar broadcast DEST sections (sharded a and c), PR against main (no sections, per-face)
+EB_R3_NO_BCAST_CHUNK=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_bcast_sec and (add or sub)"
+EB_R3_NO_BCAST_CHUNK=1,EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi;EB_R3_NO_BCAST_CHUNK=1,EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi2|EB_R3_FIDELITY=HiFi2;EB_R3_NO_BCAST_CHUNK=1,EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi3|EB_R3_FIDELITY=HiFi3;EB_R3_NO_BCAST_CHUNK=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_bcast_sec and mul"

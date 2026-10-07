@@ -1420,10 +1420,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_kernel_defines["EB_R3_PROBE_INIT"] = std::getenv("EB_R3_PROBE_INIT") != nullptr ? "1" : "0";    // CI only
     compute_kernel_defines["EB_R3_PER_FACE"] = std::getenv("EB_R3_PER_FACE") != nullptr ? "1" : "0";        // CI only
     if (std::getenv("EB_R3_LOG_RULE") != nullptr) {  // CI log, not in the PR
-        std::fprintf(stderr, "EB_R3_RULE block=%d block_pack=%d bcast_sections=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d n=%u\n",
+        const char* eb_fid = std::getenv("EB_R3_FIDELITY");
+        std::fprintf(stderr, "EB_R3_RULE block=%d block_pack=%d bcast_sections=%d sfpu=%d a=%d b=%d c=%d fp32_dest=%d n=%u per_face=%d main_reinit=%d fid=%s post=%d kernel=%d op=%d\n",
             static_cast<int>(block_section), static_cast<int>(block_pack), static_cast<int>(bcast_sections),
             static_cast<int>(is_sfpu_op), static_cast<int>(a_dtype), static_cast<int>(b_dtype),
-            static_cast<int>(c_data_format), static_cast<int>(fp32_dest_acc_en), c_num_tiles_per_shard.value_or(0));
+            static_cast<int>(c_data_format), static_cast<int>(fp32_dest_acc_en), c_num_tiles_per_shard.value_or(0),
+            static_cast<int>(std::getenv("EB_R3_PER_FACE") != nullptr), static_cast<int>(std::getenv("EB_R3_MAIN_REINIT") != nullptr),
+            eb_fid != nullptr ? eb_fid : "HiFi4", static_cast<int>(!operation_attributes.post_activations.empty()),
+            static_cast<int>(compute_kernel), static_cast<int>(op_type));
     }
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";

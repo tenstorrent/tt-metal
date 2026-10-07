@@ -1,0 +1,4 @@
+# item 5: block section (sharded no broadcast, 16 or more tiles per core), PR against main (no block section, per-face)
+EB_R3_FIDELITY=LoFi|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_block and mul-b16-bf16-hs32"|||EB_DUMP_MAX_CHUNKS=1
+EB_R3_NO_BLOCK=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_block and (add or sub)"
+EB_R3_NO_BLOCK=1,EB_R3_PER_FACE=1,EB_R3_FIDELITY=LoFi|EB_R3_FIDELITY=LoFi;EB_R3_NO_BLOCK=1,EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi2|EB_R3_FIDELITY=HiFi2;EB_R3_NO_BLOCK=1,EB_R3_PER_FACE=1,EB_R3_FIDELITY=HiFi3|EB_R3_FIDELITY=HiFi3;EB_R3_NO_BLOCK=1,EB_R3_PER_FACE=1|default|||tests/eb_r3_ci/test_eb_dump_sec.py -k "test_block and mul"

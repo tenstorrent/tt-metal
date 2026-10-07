@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdlib>
+#include <string>
 #include "bcast_sharded_h_optimised_program_factory.hpp"
 
 #include <algorithm>
@@ -167,6 +169,16 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
     };
 
     ComputeHardwareConfig compute_hw = ComputeHardwareConfig{};  // legacy ComputeConfigDescriptor{} defaults
+    if (const char* f = std::getenv("EB_R3_BCAST_FIDELITY"); f != nullptr) {  // CI toggle, not in the PR
+        const std::string fs(f);
+        compute_hw.fpu_math_fidelity = fs == "LoFi"    ? MathFidelity::LoFi
+                                       : fs == "HiFi2" ? MathFidelity::HiFi2
+                                       : fs == "HiFi3" ? MathFidelity::HiFi3
+                                                       : MathFidelity::HiFi4;
+    }
+    if (std::getenv("EB_R3_BCAST_FP32") != nullptr) {  // CI toggle, not in the PR
+        compute_hw.enable_32_bit_dest = true;
+    }
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(
