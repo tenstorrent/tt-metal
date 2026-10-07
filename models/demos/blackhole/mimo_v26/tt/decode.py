@@ -41,6 +41,7 @@ class LiveMask:
         m[:, 0, : alive.shape[1], 0] = alive.float()
         host = ttnn.from_torch(m.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self.rowmap)
         ttnn.copy_host_to_device_tensor(host, self.t)
+        return host
 
 
 class Decoder:
@@ -98,9 +99,13 @@ class Decoder:
             tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.rowmap
         )
         ttnn.copy_host_to_device_tensor(host, self.tok)
-        decode_pos_set(self.mesh, self.pos, positions)
+        keep = [host] + decode_pos_set(self.mesh, self.pos, positions)
         if self.live is not None:
-            self.live.set(~dead)
+            keep.append(self.live.set(~dead))
+        # host->device copies are asynchronous: keep the host tensors alive and wait until they landed (freed host memory read by the device = row-wide
+        # random glitches, observed as run-to-run nondeterminism; see LOG)
+        ttnn.synchronize_device(self.mesh)
+        self._keep = keep
 
     def run(self):
         """Run one step with the inputs currently on device; returns (next token ids [rows,32], max logit [rows,32][, logits [rows,32,V]])."""
