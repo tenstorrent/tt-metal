@@ -105,20 +105,23 @@ def main():
                 flags.append(ttnn.to_layout(ttnn.reshape(ttnn.sum(ne), [1, 1, 1, 1]), ttnn.ROW_MAJOR_LAYOUT))
             return ttnn.concat(flags, dim=3)
 
-        cmp()  # compile the compare ops
+        NOCMP = E("DEC_NOCMP", "0") == "1"
+        if not NOCMP:
+            cmp()  # compile the compare ops
         fwd()
-        cmp()
+        if not NOCMP:
+            cmp()
         ttnn.synchronize_device(mesh)
         os.environ["MIMO_CHECK_CAP"] = "0"
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
         fwd()
-        fl = cmp()
+        fl = None if NOCMP else cmp()
         ttnn.end_trace_capture(mesh, tid, cq_id=0)
         ttnn.synchronize_device(mesh)
         taps_dev = list(taps_all)
         comp = ttnn.ConcatMesh2dToTensor(mesh, dims=(0, 1), mesh_shape=tuple(mesh.shape))
         ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
-        for n in names:  # replay 0 defines the reference, in place (the trace reads the ref buffers)
+        for n in [] if NOCMP else names:  # replay 0 defines the reference, in place (the trace reads the ref buffers)
             ttnn.copy(tf(taps_dev[n[0]][n[1]]), ref[n])
         ttnn.synchronize_device(mesh)
 
@@ -139,7 +142,8 @@ def main():
         t0 = time.time()
         for rep in range(R):
             ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
-            check(rep, fl, "trace")
+            if not NOCMP:
+                check(rep, fl, "trace")
             if rep % 100 == 0:
                 print("DEC_PROGRESS trace", rep, round(time.time() - t0), flush=True)
         for rep in range(RE):  # eager steps compared with the same reference
