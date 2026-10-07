@@ -30,7 +30,8 @@ health() {
   st=$(tt-device-mcp status 1 2>&1) || { log "health: status failed"; return 1; }
   echo "$st" | grep -qi 'upgrade' && { log "health: broker upgrade running"; return 1; }
   echo "$st" | sed -n '/^RUNNING/,/^QUEUED/p' | grep -qiE '🔧|health-gate|fabric-check|recover|bridge-reset|power-cycle' && { log "health: broker gate/recovery running"; return 1; }
-  last=$(grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" $SL | tail -1)
+  # server.log rotates at midnight; the last gate event may sit in server.log.1.
+  last=$(cat $SL.1 $SL 2>/dev/null | grep -E "HEALTH-GATE|$OKRE|ESCALATE|RECOVER|[|] ERROR [|]" | tail -1)
   # The broker logs the end of its own reset-and-verify at ERROR level; that line means the gate passed.
   echo "$last" | grep -qE 'reset complete \+ health verified' && return 0
   if echo "$last" | grep -qE "$OKRE" && ! echo "$last" | grep -qE "$BADRE"; then return 0; fi
@@ -127,6 +128,8 @@ post() {
   log "post.py $1 rc=$?"
 }
 log "start tag=$TAG configs=$CONFIGS boot=$BOOT0 pid=$$"
+# PHASE2_LIST=<file>: run (and score) only those phase-2 labels; baseline5 there is skipped once done.
+if [ -n "${PHASE2_LIST:-}" ]; then run_list $PHASE2_LIST; post $PHASE2_LIST; done_ 0 "phase-2 list $PHASE2_LIST done"; fi
 run_list $CONFIGS
 post $CONFIGS
 COMMON="LTX_FRESH_PROMPTS=0 LTX_E2E_SEEDS=0,1,2,3,4 LTX_E2E_EXTRA_REPLAYS=0"
