@@ -17,6 +17,147 @@
 
 #include "sort_common.hpp"
 
+#ifdef SORT_STABLE_FUSED_32B_DEST
+#include "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_fused_raw16.hpp"
+
+// The stable path's bitonic sequence and merges on fused [bf16 value | u16 index] keys in a 32-bit DEST section, the
+// plain network giving the comparator's order. The values travel as raw u16 words, so every buffer keeps its format.
+template <uint32_t Wt, bool largest>
+void sort_row_fused_32b_dest(
+    DataflowBuffer& input_tensor_dfb,
+    DataflowBuffer& index_tensor_dfb,
+    DataflowBuffer& input_tensor_transposed_dfb,
+    DataflowBuffer& index_tensor_transposed_dfb,
+    DataflowBuffer& synchronization_dfb,
+    const bool ascending) {
+    constexpr uint32_t one_tile = 1;
+
+    set_fp32_dest_acc<true>();
+    ckernel::topk_tile_init</*fused=*/true>();
+    reconfig_data_format_srca(dfb::index_tensor);
+    PACK((llk_pack_reconfig_data_format<true>(dfb::index_tensor_transposed)));
+
+    input_tensor_transposed_dfb.reserve_back(Wt);
+    index_tensor_transposed_dfb.reserve_back(Wt);
+    bool ascending_local = ascending;
+    for (uint32_t wt = 0; wt < Wt; wt += 2) {
+        tile_regs_acquire();
+
+        input_tensor_dfb.wait_front(2);
+        index_tensor_dfb.wait_front(2);
+
+        transpose_init<true>(dfb::index_tensor);
+        transpose_tile<true>(dfb::input_tensor, 0, 0);
+        transpose_tile<true>(dfb::input_tensor, 1, 1);
+        transpose_tile<true>(dfb::index_tensor, 0, 2);
+        transpose_tile<true>(dfb::index_tensor, 1, 3);
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            topk_fused_raw16::fuse_raw16_slab<largest, false>, 0, VectorMode::RC_custom)));
+        ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+            0, (int)ascending_local, /*i_end_phase=*/0);
+        MATH((_llk_math_eltwise_unary_sfpu_params_(topk_fused_raw16::flush_key_denormals, 0, VectorMode::RC_custom)));
+        ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+            0, (int)ascending_local, /*i_end_phase=*/5, /*i_start_phase=*/1);
+        MATH((_llk_math_eltwise_unary_sfpu_params_(
+            topk_fused_raw16::defuse_raw16<largest>, 0, VectorMode::RC_custom, 2)));
+
+        tile_regs_commit<true>();
+        tile_regs_wait();
+
+        pack_tile<false, true>(0, dfb::input_tensor_transposed);
+        pack_tile<false, true>(1, dfb::input_tensor_transposed);
+        pack_tile<false, true>(2, dfb::index_tensor_transposed);
+        pack_tile<false, true>(3, dfb::index_tensor_transposed);
+        input_tensor_dfb.pop_front(2);
+        index_tensor_dfb.pop_front(2);
+
+        tile_regs_release<true>();
+
+        ascending_local = !ascending_local;
+    }
+    input_tensor_transposed_dfb.push_back(Wt);
+    index_tensor_transposed_dfb.push_back(Wt);
+
+    input_tensor_transposed_dfb.wait_front(Wt);
+    index_tensor_transposed_dfb.wait_front(Wt);
+
+    uint32_t stages = 0;
+    for (uint32_t i = Wt; i > 1; i >>= 1) {
+        stages++;
+    }
+
+    synchronization_dfb.reserve_back(one_tile);
+    synchronization_dfb.push_back(one_tile);
+
+    for (uint32_t stage = 2; stage <= stages; stage++) {
+        const uint32_t m_iter = stage - 1;
+        for (uint32_t sub = stage; sub > 0; sub--) {
+            const uint32_t sub_dist = 1 << (sub - 1);
+            for (uint32_t i = 0; i < Wt; i++) {
+                const uint32_t j = i ^ sub_dist;
+                if (j > i) {
+                    const bool ascending_block = ((i >> stage) & 1) == 0;
+                    const bool dir = ascending_block == ascending;
+                    const uint32_t left_tile_id = i;
+                    const uint32_t right_tile_id = j;
+
+                    tile_regs_acquire();
+
+                    synchronization_dfb.wait_front(one_tile);
+                    synchronization_dfb.pop_front(one_tile);
+                    synchronization_dfb.reserve_back(one_tile);
+
+                    copy_init<true>(dfb::index_tensor_transposed);
+                    copy_tile<true>(dfb::input_tensor_transposed, left_tile_id, 0);
+                    copy_tile<true>(dfb::input_tensor_transposed, right_tile_id, 1);
+                    copy_tile<true>(dfb::index_tensor_transposed, left_tile_id, 2);
+                    copy_tile<true>(dfb::index_tensor_transposed, right_tile_id, 3);
+                    MATH((_llk_math_eltwise_unary_sfpu_params_(
+                        topk_fused_raw16::fuse_raw16_slab<largest, true>, 0, VectorMode::RC_custom)));
+
+                    uint32_t tile_input_low = 0;
+                    uint32_t tile_input_high = 1;
+                    uint32_t tile_index_low = 2;
+                    uint32_t tile_index_high = 3;
+                    if (sub == 1) {
+                        ckernel::topk_local_sort</*stable_sort=*/false, /*is_fp32_dest_acc_en=*/true, /*fused=*/true>(
+                            0, (int)dir, /*i_end_phase=*/5);
+                    } else {
+                        ckernel::topk_merge<
+                            /*idir=*/false,
+                            /*stable_sort=*/false,
+                            /*is_fp32_dest_acc_en=*/true,
+                            /*fused=*/true>(0, m_iter, /*k=*/64);
+                        if (dir) {
+                            tile_input_low = 1;
+                            tile_input_high = 0;
+                            tile_index_low = 3;
+                            tile_index_high = 2;
+                        }
+                    }
+                    MATH((_llk_math_eltwise_unary_sfpu_params_(
+                        topk_fused_raw16::defuse_raw16<largest>, 0, VectorMode::RC_custom, 2)));
+
+                    tile_regs_commit<true>();
+                    tile_regs_wait();
+
+                    pack_tile<true, true>(tile_input_low, dfb::input_tensor_transposed, left_tile_id);
+                    pack_tile<true, true>(tile_input_high, dfb::input_tensor_transposed, right_tile_id);
+                    pack_tile<true, true>(tile_index_low, dfb::index_tensor_transposed, left_tile_id);
+                    pack_tile<true, true>(tile_index_high, dfb::index_tensor_transposed, right_tile_id);
+
+                    synchronization_dfb.push_back(one_tile);
+
+                    tile_regs_release<true>();
+                }
+            }
+        }
+    }
+
+    restore_fp32_dest_acc<true>();
+}
+#endif
+
 /*
 This sorting algorithm is based on Bitonic Merge Sort and operates on input data arranged in tiles.
 
@@ -179,6 +320,15 @@ void kernel_main() {
         }
 #endif
 
+#ifdef SORT_STABLE_FUSED_32B_DEST
+        sort_row_fused_32b_dest<Wt, descending>(
+            input_tensor_dfb,
+            index_tensor_dfb,
+            input_tensor_transposed_dfb,
+            index_tensor_transposed_dfb,
+            synchronization_dfb,
+            ascending);
+#else
         sort_Wt_tiles_row_to_bitonic_sequence<stable, tie_order>(
             input_tensor_dfb,
             index_tensor_dfb,
@@ -287,6 +437,7 @@ void kernel_main() {
                 }
             }
         }
+#endif
 
         synchronization_dfb.wait_front(one_tile);
         synchronization_dfb.pop_front(one_tile);
