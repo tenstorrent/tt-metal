@@ -843,3 +843,26 @@
 - claim: B decision data: single-card moe_compute (bfp4, compute_only, K=4096 N=2048, 8 experts, top-8) traced: 0.396 / 0.393 / 0.392 ms per call at T=32 / 16 / 8 tokens (independent of T => weight-read bound: 107 MB bfp4 / 0.393 ms = 273 GB/s). The unified op's expert stage on the real 4x8 trace: 0.775 ms for 214 MB bfp8 = 276 GB/s, i.e. the same effective bandwidth. A bfp8 moe_compute would read 2x bytes => ~0.79 ms, no gain over the unified op; only bfp4 would halve it (0.39 ms, NOT authorised). The expert stage of MoE at bfp8 is therefore ~0.775 ms x 47 = 36 ms/token at this bandwidth, above the 26 ms whole-model roofline (which assumed 450 GB/s). Recommendation: do NOT port the bfp8 moe_compute patch (no speed gain); remaining non-expert MoE overhead is 0.75 ms/layer (router 0.29, post_combine_reduce 0.19, combine 0.10, bincount 0.09) = 35 ms/token, the part worth optimising
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_E_mc_timing3_h47_56601b284bb.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/moe_prefill.py, models/demos/blackhole/mimo_v26/tt/router.py
+
+## E261007-0548-a81
+- date: 2026-10-07T05:48:02
+- commit: 0e192cf8377
+- branch: ssinghal/mimo-attn
+- host: 30
+- track: decode
+- status: verified
+- claim: Closed-loop decode of the 4-layer chain (L0..L3 + final norm + lm_head, real bfp8 weights, unified bf16-activation experts via traced MiMoMoEDecode) on the 4x8 mesh vs the CPU oracle (ref_chain_decode.py, bf16 weights/matmuls, greedy, 16 real GSM8K prompts with enable_thinking=false, lengths 35..120 tokens = RAGGED per mesh row and per slot, 12 tokens each, oracle file mimo-dumps/decode_chain4.pt): teacher forced on oracle tokens first-token (prefill) logits PCC min 0.99966, per-step logits PCC min 0.99927..0.99989 over 11 decode steps, top-1 agreement 192/192 (100%); free-running device tokens equal to the oracle's in all 16 x 12 positions; two identical runs token-identical. Eager (attn_K4_chain4_eager) and traced (attn_K6_chain4_traced) give identical PCC numbers. Per-row/per-slot positions (decode_pos_io/decode_pos_set: cur_pos int32 [32] sharded over mesh rows), KVPoolLayout page tables, dead slots (slots 4..31 per row) with live-mask routing spread, trace capture once/replay per step (tt/decode.py, tt/generator.py). Step time 330-360 ms in this test is dominated by reading the full logits back (keep_logits=True), not a decode time.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_K6_chain4_traced.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py
+- data: {"first_logits_pcc_min":0.99966,"step_logits_pcc_min":0.99927,"token_agree":1.0,"free_running_equal":1.0,"layers":4}
+
+## E261007-0548-c44
+- date: 2026-10-07T05:48:03
+- commit: 40cb127e4da
+- branch: ssinghal/mimo-attn
+- host: 46
+- track: infra
+- status: verified
+- claim: Host .46: tt-metal device init failed ('Device 0 init: failed to initialize FW! Try resetting the board', timeout waiting for physical cores) at 05:43 for my traced chain test; combined with the asm agent's earlier 18 min 2500% CPU stall on .46 (E261007-0459-e2c) this is a second bad signature on .46: not used again; no reset attempted (not needed for my jobs). Also: my first 4-layer chain runs on .30 and .41 sat ~25 min at ~3000% CPU in test_decode_chain after the weights loaded with the OLD untraced moe_decode path and no output (killed own pids, hosts OK afterwards); the same test with the traced MiMoMoEDecode path finishes in a few minutes, so the stall was in the old decode MoE path (cause not isolated).
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/attn_K5_chain4_traced.log
+- paths: models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/attention.py, models/demos/blackhole/mimo_v26/tt/kv_pool.py
