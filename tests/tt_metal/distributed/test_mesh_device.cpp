@@ -186,13 +186,13 @@ TEST_F(MeshDevice2x4Test, ViewIs2D) {
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 
-    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
+    MeshDeviceView view_1d(std::make_unique<MeshDeviceViewImpl>(MeshShape(8), devices, fabric_node_ids));
     EXPECT_FALSE(view_1d.is_mesh_2d());
 
-    MeshDeviceView view_2d(MeshShape(2, 4), devices, fabric_node_ids);
+    MeshDeviceView view_2d(std::make_unique<MeshDeviceViewImpl>(MeshShape(2, 4), devices, fabric_node_ids));
     EXPECT_TRUE(view_2d.is_mesh_2d());
 
-    MeshDeviceView view_3d(MeshShape(2, 2, 2), devices, fabric_node_ids);
+    MeshDeviceView view_3d(std::make_unique<MeshDeviceViewImpl>(MeshShape(2, 2, 2), devices, fabric_node_ids));
     EXPECT_FALSE(view_3d.is_mesh_2d());
 }
 

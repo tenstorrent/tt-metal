@@ -427,7 +427,7 @@ TEST_F(MeshDeviceView2x4Test, View2DMethodsThrowOnNon2DMesh) {
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 
-    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
+    MeshDeviceView view_1d(std::make_unique<MeshDeviceViewImpl>(MeshShape(8), devices, fabric_node_ids));
 
     EXPECT_ANY_THROW((void)view_1d.num_rows());
     EXPECT_ANY_THROW((void)view_1d.num_cols());
