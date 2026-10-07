@@ -32,3 +32,15 @@
 - claim: DECISION (coordinator): checkpoint downloaded from HF XiaomiMiMo/MiMo-V2.6-Flash-RL into /mnt/tt-data/MiMo-V2.6-Flash-RL (user approved download and location 2026-10-07; whole repo, ~173 GB, log /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log). MIMO_CKPT=/mnt/tt-data/MiMo-V2.6-Flash-RL. Hosts approved by user for use (health-check each first): 30 35 40 41 43 44 46 47 48.
 - evidence: -
 - paths: bringup/mimo_v26
+
+## E261007-0201-218
+- date: 2026-10-07T02:01:39
+- commit: 2d555515344
+- branch: ssinghal/mimo
+- host: coordinator
+- track: infra
+- status: verified
+- claim: Checkpoint XiaomiMiMo/MiMo-V2.6-Flash-RL downloaded to /mnt/tt-data/MiMo-V2.6-Flash-RL: 65 safetensors listed in model.safetensors.index.json all present, summed file bytes 172,932,505,264 vs index total_size 172,923,364,096 (+9.1 MB = headers). Not hashed against HF; sizes only.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/download_ckpt.log
+- paths: bringup/mimo_v26/scorecard.json
+- data: {"ckpt_files":65,"bytes":172932505264}
