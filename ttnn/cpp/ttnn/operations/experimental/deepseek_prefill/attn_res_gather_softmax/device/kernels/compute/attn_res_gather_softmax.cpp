@@ -26,6 +26,8 @@
 // has parked every row, so no tile can fold before all of them have been produced.
 // `running_sum` is therefore read twice, once per pass, over different rows.
 
+#define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -228,8 +230,17 @@ void derive_row_weights(CircularBuffer& cb_row_obj) {
     // because the device operation rejects a dtype mismatch among them — one
     // `bcast_init` configures the unpacker for all of them.
     bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_partial, cb_row);
+#if defined(ARCH_BLACKHOLE)
+    MATH((llk_math_eltwise_binary_init<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::COL,
+          MATH_FIDELITY,
+          EltwiseBinaryReuseDestType::NONE,
+          ckernel::detail::bcast_src_dvalid<EltwiseBinaryType::ELWMUL>>(cb_partial, cb_row, 1 /*acc_to_dest*/)));
+#else
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         cb_partial, cb_row, 1 /*acc_to_dest*/)));
+#endif
     reconfig_data_format(cb_partial, cb_row);
     pack_reconfig_data_format(cb_out);
 }
