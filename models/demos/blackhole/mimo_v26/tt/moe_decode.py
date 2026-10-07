@@ -32,8 +32,23 @@ from models.demos.blackhole.mimo_v26.tt.moe_prefill import (  # noqa: F401
 SLOTS = 64  # masked_bincount needs tokens % 64 == 0: 32 decode slots + 32 pad rows per mesh row
 
 
+def dead_routing(dead):
+    """Routing (idx [1,SLOTS,TOPK] int, w [1,SLOTS,TOPK]) given to dead/pad slots. "spread32" (default of the decode path): round-robin over ONE expert per chip (ids col*32+row*8, 32 experts =
+    1/8 of the expert weights), weight 0: every chip still gets dead-slot tokens every layer, so fabric traffic stays balanced. "sentinel" (expert id 256, never dispatched, cheapest) HANGS deep traced
+    decode (combine multicast barrier, ~per-replay probability at 48 layers: LOG moe track); "spread": all 256 experts (touches every expert's weights every call).
+    """
+    sidx, sw = spread_pad_routing(1, SLOTS)
+    if dead == "sentinel":
+        return torch.full_like(sidx, 256), torch.zeros_like(sw)
+    if dead == "spread32":
+        ids = torch.tensor([c * 32 + r * 8 for c in range(8) for r in range(4)])
+        slot = torch.arange(SLOTS).unsqueeze(1) * TOPK + torch.arange(TOPK).unsqueeze(0)
+        return ids[slot % 32].reshape(1, SLOTS, TOPK), torch.zeros_like(sw)
+    return sidx, sw
+
+
 class MiMoMoEDecode:
-    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None, router="exact", dead="sentinel"):
+    def __init__(self, mesh, gate, moe, all_reduce=True, num_links=None, router="exact", dead="spread32"):
         """router: \"exact\" (original, 64-row ttnn path) or \"fast\" (router_select kernel on the 32 live slots; identical expert sets on all 47 layers)."""
         self.router = router
         self.dead = dead  # "sentinel": dead slots get expert id 256 (= num experts, dispatch table -1): never dispatched, so cost scales with live tokens; "spread": old round-robin
@@ -41,16 +56,7 @@ class MiMoMoEDecode:
         self.mesh, self.gate, self.moe, self.do_ar = mesh, gate, moe, all_reduce
         rep = ttnn.ReplicateTensorToMesh(mesh)
         # spread routing for the 64 slots of one mesh row, expert ids exact in bf16 (<= 256), weights 1/8
-        sidx, sw = spread_pad_routing(1, SLOTS)
-        if dead == "sentinel":
-            sidx, sw = torch.full_like(sidx, 256), torch.zeros_like(sw)
-        elif dead == "spread32":
-            # balanced but cheap: dead slots round-robin over ONE expert per chip (local slot 0 of every (row, col): ids col*32 + row*8) = 32 experts = 1/8 of the weights,
-            # every chip still receives dead-slot tokens every layer (experiment: balanced fabric traffic like "spread", expert weight traffic like a small U)
-            ids = torch.tensor([c * 32 + r * 8 for c in range(8) for r in range(4)])
-            slot = torch.arange(SLOTS).unsqueeze(1) * TOPK + torch.arange(TOPK).unsqueeze(0)
-            sidx = ids[slot % 32].reshape(1, SLOTS, TOPK)
-            sw = torch.zeros_like(sw)
+        sidx, sw = dead_routing(dead)
         self.sp_idx = ttnn.from_torch(
             sidx.reshape(1, 1, SLOTS, TOPK).bfloat16(),
             device=mesh,

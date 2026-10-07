@@ -32,7 +32,7 @@ LAYERS = [int(v) for v in os.environ.get("MIMO_LAYERS", "1,5,16").split(",")]
 UVALS = [int(v) for v in os.environ.get("MIMO_UVALS", "1,2,4,8,16,32").split(",")]
 ROUTER = os.environ.get("MIMO_ROUTER", "fast")
 REPLAYS = int(os.environ.get("MIMO_REPLAYS", "30"))
-VARIANTS = os.environ.get("MIMO_DEAD", "spread,sentinel").split(",")
+VARIANTS = os.environ.get("MIMO_DEAD", "spread,spread32").split(",")
 
 
 def stats(a, b):
@@ -105,11 +105,10 @@ def test_moe_small_u(mesh_device):
                 dec[L].dead = dead
                 rep = ttnn.ReplicateTensorToMesh(md)
                 sidx = torch.full((1, 64, 8), 256) if dead == "sentinel" else None
-                from models.demos.blackhole.mimo_v26.tt.moe_prefill import spread_pad_routing
 
-                si, sw = spread_pad_routing(1, 64)
-                if dead == "sentinel":
-                    si, sw = torch.full_like(si, 256), torch.zeros_like(sw)
+                from models.demos.blackhole.mimo_v26.tt.moe_decode import dead_routing
+
+                si, sw = dead_routing(dead)
                 for name, t in (("sp_idx", si), ("sp_w", sw)):
                     old = getattr(dec[L], name)
                     setattr(
@@ -157,7 +156,7 @@ def test_moe_small_u(mesh_device):
             res[dead] = h
         if len(VARIANTS) > 1:
             print(
-                f"RESULT U={U}: live outputs sentinel vs spread identical: {all(bool(torch.equal(a, b)) for a, b in zip(res['sentinel'], res['spread']))} (max abs diff {max(float((a - b).abs().max()) for a, b in zip(res['sentinel'], res['spread'])):.4f})",
+                f"RESULT U={U}: live outputs sentinel vs spread identical: {all(bool(torch.equal(a, b)) for a, b in zip(res[VARIANTS[-1]], res[VARIANTS[0]]))} (max abs diff {max(float((a - b).abs().max()) for a, b in zip(res[VARIANTS[-1]], res[VARIANTS[0]])):.4f})",
                 flush=True,
             )
         # alternating timing
