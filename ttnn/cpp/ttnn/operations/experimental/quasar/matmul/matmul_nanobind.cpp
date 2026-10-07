@@ -730,10 +730,11 @@ void py_module(nb::module_& mod) {
             0 = auto: 4 on Quasar, 1 elsewhere (Wormhole / Blackhole have one compute engine per core).
         )doc")
         .def_rw("num_reader_threads", &MatmulUnifiedProgramConfig::num_reader_threads, R"doc(
-            Reader threads per core (Quasar DM cores), 1 to 4: thread t reads the A and B slices of every
-            num_reader_threads-th K chunk of the core's walk. More than one copies A and B even when an L1 shard
-            could be borrowed. 0 = auto: on Quasar the most of 4, 2, 1 that gets each thread at least two K chunks
-            and whose buffers fit L1 next to the minimum buffering, with no borrowed operand; else 1.
+            Reader threads per core (Quasar DM cores), 1 to 4, dividing the number of K chunks: thread t reads
+            the A and B slices of K chunks t, t + num_reader_threads, ... of every C slice. More than one copies A
+            and B even when an L1 shard could be borrowed. 0 = auto: on Quasar the most of 4, 2, 1 that divides the
+            K chunks, gets each thread at least two K chunks and whose buffers fit L1 next to the minimum
+            buffering, with no borrowed operand; else 1.
         )doc")
         .def_rw("num_writer_threads", &MatmulUnifiedProgramConfig::num_writer_threads, R"doc(
             Writer threads per core (Quasar DM cores), 1, 2 or 4 and a divisor of num_compute_threads: thread t

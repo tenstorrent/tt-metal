@@ -849,19 +849,18 @@ def test_operand_buffer_depth(device, operand_buffer_depth):
 
 @pytest.mark.parametrize("num_reader_threads,operand_buffer_depth", [(1, 2), (2, 2), (2, 4), (3, 6), (4, 4), (4, 8)])
 def test_reader_threads(device, num_reader_threads, operand_buffer_depth):
-    """Batch 2, M = 4, K = 6 (ragged: 5 tiles and 20 columns), N = 2 tiles on one core: two 2x2-tile C slices per
-    batch of three 2-tile K chunks each, so the core's walk has 12 K chunks and reader thread t reads every
-    num_reader_threads-th one, across C slices and batches. With two or four threads the last K chunk of A (the one
-    with the zeroed padding columns) is read by every thread in turn."""
+    """Batch 2, M = 4, K = 12 (ragged: 11 tiles and 20 columns), N = 2 tiles on one core: two 2x2-tile C slices per
+    batch of twelve 1-tile K chunks each, and reader thread t reads K chunks t, t + num_reader_threads, ... of every
+    C slice, so the last thread also zeroes A's padding columns."""
     _skip_unless_dm_threads_supported(device, num_reader_threads)
-    B, M, K, N = 2, 4 * TILE, 5 * TILE + 20, 2 * TILE
+    B, M, K, N = 2, 4 * TILE, 11 * TILE + 20, 2 * TILE
     torch.manual_seed(23)
     a, b = _randn(1, B, M, K), _randn(1, B, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
         cores=_rect(0, 0, 0, 0),
         C_slice_M_tiles=2,
         C_slice_N_tiles=2,
-        K_chunk_tiles=2,
+        K_chunk_tiles=1,
         num_reader_threads=num_reader_threads,
         operand_buffer_depth=operand_buffer_depth,
     )
@@ -895,7 +894,7 @@ def test_six_dm_cores_with_K_spill_and_packer_l1_acc(device):
     padded subblock, with four reader and two writer threads on Quasar (all six DM cores) and two C slices in
     flight; one reader and one writer elsewhere."""
     quasar = _on_quasar(device)
-    B, M, K, N = 2, 5 * TILE + 3, 8 * TILE + 7, 6 * TILE + 9
+    B, M, K, N = 2, 5 * TILE + 3, 8 * TILE - 25, 6 * TILE + 9
     torch.manual_seed(24)
     a, b = _randn(1, B, M, K), _randn(1, B, K, N)
     config = qsr.MatmulUnifiedProgramConfig(
@@ -957,6 +956,8 @@ def test_dm_threads_and_buffering_rejections(device, expect_error):
     if _on_quasar(device):
         with expect_error(RuntimeError, "must be a multiple of num_reader_threads"):
             run(num_reader_threads=2, operand_buffer_depth=3)
+        with expect_error(RuntimeError, "must divide the number of K chunks"):
+            run(num_reader_threads=3)
         with expect_error(RuntimeError, "must divide num_compute_threads"):
             run(num_compute_threads=2, num_writer_threads=4)
         with expect_error(RuntimeError, "exceed the 6 DM cores"):
