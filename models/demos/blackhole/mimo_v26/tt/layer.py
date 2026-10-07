@@ -174,12 +174,29 @@ class MiMoDecoderLayer:
         N = x.shape[2]
         wts, idx = route if route is not None else self.gate.route(x, ROUTER_MODE)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, N, HIDDEN])
+        if os.environ.get("MIMO_CHECK_CAP", "1") == "1":
+            self.check_capacity(idx, N)
         part = self.moe.forward(x_rm, wts, idx)
         ttnn.deallocate(x_rm)
         out = self.all_reduce_cols(part)
         ttnn.deallocate(part)
         self.last_route = (wts, idx)
         return out
+
+    def check_capacity(self, idx, N):
+        """Assert no chip's dispatch load (experts padded to 32 rows) exceeds max_buf for this N (dead/pad rows included). Host sync: debug/smoke only."""
+        from models.demos.blackhole.mimo_v26.tt.moe_prefill import NUM_ROUTED
+
+        mb = self.moe.shared(N).max_buf
+        devs = ttnn.get_device_tensors(idx)
+        for r in range(ROWS):
+            ix = ttnn.to_torch(devs[r * COLS]).reshape(N, -1).long()
+            cnt = torch.bincount(ix.flatten(), minlength=NUM_ROUTED)
+            for c in range(COLS):
+                load = sum(-(-int(cnt[global_expert(r, c, l)]) // 32) * 32 for l in range(EPC))
+                assert (
+                    load <= mb
+                ), f"layer {self.L} row {r} col {c}: dispatch load {load} > max_buf {mb} (capacity overflow)"
 
     def ffn(self, x, route=None):
         return self.ffn_dense(x) if self.L == 0 else self.ffn_moe(x, route)
