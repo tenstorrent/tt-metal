@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "distributed/mesh_socket_utils.hpp"
 #include "program.hpp"
 #include <map>
@@ -371,8 +372,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
 
         inspector::MeshSocketData socket_data;
         socket_data.is_sender = is_sender;
-        socket_data.config_buffer_address = config_buffer->address();
-        socket_data.data_buffer_address = is_sender ? 0 : socket->get_data_buffer()->address();
         socket_data.fifo_size = socket->get_config().socket_mem_config.fifo_size;
         socket_data.bytes_acked_offset_bytes = sender_size.md_size_bytes;
         socket_data.bytes_acked_stride_bytes = sender_size.ack_size_bytes;
@@ -415,6 +414,17 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         }
         if (by_core.empty()) {
             return;  // this rank owns no core of this socket
+        }
+        // address() is 0 for per-core buffers, so resolve the per-core addresses here, on the rank that owns the core.
+        socket_data.config_buffer_address = socket->get_config_buffer_address();
+        if (!is_sender) {
+            const auto& data_buffer = *socket->get_data_buffer();
+            const auto& receiver_core = socket->get_config().socket_connection_config.front().receiver_core;
+            socket_data.data_buffer_address =
+                socket->get_config().socket_mem_config.per_core_allocation
+                    ? experimental::per_core_allocation::get_per_core_address(
+                          data_buffer, receiver_core.device_coord, receiver_core.core_coord)
+                    : data_buffer.address();
         }
         socket_data.local_cores.reserve(by_core.size());
         for (auto& [key, core_data] : by_core) {

@@ -13,6 +13,70 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+# Device kernel time of generated eltwise programs against the paths they replace, one file per
+# op. An op's entry is what makes the changed-tests gate run its file on hardware, with a Tracy
+# build, before the change merges. Each op's entry goes under its own line below, so the ops'
+# changes merge in any order.
+# generated bf16 op: abs_bw
+# generated bf16 op: acos_bw
+# generated bf16 op: acosh_bw
+# generated bf16 op: asin_bw
+# generated bf16 op: asinh_bw
+# generated bf16 op: atanh_bw
+# generated bf16 op: celu_bw
+# generated bf16 op: cosh_bw
+# generated bf16 op: digamma_bw
+# generated bf16 op: elu_bw
+# generated bf16 op: erf_bw
+# generated bf16 op: erfc_bw
+# generated bf16 op: erfinv_bw
+# generated bf16 op: exp2_bw
+# generated bf16 op: exp_bw
+# generated bf16 op: expm1_bw
+# generated bf16 op: hardshrink_bw
+# generated bf16 op: hardsigmoid_bw
+# generated bf16 op: hardswish_bw
+# generated bf16 op: hardtanh_bw
+# generated bf16 op: leaky_relu_bw
+# generated bf16 op: lgamma
+# generated bf16 op: log10_bw
+# generated bf16 op: log1p_bw
+# generated bf16 op: log2_bw
+# generated bf16 op: log_bw
+# generated bf16 op: log_sigmoid
+# generated bf16 op: log_sigmoid_bw
+# generated bf16 op: logit
+# generated bf16 op: logit_bw
+# generated bf16 op: logiteps_bw
+- name: "ttnn eltwise generated bf16 device perf logiteps_bw"
+  cmd: >-
+    TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
+    tests/ttnn/perf_tests/operations/eltwise/test_logiteps_bw_device_perf.py
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: device_perf
+  owner_id: U09LVP68R7F # Nachiket Kapre
+# generated bf16 op: multigammaln
+# generated bf16 op: multigammaln_bw
+# generated bf16 op: pack_relu
+# generated bf16 op: reciprocal_bw
+# generated bf16 op: relu6_bw
+# generated bf16 op: relu_bw
+# generated bf16 op: rsqrt_bw
+# generated bf16 op: selu_bw
+# generated bf16 op: silu_bw
+# generated bf16 op: sinh_bw
+# generated bf16 op: softplus_bw
+# generated bf16 op: softshrink_bw
+# generated bf16 op: softsign_bw
+# generated bf16 op: sqrt_bw
+# generated bf16 op: square_bw
+# generated bf16 ops end
+
 - name: Llama 3.1-8B device perf tests
   cmd: |
     export TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000
@@ -214,19 +278,3 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: device_perf
-
-# Device kernel time of generated eltwise programs against the paths they replace, one file
-# per op. Listing each here is what makes the changed-tests gate run a PR's new file on
-# hardware, with a Tracy build, before it merges.
-- name: "ttnn eltwise generated bf16 device perf"
-  cmd: >-
-    TRACY_NO_SYS_TRACE=1 pytest --timeout 600 -s -m models_device_performance_bare_metal
-    tests/ttnn/perf_tests/operations/eltwise/test_logiteps_bw_device_perf.py
-  skus:
-    wh_n300_civ2:
-      timeout: 10
-    bh_p150b_civ2:
-      timeout: 10
-  team: ttnn
-  budget_type: device_perf
-  owner_id: U09LVP68R7F # Nachiket Kapre
