@@ -573,6 +573,8 @@ def cmd_render(a):
     L.append("%s: %s" % (", ".join("`%s`" % t for t in tests), reg))
     L += ["", "### Why", v.get("why") or v["root_cause"]]
     L += ["", "### Fix", v.get("fix") or v["change_summary"]]
+    if m.get("decision"):
+        L += ["", "Chosen in Slack: **%s · %s**" % (m["decision"]["key"], m["decision"]["label"])]
     L += ["", "### Validation"]
     branch = m.get("branch") or ""
     for p in m.get("dispatch", []):

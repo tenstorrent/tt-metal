@@ -118,8 +118,17 @@ slack_update() {
 # there is nothing to edit or the edit fails.
 slack_sig() {
   local text="$1"; shift
-  local mts
-  mts=$($FIXLIB get "$@" | jq -r '[.[] | .slack_ts // empty] | first // ""')
+  local mts recs foot
+  recs=$($FIXLIB get "$@")
+  mts=$(jq -r '[.[] | .slack_ts // empty] | first // ""' <<<"$recs")
+  # A human decision stays visible through every later edit of the message.
+  foot=$(jq -r '[.[] | select(.decision_choice != null)] | first
+                | if . == null then "" else
+                    (.decision_choice.key as $k
+                     | "_decision: \(if $k == "REJECT" then "Reject" else ([.decision.options[] | select(.key == $k) | "\(.key) · \(.label)"] | first) end)"
+                       + " — chosen by <@\(.decision_choice.by)> at \(.decision_choice.at[0:16] | sub("T"; " ")) UTC_")
+                  end' <<<"$recs")
+  [[ -n "$foot" ]] && text+=$'\n'"$foot"
   if [[ -n "$mts" ]] && slack_update "$mts" "$text"; then return 0; fi
   slack "$text"
   [[ -n "${SLACK_LAST_TS:-}" ]] && $FIXLIB mark --state keep \
@@ -222,7 +231,7 @@ apply_decisions() {
     if [[ "$key" == "REJECT" ]]; then
       $FIXLIB mark --state rejected "$sig"
       log "  decision for $short: rejected by $by"
-      slack_sig "⚪ decided by <@$by>: *reject*, no change for \`$short\` ($wf)" "$sig"
+      slack_sig "⚪ rejected: no change for \`$short\` ($wf)" "$sig"
       continue
     fi
     kind=$(jq -r --arg k "$key" '.r.decision.options[] | select(.key == $k) | .kind' <<<"$row")
@@ -231,7 +240,7 @@ apply_decisions() {
       patch)
         $FIXLIB mark --state decided "$sig"
         log "  decision for $short: $key ($label) by $by — fix stage implements it now"
-        slack_sig "🛠 decided by <@$by>: *$key · $label* for \`$short\` ($wf), preparing the draft PR…" "$sig" ;;
+        slack_sig "🛠 preparing the autofix draft PR for \`$short\` ($wf)…" "$sig" ;;
       *) log "  WARN: unknown decision $key for $sig" ;;
     esac
   done < <(jq -c '.sigs | to_entries[] | select(.value.state == "awaiting_decision" and .value.decision_choice != null) | {sig: .key, r: .value}' "$FIX_HOME/ledger.json")
@@ -753,9 +762,10 @@ $(jq -r .question <<<"$dec")" "$dec"
   render() {
     jq -n --slurpfile v "$pdir/verdict.json" --argjson recs "$recs" --slurpfile d "$pdir/dispatch.json" \
           --argjson rel "$related" --arg repo "$REPO" --arg model "$FIX_MODEL" --arg ci "$CI_STATUS_CONTEXT" \
-          --arg pipe "$pipe_name" --arg br "$branch" \
+          --arg pipe "$pipe_name" --arg br "$branch" --argjson ch "${choice:-null}" \
           '{verdict: $v[0], records: [$recs | to_entries[].value], sigs: ($recs | keys), dispatch: $d[0],
-            related_prs: $rel, repo: $repo, model: $model, ci_ctx: $ci, pipeline: $pipe, branch: $br}' > "$pdir/meta.json"
+            related_prs: $rel, repo: $repo, model: $model, ci_ctx: $ci, pipeline: $pipe, branch: $br,
+            decision: (if $ch == null then null else ($ch.choice.key as $k | $ch.decision.options[] | select(.key == $k)) end)}' > "$pdir/meta.json"
     $FIXLIB render --meta "$pdir/meta.json" > "$pdir/pr_body.md"
   }
   render
