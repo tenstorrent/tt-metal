@@ -173,3 +173,37 @@ def test_latent_stats_opt_out(monkeypatch, value, logged):
     p._latent_stats = stats
     p._log_latent_stats("s1", torch.zeros(2, 3), torch.zeros(2, 3))
     assert len(calls) == (2 if logged else 0)
+
+
+def _timing_sync_pipeline():
+    env_src, cls_src = _source(("_sync_for_stage_timing",))
+    syncs = []
+    ns = {"os": __import__("os"), "ttnn": types.SimpleNamespace(synchronize_device=syncs.append)}
+    exec(env_src, ns)
+    exec(cls_src, ns)
+    p = ns["P"]()
+    p.mesh_device = object()
+    return p, syncs
+
+
+@pytest.mark.parametrize(
+    "env, device_resident, expect_sync",
+    [(None, True, False), ("0", True, False), ("1", False, False), ("1", True, True), ("true", True, True)],
+)
+def test_stage_timing_sync_only_when_timed_and_device_resident(monkeypatch, env, device_resident, expect_sync):
+    if env is None:
+        monkeypatch.delenv("LTX_TIME_STAGES", raising=False)
+    else:
+        monkeypatch.setenv("LTX_TIME_STAGES", env)
+    p, syncs = _timing_sync_pipeline()
+    p._sync_for_stage_timing(device_resident)
+    assert syncs == ([p.mesh_device] if expect_sync else [])
+
+
+def test_stage1_timing_syncs_before_t_stage1():
+    # S1 replays no longer block, so without this sync S1's device time is charged to the next stage.
+    src = DISTILLED_PATH.read_text()
+    t1 = src.index("t_stage1 = time.time() - t0")
+    s1_call = src.rindex("self._denoise_no_guidance(", 0, t1)
+    between = src[s1_call:t1]
+    assert between.count("self._sync_for_stage_timing(device_resident)") == 1

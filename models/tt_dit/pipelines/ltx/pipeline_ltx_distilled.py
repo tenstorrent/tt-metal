@@ -1597,6 +1597,12 @@ class LTXDistilledPipeline(LTXPipeline):
         return v_final[:, :decode_N, :], a_final[:, :audio_N_real, :]
 
     # ----- device-resident stage transition (T2V) -----------------------------------------------------------
+    def _sync_for_stage_timing(self, device_resident: bool) -> None:
+        """LTX_TIME_STAGES=1: block so async device work is charged to the stage that enqueued it.
+        Off by default: the sync would stall the host and change the e2e time."""
+        if device_resident and _env_on("LTX_TIME_STAGES"):
+            ttnn.synchronize_device(self.mesh_device)
+
     def _device_resident(self, images) -> bool:
         """Keep the video latent on device from stage 1 through the upsampler into stage 2 (T2V only).
         The transition is a trace of its own: eager collectives issued after a replay deadlock on this
@@ -2135,6 +2141,7 @@ class LTXDistilledPipeline(LTXPipeline):
             return_device_video=device_resident,
             device_prompts=self._device_prompt_handoff,
         )
+        self._sync_for_stage_timing(device_resident)  # device-resident S1 replays do not block
         t_stage1 = time.time() - t0
         if not device_resident:
             _stats("s1_video", s1_video)
@@ -2178,8 +2185,7 @@ class LTXDistilledPipeline(LTXPipeline):
             upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
                 1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
             )
-        if device_resident and os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True"):
-            ttnn.synchronize_device(self.mesh_device)  # the eager transition is async; charge it here, not to stage 2
+        self._sync_for_stage_timing(device_resident)  # the eager transition is async; charge it here, not to stage 2
         t_upsample = time.time() - t0
         timings.append(("Latent upsample", t_upsample))
         logger.info(f"Latent upsample: {t_upsample:.1f}s")
