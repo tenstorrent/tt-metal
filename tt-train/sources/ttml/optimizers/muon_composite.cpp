@@ -75,8 +75,7 @@ void MuonComposite::step() {
 
         const auto gradients = tensor_ptr->get_grad();
 
-        // By value: ttnn::add/subtract relabel their outputs with the union of their inputs, gradient included
-        // (see optimizers::restore_topology). The momentum buffer follows the parameter's distribution.
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
         const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         if (m_steps > 0 && m_config.momentum != 0.0F) {

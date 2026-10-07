@@ -49,8 +49,7 @@ void SGDComposite::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
-        // By value: the ttnn::add/subtract below relabel their outputs with the union of their inputs, gradient
-        // included (see optimizers::restore_topology). The momentum buffer follows the parameter's distribution.
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
         const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         if (m_config.weight_decay != 0.0F) {

@@ -72,9 +72,7 @@ void MorehAdamW::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
-        // By value: moreh_adamw hands the parameter and moments back as its outputs and relabels them with the
-        // union of all its inputs, gradient included (see optimizers::restore_topology). Restore the parameter's
-        // label on the parameter and on every moment, which must follow the parameter's distribution.
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
         const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
@@ -196,17 +194,13 @@ void AdamWComposite::step() {
 
         auto gradients = tensor_ptr->get_grad();
 
-        // By value, before any update: each ttnn::add/subtract below relabels its output with the union of its
-        // inputs, so the gradient's label would otherwise reach the parameter and its state through set_value
-        // (see optimizers::restore_topology). Every tensor the step writes gets this label back at the end.
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
         const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(
                 tensor_ptr->get_value(autograd::PreferredPrecision::HALF), m_config.weight_decay * m_config.lr);
             // weights -= weight_decay * lr * weights
-            // Intentionally not pinned: both inputs carry the parameter's label, and the final parameter
-            // set_value below overwrites this intermediate value with a pinned one.
             tensor_ptr->set_value(
                 ttnn::subtract(tensor_ptr->get_value(autograd::PreferredPrecision::HALF), weight_decay_update));
         }
