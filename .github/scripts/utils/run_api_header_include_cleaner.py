@@ -8,8 +8,9 @@
     run_api_header_include_cleaner.py <build-dir> <header> [<header> ...]
 
 Options:
-    --fail-on-findings   exit 1 if any header has a finding or fails to parse
-                         (the switch that turns this report into a gate)
+    --fail-on-findings   exit 1 if any header has a finding, or any header could not be
+                         analyzed (compile error, clang-tidy crash, header with no
+                         verification TU). This is what CI runs.
     --fix                apply clang-tidy's fix-its to the headers (local use). All
                          headers are analyzed against the unmodified tree first, then
                          the edits are applied, with inserted includes respelled the
@@ -62,8 +63,9 @@ import tempfile
 import time
 
 CHECK = "misc-include-cleaner"
+HEADER_SUFFIXES = (".h", ".hpp", ".tpp", ".inl")
 MISSING = re.compile(r'^no header providing "(?P<symbol>.+)" is directly included$')
-COVERED = "(provided by an include already listed)"
+COVERED = "(no fix-it of its own)"
 UNUSED = re.compile(r"^included header (?P<header>.+) is not used directly$")
 
 # clang-tidy spells a header it asks to add as a quoted path relative to the
@@ -107,6 +109,21 @@ class Result:
     def failed(self) -> bool:
         return bool(self.errors)
 
+    @property
+    def failure_kind(self) -> str:
+        if not self.errors:
+            return ""
+        first = self.errors[0]
+        if first.startswith("clang-tidy was killed"):
+            return "clang-tidy crashed"
+        if first.startswith("clang-tidy exited"):
+            return "clang-tidy failed"
+        if first.startswith(f"{CHECK}: unrecognised"):
+            return "unrecognised diagnostic"
+        if first.startswith("no verification TU"):
+            return "not analyzed (no verification TU)"
+        return "compile error"
+
 
 def unquote(value: str) -> str:
     value = value.strip()
@@ -143,7 +160,12 @@ def parse_export_fixes(text: str) -> list[dict]:
     return diagnostics
 
 
-def select(build: str, root: str, headers: list[str]) -> list[dict]:
+def select(build: str, root: str, headers: list[str]) -> tuple[list[dict], list[str], list[str]]:
+    """Header compile commands derived from the verification stubs.
+
+    Returns (entries, requested headers with no stub, headers under tt_metal/api
+    that are not in the public header set and so have no stub; --all only).
+    """
     stub_dir = os.path.join(build, "tt_metal", "tt_metal_verify_interface_header_sets") + os.sep
     api_dir = os.path.join(root, "tt_metal", "api") + os.sep
     stubs = {}
@@ -157,8 +179,15 @@ def select(build: str, root: str, headers: list[str]) -> list[dict]:
             f"::error::no header verification TUs under {stub_dir}; was the build configured with the iwyu preset?"
         )
 
+    no_stub, outside_set = [], []
     if headers == ["--all"]:
         names = sorted(stubs)
+        listed = subprocess.run(
+            ["git", "-C", root, "ls-files", "--", "tt_metal/api"], capture_output=True, text=True
+        ).stdout.split()
+        outside_set = sorted(
+            f for f in listed if f.endswith(HEADER_SUFFIXES) and f[len("tt_metal/api/") :] not in stubs
+        )
     else:
         names = []
         for header in headers:
@@ -167,7 +196,7 @@ def select(build: str, root: str, headers: list[str]) -> list[dict]:
             if name in stubs:
                 names.append(name)
             else:
-                print(f"::warning::{header} has no header verification TU; skipped", file=sys.stderr)
+                no_stub.append(header)
 
     derived = []
     for name in names:
@@ -186,7 +215,7 @@ def select(build: str, root: str, headers: list[str]) -> list[dict]:
         header = os.path.join(api_dir, name)
         args = [header if os.path.realpath(os.path.join(entry["directory"], a)) == stub else a for a in args]
         derived.append({"directory": entry["directory"], "arguments": args, "file": header})
-    return derived
+    return derived, no_stub, outside_set
 
 
 def run_one(entry: dict, args: argparse.Namespace, out: str, root: str) -> Result:
@@ -226,6 +255,7 @@ def analyze(header: str, returncode: int, output: str, exported: str, content: b
         if match := MISSING.match(message):
             # clang-tidy attaches the insertion to the first symbol a header
             # provides; later symbols from the same header carry no fix-it.
+            # A few diagnostics have no fix-it at all and need a manual change.
             for text in diagnostic["replacements"] or [COVERED]:
                 include = repo_spelling(text.strip(), root)
                 result.missing.setdefault(include, [])
@@ -273,43 +303,85 @@ def apply_edits(path: str, edits: list, root: str) -> None:
 
 
 def exit_status(results: list[Result], gating: bool) -> int:
-    """1 in gating mode if any header has a finding or failed to analyze, else 0."""
+    """With --fail-on-findings: 1 if any header has a finding or could not be analyzed."""
     return 1 if gating and any(r.missing or r.unused or r.failed for r in results) else 0
 
 
-def render(results: list[Result], status: int, artifact: str, gating: bool) -> str:
-    missing = sum(len(r.missing.keys() - {COVERED}) for r in results)
-    unused = sum(len(r.unused) for r in results)
+REPRODUCE = """\
+cmake --preset iwyu
+cmake --build .build/iwyu --target metalium_GeneratedHeaders
+.github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --all --fail-on-findings"""
+
+
+def render(results: list[Result], status: int, artifact: str, gating: bool, outside_set: list[str] = ()) -> str:
+    to_add = sum(len(r.missing.keys() - {COVERED}) for r in results)
+    to_remove = sum(len(r.unused) for r in results)
     flagged = [r for r in results if r.missing or r.unused]
     failed = [r for r in results if r.failed]
-    mode = "gate" if gating else "report-only"
+    if not gating:
+        verdict = "Findings are reported but do not fail this run (no `--fail-on-findings`)."
+    elif status:
+        verdict = (
+            f"**FAILED**: {len(flagged)} header(s) with findings, {len(failed)} header(s) failed. "
+            "Every tt_metal public header must have exactly the includes it uses."
+        )
+    else:
+        verdict = "**PASSED**: no findings, every header analyzed."
     lines = [
-        f"### misc-include-cleaner (tt_metal API headers, {mode})",
+        f"### misc-include-cleaner on tt_metal public headers: {'FAILED' if status else 'passed'}",
+        "",
+        verdict,
         "",
         "| Headers | Count |",
         "| --- | --- |",
-        f"| analyzed | {len(results)} |",
+        f"| analyzed | {sum(1 for r in results if not r.failure_kind.startswith('not analyzed'))} |",
         f"| with findings | {len(flagged)} |",
-        f"| with missing includes | {sum(1 for r in results if r.missing)} ({missing} includes to add) |",
-        f"| with unused includes | {sum(1 for r in results if r.unused)} ({unused} includes to remove) |",
-        f"| failed to analyze | {len(failed)} |",
+        f"| missing includes | {sum(1 for r in results if r.missing)} headers, {to_add} includes to add |",
+        f"| unused includes | {sum(1 for r in results if r.unused)} headers, {to_remove} includes to remove |",
+        f"| failed (compile error, crash, no verification TU) | {len(failed)} |",
         "",
         f"Exit status: {status}. Wall time per header: "
         f"max {max((r.seconds for r in results), default=0):.1f} s, "
         f"total {sum(r.seconds for r in results):.1f} s (CPU-serial).",
     ]
-    if flagged or failed:
-        lines += ["", "| Header | Add | Remove |", "| --- | --- | --- |"]
-        for r in flagged + [r for r in failed if r not in flagged]:
+    if failed:
+        lines += ["", "#### Failed", "", "| Header | Kind | First error |", "| --- | --- | --- |"]
+        for r in failed:
+            first = r.errors[0].replace("|", "\\|")[:200]
+            lines.append(f"| `{r.header}` | {r.failure_kind} | `{first}` |")
+    if flagged:
+        lines += ["", "#### Findings", "", "| Header | Add | Remove | Without fix-it |", "| --- | --- | --- | --- |"]
+        for r in flagged:
             add = "<br>".join(f"`{inc}`" for inc in sorted(r.missing.keys() - {COVERED}))
             rm = "<br>".join(f"`{inc}` (line {n})" for n, inc in r.unused)
-            if r.failed:
-                rm += (" " if rm else "") + "**analysis failed**"
-            lines.append(f"| `{r.header}` | {add} | {rm} |")
+            manual = ", ".join(f"`{sym}`" for sym in r.missing.get(COVERED, []))
+            lines.append(f"| `{r.header}` | {add} | {rm} | {manual} |")
+    if outside_set:
+        lines += [
+            "",
+            f"Not checked: {len(outside_set)} header(s) under tt_metal/api are not in the tt_metal public header "
+            "set (TT_METAL_PUBLIC_API), so CMake generates no verification TU for them: "
+            + ", ".join(f"`{h}`" for h in outside_set)
+            + ".",
+        ]
     lines += [
         "",
-        "Apply locally: `.github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --fix <header>...`.",
-        f"Full output: `include-cleaner.txt` and `findings.json` in the `{artifact}` artifact.",
+        "Reproduce locally (from the repo root):",
+        "",
+        "```",
+        REPRODUCE,
+        "```",
+        "",
+        "Apply the fix-its, then review the diff (inserted includes may need regrouping; "
+        "symbols listed under *Without fix-it* that are not covered by an added include need a manual include, "
+        "or `// NOLINT(misc-include-cleaner)` / `// IWYU pragma: keep` with a reason):",
+        "",
+        "```",
+        ".github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --fix "
+        + (" ".join(f"tt_metal/api/{r.header}" for r in flagged) if 0 < len(flagged) <= 10 else "--all"),
+        "```",
+        "",
+        f"Full clang-tidy output: `include-cleaner.txt` and `findings.json` in the `{artifact}` artifact.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -323,7 +395,7 @@ def main() -> int:
     parser.add_argument("--fix", action="store_true")
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--clang-tidy", default=shutil.which("clang-tidy-20") or "clang-tidy")
-    parser.add_argument("--artifact", default="include-cleaner-api-headers-report")
+    parser.add_argument("--artifact", default="include-cleaner-api-headers-results")
     args = parser.parse_intermixed_args()
 
     root = subprocess.run(
@@ -339,13 +411,10 @@ def main() -> int:
 
     if args.all == bool(args.headers):
         parser.error("give either --all or a list of headers")
-    entries = select(build, root, ["--all"] if args.all else args.headers)
+    entries, no_stub, outside_set = select(build, root, ["--all"] if args.all else args.headers)
     with open(os.path.join(out, "compile_commands.json"), "w") as db:
         json.dump(entries, db, indent=1)
     print(f"{len(entries)} header(s) selected for {CHECK}", file=sys.stderr)
-    if not entries:
-        print("::warning::no header selected; nothing analyzed", file=sys.stderr)
-        return 0
 
     version = subprocess.run([args.clang_tidy, "--version"], capture_output=True, text=True).stdout
     with open(os.path.join(out, "clang-tidy-version.txt"), "w") as f:
@@ -353,6 +422,10 @@ def main() -> int:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(pool.map(lambda e: run_one(e, args, out, root), entries))
+    # A requested header without a verification TU cannot be analyzed: that is a failure, not a skip.
+    results += [
+        Result(header=h, errors=[f"no verification TU: {h} is not in the tt_metal public header set"]) for h in no_stub
+    ]
     if args.fix:
         for entry, result in zip(entries, results):
             if result.edits:
@@ -367,9 +440,13 @@ def main() -> int:
         json.dump([dataclasses.asdict(r) | {"output": None} for r in results], f, indent=1)
     with open(os.path.join(out, "exit-code.txt"), "w") as f:
         f.write(f"{status}\n")
-    print(render(results, status, args.artifact, args.fail_on_findings))
+    print(render(results, status, args.artifact, args.fail_on_findings, outside_set))
+    level = "error" if args.fail_on_findings else "warning"
+    flagged = sum(1 for r in results if r.missing or r.unused)
+    if flagged:
+        print(f"::{level}::{CHECK}: {flagged} tt_metal public header(s) have include findings", file=sys.stderr)
     if failed:
-        print(f"::warning::{CHECK} could not analyze some headers; see include-cleaner.txt", file=sys.stderr)
+        print(f"::{level}::{CHECK}: {sum(r.failed for r in results)} header(s) could not be analyzed", file=sys.stderr)
     return status
 
 

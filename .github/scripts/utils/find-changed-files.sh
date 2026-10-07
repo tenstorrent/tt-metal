@@ -272,11 +272,12 @@ while IFS= read -r FILE; do
 done <<< "$CHANGED_FILES"
 # ----------------------------------------------------------------------------
 
-# tt-metalium-api-headers-changed: gates the misc-include-cleaner check on
-# tt_metal/api headers (code-analysis.yaml). Public headers themselves, plus
-# the files that define that check, so a PR that edits the check also
-# exercises it. Deliberately not derived from tt-metalium-changed, which fires
-# on any tt_metal source.
+# tt-metalium-api-headers-changed: runs the misc-include-cleaner gate on the
+# tt_metal public headers (include-cleaner job in code-analysis.yaml; the job
+# always sweeps every public header and fails on any finding). Set by a change
+# to a tt_metal/api header or to a file that defines the check, so a PR that
+# edits the check also exercises it. Deliberately not derived from
+# tt-metalium-changed, which fires on any tt_metal source.
 #
 # pr-gate.yaml only calls code-analysis.yaml when run-clang-tidy (computed
 # below) is true. Headers reach it through CPP_SOURCE_FOR_CLANG_TIDY_CHANGED
@@ -284,12 +285,10 @@ done <<< "$CHANGED_FILES"
 # and tests are promoted here. find-changed-files.sh and its action.yml are
 # shared change-detection plumbing: they run the check when something else
 # triggers code analysis, but on their own do not force a full clang-tidy scan.
-# Keep the check-file list in sync with the include-cleaner job in
-# code-analysis.yaml.
 TTMETALIUM_API_HEADERS_CHANGED=false
 while IFS= read -r FILE; do
     case "$FILE" in
-        tt_metal/api/*(*/)*.@(h|hpp)|\
+        tt_metal/api/*(*/)*.@(h|hpp|tpp|inl)|\
         .github/scripts/utils/find-changed-files.sh|\
         .github/actions/find-changed-files/action.yml|\
         .github/workflows/code-analysis.yaml)

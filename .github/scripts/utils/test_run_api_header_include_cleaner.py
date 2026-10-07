@@ -262,15 +262,23 @@ class Select(unittest.TestCase):
     def test_stub_entry_becomes_a_header_entry(self):
         header = os.path.join(ROOT, "tt_metal/api/tt-metalium/core_coord.hpp")
         for request in (["--all"], ["tt_metal/api/tt-metalium/core_coord.hpp"], [header]):
-            (entry,) = select(self.build.name, ROOT, request)
+            (entry,), no_stub, _ = select(self.build.name, ROOT, request)
+            self.assertEqual(no_stub, [])
             self.assertEqual(entry["file"], header)
             self.assertEqual(
                 entry["arguments"],
                 ["/usr/bin/clang++-20", "-DX=1", f"-I{ROOT}/tt_metal/api", "-x", "c++-header", "-std=c++20", header],
             )
 
-    def test_headers_without_a_stub_are_skipped(self):
-        self.assertEqual(select(self.build.name, ROOT, ["tt_metal/api/tt-metalium/no_such.hpp", "README.md"]), [])
+    def test_requested_headers_without_a_stub_are_returned(self):
+        requested = ["tt_metal/api/tt-metalium/no_such.hpp", "README.md"]
+        self.assertEqual(select(self.build.name, ROOT, requested), ([], requested, []))
+
+    def test_all_lists_headers_outside_the_public_header_set(self):
+        entries, no_stub, outside_set = select(self.build.name, ROOT, ["--all"])
+        self.assertEqual((len(entries), no_stub), (1, []))
+        self.assertIn("tt_metal/api/tt-metalium/mesh_coord.hpp", outside_set)
+        self.assertNotIn("tt_metal/api/tt-metalium/core_coord.hpp", outside_set)
 
 
 class GateMode(unittest.TestCase):
@@ -321,16 +329,65 @@ class GateMode(unittest.TestCase):
                 text=True,
             )
 
-    def test_fail_on_findings(self):
-        report_only = self.run_script(EXPORT_FINDINGS, 0)
-        self.assertEqual(report_only.returncode, 0, report_only.stderr)
-        gated = self.run_script(EXPORT_FINDINGS, 0, "--fail-on-findings")
-        self.assertEqual(gated.returncode, 1, gated.stderr)
-        self.assertIn("| with findings | 1 |", gated.stdout)
-        self.assertEqual(self.run_script("", 0, "--fail-on-findings").returncode, 0)
-        crashed = self.run_script("", 139, "--fail-on-findings")
-        self.assertEqual(crashed.returncode, 1, crashed.stderr)
-        self.assertIn("| failed to analyze | 1 |", crashed.stdout)
+    def test_without_the_flag_nothing_fails(self):
+        for export, returncode in ((EXPORT_FINDINGS, 0), (EXPORT_WITH_ERROR, 1), ("", 139)):
+            run = self.run_script(export, returncode)
+            self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_clean(self):
+        run = self.run_script("", 0, "--fail-on-findings")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("passed", run.stdout)
+        self.assertIn("**PASSED**", run.stdout)
+
+    def test_findings_fail(self):
+        run = self.run_script(EXPORT_FINDINGS, 0, "--fail-on-findings")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn("**FAILED**: 1 header(s) with findings, 0 header(s) failed.", run.stdout)
+        self.assertIn("| with findings | 1 |", run.stdout)
+        self.assertIn("| missing includes | 1 headers, 1 includes to add |", run.stdout)
+        self.assertIn("| unused includes | 1 headers, 2 includes to remove |", run.stdout)
+        self.assertIn("| `tt-metalium/core_coord.hpp` | `#include <cstddef>` |", run.stdout)
+        self.assertIn(
+            ".github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --all --fail-on-findings", run.stdout
+        )
+        self.assertIn(
+            ".github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --fix "
+            "tt_metal/api/tt-metalium/core_coord.hpp",
+            run.stdout,
+        )
+        self.assertIn("::error::misc-include-cleaner: 1 tt_metal public header(s) have include findings", run.stderr)
+
+    def test_parse_failure_fails(self):
+        run = self.run_script(EXPORT_WITH_ERROR, 1, "--fail-on-findings")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn("| failed (compile error, crash, no verification TU) | 1 |", run.stdout)
+        self.assertIn(
+            "| `tt-metalium/core_coord.hpp` | compile error | "
+            "`clang-diagnostic-error: use of undeclared identifier 'undeclared_thing'` |",
+            run.stdout,
+        )
+
+    def test_crash_fails(self):
+        run = self.run_script("", 139, "--fail-on-findings")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn(
+            "| `tt-metalium/core_coord.hpp` | clang-tidy failed | "
+            "`clang-tidy exited with 139 without reporting an error` |",
+            run.stdout,
+        )
+        # A crash after partial findings still fails, and is listed as a failure.
+        run = self.run_script(EXPORT_FINDINGS, -11 % 256, "--fail-on-findings")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn("1 header(s) failed", run.stdout)
+
+    def test_missing_stub_fails(self):
+        run = self.run_script("", 0, "--fail-on-findings", "tt_metal/api/tt-metalium/no_such.hpp")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn(
+            "| `tt_metal/api/tt-metalium/no_such.hpp` | not analyzed (no verification TU) |",
+            run.stdout,
+        )
 
 
 if __name__ == "__main__":

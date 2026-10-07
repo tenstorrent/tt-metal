@@ -266,26 +266,29 @@ jobs:
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
 
-  # Report-only misc-include-cleaner on the tt_metal public headers touched by the
-  # PR. The check only reports on a translation unit's main file, so each header is
-  # analyzed as its own main file (-x c++-header) with the flags of its CMake
-  # header-verification TU; only configure and the generated API headers are
-  # needed, no build. Not a gate yet: findings go to the step summary and an
-  # artifact; pass --fail-on-findings to the script to make it one. See
+  # Gate: every tt_metal public header must include exactly what it uses
+  # (clang-tidy misc-include-cleaner, no missing and no unused includes). Any
+  # finding, or any header that cannot be analyzed, fails the job and with it the
+  # PR / merge-queue gate. Runs whenever a tt_metal/api header or the check itself
+  # changes, and always sweeps all public headers (about 40 s), so effects of one
+  # header on another are caught. The check only reports on a translation unit's
+  # main file, so each header is analyzed as its own main file (-x c++-header)
+  # with the flags of its CMake header-verification TU; only configure and the
+  # generated API headers are needed, no build. The step summary lists every
+  # finding and the commands to reproduce and fix it locally. See
   # .github/scripts/utils/run_api_header_include_cleaner.py.
   include-cleaner-api-headers:
     name: "🔍 Include cleaner (tt_metal API headers)"
     needs: [resolve-docker-pull-refs, determine-scan-type]
     if: >-
-      ${{ !cancelled() && github.event_name == 'pull_request' &&
+      ${{ !cancelled() &&
           needs.resolve-docker-pull-refs.result == 'success' &&
           needs.determine-scan-type.outputs.api-headers-changed == 'true' }}
-    # Configure and flatc are mostly single-threaded and clang-tidy runs on a few
-    # headers (~1-4 s each); medium is the smallest self-hosted size that already
-    # runs CPU-only container jobs.
+    # Configure and flatc are mostly single-threaded and the sweep takes about 40 s
+    # on this size; medium is the smallest self-hosted size that already runs
+    # CPU-only container jobs.
     runs-on: tt-ubuntu-2204-medium-stable
     timeout-minutes: 30
-    continue-on-error: true
     permissions:
       contents: read
     container:
@@ -330,38 +333,16 @@ jobs:
       - name: 🛠️ Generate API headers
         run: cmake --build .build/iwyu --target metalium_GeneratedHeaders
 
-      - name: 🔍 Analyze changed API headers with misc-include-cleaner
+      - name: 🔍 Include cleaner on all tt_metal public headers
         run: |
-          base=$(git merge-base origin/main HEAD)
-          mapfile -t headers < <(git diff --name-only --diff-filter=ACMR "${base}..HEAD" -- 'tt_metal/api/*.h' 'tt_metal/api/*.hpp')
-          if [ "${#headers[@]}" -eq 0 ]; then
-            # No added/modified header. Sweep everything only if the check itself
-            # changed (same list as tt-metalium-api-headers-changed in
-            # .github/scripts/utils/find-changed-files.sh).
-            check_files=(
-              .github/api-include-cleaner.clang-tidy
-              .github/scripts/utils/run_api_header_include_cleaner.py
-              .github/scripts/utils/test_run_api_header_include_cleaner.py
-              .github/scripts/utils/find-changed-files.sh
-              .github/actions/find-changed-files/action.yml
-              .github/workflows/code-analysis.yaml
-            )
-            if [ -z "$(git diff --name-only "${base}..HEAD" -- "${check_files[@]}")" ]; then
-              echo "No added or modified tt_metal/api header and no change to the check; nothing to analyze." \
-                | tee -a "${GITHUB_STEP_SUMMARY}"
-              exit 0
-            fi
-            headers=(--all)
-          fi
-          # Report-only. To gate, add --fail-on-findings and drop continue-on-error.
-          .github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu "${headers[@]}" \
+          .github/scripts/utils/run_api_header_include_cleaner.py .build/iwyu --all --fail-on-findings \
             | tee -a "${GITHUB_STEP_SUMMARY}"
 
-      - name: Upload include-cleaner report
+      - name: Upload include-cleaner results
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: include-cleaner-api-headers-report
+          name: include-cleaner-api-headers-results
           path: |
             /work/.build/iwyu/report-api-include-cleaner/include-cleaner.txt
             /work/.build/iwyu/report-api-include-cleaner/findings.json
