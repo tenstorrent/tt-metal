@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the instruction-argument constant-family checker."""
 import contextlib
+import importlib.util
 import io
 import os
 import runpy
@@ -13,6 +14,13 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "check_instr_encoding_args.py")
 REPO = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("check_instr_encoding_args", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def run(*paths):
@@ -166,6 +174,36 @@ def test_comments_and_strings_are_ignored(tmp_path):
             "TTI_SFPSWAP(0, 1, 2, p_sfpgt::SOMETHING);",
             "belongs to p_sfpgt, passed to SFPSWAP",
         ),
+        # a `<` that is a comparison opens no template argument list
+        (
+            "TTI_SFPLOAD(p_sfpu::LREG0, x < y ? SFPLOADI_MOD0_FLOATB : 0, ADDR_MOD_3, 0);",
+            "SFPLOADI modifier, passed to SFPLOAD",
+        ),
+        (
+            "TTI_SFPLOAD(p_sfpu::LREG0, a < b, SFPLOADI_MOD0_FLOATB, 0);",
+            "SFPLOADI modifier, passed to SFPLOAD",
+        ),
+        (
+            "TTI_SFPLOAD(p_sfpu::LREG0, a < b && c > d, SFPLOADI_MOD0_FLOATB, 0);",
+            "SFPLOADI modifier, passed to SFPLOAD",
+        ),
+        # a cast keeps the value: the constant is still this instruction's argument
+        (
+            "TTI_SFPLOAD(p_sfpu::LREG0, static_cast<std::uint32_t>(SFPLOADI_MOD0_FLOATB), ADDR_MOD_3, 0);",
+            "SFPLOADI modifier, passed to SFPLOAD",
+        ),
+        (
+            "TTI_SFPLOAD(p_sfpu::LREG0, (std::uint32_t)SFPLOADI_MOD0_FLOATB, ADDR_MOD_3, 0);",
+            "SFPLOADI modifier, passed to SFPLOAD",
+        ),
+        (
+            "TTI_SFPLOAD(p_sfpu::LREG0, std::uint32_t(SFPLOADI_MOD0_FLOATB), ADDR_MOD_3, 0);",
+            "SFPLOADI modifier, passed to SFPLOAD",
+        ),
+        (
+            "TTI_ZEROACC(reinterpret_cast<int>(p_zerosrc::SOMETHING), 0, 0, 0);",
+            "belongs to p_zerosrc, passed to ZEROACC",
+        ),
     ],
 )
 def test_constant_from_another_instruction_fails(tmp_path, stmt, fragment):
@@ -200,6 +238,8 @@ def test_constant_in_its_own_instruction_is_clean(tmp_path, stmt):
         # forwarded through a wrapper: the wrapper, not this call, decides the instruction
         "TTI_SFPLOAD(p_sfpu::LREG0, to_load_mode(SFPLOADI_MOD0_FLOATB), ADDR_MOD_3, 0);",
         "TTI_SFPLOAD(p_sfpu::LREG0, cvt<SFPLOADI_MOD0_FLOATB>(x), ADDR_MOD_3, 0);",
+        "TTI_SFPLOAD(p_sfpu::LREG0, to_mode<std::uint32_t>(SFPLOADI_MOD0_FLOATB), ADDR_MOD_3, 0);",
+        "TTI_SFPLOAD(p_sfpu::LREG0, wrap<a<b>>(SFPLOADI_MOD0_FLOATB), ADDR_MOD_3, 0);",
         "_sfpu_load_imm_(SFPLOADI_MOD0_FLOATB, 0x3f80);",
         "constexpr std::uint32_t mode = SFPLOADI_MOD0_FLOATB;",
         "__builtin_rvtt_sfpxiadd_i(a, b, SFPIADD_MOD1_CC_NONE);",
@@ -210,6 +250,53 @@ def test_constant_in_its_own_instruction_is_clean(tmp_path, stmt):
 def test_forwarded_constant_is_not_checked(tmp_path, stmt):
     r = run(body(tmp_path, stmt))
     assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        (SCRIPT, True),
+        (os.path.join(HERE, "..", "check_mutex_balance.py"), True),
+        ("tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_ops.h", True),
+        ("tt_metal/tt-llk/tt_llk_quasar/common/inc/ckernel_sfpu_ops.h", True),
+        ("tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_instr_params.h", False),
+        ("tt_metal/tt-llk/infra/check_cross_thread_cfg.py", False),
+    ],
+)
+def test_every_verdict_input_triggers_a_full_rescan(path, expected):
+    """The verdict depends on the checker, its lexer and the TT_OP_* definitions."""
+    assert load_module().rescans_all([path]) is expected
+
+
+def test_full_rescan_adds_the_tree_to_the_touched_files(tmp_path, monkeypatch):
+    chk = load_module()
+    touched = body(
+        tmp_path, "TTI_SFPLOAD(p_sfpu::LREG0, SFPLOADI_MOD0_FLOATB, ADDR_MOD_3, 0);"
+    )
+    elsewhere = tmp_path / "elsewhere.h"
+    elsewhere.write_text(
+        "inline void g() { TTI_STALLWAIT(p_stall::MATH, p_stall::STALL_MATH); }\n"
+    )
+    ops = tmp_path / "ckernel_ops.h"
+    ops.write_text("#define TT_OP_NOP() 0\n")
+    monkeypatch.setattr(chk, "all_headers", lambda: {str(elsewhere)})
+    monkeypatch.setattr(sys, "argv", [SCRIPT, str(ops), str(touched)])
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = chk.main()
+    assert code == 1
+    assert "k.h:" in out.getvalue() and "elsewhere.h:" in out.getvalue(), out.getvalue()
+
+
+def test_missing_instruction_definitions_fail_loudly(tmp_path, monkeypatch):
+    """No ckernel*_ops.h found: refuse to pass while checking nothing."""
+    chk = load_module()
+    monkeypatch.setattr(chk, "_LLK", str(tmp_path))
+    with pytest.raises(  # allow-pytest.raises: a host-side script, no device fixture
+        SystemExit
+    ) as e:
+        chk._instruction_names()
+    assert "no TT_OP_* definitions found" in str(e.value)
 
 
 def test_no_files_is_clean():

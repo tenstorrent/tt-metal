@@ -25,8 +25,13 @@ plain integer:
    innermost call around the constant decides: an instruction macro (`TT_OP_` / `TTI_` /
    `TT_`) is checked; a constant passed to any other function -- including sfpi's
    `__builtin_rvtt_*` intrinsics, whose `sfpx*` forms expand to several instructions -- is
-   forwarded, and not checked. Families that several instructions share by design
-   (`p_setrwc`, `p_unpacr`, `p_movd2a`, `p_mova2d`, ...) are deliberately not listed.
+   forwarded, and not checked. A cast (`static_cast<T>(c)`, `(T)c`, `T(c)`) is not a call: it
+   keeps the value, so the constant is still the enclosing instruction's argument. Families
+   that several instructions share by design (`p_setrwc`, `p_unpacr`, `p_movd2a`, `p_mova2d`,
+   ...) are deliberately not listed.
+
+The verdict depends on this file, on the lexer in check_mutex_balance.py and on the
+`TT_OP_*` definitions in `ckernel*_ops.h`; a commit touching any of those rescans every header.
 """
 import argparse
 import glob
@@ -63,9 +68,37 @@ INSTR_FAMILIES = {
 _ROLE_CALL = re.compile(r"\b(?:TT_OP|TTI|TT)_(STALLWAIT|SEMWAIT)\s*\(")
 _STALL_NAME = re.compile(r"\bp_stall::(\w+)")
 _INT_LITERAL = re.compile(r"^(?:0[xX][0-9a-fA-F']+|0[bB][01']+|\d[\d']*)[uUlL]*$")
-_CALL_NAME = re.compile(r"([A-Za-z_]\w*)\s*$")
+_CALL_NAME = re.compile(r"((?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*$")
 _INSN = re.compile(r"^(?:TT_OP_|TTI_|TT_)([A-Z][A-Z0-9_]*)$")
-_LLK = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LLK = os.path.normpath(os.path.join(_HERE, ".."))
+_OPS_HEADER = re.compile(r"^ckernel\w*_ops\.h$")
+# Keywords whose `(` is grouping, and conversions that keep the value: a constant inside them is
+# still the enclosing instruction's argument.
+_GROUPING = {"if", "while", "for", "switch", "return", "sizeof", "decltype"}
+_CASTS = {"static_cast", "reinterpret_cast", "const_cast", "dynamic_cast"}
+_TYPES = {
+    "bool",
+    "char",
+    "short",
+    "int",
+    "long",
+    "unsigned",
+    "size_t",
+    "int8_t",
+    "int16_t",
+    "int32_t",
+    "int64_t",
+    "uint8_t",
+    "uint16_t",
+    "uint32_t",
+    "uint64_t",
+    "uint",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+}
 
 
 def _instruction_names():
@@ -74,7 +107,13 @@ def _instruction_names():
     for path in glob.glob(
         os.path.join(_LLK, "tt_llk_*", "common", "inc", "ckernel*_ops.h")
     ):
-        names |= set(re.findall(r"#\s*define\s+TT_OP_(\w+)\s*\(", open(path).read()))
+        with open(path) as f:
+            names |= set(re.findall(r"#\s*define\s+TT_OP_(\w+)\s*\(", f.read()))
+    if not names:
+        sys.exit(
+            "check_instr_encoding_args: no TT_OP_* definitions found under "
+            f"{_LLK}/tt_llk_*/common/inc/ckernel*_ops.h -- refusing to pass while checking nothing"
+        )
     return names
 
 
@@ -151,46 +190,82 @@ def _norm(name):
     return name.replace("_", "").upper()
 
 
-def _in_template_args(text):
-    """True if text ends inside an open `name<...` template argument list."""
+# Inside a template argument list only type-like text appears: names, `::`, digits, commas,
+# `*`, a single `&`, nested `<>`. Anything else (an operator, `?`, a paren) means the `<` was
+# a comparison.
+_TEMPLATE_BODY = re.compile(r"^(?:[\w\s:,*<>]|&(?!&))*$")
+
+
+def _template_spans(code):
+    """(start, end) of every `<...>` template argument list, so a constant inside one is a
+    template argument (forwarded), while a `<` that is a comparison opens nothing."""
+    spans = []
+    for m in re.finditer(r"\w\s*(<)(?![<=])", code):
+        start = m.start(1)
+        depth = 0
+        for j in range(start, len(code)):
+            c = code[j]
+            if c == "<":
+                depth += 1
+            elif c == ">":
+                depth -= 1
+                if depth == 0:
+                    body = code[start + 1 : j]
+                    nxt = code[j + 1 :].lstrip()[:2]
+                    if _TEMPLATE_BODY.match(body) and (
+                        nxt[:1] in ("(", "{", ",", ")", ";", ">", "") or nxt == "::"
+                    ):
+                        spans.append((start, j))
+                    break
+            elif not (c.isalnum() or c in "_ \t\n:,*&"):
+                break
+    return spans
+
+
+def _template_callee(code, i):
+    """For a `(` that follows `name<...>`, the name; None if there is no such template."""
+    j = i - 1
+    while j >= 0 and code[j].isspace():
+        j -= 1
+    if j < 0 or code[j] != ">":
+        return None
     depth = 0
-    for k, c in enumerate(text):
-        if c == "<" and re.search(r"\w\s*$", text[:k]) and text[k + 1 : k + 2] != "<":
+    while j >= 0:
+        if code[j] == ">":
             depth += 1
-        elif c == ">" and depth:
+        elif code[j] == "<":
             depth -= 1
-    return depth > 0
+            if depth == 0:
+                break
+        j -= 1
+    m = _CALL_NAME.search(code, max(0, j - 80), j)
+    return m.group(1) if m else None
+
+
+def _opener(code, i):
+    """What the `(` at i opens: an instruction name, "" for any other call, None for grouping
+    (control keywords, parenthesized expressions and value-preserving casts)."""
+    m = _CALL_NAME.search(code, max(0, i - 80), i)
+    if not m:
+        callee = _template_callee(code, i)
+        if callee is None:
+            return None  # a parenthesized expression or a C-style cast `(T)c`
+        return None if callee.split("::")[-1] in _CASTS else ""
+    name = m.group(1)
+    base = name.split("::")[-1]
+    ins = _INSN.match(base)
+    # TT_<X>_VALID range-checks X's operands, so its arguments are X's
+    insn = ins and re.sub(r"_VALID$", "", ins.group(1))
+    if insn in INSTRUCTIONS:
+        return insn
+    if base in _GROUPING or base in _TYPES:
+        return None  # grouping, or a functional cast `T(c)`
+    return ""
 
 
 def check_families(code):
-    # For every `(`: the instruction it opens, "" for any other call, None for plain grouping.
-    opener = {}
-    for i, c in enumerate(code):
-        if c != "(":
-            continue
-        m = _CALL_NAME.search(code, max(0, i - 80), i)
-        if not m:
-            # `f<T>(` or `static_cast<T>(`: a call, so a constant inside is forwarded
-            prev = code[max(0, i - 80) : i].rstrip()
-            opener[i] = "" if prev.endswith(">") else None
-            continue
-        ins = _INSN.match(m.group(1))
-        # TT_<X>_VALID range-checks X's operands, so its arguments are X's
-        name = ins and re.sub(r"_VALID$", "", ins.group(1))
-        if name in INSTRUCTIONS:
-            opener[i] = name
-        elif m.group(1) in (
-            "if",
-            "while",
-            "for",
-            "switch",
-            "return",
-            "sizeof",
-            "decltype",
-        ):
-            opener[i] = None
-        else:
-            opener[i] = ""
+    opener = {i: _opener(code, i) for i, c in enumerate(code) if c == "("}
+    forwarded = _template_spans(code)
     consts = {m.start(): m for m in _CONST.finditer(code)}
     stack = []  # (opener, offset of the `(`)
     for i, c in enumerate(code):
@@ -202,8 +277,8 @@ def check_families(code):
         if not m:
             continue
         inner = next((x for x, _ in reversed(stack) if x is not None), None)
-        if not inner or (stack and _in_template_args(code[stack[-1][1] + 1 : i])):
-            continue  # not an instruction argument, or forwarded through a function call
+        if not inner or any(a < i < b for a, b in forwarded):
+            continue  # not an instruction argument, or forwarded as a template argument
         if m.group(1):
             if _norm(m.group(1)) != _norm(inner):
                 yield _line(code, i), (
@@ -220,6 +295,37 @@ def scan(path):
     yield from check_families(code)
 
 
+_RESCAN_TRIGGERS = {
+    os.path.abspath(__file__),
+    os.path.join(
+        _HERE, "check_mutex_balance.py"
+    ),  # the lexer every verdict goes through
+}
+
+
+def rescans_all(paths):
+    """A change to the checker, its lexer or an instruction-definition header moves the verdict
+    on every header, not just the touched ones."""
+    return any(
+        os.path.abspath(p) in _RESCAN_TRIGGERS or _OPS_HEADER.match(os.path.basename(p))
+        for p in paths
+    )
+
+
+def all_headers():
+    repo = os.path.normpath(os.path.join(_LLK, "..", ".."))
+    trees = (
+        "tt_metal/tt-llk/tt_llk_*/**/*.h",
+        "tt_metal/tt-llk/tt_llk_*/**/*.hpp",
+        "tt_metal/hw/ckernels/*/metal/**/*.h",
+    )
+    return {
+        os.path.relpath(p)
+        for t in trees
+        for p in glob.glob(os.path.join(repo, t), recursive=True)
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -227,21 +333,8 @@ def main():
     ap.add_argument("files", nargs="*")
     args = ap.parse_args()
     files = [f for f in args.files if f.endswith((".h", ".hpp"))]
-    if any(os.path.abspath(f) == os.path.abspath(__file__) for f in args.files):
-        # A change to the checker moves the verdict on every header, not just touched ones.
-        repo = os.path.normpath(os.path.join(_LLK, "..", ".."))
-        trees = (
-            "tt_metal/tt-llk/tt_llk_*/**/*.h",
-            "tt_metal/tt-llk/tt_llk_*/**/*.hpp",
-            "tt_metal/hw/ckernels/*/metal/**/*.h",
-        )
-        files = sorted(
-            {
-                os.path.relpath(p)
-                for t in trees
-                for p in glob.glob(os.path.join(repo, t), recursive=True)
-            }
-        )
+    if rescans_all(args.files):
+        files = sorted(set(files) | set(all_headers()))
     n = 0
     for path in files:
         for line, msg in scan(path):

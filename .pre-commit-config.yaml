@@ -177,12 +177,15 @@ repos:
       name: "llk: STALLWAIT/SEMWAIT argument roles and instruction-scoped constants"
       entry: python3 tt_metal/tt-llk/infra/check_instr_encoding_args.py
       language: system
-      # Zero findings in both trees, so no baseline. A change to the checker rescans every header.
+      # Zero findings in both trees, so no baseline. A change to the checker, to its lexer
+      # (check_mutex_balance.py) or to a ckernel*_ops.h instruction-definition header rescans
+      # every header.
       files: |
         (?x)^(
           tt_metal/tt-llk/tt_llk_.*\.(h|hpp)|
           tt_metal/hw/ckernels/[^/]+/metal/.*\.h|
-          tt_metal/tt-llk/infra/check_instr_encoding_args\.py
+          tt_metal/tt-llk/infra/check_instr_encoding_args\.py|
+          tt_metal/tt-llk/infra/check_mutex_balance\.py
         )$
     - id: llk-xthread-cfg-wormhole
       name: "llk: cross-thread config write (wormhole)"
