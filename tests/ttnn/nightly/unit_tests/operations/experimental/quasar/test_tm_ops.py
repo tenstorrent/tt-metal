@@ -447,7 +447,26 @@ def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
 
 
 def test_quasar_tilize_l1_output_reserved_in_budget(device):
-    shape = (1, 1, 2048, 8192)
+    tile_dim, tile_bytes = 32, 2048  # bfloat16 in and out
+    info = ttnn._ttnn.reports.get_device_info(device)
+    free_l1, num_banks = info.cb_limit, info.l1_num_banks
+
+    # Full-row DFBs (~0.8 of free L1) fit alone; with the L1 output (~0.3) they overflow.
+    # The reservation must therefore route to the SingleCore fallback.
+    Wt = (4 * free_l1 // 5) // (2 * tile_bytes)
+    dfb = 2 * Wt * tile_bytes
+    Ht = -(-(3 * free_l1 // 10) * num_banks // (Wt * tile_bytes))
+    output = -(-Ht * Wt // num_banks) * tile_bytes
+
+    # SingleCore's DFB size ignores the output, so check it still fits next to it.
+    max_tiles = (info.worker_l1_size // 2 - info.address_at_first_l1_cb_buffer) // (2 * tile_bytes)
+    tiles_per_block = next(n for n in range(min(Wt, max_tiles), 0, -1) if Wt % n == 0)
+    single_core_dfb = 2 * tiles_per_block * tile_bytes
+
+    if not (dfb < free_l1 < dfb + output and single_core_dfb + output < free_l1):
+        pytest.skip(f"No shape separates the routes on this device (free_l1={free_l1}, banks={num_banks})")
+
+    shape = (1, 1, Ht * tile_dim, Wt * tile_dim)
     torch.manual_seed(0)
     x = torch.rand(shape, dtype=torch.bfloat16)
     ttnn_in = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, device=device)

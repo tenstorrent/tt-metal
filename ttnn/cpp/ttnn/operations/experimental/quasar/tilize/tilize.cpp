@@ -66,7 +66,10 @@ ttnn::Tensor tilize(
     // Reserve the output buffer's per-core L1 up front: it is allocated after this check but
     // before the DFBs are placed (interleaved L1 grows top-down, static DFBs bottom-up), so leaving
     // it out overestimates the DFB budget and can pick a factory whose DFBs then clash with it.
-    // Unlike data_movement, no quasar tilize factory has a staging DFB, so the staging terms stay 0.
+    // The staging terms stay 0 even though TilizeMultiCoreBlockProgramFactory allocates a staging DFB:
+    // select_program_factory never picks that factory on Gen2 (its cliff reader self-loops the staging
+    // DFB, which Gen2 rejects) and routes !enough_space_height to SingleCore instead. If the block
+    // factory is ever re-enabled, mirror data_movement/tilize and pass its staging footprint here.
     const uint32_t pending_l1_output_bytes = ttnn::operations::data_movement::get_pending_l1_output_reservation(
         input_tensor,
         input_tensor.padded_shape(),
