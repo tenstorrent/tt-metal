@@ -27,7 +27,14 @@ class Generator:
         self.eos = set(eos) if eos is not None else load_eos()
         self.U, self.trace = U, trace
         self.dec = Decoder(
-            model, trace=trace, keep_logits=keep_logits, U=U, feedback=os.environ.get("MIMO_FEEDBACK", "0") == "1"
+            model,
+            trace=trace,
+            keep_logits=keep_logits,
+            U=U,
+            feedback=os.environ.get("MIMO_FEEDBACK", "0") == "1",
+            max_pos=max_pos,
+            eos=self.eos,
+            chunk=int(os.environ.get("MIMO_CHUNK", "16")),
         )
         self.keep_logits = keep_logits
         self.prefill_group = prefill_group
@@ -84,6 +91,39 @@ class Generator:
         times = []
         fb = getattr(self.dec, "feedback", False) and teacher is None
         dirty = True
+        if fb and not self.keep_logits:
+            # device-resident loop: the host only enqueues chunks of trace replays (state, eos/cap handling and the token ring live on device) and reads the ring once per chunk
+            self.dec.set_inputs(cur, pos, ~(alive & (pos < self.max_pos - 1)))
+            step = 0
+            while step < max_new - 1 and alive.any():
+                n = min(self.dec.N, max_new - 1 - step)
+                t1 = time.perf_counter()
+                toks = self.dec.run_chunk(n)
+                dt = (time.perf_counter() - t1) / n
+                for j in range(n):
+                    alive &= pos < self.max_pos - 1
+                    if not alive.any():
+                        break
+                    times.append(dt)
+                    for i, (r, s) in enumerate(place):
+                        if not alive[r, s]:
+                            continue
+                        t = int(toks[j][r, s])
+                        out[i].append(t)
+                        sbest[i].append(0.0)
+                        pos[r, s] += 1
+                        if t in self.eos or len(out[i]) >= max_new:
+                            alive[r, s] = False
+                    step += 1
+            return dict(
+                tokens=out,
+                first_logits=flg,
+                step_logits=slog,
+                step_best=sbest,
+                times=times,
+                prefill_s=t_pre,
+                place=place,
+            )
         for step in range(max_new - 1):
             if not alive.any():
                 break
@@ -134,4 +174,7 @@ class Generator:
             keep_logits=keep_logits,
             U=U,
             feedback=os.environ.get("MIMO_FEEDBACK", "0") == "1",
+            max_pos=self.max_pos,
+            eos=self.eos,
+            chunk=int(os.environ.get("MIMO_CHUNK", "16")),
         )
