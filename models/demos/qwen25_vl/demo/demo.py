@@ -59,6 +59,13 @@ def _qwen25_vl_device_params():
     }
 
 
+_mesh_shape = qwen25_vl_mesh_shape()
+# Resolved at collection time so the mesh_device fixture sizes trace regions for the per-lane SKU.
+DEFAULT_DATA_PARALLEL = default_data_parallel(
+    os.environ.get("HF_MODEL", ""), _mesh_shape[0] * _mesh_shape[1] if isinstance(_mesh_shape, tuple) else _mesh_shape
+)
+
+
 def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config):
     if paged_attention_config is None:
         return None
@@ -178,7 +185,7 @@ def prepare_generator_args(
 # page_params (dict): Page parameters for paged attention (block_size, max_num_blocks) For smaller context lengths use block_size=32 and max_num_blocks=1024, for larger context use block_size=64 and max_num_blocks=2048
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
-# data_parallel (int | None): Number of data parallel groups; None picks default_data_parallel(HF_MODEL, num_devices)
+# data_parallel (int): Number of data parallel groups; DEFAULT_DATA_PARALLEL = default_data_parallel(HF_MODEL, num_devices)
 #     (1 on N150/N300/T3K, 4 x 1x8 submeshes on Galaxy). batch_size is per DP group.
 #
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
@@ -198,7 +205,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompts
             "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
@@ -212,7 +219,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
         (  # Batch-1 run with full model for more stable BERTScore checks (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/test_bert_score.json",
@@ -226,7 +233,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             True,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
         (  # Batch-1 run with text only prompts hence skipping vision model (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
@@ -240,7 +247,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
         (  # Batch-4 run with 300 dpi scanned document (Latency) - 16k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -254,7 +261,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
         (  # Batch-2 run with 300 dpi scanned document (Latency) - 32k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -268,7 +275,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 64k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -282,7 +289,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
         (  # Batch-1 run with 300 dpi scanned document (Latency) - 128k long context, real-world test
             "models/demos/qwen25_vl/demo/sample_prompts/demo_300dpi.json",  # single qwen demo prompt
@@ -296,7 +303,7 @@ def prepare_generator_args(
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
-            None,  # data_parallel (None: default for model/device, see default_data_parallel)
+            DEFAULT_DATA_PARALLEL,  # data_parallel
         ),
     ],
     ids=[
@@ -359,8 +366,6 @@ def test_demo(
 
     num_devices = mesh_device.get_num_devices()
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
-    if data_parallel is None:
-        data_parallel = default_data_parallel(os.environ.get("HF_MODEL", ""), num_devices)
 
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
@@ -372,8 +377,8 @@ def test_demo(
         pytest.skip("Qwen2.5-VL-7B does not support running on N150")
 
     logger.info(f"mesh_device: {mesh_device}")
-    use_tt_vision = True
-    enable_trace = True  # Use tracing for better perf
+    use_tt_vision = os.environ.get("TT_QWEN_USE_HF_VISION") != "1"  # EXPERIMENT
+    enable_trace = os.environ.get("TT_QWEN_DISABLE_DECODE_TRACE") != "1"  # EXPERIMENT
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
@@ -461,7 +466,9 @@ def test_demo(
     tokenizer = model_args.tokenizer
 
     for m_args in model_args_list:
-        m_args.use_qk_fused = False
+        m_args.use_qk_fused = os.environ.get("TT_QWEN_USE_QK_FUSED") == "1"  # EXPERIMENT (default False)
+        if os.environ.get("TT_QWEN_DISABLE_BATCHED_PREFILL") == "1":  # EXPERIMENT
+            m_args.disable_batched_prefill = True
     generator = Generator(model_list, model_args_list, mesh_device, processor=processor, tokenizer=tokenizer)
 
     from transformers import logging as transformers_logging
@@ -546,6 +553,8 @@ def test_demo(
                     )
             else:
                 image_embeds = visual_models[0](inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+                # transformers 5.x HF visual returns BaseModelOutputWithPooling; the merged tokens are pooler_output
+                image_embeds = getattr(image_embeds, "pooler_output", image_embeds)
         else:
             image_embeds = torch.tensor([], dtype=torch.bfloat16)
         profiler.end(f"vision_model_prefill", iteration=batch_idx)
@@ -580,6 +589,7 @@ def test_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache_list,
             prompt_lens=decoding_pos,
+            enable_trace=os.environ.get("TT_QWEN_DISABLE_PREFILL_TRACE") != "1",  # EXPERIMENT
         )
         profiler.end(f"compile_prefill", iteration=batch_idx)
         logger.info("Finished prefill warmup")
@@ -592,6 +602,7 @@ def test_demo(
             page_table=page_table,
             kv_cache=tt_kv_cache_list,
             prompt_lens=decoding_pos,
+            enable_trace=os.environ.get("TT_QWEN_DISABLE_PREFILL_TRACE") != "1",  # EXPERIMENT
         )
         generator.update_rope_deltas([rope_delta.item() for rope_delta in rope_deltas])
         prefilled_token = torch.argmax(logits, dim=-1)
@@ -982,11 +993,15 @@ def test_demo(
 def load_inputs(input_file, batch_size):
     with open(input_file, "r") as f:
         user_input = json.load(f)
+    # A file holding a single conversation (a list of message dicts) is one user; repeating
+    # its messages would merge every copy into one long conversation.
+    if user_input and isinstance(user_input[0], dict):
+        user_input = [user_input]
     if len(user_input) < batch_size:
         logger.warning(
             f"Number of users in the file {input_file} is less than the provided batch={batch_size}. Repeating the prompts to match the batch size."
         )
-        user_input = user_input * batch_size
+        user_input = [user_input[i % len(user_input)] for i in range(batch_size)]
     return user_input
 
 

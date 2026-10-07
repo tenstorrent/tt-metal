@@ -246,6 +246,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 f" = {total_tokens} total tokens (DP={self.data_parallel})"
             )
             num_dp = max(self.data_parallel, 1)
+            lane_chunks = []
             for dp_group in range(num_dp):
                 group_start = dp_group * max_batch_size_per_model
                 group_end = min(group_start + max_batch_size_per_model, batch)
@@ -285,22 +286,38 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         if chunk_size == 0:
                             chunk_size = 1
 
+                group_chunks = []
                 chunk_start = 0
                 for current_chunk_size in _power_of_two_prefill_chunks(group_size, chunk_size):
-                    chunk_end = chunk_start + current_chunk_size
-                    abs_start = group_start + chunk_start
-                    abs_end = group_start + chunk_end
-                    chunk_logits = self.__prefill_forward_batched_text(
-                        tokens=tokens[abs_start:abs_end],
-                        rot_mats=(rot_mats[0][abs_start:abs_end], rot_mats[1][abs_start:abs_end]),
-                        page_table=page_table[abs_start:abs_end],
-                        kv_cache=group_kv_cache,
-                        prompt_lens=prompt_lens[abs_start:abs_end],
-                        prefill_seq_len=batch_seq_len,
-                        model_id=dp_group,
+                    group_chunks.append((group_start + chunk_start, group_start + chunk_start + current_chunk_size))
+                    chunk_start += current_chunk_size
+                lane_chunks.append((dp_group, group_kv_cache, group_chunks))
+
+            # Round-robin over DP lanes: enqueue one chunk on every lane, then read the lanes back,
+            # so each lane's host readback overlaps with the other lanes' device compute.
+            for round_idx in range(max((len(chunks) for _, _, chunks in lane_chunks), default=0)):
+                pending = []
+                for dp_group, group_kv_cache, chunks in lane_chunks:
+                    if round_idx >= len(chunks):
+                        continue
+                    abs_start, abs_end = chunks[round_idx]
+                    pending.append(
+                        (
+                            abs_start,
+                            abs_end,
+                            self.__dispatch_batched_prefill(
+                                tokens=tokens[abs_start:abs_end],
+                                rot_mats=(rot_mats[0][abs_start:abs_end], rot_mats[1][abs_start:abs_end]),
+                                page_table=page_table[abs_start:abs_end],
+                                kv_cache=group_kv_cache,
+                                prompt_lens=prompt_lens[abs_start:abs_end],
+                                prefill_seq_len=batch_seq_len,
+                                model_id=dp_group,
+                            ),
+                        )
                     )
-                    output_logits[abs_start:abs_end] = chunk_logits
-                    chunk_start = chunk_end
+                for abs_start, abs_end, lane_pending in pending:
+                    output_logits[abs_start:abs_end] = self.__finish_batched_prefill(lane_pending)
         else:
             use_trace = (
                 enable_trace and page_table is not None and batch_seq_len <= self.model_args.max_prefill_chunk_size
@@ -392,6 +409,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         prefill_seq_len,
         model_id=0,
     ):
+        pending = self.__dispatch_batched_prefill(
+            tokens, rot_mats, page_table, kv_cache, prompt_lens, prefill_seq_len, model_id
+        )
+        return self.__finish_batched_prefill(pending)
+
+    def __dispatch_batched_prefill(
+        self,
+        tokens,
+        rot_mats,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        prefill_seq_len,
+        model_id=0,
+    ):
+        """Enqueue a batched prefill forward on one DP lane without waiting for it."""
         model_inst = self._ttt_generator.model[model_id]
         batch_size = tokens.shape[0]
         last_token_idx = [int(pl) - 1 for pl in prompt_lens]
@@ -427,7 +460,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         hidden_dim = tt_out.shape[-1]
         tt_out = ttnn.reshape(tt_out, [batch_size, 1, prefill_seq_len, hidden_dim])
+        return model_id, tt_out, prefill_input, page_table_tt, last_token_idx, batch_size, prefill_seq_len
 
+    def __finish_batched_prefill(self, pending):
+        """Read back the last-token logits of a dispatched batched prefill (blocks on that lane only)."""
+        model_id, tt_out, prefill_input, page_table_tt, last_token_idx, batch_size, prefill_seq_len = pending
+        model_inst = self._ttt_generator.model[model_id]
         user_hidden = model_inst.extract_last_tokens_batched_prefill(
             tt_out, last_token_idx, batch_size, prefill_seq_len
         )
@@ -749,11 +787,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
     ## Destructor (used to delete ttnn trace if exists)
 
+    def release_persistent_capture(self) -> None:
+        """Release the Qwen prefill traces and the wrapped generator's traces while the mesh is open."""
+        for trace_key in list(self.trace_id_prefill.keys()):
+            try:
+                self._release_trace_prefill(trace_key)
+            except Exception:
+                pass  # the mesh may already be closed
+        self._ttt_generator.release_persistent_capture()
+
     def __del__(self):
-        for trace_key, trace_id in self.trace_id_prefill.items():
-            if trace_id is not None:
-                mesh = self.trace_mesh_prefill.get(trace_key, self.mesh_device)
-                ttnn.release_trace(mesh, trace_id)
+        # A destructor may run after the mesh closed; release_persistent_capture() tolerates that.
+        if hasattr(self, "trace_id_prefill"):
+            self.release_persistent_capture()
 
         if hasattr(self, "trace_id"):
             ttnn.release_trace(self.mesh_device, self.trace_id)

@@ -690,8 +690,8 @@ class ModelArgs:
         # Decode-SDPA tuning. Architecture-specific overrides are applied once in
         # _set_model_specific_params(); these defaults preserve existing behaviour for
         # every model (q/k chunk 0 => op auto-selects, forced framework compute config).
-        self.sdpa_decode_q_chunk_size = 0
-        self.sdpa_decode_k_chunk_size = 0
+        self.sdpa_decode_q_chunk_size = int(os.environ.get("TT_SDPA_DECODE_Q_CHUNK", 0))  # EXPERIMENT
+        self.sdpa_decode_k_chunk_size = int(os.environ.get("TT_SDPA_DECODE_K_CHUNK", 0))  # EXPERIMENT
         self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
 
@@ -2596,7 +2596,7 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-VL-3B": {"N150": 4, "N300": 32, "T3K": None, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-3B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": None},
                 "Qwen2.5-VL-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
                 "olmOCR-2-7B": {"N150": 4, "N300": 16, "T3K": 128, "TG": 128, "P150x4": None},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
@@ -4770,10 +4770,14 @@ class HfAttentionWrapper:
                 if self.rope_layer_type is not None
                 else getattr(self.attention, "layer_type", None)
             )
+            rope_position_ids = position_ids
+            if "Qwen2_5_VL" in type(self.rotary_emb).__name__ or "Qwen2VL" in type(self.rotary_emb).__name__:
+                # M-RoPE rotary expects (3, bs, S); text-only positions are identical on all three axes.
+                rope_position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
             if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
-                position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
+                position_embeddings = self.rotary_emb(x, rope_position_ids, layer_type=_layer_type)
             else:
-                position_embeddings = self.rotary_emb(x, position_ids)
+                position_embeddings = self.rotary_emb(x, rope_position_ids)
             output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
