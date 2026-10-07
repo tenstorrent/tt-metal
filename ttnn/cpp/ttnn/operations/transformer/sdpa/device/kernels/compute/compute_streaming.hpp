@@ -962,8 +962,20 @@ static inline void l1_acc_tile_run(
 
 static inline void l1_acc_neginf_cols(
     uint32_t mask_cb, uint32_t out_cb, uint32_t row_offset, uint32_t start_col, uint32_t end_col, uint32_t neginf_idx) {
-    for (uint32_t col = start_col; col < end_col; col++) {
-        l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
+    // One DEST section per DEST_AUTO_LIMIT columns: the hand-off is paid per batch, not per tile.
+    constexpr uint32_t kBatch = compute_kernel_lib::DEST_AUTO_LIMIT;
+    for (uint32_t col = start_col; col < end_col; col += kBatch) {
+        const uint32_t batch = (end_col - col) < kBatch ? (end_col - col) : kBatch;
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < batch; j++) {
+            copy_tile(mask_cb, neginf_idx, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < batch; j++) {
+            sdpa_pack_tile_ooo(j, out_cb, row_offset + col + j);
+        }
+        tile_regs_release();
     }
 }
 
