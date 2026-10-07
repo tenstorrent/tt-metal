@@ -697,13 +697,13 @@ autofix_annotate() {
       | {f: (.test | split("::") | last | split("[") | first),
          short: (.test | split("::") | last), r: ((.last_seen.number // "") | tostring),
          tk: ("\(.test) \(.job) \(.summary // "") \(.error_key // "")" | toks),
-         n: (if .state == "pr_open" then "\($eo) draft PR \(.pr.url | prlink), targeted CI running"
-             elif .state == "ci_passed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ✅, awaiting review"
-             elif .state == "ci_failed" then "\($eo) draft PR \(.pr.url | prlink), targeted CI ❌"
-             elif .state == "merged" then "\($em) fix \(.pr.url | prlink) merged, not in this run yet"
-             elif .state == "fixed_upstream" then "\($em) already fixed on main by \(fixref), not in this run yet"
-             elif .state == "fix_pending" then "\($eo) fix in progress: open PR \(.fix_pr.url | prlink)"
-             elif .state == "proposed_dryrun" then "🛠 autofix proposal (dry run): \(.verdict_title // "see proposals/")"
+         n: (if .state == "pr_open" then "\($eo) *autofix draft \(.pr.url | prlink) — needs your review* (targeted CI running)"
+             elif .state == "ci_passed" then "\($eo) *autofix draft \(.pr.url | prlink) — CI ✅, needs your review*"
+             elif .state == "ci_failed" then "\($eo) *autofix draft \(.pr.url | prlink) — CI ❌, needs your look*"
+             elif .state == "merged" then "\($em) autofix \(.pr.url | prlink) merged, not in this run yet"
+             elif .state == "fixed_upstream" then "\($em) already fixed on main by \(fixref)\(if (.fix_author // "") != "" then " by @\(.fix_author)" else "" end), not in this run yet"
+             elif .state == "fix_pending" then "\($eo) fix in progress\(if (.fix_author // "") != "" then " by @\(.fix_author)" else "" end): open PR \(.fix_pr.url | prlink)"
+             elif .state == "proposed_dryrun" then "🛠 *autofix dry-run proposal — take a look*: \((.verdict_title // "see proposals/") | sub("^\\[autofix[^]]*\\] *"; ""))"
              elif .state == "no_fix" then "🛠 no safe autofix"
              else null end)}
       | select(.n != null and (.f | length) > 3) ] as $notes

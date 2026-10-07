@@ -127,6 +127,14 @@ slack_sig() {
 
 run_url() { echo "https://github.com/$REPO/actions/runs/$1"; }
 
+# Who owns a PR, for "by @author" labels on PRs that are not ours.
+pr_author() { gh pr view "$1" -R "$REPO" --json author --jq '.author.login' 2>/dev/null || true; }
+
+# Message wording convention: a PR that needs one of US to act (our autofix
+# draft to review, a dry-run proposal to look at) is labelled
+# *autofix draft #N — needs your review* in bold; a PR by someone else is
+# "#N by @author" in plain text; our merged fix is plain "autofix #N merged".
+
 run_jobs_json() {  # all jobs of a run as [{name, conclusion}]; 3 tries (GitHub 5xx are common)
   local i out
   for i in 1 2 3; do
@@ -170,7 +178,7 @@ followup() {
         local msha
         msha=$(gh pr view "$url" --json mergeCommit --jq '.mergeCommit.oid' 2>/dev/null || echo "")
         $FIXLIB mark --state merged --extra "$(jq -nc --arg f "$msha" '{fix_sha:$f}')" "${sigs[@]}"
-        slack_sig "$EMOJI_PR_MERGED *merged* #$num: *$(jq -r .title <<<"$g")*
+        slack_sig "$EMOJI_PR_MERGED autofix #$num merged: $(jq -r .title <<<"$g")
 • \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g")) · merge commit:$msha
 • waiting for the next run that contains it to confirm it is green" "${sigs[@]}"
         continue ;;
@@ -201,18 +209,16 @@ followup() {
       gh pr comment "$url" --body "❌ **autofix:** the targeted CI legs finished and at least one failed. The fix did not hold; needs a human.
 $lines" >/dev/null
       $FIXLIB mark --state ci_failed --extra "{\"dispatched\": $new_disp}" "${sigs[@]}"
-      slack_sig "$EMOJI_PR_OPENED draft PR #$num: *$(jq -r .title <<<"$g")*
-• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
-• ❌ targeted CI failed, needs a human" "${sigs[@]}"
+      slack_sig "$EMOJI_PR_OPENED *autofix draft #$num — targeted CI ❌, needs your look*: $(jq -r .title <<<"$g")
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))" "${sigs[@]}"
     else
       gh api "repos/$REPO/statuses/$head" -f state=success -f context="$CI_STATUS_CONTEXT" \
          -f description="Targeted CI passed — still needs human review" >/dev/null
       gh pr comment "$url" --body "✅ **autofix:** all targeted CI legs passed. Still a draft: needs a human to review the diff and mark it ready.
 $lines" >/dev/null
       $FIXLIB mark --state ci_passed --extra "{\"dispatched\": $new_disp}" "${sigs[@]}"
-      slack_sig "$EMOJI_PR_OPENED draft PR #$num: *$(jq -r .title <<<"$g")*
-• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))
-• ✅ targeted CI passed, ready for your review" "${sigs[@]}"
+      slack_sig "$EMOJI_PR_OPENED *autofix draft #$num — targeted CI ✅, needs your review*: $(jq -r .title <<<"$g")
+• \`$(jq -r .tests <<<"$g")\` ($(jq -r .wf <<<"$g"))" "${sigs[@]}"
     fi
   done <<<"$open"
 }
@@ -394,8 +400,8 @@ scan_human_fixes() {
           $FIXLIB mark --state fixed_upstream \
             --extra "$(jq -nc --arg f "$msha" --arg r "#$n $(jq -r '.fix_pr.title // ""' <<<"$f")" '{fix_sha:$f, reason:$r}')" "$sig"
           log "  fix PR #$n merged for $short"
-          slack_sig "$EMOJI_PR_MERGED *fix merged*: \`$short\` ($wf)
-fixed by #$n · commit:$msha · waiting for the next run that contains it to confirm it is green" "$sig" ;;
+          slack_sig "$EMOJI_PR_MERGED fixed on main by #$n by @$(jq -r '.fix_author // "?"' <<<"$f"): \`$short\` ($wf)
+• commit:$msha · waiting for the next run that contains it to confirm it is green" "$sig" ;;
         CLOSED*)
           $FIXLIB mark --state tracking "$sig"
           log "  fix PR #$n closed unmerged for $short"
@@ -454,16 +460,18 @@ $(git -C "$TT_METAL_DIR" show --format= "$csha" | head -c 6000)"
       # failure mode. Anything less stays a cached "no" in the ledger.
       [[ "$fixes" == "true" && "$conf" == "high" && "$(jq -r .symptom_match <<<"$v")" == "true" ]] || continue
       n="${id#pr:}"; [[ "$id" == pr:* ]] || n=""
+      local who
+      if [[ -n "$n" ]]; then who=$(pr_author "$n"); else who=$(git -C "$TT_METAL_DIR" log -1 --format=%an "$csha"); fi
       if [[ "$kind" == "merged" ]]; then
         $FIXLIB mark --state fixed_upstream \
-          --extra "$(jq -nc --arg f "$csha" --arg r "${n:+#$n }$PR_TITLE" '{fix_sha:$f, reason:$r}')" "$sig"
-        slack_sig "$EMOJI_PR_MERGED *already fixed on main*: \`$short\` ($wf)
-fixed by ${n:+#$n }commit:$csha · waiting for the next run that contains it to confirm it is green" "$sig"
+          --extra "$(jq -nc --arg f "$csha" --arg r "${n:+#$n }$PR_TITLE" --arg a "$who" '{fix_sha:$f, reason:$r, fix_author:$a}')" "$sig"
+        slack_sig "$EMOJI_PR_MERGED already fixed on main by ${n:+#$n }by @$who: \`$short\` ($wf)
+• commit:$csha · waiting for the next run that contains it to confirm it is green" "$sig"
       else
         $FIXLIB mark --state fix_pending \
-          --extra "$(jq -nc --arg n "$n" --arg u "$PR_URL" --arg t "$PR_TITLE" '{fix_pr: {number: ($n|tonumber), url: $u, title: $t}}')" "$sig"
-        slack_sig "$EMOJI_PR_OPENED *fix in progress*: \`$short\` ($wf)
-open PR #$n: $PR_TITLE · the bot will not draft its own fix" "$sig"
+          --extra "$(jq -nc --arg n "$n" --arg u "$PR_URL" --arg t "$PR_TITLE" --arg a "$who" '{fix_pr: {number: ($n|tonumber), url: $u, title: $t}, fix_author:$a}')" "$sig"
+        slack_sig "$EMOJI_PR_OPENED fix in progress by @$who, open PR #$n: \`$short\` ($wf)
+• $PR_TITLE · the bot will not draft its own fix" "$sig"
       fi
       break
     done
@@ -600,8 +608,11 @@ $logs"
       fsha=$(grep -oE '\b[0-9a-f]{7,40}\b' <<<"$upstream" | head -1 || true)
       $FIXLIB mark --state fixed_upstream --attempt \
         --extra "$(jq -nc --arg p "$pdir" --arg r "$upstream" --arg f "$fsha" '{proposal:$p, reason:$r, fix_sha:$f}')" "${sigs[@]}"
-      slack_sig "$EMOJI_PR_MERGED *already fixed on main*: \`$first_test\` ($workflow)
-fixed by $upstream · commit:$fsha · waiting for the next run that contains it to confirm it is green" "${sigs[@]}"
+      upr=$(grep -oE '#[0-9]{4,6}' <<<"$upstream" | head -1 | tr -d '#' || true)
+      who=$( [[ -n "$upr" ]] && pr_author "$upr" || git -C "$TT_METAL_DIR" log -1 --format=%an "$fsha" 2>/dev/null || true)
+      $FIXLIB mark --state keep --extra "$(jq -nc --arg a "$who" '{fix_author:$a}')" "${sigs[@]}"
+      slack_sig "$EMOJI_PR_MERGED already fixed on main by ${upr:+#$upr }by @$who: \`$first_test\` ($workflow)
+• commit:$fsha · waiting for the next run that contains it to confirm it is green" "${sigs[@]}"
     else
       log "  no fix: $reason"
       $FIXLIB mark --state no_fix --attempt --extra "$(jq -nc --arg p "$pdir" --arg r "$reason" '{proposal:$p, reason:$r}')" "${sigs[@]}"
@@ -644,7 +655,7 @@ fixed by $upstream · commit:$fsha · waiting for the next run that contains it 
     $FIXLIB mark --state proposed_dryrun --attempt --count-daily \
       --extra "$(jq -nc --arg p "$pdir" --arg t "$title" '{proposal:$p, verdict_title:$t}')" "${sigs[@]}"
     log "  DRY RUN — proposal written to $pdir"
-    slack_sig "🛠 *autofix (dry run)* would open a draft PR: *$title*
+    slack_sig "🛠 *autofix dry-run proposal — take a look*: $title
 • failing: \`$first_test\` ($workflow, streak $(jq -r '[.[].streak] | max' <<<"$recs"))
 • $appr, confidence $conf, $(jq -r '.added + .deleted' <<<"$guard") lines in $files
 • proposal: \`$pdir\`" "${sigs[@]}"
@@ -709,7 +720,7 @@ EOF
   gh api -X PATCH "repos/$REPO/pulls/$pr_num" -F "body=@$pdir/pr_body.md" >/dev/null \
     || log "  WARN: could not update the PR body with run links"
   log "  opened draft $pr_url"
-  slack_sig "$EMOJI_PR_OPENED *opened* draft PR #$pr_num (needs human review): *$title*
+  slack_sig "$EMOJI_PR_OPENED *autofix draft #$pr_num — needs your review*: $title
 • failing: \`$first_test\` ($workflow)
 • $appr, confidence $conf · targeted CI dispatched
 $pr_url" "${sigs[@]}"

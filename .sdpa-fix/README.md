@@ -103,6 +103,16 @@ A new reply is posted only when there is no earlier message to edit.
 `git merge-base --is-ancestor fix_sha run_sha`: runs older than the fix change
 nothing; a newer green run makes it `verified`; a newer red run reopens it.
 
+**Who owns a PR, and does it need you?** PR links are labelled by owner:
+
+| Label | Means |
+|---|---|
+| ***autofix draft #N — needs your review*** (bold) | our draft PR; a human has to review it (also CI ✅/❌ variants) |
+| ***autofix dry-run proposal — take a look*** (bold) | a proposal on disk, not pushed |
+| autofix #N merged | our fix, merged; waiting for the run that verifies it |
+| already fixed on main by #N by @author | someone else's merged fix; nothing to do |
+| fix in progress by @author: open PR #N | someone else's open PR; the bot will not draft its own |
+
 ## No duplicate PRs
 
 Deduplication is by regression **signature** = `sha1(workflow :: job-without-SKU :: test-id)`,
