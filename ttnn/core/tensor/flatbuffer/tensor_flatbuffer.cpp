@@ -280,6 +280,16 @@ Tensor from_flatbuffer(
 
         const uint64_t offset = inline_storage->offset();
         const uint64_t size = inline_storage->size();
+        // The header is verified, but the data section is not: a file cut short after its header
+        // (a writer killed mid-write) would otherwise yield a buffer that runs past the mapping and
+        // faults on the first use. Reject it here so callers can regenerate the file.
+        TT_FATAL(
+            offset <= tensor_data.size() && size <= tensor_data.size() - offset,
+            "Tensor shard {} spans bytes [{}, {}) of a {}-byte data section: the file is truncated or corrupt",
+            i,
+            offset,
+            offset + size,
+            tensor_data.size());
 
         tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
             size, spec, ttsl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
