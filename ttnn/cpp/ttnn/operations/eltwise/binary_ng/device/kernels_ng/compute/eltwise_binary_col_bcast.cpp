@@ -7,6 +7,9 @@
 #ifndef BINARY_NG_BLOCK
 #define BINARY_NG_BLOCK 0
 #endif
+#ifndef BINARY_NG_BLOCK_PACK
+#define BINARY_NG_BLOCK_PACK 0
+#endif
 // Blackhole: ELWMUL, which binary_ng runs at HiFi4, takes the per-tile hand-off; add and sub keep the per-face one, except
 // in the block sections (BINARY_NG_BLOCK), whose block unpack takes it for every op.
 #ifndef EB_R3_PER_FACE
@@ -14,6 +17,7 @@
 #endif
 #define ELTWISE_BINARY_PER_TILE_HANDOFF ((BINARY_OP_TYPE == EltwiseBinaryType::ELWMUL || BINARY_NG_BLOCK) && !EB_R3_PER_FACE)
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/pack.h"
 #include "api/compute/bcast.h"
 
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
@@ -121,9 +125,13 @@ ALWI void process_tile(
         tile_regs_commit();
 
         tile_regs_wait();
+#if BINARY_NG_BLOCK_PACK
+        pack_block_mop(0, cb_out, n);
+#else
         for (uint32_t i = 0; i < n; ++i) {
             pack_tile(i, cb_out);
         }
+#endif
         tile_regs_release();
 
         exp_dfb_out.push_back(n);
