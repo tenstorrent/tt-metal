@@ -796,7 +796,7 @@ def test_quantize_rounds_ties_to_even(device, input_dtype, out_dtype, zero_point
 
 
 @pytest.mark.parametrize(
-    "zero_point,input_values,expected",
+    "zero_point, input_values, expected",
     [
         (8388608, [-8388607.0, -8388544.0], [1, 64]),
         # 4194307.5 is a tie. It rounds to 4194308 before the zero point is added.
@@ -808,6 +808,24 @@ def test_quantize_large_zero_point(device, zero_point, input_values, expected):
     input_tr = torch.tensor([input_values], dtype=torch.float32)
     input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     result = ttnn.to_torch(ttnn.quantize(input_tt, 1.0, zero_point, dtype=ttnn.int32))
+    assert result.tolist() == [expected], f"got {result.tolist()} expected {[expected]}"
+
+
+@pytest.mark.parametrize(
+    "out_zero_point, q_values,in_scale, expected",
+    [
+        (8388608, [-8388607, -8388544], 1.0, [1, 64]),
+        # 8388615 * 0.5 = 4194307.5 is a tie. It rounds to 4194308 before the zero point is added.
+        (-4194305, [8388615, 8388352], 0.5, [3, -128]),
+    ],
+)
+def test_requantize_large_output_zero_point(device, out_zero_point, q_values, in_scale, expected):
+    """Test requantize with an output zero point outside [-2^22, 2^22]"""
+    q_tr = torch.tensor([q_values], dtype=torch.int32)
+    q_tt = ttnn.from_torch(
+        q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    result = ttnn.to_torch(ttnn.requantize(q_tt, in_scale, 0, 1.0, out_zero_point, dtype=ttnn.int32))
     assert result.tolist() == [expected], f"got {result.tolist()} expected {[expected]}"
 
 
