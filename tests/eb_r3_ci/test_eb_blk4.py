@@ -145,3 +145,21 @@ def test_blk4_opact(device, op, mem, kind):
            "add_arelu": lambda: torch.relu(af) + bf, "mul_asilu": lambda: torch.nn.functional.silu(af) * bf}[op]()
     got = ttnn.to_torch(out).float()
     assert torch.allclose(got, ref, rtol=0.05, atol=0.05), float((got - ref).abs().max())
+
+
+# #58723: HiFi3 for a block-float SrcB, every kernel form binary_ng runs a multiply in.
+H3_DT = [("bf16", "bfp8", "bf16"), ("bfp8", "bfp8", "bfp8"), ("bfp8", "bfp8", "bf16"), ("bf16", "bfp4", "bf16"), ("bfp4", "bfp4", "bfp4"),
+         ("bf16", "bfp8", "fp32")]
+H3 = [(m, "none", d) for m in ("hs8_t4", "hs8_t16", "hs8_t128", "ws32_t4", "bs64_t80", "dram") for d in H3_DT]
+H3 += [(m, k, d) for m in ("hs8_t128", "dram") for k in ("col", "row", "scalar") for d in (("bf16", "bfp8", "bf16"), ("bfp8", "bfp8", "bfp8"))]
+
+
+@pytest.mark.parametrize("mem, kind, d", H3, ids=["-".join((m, k) + d) for m, k, d in H3])
+def test_blk4_hifi3(device, mem, kind, d):
+    da, db, do = d
+    if mem == "dram":
+        shape, mc = (1, 1, 1024, 1024), ttnn.DRAM_MEMORY_CONFIG
+    else:
+        shape, mc = _mem(mem)
+    b_shape = {"none": None, "col": (1, 1, shape[2], 1), "row": (1, 1, 1, shape[3]), "scalar": (1, 1, 1, 1)}[kind]
+    _run(device, "mul", shape, mc, da, db, do, b_shape=b_shape, mcb=None if kind == "none" else ttnn.DRAM_MEMORY_CONFIG)
