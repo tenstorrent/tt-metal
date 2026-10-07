@@ -130,3 +130,14 @@
 - claim: Prefill path (dispatch/unified expert bfp8/combine/post_combine_reduce) on 4x8, synthetic data, N=256,512,1024,2048,4096 tokens per mesh row in ONE process: 5 runs bit-identical to run 0 at every N, per mesh row all True; PCC 0.99925 every row; 32-row corruption check (per-token PCC of all tokens, grouped in 32-row blocks, per mesh row): min per-token PCC 0.99909, zero blocks below 0.99; capacity ok. No corruption seen on this build/host 40. Also: masked_bincount requires tokens%64==0 (so decode at 32 users/row must be padded to 64 per row)
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_det_corrupt_42c08b7f5a0.log
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_moe_prefill_4x8.py
+
+## E261007-0215-4d9
+- date: 2026-10-07T02:15:49
+- commit: b435b8394f9
+- branch: ssinghal/mimo-moe
+- host: 40
+- track: moe
+- status: verified
+- claim: Decode-style 4x8 (ragged live users/row 32,20,7,1; 32 users padded to 64 tokens/row because masked_bincount needs tokens%64==0), REAL gate weights (bf16 in ckpt) and e_score_correction_bias (fp32) of layers 1/20/46 (bias mean 2.05/10.46/11.98, std .041/.025/.049), SYNTHETIC unit-rms hidden and synthetic bfp8 experts. Mode exact (fp32 matmul+sigmoid+ttnn.topk, weights from fp32 score): MoE PCC vs dense torch with the device's own routing 0.99922-0.99928 on live tokens, 3 runs bit-identical, set agreement vs fp32 CPU routing 1.00/0.983/0.967 (synthetic x: not a routing claim). Mode hilo (kernel op with calibrated shift): agreement 0.82/0.73/0.78 on the same synthetic input AND NOT deterministic across 3 runs (live tokens differ) in my wrapper. Proposal: use exact router; hilo kernel path rejected until a cause is found
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_B_decode_b435b8394f9.log
+- paths: models/demos/blackhole/mimo_v26
