@@ -645,6 +645,70 @@ def test_fused_msda_program_cache_hit_readdresses(device):
     assert out1.buffer_address() != out2.buffer_address()
 
 
+def test_compute_kernel_zero_scalar_annihilates_nonfinite_input(device):
+    """Skipped input-tile rows hold stale bytes and rely on a 0 scalar to cancel them.
+
+    Drives compute_msda.cpp with the op's compute config and a hand-built NaN/+Inf/-Inf
+    input tile, so the result does not depend on whatever a CB slot happens to hold.
+    """
+    nonfinite = torch.tensor([0x7FC0, 0x7F80, 0xFF80]).to(torch.int16)  # NaN, +Inf, -Inf
+    input_bits = nonfinite[torch.arange(32 * 32) % 3].reshape(32, 32)
+    input_host = input_bits.view(torch.bfloat16)
+    input_t = ttnn.from_torch(input_host, layout=ttnn.TILE_LAYOUT, device=device)
+    # Host tilization must keep the NaN/Inf bit patterns, or the kernel never sees them.
+    assert torch.equal(ttnn.to_torch(input_t).view(torch.int16), input_bits)
+    scalar_t = ttnn.from_torch(torch.zeros(32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    out_t = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+    in_cb, scalar_cb, out_cb = 0, 1, 16  # reader_binary_interleaved_start_id hardcodes c_0 / c_1
+
+    def cb(index):
+        fmt = ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=2048)
+        return ttnn.CBDescriptor(total_size=2 * 2048, core_ranges=core, format_descriptors=[fmt])
+
+    def rt(args):
+        r = ttnn.RuntimeArgs()
+        r[0][0] = args
+        return r
+
+    def accessor(t):
+        return ttnn.TensorAccessorArgs(t).get_compile_time_args()
+
+    reader = ttnn.KernelDescriptor(
+        kernel_source="ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/reader_binary_interleaved_start_id.cpp",
+        core_ranges=core,
+        compile_time_args=[0, *accessor(input_t), *accessor(scalar_t)],
+        runtime_args=rt([input_t.buffer_address(), scalar_t.buffer_address(), 1, 0, 0, 0, 0]),
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source="ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        core_ranges=core,
+        compile_time_args=[out_cb, *accessor(out_t)],
+        runtime_args=rt([out_t.buffer_address(), 1, 0]),
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    compute = ttnn.KernelDescriptor(
+        kernel_source="ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/compute/compute_msda.cpp",
+        core_ranges=core,
+        # input_cb, scalar_cb, output_cb, reduction_size, n_d_tiles
+        compile_time_args=[in_cb, scalar_cb, out_cb, 1, 1],
+        runtime_args=rt([1]),
+        # The program factory's config: HiFi4, fp32_dest_acc_en=False.
+        config=ttnn.ComputeConfigDescriptor(),
+    )
+    program = ttnn.ProgramDescriptor(
+        kernels=[reader, writer, compute], semaphores=[], cbs=[cb(in_cb), cb(scalar_cb), cb(out_cb)]
+    )
+    out_bits = ttnn.to_torch(ttnn.generic_op([input_t, scalar_t, out_t], program)).view(torch.int16)
+
+    # The sign of zero is not part of the contract.
+    assert torch.all((out_bits & 0x7FFF) == 0), "0 * NaN/Inf is nonzero; skipped input rows must be zero-filled"
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
