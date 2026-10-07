@@ -60,11 +60,13 @@ def test_router_cost(mesh_device, mesh_shape):
             f"RESULT router stage {st} ({gate.STAGES[st]}): cumulative {v:.3f} ms (delta {v - prev:+.3f})", flush=True
         )
         prev = v
+    x32 = ttnn.from_torch(x[:32].reshape(1, 1, 32, 4096), device=md, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     for var in gate.VARIANTS:
+        xin = x32 if var.startswith("sel") else xd  # router_select handles T <= 32 rows (the 32 live decode slots)
 
-        def fn(var=var):
-            w, i = gate.route_v(xd, var)
+        def fn(var=var, xin=xin):
+            w, i = gate.route_v(xin, var)
             ttnn.deallocate(w)
             ttnn.deallocate(i)
 
-        print(f"RESULT router variant {var}: {timed(md, fn):.3f} ms", flush=True)
+        print(f"RESULT router variant {var} ({xin.shape[2]} rows): {timed(md, fn):.3f} ms", flush=True)
