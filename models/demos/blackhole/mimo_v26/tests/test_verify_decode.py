@@ -43,7 +43,7 @@ def feat_host(mesh, t):
     return torch.cat([ttnn.to_torch(dts[r * cols]).float() for r in range(ROWS)], 0)[:, 0]  # [rows, B, F]
 
 
-def kv_rows(model, mesh, pos, U, blk, layer=0, col=0):
+def kv_rows(model, mesh, pos, U, blk, layer=0, col=0, lo=0):
     """K and V rows of positions pos..pos+blk-1 of every (row, user) for `layer`, device column `col`: [rows, U, blk, 192] each"""
     a = model.layers[layer].attn
     cols = mesh.shape[1]
@@ -53,7 +53,7 @@ def kv_rows(model, mesh, pos, U, blk, layer=0, col=0):
         kc, vc = ttnn.to_torch(kd[r * cols + col]).float(), ttnn.to_torch(vd[r * cols + col]).float()
         for u in range(U):
             for t in range(blk):
-                p = int(pos[r, u]) + t
+                p = int(pos[r, u]) + t + lo
                 bl = int(a.page_table[u][(p // 64) % a.ring_blocks]) if a.ring_blocks else int(a.page_table[u][p // 64])
                 ks[r, u, t], vs[r, u, t] = kc[bl, 0, p % 64], vc[bl, 0, p % 64]
     return ks, vs
@@ -89,6 +89,7 @@ def main():
             vd = Decoder(model, trace=trace, U=U, block=blk, capture=cap)
             av, bv = vd.verify(toks, pos, dead)
             kv_ver = kv_rows(model, mesh, pos, U, blk)
+            kvw_ver = kv_rows(model, mesh, pos, U, 4 * blk, lo=-8)  # window pos-8 .. pos+24 of the verify cache
             fv = feat_host(mesh, vd.feat)  # [rows, U*blk, NL*4096]
             av2, _ = vd.verify(toks, pos, dead)
             kv_ver2 = kv_rows(model, mesh, pos, U, blk)
@@ -106,6 +107,21 @@ def main():
                 aseq[:, :, t] = a
                 fseq[:, :, t] = feat_host(mesh, sd.feat)
             kv_seq = kv_rows(model, mesh, pos, U, blk)
+            kvw_seq = kv_rows(model, mesh, pos, U, 4 * blk, lo=-8)
+            disp = []
+            for u in range(U):
+                row = []
+                for t in range(blk):
+                    a = kv_ver[0][0, u, t]
+                    errs = (kvw_seq[0][0, u] - a).norm(dim=-1) / a.norm().clamp_min(1e-9)
+                    j = int(errs.argmin())
+                    row.append((j - 8 - t, round(float(errs[j]), 3)))
+                disp.append(row)
+            rec(
+                "kv_displacement_row0",
+                note="(best matching sequential position - intended, rel err) per user, t",
+                disp=disp,
+            )
             for t in range(blk):
                 sd.set_inputs(toks[:, :, t], pos + t, dead)
                 sd.run()
