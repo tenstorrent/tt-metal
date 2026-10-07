@@ -24,7 +24,7 @@ template <SfpuType sfpu_op>
 inline void eltwise_binary_sfpu_configure_addrmod()
 {
     // NOTE: this kernel is typically used in conjunction with
-    //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
+    //       A2D, which uses ADDR_MOD_2 (and ADDR_MOD_3 for broadcasts), so use one
     //       that doesn't conflict!
 
     addr_mod_t {
