@@ -155,8 +155,9 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
-    const std::uint32_t l1_tile_idx =
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
+    // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
+    const std::uint32_t l1_tile_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx +
+                                      tile_index * local_dfb_interface.stride_size_tiles;
 
     if constexpr (BType == BroadcastType::NONE) {
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
@@ -204,22 +205,25 @@ inline void llk_unpack_A_block(
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
+    const std::uint32_t stride_size_tiles = local_dfb_interface.stride_size_tiles;
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
+        // Consecutive tiles of a batch are stride_size_tiles entries apart, as on the pack side (#56194).
+        const std::uint32_t l1_tile_idx = rd_entry_idx + tile_index * stride_size_tiles;
         if constexpr (BType == BroadcastType::NONE) {
             if constexpr (unpack_to_dest) {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
-                    rd_entry_idx + tile_index, tensor_shape);
+                    l1_tile_idx, tensor_shape);
             } else {
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(
-                    rd_entry_idx + tile_index, tensor_shape);
+                    l1_tile_idx, tensor_shape);
             }
         } else {
             static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
+            _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
         }
         WAYPOINT("UPAD");
     }
