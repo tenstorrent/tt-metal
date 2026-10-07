@@ -152,8 +152,8 @@ def apply_fast_env(env=None):
 
 
 # Quality tiers for the served High/Medium/Fast dropdown, sharing the same authority as the fast
-# bundle (conftest + ltx_server worker), applied before the pipeline import. high = shipped baseline
-# (bf16/HiFi2, 8+3 steps); medium = the fast bundle (scene-preserving); fast collapses S1 to a 3-step
+# bundle (conftest + ltx_server worker), applied before the pipeline import. high = pipeline default
+# (bf16/HiFi2, 8+2 steps); medium = the fast bundle (scene-preserving); fast collapses S1 to a 3-step
 # schedule — the fewest steps that still resolve a coherent composition, so it may land a different
 # scene than medium but not garbage. The perf-only knobs (traced, host-weight-cache) stay on for
 # every tier so high isn't needlessly slow.

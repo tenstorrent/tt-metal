@@ -33,11 +33,13 @@ from ...utils.tracing import StateTensor, Tracer, traced_function
 from ...utils.video import YuvVideoExport, export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
-# Distilled sigma schedules for the two stages. The defaults are the shipped 8-step (stage 1)
-# and 3-step (stage 2) schedules. LTX_S1_SIGMAS / LTX_S2_SIGMAS override with a comma-separated
-# list to A/B fewer-step schedules (L2 step cut). Unset = byte-identical to the shipped baseline.
+# Distilled sigma schedules for the two stages. Stage 1 is the shipped 8-step schedule; stage 2
+# drops the shipped 3-step schedule's 0.725 step (quality-neutral on 4x8 1080p 6s: PCC 0.980 /
+# PSNR 29.8 dB vs the 3-step output, VBench and 5-seed visuals unchanged, -0.7 s). LTX_S1_SIGMAS /
+# LTX_S2_SIGMAS override with a comma-separated list; LTX_S2_SIGMAS=0.909375,0.725,0.421875,0.0
+# restores the shipped 3-step stage 2.
 _DEFAULT_S1_SIGMAS = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
-_DEFAULT_S2_SIGMAS = [0.909375, 0.725, 0.421875, 0.0]
+_DEFAULT_S2_SIGMAS = [0.909375, 0.421875, 0.0]
 
 # Serial number for LTX_DUMP_LATENTS files; see the dump site in generate().
 _LATENT_DUMP_N = 0

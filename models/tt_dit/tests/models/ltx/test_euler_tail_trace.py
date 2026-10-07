@@ -6,7 +6,7 @@
 
 C10_RESULTS=<fresh.pt> pytest '<this-file>::test_euler_tail_trace[galaxy]' -s
 Use the broker and normal build/native provenance checks. Small SP-sharded inputs
-exercise all 11 shipped steps, FP32/BF16 producer outputs, A/B/A, padding, and
+exercise all 10 shipped steps, FP32/BF16 producer outputs, A/B/A, padding, and
 coexisting producer/tail traces. This is not full-model quality or speed evidence.
 """
 

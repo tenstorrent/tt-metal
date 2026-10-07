@@ -236,7 +236,7 @@ class EulerTraceContract(unittest.TestCase):
     def assert_bits(self, a, b):
         self.assertTrue(torch.equal(a.contiguous().view(torch.uint8), b.contiguous().view(torch.uint8)))
 
-    def test_all_eleven_steps_changed_velocity_aba_and_padding(self):
+    def test_all_ten_steps_changed_velocity_aba_and_padding(self):
         tree = ast.parse(PIPELINE.read_text())
         schedules = [
             ast.literal_eval(n.value)
@@ -245,7 +245,7 @@ class EulerTraceContract(unittest.TestCase):
             and isinstance(n.targets[0], ast.Name)
             and n.targets[0].id in ("_DEFAULT_S1_SIGMAS", "_DEFAULT_S2_SIGMAS")
         ]
-        self.assertEqual(sum(len(s) - 1 for s in schedules), 11)
+        self.assertEqual(sum(len(s) - 1 for s in schedules), 10)
         for dtype in (torch.float32, torch.bfloat16):
             for real in (63, 65):
                 for schedule in schedules:

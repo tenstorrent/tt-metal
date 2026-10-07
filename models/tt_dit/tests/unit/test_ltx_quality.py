@@ -10,11 +10,19 @@ the LTX_FAST fallback on a throwaway env dict so os.environ is never touched."""
 
 from __future__ import annotations
 
+import ast
+import os
+from pathlib import Path
+
+import pytest
+
 from ...utils import ltx
+
+PIPELINE = Path(__file__).resolve().parents[2] / "pipelines/ltx/pipeline_ltx_distilled.py"
 
 
 def test_high_tier_keeps_pipeline_defaults():
-    # high = shipped baseline: no quant/sigma overrides, only the perf-only knobs.
+    # high = pipeline defaults: no quant/sigma overrides, only the perf-only knobs.
     env = {"LTX_QUALITY": "high"}
     ltx.apply_quality_env(env)
     assert "LTX_QUANT" not in env
@@ -71,3 +79,32 @@ def test_explicit_var_survives_the_tier():
     env = {"LTX_QUALITY": "medium", "LTX_QUANT": "custom"}
     ltx.apply_quality_env(env)
     assert env["LTX_QUANT"] == "custom"
+
+
+def _pipeline_sigma_defs():
+    # The pipeline module needs ttnn to import; pull the schedule defaults and the override parser
+    # out of its AST so this stays a host-only check.
+    tree = ast.parse(PIPELINE.read_text())
+    keep = [
+        n
+        for n in tree.body
+        if (isinstance(n, ast.FunctionDef) and n.name == "_sigma_override")
+        or (isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_DEFAULT_S2_SIGMAS")
+    ]
+    ns = {"os": os}
+    exec(compile(ast.Module(body=keep, type_ignores=[]), str(PIPELINE), "exec"), ns)
+    return ns
+
+
+def test_stage2_default_is_two_steps(monkeypatch):
+    ns = _pipeline_sigma_defs()
+    assert ns["_DEFAULT_S2_SIGMAS"] == [0.909375, 0.421875, 0.0]
+    monkeypatch.delenv("LTX_S2_SIGMAS", raising=False)
+    assert ns["_sigma_override"]("LTX_S2_SIGMAS", ns["_DEFAULT_S2_SIGMAS"]) == [0.909375, 0.421875, 0.0]
+
+
+@pytest.mark.parametrize("raw", ["0.909375,0.725,0.421875,0.0", ltx.FAST_S2_SIGMAS])
+def test_stage2_schedule_still_selectable(raw, monkeypatch):
+    ns = _pipeline_sigma_defs()
+    monkeypatch.setenv("LTX_S2_SIGMAS", raw)
+    assert ns["_sigma_override"]("LTX_S2_SIGMAS", ns["_DEFAULT_S2_SIGMAS"]) == [float(x) for x in raw.split(",")]
