@@ -290,7 +290,7 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // With NoC address translation tables a worker is reached by an endpoint selector, and the tables list the workers
     // in logical row-major order; hardware that walks banks (the Quasar address generator's banking loop) needs bank i
     // to be the i-th endpoint.
-    if (hal.noc_att_enabled()) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && env.get_rtoptions().get_noc_att_map().has_value()) {
         const size_t num_l1_banks = std::count_if(
             config.core_type_from_noc_coord_table.begin(),
             config.core_type_from_noc_coord_table.end(),

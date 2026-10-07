@@ -640,7 +640,6 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         NEO_REGS_0__LOCAL_REGS_TILE_COUNTERS_MIRROR_COUNTERS_0__BUFFER_CAPACITY_REG_OFFSET;
 
     this->has_remapper_ = true;
-    this->noc_att_enabled_ = std::getenv("TT_METAL_NOC_ATT") != nullptr;
     this->remapper_global_control_addr_ = REMAP_GLOBAL_CONTROL_REG_ADDR32;
     this->remapper_client_l_config_base_addr_ = REMAP_CLIENT_L_CONFIG_REG_BASE_ADDR32;
     this->remapper_client_r_config_base_addr_ = REMAP_CLIENT_R_CONFIG_REG_BASE_ADDR32;
