@@ -136,7 +136,8 @@ def test_twin_r2r(device, loop_size, iters):
 #    (unnormalized, two blocks of 8) and round 2 (normalized and untilized, one dense block of 16).
 @pytest.mark.parametrize("iters", [1, 32], ids=["k1", "k32"])
 @pytest.mark.parametrize("rnd", [1, 2], ids=["r1", "r2"])
-def test_twin_psdpa(device, rnd, iters):
+@pytest.mark.parametrize("fid", ["HiFi4", "HiFi2", "LoFi"])
+def test_twin_psdpa(device, fid, rnd, iters):
     g = _gen(7)
     bf = ttnn.bfloat16
     T = (8, 32)
@@ -150,7 +151,7 @@ def test_twin_psdpa(device, rnd, iters):
         device,
         "tw_psdpa.cpp",
         [0, 1, 2, 3, 4, 5, _bits(1.0), 8, 2, iters, rnd],
-        _cfg(ttnn.MathFidelity.HiFi4),
+        _cfg(getattr(ttnn.MathFidelity, fid)),
         [(0, t_ll, 16, 1), (1, t_lms, 1, 1), (2, t_nl, 16, 1), (3, t_nms, 1, 1)],
         outs,
         [],
