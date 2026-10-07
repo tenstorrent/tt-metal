@@ -124,14 +124,14 @@ def _report_diff(tag, ref, got, a_bits, b_vals):
         prod = a.astype(np.float64) * b.astype(np.float64)
     lim = 3.3895313892515355e38 if ref.dtype == np.uint16 else 3.4028234663852886e38
     pc = np.where(np.isnan(prod), 4, np.where(np.isinf(prod) | (np.abs(prod) > lim), 3, np.where(prod == 0, 0, np.where(np.abs(prod) < 1.1754943508222875e-38, 1, 2))))
-    key = ca * 625 + cb * 125 + pc * 25 + cr * 5 + cg
+    key = ca.astype(np.int64) * 625 + cb.astype(np.int64) * 125 + pc.astype(np.int64) * 25 + cr.astype(np.int64) * 5 + cg.astype(np.int64)
     u, n = np.unique(key, return_counts=True)
     print(f"DUMP {tag} classes (a, b, exact product, hifi4, hifi2): count")
     for k, c in sorted(zip(u, n), key=lambda t: -t[1]):
         k = int(k)
         parts = [NAMES[(k // 625) % 5], NAMES[(k // 125) % 5], NAMES[(k // 25) % 5], NAMES[(k // 5) % 5], NAMES[k % 5]]
         sel = d[key == k][:3]
-        ex = "; ".join(f"a=0x{int(np.asarray(a_bits)[j]):x} b={float(np.asarray(b_vals)[j])!r} h4=0x{int(ref[j]):x} h2=0x{int(got[j]):x}" for j in sel)
+        ex = "; ".join(f"a={float(a[np.searchsorted(d, j)])!r} b={float(np.asarray(b_vals)[j])!r} h4=0x{int(ref[j]):x} h2=0x{int(got[j]):x}" for j in sel)
         print(f"DUMP {tag}   {parts}: {int(c)}   e.g. {ex}")
     fin = (ca == 2) & (cb == 2) & (cr == 2) & (cg == 2)
     if fin.any():
