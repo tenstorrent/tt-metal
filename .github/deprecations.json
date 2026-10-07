@@ -80,19 +80,6 @@
       "introduced_by_pr": 52253,
       "grace": "30d",
       "owners": ["ncvetkovicTT"]
-    },
-    {
-      "id": "random-vector-test-helpers",
-      "description": "The public create_random_vector_of_float8_e4m3 and create_random_vector_of_uint8 helpers are deprecated in favor of the test-only create_random_packed_float8_e4m3 and create_random_packed_uint8 helpers in tests/tt_metal/test_utils/. The compatibility shims remain for downstream consumers during the grace period and should be removed after all external callers migrate.",
-      "files": [
-        "tt_metal/api/tt-metalium/float8.hpp",
-        "tt_metal/api/tt-metalium/uint8.hpp",
-        "tt_metal/impl/data_format/float8.cpp",
-        "tt_metal/impl/data_format/uint8.cpp"
-      ],
-      "introduced_by_pr": 59084,
-      "grace": "4w",
-      "owners": ["blozano-tt"]
     }
   ]
 }
