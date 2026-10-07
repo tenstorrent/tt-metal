@@ -53,6 +53,12 @@ if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 
 
+def _exact_shard_enabled() -> bool:
+    # On by default: bit-identical output, ~50 ms faster 1080p 4x8 decode. LTX_VAE_EXACT_SHARD=0 restores
+    # the padded shards.
+    return os.environ.get("LTX_VAE_EXACT_SHARD", "1") != "0"
+
+
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
     """Cached mask that zeros width-padding columns beyond logical_w (when neighbor_pad does not mask them)."""
     sharded_w = x_BTHWC.shape[3]
@@ -788,7 +794,7 @@ class LTXVideoDecoder(Module):
         self._yuv_output_tracer = None
         self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
-        self.exact_shard = os.environ.get("LTX_VAE_EXACT_SHARD", "0") == "1"
+        self.exact_shard = _exact_shard_enabled()
         self._decode_logical_hw = (0, 0)
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
