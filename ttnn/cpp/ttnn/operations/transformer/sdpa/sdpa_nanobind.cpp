@@ -346,6 +346,7 @@ void bind_sdpa(nb::module_& mod) {
             windowed_q_token_offset_tensor (ttnn.Tensor, optional): Defaults to `None`. Windowed mode only. The per-device form of `windowed_q_token_offset`: a 1-element int32/uint32 ROW_MAJOR on-device tensor holding the same global row index; when provided it overrides the scalar. Every device runs the same cached program, so a scalar cannot differ across a mesh -- shard this tensor on the sequence-parallel mesh axis (e.g. `arange(sp) * local_seq_len`) so each device reads its own shard's origin. The scalar's constraints apply to each device's value (a multiple of TILE_HEIGHT; `offset + Sq <= Sk`) but cannot be validated host-side -- they are the caller's responsibility.
             output_concat_heads (bool): Defaults to `False`. Write the heads side by side as [b x 1 x s x nqh*dh] (what `nlp_concat_heads` produces from the default layout) without that op. Plain SDPA only.
             pack_gqa_heads (bool): Defaults to `False`. Grouped-query attention: schedule the `nqh / nkh` query heads that share a KV head as one head of `(nqh / nkh) * s` rows (the same memory), so each KV head's K/V is read once for its whole group. Non-causal, no `attn_mask`, tile-aligned unpadded `s`. `q_chunk_size` need not divide `s` (a chunk may run into the next query head of its group). Output layout is unchanged.
+            reuse_kv (bool): Defaults to `False`. Keep K and V in the core's buffers across its consecutive query chunks of the same (batch, KV head) instead of re-reading them, so each core reads a KV head's K/V once; the K/V chains between cores are not built. Non-causal, no `attn_mask`, a single K chunk (`k_chunk_size >= s`), `fp32_dest_acc_en=False` (streaming kernel).
 
 
         Returns:
@@ -373,7 +374,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("windowed_q_token_offset") = 0,
         nb::arg("windowed_q_token_offset_tensor") = nb::none(),
         nb::arg("output_concat_heads") = false,
-        nb::arg("pack_gqa_heads") = false);
+        nb::arg("pack_gqa_heads") = false,
+        nb::arg("reuse_kv") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
