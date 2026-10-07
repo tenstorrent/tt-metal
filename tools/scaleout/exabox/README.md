@@ -6,9 +6,9 @@ Scripts for validating Blackhole Galaxy Exabox clusters before running workloads
 
 ## Quick Reference
 
-**Last Known-Good Docker Image:**
+**Docker Image:**
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.80.0-dev20261006-45-g1d758e27faf
+ghcr.io/tenstorrent/tt-metal/exabox-tools:latest
 ```
 
 ## Full Hardware Qualification
@@ -77,14 +77,12 @@ This should print the Docker version on each machine. If any host fails, install
 
 For Galaxy clusters, use:
 ```
-ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:<tag>
+ghcr.io/tenstorrent/tt-metal/exabox-tools:<tag>
 ```
 
-Options for `<tag>`:
-- `latest` - most recent passing build from main (Note: Once quad systems are in CI, this will be consistently reliable. For now, use the known-good version below.)
-- **Last known-good version** - the tag in [Quick Reference](#quick-reference) at the top. `run_validation.sh` and `recover.sh` use it automatically when you omit `--image`; `run_fabric_tests.sh` and `run_dispatch_tests.sh` require it to be passed explicitly.
+`run_validation.sh` and `recover.sh` use `exabox-tools:latest` when you omit `--image`; `run_fabric_tests.sh` and `run_dispatch_tests.sh` require it to be passed explicitly. Tags and how to build one are described below.
 
-To build an image from a custom branch (your own branch or one requested from a Metal developer), run the [upstream-tests workflow](https://github.com/tenstorrent/tt-metal/actions/workflows/upstream-tests.yaml). The workflow summary shows the image tag once complete.
+The scripts run docker with `--pull=always`, so a moved `:latest` is picked up on the next run. Hosts that already have the current build only do a quick registry check.
 
 **`exabox-tools` image**
 
