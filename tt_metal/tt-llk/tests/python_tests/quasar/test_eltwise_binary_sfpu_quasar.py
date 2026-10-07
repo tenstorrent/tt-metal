@@ -126,8 +126,7 @@ def _run_sfpu_binary_llk_golden(
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
     extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
-    COL / ROW broadcasts column 0 / row 0 of the ``src1_idx`` tile (tile layout)
-    before the elementwise golden.
+    broadcasts the ``src1_idx`` tile in the golden.
     """
     src0_idx, src1_idx, dst_idx = tile_indices
     input_dimensions = [(max(src0_idx, src1_idx, dst_idx) + 1) * 32, 32]
@@ -235,11 +234,8 @@ def _run_sfpu_binary_llk_golden(
     )
 
     if broadcast_type != BroadcastType.None_ and mathop != MathOperation.SfpuElwmul:
-        # passed_test's isclose treats +0.0 and -0.0 as equal. The broadcast stimuli
-        # add a -0.0 bcast value to -0.0 data, which stays -0.0 only if the kernel
-        # kept the bcast value's sign, so check the sign of every zero result too.
-        # MUL is skipped: SFPMUL is a MAD with a +0.0 addend, so x * -0.0 + 0.0 is
-        # +0.0 on hardware (the plain binary MUL does the same).
+        # isclose ignores the sign of zero. MUL is skipped: SFPMUL adds +0.0, so
+        # x * -0.0 is +0.0 on hardware (as for the plain binary MUL).
         zero = golden_tensor == 0
         assert torch.equal(
             torch.signbit(res_tensor[zero]), torch.signbit(golden_tensor[zero])
@@ -507,8 +503,7 @@ def test_eltwise_binary_sfpu_float_quasar(
 
 
 # ===========================================================================
-# Broadcast float ops (add, sub, mul): column 0 (COL) or row 0 (ROW) of the src1
-# tile is broadcast over the whole tile, one full-tile calculate_binary_bcast call.
+# Broadcast float ops (add, sub, mul) with src1 col 0 (COL) or row 0 (ROW).
 # ===========================================================================
 BCAST_SWEEP = dict(
     formats=[variant.formats for variant in _FLOAT_VARIANTS],
@@ -521,24 +516,16 @@ BCAST_SWEEP = dict(
     broadcast_type=[BroadcastType.Column, BroadcastType.Row],
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
 )
-# (2, 3, 0): disjoint tiles at non-zero data / bcast bases. (0, 1, 1): the result
-# overwrites the bcast tile, so the ROW hoist and the per-band COL bcast load must
-# both land before that band's store. Two layouts keep the matrix at 72 cases.
+# (0, 1, 1): the result overwrites the bcast tile, so bcast loads must precede the
+# band's store. Two layouts keep the matrix under 100 cases.
 _BCAST_TILE_INDEX_VARIANTS = [(2, 3, 0), (0, 1, 1)]
 _BCAST_SPECIALS = [float("inf"), float("-inf"), float("nan")]
-# Spacing of the -0.0 cells along the bcast col / row and across the data tile
 _BCAST_NEG_ZERO_STRIDE = 4
 
 
 def _inject_bcast_specials(src_A, src0_idx, src1_idx, broadcast_type):
-    """Edit the src1 tile (tile layout: four 16x16 faces) in two ways:
-    - +-Inf / NaN everywhere the broadcast ignores (tile cols 1..31 for COL,
-      rows 1..31 for ROW). The golden broadcasts them away, so any leak into the
-      result (e.g. 0 * Inf = NaN from an arithmetic column mask) fails.
-    - -0.0 in every _BCAST_NEG_ZERO_STRIDE-th retained cell (col 0 / row 0), and
-      in the src0 cells of every _BCAST_NEG_ZERO_STRIDE-th col (COL) / row (ROW),
-      so ADD meets -0.0 + -0.0 = -0.0 at their crossings. The driver's signbit
-      check catches a kernel that turns the broadcast -0.0 into +0.0."""
+    """Fill the cells the broadcast ignores with Inf/NaN (must not leak) and put
+    -0.0 at bcast x data crossings, where ADD must return -0.0."""
     flat = src_A.flatten().clone()
     base = src1_idx * MAX_TILE_ELEMENTS
     data_base = src0_idx * MAX_TILE_ELEMENTS
@@ -581,8 +568,7 @@ def test_eltwise_binary_sfpu_bcast_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast. The
-    src1 cells the broadcast ignores hold Inf/NaN, and some retained ones -0.0."""
+    """Binary SFPU float ADD / SUB / MUL with src1 column or row broadcast."""
     format_variant = resolve_quasar_sfpu_variant(
         MathOperation.SfpuElwadd, formats, dest_acc
     )

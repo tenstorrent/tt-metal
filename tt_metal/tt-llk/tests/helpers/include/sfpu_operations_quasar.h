@@ -1237,8 +1237,7 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  *         and skip the sign-magnitude<->2's-complement casts. Must match the calculate step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         calculate step; atan2 uses it to select the LUT-only reciprocal path.
- * @tparam BCAST_TYPE Broadcast of src1: NONE for the plain binary op; COL or ROW routes
- *         ADD / SUB / MUL to the full-tile broadcast kernel. Must match the calculate step.
+ * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel.
  * @param zero_point fp32 bit-pattern of the zero-point loaded once by the quant
  *        family init (DEQUANT expects the bits of -zero_point); ignored by the
  *        other ops, which have no runtime init argument.
@@ -1373,11 +1372,8 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  *         and skip the sign-magnitude<->2's-complement casts. Must match the init step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         init step; atan2 uses it to select the LUT-only reciprocal path.
- * @tparam BCAST_TYPE Broadcast of src1: NONE for the plain binary op; COL or ROW
- *         broadcasts column 0 / row 0 of `src1_tile` over the whole tile for ADD / SUB / MUL
- *         (float only, one full-tile call). Must match the init step. The broadcast path
- *         requires dst_rounding_mode == Default (results are stored truncated) and a float
- *         `math_format`; it ignores ITERATIONS and APPROXIMATION_MODE.
+ * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel (float only,
+ *         Default rounding; ignores ITERATIONS and APPROXIMATION_MODE).
  * @param src0_tile,src1_tile,dst_tile Operand / result tile indices. COPY_DEST ignores
  *        `src1_tile` and writes `src0_tile` onto `dst_tile`.
  * @param math_format Dest encoding. Int32 vs float path for MUL and max/min; COPY_DEST
