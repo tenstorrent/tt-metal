@@ -18,6 +18,7 @@ from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decoder import DecoderState
 from models.demos.qwen38_27b_qb2.tt.decoder_tp import Qwen38TPDecoder, validate_qb2_mesh
 from models.demos.qwen38_27b_qb2.tt.precision import decoder_policy, load_precision
+from models.demos.qwen38_27b_qb2.tt.topology import resolve_tp4_topology
 
 MODEL_ID = "Qwen/Qwen3.8-27B"
 REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
@@ -62,8 +63,18 @@ class ModelCache:
 
 
 class Qwen38Model:
-    def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
+    def __init__(
+        self,
+        mesh_device,
+        *,
+        snapshot=None,
+        layer_indices=None,
+        head_strategy="dram",
+        precision_config=None,
+        topology=None,
+    ):
         validate_qb2_mesh(mesh_device)
+        self.topology = resolve_tp4_topology(topology)
         self.precision = load_precision(precision_config)
         self.mesh = mesh_device
         self.snapshot = Path(snapshot or checkpoint_path())
@@ -105,6 +116,7 @@ class Qwen38Model:
                     policy={
                         **decoder_policy(self.precision, i),
                         **prefill_policy,
+                        "ring": self.topology == ttnn.Topology.Ring,
                         "compact_decode_residual": self.compact_decode_residual,
                         "compact_decode_mlp": os.getenv("QWEN_COMPACT_DECODE_MLP", "0") == "1",
                         "batched_decode_rope": os.getenv("QWEN_BATCHED_DECODE_ROPE", "0") == "1",
@@ -205,7 +217,7 @@ class Qwen38Model:
             cluster_axis=1,
             mesh_device=self.mesh,
             num_links=2,
-            topology=ttnn.Topology.Ring,
+            topology=self.topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             multi_device_global_semaphore=self.ccl.get_and_cycle_ag_semaphore_handles(1),
             barrier_semaphore=self.ccl.get_and_cycle_barrier_semaphore_handle(1),

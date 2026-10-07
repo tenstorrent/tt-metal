@@ -16,24 +16,12 @@ import ttnn
 from models.common.modules.tt_ccl import TT_CCL
 from models.demos.qwen38_27b_qb2.tt.decode_conv import make_actual_start
 from models.demos.qwen38_27b_qb2.tt.decoder import DEFAULT_POLICY, Qwen38Decoder
+from models.demos.qwen38_27b_qb2.tt.topology import resolve_tp4_topology, validate_tp4_mesh
 
 
 def validate_qb2_mesh(mesh_device):
-    """Reject unsupported hardware before checkpoint conversion or device allocation."""
-    arch = mesh_device.arch()
-    cluster_type = ttnn.cluster.get_cluster_type()
-    num_devices = mesh_device.get_num_devices()
-    mesh_shape = tuple(mesh_device.shape)
-    if (
-        arch != ttnn.Arch.BLACKHOLE
-        or cluster_type != ttnn.cluster.ClusterType.P300_X2
-        or num_devices != 4
-        or mesh_shape != (1, 4)
-    ):
-        raise ValueError(
-            "Qwen3.8-27B requires a Blackhole P300_X2 QB2 with four devices in a (1, 4) mesh; "
-            f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
-        )
+    """Compatibility alias for callers of the original QB2-only validator."""
+    validate_tp4_mesh(mesh_device)
 
 
 class Qwen38TPDecoder(Qwen38Decoder):
@@ -97,7 +85,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             residual_layout="replicated",
             ccl_dtype="bfloat16",
             num_links=2,
-            ring=True,
+            ring=resolve_tp4_topology() == ttnn.Topology.Ring,
             packed_mlp=True,
             packed_decode_conv=True,
             persistent_ccl=True,

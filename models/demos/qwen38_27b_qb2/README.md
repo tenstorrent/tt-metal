@@ -4,6 +4,31 @@ TP4 implementation of `Qwen/Qwen3.8-27B` on four Blackhole devices with a
 `(1, 4)` mesh. It supports prefill, traced decode, device sampling, and vLLM
 serving.
 
+## Experimental Galaxy bring-up
+
+The TP4 validator also accepts a `(1, 4)` submesh of a Blackhole Galaxy. The
+Galaxy default is `Topology.Linear`; QB2 keeps its qualified ring default.
+Fabric setup, decoder collectives, embedding gather and sampler use the same
+choice. Select Ring explicitly only after qualifying the physical wraparound
+links, and pass that choice to both `configure_fabric` and `build_generator`.
+
+The target layout is one `(8, 4)` parent mesh with eight independent `(1, 4)`
+replicas. Each replica needs its own model, KV/GDN-state pool, traces and CCL
+context. Do not share a CCL context between concurrent replicas. The first
+hardware test opens the parent and exercises **one** replica; it does not prove
+eight-replica scaling or unchanged reference evaluations.
+
+`tests/test_galaxy_smoke.py` runs all layers, then repeats the same prompt and
+checks deterministic generation, preserving tokens, decoded text and first/warm
+performance in `QWEN_GALAXY_RECEIPT`. Enable it with `QWEN_GALAXY_SMOKE=1` and
+set `MODEL_WEIGHTS_DIR` to the pinned checkpoint. Hardware runs must be serialized.
+`demo/run_galaxy_qualification.sh` is the bounded-job entrypoint for the isolated
+task layout used during this bring-up; it runs the host tests before hardware.
+
+At initial publication, 66 host tests pass (plus 40 subtests). The full model
+hardware test is running; performance, eight concurrent replicas, long-context
+serving and reference evaluation results remain unqualified on Galaxy.
+
 ## Capacity
 
 - Maximum supported context: 262,144 tokens.

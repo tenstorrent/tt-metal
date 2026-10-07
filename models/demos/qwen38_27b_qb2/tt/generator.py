@@ -14,13 +14,16 @@ from transformers import AutoTokenizer
 import ttnn
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.qwen38_27b_qb2.tt.model import Qwen38Model
+from models.demos.qwen38_27b_qb2.tt.topology import resolve_tp4_topology
 
 
-def configure_fabric(*, payload_bytes=8192):
-    """Configure the measured TP4 ring before the caller opens its mesh."""
+def configure_fabric(*, payload_bytes=8192, topology=None):
+    """Configure the same TP4 topology the model will use, before opening its mesh."""
     router = ttnn.FabricRouterConfig()
     router.max_packet_payload_size_bytes = payload_bytes
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
+    selected = resolve_tp4_topology(topology)
+    fabric = ttnn.FabricConfig.FABRIC_1D_RING if selected == ttnn.Topology.Ring else ttnn.FabricConfig.FABRIC_1D
+    ttnn.set_fabric_config(fabric, router_config=router)
 
 
 class Qwen38Generator:
@@ -43,7 +46,7 @@ class Qwen38Generator:
             raise ValueError("Unknown common sampling strategy")
         args.model_config = {
             "SAMPLING_AG_CONFIG": dict(
-                allow_force_argmax=sampling_strategy == "argmax", num_links=2, topology=ttnn.Topology.Ring
+                allow_force_argmax=sampling_strategy == "argmax", num_links=2, topology=model.topology
             )
         }
         self.sampling_strategy = sampling_strategy
@@ -976,6 +979,7 @@ def build_generator(model_dir, mesh_device, **kwargs):
         layer_indices=indices,
         head_strategy=kwargs.pop("head_strategy", "dram"),
         precision_config=kwargs.pop("precision_config", None),
+        topology=kwargs.pop("topology", None),
     )
     return Qwen38Generator(
         model,

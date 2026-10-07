@@ -24,6 +24,7 @@ class CompactDecodeHostTests(unittest.TestCase):
         embed = load_methods("model.py", "Qwen38Model", ["embed"], ops)["embed"]
         model = SimpleNamespace(
             embedding_weight=object(),
+            topology="linear",
             config=SimpleNamespace(hidden_size=8),
             mesh=object(),
             ccl=SimpleNamespace(
