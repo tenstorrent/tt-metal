@@ -44,9 +44,8 @@ void py_module_types(nb::module_& mod) {
 
     nb::class_<kh::McastConfig>(mod, "McastConfig");
     nb::class_<kh::McastFixedSenderConfig>(mod, "McastFixedSenderConfig");
+    nb::class_<kh::McastExplicitFixedSenderConfig>(mod, "McastExplicitFixedSenderConfig");
     nb::class_<kh::McastRotatingSenderConfig>(mod, "McastRotatingSenderConfig");
-    nb::class_<kh::McastSenderGridConfig>(mod, "McastSenderGridConfig");
-    nb::class_<kh::McastExplicitSenderConfig>(mod, "McastExplicitSenderConfig");
     nb::class_<kh::Mcast>(mod, "Mcast");
 }
 
@@ -121,30 +120,28 @@ void py_module(nb::module_& mod) {
         .def_rw("sender_index", &kh::McastFixedSenderConfig::sender_index)
         .def_rw("placement", &kh::McastFixedSenderConfig::placement);
 
-    static_cast<nb::class_<kh::McastRotatingSenderConfig>>(mod.attr("McastRotatingSenderConfig")).def(nb::init<>());
-
-    static_cast<nb::class_<kh::McastSenderGridConfig>>(mod.attr("McastSenderGridConfig"))
+    static_cast<nb::class_<kh::McastRotatingSenderConfig>>(mod.attr("McastRotatingSenderConfig"))
         .def(
             "__init__",
-            [](kh::McastSenderGridConfig* self,
-               CoreRangeSet sender_cores,
+            [](kh::McastRotatingSenderConfig* self,
+               std::optional<CoreRangeSet> sender_cores,
                std::optional<kh::McastCoreOrder> sender_order) {
-                new (self) kh::McastSenderGridConfig{std::move(sender_cores), sender_order};
+                new (self) kh::McastRotatingSenderConfig{std::move(sender_cores), sender_order};
             },
-            nb::arg("sender_cores"),
+            nb::arg("sender_cores") = std::optional<CoreRangeSet>{},
             nb::kw_only(),
             nb::arg("sender_order") = std::optional<kh::McastCoreOrder>{})
-        .def_rw("sender_cores", &kh::McastSenderGridConfig::sender_cores)
-        .def_rw("sender_order", &kh::McastSenderGridConfig::sender_order);
+        .def_rw("sender_cores", &kh::McastRotatingSenderConfig::sender_cores)
+        .def_rw("sender_order", &kh::McastRotatingSenderConfig::sender_order);
 
-    static_cast<nb::class_<kh::McastExplicitSenderConfig>>(mod.attr("McastExplicitSenderConfig"))
+    static_cast<nb::class_<kh::McastExplicitFixedSenderConfig>>(mod.attr("McastExplicitFixedSenderConfig"))
         .def(
             "__init__",
-            [](kh::McastExplicitSenderConfig* self, std::vector<std::vector<CoreCoord>> senders_per_group) {
-                new (self) kh::McastExplicitSenderConfig{std::move(senders_per_group)};
+            [](kh::McastExplicitFixedSenderConfig* self, std::vector<CoreCoord> senders_per_group) {
+                new (self) kh::McastExplicitFixedSenderConfig{std::move(senders_per_group)};
             },
             nb::arg("senders_per_group"))
-        .def_rw("senders_per_group", &kh::McastExplicitSenderConfig::senders_per_group);
+        .def_rw("senders_per_group", &kh::McastExplicitFixedSenderConfig::senders_per_group);
 
     mcast
         .def(

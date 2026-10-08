@@ -41,7 +41,7 @@ def _program(device, mode, input_tensor, output_tensor):
         ),
         core_set(RECEIVERS),
         len(RECEIVERS),
-        ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*SENDER)]]),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*SENDER)]),
     )
 
     compile_time_args = [PAYLOAD_PAGES]

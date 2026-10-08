@@ -118,9 +118,9 @@ def test_rotating_groups(device, noc, counter, control):
     run_mcast_groups_case(
         device,
         [
-            ([(0, 0), (2, 0), (3, 0), (0, 1)], [(0, 0), (4, 0)]),
-            ([(1, 2)], [(1, 2), (3, 2)]),
-            ([(0, 3), (2, 3)], [(0, 3), (2, 3)]),
+            ([(0, 0), (1, 0), (0, 1), (1, 1)], [(0, 0), (2, 0)]),
+            ([(1, 2), (2, 2)], [(1, 2), (3, 2)]),
+            ([(0, 3), (1, 3)], [(0, 3), (1, 3)]),
         ],
         noc=noc,
         counter=counter,
@@ -289,8 +289,7 @@ def test_compressed_coordinate_lifetime(device, noc, column_major, count):
         pytest.skip("requires an 8x8 worker grid")
     receivers = [(x, y) for y in range(8) for x in range(8)]
     senders = [(i // 8, i % 8) if column_major else (i % 8, i // 8) for i in range(count)]
-    # Pass through all phases and wrap: the returned optional receiver must own
-    # its expanded table after the temporary decoder/constructor has gone away.
+    # Pass through all phases and wrap with the receiver's decoded physical axes.
     run_mcast_groups_case(device, [(receivers, senders)], noc=noc, counter=True, rounds=count + 3)
 
 
@@ -317,7 +316,7 @@ def test_compressed_external_sender_lifetime(device, noc, counter, column_major,
     assert metadata["encoding"] != 0
     assert metadata["span"] == len(senders)
     assert 2 * (metadata["x_ranges"] + metadata["y_ranges"]) < 2 * len(senders)
-    # Exercise every sender and wrap, with the decoded table owned by the pipe.
+    # Exercise every sender and wrap through the pipe's decoded physical axes.
     run_mcast_groups_case(device, [(receivers, senders)], noc=noc, counter=counter, rounds=len(senders) + 3)
 
 
@@ -335,7 +334,7 @@ def test_group_attention_external_sender_argument_counts(device):
         ttnn.McastConfig(),
         receiver_box,
         receiver_box.num_cores(),
-        ttnn.McastSenderGridConfig(core_set(senders), sender_order=ttnn.McastCoreOrder.ColumnMajor),
+        ttnn.McastRotatingSenderConfig(core_set(senders), sender_order=ttnn.McastCoreOrder.ColumnMajor),
         ttnn.McastCoreOrder.ColumnMajor,
     )
     _, kernel = attach_for_inspection(mcast, core_set([(x, y) for x in range(size.x) for y in range(size.y)]))
@@ -349,15 +348,3 @@ def test_group_attention_external_sender_argument_counts(device):
             assert len(kernel.runtime_args[x][y]) == expected_rt
     assert expected_rt < 73
     print(f"Group attention Q10 multicast RT: 73 -> {expected_rt} words/core")
-
-
-def test_large_explicit_coordinate_lifetime(device):
-    size = device.compute_with_storage_grid_size()
-    if size.x < 8 or size.y < 8:
-        pytest.skip("requires an 8x8 worker grid")
-    receivers = [(x, y) for y in range(8) for x in range(8)]
-    senders = receivers.copy()
-    # The same 64-core geometry with a non-Cartesian traversal must retain pairs.
-    # This also provides a matched explicit-storage artifact for the range audit.
-    senders[0], senders[1] = senders[1], senders[0]
-    run_mcast_groups_case(device, [(receivers, senders)], noc=0, counter=True, rounds=67)

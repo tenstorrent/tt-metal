@@ -34,7 +34,7 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
         ttnn.McastConfig(noc=noc_id, data_ready=signal, irregular_receiver_set_mode=ttnn.TransferMode.ChainUnicast),
         core_set(receiver_coords),
         len(receiver_coords),
-        ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*coords[0])]]),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*coords[0])]),
     )
     reverse = None
     if reverse_channel:
@@ -43,7 +43,7 @@ def _stress(device, noc, counter, events, guards, includes_sender, reverse_chann
             ttnn.McastConfig(noc=noc_id, data_ready=signal),
             core_set([coords[0]]),
             1,
-            ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*coords[2])]]),
+            ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*coords[2])]),
         )
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape([3, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG

@@ -22,14 +22,14 @@ def inspect(channel, device, noc=ttnn.NOC.NOC_0):
 
 def test_mcast_keywords_and_sender_order(device):
     receivers = core_set([(0, 0), (1, 0), (0, 1), (1, 1)])
-    senders = [[ttnn.CoreCoord(1, 0)], [ttnn.CoreCoord(0, 1)]]
+    senders = [ttnn.CoreCoord(1, 0), ttnn.CoreCoord(0, 1)]
     config = ttnn.McastConfig(noc=ttnn.NOC.NOC_1)
     channel = ttnn.Mcast(
         device=device,
         config=config,
         receivers=receivers,
         receiver_group_size=2,
-        sender_config=ttnn.McastExplicitSenderConfig(senders),
+        sender_config=ttnn.McastExplicitFixedSenderConfig(senders),
         receiver_order=ttnn.McastCoreOrder.RowMajor,
     )
     try:
@@ -53,7 +53,7 @@ def test_owned_handshake_subset_and_external_sender(device):
         config,
         receivers,
         3,
-        ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(3, 0)]]),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(3, 0)]),
     )
     config.handshake_cores = core_set([])
     _, kernel = inspect(channel, device)
@@ -73,7 +73,7 @@ def test_rotating_and_sender_grid_configs(device):
         ttnn.McastConfig(),
         receivers,
         2,
-        ttnn.McastSenderGridConfig(sender_grid, sender_order=ttnn.McastCoreOrder.ColumnMajor),
+        ttnn.McastRotatingSenderConfig(sender_grid, sender_order=ttnn.McastCoreOrder.ColumnMajor),
     )
     _, external_kernel = inspect(external, device)
     assert inspect_mcast_ct(external_kernel)["span"] == 2
@@ -118,9 +118,8 @@ def test_current_host_api_is_exported():
         "McastCoreOrder",
         "McastSenderPlacement",
         "McastFixedSenderConfig",
+        "McastExplicitFixedSenderConfig",
         "McastRotatingSenderConfig",
-        "McastSenderGridConfig",
-        "McastExplicitSenderConfig",
         "attach_absent_mcast",
     ]:
         assert getattr(ttnn, name) is getattr(module, name)
@@ -157,14 +156,16 @@ def test_current_sender_config_bindings_round_trip():
 
     rotating = ttnn.McastRotatingSenderConfig()
     assert isinstance(rotating, ttnn.McastRotatingSenderConfig)
+    assert rotating.sender_cores is None
+    assert rotating.sender_order is None
 
     sender_cores = core_set([(2, 0), (2, 1)])
-    sender_grid = ttnn.McastSenderGridConfig(sender_cores, sender_order=ttnn.McastCoreOrder.ColumnMajor)
+    sender_grid = ttnn.McastRotatingSenderConfig(sender_cores, sender_order=ttnn.McastCoreOrder.ColumnMajor)
     assert sender_grid.sender_cores == sender_cores
     assert sender_grid.sender_order == ttnn.McastCoreOrder.ColumnMajor
 
-    senders = [[ttnn.CoreCoord(2, 0)], [ttnn.CoreCoord(2, 1)]]
-    explicit = ttnn.McastExplicitSenderConfig(senders)
+    senders = [ttnn.CoreCoord(2, 0), ttnn.CoreCoord(2, 1)]
+    explicit = ttnn.McastExplicitFixedSenderConfig(senders)
     assert explicit.senders_per_group == senders
 
 

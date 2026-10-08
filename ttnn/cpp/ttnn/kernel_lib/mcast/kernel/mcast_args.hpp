@@ -75,22 +75,36 @@ struct InactiveReceiverPipe {
     FORCE_INLINE uint32_t receive_signal(uint32_t = 0) { return 0; }
 };
 
-// The pipe constructs this table directly in its own storage from a lightweight
-// RT view. No pointer into a temporary decoder and no expanded-table argument.
-template <mcast_wire::SenderCoordinateMetadata METADATA, uint32_t NUM_SENDERS>
-struct ExpandedSenderCoordinates {
-    uint32_t values[mcast_wire::SENDER_COORD_WORDS * NUM_SENDERS]{};
+// Decode the compact axis ranges once into the pipe's own storage.
+template <mcast_wire::SenderCoordinateMetadata METADATA>
+struct PhysicalSenderAxes {
+    static_assert(
+        METADATA.encoding == mcast_wire::SenderCoordinateEncoding::RowMajorRanges ||
+        METADATA.encoding == mcast_wire::SenderCoordinateEncoding::ColumnMajorRanges);
+    static_assert(METADATA.columns > 0 && METADATA.rows > 0);
+    uint32_t x[METADATA.columns];
+    uint32_t y[METADATA.rows];
 
     template <typename Coordinates>
-    FORCE_INLINE explicit ExpandedSenderCoordinates(const Coordinates& payload) {
-        for (uint32_t phase = 0; phase < NUM_SENDERS; ++phase) {
-            values[mcast_wire::SENDER_COORD_WORDS * phase + mcast_wire::SENDER_X] =
-                mcast_wire::sender_coordinate(payload, METADATA, phase, mcast_wire::SENDER_X);
-            values[mcast_wire::SENDER_COORD_WORDS * phase + mcast_wire::SENDER_Y] =
-                mcast_wire::sender_coordinate(payload, METADATA, phase, mcast_wire::SENDER_Y);
+    FORCE_INLINE explicit PhysicalSenderAxes(const Coordinates& payload) {
+        for (uint32_t column = 0; column < METADATA.columns; ++column) {
+            x[column] = mcast_wire::range_coordinate(payload, 0, METADATA.x_ranges, column);
+        }
+        for (uint32_t row = 0; row < METADATA.rows; ++row) {
+            y[row] = mcast_wire::range_coordinate(
+                payload, mcast_wire::RANGE_WORDS * METADATA.x_ranges, METADATA.y_ranges, row);
         }
     }
-    FORCE_INLINE uint32_t operator[](uint32_t word) const { return values[word]; }
+    FORCE_INLINE uint32_t operator[](uint32_t word) const {
+        const uint32_t phase = word / mcast_wire::SENDER_COORD_WORDS;
+        if constexpr (METADATA.encoding == mcast_wire::SenderCoordinateEncoding::RowMajorRanges) {
+            return word % mcast_wire::SENDER_COORD_WORDS == mcast_wire::SENDER_X ? x[phase % METADATA.columns]
+                                                                                 : y[phase / METADATA.columns];
+        } else {
+            return word % mcast_wire::SENDER_COORD_WORDS == mcast_wire::SENDER_X ? x[phase / METADATA.rows]
+                                                                                 : y[phase % METADATA.rows];
+        }
+    }
 };
 
 template <
@@ -185,7 +199,7 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
     using SenderCoordinates = std::conditional_t<
         METADATA.coordinates.encoding == mcast_wire::SenderCoordinateEncoding::ExplicitPairs,
         decltype(Runtime::coordinates(0)),
-        ExpandedSenderCoordinates<METADATA.coordinates, num_senders>>;
+        PhysicalSenderAxes<METADATA.coordinates>>;
     using ReceiverPipeType = std::conditional_t<
         !receiver_available,
         InactiveReceiverPipe,

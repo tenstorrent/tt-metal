@@ -784,7 +784,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             mcast::McastConfig{.noc = weights_noc, .handshake_cores = input_cores},
             all_cores,
             /*receiver_group_size=*/all_cores.num_cores(),
-            mcast::McastExplicitSenderConfig{{{top_left_core}}});
+            mcast::McastFixedSenderConfig{});
     }
 
     if (split_reader_cb_shared) {

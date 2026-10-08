@@ -49,7 +49,7 @@ def _run_transfer(
         ),
         core_set(receivers),
         len(receivers),
-        ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*sender_logical)]]),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*sender_logical)]),
     )
     payload = tile_pattern(payload_tiles).reshape(1, 1, 32, 32 * payload_tiles)
     input_tensor = ttnn.from_torch(payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -129,7 +129,7 @@ def _run_sender_loopback(device, rect_len, payload_tiles, n_iters):
         ttnn.McastConfig(handshake=False),
         full_crs,
         full_crs.num_cores(),
-        ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(0, 0)]]),
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(0, 0)]),
     )
     cb_src, cb_dst, cb_result = (0, 1, 16)
     cbs = [
@@ -218,7 +218,7 @@ def _run_rotating_line(
         ttnn.McastConfig(data_ready=data_ready_mode),
         receiver_grid,
         receiver_grid.num_cores(),
-        ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(sender, 0) for sender in sender_indices]]),
+        ttnn.McastRotatingSenderConfig(core_set([(sender, 0) for sender in sender_indices])),
     )
     cb = 0
     cbs = [make_cb(cb, participant_grid, pages=payload_pages, page_bytes=page_bytes, dtype=ttnn.bfloat16)]

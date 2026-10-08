@@ -45,8 +45,8 @@ Mcast::Mcast(
         "Mcast: receiver groups must divide the receiver list exactly");
     const size_t num_groups = receiver_cores.size() / receiver_group_size;
     const auto* fixed = std::get_if<McastFixedSenderConfig>(&sender_config);
-    const auto* grid = std::get_if<McastSenderGridConfig>(&sender_config);
-    const auto* explicit_senders = std::get_if<McastExplicitSenderConfig>(&sender_config);
+    const auto* rotating = std::get_if<McastRotatingSenderConfig>(&sender_config);
+    const auto* explicit_fixed = std::get_if<McastExplicitFixedSenderConfig>(&sender_config);
     std::vector<CoreCoord> grid_senders;
     if (fixed) {
         TT_FATAL(
@@ -55,14 +55,22 @@ Mcast::Mcast(
         TT_FATAL(
             fixed->placement == McastSenderPlacement::Staggered || fixed->sender_index < receiver_group_size,
             "Mcast: uniform sender_index is outside its receiver group");
-    } else if (grid) {
-        grid_senders = ordered_cores(grid->sender_cores, grid->sender_order.value_or(receiver_order));
-        TT_FATAL(!grid_senders.empty(), "Mcast: sender grid must not be empty");
-        TT_FATAL(grid_senders.size() % num_groups == 0, "Mcast: sender grid must divide evenly across receiver groups");
-    } else if (explicit_senders) {
+    } else if (rotating) {
+        TT_FATAL(rotating->sender_cores || !rotating->sender_order, "Mcast: sender order requires a sender grid");
+        if (rotating->sender_cores) {
+            grid_senders = ordered_cores(*rotating->sender_cores, rotating->sender_order.value_or(receiver_order));
+            TT_FATAL(!grid_senders.empty(), "Mcast: sender grid must not be empty");
+            TT_FATAL(
+                grid_senders.size() % num_groups == 0, "Mcast: sender grid must divide evenly across receiver groups");
+            TT_FATAL(
+                grid_senders.size() / num_groups > 1, "Mcast: rotating sender grid needs multiple senders per group");
+        } else {
+            TT_FATAL(receiver_group_size > 1, "Mcast: rotating receiver group needs multiple senders");
+        }
+    } else if (explicit_fixed) {
         TT_FATAL(
-            explicit_senders->senders_per_group.size() == num_groups,
-            "Mcast: explicit sender lists must match the receiver group count");
+            explicit_fixed->senders_per_group.size() == num_groups,
+            "Mcast: explicit fixed senders must match the receiver group count");
     }
 
     for (size_t group_index = 0; group_index < num_groups; ++group_index) {
@@ -73,24 +81,33 @@ Mcast::Mcast(
         for (auto it = begin; it != end; ++it) {
             ranges.emplace_back(*it, *it);
         }
+        CoreRangeSet group_receivers(std::move(ranges));
+        if (rotating) {
+            TT_FATAL(
+                group_receivers.bounding_box().size() == group_receivers.num_cores(),
+                "Mcast: rotating sender requires receiver group {} to form a rectangle",
+                group_index);
+        }
         std::vector<CoreCoord> senders;
         if (fixed) {
             const size_t index = fixed->placement == McastSenderPlacement::Staggered
                                      ? (uint64_t(fixed->sender_index) + group_index) % receiver_group_size
                                      : fixed->sender_index;
             senders.push_back(*(begin + index));
-        } else if (grid) {
-            const size_t count = grid_senders.size() / num_groups;
-            const auto first = grid_senders.begin() + group_index * count;
-            senders.assign(first, first + count);
-        } else if (explicit_senders) {
-            senders = explicit_senders->senders_per_group[group_index];
-        } else {
-            senders.assign(begin, end);
+        } else if (rotating) {
+            if (rotating->sender_cores) {
+                const size_t count = grid_senders.size() / num_groups;
+                const auto first = grid_senders.begin() + group_index * count;
+                senders.assign(first, first + count);
+            } else {
+                senders.assign(begin, end);
+            }
+        } else if (explicit_fixed) {
+            senders.push_back(explicit_fixed->senders_per_group[group_index]);
         }
         // The implementation owns schedule uniqueness/length and cross-group footprint
         // validation. Do not replace either receiver membership or sender order.
-        impl_->add_group(CoreRangeSet(std::move(ranges)), std::move(senders));
+        impl_->add_group(std::move(group_receivers), std::move(senders));
     }
     impl_->prepare_arguments_();
 }

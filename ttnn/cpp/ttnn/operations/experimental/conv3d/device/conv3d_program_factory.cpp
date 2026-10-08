@@ -1059,7 +1059,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Track physical-x columns already used as senders so we can max-min the next pick.
         std::vector<uint32_t> used_sender_phys_xs;
         used_sender_phys_xs.reserve(num_groups);
-        mcast::McastExplicitSenderConfig strip_senders;
+        mcast::McastExplicitFixedSenderConfig strip_senders;
         strip_senders.senders_per_group.reserve(num_groups);
 
         auto pick_sender_within_idx = [&](uint32_t bbox_y_start_log, uint32_t num_members) {
@@ -1109,7 +1109,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             const auto sender_phys = device->worker_core_from_logical_core(CoreCoord{sender_x_log, sender_y_log});
             used_sender_phys_xs.push_back((uint32_t)sender_phys.x);
 
-            strip_senders.senders_per_group.push_back({CoreCoord{sender_x_log, sender_y_log}});
+            strip_senders.senders_per_group.push_back(CoreCoord{sender_x_log, sender_y_log});
 
             // Weight CB storage is allocated across core_grid, including the unused row tails.
             // Leave those cores idle: hardware can land payloads there without a receiving kernel.

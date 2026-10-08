@@ -155,7 +155,7 @@ class ReceiverPipeImpl {
     static_assert(NUM_SENDERS >= 1, "ReceiverPipe needs at least one sender coord pair.");
 
 public:
-    // The view supplies NUM_SENDERS virtual NoC coordinate pairs. Pointer-backed storage must outlive the pipe.
+    // Supplies NUM_SENDERS virtual NoC coordinate pairs; pointer-backed storage must outlive the pipe.
     template <typename CoordinateSource = SenderCoordinates>
     FORCE_INLINE explicit ReceiverPipeImpl(const Noc& noc, CoordinateSource sender_coords);
 

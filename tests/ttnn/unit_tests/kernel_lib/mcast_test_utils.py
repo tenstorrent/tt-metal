@@ -52,9 +52,23 @@ def make_mcast(device, specs, config):
     if order is None:
         raise ValueError("Mcast requires equal consecutive receiver groups and equal sender counts")
     receivers = core_set([core for group in specs for core in group.receivers])
-    sender_config = ttnn.McastExplicitSenderConfig(
-        [[ttnn.CoreCoord(*core) for core in group.senders] for group in specs]
-    )
+    if len(specs[0].senders) == 1:
+        sender_config = ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*group.senders[0]) for group in specs])
+    else:
+        keys = {
+            ttnn.McastCoreOrder.RowMajor: lambda core: (core[1], core[0]),
+            ttnn.McastCoreOrder.ColumnMajor: lambda core: (core[0], core[1]),
+        }
+        if all(group.senders == sorted(group.receivers, key=keys[order]) for group in specs):
+            sender_config = ttnn.McastRotatingSenderConfig()
+        else:
+            senders = [core for group in specs for core in group.senders]
+            sender_order = next(
+                (candidate for candidate, key in keys.items() if senders == sorted(senders, key=key)), None
+            )
+            if sender_order is None or len(set(senders)) != len(senders):
+                raise ValueError("Mcast rotating senders require row-major or column-major grid order")
+            sender_config = ttnn.McastRotatingSenderConfig(core_set(senders), sender_order=sender_order)
     return ttnn.Mcast(device, config, receivers, len(specs[0].receivers), sender_config, order)
 
 
@@ -290,7 +304,11 @@ def run_positional_mcast_case(
         handshake=handshake,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
     )
-    sender_config = ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(*sender) for sender in group.senders]])
+    sender_config = (
+        ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*group.senders[0])])
+        if len(group.senders) == 1
+        else ttnn.McastRotatingSenderConfig(core_set(group.senders))
+    )
     helper = ttnn.Mcast(device, config, core_set(group.receivers), len(group.receivers), sender_config)
     _run_channel(
         device,
@@ -435,7 +453,7 @@ def _run_channel(
             ttnn.McastConfig(noc=config.noc),
             participants,
             participants.num_cores(),
-            ttnn.McastExplicitSenderConfig([[ttnn.CoreCoord(0, 0)]]),
+            ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(0, 0)]),
         )
         barrier.attach(descriptor, "barrier_mcast", kernels, mcast.next_semaphore_id())
     else:

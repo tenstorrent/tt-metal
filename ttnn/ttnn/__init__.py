@@ -312,9 +312,8 @@ from ttnn.types import (
     McastCoreOrder,
     McastSenderPlacement,
     McastFixedSenderConfig,
+    McastExplicitFixedSenderConfig,
     McastRotatingSenderConfig,
-    McastSenderGridConfig,
-    McastExplicitSenderConfig,
     McastConfig,
     McastDataReady,
 )

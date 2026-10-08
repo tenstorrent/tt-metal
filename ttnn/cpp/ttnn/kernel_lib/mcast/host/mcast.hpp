@@ -32,7 +32,7 @@ class McastImpl;
 // =============================================================================
 // Usage examples
 //
-// The examples assume that device, descriptor, noc, and the shown cores and receiver sets already exist, and
+// The examples assume that device, descriptor, noc, and the shown cores and core sets already exist, and
 // that kernel is a placed KernelDescriptor with its operation-specific compile-time and runtime arguments.
 //
 // Create one independent multicast per row, with the first core in each row as its fixed sender.
@@ -49,14 +49,14 @@ class McastImpl;
 // const uint32_t next_semaphore_id = mcast.next_semaphore_id();
 // descriptor.kernels.push_back(std::move(kernel));
 //
-// Create one multicast over the receiver set from an explicit sender.
+// Rotate through a separate sender grid for one rectangular receiver group.
 //
 // Mcast mcast(
 //     device,
 //     McastConfig{.noc = noc},
 //     receivers,
 //     receivers.num_cores(),
-//     McastExplicitSenderConfig{{{sender}}});
+//     McastRotatingSenderConfig{.sender_cores = sender_grid, .sender_order = McastCoreOrder::RowMajor});
 // const std::array kernels{std::ref(kernel)};
 // mcast.attach(descriptor, "input_mcast", kernels, 0);
 // descriptor.kernels.push_back(std::move(kernel));
@@ -94,25 +94,27 @@ struct McastConfig {
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
 };
 
+// One in-group sender per receiver group, optionally staggered across groups.
 struct McastFixedSenderConfig {
     // Uniform requires an in-group index. Staggered wraps index + group number.
     uint32_t sender_index = 0;
     McastSenderPlacement placement = McastSenderPlacement::Uniform;
 };
 
-struct McastRotatingSenderConfig {};
-
-struct McastSenderGridConfig {
-    tt::tt_metal::CoreRangeSet sender_cores;
+// Multiple senders take turns, using the receiver group or a separate sender grid.
+struct McastRotatingSenderConfig {
+    // Defaults to the receiver group; a separate grid is partitioned across groups.
+    std::optional<tt::tt_metal::CoreRangeSet> sender_cores;
     std::optional<McastCoreOrder> sender_order;  // Defaults to receiver order.
 };
 
-struct McastExplicitSenderConfig {
-    std::vector<std::vector<tt::tt_metal::CoreCoord>> senders_per_group;
+// One explicitly chosen sender per group, which may be outside its receivers.
+struct McastExplicitFixedSenderConfig {
+    std::vector<tt::tt_metal::CoreCoord> senders_per_group;
 };
 
 using McastSenderConfig =
-    std::variant<McastFixedSenderConfig, McastRotatingSenderConfig, McastSenderGridConfig, McastExplicitSenderConfig>;
+    std::variant<McastFixedSenderConfig, McastExplicitFixedSenderConfig, McastRotatingSenderConfig>;
 
 // Partitions the ordered receiver cores into equal consecutive groups and
 // owns the resulting multicast lowering snapshot.
