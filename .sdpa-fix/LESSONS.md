@@ -5,7 +5,9 @@ follow it; `fixer.sh` and `watch.sh` inject the matching lines into every
 prompt (triage, fix, judge, skeptic, watcher). `ops` lines are for whoever
 maintains the bots.
 
-**When a human corrects the bot, add one line here, phrased as a rule.**
+**When a human corrects the bot, add one line here, phrased as a rule, and fix
+the source that taught the wrong thing.** The procedure is in `CLAUDE.md` (here
+and in the global `~/.claude/CLAUDE.md`).
 
 ## Claiming that a PR fixes a failure
 
