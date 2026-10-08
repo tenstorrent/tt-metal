@@ -14,7 +14,12 @@ from data import load, SETS, CAND
 
 W = "/localdev/rmiller/mm-oob-model-work"
 V6_CV = "pred_cv_x_noc_rl_burstl1+dram_eff=0.77_launch_us=0.5_rl_init=340_u2d=100.npy"
-FRESH = [(f"{W}/fresh/fresh_timed.csv", f"{W}/fresh/fresh_cases.csv", "fresh90001")]
+# (timed, cases or None = attributes from the timed rows, set name, enumeration)
+FRESH = [
+    (f"{W}/fresh/fresh_timed.csv", f"{W}/fresh/fresh_cases.csv", "fresh90001", f"{W}/fresh/fresh_enum.csv"),
+    (f"{W}/fresh/fresh2_timed.csv", f"{W}/fresh/fresh2_cases.csv", "fresh91001", f"{W}/fresh/fresh2_enum.csv"),
+    (f"{W}/device/suite719_v6_timed.csv", None, "suite719", f"{W}/device/suite719_enum.csv"),
+]
 THIN = 15
 
 
@@ -100,10 +105,16 @@ reg_cv = regimes(d.loc[cv.idx].reset_index(drop=True))
 cv = pd.concat([cv.reset_index(drop=True), reg_cv], axis=1)
 # ---- fresh device sets ----
 parts = [cv]
-for timed, cases, name in FRESH:
+for timed, cases, name, enum in FRESH:
+    if not os.path.exists(timed):
+        continue
     t = pd.read_csv(timed, low_memory=False)
-    cs = pd.read_csv(cases).set_index("case")
-    en = pd.read_csv(timed.replace("_timed.csv", "_enum.csv"), low_memory=False)
+    cs = (
+        pd.read_csv(cases).set_index("case")
+        if cases
+        else t[t.origin == "legacy"].drop_duplicates("case", keep="last").set_index("case")
+    )
+    en = pd.read_csv(enum, low_memory=False)
     fams = en[en.origin.isin(CAND) & (en.status == "ok")].groupby("case").family.agg(set)
     ok = t[t.status == "ok"]
     ns = ok.pivot_table(index="case", columns="origin", values="device_ns", aggfunc="last").dropna(
@@ -117,6 +128,7 @@ for timed, cases, name in FRESH:
         fr.append(dict(src=name, kind="device", key=c, ratio=ratio, cause=cause))
     fr = pd.DataFrame(fr)
     attrs = cs.loc[fr.key].reset_index().assign(arch_="wh")
+    attrs["core_grid"] = attrs.core_grid if "core_grid" in attrs else ""
     parts.append(pd.concat([fr.reset_index(drop=True), regimes(attrs).reset_index(drop=True)], axis=1))
 A = pd.concat(parts, ignore_index=True)
 DIMS = ["arch", "source", "spill", "epilogue", "M", "K", "N", "batch", "dtype", "fidelity", "ragged", "grid"]

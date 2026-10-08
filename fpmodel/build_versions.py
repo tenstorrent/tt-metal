@@ -214,10 +214,49 @@ if os.path.exists(fresh):
     if os.path.exists(f"{W}/fresh/fresh_sweep.csv"):
         b["regret"] = sweep_regret(f"{W}/fresh/fresh_sweep.csv", f"{W}/fresh/fresh_picks.csv")
     DEV["v6"].append(b)
+if os.path.exists(f"{W}/fresh/fresh2_timed.csv"):
+    DEV["v6"].append(
+        device_block(
+            f"{W}/fresh/fresh2_timed.csv",
+            "fresh91001",
+            "Fresh random set, draw 2 (seeds 91001-7)",
+            "2026-10-08",
+            "Second out-of-sample draw, picked with the frozen v6 constants.",
+        )
+    )
+if os.path.exists(f"{W}/device/suite719_v6_timed.csv"):
+    b = device_block(
+        f"{W}/device/suite719_v6_timed.csv",
+        "suite719",
+        "Real-case suite (719)",
+        "2026-10-08",
+        "Not in v6's training data; the rules were tuned on this suite.",
+    )
+    if os.path.exists(f"{W}/usage/usage_v6_wh.json"):  # written by usage_eval.py
+        b["usage"] = json.load(open(f"{W}/usage/usage_v6_wh.json"))
+    DEV["v6"].append(b)
+
+
+def bounds(blocks):
+    """pooled regression rates over the fresh draws with one-sided 95% Clopper-Pearson upper bounds"""
+    from scipy.stats import beta
+
+    fr = [b for b in blocks if b["id"].startswith("fresh")]
+    if not fr:
+        return None
+    n = sum(b["n"] for b in fr)
+    out = dict(sets=[b["id"] for b in fr], n=n)
+    for who in ("model", "rules"):
+        for key, k in (("gt105", sum(b[who]["n_regr"] for b in fr)), ("gt125", sum(b[who]["n_gt125"] for b in fr))):
+            out[f"{who}_{key}"] = dict(k=k, rate=r3(k / n), upper95=r3(beta.ppf(0.95, k + 1, n - k)))
+    return out
+
+
 index = []
 for vid, meta in V.items():
     cv, _ = cv_block(CVPRED[vid])
     doc = dict(id=vid, commit=commit.get(vid), **meta, cv=cv, rules_cv=rules, device=DEV.get(vid, []))
+    doc["bounds"] = bounds(doc["device"])
     if os.path.exists(f"{OUT}/coverage_{vid}.json"):  # written by coverage.py
         doc["coverage"] = f"data/coverage_{vid}.json"
     json.dump(doc, open(f"{OUT}/{vid}.json", "w"), separators=(",", ":"))
