@@ -125,6 +125,15 @@ class Kernel:
                 reads.append(a)
         start = [a for a in reads if calls(a, range(-4, 0), reserve)]
         end = [a for a in reads if calls(a, range(1, 14), record)]
+        if not start and len(end) == 1:
+            # the zone was reserved before its barrier rendezvous (LLK_ZONE_EARLY_RESERVE): the start read is the first
+            # clock read after the park that comes before the end read
+            parks = [a for a, w in self.words.items() if w == EBREAK and a < end[0]]
+            if parks:
+                start = [
+                    min((a for a in reads if max(parks) < a < end[0]), default=None)
+                ]
+                start = [a for a in start if a is not None]
         return (start[0], end[0]) if len(start) == 1 and len(end) == 1 else None
 
     def events(self):
