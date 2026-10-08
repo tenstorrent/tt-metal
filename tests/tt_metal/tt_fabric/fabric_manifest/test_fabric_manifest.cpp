@@ -177,7 +177,7 @@ void check_top_level(
     std::filesystem::file_time_type suite_start) {
     EXPECT_EQ(
         keys_of(manifest),
-        (std::set<std::string>{"manifest_version", "kind", "run", "fabric_context", "vocabulary", "meshes"}));
+        (std::set<std::string>{"manifest_version", "kind", "run", "fabric_context", "vocabulary", "archs", "meshes"}));
     EXPECT_EQ(keys_of(manifest.at("vocabulary")), (std::set<std::string>{"categories", "kinds"}));
     EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
     EXPECT_EQ(manifest.at("kind"), "fabric_manifest");
@@ -639,11 +639,18 @@ void collect_regions(
     }
 }
 
-// No two of a router's L1 regions overlap.
-void check_router_regions_disjoint(const std::vector<RouterEntry>& routers) {
+// The arch's L1 areas, which every router's core has.
+const json& arch_areas(const json& manifest) {
+    return manifest.at("archs").at(manifest.at("run").at("arch").get<std::string>()).at("areas");
+}
+
+// No two of a router's L1 regions overlap, counting the arch areas on its core.
+void check_router_regions_disjoint(const json& manifest, const std::vector<RouterEntry>& routers) {
+    std::vector<std::tuple<uint32_t, uint32_t, std::string>> areas;
+    collect_regions(arch_areas(manifest), "areas", areas);
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
-        std::vector<std::tuple<uint32_t, uint32_t, std::string>> regions;
+        auto regions = areas;
         collect_regions(*entry.router, "", regions);
         std::ranges::sort(regions);
         for (size_t i = 1; i < regions.size(); ++i) {
@@ -1057,12 +1064,16 @@ void check_local_sync(const json& manifest) {
                 EXPECT_TRUE(local_sync.is_null());
                 continue;
             }
-            ASSERT_EQ(
-                keys_of(local_sync), (std::set<std::string>{"master_eth_chan", "num_routers", "router_channels_mask"}));
+            ASSERT_EQ(keys_of(local_sync), (std::set<std::string>{"master", "num_routers", "router_channels_mask"}));
             const FabricNodeId node(
                 MeshId{static_cast<uint32_t>(std::stoul(m_key.substr(1)))},
                 static_cast<uint32_t>(std::stoul(c_key.substr(1))));
-            const auto master_eth_chan = local_sync.at("master_eth_chan").get<uint32_t>();
+            const auto master = local_sync.at("master").get<std::string>();
+            const auto chip_prefix = fmt::format("{}/{}/", m_key, c_key);
+            ASSERT_TRUE(master.starts_with(chip_prefix)) << master << " is not on this chip";
+            ASSERT_TRUE(routers.contains(key_of_path(master))) << master;
+            const auto master_eth_chan = channel_for_key(node, key_of_path(master));
+            ASSERT_TRUE(master_eth_chan.has_value()) << master;
             uint32_t mask = 0;
             bool syncs = false;
             uint32_t num_masters = 0;
@@ -1077,14 +1088,14 @@ void check_local_sync(const json& manifest) {
                 syncs = true;
                 for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
                     if (erisc.at("fields").at("local_handshake_master").at("value").get<bool>()) {
-                        EXPECT_EQ(*eth_chan, master_eth_chan) << r_key << "/" << risc_key;
+                        EXPECT_EQ(chip_prefix + r_key, master) << risc_key;
                         ++num_masters;
                     }
                 }
             }
             EXPECT_EQ(local_sync.at("num_routers"), routers.size());
             EXPECT_EQ(local_sync.at("router_channels_mask"), mask);
-            EXPECT_NE(mask & (1u << master_eth_chan), 0u) << "the master is not one of the chip's routers";
+            EXPECT_NE(mask & (1u << *master_eth_chan), 0u) << "the master is not in router_channels_mask";
             EXPECT_EQ(num_masters, syncs ? 1u : 0u);
         }
     }
@@ -1187,6 +1198,59 @@ void check_router_leftover_l1(const std::vector<RouterEntry>& routers) {
         EXPECT_EQ(leftover.at("address").get<uint64_t>(), buffers_end);
         EXPECT_EQ(leftover.at("address").get<uint64_t>() + leftover.at("size").get<uint64_t>(), l1_end);
     }
+}
+
+// The run's arch is the only one described, and its areas are where the HAL puts them on the active Ethernet core.
+void check_archs(const json& manifest) {
+    using tt::tt_metal::HalL1MemAddrType;
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto core = tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
+    EXPECT_EQ(keys_of(manifest.at("archs")), (std::set<std::string>{lower_enum_name(BaseFabricFixture::arch_)}));
+    const auto& areas = arch_areas(manifest);
+    EXPECT_EQ(
+        keys_of(areas),
+        (std::set<std::string>{
+            "heartbeat",
+            "fabric_telemetry",
+            "routing_table",
+            "go_msg",
+            "launch",
+            "launch_msg_rd_ptr",
+            "eth_fw_mailbox"}));
+
+    const auto expect_hal_area = [&](const char* key, HalL1MemAddrType type) {
+        SCOPED_TRACE(key);
+        const auto& area = areas.at(key);
+        ASSERT_TRUE(area.is_object());
+        EXPECT_EQ(area.at("address").get<uint64_t>(), hal.get_dev_addr(core, type));
+        EXPECT_EQ(area.at("size").get<uint32_t>(), hal.get_dev_size(core, type));
+    };
+    expect_hal_area("fabric_telemetry", HalL1MemAddrType::FABRIC_TELEMETRY);
+    expect_hal_area("routing_table", HalL1MemAddrType::ROUTING_TABLE);
+    expect_hal_area("launch_msg_rd_ptr", HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+    if (hal.get_dev_addr(core, HalL1MemAddrType::ETH_FW_MAILBOX) != 0) {
+        expect_hal_area("eth_fw_mailbox", HalL1MemAddrType::ETH_FW_MAILBOX);
+    } else {
+        EXPECT_TRUE(areas.at("eth_fw_mailbox").is_null());
+    }
+
+    // Only the first of the HAL's go messages: the one active ERISC firmware uses.
+    const auto& go_msg = areas.at("go_msg");
+    EXPECT_EQ(go_msg.at("address").get<uint64_t>(), hal.get_dev_addr(core, HalL1MemAddrType::GO_MSG));
+    EXPECT_EQ(go_msg.at("size"), hal.get_dev_msgs_factory(core).size_of<tt::tt_metal::dev_msgs::go_msg_t>());
+    EXPECT_FALSE(go_msg.contains("num_elements"));
+
+    // The whole launch ring, which starts at the HAL's single LAUNCH entry.
+    const auto& launch = areas.at("launch");
+    EXPECT_EQ(launch.at("address").get<uint64_t>(), hal.get_dev_addr(core, HalL1MemAddrType::LAUNCH));
+    EXPECT_EQ(launch.at("size_per_element"), hal.get_dev_size(core, HalL1MemAddrType::LAUNCH));
+    EXPECT_EQ(launch.at("num_elements"), tt::tt_metal::dev_msgs::launch_msg_buffer_num_entries);
+
+    const auto& heartbeat = areas.at("heartbeat");
+    EXPECT_EQ(
+        keys_of(heartbeat),
+        (std::set<std::string>{"address", "size", "schema", "cleared_by_host", "magic", "magic_mask", "period_iters"}));
+    EXPECT_EQ(heartbeat.at("size"), sizeof(uint32_t));
 }
 
 }  // namespace
@@ -1318,8 +1382,11 @@ TEST_F(Fabric2DManifestFixture, RouterFields) { check_router_fields(manifest_, r
 TEST_F(Fabric1DManifestFixture, LocalSync) { check_local_sync(manifest_); }
 TEST_F(Fabric2DManifestFixture, LocalSync) { check_local_sync(manifest_); }
 
-TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(routers_); }
+TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
+TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
+
+TEST_F(Fabric1DManifestFixture, Archs) { check_archs(manifest_); }
+TEST_F(Fabric2DManifestFixture, Archs) { check_archs(manifest_); }
 
 TEST_F(Fabric1DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
 TEST_F(Fabric2DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }

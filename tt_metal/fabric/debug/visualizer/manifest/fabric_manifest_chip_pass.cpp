@@ -20,6 +20,8 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
+#include "tt_metal/llrt/hal.hpp"
 
 namespace tt::tt_fabric {
 
@@ -27,14 +29,16 @@ namespace {
 
 using manifest::direction_letter;
 using manifest::router_key;
+using tt::tt_metal::HalL1MemAddrType;
+using tt::tt_metal::HalProgrammableCoreType;
 
 // The router on `peer_chan`, or nullopt when ControlPlane has no active router there (the channel was trimmed from
 // the peer's routing planes).
-std::optional<manifest::PeerRouterRef> peer_router_ref(
+std::optional<manifest::RouterRef> peer_router_ref(
     const ControlPlane& control_plane, FabricNodeId peer_node, chan_id_t peer_chan) {
     for (const auto& [chan, direction] : control_plane.get_active_fabric_eth_channels(peer_node)) {
         if (chan == peer_chan) {
-            return manifest::PeerRouterRef{
+            return manifest::RouterRef{
                 .node = peer_node,
                 .direction = direction,
                 .routing_plane = control_plane.get_routing_plane_id(peer_node, chan),
@@ -156,6 +160,20 @@ std::vector<manifest::Router> key_routers(
     return routers;
 }
 
+// The router that leads the chip's local sync.
+manifest::RouterRef master_router_ref(
+    const std::vector<manifest::Router>& routers, FabricNodeId node, uint32_t master_eth_chan) {
+    const auto it = std::ranges::find(
+        routers, master_eth_chan, [](const manifest::Router& router) { return router.identity.eth_chan; });
+    TT_FATAL(
+        it != routers.end(),
+        "Fabric manifest: {}'s local sync master is channel {}, which has no router",
+        node,
+        master_eth_chan);
+    return manifest::RouterRef{
+        .node = node, .direction = it->identity.direction, .routing_plane = it->identity.routing_plane};
+}
+
 void join_link(
     manifest::Router& router,
     const ControlPlane& control_plane,
@@ -260,6 +278,48 @@ void join_edges(std::vector<manifest::Router>& routers, const ControlPlane& cont
     }
 }
 
+// ============ Architecture ============
+
+uint32_t hal_address(const tt::tt_metal::Hal& hal, HalL1MemAddrType area) {
+    return static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, area));
+}
+
+uint32_t hal_size(const tt::tt_metal::Hal& hal, HalL1MemAddrType area) {
+    return hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, area);
+}
+
+// A HAL area holding a whole number of `one`s, described as `count` of them from its address: one of them, or an
+// array. `count` defaults to as many as the HAL's size holds.
+manifest::content::L1 hal_area(
+    const tt::tt_metal::Hal& hal,
+    HalL1MemAddrType area,
+    const layout::Type& one,
+    std::optional<uint32_t> count = std::nullopt) {
+    const uint32_t size = hal_size(hal, area);
+    TT_FATAL(
+        one.size > 0 && size >= one.size && size % one.size == 0,
+        "Fabric manifest: the HAL's {} area is {} bytes, which is not a whole number of its {}-byte {}",
+        manifest::lower_enum_name(area),
+        size,
+        one.size,
+        manifest::schema_name(one));
+    const uint32_t n = count.value_or(size / one.size);
+    return {.address = hal_address(hal, area), .type = n == 1 ? one : layout::Type{one.element, n * one.size, n}};
+}
+
+// The kernel picks its heartbeat word's address by architecture: Blackhole's, or else Wormhole's.
+manifest::Heartbeat heartbeat(tt::ARCH arch) {
+    return manifest::Heartbeat{
+        .word =
+            {.address = arch == tt::ARCH::BLACKHOLE ? FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE
+                                                    : FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE,
+             .type = layout::type_of<uint32_t>()},
+        .magic = FABRIC_KERNEL_HEARTBEAT_MAGIC,
+        .magic_mask = FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK,
+        .period_iters = FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS,
+    };
+}
+
 }  // namespace
 
 manifest::Chip join_chip(
@@ -270,11 +330,44 @@ manifest::Chip join_chip(
     FabricNodeId node,
     ChipId physical_chip_id) {
     chip.routers = key_routers(std::move(chip.routers), control_plane, cluster, node, physical_chip_id);
+    if (chip.local_sync.has_value()) {
+        chip.local_sync->master = master_router_ref(chip.routers, node, chip.local_sync->master_eth_chan);
+    }
     for (auto& router : chip.routers) {
         join_link(router, control_plane, fabric_type, node, physical_chip_id);
     }
     join_edges(chip.routers, control_plane, node);
     return chip;
+}
+
+manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
+    namespace dev_msgs = tt::tt_metal::dev_msgs;
+    const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
+    const layout::Type go_msg{
+        layout::element::Struct{layout::go_msg_name}, static_cast<uint32_t>(factory.size_of<dev_msgs::go_msg_t>()), 0};
+    const layout::Type launch_msg{
+        layout::element::Bytes{}, static_cast<uint32_t>(factory.size_of<dev_msgs::launch_msg_t>()), 0};
+    return manifest::Arch{
+        .arch = hal.get_arch(),
+        .areas =
+            manifest::ArchAreas{
+                .heartbeat = heartbeat(hal.get_arch()),
+                .fabric_telemetry =
+                    hal_area(hal, HalL1MemAddrType::FABRIC_TELEMETRY, layout::type_of<FabricTelemetry>()),
+                .routing_table = hal_area(hal, HalL1MemAddrType::ROUTING_TABLE, layout::type_of<routing_l1_info_t>()),
+                // Active ERISC firmware only reads and writes go_messages[0].
+                .go_msg = hal_area(hal, HalL1MemAddrType::GO_MSG, go_msg, 1),
+                // The HAL's LAUNCH is the ring's first entry; firmware and the router index the ring by its read
+                // pointer.
+                .launch = hal_area(hal, HalL1MemAddrType::LAUNCH, launch_msg, dev_msgs::launch_msg_buffer_num_entries),
+                .launch_msg_rd_ptr =
+                    hal_area(hal, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR, layout::type_of<uint32_t>()),
+                .eth_fw_mailbox =
+                    hal.get_supports_eth_fw_mailbox()
+                        ? std::optional(hal_area(hal, HalL1MemAddrType::ETH_FW_MAILBOX, layout::type_of<uint32_t>()))
+                        : std::nullopt,
+            },
+    };
 }
 
 }  // namespace tt::tt_fabric
