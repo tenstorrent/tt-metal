@@ -62,8 +62,11 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     // create circular buffers
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // The reader writes bfloat16 mask and scaler tiles.
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
     const std::uint32_t tile_size_data = tile_size(data_format);
     const std::uint32_t tile_size_intermed = tile_size(intermed_data_format);
+    const std::uint32_t tile_size_mask_scaler = tile_size(mask_scaler_format);
 
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
@@ -88,17 +91,20 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
         DataflowBufferSpec{
             .unique_id = IN, .entry_size = tile_size_data, .num_entries = 2, .data_format_metadata = data_format},
         DataflowBufferSpec{
-            .unique_id = MASK, .entry_size = tile_size_data, .num_entries = 1, .data_format_metadata = data_format},
+            .unique_id = MASK,
+            .entry_size = tile_size_mask_scaler,
+            .num_entries = 1,
+            .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = MAX_SCALER,
-            .entry_size = tile_size_data,
+            .entry_size = tile_size_mask_scaler,
             .num_entries = 1,
-            .data_format_metadata = data_format},
+            .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = SUM_SCALER,
-            .entry_size = tile_size_data,
+            .entry_size = tile_size_mask_scaler,
             .num_entries = 1,
-            .data_format_metadata = data_format},
+            .data_format_metadata = mask_scaler_format},
         DataflowBufferSpec{
             .unique_id = OUT, .entry_size = tile_size_data, .num_entries = 2, .data_format_metadata = data_format},
         DataflowBufferSpec{
@@ -170,7 +176,8 @@ ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxHLar
     if (op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["LOG"] = "1";
     }
-    if (fp32_dest_acc_en) {
+    // Bfp8_b input needs the format reconfig this define enables.
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
