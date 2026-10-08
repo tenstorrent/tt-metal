@@ -207,7 +207,7 @@ inline void llk_unpack_A_block(
         constexpr std::uint32_t dest_section_tiles = ckernel::trisc::
             get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::trisc::DstTileShape::Tile32x32>();
         LLK_ASSERT(
-            start_dst_tile_index + ntiles <= dest_section_tiles,
+            start_dst_tile_index < dest_section_tiles && ntiles <= dest_section_tiles - start_dst_tile_index,
             "unpack-to-dest: start_dst_tile_index + ntiles exceeds the DEST section capacity for this sync mode and "
             "DEST width");
         // EN_32BIT_DEST must match the pack side, see llk_unpack_A.
