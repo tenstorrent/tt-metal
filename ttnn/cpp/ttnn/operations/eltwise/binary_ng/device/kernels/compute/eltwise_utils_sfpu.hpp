@@ -33,7 +33,7 @@ ALWI void preprocess_sfpu_impl(
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
         copy_init(cb_pre.get_cb_id());
-        BINARY_NG_COPY_TILE(cb_pre.get_cb_id(), i, i);
+        copy_tile(cb_pre.get_cb_id(), i, i);
         process_activations(i);
     }
     tile_regs_commit();
