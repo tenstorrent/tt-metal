@@ -131,7 +131,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // PV pipeline has enough groups to overlap (1 core Q128: 1.93 -> 2.03 TF). FAST is pack-bound and keeps
     // two-row groups (one-row groups double its per-group pack work), and so do the ring kernels (H3 4x8 ring
     // block: one-row groups were 1-4% slower).
-#if defined(SDPA_RECIPE_LOFI) || defined(SDPA_RECIPE_RING)
+// Wormhole STANDARD is faster with two-row groups too (1 core Q128/K512: 0.94 -> 1.02 TF).
+#if defined(SDPA_RECIPE_LOFI) || defined(SDPA_RECIPE_RING) || defined(ARCH_WORMHOLE)
     constexpr uint32_t kH1MaxQTiles = 0;
 #else
     constexpr uint32_t kH1MaxQTiles = 6;
