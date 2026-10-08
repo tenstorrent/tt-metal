@@ -21,6 +21,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_chip_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 #include <algorithm>
@@ -32,9 +33,12 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
+#include <tuple>
 #include <type_traits>
 #include <variant>
+#include <vector>
 #include <unistd.h>
 
 namespace tt::tt_fabric {
@@ -117,16 +121,24 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
 
 // ============ Contents ============
 
-// An array also gets its element count and the size of one element.
+// A type's size and schema. An array also gets its element count and the size of one element, and a packed table
+// its entry count and the bits in one entry.
+void add_type_json(json& out, const layout::Type& type) {
+    out["size"] = type.size;
+    if (const auto* packed = std::get_if<layout::element::Packed>(&type.element)) {
+        out["num_elements"] = type.count;
+        out["bits_per_entry"] = packed->bits_per_entry;
+    } else if (type.count > 0) {
+        out["num_elements"] = type.count;
+        out["size_per_element"] = manifest::element_size(type);
+    }
+    out["schema"] = manifest::schema_name(type);
+}
+
 json l1_json(const manifest::content::L1& l1) {
     json out;
     out["address"] = l1.address;
-    out["size"] = l1.type.size;
-    if (l1.type.count > 0) {
-        out["num_elements"] = l1.type.count;
-        out["size_per_element"] = manifest::element_size(l1.type);
-    }
-    out["schema"] = manifest::schema_name(l1.type);
+    add_type_json(out, l1.type);
     out["cleared_by_host"] = l1.cleared_by_host;
     return out;
 }
@@ -153,6 +165,26 @@ json heartbeat_json(const manifest::Heartbeat& heartbeat) {
     return out;
 }
 
+// Each struct by name, with its members in order.
+json types_json(const std::vector<layout::StructType>& types) {
+    json out = json::object();
+    for (const auto& type : types) {
+        const std::string name(type.name);
+        TT_FATAL(!out.contains(name), "Fabric manifest: two structs are named {}, so its schema is ambiguous", name);
+        json members = json::array();
+        for (const auto& member : type.members) {
+            json entry;
+            entry["name"] = std::string(member.name);
+            entry["offset"] = member.offset;
+            add_type_json(entry, member.type);
+            members.push_back(std::move(entry));
+        }
+        out[name]["size"] = type.size;
+        out[name]["members"] = std::move(members);
+    }
+    return out;
+}
+
 // Keyed by architecture, which run.arch names.
 json make_archs_json(const manifest::Arch& arch) {
     const auto& areas = arch.areas;
@@ -166,7 +198,59 @@ json make_archs_json(const manifest::Arch& arch) {
     areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
     json archs;
     archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
+    archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types);
     return archs;
+}
+
+// ============ Enums and schemas ============
+
+// Each enum by name, with its values by their lower_name.
+json make_enums_json() {
+    json out = json::object();
+    const auto add = [&](const layout::EnumType& type) {
+        const std::string name(type.name);
+        TT_FATAL(!out.contains(name), "Fabric manifest: two enums are named {}, so its schema is ambiguous", name);
+        json values = json::object();
+        for (const auto& enumerator : type.enumerators) {
+            values[manifest::lower_name(enumerator.name)] = enumerator.value;
+        }
+        out[name]["values"] = std::move(values);
+    };
+    [&]<typename... Enums>(std::type_identity<std::tuple<Enums...>>) {
+        (add(layout::enum_type<Enums>()), ...);
+    }(std::type_identity<layout::DescribedEnums>{});
+    return out;
+}
+
+// Every struct and enum schema in `node` names a type in `types` or `enums`, so decode can read everything the
+// manifest hands it.
+void check_schemas_resolve(const json& node, const json& types, const json& enums) {
+    if (node.is_array()) {
+        for (const auto& element : node) {
+            check_schemas_resolve(element, types, enums);
+        }
+        return;
+    }
+    if (!node.is_object()) {
+        return;
+    }
+    for (const auto& [key, value] : node.items()) {
+        if (key != "schema" || !value.is_string()) {
+            check_schemas_resolve(value, types, enums);
+            continue;
+        }
+        const auto& schema = value.get_ref<const std::string&>();
+        const auto names_missing = [&](std::string_view prefix, const json& described) {
+            return schema.starts_with(prefix) && !described.contains(schema.substr(prefix.size()));
+        };
+        const bool unresolved =
+            names_missing(manifest::k_struct_schema, types) || names_missing(manifest::k_enum_schema, enums);
+        TT_FATAL(
+            !unresolved,
+            "Fabric manifest: the schema {} names a type the manifest does not describe; add it to "
+            "layout::DescribedStructs or layout::DescribedEnums (fabric_struct_layouts.hpp)",
+            schema);
+    }
 }
 
 // ============ Paths ============
@@ -550,7 +634,9 @@ void serialize_fabric_manifest_to_file(
     manifest["run"] = make_run_json(control_plane, cluster);
     manifest["fabric_context"] = make_fabric_context_json(fabric_context);
     manifest["vocabulary"] = make_vocabulary_json();
-    manifest["archs"] = make_archs_json(describe_arch(tt::tt_metal::MetalContext::instance().hal()));
+    const manifest::Arch arch = describe_arch(tt::tt_metal::MetalContext::instance().hal());
+    manifest["archs"] = make_archs_json(arch);
+    manifest["enums"] = make_enums_json();
 
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
@@ -559,6 +645,8 @@ void serialize_fabric_manifest_to_file(
         meshes[mesh_key(mesh_id)] = make_mesh_json(control_plane, cluster, builder_context, fabric_type, mesh_id);
     }
     manifest["meshes"] = std::move(meshes);
+    check_schemas_resolve(
+        manifest, manifest.at("archs").at(lower_enum_name(arch.arch)).at("types"), manifest.at("enums"));
 
     std::filesystem::create_directories(output_file_path.parent_path());
     const std::filesystem::path temporary_path =
