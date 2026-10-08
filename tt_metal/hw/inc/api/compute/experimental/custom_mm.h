@@ -27,7 +27,7 @@ namespace ckernel {
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32]; with narrow_in1 each tile holds 64 K rows x 16 N columns (ct_dim must be 1)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -43,6 +43,7 @@ namespace ckernel {
  * | dense_packing    | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | fp32_dest_acc_en | Whether dest accumulates in fp32; defaults to the kernel's DST_ACCUM_MODE              | bool     | true/false                            | False                 |
  * | clear_src        | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
+ * | narrow_in1       | Whether each in1 tile holds 64 K rows x 16 N columns (reads two in0 tiles per in1 tile) | bool     | true/false                            | False (default false) |
  * | in0_cb_id        | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id        | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id        | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
@@ -54,7 +55,8 @@ template <
     bool split_acc = false,
     bool dense_packing = false,
     bool fp32_dest_acc_en = DST_ACCUM_MODE,
-    bool clear_src = true>
+    bool clear_src = true,
+    bool narrow_in1 = false>
 ALWI void custom_mm_block_init(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -62,11 +64,11 @@ ALWI void custom_mm_block_init(
     const std::uint32_t ct_dim = 1) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src, narrow_in1>(in0_cb_id, in1_cb_id, ct_dim)));
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing, narrow_in1>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -81,7 +83,7 @@ ALWI void custom_mm_block_init(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32]; with narrow_in1 each tile holds 64 K rows x 16 N columns (ct_dim must be 1)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -96,21 +98,27 @@ ALWI void custom_mm_block_init(
  * | split_acc      | Whether to accumulate partials within a single tile in different dest locations        | bool     | true/false                            | False (default false) |
  * | dense_packing  | Whether to pack consecutive tiles 32 rows apart (instead of 64, doubles dest capacity) | bool     | true/false                            | False (default false) |
  * | clear_src      | Whether to clear SrcB at init (saves power as only 1/8 FPU rows are used)              | bool     | true/false                            | False (default true)  |
+ * | narrow_in1     | Whether each in1 tile holds 64 K rows x 16 N columns (reads two in0 tiles per in1 tile) | bool     | true/false                            | False (default false) |
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)                                 | uint32_t | 0 to 31                               | True                  |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)                                | uint32_t | 0 to 31                               | True                  |
  * | out_cb_id      | The identifier of the output circular buffer (CB)                                      | uint32_t | 0 to 31                               | True                  |
  * | ct_dim         | The width of the output matrix in tiles                                                | uint32_t | 1 to 16                               | False (default 1)     |
  */
 // clang-format on
-template <bool transpose = false, bool split_acc = false, bool dense_packing = false, bool clear_src = true>
+template <
+    bool transpose = false,
+    bool split_acc = false,
+    bool dense_packing = false,
+    bool clear_src = true,
+    bool narrow_in1 = false>
 ALWI void custom_mm_block_init_short(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t out_cb_id,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
+    UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src, narrow_in1>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<transpose, split_acc, dense_packing, narrow_in1>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
 }
@@ -124,7 +132,7 @@ ALWI void custom_mm_block_init_short(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32]; with narrow_in1 each tile holds 64 K rows x 16 N columns (ct_dim must be 1)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -136,6 +144,7 @@ ALWI void custom_mm_block_init_short(
  * | Argument        | Description                                                                                                     | Type     | Valid Range                                      | Required              |
  * |-----------------|-----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                               | bool     | true/false (must be false if split_acc is false) | False (default true)  |
+ * | narrow_in1      | Whether each in1 tile holds 64 K rows x 16 N columns (two in0 tiles per in1 tile); must match the init call      | bool     | true/false                                       | False (default false) |
  * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool     | true/false                                       | False (default false) |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                          | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
@@ -146,7 +155,7 @@ ALWI void custom_mm_block_init_short(
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true, bool read_transposed = false>
+template <bool finalize = true, bool read_transposed = false, bool narrow_in1 = false>
 ALWI void custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -155,9 +164,9 @@ ALWI void custom_mm_block(
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
+    UNPACK((llk_unpack_AB_custom_mm<read_transposed, narrow_in1>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
-    MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<finalize, narrow_in1>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off
@@ -169,7 +178,7 @@ ALWI void custom_mm_block(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32]; with narrow_in1 each tile holds 64 K rows x 16 N columns (ct_dim must be 1)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -181,6 +190,7 @@ ALWI void custom_mm_block(
  * | Argument        | Description                                                                                                     | Type     | Valid Range                                      | Required              |
  * |-----------------|-----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | read_transposed | Whether to read in1 tiles in transposed order (read ct tiles with a stride of kt, then move over a single tile) | bool     | true/false                                       | False (default false) |
+ * | narrow_in1      | Whether each in1 tile holds 64 K rows x 16 N columns (two in0 tiles per in1 tile); must match the init call      | bool     | true/false                                       | False (default false) |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                          | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t | Must be less than the size of the CB             | True                  |
@@ -189,7 +199,7 @@ ALWI void custom_mm_block(
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool narrow_in1 = false>
 ALWI void custom_mm_block_unpack(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -197,7 +207,7 @@ ALWI void custom_mm_block_unpack(
     const std::uint32_t in1_tile_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
+    UNPACK((llk_unpack_AB_custom_mm<read_transposed, narrow_in1>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
 }
 
@@ -210,7 +220,7 @@ ALWI void custom_mm_block_unpack(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32]; with narrow_in1 each tile holds 64 K rows x 16 N columns (ct_dim must be 1)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -222,6 +232,7 @@ ALWI void custom_mm_block_unpack(
  * | Argument        | Description                                                                                                    | Type     | Valid Range                                      | Required              |
  * |-----------------|----------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|-----------------------|
  * | finalize        | Whether to perform the finalization step which merges split_accumulation partials                              | bool     | true/false (must be false if split_acc is false) | False (default true)  |
+ * | narrow_in1      | Whether each in1 tile holds 64 K rows x 16 N columns (two in0 tiles per in1 tile); must match the init call      | bool     | true/false                                       | False (default false) |
  * | in0_cb_id       | The identifier of the first input circular buffer (CB)                                                         | uint32_t | 0 to 31                                          | True                  |
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                        | uint32_t | 0 to 31                                          | True                  |
  * | dst_index       | The index of the tile in DST REG to which the result C will be written                                         | uint32_t | Must be less than the acquired size of DST REG   | True                  |
@@ -229,14 +240,14 @@ ALWI void custom_mm_block_unpack(
  * | ct_dim          | The width of the output matrix in tiles                                                                        | uint32_t | 1 to 16                                          | False (default 1)     |
  */
 // clang-format on
-template <bool finalize = true>
+template <bool finalize = true, bool narrow_in1 = false>
 ALWI void custom_mm_block_math(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_custom_mm<finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    MATH((llk_math_custom_mm<finalize, narrow_in1>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
 }
 
 // clang-format off

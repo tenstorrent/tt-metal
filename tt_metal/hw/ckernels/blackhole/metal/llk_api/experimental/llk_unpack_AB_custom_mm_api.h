@@ -12,7 +12,7 @@
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32]; with narrow_in1 each tile holds 64 K rows x 16 N columns (two in0 tiles per in1 tile)
  * rt_dim: 1
  * ct_dim: any integer from 1 to 16
  * kt_dim: any integer from 1 to 256 (inclusive)
@@ -27,6 +27,7 @@
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
  * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
+ * @tparam narrow_in1: Each weight tile holds 64 K rows x 16 N columns, values = <true/false>
  * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
  * @param operand1: CB of the weights, whose unpack format selects the instruction tuning. Its data goes to SrcA.
  * @param ct_dim: Output width in tiles, 1 to 16.
@@ -34,7 +35,7 @@
  *       that writes SrcB.
  * @note On the math thread, pair with @ref llk_math_custom_mm_init.
  */
-template <bool transpose = false, bool clear_src = true>
+template <bool transpose = false, bool clear_src = true, bool narrow_in1 = false>
 inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operand0, const std::uint32_t operand1, const std::uint32_t ct_dim = 1) {
     SAN_HOOK(unsupported());
@@ -44,7 +45,8 @@ inline void llk_unpack_AB_custom_mm_init(
     const std::uint32_t operandB_face_r_dim = get_operand_face_r_dim(operandB_id);
     const std::uint32_t operandA_unpack_dst_format = unpack_dst_format[operandA_id];
 
-    _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(operandB_face_r_dim, operandA_unpack_dst_format, ct_dim);
+    _llk_unpack_AB_custom_mm_init_<transpose, clear_src, narrow_in1>(
+        operandB_face_r_dim, operandA_unpack_dst_format, ct_dim);
 }
 
 /**
@@ -52,6 +54,7 @@ inline void llk_unpack_AB_custom_mm_init(
  *        SrcB.
  *
  * @tparam read_transposed: Walk the weight tiles column by column instead of row by row, values = <true/false>
+ * @tparam narrow_in1: Each weight tile holds 64 K rows x 16 N columns, must match the init call, values = <true/false>
  * @param operand0: CB of the activations; its read pointer is the SrcB base.
  * @param operand1: CB of the weights; its read pointer is the SrcA base.
  * @param tile_index_0: First activation tile, relative to operand0's read pointer.
@@ -61,7 +64,7 @@ inline void llk_unpack_AB_custom_mm_init(
  * @note Call @ref llk_unpack_AB_custom_mm_init first.
  * @note On the math thread, pair with @ref llk_math_custom_mm.
  */
-template <bool read_transposed = false>
+template <bool read_transposed = false, bool narrow_in1 = false>
 inline void llk_unpack_AB_custom_mm(
     const std::uint32_t operand0,
     const std::uint32_t operand1,
@@ -79,6 +82,6 @@ inline void llk_unpack_AB_custom_mm(
     const std::uint32_t tile_index_B = tile_index_0;
     const std::uint32_t tile_size_A = get_local_cb_interface(operandA_id).fifo_page_size;
     const std::uint32_t tile_size_B = get_local_cb_interface(operandB_id).fifo_page_size;
-    _llk_unpack_AB_custom_mm_<read_transposed>(
+    _llk_unpack_AB_custom_mm_<read_transposed, narrow_in1>(
         base_address_A, base_address_B, tile_index_A, tile_index_B, tile_size_A, tile_size_B, kt_dim, ct_dim);
 }
