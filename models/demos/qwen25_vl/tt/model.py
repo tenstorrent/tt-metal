@@ -180,6 +180,7 @@ class DropInVisionTransformer(torch.nn.Module):
         self.reference_model = reference_model
         self.model_args = model_args
         self.debug = debug
+        self._traces = {}
 
         state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.vision_head_dim)
@@ -201,6 +202,97 @@ class DropInVisionTransformer(torch.nn.Module):
     @property
     def spatial_merge_size(self):
         return self.model_args.hf_config.vision_config.spatial_merge_size
+
+    # Trace capture per padded image length. Measured neutral on a 1x8 lane (the pass is bound by per-op
+    # device launch overhead, not host dispatch), so it is off by default; it helps when the host is busy.
+    use_trace = False
+
+    def _mappers(self, image_parallel):
+        mesh = self.model_args.mesh_device
+        if image_parallel:
+            shard0 = ttnn.ShardTensorToMesh(mesh, dim=0)
+            return shard0, shard0, shard0
+        return (
+            ttnn.ShardTensor2dMesh(mesh, dims=(None, -1), mesh_shape=self.model_args.cluster_shape),
+            ttnn.ReplicateTensorToMesh(mesh),
+            ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def _host_inputs(self, x, cos, sin, cu, cuw, image_parallel):
+        x_mapper, rope_mapper, bounds_mapper = self._mappers(image_parallel)
+        # The activations go over as row-major bf16 and are tilized on device: host-side tilization
+        # of the ~300 MB input of an 8-image pass costs 0.2-0.6 s per pass. The RoPE tables are small
+        # and their width (head_dim 80) is not tile-aligned, so they stay host-tilized.
+        rm_bf16 = dict(layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+        tile_bf16 = dict(layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        rm_u32 = dict(layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
+        return [
+            ttnn.from_torch(x, mesh_mapper=x_mapper, **rm_bf16),
+            ttnn.from_torch(cos, mesh_mapper=rope_mapper, **tile_bf16),
+            ttnn.from_torch(sin, mesh_mapper=rope_mapper, **tile_bf16),
+            ttnn.from_torch(cu, mesh_mapper=bounds_mapper, **rm_u32),
+            ttnn.from_torch(cuw, mesh_mapper=bounds_mapper, **rm_u32),
+        ]
+
+    def _run_model(self, dev_inputs, S):
+        """One vision pass from device-resident inputs; copies them first so the blocks may free their input."""
+        x, cos, sin, cu, cuw = dev_inputs
+        # tilize makes fresh tensors, so the blocks may free them without touching the persistent inputs
+        work_x = ttnn.tilize(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+        rot_mats = [
+            ttnn.clone(cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.clone(sin, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        ]
+        out = self.tt_model(
+            work_x,
+            unpadded_seq_len=S,  # the merger sees the padded length; the padding rows are dropped on the host
+            rot_mats=rot_mats,
+            cu_seqlens=ttnn.reshape(cu, (cu.shape[-1],)),  # per-device 1-D rows, as the windowed SDPA expects
+            cu_window_seqlens=ttnn.reshape(cuw, (cuw.shape[-1],)),
+        )
+        ttnn.deallocate(rot_mats[0])
+        ttnn.deallocate(rot_mats[1])
+        return out
+
+    def _run_group(self, x, cos, sin, cu, cuw, S, image_parallel):
+        """Run one group of images (one per chip) and return the merged tokens as [N, 1, S // merge, H_out]."""
+        mesh = self.model_args.mesh_device
+        host_inputs = self._host_inputs(x, cos, sin, cu, cuw, image_parallel)
+        key = (S, tuple(cu.shape), tuple(cuw.shape), tuple(x.shape))
+        if not self.use_trace:
+            dev_inputs = [ttnn.to_device(t, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host_inputs]
+            tt_out = self._run_model(dev_inputs, S)
+            for t in dev_inputs:
+                ttnn.deallocate(t)
+        else:
+            entry = self._traces.get(key)
+            if entry is None:
+                dev_inputs = [ttnn.to_device(t, mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host_inputs]
+                ttnn.deallocate(self._run_model(dev_inputs, S))  # compile run
+                trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+                tt_out = self._run_model(dev_inputs, S)
+                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+                entry = self._traces[key] = dict(trace_id=trace_id, inputs=dev_inputs, out=tt_out)
+                logger.info(f"Captured vision trace for padded length {S} ({len(self._traces)} traces)")
+            else:
+                for h, d in zip(host_inputs, entry["inputs"]):
+                    ttnn.copy_host_to_device_tensor(h, d)
+                ttnn.execute_trace(mesh, entry["trace_id"], cq_id=0, blocking=False)
+                tt_out = entry["out"]
+        if image_parallel:
+            out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        else:
+            out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1))[:, 0:1]
+        if not self.use_trace:
+            ttnn.deallocate(tt_out)
+        return out
+
+    def release_traces(self):
+        for entry in self._traces.values():
+            ttnn.release_trace(self.model_args.mesh_device, entry["trace_id"])
+            for t in entry["inputs"]:
+                ttnn.deallocate(t)
+        self._traces = {}
 
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
@@ -278,6 +370,10 @@ class DropInVisionTransformer(torch.nn.Module):
             max_unpadded = max(im["unpadded"] for im in group)
             L = max(im["cu_seqlens"].numel() for im in group)
             Lw = max(im["cu_window_seqlens"].numel() for im in group)
+            if self.use_trace:
+                # fixed boundary-vector lengths per padded length, so one trace serves every group of that length
+                L = max(L, 2)
+                Lw = max(Lw, min(S // 32 + 2, 1024))
 
             def _pad_rows(t, value=0.0):
                 return torch.nn.functional.pad(t, (0, 0, 0, S - t.shape[-2]), value=value)
@@ -290,42 +386,7 @@ class DropInVisionTransformer(torch.nn.Module):
             sin = torch.stack([_pad_rows(im["sin"], 0.0) for im in group]).unsqueeze(1)
             cu = torch.stack([_pad_bounds(im["cu_seqlens"], L) for im in group])  # [N, L]
             cuw = torch.stack([_pad_bounds(im["cu_window_seqlens"], Lw) for im in group])  # [N, Lw]
-            if image_parallel:
-                shard0 = ttnn.ShardTensorToMesh(mesh, dim=0)
-                x_mapper = rope_mapper = bounds_mapper = shard0
-            else:
-                x_mapper = ttnn.ShardTensor2dMesh(mesh, dims=(None, -1), mesh_shape=self.model_args.cluster_shape)
-                rope_mapper = bounds_mapper = ttnn.ReplicateTensorToMesh(mesh)
-            common = dict(device=mesh, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            tt_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, mesh_mapper=x_mapper, **common)
-            rot_mats = [
-                ttnn.from_torch(cos, dtype=ttnn.bfloat16, mesh_mapper=rope_mapper, **common),
-                ttnn.from_torch(sin, dtype=ttnn.bfloat16, mesh_mapper=rope_mapper, **common),
-            ]
-
-            def _bounds_tensor(b):  # per-device 1-D uint32 row, as the windowed SDPA expects
-                t = ttnn.from_torch(
-                    b, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh, mesh_mapper=bounds_mapper
-                )
-                return ttnn.reshape(t, (b.shape[-1],))
-
-            tt_out = self.tt_model(
-                tt_input,
-                unpadded_seq_len=max_unpadded,
-                rot_mats=rot_mats,
-                cu_seqlens=_bounds_tensor(cu),
-                cu_window_seqlens=_bounds_tensor(cuw),
-            )
-            ttnn.deallocate(tt_input)
-            ttnn.deallocate(rot_mats[0])
-            ttnn.deallocate(rot_mats[1])
-
-            # [N, 1, max_unpadded // merge, H_out_padded]
-            if image_parallel:
-                out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
-            else:
-                out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=1))[:, 0:1]
-            ttnn.deallocate(tt_out)
+            out = self._run_group(x, cos, sin, cu, cuw, S, image_parallel)  # [N, 1, S // merge, H_out_padded]
             for i, im in enumerate(group[:n_real]):
                 merged_len = im["unpadded"] // spatial_merge_unit
                 o = out[i, 0, :merged_len, :out_hidden_size]
