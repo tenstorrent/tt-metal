@@ -86,10 +86,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t base = 0; base < tile_cnt; base += batch_size)
                 {
                     const std::uint32_t count = (tile_cnt - base < batch_size) ? (tile_cnt - base) : batch_size;
-                    if (base > 0)
-                    {
-                        _llk_unpack_AB_init_<BroadcastType::NONE>(tensor_shape, ckernel::Transpose::None);
-                    }
                     for (std::uint32_t j = 0; j < count; ++j)
                     {
                         _llk_unpack_AB_<BroadcastType::NONE>(L1_ADDRESS(params.buffer_A[base + j]), L1_ADDRESS(params.buffer_B[base + j]));
@@ -145,7 +141,7 @@ inline void row_math(const std::uint32_t tile_cnt, const std::uint32_t batch_siz
         const std::uint32_t count = (tile_cnt - base < batch_size) ? (tile_cnt - base) : batch_size;
         if (base > 0)
         {
-            _llk_math_eltwise_binary_init_<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE>(tensor_shape, 0);
+            eltwise_binary_configure_addrmod<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY>();
         }
         for (std::uint32_t j = 0; j < count; ++j)
         {

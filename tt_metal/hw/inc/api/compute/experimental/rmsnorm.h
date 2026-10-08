@@ -137,10 +137,9 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         const uint32_t input_start = batch * batch_size;
         const uint32_t count = batch + 1 < num_batches ? batch_size : last_batch_size;
 
-        // Each reduction consumes the UNPACK/MATH state. The caller provides
-        // the first initialization; subsequent chunks restore it here.
+        // The reduce phase rewrites the multiply's address modifiers, not its MOP or the unpacker's state.
         if (batch > 0) {
-            mul_reduce_scalar_init(icb0, icb1);
+            MATH((llk_math_eltwise_mul_reduce_scalar_reinit<MATH_FIDELITY>()));
         }
         for (uint32_t j = 0; j < count; ++j) {
             // Products reuse DEST slots across chunks; preserve the running

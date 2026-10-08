@@ -63,6 +63,13 @@ inline void llk_math_mul_reduce_scalar() {
     _llk_math_mul_reduce_scalar_<math_fidelity>();
 }
 
+// Restores the multiply's address modifiers after a reduce phase; the reduce does not touch the multiply's MOP.
+template <MathFidelity math_fidelity>
+inline void llk_math_eltwise_mul_reduce_scalar_reinit() {
+    SAN_HOOK(unsupported());
+    eltwise_binary_configure_addrmod<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, math_fidelity>();
+}
+
 inline void llk_math_mul_reduce_scalar_clear_dvalid() {
     SAN_HOOK(unsupported());
     _llk_math_mul_reduce_scalar_clear_dvalid_();
