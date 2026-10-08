@@ -730,8 +730,8 @@ void ProfilerSync(MetalContext& ctx, ProfilerSyncState state) {
 
 void ProfilerSync(ProfilerSyncState state) {
 #if defined(TRACY_ENABLE)
-    // TODO: Resolve the profiled context through the process-wide profiler instead of assuming the default one.
-    ProfilerSync(MetalContext::instance(), state);
+    ProfilerRegistry::instance().for_each_attached(
+        [state](ProfilerStateManager& profiler_state_manager) { ProfilerSync(profiler_state_manager.ctx_, state); });
 #endif
 }
 
@@ -774,13 +774,11 @@ void InitDeviceProfiler(IDevice* device) {
 
     TracySetCpuTime(TracyGetCpuTime());
 
-    static std::atomic<bool> firstInit = true;
-
     const ChipId device_id = device->id();
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
     if (!profiler_state_manager->device_profiler_map.contains(device_id)) {
-        if (firstInit.exchange(false)) {
+        if (ProfilerRegistry::instance().first_device_profiler_init.exchange(false)) {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, true);
         } else {
             profiler_state_manager->device_profiler_map.try_emplace(device_id, device, false);
@@ -1336,30 +1334,26 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetLatestProgramsPerfData() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    // TODO: Resolve the profiled context through the process-wide profiler instead of assuming the default one.
-    auto& ctx = MetalContext::instance();
-    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
-    if (!getDeviceProfilerState(env) || !detail::getProgramsPerfDataMidRun(env.get_rtoptions())) {
-        return {};
-    }
-
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
-
-    if (profiler_state_manager == nullptr) {
-        log_warning(
-            tt::LogMetal,
-            "Profiler state manager is nullptr. Either enable profiling or open the device before calling this API.");
-        return {};
-    }
-
-    for (const auto& [device_id, device_programs_perf_analyses] :
-         profiler_state_manager->device_programs_perf_analyses_map) {
-        if (device_programs_perf_analyses.empty()) {
-            latest_programs_perf_data[device_id] = {};
-        } else {
-            latest_programs_perf_data[device_id] = device_programs_perf_analyses.back();
+    ProfilerRegistry::instance().with_sole_attached([&](const ProfilerStateManager* profiler_state_manager) {
+        if (profiler_state_manager == nullptr) {
+            log_warning(
+                tt::LogMetal,
+                "No device is being profiled. Either enable profiling or open the device before calling this API.");
+            return;
         }
-    }
+        if (!detail::getProgramsPerfDataMidRun(profiler_state_manager->env_.get_rtoptions())) {
+            return;
+        }
+
+        for (const auto& [device_id, device_programs_perf_analyses] :
+             profiler_state_manager->device_programs_perf_analyses_map) {
+            if (device_programs_perf_analyses.empty()) {
+                latest_programs_perf_data[device_id] = {};
+            } else {
+                latest_programs_perf_data[device_id] = device_programs_perf_analyses.back();
+            }
+        }
+    });
 
 #endif
     return latest_programs_perf_data;
@@ -1370,29 +1364,25 @@ std::map<ChipId, std::set<ProgramAnalysisData>> GetAllProgramsPerfData() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    // TODO: Resolve the profiled context through the process-wide profiler instead of assuming the default one.
-    auto& ctx = MetalContext::instance();
-    auto& env = MetalEnvAccessor(ctx.get_env()).impl();
-    if (!getDeviceProfilerState(env) || !detail::getProgramsPerfDataMidRun(env.get_rtoptions())) {
-        return {};
-    }
-
-    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager = ctx.profiler_state_manager();
-
-    if (profiler_state_manager == nullptr) {
-        log_warning(
-            tt::LogMetal,
-            "Profiler state manager is nullptr. Either enable profiling or open the device before calling this API.");
-        return {};
-    }
-
-    for (const auto& [device_id, device_programs_perf_analyses] :
-         profiler_state_manager->device_programs_perf_analyses_map) {
-        std::set<ProgramAnalysisData>& device_all_programs_perf_data = all_programs_perf_data[device_id];
-        for (const auto& programs_perf_analysis : device_programs_perf_analyses) {
-            device_all_programs_perf_data.insert(programs_perf_analysis.begin(), programs_perf_analysis.end());
+    ProfilerRegistry::instance().with_sole_attached([&](const ProfilerStateManager* profiler_state_manager) {
+        if (profiler_state_manager == nullptr) {
+            log_warning(
+                tt::LogMetal,
+                "No device is being profiled. Either enable profiling or open the device before calling this API.");
+            return;
         }
-    }
+        if (!detail::getProgramsPerfDataMidRun(profiler_state_manager->env_.get_rtoptions())) {
+            return;
+        }
+
+        for (const auto& [device_id, device_programs_perf_analyses] :
+             profiler_state_manager->device_programs_perf_analyses_map) {
+            std::set<ProgramAnalysisData>& device_all_programs_perf_data = all_programs_perf_data[device_id];
+            for (const auto& programs_perf_analysis : device_programs_perf_analyses) {
+                device_all_programs_perf_data.insert(programs_perf_analysis.begin(), programs_perf_analysis.end());
+            }
+        }
+    });
 
 #endif
     return all_programs_perf_data;
