@@ -108,7 +108,7 @@ void push_tensor_cb(
     uint32_t cb_id,
     uint32_t num_pages,
     uint32_t page_size,
-    DataFormat data_format,
+    tt::DataFormat data_format,
     const CoreRangeSet& cores,
     Buffer* buffer) {
     TT_FATAL(buffer != nullptr, "deepseek_moe_reduce_scatter circular buffer {} requires a device buffer", cb_id);
@@ -154,7 +154,7 @@ ProgramDescriptor build_program_descriptor(
     const uint32_t compute_input_cb_num_pages = num_pages_per_shard;    // entire shard
     const uint32_t compute_output_cb_num_pages = 2 * kTileGranularity;  // double buffer
 
-    DataFormat data_format = datatype_to_dataformat_converter(input_tensors.at(0).dtype());
+    tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensors.at(0).dtype());
 
     const uint32_t input_cb_ids[] = {
         tt::CBIndex::c_0,

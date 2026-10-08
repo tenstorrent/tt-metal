@@ -18,7 +18,7 @@ uint32_t allocate_worker_semaphore(ProgramDescriptor& desc, const CoreRangeSet& 
     for (uint32_t id = 0; id < kMaxSemaphores; ++id) {
         bool used = false;
         for (const auto& sem : desc.semaphores) {
-            if (sem.core_type == CoreType::WORKER && sem.id == id && sem.core_ranges.intersects(cores)) {
+            if (sem.core_type == tt::CoreType::WORKER && sem.id == id && sem.core_ranges.intersects(cores)) {
                 used = true;
                 break;
             }
@@ -26,7 +26,7 @@ uint32_t allocate_worker_semaphore(ProgramDescriptor& desc, const CoreRangeSet& 
         if (!used) {
             desc.semaphores.push_back(SemaphoreDescriptor{
                 .id = id,
-                .core_type = CoreType::WORKER,
+                .core_type = tt::CoreType::WORKER,
                 .core_ranges = cores,
                 .initial_value = initial_value,
             });
