@@ -77,9 +77,12 @@ case "$HF_MODEL" in
     MODEL_HYBRID_PROFILES="p150x4"
     MODEL_HYBRID_MAX_MODEL_LEN=1048576
     MODEL_MAX_MODEL_LEN_CAP=131072
-    # trace_region_size is reserved in EVERY DRAM bank (tt_metal allocator.cpp:39): 1.5e9 x 8 banks held
-    # 12 GB per chip for a decode trace that measures 27,238,400 B on S. 300 MB per bank leaves 11x headroom.
-    MODEL_TRACE_REGION_SIZE=300000000
+    # trace_region_size is reserved in EVERY DRAM bank (tt_metal allocator.cpp init_one_bank_per_channel), but
+    # mesh_trace.cpp checks the SUM of all trace buffers (unbanked bytes) against it, while each buffer is
+    # interleaved and occupies only 1/8 of its size per bank. Measured 2026-10-08 (generator_vllm _report_dram
+    # trace_used_mib_per_bank): decode + every DFlash trace = 4.6 MiB per bank = ~37 MB total. 128 MB allows
+    # 3.5x that total; 300 MB held ~2.4 GB per chip of which traces used 37 MB.
+    MODEL_TRACE_REGION_SIZE=128000000
     # S's chat template thinks by default (prompt ends in <think>); vLLM's poolside_v1 reasoning parser
     # only splits reasoning when enable_thinking is passed. Make the server default match the template.
     MODEL_CHAT_TEMPLATE_KWARGS='{"enable_thinking": true}'

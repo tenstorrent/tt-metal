@@ -466,10 +466,14 @@ class LagunaForCausalLM:
         free = int(view.total_bytes_free_per_bank) * int(view.num_banks)
         largest = int(view.largest_contiguous_bytes_free_per_bank)
         free_fraction = (free / total) if total else 0.0
+        trace = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
+        trace_used = int(trace.total_bytes_allocated_per_bank)
+        trace_size = int(trace.total_bytes_per_bank)
         print(
             f"[laguna memory] stage={stage} used_mib={allocated / 2**20:.1f} "
             f"total_mib={total / 2**20:.1f} free_mib={free / 2**20:.1f} "
-            f"free_fraction={free_fraction:.4f} largest_contiguous_mib_per_bank={largest / 2**20:.1f}",
+            f"free_fraction={free_fraction:.4f} largest_contiguous_mib_per_bank={largest / 2**20:.1f} "
+            f"trace_used_mib_per_bank={trace_used / 2**20:.1f}/{trace_size / 2**20:.1f}",
             flush=True,
         )
         if enforce and os.environ.get("TT_LAGUNA_ENFORCE_MEMORY_MARGIN", "0") == "1":

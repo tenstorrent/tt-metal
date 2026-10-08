@@ -633,7 +633,7 @@ def test_s_is_the_default_model_and_selects_p150x4(tmp_path):
     assert "hybrid_kv_layout=four_groups_twelve_aliased_tensor_pairs\n" in result.stdout
     assert "streaming_prefill_status=production_qualified\n" in result.stdout
     assert "max_model_len=1048576\n" in result.stdout
-    assert "trace_region_size=300000000\n" in result.stdout
+    assert "trace_region_size=128000000\n" in result.stdout
     assert "max_num_seqs=1\n" in result.stdout
     assert ("chunked_prefill_cli_args=--enable-chunked-prefill " "--max-num-batched-tokens 8192\n") in result.stdout
     assert 'chat_template_kwargs={"enable_thinking": true}\n' in result.stdout

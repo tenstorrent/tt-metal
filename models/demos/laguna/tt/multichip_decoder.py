@@ -490,6 +490,9 @@ class MultichipDecoder(OptimizedDecoder):
             qkvg_il = shard_tt("wqkvg" + rp_tag, build_qkvg, 1, policy.attn_qkv)
             w["wqkvg_ds"] = ttnn.to_memory_config(qkvg_il, _dram_weight_memcfg(H, fused_pad, dram_cores))
             ttnn.deallocate(qkvg_il)
+            # decode reads the fused copy; prefill reads the interleaved wqkv. The DRAM-sharded wqkv_ds has no
+            # reader left (~6.7 MB/layer/chip on S), so free it.
+            ttnn.deallocate(w.pop("wqkv_ds"))
             qkvg_pad = fused_pad
         else:
             qkvg_pad = None
