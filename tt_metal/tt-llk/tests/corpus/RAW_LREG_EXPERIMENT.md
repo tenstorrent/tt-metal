@@ -487,3 +487,83 @@ that either mechanism is universally necessary or sufficient.
 Reproduce with the existing test commands and compiler option above. Final
 evidence: `topk-production-final.{log,xml}`, `topk-production-enabled.{log,xml}`,
 and `topk-production-O2.{log,xml}` under the same quietbox evidence root.
+
+## All-region rollout: EMA and Welford — 2026-10-08
+
+This rollout is incomplete. `inventory_raw_sfpu.py` inventories source spellings
+in the three architectures' `common/inc/sfpu` trees, including experimental
+headers and inactive preprocessor branches. With comments and ordinary string
+literals excluded it finds 39 headers (18 Blackhole, 11 Wormhole, 10 Quasar)
+and 2004 source sites. The preliminary grep count of 44 included comment-only
+matches. These are not instantiated-kernel or validated-region counts, and the
+inventory does not close calls into helpers outside those trees.
+
+```sh
+python3 corpus/inventory_raw_sfpu.py --self-test
+python3 corpus/inventory_raw_sfpu.py
+```
+
+EMA now has an opt-in shared production header,
+`common/ckernel_sfpu_ema_explicit.h`. The existing corpus entry points forward
+to it rather than keeping a second implementation. Caller-owned `EmaState`
+carries values across tile calls; existing production defaults are unchanged.
+Contract 1 is the FMA ordering tested here. Contract 2 retains an existing
+different arithmetic ordering and is NOT admitted as a bit-exact replacement.
+
+On Blackhole with compiler `064ef4565ea`, O3, explicit scheduling,
+launch-flatten enabled and the raw-LREG live-in pass disabled, the production
+EMA module passes 18 tests. Exact hand/typed comparisons cover 1, 2, 4 and 32
+tiles, seed 0, BF16 finite input in [-4,4], alpha=0.25 and beta=0.75; both arms
+also pass the independent recurrence oracle. This does not cover arbitrary
+coefficients, special values, FP32 or other architectures.
+
+Welford's existing typed candidate passes 26 tests under the same compiler
+options, including six new hand-replay/typed-direct exact comparisons at
+prefix lengths 1, 2, 4, 8, 16 and 32. Exactness here is of the captured BF16
+mean/M2 outputs, NOT all internal FP32 bits or scratch registers. Both arms
+also satisfy the existing independent mean/M2 tolerance checks. Input seed is
+20260814, finite BF16 in [-4,4]. No new production Welford default is adopted.
+
+Matched device MATH-zone measurements, five executions per arm:
+
+| Region | Hand | Typed | Interpretation |
+| --- | ---: | ---: | --- |
+| EMA, one tile | 335 | 329 | 1.79% faster |
+| EMA, 32 tiles, cycles/tile | 212.21875 | 209.125 | 1.46% faster |
+| Welford, 32 rows | 325 | 350 | 7.69% slower than hand replay |
+
+EMA initialization is outside the timed body. Welford hand-direct is 464.8
+cycles, but the faster replay implementation is the relevant baseline; using
+hand-direct would misleadingly report a win. Welford needs replay/codegen
+work before a non-regressing replacement. No blanket raw-macro rewrite is
+justified by these results, especially inside fixed-length recorded streams
+or configured LOADMACRO regions.
+
+The EMA profiler previously mixed parameter schemas and selected earlier
+cases' rows when run as a module. All EMA arms now carry `EMA_IMPL`, and row
+selection includes implementation and tile count. Welford profiling likewise
+selects its implementation. Both modules support a single combined invocation
+and retain fractional five-run means. The initial EMA profiling attempt failed
+in the harness; the table comes from the subsequent successful production run.
+
+From `tests/python_tests`, with `CHIP_ARCH=blackhole`, matching compiler/header
+paths and these extra options:
+
+```sh
+export TT_LLK_EXTRA_COMPILER_OPTIONS="-B$GCC_BUILD/gcc/ -I$SFPI/include -O3 -fschedule-insns -fschedule-insns2 -fdisable-rtl-rvtt_lreg_livein -mtt-tensix-optimize-launch-flatten"
+../.venv/bin/python -m pytest -s -q test_sfpu_ema.py
+../.venv/bin/python -m pytest -s -q test_sfpu_welford_prefix_snapshot.py
+```
+
+Set `GCC_BUILD` to the built compiler directory and `SFPI` to matching installed
+SFPI before exporting the options. On the measured node those are
+`/home/ttuser/craq-build/sfpi/build/build-gcc-newlib-stage1` and
+`/tmp/sfpi-lreg-test.Mg1BuW/build/sfpi`. Evidence in the quietbox root above:
+`ema-production-state.{log,xml}` and `welford-state-all.{log,xml}`, with build
+and profiler CSV artifacts in the corresponding run directories. The Parquet
+writer warns that two Welford columns are dropped from its narrower schema;
+the full per-implementation rows are retained in the CSV/log evidence.
+
+Remaining scope includes other TopK regions, configured LOADMACRO users,
+recorded streams, experimental kernels and non-Blackhole silicon. These
+results neither finish the all-region migration nor prove universal safety.

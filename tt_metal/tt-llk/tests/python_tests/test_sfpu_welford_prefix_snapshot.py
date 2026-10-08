@@ -111,6 +111,21 @@ def test_sfpu_welford_prefix_snapshot(impl, label, n):
     assert torch.allclose(observed[5], expected_m2, rtol=3e-2, atol=3e-2)
 
 
+@pytest.mark.parametrize("n", [1, 2, 4, 8, 16, 32])
+def test_sfpu_welford_explicit_state_exact(n, monkeypatch):
+    """Compare observable mean/M2, not implementation-specific scratch banks."""
+    monkeypatch.setattr(TestConfig, "BIT_EXACT_RUNS", max(2, TestConfig.BIT_EXACT_RUNS))
+    outputs = []
+    for impl in (1, 2):
+        inputs, observed = _run(impl, n)
+        mean = inputs[:n].float().mean(dim=0)
+        m2 = ((inputs[:n].float() - mean) ** 2).sum(dim=0)
+        assert torch.allclose(observed[4], mean, rtol=2e-2, atol=2e-2)
+        assert torch.allclose(observed[5], m2, rtol=3e-2, atol=3e-2)
+        outputs.append(observed[4:6])
+    assert torch.equal(*outputs)
+
+
 @pytest.mark.parametrize("impl,label", IMPLEMENTATIONS)
 def test_sfpu_welford_device_profile(perf_report, impl, label):
     """One on-device math-zone sample; pytest elapsed time is deliberately ignored.
@@ -118,8 +133,8 @@ def test_sfpu_welford_device_profile(perf_report, impl, label):
     This is the LLK equivalent of the fitter's device-profiler collection: the
     profiler build records the MATH TRISC zone around WELFORD_BODY and PerfConfig
     retrieves those device timestamps after the ELF has completed.  The caller
-    launches a fresh pytest process per sample, so no host-side timing or cached
-    profiler state is carried between samples.
+    records five device executions per implementation; report rows are selected
+    by implementation so a combined pytest invocation is also supported.
     """
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     torch.manual_seed(20260814)
@@ -151,11 +166,11 @@ def test_sfpu_welford_device_profile(perf_report, impl, label):
     )
     # Use the module fixture, not a private report, so conftest persists both
     # raw and post-process CSV rows in addition to the greppable console line.
-    config.run(perf_report, run_count=1)
+    config.run(perf_report, run_count=5)
     frame = perf_report.frame()
-    rows = frame[frame["marker"] == "WELFORD_BODY"]
+    rows = frame[(frame["marker"] == "WELFORD_BODY") & (frame["trace_impl"] == impl)]
     assert len(rows) == 1, frame.to_string(index=False)
     value = rows.iloc[0]["mean(MATH_ISOLATE)"]
     assert value > 0
     # Stable, greppable device-only output for the external fitter-style reducer.
-    print(f"WELFORD_DEVICE_PROFILE impl={label} math_cycles={int(value)}")
+    print(f"WELFORD_DEVICE_PROFILE impl={label} math_cycles={value:.5f}")

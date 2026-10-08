@@ -124,55 +124,8 @@ def test_sfpu_ema(dest_acc, num_time_tiles):
 
 
 def test_sfpu_ema_device_profile(perf_report):
-    """One on-device MATH-zone sample of the EMA body (Lane BK perf vehicle).
-
-    Welford device-profile recipe around EMA_BODY. num_time_tiles=1 gives one
-    clean zone firing; init/alpha-beta load/carry clear sit outside the zone.
-    Correctness stays owned by test_sfpu_ema.
-    """
-    torch.manual_seed(0)
-    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    torch_format = format_dict[formats.input_format]
-
-    src_A = torch.empty((ELEMENTS_PER_TILE,), dtype=torch_format).uniform_(-4.0, 4.0)
-    src_B = torch.zeros_like(src_A)
-    src_A_tilized = tilize_block(
-        src_A, [TILE_DIM, TILE_DIM], stimuli_format=formats.input_format
-    ).flatten()
-
-    configuration = PerfConfig(
-        "sources/sfpu_ema_test.cpp",
-        formats,
-        run_types=[PerfRunType.MATH_ISOLATE],
-        templates=[
-            APPROX_MODE(ApproximationMode.No),
-            EMA_ALPHA_BETA(
-                alpha_bits=_f32_bits(EMA_ALPHA), beta_bits=_f32_bits(EMA_BETA)
-            ),
-        ],
-        runtimes=[TILE_COUNT(1)],
-        variant_stimuli=StimuliConfig(
-            src_A_tilized,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
-        ),
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
-        disable_format_inference=True,
-        compile_time_formats=True,
-    )
-    configuration.run(perf_report, run_count=1)
-    frame = perf_report.frame()
-    rows = frame[frame["marker"] == "EMA_BODY"]
-    assert len(rows) == 1, frame.to_string(index=False)
-    cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
-    assert cycles > 0
-    print(f"EMA_DEVICE_PROFILE num_time_tiles=1 math_cycles={int(cycles)}")
+    """Five device samples; same parameter schema as the candidate arms."""
+    _run_ema_device_profile(perf_report, 1, 0, "EMA_DEVICE_PROFILE")
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +137,10 @@ def test_sfpu_ema_device_profile(perf_report):
 # recurrence with the carry held as caller-owned typed state.
 # ---------------------------------------------------------------------------
 
-_EMA_IMPL_IDS = {1: "fresh_fma", 2: "fresh_muladd"}
+_EMA_IMPL_IDS = {0: "handwritten", 1: "fresh_fma", 2: "fresh_muladd"}
 
 
-@pytest.mark.parametrize("ema_impl", [1, 2], ids=lambda i: _EMA_IMPL_IDS[i])
-@pytest.mark.parametrize("num_time_tiles", [1, 32], ids=lambda n: f"t{n}")
-def test_sfpu_ema_fresh(num_time_tiles, ema_impl):
+def _run_ema_fresh(num_time_tiles, ema_impl):
     torch.manual_seed(0)
 
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
@@ -245,6 +196,27 @@ def test_sfpu_ema_fresh(num_time_tiles, ema_impl):
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), f"[{_EMA_IMPL_IDS[ema_impl]}] EMA result does not match golden"
+    return res_tensor
+
+
+@pytest.mark.parametrize("ema_impl", [1, 2], ids=lambda i: _EMA_IMPL_IDS[i])
+@pytest.mark.parametrize("num_time_tiles", [1, 32], ids=lambda n: f"t{n}")
+def test_sfpu_ema_fresh(num_time_tiles, ema_impl):
+    _run_ema_fresh(num_time_tiles, ema_impl)
+
+
+@pytest.mark.parametrize("num_time_tiles", [1, 2, 4, 32], ids=lambda n: f"t{n}")
+def test_sfpu_ema_explicit_state_exact(num_time_tiles, monkeypatch):
+    """Check the existing typed-state FMA candidate against the raw carry ABI.
+
+    Both arms first pass the independent recurrence oracle. Exact comparison
+    then prevents the ordinary tolerance from hiding a migration difference.
+    The differently rounded mul_add contract is deliberately not admitted here.
+    """
+    monkeypatch.setattr(TestConfig, "BIT_EXACT_RUNS", max(2, TestConfig.BIT_EXACT_RUNS))
+    hand = _run_ema_fresh(num_time_tiles, 0)
+    explicit = _run_ema_fresh(num_time_tiles, 1)
+    assert torch.equal(hand, explicit), "EMA explicit-state migration changed output bits"
 
 
 def _run_ema_device_profile(perf_report, num_time_tiles, ema_impl, tag):
@@ -266,9 +238,8 @@ def _run_ema_device_profile(perf_report, num_time_tiles, ema_impl, tag):
     templates = [
         APPROX_MODE(ApproximationMode.No),
         EMA_ALPHA_BETA(alpha_bits=_f32_bits(EMA_ALPHA), beta_bits=_f32_bits(EMA_BETA)),
+        EMA_IMPL(ema_impl),
     ]
-    if ema_impl:
-        templates.append(EMA_IMPL(ema_impl))
 
     configuration = PerfConfig(
         "sources/sfpu_ema_test.cpp",
@@ -291,13 +262,17 @@ def _run_ema_device_profile(perf_report, num_time_tiles, ema_impl, tag):
         disable_format_inference=True,
         compile_time_formats=True,
     )
-    configuration.run(perf_report, run_count=1)
+    configuration.run(perf_report, run_count=5)
     frame = perf_report.frame()
-    rows = frame[frame["marker"] == "EMA_BODY"]
+    rows = frame[
+        (frame["marker"] == "EMA_BODY")
+        & (frame["tile_cnt"] == num_time_tiles)
+        & (frame["ema_impl"] == ema_impl)
+    ]
     assert len(rows) == 1, frame.to_string(index=False)
     cycles = float(rows.iloc[0]["mean(MATH_ISOLATE)"])
     assert cycles > 0
-    print(f"{tag} num_time_tiles={num_time_tiles} math_cycles_per_tile={int(cycles)}")
+    print(f"{tag} impl={ema_impl} num_time_tiles={num_time_tiles} math_cycles_per_tile={cycles:.5f}")
 
 
 @pytest.mark.parametrize("ema_impl", [1, 2], ids=lambda i: _EMA_IMPL_IDS[i])
