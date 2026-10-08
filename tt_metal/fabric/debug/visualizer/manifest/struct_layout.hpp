@@ -102,6 +102,16 @@ struct StdArray<std::array<T, N>> : std::true_type {
     static constexpr std::size_t count = N;
 };
 
+// A described struct's name
+template <typename T>
+constexpr std::string_view struct_name() {
+    if constexpr (requires { StructLayout<T>::name; }) {
+        return StructLayout<T>::name;
+    } else {
+        return enchantum::type_name<T>;
+    }
+}
+
 // The Element for one element of type T: an integer, an enum or a described struct.
 template <typename T>
 constexpr Element element_of() {
@@ -116,7 +126,7 @@ constexpr Element element_of() {
             return element::Uint{};
         }
     } else if constexpr (Described<T>) { /* defined struct type, via StructLayout<T> */
-        return element::Struct{enchantum::type_name<T>};
+        return element::Struct{struct_name<T>()};
     } else { /* always fails if we get here */
         static_assert(!sizeof(T*), "member type has no StructLayout specialization; describe it or use LAYOUT_BYTES");
     }

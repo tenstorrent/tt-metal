@@ -11,7 +11,9 @@
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
 namespace tt::tt_metal {
@@ -185,6 +187,33 @@ struct StructLayout<FabricTelemetry> {
 };
 static_assert(validate_struct_members<FabricTelemetry>(StructLayout<FabricTelemetry>::members));
 
+// ============ Diagnostics ============
+
+template <>
+struct StructLayout<CodeProfilingTimerResult> {
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(CodeProfilingTimerResult, total_cycles),
+        LAYOUT_MEMBER(CodeProfilingTimerResult, num_instances),
+    };
+};
+static_assert(validate_struct_members<CodeProfilingTimerResult>(StructLayout<CodeProfilingTimerResult>::members));
+
+// The channel trimming capture, which the kernel writes and a later run imports as its trimming profile.
+template <>
+struct StructLayout<ChannelTrimmingOverrides> {
+    using T = ChannelTrimmingOverrides;
+    static constexpr std::string_view name = "FabricDatapathUsageL1Results";
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(T, sender_channel_min_packet_size_seen_bytes_by_vc),
+        LAYOUT_MEMBER(T, sender_channel_max_packet_size_seen_bytes_by_vc),
+        LAYOUT_MEMBER(T, sender_channel_used_bitfield_by_vc),
+        LAYOUT_MEMBER(T, sender_channel_forwarded_to_bitfield_by_vc),
+        LAYOUT_MEMBER(T, receiver_channel_data_forwarded_bitfield_by_vc),
+        LAYOUT_MEMBER(T, used_noc_send_type_by_vc_bitfield),
+    };
+};
+static_assert(validate_struct_members<ChannelTrimmingOverrides>(StructLayout<ChannelTrimmingOverrides>::members));
+
 // ============ All described structs ============
 
 // Every struct described at compile time. The manifest writes one type entry per element, which describes the
@@ -201,7 +230,9 @@ using DescribedStructs = std::tuple<
     EriscDynamicEntry,
     DynamicInfo,
     StaticInfo,
-    FabricTelemetry>;
+    FabricTelemetry,
+    CodeProfilingTimerResult,
+    ChannelTrimmingOverrides>;
 
 // ============ Go message ============
 
