@@ -33,6 +33,14 @@ pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_per
 
 Both tests take chunk sizes 2048, 4096, 8192, 16384, and 32768; a chunk must split into whole 32-token tiles per CP rank. Layer tests compile and capture once per layer type, initialize the ring caches with random values, and measure each selected chunk once.
 
+### Prefill perf gate in CI
+
+The **Blaze Models Prefill tests** workflow runs `tests/test_perf_glx.py` as the `gemma4_d_p_perf` stage on a 14kW Galaxy, 8×4. Dispatch it with `test-type=gemma4_d_p_perf`; the `gemma4_d_p` tag and nightly runs include it. In one process, with each cached weight written to the device once (as in `test_prefill_chunk_sweep_traced`), it runs a traced 256k prefill at chunk sizes 2048, 4096 and 8192, and fails if the wall time to reach 1k, 10k, 100k or 256k context exceeds its entry in `WALL_MS_BASELINES` by more than its margin in `WALL_MS_MARGINS`. Wall time is the `[traced_perf] context wall times` table: host staging, trace dispatch and the wait for the device, excluding compile and capture, rounded up to whole chunks.
+
+```bash
+pytest models/demos/gemma4_d_p/tests/test_perf_glx.py -sv
+```
+
 ### Layer perf in CI
 
 The **Blaze Models Prefill tests** workflow runs the `gemma4_d_p_layer_perf` stage with Tracy on a 14kW Galaxy. Dispatch it with `test-type=gemma4_d_p_layer_perf`; the regular nightly callers exclude this group. It measures `chunk_idx=ci` for 2048, 4096, and 8192 chunks at 256k context on 8×4. `layer_perf_ci_cells` derives the cells from the chunk count: the first, second, middle, and last global chunk (0/1/63/127, 0/1/31/63, and 0/1/15/31) and sliding chunks 0 and 1. Each chunk size runs in its own Tracy session, because one session for all three exceeds Tracy's 32K source-location limit. Signposts name the chunk size, and the report slices each test's cells from the newest ops CSV that postdates its manifest and holds its signposts. The job summary shows device-kernel time, span, and host time for each cell, plus each cell's full `tt-perf-report` output: the op table, advice, and stacked summary. The gap before each device's first replayed op is idle time before the replay, so it is left out of span and of `tt-perf-report`'s totals. The `layer-perf-*` artifact holds the raw `ops_perf_results_*.csv` and, for each cell, the slice of it that was reported (`*_ops.csv`) with `tt-perf-report`'s CSV, text output, stacked CSV/PNG, and log.

@@ -36,6 +36,8 @@ except ModuleNotFoundError:
 MODEL_DTYPE = ttnn.bfloat16
 PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 16384, 32768)
 LAYER_PERF_CONTEXT_LENGTHS = (262144,)
+# Contexts (in units of 1024 tokens) reported in the wall-time table.
+REPORT_CONTEXT_KS = (1, 10, 100, 256)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
 
 
@@ -183,7 +185,11 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
 
 
 def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, context_len, chunk_size, token_source):
-    """Compile, capture and replay one ring-attention trace over every chunk of ``context_len``."""
+    """Compile, capture and replay one ring-attention trace over every chunk of ``context_len``.
+
+    Returns {context_k: wall ms} for each of REPORT_CONTEXT_KS: elapsed time from the first chunk's
+    staging to the end of the last chunk that context needs. None when ``context_len`` is too short.
+    """
     n_chunks = context_len // chunk_size
     tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size, token_source)
 
@@ -312,17 +318,19 @@ def _measure_traced(mesh_device, mesh_config, model_args, model, hf_model_id, co
     )
 
     # Use measured elapsed time through the last whole chunk needed for each context.
+    context_wall_ms = {}
     context_rows = [f"{'Context':>8} | {'Chunks':>6} | {'Wall (ms)':>12}"]
-    for context_k in (1, 10, 100, 256):
+    for context_k in REPORT_CONTEXT_KS:
         required_chunks = (context_k * 1024 + chunk_size - 1) // chunk_size
-        wall_ms = (
-            f"{cumulative_wall_ms[required_chunks - 1]:.1f}" if required_chunks <= len(cumulative_wall_ms) else "N/A"
-        )
+        reached = required_chunks <= len(cumulative_wall_ms)
+        context_wall_ms[context_k] = cumulative_wall_ms[required_chunks - 1] if reached else None
+        wall_ms = f"{context_wall_ms[context_k]:.1f}" if reached else "N/A"
         context_rows.append(f"{str(context_k) + 'k':>8} | {required_chunks:>6} | {wall_ms:>12}")
     logger.info(
         f"[traced_perf] context wall times (chunk_size={chunk_size}, 1k=1024 tokens; "
         "rounded up to whole chunks; N/A = context not reached):\n" + "\n".join(context_rows)
     )
+    return context_wall_ms
 
 
 @torch.no_grad()
