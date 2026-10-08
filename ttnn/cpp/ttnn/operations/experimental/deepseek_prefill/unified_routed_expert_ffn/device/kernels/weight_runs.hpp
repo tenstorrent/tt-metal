@@ -89,6 +89,9 @@ template <uint32_t E, uint32_t G, uint32_t R, uint32_t GD, uint32_t RD, uint32_t
 struct RingWeights {
     // gate (is_up = 0) or up (is_up = 1) tiles of K row `row`, N columns [0, ncols) of column c, into l1_base + nl *
     // page_bytes
+    // All tiles of one call live in ONE DRAM bank (ring core c's shard) and are consecutive pages of equal size, so the
+    // NoC command state (source bank, size) is set once per call and every tile read is one `with_state` command with a
+    // plain address increment (no per-tile accessor/bank computation). Page stride = the DRAM-aligned tile size.
     template <class Acc>
     static FORCE_INLINE void read_gu(
         const Noc& noc,
@@ -101,24 +104,26 @@ struct RingWeights {
         uint32_t l1_base,
         uint32_t page_bytes) {
         const uint32_t base = (c * E + e) * G;
+        const uint64_t a0 = acc.get_noc_addr(
+            ((base * R) + row) * 4 + is_up, 0, noc.get_noc_id());  // group 0, tile n0 of this projection
+        noc_async_read_one_packet_set_state(a0, page_bytes, 0, noc.get_noc_id());
+        const uint32_t src0 = static_cast<uint32_t>(a0);
+        const uint32_t group_stride = R * 4 * page_bytes;
+#pragma GCC unroll 4
         for (uint32_t g = 0; g < G; ++g) {
-            const uint32_t page0 = ((base + g) * R + row) * 4 + is_up;
 #pragma GCC unroll 2
             for (uint32_t i = 0; i < 2; ++i) {
                 const uint32_t nl = 2 * g + i;
                 if (nl < ncols) {
-                    noc.async_read(
-                        acc,
-                        CoreLocalMem<uint32_t>(l1_base + nl * page_bytes),
-                        page_bytes,
-                        {.page_id = page0 + 2 * i},
-                        {});
+                    noc_async_read_one_packet_with_state<true>(
+                        src0 + g * group_stride + 2 * i * page_bytes, l1_base + nl * page_bytes, 0, noc.get_noc_id());
                 }
             }
         }
     }
 
-    // down tiles of logical K row `row`, hidden columns [20 c, 20 c + 4 GD) of column c, into l1_base + n * page_bytes
+    // down tiles of logical K row `row`, hidden columns [4 GD c, 4 GD (c + 1)) of column c, into l1_base + n *
+    // page_bytes
     template <class Acc>
     static FORCE_INLINE void read_d(
         const Noc& noc, const Acc& acc, uint32_t e, uint32_t c, uint32_t row, uint32_t l1_base, uint32_t page_bytes) {
@@ -127,13 +132,14 @@ struct RingWeights {
         const uint32_t q = (c + NC - ch) % NC;
         const uint32_t r = q * CH + j;
         const uint32_t base = (c * E + e) * GD;
+        const uint64_t a0 = acc.get_noc_addr((base * RD + r) * 4, 0, noc.get_noc_id());
+        noc_async_read_one_packet_set_state(a0, 4 * page_bytes, 0, noc.get_noc_id());
+        const uint32_t src0 = static_cast<uint32_t>(a0);
+        const uint32_t group_stride = RD * 4 * page_bytes;
+#pragma GCC unroll 4
         for (uint32_t g = 0; g < GD; ++g) {
-            noc.async_read(
-                acc,
-                CoreLocalMem<uint32_t>(l1_base + 4 * g * page_bytes),
-                4 * page_bytes,
-                {.page_id = ((base + g) * RD + r) * 4},
-                {});
+            noc_async_read_one_packet_with_state<true>(
+                src0 + g * group_stride, l1_base + 4 * g * page_bytes, 0, noc.get_noc_id());
         }
     }
 };
