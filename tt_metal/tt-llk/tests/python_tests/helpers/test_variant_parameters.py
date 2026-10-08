@@ -89,6 +89,15 @@ class MATMUL_ROW_MOP(TemplateParameter):
 
 
 @dataclass
+class MATMUL_UNPACK_TTSYNC(TemplateParameter):
+    """Blackhole matmul unpack with each row's base addresses written through GPRs and WRCFG under Auto TTSync
+    (_llk_unpack_AB_matmul_init_ and _llk_unpack_AB_matmul_ with ttsync)."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_UNPACK_TTSYNC"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 

@@ -48,6 +48,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_UNPACK_TTSYNC)
+#define MATMUL_UNPACK_TEMPLATE_ARGS 0, 0, true
+#else
+#define MATMUL_UNPACK_TEMPLATE_ARGS
+#endif
+
 #ifdef ARCH_BLACKHOLE
     // with a 16-bit DEST an 8-bit streamed operand is streamed at its data rate (Wormhole's init has no such argument)
     const bool stream_narrow = _llk_unpack_AB_matmul_stream_narrow_(CT_DIM, RT_DIM, formats.unpack_A_src, formats.unpack_B_src, is_fp32_dest_acc_en);
@@ -69,7 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<>(
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_TEMPLATE_ARGS>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,
             RT_DIM,
@@ -121,7 +127,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_A[last_a])), "unpack A real-buffer top address is outside L1");
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_B[last_b])), "unpack B real-buffer top address is outside L1");
                     }
-                    _llk_unpack_AB_matmul_<>(
+                    _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
                         addr_a,
                         addr_b,
                         tile_a,

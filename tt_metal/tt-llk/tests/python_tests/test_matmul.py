@@ -30,6 +30,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_ROW_MOP,
+    MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     PERF_RUN_TYPE,
     THROTTLE_LEVEL,
@@ -95,6 +96,7 @@ def test_matmul(
     boot_mode=BootMode.DEFAULT,
     row_mop=False,
     transpose=False,
+    unpack_ttsync=False,
 ):
     torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
 
@@ -161,6 +163,7 @@ def test_matmul(
             DEST_SYNC(),
             THROTTLE_LEVEL(),
             *([MATMUL_ROW_MOP()] if row_mop else []),
+            *([MATMUL_UNPACK_TTSYNC()] if unpack_ttsync else []),
         ],
         runtimes=[
             NUM_FACES(),
@@ -217,6 +220,16 @@ ROW_MOP_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 def test_matmul_row_mop(math_fidelity, format_dest_acc_and_dims):
     test_matmul(math_fidelity, format_dest_acc_and_dims, row_mop=True)
+
+
+# The unpack's row base addresses through GPRs and WRCFG under Auto TTSync (Blackhole only) on every block shape.
+@skip_for_wormhole
+@parametrize(
+    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2],
+    format_dest_acc_and_dims=ROW_MOP_COMBINATIONS,
+)
+def test_matmul_unpack_ttsync(math_fidelity, format_dest_acc_and_dims):
+    test_matmul(math_fidelity, format_dest_acc_and_dims, unpack_ttsync=True)
 
 
 # in1 transposed tile by tile (SDPA's Q K^T), with the per-tile MOP and with the row MOP.

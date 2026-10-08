@@ -200,6 +200,11 @@ ALWI void matmul_tiles(
  * uses the math thread's ADDR_MOD_3, 6 and 7, so a math-thread SFPU init between the two needs a new matmul_block_init,
  * and a math-thread SFPU op after the matmul needs its own init again.
  *
+ * The template parameter unpack_ttsync (Blackhole; other architectures ignore it) makes the unpack thread write each row's
+ * base addresses through two GPRs and WRCFG under Auto TTSync instead of polling for a free config context; it is faster
+ * for blocks of at most two tiles in each direction. The kernel must define MATMUL_UNPACK_TTSYNC before its includes, and
+ * matmul_block must be called with the same value.
+ *
  * Return value: None
  *
  * | Argument  | Description                                                | Type     | Valid Range                                                                                    | Required |
@@ -212,7 +217,7 @@ ALWI void matmul_tiles(
  * | kt_dim    | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension                                                      | False    |
  */
 // clang-format on
-template <bool row_mop = false>
+template <bool row_mop = false, bool unpack_ttsync = false>
 ALWI void matmul_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -224,12 +229,13 @@ ALWI void matmul_block_init(
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_AB_matmul_init<unpack_ttsync>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #endif
 #else
@@ -251,7 +257,7 @@ ALWI void matmul_block_init(
  * size is limited by DST size and sync mode (see matmul_block_init for the valid ct_dim/rt_dim ranges).
  * A call may use smaller ct_dim and rt_dim than matmul_block_init, but ct_dim >= rt_dim must hold for it exactly
  * when it held for the init (the init fixes which operand is held); a block of the other direction needs a new init.
- * The template parameter row_mop must be the value matmul_block_init was called with.
+ * The template parameters row_mop and unpack_ttsync must be the values matmul_block_init was called with.
  *
  * Return value: None
  *
@@ -268,7 +274,7 @@ ALWI void matmul_block_init(
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
  */
 // clang-format on
-template <bool row_mop = false>
+template <bool row_mop = false, bool unpack_ttsync = false>
 ALWI void matmul_block(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -283,11 +289,12 @@ ALWI void matmul_block(
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_AB_matmul<unpack_ttsync>(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<row_mop>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 #endif
 #else
