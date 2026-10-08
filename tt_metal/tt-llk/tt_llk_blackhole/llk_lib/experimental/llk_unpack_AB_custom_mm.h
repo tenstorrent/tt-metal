@@ -347,6 +347,7 @@ inline void _llk_unpack_AB_custom_mm_(
     {
         // SCRATCH_SEC0/1 are global, not banked: the calls of a sequence must write the same increments
         static_assert(!read_transposed, "banked custom_mm calls do not support read_transposed");
+        LLK_ASSERT(custom_mm_bank_key != ~std::uint64_t {0}, "banked custom_mm call before the bank init");
         // The first call of a sequence waits for every earlier call, which may read bank 1 or SCRATCH; a later call
         // writes the bank the call before the one in flight used, while that call runs
         wait_for_next_context(custom_mm_bank_sequence_start ? 1 : 2);
