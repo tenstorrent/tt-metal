@@ -177,6 +177,8 @@ enum : uint32_t {
 
     // Timing diagnostic (DIFFVAE_NA_ABLATE=reads): skip every K/V read. Output is garbage.
     ablate_kv_reads,
+    // Timing diagnostic (DIFFVAE_NA_ABLATE=mask): never generate per-brick mask tiles. Output is garbage.
+    ablate_mask,
 
     COUNT
 };

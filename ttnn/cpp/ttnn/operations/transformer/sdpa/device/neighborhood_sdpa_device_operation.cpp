@@ -168,8 +168,16 @@ uint32_t NeighborhoodSDPAOperation::ablation_requested() {
     if (value == nullptr) {
         return 0;
     }
-    const std::string_view mode(value);
-    return mode == "reads" ? 1u : mode == "math" ? 2u : 0u;
+    // Any combination joined by '+' or ',': reads (1), math (2), mask (4).
+    uint32_t bits = 0;
+    std::string_view rest(value);
+    while (!rest.empty()) {
+        const size_t comma = rest.find_first_of("+,");
+        const std::string_view mode = rest.substr(0, comma);
+        bits |= mode == "reads" ? 1u : mode == "math" ? 2u : mode == "mask" ? 4u : 0u;
+        rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
+    }
+    return bits;
 }
 
 ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(

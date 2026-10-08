@@ -44,7 +44,8 @@ struct NeighborhoodSDPAOperation {
     // of the program hash.
     static bool kv_ring_requested();
 
-    // Timing diagnostic, DIFFVAE_NA_ABLATE=reads|math: 1 skips the K/V reads, 2 skips the math.
+    // Timing diagnostic, DIFFVAE_NA_ABLATE=reads+math+mask (any subset): bit 1 skips the K/V reads,
+    // 2 the math, 4 the per-brick mask generation.
     // Either one makes the output garbage. Part of the program hash.
     static uint32_t ablation_requested();
 };

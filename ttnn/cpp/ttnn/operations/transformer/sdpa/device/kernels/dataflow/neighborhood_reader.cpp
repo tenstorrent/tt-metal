@@ -527,6 +527,7 @@ void kernel_main() {
     constexpr bool ring_keys = kv_ring_mode >= 1;
     constexpr bool ring_values = kv_ring_mode == 2;
     constexpr bool ablate_kv_reads = get_compile_time_arg_val(kernel_args::reader_arg::ablate_kv_reads) != 0;
+    constexpr bool ablate_mask = get_compile_time_arg_val(kernel_args::reader_arg::ablate_mask) != 0;
     constexpr uint32_t gather_width = gather_bricks.width();
     const uint32_t key_ring_base = ring_keys ? CircularBuffer(kernel_args::cb_key_ring).get_write_ptr() : 0;
     const uint32_t value_ring_base = ring_values ? CircularBuffer(kernel_args::cb_value_ring).get_write_ptr() : 0;
@@ -844,7 +845,7 @@ void kernel_main() {
             if (per_brick_mask != 0) {
                 // The pages already hold a block with this chunk's WindowClamp: nothing to write, only
                 // the K/V reads above and the pushes below.
-                if (!mask_writes_skippable) {
+                if (!ablate_mask && !mask_writes_skippable) {
                     for (uint32_t brick_in_chunk = 0; brick_in_chunk < bricks_per_query_chunk; ++brick_in_chunk) {
                         const BrickPoint query_brick =
                             layout::brick_within_chunk(brick_in_chunk, chunk_origin, query_chunk_bricks);
