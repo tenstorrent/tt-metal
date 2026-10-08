@@ -274,9 +274,6 @@ void run_sdpa_tail(
 }  // namespace
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaRecipFidelityAndSignalling) {
-    if (!detail::detect_slow_dispatch()) {
-        GTEST_SKIP() << "Skipping: SDPA tests are gated under slow dispatch (LLK SD blackhole merge gate)";
-    }
     for (const auto fidelity : {0u, 2u, 3u, 4u, 255u}) {
         for (const auto granularity : {1u, 2u}) {
             SCOPED_TRACE(::testing::Message() << "fidelity=" << fidelity << ", granularity=" << granularity);
@@ -286,9 +283,6 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaRecipFidelityAndSignalling) {
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaTailShortFaceProducerAndUntilize) {
-    if (!detail::detect_slow_dispatch()) {
-        GTEST_SKIP() << "Skipping: SDPA tests are gated under slow dispatch (LLK SD blackhole merge gate)";
-    }
     // Three invocations reuse both DEST banks; three blocks also exercise
     // untilize's full-width row stride and nonzero block-column offsets.
     for (const bool normalize : {false, true}) {
@@ -309,9 +303,6 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaTailShortFaceProducerAndUntilize) {
 }
 
 TEST_F(LLKBlackholeSingleCardFixture, SdpaChunkSemaphoreCompileLimits) {
-    if (!detail::detect_slow_dispatch()) {
-        GTEST_SKIP() << "Skipping: SDPA tests are gated under slow dispatch (LLK SD blackhole merge gate)";
-    }
     // This is a compile-time contract test; these programs are never launched.
     // 14 tiles with unit signaling and 16 tiles with grouped signaling fit the
     // 4-bit semaphore. At 16 tiles, either unit-signaling path must be rejected.
