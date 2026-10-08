@@ -831,9 +831,10 @@ inline void init_typecast_int32_to_fp16b() {
     // Misc: {
     //   StoreMod0: DEFAULT,
     //   UsesLoadMod0ForStore: {0},
-    //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
+    //   UnitDelayKind: {1,0,1}, (WaitForElapsedInstructions=1 for the Simple and Round sub-units)
     // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::DEFAULT, 8, 1);
+    // Round waits on instructions too, so an idle cycle between rows cannot put its op on the next row's SFPSHFT2.
+    TTI_SFPCONFIG(0x500 | InstrModLoadStore::DEFAULT, 8, 1);
 #endif
 }
 
@@ -950,9 +951,10 @@ inline void init_typecast_uint32_to_fp16b() {
     // Misc: {
     //   StoreMod0: FP32,
     //   UsesLoadMod0ForStore: {0},
-    //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
+    //   UnitDelayKind: {1,0,1}, (WaitForElapsedInstructions=1 for the Simple and Round sub-units)
     // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::FP32, 8, 1);
+    // Round waits on instructions too, so an idle cycle between rows cannot put its op on the next row's SFPSHFT2.
+    TTI_SFPCONFIG(0x500 | InstrModLoadStore::FP32, 8, 1);
 #endif
 }
 
