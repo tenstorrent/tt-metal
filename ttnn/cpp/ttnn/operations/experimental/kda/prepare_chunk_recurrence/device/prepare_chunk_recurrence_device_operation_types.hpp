@@ -18,6 +18,8 @@ struct PrepareChunkRecurrenceParams {
     uint32_t key_dim;
     uint32_t value_dim;
     uint32_t output_bf16_mask = 0;
+    // Multiplies the per-key log decay before its within-chunk cumulative sum.
+    float gate_scale = 1.0F;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

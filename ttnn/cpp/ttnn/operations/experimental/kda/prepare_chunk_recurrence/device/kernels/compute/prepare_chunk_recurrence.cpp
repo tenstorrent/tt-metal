@@ -633,6 +633,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer tril(dfb::tril);
     DataflowBuffer block_masks(dfb::block_masks);
     DataflowBuffer ones(dfb::ones);
+    DataflowBuffer gate_tril(dfb::gate_tril);
+    DataflowBuffer gate_ones(dfb::gate_ones);
 
     // Writer-consumed outputs.
     DataflowBuffer v_beta(dfb::v_beta);
@@ -666,6 +668,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     tril.wait_front(chunk_matrix_tiles);
     block_masks.wait_front(2);
     ones.wait_front(chunk_matrix_tiles);
+    gate_tril.wait_front(chunk_matrix_tiles);
+    gate_ones.wait_front(chunk_matrix_tiles);
 
     for (uint32_t work_item = 0; work_item < work_item_count; ++work_item) {
         if ((work_item_start + work_item) % num_chunks >= valid_chunks) {
@@ -702,8 +706,8 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         DataflowBuffer& g_last = workspace_3;
         prepare_gate_factors<Ct, Kt>(
             g,
-            tril,
-            ones,
+            gate_tril,
+            gate_ones,
             scan_decay,
             centered_decay,
             centered_inverse_decay,
