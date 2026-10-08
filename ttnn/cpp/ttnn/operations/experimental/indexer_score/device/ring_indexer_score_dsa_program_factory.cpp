@@ -270,7 +270,12 @@ ProgramDescriptor build_ring_program_descriptor(
     // hoisting the matmul<->eltwise reinit out of the per-head loop (shared with the classic factory).
     const auto [qk_batch_heads, qk_col_batch] = dsa_qk_batching(subblock_basis, QC, KC, stream_heads);
 
-    const uint32_t q_depth = stream_heads ? streaming_q_depth(uint64_t(HB) * QC * Dt * q_tile, cb_l1_budget(q)) : 1;
+    const uint32_t acc_strip_tiles = std::max(2u * KC, QC * KC);
+    const uint64_t other_cb_bytes = uint64_t(2) * KC * Dt * k_tile +
+                                    (uint64_t(Hi) * QC + args.key_compression_ratio + 1 + 2 * KC) * bf16_tile +
+                                    uint64_t(qk_col_batch * qk_batch_heads + acc_strip_tiles) * acc_tile + 3 * 64;
+    const uint32_t q_depth =
+        stream_heads ? streaming_q_depth(uint64_t(HB) * QC * Dt * q_tile, other_cb_bytes, cb_l1_budget(q)) : 1;
     make_cb(cb_q_arg, q_depth * HB * QC * Dt, q_fmt, q_tile);
     make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
     make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
@@ -281,7 +286,7 @@ ProgramDescriptor build_ring_program_descriptor(
     make_cb(cb_out_strip_arg, 2 * KC, tt::DataFormat::Float16_b, bf16_tile);
     // cb_acc_strip accumulates a whole unit's QC*KC strip, then untilizes under ONE pack_untilize bracket.
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
-    make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
+    make_cb(cb_acc_strip_arg, acc_strip_tiles, acc_fmt, acc_tile);
 
     // The reader publishes one copy of the derived geometry to each single-consumer mailbox. Allocate these
     // after the shared CB slots so the classic factory's indices remain unchanged.

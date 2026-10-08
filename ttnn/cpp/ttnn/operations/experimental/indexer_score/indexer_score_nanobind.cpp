@@ -52,7 +52,8 @@ void bind_indexer_score(nb::module_& mod) {
                 chunk_start_idx geometry remain token units.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
                 head_group_size; elements, tile-aligned). Omitted: every head
-                resident and the widest k chunk that fits L1 (the full strip path).
+                resident and the widest k chunk that fits the free L1 (the full strip path),
+                or the 32/32/1 config when q is in L1.
             compute_kernel_config: optional DeviceComputeKernelConfig. Only
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
@@ -154,7 +155,7 @@ void bind_indexer_score(nb::module_& mod) {
                 blocks). Requires block_size a multiple of 32, T % block_size == 0,
                 and k_chunk_size % block_size == 0.
             program_config: work-unit knobs (q_chunk_size, k_chunk_size,
-                head_group_size; elements, tile-aligned). Defaults always fit L1.
+                head_group_size; elements, tile-aligned). Omitted: as in indexer_score_dsa.
             compute_kernel_config: optional DeviceComputeKernelConfig. Only
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must

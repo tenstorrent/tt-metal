@@ -88,18 +88,22 @@ inline uint32_t gate_mul_heads_per_pass(tt::tt_metal::MathFidelity math_fidelity
     return math_fidelity == tt::tt_metal::MathFidelity::LoFi ? 0u : 8u;
 }
 
-inline uint32_t streaming_q_depth(uint64_t q_block_bytes, uint64_t l1_budget) {
+// The deepest q buffer within half of L1 that still fits next to the other CBs, else a double buffer.
+inline uint32_t streaming_q_depth(uint64_t q_block_bytes, uint64_t other_cb_bytes, uint64_t l1_budget) {
     for (uint32_t depth : {8u, 4u}) {
-        if (depth * q_block_bytes <= l1_budget / 2) {
+        if (depth * q_block_bytes <= l1_budget / 2 && depth * q_block_bytes + other_cb_bytes <= l1_budget) {
             return depth;
         }
     }
     return 2;
 }
 
+// CB space: from the allocator base up to the lowest live L1 buffer.
 inline uint64_t cb_l1_budget(const Tensor& q) {
-    return q.device()->l1_size_per_core() -
-           q.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    auto* device = q.device();
+    const uint64_t top = device->lowest_occupied_compute_l1_address().value_or(device->l1_size_per_core());
+    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    return top > base ? top - base : 0;
 }
 
 // Shared physical axis tables preserve harvested/non-contiguous coordinates.

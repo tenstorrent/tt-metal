@@ -205,12 +205,6 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         k_mcast_on,
         q_mcast_on);
 
-    // Allocate each CB by its CbArg slot; make_cb assigns the next continuous index.
-    const uint32_t q_depth = stream_heads ? streaming_q_depth(uint64_t(HB) * QC * Dt * q_tile, cb_l1_budget(q)) : 1;
-    make_cb(cb_q_arg, q_depth * HB * QC * Dt, q_fmt, q_tile);
-    make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
-    make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
-    make_cb(cb_mask_arg, args.key_compression_ratio + 1, tt::DataFormat::Float16_b, bf16_tile);
     const tt::DataFormat acc_fmt = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const uint32_t acc_tile = fp32_dest_acc_en ? fp32_tile : bf16_tile;
     // cb_qk buffers a batch of relu(q.kT) tiles so compute runs the batch's matmuls then mul+accumulates,
@@ -225,11 +219,25 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         plane_heads);
     // cb_qk stages the matmul output for the gate-mul phase; the fused path writes straight to the
     // accumulator, so cb_qk is unused there (1 tile, L1 spent on a deeper cb_out_strip).
-    make_cb(cb_qk_arg, fuse_single ? 1u : (qk_col_batch * qk_batch_heads), acc_fmt, acc_tile);
+    const uint32_t qk_tiles = fuse_single ? 1u : (qk_col_batch * qk_batch_heads);
     // cb_out_strip holds the pooled/untilized output, normally double-buffered. The fused block-pool path
     // deepens it to the whole unit's blocks so the pool and writer decouple (no 2-row-ring mutual stall).
     const uint32_t out_strip_tiles =
         (fuse_single && block_pool) ? (QC * blocks_per_unit) : 2 * (block_pool ? blocks_per_unit : KC);
+    const uint32_t acc_strip_tiles = std::max(2u * KC, QC * KC);
+    const uint64_t other_cb_bytes =
+        uint64_t(2) * KC * Dt * k_tile +
+        (uint64_t(Hi) * QC + args.key_compression_ratio + 1 + out_strip_tiles + (block_pool ? 2 : 0)) * bf16_tile +
+        uint64_t(qk_tiles + acc_strip_tiles) * acc_tile;
+
+    // Allocate each CB by its CbArg slot; make_cb assigns the next continuous index.
+    const uint32_t q_depth =
+        stream_heads ? streaming_q_depth(uint64_t(HB) * QC * Dt * q_tile, other_cb_bytes, cb_l1_budget(q)) : 1;
+    make_cb(cb_q_arg, q_depth * HB * QC * Dt, q_fmt, q_tile);
+    make_cb(cb_k_arg, 2 * KC * Dt, k_fmt, k_tile);
+    make_cb(cb_w_arg, Hi * QC, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_mask_arg, args.key_compression_ratio + 1, tt::DataFormat::Float16_b, bf16_tile);
+    make_cb(cb_qk_arg, qk_tiles, acc_fmt, acc_tile);
     make_cb(cb_out_strip_arg, out_strip_tiles, tt::DataFormat::Float16_b, bf16_tile);
     // Block-max-pool scratch CBs (only when pooling): cb_scaler = one 1.0 reduce-MAX tile; cb_pool_scratch
     // = the writer's one-tile row-assembly buffer.
@@ -239,7 +247,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     }
     // cb_acc_strip accumulates a whole unit's QC*KC strip, then untilizes under ONE pack_untilize bracket.
     // max(2*KC, .) keeps the QC<=2 double buffer and a whole multiple of QC*KC so a push never wraps mid-unit.
-    make_cb(cb_acc_strip_arg, std::max(2u * KC, QC * KC), acc_fmt, acc_tile);
+    make_cb(cb_acc_strip_arg, acc_strip_tiles, acc_fmt, acc_tile);
 
     // Common dimensions (including compressed-key ratio), then CB indices. chunk_t stays a runtime arg.
     std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB, G, block_tiles, args.key_compression_ratio};
