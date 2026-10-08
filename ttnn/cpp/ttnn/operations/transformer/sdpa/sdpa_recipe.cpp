@@ -10,19 +10,14 @@
 #include <set>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 #include <tt-metalium/experimental/kernel_build_options.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/reflection.hpp>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/generic/generic_op.hpp"
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-
-namespace ttnn::operations::generic {
-ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
-}  // namespace ttnn::operations::generic
 
 namespace ttnn::operations::transformer::sdpa::detail {
 using namespace tt::tt_metal;
@@ -458,15 +453,48 @@ uint32_t recipe_key_range_extra_bytes(const RecipeKeyRange& key_range) {
                               : 0;
 }
 
-static std::vector<Tensor> run_recipe_segments(
+namespace {
+// Runtime args holding buffer addresses, which a program-cache hit re-applies (SDPARecipeOperation): the reader's
+// Q/K/V first; then on key-range calls, after the 13 work args, the Q offset tensor, cu_window_seqlens and page
+// table, then the sink; otherwise, after the 12 work args, the mask, the sink and the joint Q/K/V. The writer's
+// output first; then on key-range calls the Q offset tensor and cu_window_seqlens after 4 args, otherwise the
+// joint output after 3.
+constexpr uint32_t kReaderKeyedTensorArg = 13;
+constexpr uint32_t kReaderTensorArg = 12;
+constexpr uint32_t kWriterKeyedTensorArg = 4;
+constexpr uint32_t kWriterJointOutputArg = 3;
+
+// One output per segment: BF16, V's head dim, the two Q slabs' rows (ring-distributed), [B, 1, Sq, H * Dv] with
+// concatenated heads.
+TensorSpec recipe_output_spec(
+    const Tensor& q,
+    uint32_t head_dim_v,
+    uint32_t q_slab_rows,
+    bool output_concat_heads,
+    const MemoryConfig& output_memory_config) {
+    auto shape = q.logical_shape();
+    shape[3] = head_dim_v ? head_dim_v : shape[3];
+    if (q_slab_rows) {
+        shape[2] = 2 * q_slab_rows;
+    }
+    if (output_concat_heads) {
+        shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
+    }
+    return TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_memory_config));
+}
+}  // namespace
+
+// The recipe program for `segments` (Q/K/V, then the joint Q/K/V) writing `outputs`; validates the call.
+static ProgramDescriptor recipe_program(
     const std::vector<std::array<Tensor, 3>>& segments,
     const PrecisionPolicy& policy,
     const std::optional<SDPAProgramConfig>& program_config,
     const std::optional<Tensor>& attn_mask,
     std::optional<float> scale,
     const MemoryConfig& output_memory_config,
-    const RecipeKeyRange& key_range = {},
-    const RecipeDenseOptions& options = {}) {
+    const RecipeKeyRange& key_range,
+    const RecipeDenseOptions& options,
+    const std::vector<Tensor>& outputs) {
     const bool keyed = key_range.active();
     const bool paged = key_range.page_table.has_value();
     const auto& [q, k, v] = segments.front();
@@ -644,20 +672,6 @@ static std::vector<Tensor> run_recipe_segments(
     TT_FATAL(
         output_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "SDPA recipes require an interleaved (DRAM or L1) output memory config");
-    std::vector<Tensor> outputs;
-    for (const auto& segment : segments) {
-        auto shape = segment[0].logical_shape();
-        shape[3] = head_dim_v;
-        if (key_range.q_slab_rows) {
-            shape[2] = 2 * key_range.q_slab_rows;
-        }
-        if (options.output_concat_heads) {
-            shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
-        }
-        outputs.push_back(create_device_tensor(
-            TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_memory_config)),
-            q.device()));
-    }
     const auto& output = outputs.front();
     const uint32_t compute_q_tiles =
         recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value() || keyed, keyed);
@@ -962,46 +976,314 @@ static std::vector<Tensor> run_recipe_segments(
         compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{count});
     }
     program.kernels = {std::move(reader), std::move(writer), std::move(compute)};
-    if (attn_mask) {
-        io.push_back(*attn_mask);
+    return program;
+}
+
+namespace {
+// A dense or joint recipe call as a device operation. The program is built (and the call validated) on a
+// program-cache miss only; a hit re-applies the buffer addresses. Building the ProgramDescriptor on every call
+// (generic_op) cost ~0.15 ms of host time, more than the device time of a small encoder's attention.
+struct SDPARecipeParams {
+    PrecisionPolicy policy;
+    std::optional<SDPAProgramConfig> program_config;
+    std::optional<float> scale;
+    MemoryConfig output_memory_config;
+    // RecipeKeyRange and RecipeDenseOptions without their tensors (SDPARecipeInputs).
+    bool causal = false;
+    uint32_t sliding_window = 0;
+    uint32_t q_offset = 0;
+    PagedCacheGeometryOverride paged_geometry;
+    uint32_t q_slab_rows = 0;
+    std::vector<std::pair<ttnn::MeshCoordinateRange, std::array<uint32_t, 2>>> q_slab_starts;
+    uint32_t head_dim_v = 0;
+    bool output_concat_heads = false;
+    // Free L1 below the live L1 buffers at the call: the mask CB depth and the fused CBs depend on it.
+    uint64_t free_l1 = 0;
+};
+
+struct SDPARecipeInputs {
+    Tensor q;
+    Tensor k;
+    Tensor v;  // K itself for MLA without a V tensor
+    std::optional<Tensor> joint_q;
+    std::optional<Tensor> joint_k;
+    std::optional<Tensor> joint_v;
+    std::optional<Tensor> attn_mask;
+    std::optional<Tensor> attention_sink;
+    std::optional<Tensor> q_offset_tensor;
+    std::optional<Tensor> segments;
+    std::optional<Tensor> page_table;
+};
+
+struct SDPARecipeOperation {
+    using operation_attributes_t = SDPARecipeParams;
+    using tensor_args_t = SDPARecipeInputs;
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
+
+    struct RecipeProgramFactory {
+        static ProgramDescriptor create_descriptor(
+            const SDPARecipeParams& attrs, const SDPARecipeInputs& inputs, std::vector<Tensor>& outputs) {
+            std::vector<std::array<Tensor, 3>> segments{{inputs.q, inputs.k, inputs.v}};
+            if (inputs.joint_q) {
+                segments.push_back({*inputs.joint_q, *inputs.joint_k, *inputs.joint_v});
+            }
+            const RecipeKeyRange key_range{
+                .causal = attrs.causal,
+                .sliding_window = attrs.sliding_window,
+                .q_offset = attrs.q_offset,
+                .q_offset_tensor = inputs.q_offset_tensor,
+                .segments = inputs.segments,
+                .page_table = inputs.page_table,
+                .paged_geometry = attrs.paged_geometry,
+                .q_slab_rows = attrs.q_slab_rows,
+                .q_slab_starts = attrs.q_slab_starts};
+            const RecipeDenseOptions options{
+                .head_dim_v = attrs.head_dim_v,
+                .attention_sink = inputs.attention_sink,
+                .output_concat_heads = attrs.output_concat_heads};
+            return recipe_program(
+                segments,
+                attrs.policy,
+                attrs.program_config,
+                inputs.attn_mask,
+                attrs.scale,
+                attrs.output_memory_config,
+                key_range,
+                options,
+                outputs);
+        }
+
+        // Everything but the buffer addresses is in the program hash.
+        static void override_runtime_arguments(
+            Program& program,
+            const SDPARecipeParams& attrs,
+            const SDPARecipeInputs& inputs,
+            std::vector<Tensor>& outputs,
+            const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/ = std::nullopt) {
+            const bool keyed = attrs.causal || attrs.sliding_window > 0 || inputs.segments;
+            auto address = [](const std::optional<Tensor>& t) { return t ? t->buffer()->address() : 0u; };
+            const uint32_t q = inputs.q.buffer()->address(), k = inputs.k.buffer()->address(),
+                           v = inputs.v.buffer()->address();
+            auto& reader_args = GetRuntimeArgs(program, 0);
+            auto& writer_args = GetRuntimeArgs(program, 1);
+            for (auto& column : reader_args) {
+                for (auto& args : column) {
+                    if (args.size() == 0) {
+                        continue;
+                    }
+                    args[0] = q;
+                    args[1] = k;
+                    args[2] = v;
+                    uint32_t slot = keyed ? kReaderKeyedTensorArg : kReaderTensorArg;
+                    if (keyed) {
+                        args[slot++] = address(inputs.q_offset_tensor);
+                        args[slot++] = address(inputs.segments);
+                        args[slot++] = address(inputs.page_table);
+                    } else if (inputs.attn_mask) {
+                        args[slot++] = address(inputs.attn_mask);
+                    }
+                    if (inputs.attention_sink) {
+                        args[slot++] = address(inputs.attention_sink);
+                    }
+                    if (!keyed && inputs.joint_q) {
+                        args[slot++] = address(inputs.joint_q);
+                        args[slot++] = address(inputs.joint_k);
+                        args[slot++] = address(inputs.joint_v);
+                    }
+                }
+            }
+            for (auto& column : writer_args) {
+                for (auto& args : column) {
+                    if (args.size() == 0) {
+                        continue;
+                    }
+                    args[0] = outputs[0].buffer()->address();
+                    if (keyed) {
+                        args[kWriterKeyedTensorArg] = address(inputs.q_offset_tensor);
+                        args[kWriterKeyedTensorArg + 1] = address(inputs.segments);
+                    } else if (inputs.joint_q) {
+                        args[kWriterJointOutputArg] = outputs[1].buffer()->address();
+                    }
+                }
+            }
+        }
+    };
+
+    // Ring-distributed SDPA (RecipeKeyRange::q_slab_rows): one program per device, whose reader and writer args hold
+    // its two Q slabs' first chunks; a device without slabs runs nothing.
+    struct RecipeSlabProgramFactory {
+        static ProgramDescriptor create_descriptor(
+            const SDPARecipeParams& attrs,
+            const SDPARecipeInputs& inputs,
+            std::vector<Tensor>& outputs,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+            TT_FATAL(mesh_dispatch_coordinate.has_value(), "SDPA recipe Q slabs are set per device");
+            const auto entry =
+                std::find_if(attrs.q_slab_starts.begin(), attrs.q_slab_starts.end(), [&](const auto& slab_starts) {
+                    return slab_starts.first.contains(*mesh_dispatch_coordinate);
+                });
+            if (entry == attrs.q_slab_starts.end()) {
+                return ProgramDescriptor{};
+            }
+            auto program = RecipeProgramFactory::create_descriptor(attrs, inputs, outputs);
+            const uint32_t q_chunk = recipe_dense_q_tiles(attrs.program_config) * 32;
+            const auto& starts = entry->second;
+            for (auto& [core, args] : program.kernels[0].runtime_args) {
+                args[kRecipeReaderSlabArg] = starts[0] / q_chunk;
+                args[kRecipeReaderSlabArg + 1] = starts[1] / q_chunk;
+            }
+            for (auto& [core, args] : program.kernels[1].runtime_args) {
+                args[kRecipeWriterSlabArg] = starts[0] / q_chunk;
+                args[kRecipeWriterSlabArg + 1] = starts[1] / q_chunk;
+            }
+            return program;
+        }
+
+        static void override_runtime_arguments(
+            Program& program,
+            const SDPARecipeParams& attrs,
+            const SDPARecipeInputs& inputs,
+            std::vector<Tensor>& outputs,
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt) {
+            RecipeProgramFactory::override_runtime_arguments(program, attrs, inputs, outputs, mesh_dispatch_coordinate);
+        }
+    };
+
+    using program_factory_t = std::variant<RecipeProgramFactory, RecipeSlabProgramFactory>;
+
+    static program_factory_t select_program_factory(const SDPARecipeParams& attrs, const SDPARecipeInputs&) {
+        if (attrs.q_slab_rows) {
+            return RecipeSlabProgramFactory{};
+        }
+        return RecipeProgramFactory{};
     }
-    if (options.attention_sink) {
-        io.push_back(*options.attention_sink);
+
+    // recipe_program validates on a miss; a hit has the hashed shapes, dtypes and layouts of a validated call.
+    static void validate_on_program_cache_miss(const SDPARecipeParams&, const SDPARecipeInputs& inputs) {
+        TT_FATAL(
+            inputs.q.storage_type() == StorageType::DEVICE && inputs.q.logical_shape().rank() == 4,
+            "SDPA recipes require rank-four device inputs");
     }
-    io.insert(io.end(), key_tensors.begin(), key_tensors.end());
-    io.insert(io.end(), outputs.begin(), outputs.end());
-    if (keyed) {
-        // The scalar Q offset is a runtime arg the cache-hit path does not re-apply: key the program on it (legacy
-        // chunked SDPA keys its cache on chunk_start_idx the same way); the kernels do not recompile.
-        auto hash = ttnn::operations::generic::compute_program_descriptor_hash(program);
-        ttsl::hash::hash_combine(hash, key_range.q_offset);
-        program.custom_program_hash = hash;
+    static void validate_on_program_cache_hit(const SDPARecipeParams&, const SDPARecipeInputs&) {}
+
+    static spec_return_value_t compute_output_specs(const SDPARecipeParams& attrs, const SDPARecipeInputs& inputs) {
+        std::vector<TensorSpec> specs{recipe_output_spec(
+            inputs.q, attrs.head_dim_v, attrs.q_slab_rows, attrs.output_concat_heads, attrs.output_memory_config)};
+        if (inputs.joint_q) {
+            specs.push_back(recipe_output_spec(
+                *inputs.joint_q,
+                attrs.head_dim_v,
+                attrs.q_slab_rows,
+                attrs.output_concat_heads,
+                attrs.output_memory_config));
+        }
+        return specs;
     }
-    if (!key_range.q_slab_rows) {
-        ttnn::generic_op(io, program);
+
+    static tensor_return_value_t create_output_tensors(const SDPARecipeParams& attrs, const SDPARecipeInputs& inputs) {
+        std::vector<Tensor> outputs;
+        for (const auto& spec : compute_output_specs(attrs, inputs)) {
+            outputs.push_back(create_device_tensor(spec, inputs.q.device()));
+        }
         return outputs;
     }
-    // Ring-distributed SDPA: one program per range of devices, differing only in the Q slabs' first chunks (runtime
-    // args, so folded into the program hash like the Q offset).
-    tt::tt_metal::experimental::MeshProgramDescriptor mesh_program;
-    for (const auto& [devices, starts] : key_range.q_slab_starts) {
-        auto device_program = program;
-        for (auto& [core, args] : device_program.kernels[0].runtime_args) {
-            args[kRecipeReaderSlabArg] = starts[0] / q_chunk;
-            args[kRecipeReaderSlabArg + 1] = starts[1] / q_chunk;
+
+    // Everything recipe_program reads except buffer addresses. The scalar Q offset stays a hashed runtime arg
+    // (legacy chunked SDPA keys its cache on chunk_start_idx the same way); the kernels do not recompile.
+    static ttsl::hash::hash_t compute_program_hash(const SDPARecipeParams& attrs, const SDPARecipeInputs& inputs) {
+        auto hash = ttsl::hash::hash_objects_with_default_seed(
+            attrs.policy.selection.recipe,
+            attrs.policy.selection.kv_storage,
+            attrs.scale.has_value(),
+            attrs.scale.value_or(0.0f),
+            attrs.output_memory_config,
+            attrs.causal,
+            attrs.sliding_window,
+            attrs.q_offset,
+            attrs.paged_geometry.block_size,
+            attrs.paged_geometry.num_kv_heads,
+            attrs.q_slab_rows,
+            attrs.head_dim_v,
+            attrs.output_concat_heads,
+            attrs.free_l1,
+            inputs.v.buffer() == inputs.k.buffer());
+        for (const auto& [devices, starts] : attrs.q_slab_starts) {
+            ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(devices, starts[0], starts[1]));
         }
-        for (auto& [core, args] : device_program.kernels[1].runtime_args) {
-            args[kRecipeWriterSlabArg] = starts[0] / q_chunk;
-            args[kRecipeWriterSlabArg + 1] = starts[1] / q_chunk;
+        if (const auto& config = attrs.program_config) {
+            ttsl::hash::hash_combine(
+                hash,
+                ttsl::hash::hash_objects_with_default_seed(
+                    config->compute_with_storage_grid_size,
+                    config->sub_core_grids.has_value(),
+                    config->q_chunk_size,
+                    config->k_chunk_size,
+                    config->max_cores_per_head_batch));
         }
-        auto hash = *program.custom_program_hash;
-        ttsl::hash::hash_combine(hash, starts[0]);
-        ttsl::hash::hash_combine(hash, starts[1]);
-        device_program.custom_program_hash = hash;
-        mesh_program.mesh_programs.emplace_back(devices, std::move(device_program));
+        for (const auto* tensor :
+             {&inputs.joint_q,
+              &inputs.joint_k,
+              &inputs.joint_v,
+              &inputs.attn_mask,
+              &inputs.attention_sink,
+              &inputs.q_offset_tensor,
+              &inputs.segments,
+              &inputs.page_table}) {
+            ttsl::hash::hash_combine(hash, tensor->has_value());
+            if (*tensor) {
+                ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed((*tensor)->tensor_spec()));
+            }
+        }
+        for (const auto* tensor : {&inputs.q, &inputs.k, &inputs.v}) {
+            ttsl::hash::hash_combine(hash, ttsl::hash::hash_objects_with_default_seed(tensor->tensor_spec()));
+        }
+        return hash;
     }
-    ttnn::generic_op(io, mesh_program);
-    return outputs;
+};
+}  // namespace
+
+static std::vector<Tensor> run_recipe_segments(
+    const std::vector<std::array<Tensor, 3>>& segments,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask,
+    std::optional<float> scale,
+    const MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range = {},
+    const RecipeDenseOptions& options = {}) {
+    const auto& [q, k, v] = segments.front();
+    TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
+    SDPARecipeInputs inputs{
+        .q = q,
+        .k = k,
+        .v = v,
+        .attn_mask = attn_mask,
+        .attention_sink = options.attention_sink,
+        .q_offset_tensor = key_range.q_offset_tensor,
+        .segments = key_range.segments,
+        .page_table = key_range.page_table};
+    if (segments.size() == 2) {
+        inputs.joint_q = segments[1][0];
+        inputs.joint_k = segments[1][1];
+        inputs.joint_v = segments[1][2];
+    }
+    return ttnn::device_operation::launch<SDPARecipeOperation>(
+        SDPARecipeParams{
+            .policy = policy,
+            .program_config = program_config,
+            .scale = scale,
+            .output_memory_config = output_memory_config,
+            .causal = key_range.causal,
+            .sliding_window = key_range.sliding_window,
+            .q_offset = key_range.q_offset,
+            .paged_geometry = key_range.paged_geometry,
+            .q_slab_rows = key_range.q_slab_rows,
+            .q_slab_starts = key_range.q_slab_starts,
+            .head_dim_v = options.head_dim_v,
+            .output_concat_heads = options.output_concat_heads,
+            .free_l1 = recipe_free_l1(*q.device())},
+        inputs);
 }
 
 Tensor run_recipe(
