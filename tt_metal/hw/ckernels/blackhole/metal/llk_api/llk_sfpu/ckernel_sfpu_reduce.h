@@ -958,7 +958,7 @@ inline void load_row_avg_reciprocal_into(std::uint32_t scratch_lreg, RowAvgRecip
     TT_SFPLOADI(scratch_lreg, sfpi::SFPLOADI_MOD0_LOWER, recip.low16);
 }
 
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool is_avg = false>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool is_avg = false, bool load_macros = false>
 inline void perform_reduce_row_sum_tile(
     std::uint32_t tile_row_offset,
     std::uint32_t result_store_mode,
@@ -967,6 +967,11 @@ inline void perform_reduce_row_sum_tile(
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
         (INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16);
+#ifdef DISABLE_SFPLOADMACRO
+    constexpr bool fused_vertical_add = false;
+#else
+    constexpr bool fused_vertical_add = load_macros && !clear_high_bits;
+#endif
 
     // Process tile in 2 face-pairs: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31
     // Each face-pair iteration processes 8 rows (two groups of 4 rows each)
@@ -984,25 +989,37 @@ inline void perform_reduce_row_sum_tile(
             const std::uint32_t group_a_base = tile_row_offset + face_pair_base + row_offset_first;
             const std::uint32_t group_b_base = tile_row_offset + face_pair_base + row_offset_second;
 
-            // Load 4 rows from face 0 (or 2) and face 1 (or 3)
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base);
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE + 2);
-
-            // Load next 4 rows from face 0 (or 2) and face 1 (or 3)
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base);
-            load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE + 2);
-
-            // Perform vertical sum of loaded rows via replay buffer
-            // After this: LREG0 contains sum of first 4 rows, LREG4 contains sum of next 4 rows
-            lltt::replay(0, 6);
+            if constexpr (fused_vertical_add) {
+                // Group A's three adds run in load macros 0 to 2, in the replayed order; group B's fill the gaps.
+                TT_SFPLOAD(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE + 2);
+                TT_SFPLOADMACRO((0 << 2) | p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE);
+                TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE + 2);
+                TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE);
+                half_reduce_add<is_integer_mode, p_sfpu::LREG6, p_sfpu::LREG7>();
+                TT_SFPLOADMACRO((1 << 2) | p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + 2);
+                TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + 2);
+                half_reduce_add<is_integer_mode, p_sfpu::LREG5, p_sfpu::LREG6>();
+                TT_SFPLOADMACRO((2 << 2) | p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base);
+                TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base);
+                half_reduce_add<is_integer_mode, p_sfpu::LREG4, p_sfpu::LREG5>();
+            } else {
+                load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + 2);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, group_a_base + ROWS_PER_FACE + 2);
+                load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + 2);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE);
+                load_and_clear_high_bits<clear_high_bits>(
+                    p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, group_b_base + ROWS_PER_FACE + 2);
+                // LREG0 = sum of the first 4 rows, LREG4 = sum of the next 4 rows
+                lltt::replay(0, 6);
+            }
 
             // Horizontal reduction, inline (see the horizontal-reduce section): every column of LREG0 / LREG4
             // then holds its 4-row group's full row sum.
@@ -1134,6 +1151,27 @@ inline void sum_first_columns_across_tiles(
     }
 }
 
+// LOADMACRO templates and sequences 0 to 2 of the row SUM/AVG: the loaded register (srcB, 0x80) plus LREG3, LREG2 or
+// LREG1 into the loaded register, the replayed tree's adds with their operands in place. Written per row call.
+template <bool is_integer_mode>
+inline void init_row_sum_load_macros() {
+    if constexpr (is_integer_mode) {
+        TTI_SFPIADD(0, p_sfpu::LREG3, 0xC /* instruction template 0 */, 4);
+        TTI_SFPIADD(0, p_sfpu::LREG2, 0xD /* instruction template 1 */, 4);
+        TTI_SFPIADD(0, p_sfpu::LREG1, 0xE /* instruction template 2 */, 4);
+        TTI_SFPCONFIG(0x0084, 4, 1);
+        TTI_SFPCONFIG(0x0085, 5, 1);
+        TTI_SFPCONFIG(0x0086, 6, 1);
+    } else {
+        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG3, 0xC /* instruction template 0 */, 0);
+        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG2, 0xD /* instruction template 1 */, 0);
+        TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, 0xE /* instruction template 2 */, 0);
+        TTI_SFPCONFIG(0x8400, 4, 1);
+        TTI_SFPCONFIG(0x8500, 5, 1);
+        TTI_SFPCONFIG(0x8600, 6, 1);
+    }
+}
+
 template <PoolType pool_type, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
     static_assert(
@@ -1156,6 +1194,20 @@ inline void perform_reduce_row_sum_avg(std::uint32_t block_ct_dim, std::uint32_t
     // For AVG, the divide happens at the point the full row sum is known: in the per-tile reducer for a
     // single column tile, or in the cross-tile accumulation step for multiple column tiles.
     const bool divide_in_tile = is_avg && (block_ct_dim == 1);
+
+#ifndef DISABLE_SFPLOADMACRO
+    // One tile per call: the load macros need constant load addresses for the issuing RISC to keep ahead of the SFPU,
+    // and the several-tile loop computes its addresses at run time.
+    if constexpr (!clear_high_bits) {
+        if (block_ct_dim == 1 && block_rt_dim == 1) {
+            init_row_sum_load_macros<
+                INSTRUCTION_MODE == InstrModLoadStore::INT32 || INSTRUCTION_MODE == InstrModLoadStore::LO16>();
+            perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits, is_avg, true>(
+                0, tile_store_mode, divide_in_tile, recip);
+            return;
+        }
+    }
+#endif
 
     for (std::uint32_t i = 0; i < block_rt_dim; i++) {
         std::uint32_t tile_row_offset = ROWS_PER_TILE * block_ct_dim * i;
