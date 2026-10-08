@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF true
-#define ELTWISE_BINARY_PER_TILE_HANDOFF_BCAST true
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
