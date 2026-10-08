@@ -67,6 +67,9 @@ mathop_mapping = {
 
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
+# Per-tile SrcA scales: distinct magnitudes make a re-read SrcA tile miss the golden
+DISTINCT_TILE_SCALES = torch.tensor([1.0, 1.25, 1.5, 1.75])
+
 
 REDUCE_FORMATS = input_output_formats(
     [
@@ -194,8 +197,9 @@ def test_reduce_quasar(
     ), f"tile_cnt {tile_cnt} must be a multiple of unpack_num_tiles {unpack_num_tiles}"
 
     if distinct_tile_magnitudes:
-        # Distinct per-tile magnitudes make a re-read SrcA tile miss the golden
-        tile_scales = torch.tensor([1.0, 1.25, 1.5, 1.75])[torch.arange(tile_cnt) % 4]
+        tile_scales = DISTINCT_TILE_SCALES[
+            torch.arange(tile_cnt) % len(DISTINCT_TILE_SCALES)
+        ]
         src_A = (
             src_A * tile_scales.repeat_interleave(tile_shape.total_tile_size())
         ).to(src_A.dtype)

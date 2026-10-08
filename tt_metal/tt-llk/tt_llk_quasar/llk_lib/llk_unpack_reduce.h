@@ -45,8 +45,9 @@ inline void _llk_unpack_reduce_mop_config_(
     }
     else
     {
-        unpack_srcA_face  = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
-        unpack_srcB_face  = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+        unpack_srcA_face = TT_OP_UNPACR0_TILE_INC(0, 1 /*Src tile Idx*/, buf_desc_id_0, 1 /*Set Dvalid*/);
+        unpack_srcB_face = TT_OP_UNPACR1_TILE_INC(0, 0, buf_desc_id_1, 1 /*Set Dvalid*/);
+        // UNPACR0_TILE_INC already advances the SrcA tile index, so no end-op advance is needed
         advance_srcA_tile = TT_OP_NOP;
     }
 
