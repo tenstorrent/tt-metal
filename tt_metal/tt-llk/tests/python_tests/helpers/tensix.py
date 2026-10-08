@@ -23,6 +23,8 @@ from ttexalens.tt_exalens_lib import (
 GPRS_PER_THREAD = 64
 TENSIX_THREADS = 3
 GPR_DUMP_WORDS = GPRS_PER_THREAD * TENSIX_THREADS
+GPR_BYTES = 4
+GPR_DUMP_BYTES = GPR_DUMP_WORDS * GPR_BYTES
 
 # Per thread (unpack, math, pack): GPRs ckernel_gpr_map.h designates as temporaries.
 # They hold path-dependent intermediates, not configuration state.
@@ -76,19 +78,27 @@ class TensixState:
                 names[(description.thread_id, description.index)] = register[
                     :-3
                 ].lower()
+        missing = [
+            (thread, index)
+            for thread in range(TENSIX_THREADS)
+            for index in range(GPRS_PER_THREAD)
+            if (thread, index) not in names
+        ]
+        if missing:
+            raise RuntimeError(
+                f"ttexalens register store at {location} does not name {len(missing)} of the "
+                f"{GPR_DUMP_WORDS} Tensix GPRs (thread, index): {missing}"
+            )
         return names
 
     @classmethod
     def _dump_gprs(cls, location: str) -> dict[tuple[int, int], int]:
         # ttexalens reads GPRs by halting BRISC, which hangs it; BRISC copies them to L1 instead.
-        # Keep in step with brisc_cmd_timeout in TestConfig.run_elf_files.
-        timeout = (
-            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
-        )
-        commit_brisc_command(location, BriscCmd.DUMP_GPRS, timeout=timeout)
+        # Only reached on silicon: fetch returns before this on the simulator.
+        commit_brisc_command(location, BriscCmd.DUMP_GPRS)
         words = read_words_from_device(
             location,
-            device_module.Mailboxes.Unpacker.value - GPR_DUMP_WORDS * 4,
+            device_module.Mailboxes.Unpacker.value - GPR_DUMP_BYTES,
             word_count=GPR_DUMP_WORDS,
         )
         return {
