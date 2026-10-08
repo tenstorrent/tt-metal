@@ -43,11 +43,32 @@ Set \"worker\" in node.json to your model id.
 Never push, never edit files outside WORKTREE, never kill processes you did not start, never reset the device.
 Your final message must be only the JSON line printed by commit_node.py."
 
+kill_tree() {  # kill a process and all its descendants
+  local p
+  for p in $(pgrep -P "$1"); do kill_tree "$p"; done
+  kill "$1" 2>/dev/null
+}
+
 echo "[worker $NODE] started $(date -Is), log: $LOG"
 cd "$WT" || exit 1
 timeout --kill-after=60 "$((TIMEOUT_MIN * 60))" \
   claude -p "$PROMPT" --permission-mode bypassPermissions --output-format stream-json --verbose \
-  ${MODEL:+--model "$MODEL"} >"$LOG" 2>&1
+  ${MODEL:+--model "$MODEL"} >"$LOG" 2>&1 &
+pid=$!
+# A worker can leave a background shell running after its final message, which keeps the
+# session alive. Once the result is in the log, give it a minute to exit, then clean up.
+while kill -0 "$pid" 2>/dev/null; do
+  if grep -q '"type":"result"' "$LOG" 2>/dev/null; then
+    for _ in $(seq 1 12); do kill -0 "$pid" 2>/dev/null || break; sleep 5; done
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[worker $NODE] result received but the session is still running; stopping leftover processes"
+      kill_tree "$pid"
+    fi
+    break
+  fi
+  sleep 10
+done
+wait "$pid"
 rc=$?
 echo "[worker $NODE] exited rc=$rc $(date -Is)"
 "$DREAM_PY" - "$LOG" <<'PY'
