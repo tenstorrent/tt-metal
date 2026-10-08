@@ -1137,8 +1137,24 @@ MatmulProgramConfig create_simple_matmul_program_config(
     auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
     auto in1_tile = utilities::get_matmul_tile(input_tensor_b, transpose_b);
 
-    // Parameters for large matmul with reuse
-    const auto Mt = utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    // A sharded output needs the batch folded into M (compute_output_specs sizes the output shard grid that way,
+    // and a shard-backed output CB cannot drain an unfused batch loop). Folding is only legal when B is unbatched.
+    // BLOCK_SHARDED outputs whose user shard spec sits on a 1-row/1-column grid take the 1D mcast branches below,
+    // which honour that spec and decide batch fusion themselves (fused when B is unbatched), so they are excluded here.
+    bool block_sharded_output_on_1d_grid = false;
+    if (mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED && mem_config.shard_spec().has_value()) {
+        const auto shard_bbox = mem_config.shard_spec()->grid.bounding_box();
+        const bool is_single_core_grid = shard_bbox.start_coord == shard_bbox.end_coord;
+        block_sharded_output_on_1d_grid = !is_single_core_grid && (shard_bbox.end_coord.x == shard_bbox.start_coord.x ||
+                                                                   shard_bbox.end_coord.y == shard_bbox.start_coord.y);
+    }
+    const bool fuse_batch_for_sharded_output =
+        mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and not block_sharded_output_on_1d_grid and
+        get_batch_size(a_shape_padded) > 1 and get_batch_size(b_shape_padded) == 1;
+
+    // Parameters for large matmul with reuse; Mt includes the batch when it is fused so the grid-fit checks below
+    // see the same M that compute_output_specs uses.
+    const auto Mt = utilities::get_M_dim(a_shape_padded, in0_tile, fuse_batch_for_sharded_output);
     const auto Kt = utilities::get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = utilities::get_N_dim(b_shape_padded, in1_tile);
     uint32_t in0_block_w = 2;
@@ -1350,7 +1366,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
-                .fuse_batch = false,
+                .fuse_batch = fuse_batch_for_sharded_output,
             };
         }
     }

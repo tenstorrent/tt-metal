@@ -39,7 +39,7 @@ namespace ckernel {
 // exception on the unpack side because each tile must still be addressed around
 // its exponent section.
 
-// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; init, block and uninit must agree on it.
+// four_tile_chunks keeps the four-tile chunks with a 16-bit DEST too; init and block must agree on it.
 template <
     std::uint32_t full_ct_dim,
     bool configure_remap,
@@ -181,9 +181,7 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
     PACK((llk_init_packer_dest_offset_registers<PackMode::Default>(ocb)));
     PACK((llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(ocb)));
     PACK((llk_pack_init(ocb)));
-    constexpr std::uint32_t max_unit_dim =
-        four_tile_chunks ? FAST_UNTILIZE_MAX_UNIT_DIM : fast_untilize_max_unit_dim<full_ct_dim, is_fp32_dest_acc_en>();
-    PACK((llk_pack_fast_untilize_uninit<max_unit_dim, full_ct_dim>(ocb)));
+    PACK((llk_pack_fast_untilize_uninit(ocb)));
 #else
     pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
 #endif

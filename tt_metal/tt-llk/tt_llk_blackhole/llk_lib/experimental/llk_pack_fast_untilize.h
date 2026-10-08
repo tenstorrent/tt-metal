@@ -273,40 +273,13 @@ inline void _llk_pack_fast_untilize_program_output_row_stride_(const std::uint32
 {
     // Wider rows close the pack stream after each chunk row. Program the PAC
     // output Y stride to one full row of the row-major tensor so the ch1 output
-    // counter lands at the same column in the next output row.
-    // This relies on BH packer channel-1 output-address generation through
-    // PCK0_ADDR_CTRL_XY_REG_1 plus AddrMod y_dst.incr. Current public BH ISA
-    // docs do not pin down that packer channel-1 stride/address behavior.
+    // counter lands at the same column in the next output row. set_packer_strides
+    // owns the zero baseline, so hw_configure and the uninit below clear it.
     TT_SETDMAREG(0, LOWER_HALFWORD(output_row_stride_bytes << PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT), 0, LO_16(p_gpr_pack::TMP0));
     TT_SETDMAREG(0, UPPER_HALFWORD(output_row_stride_bytes << PCK0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT), 0, HI_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::TMP1));
-    TT_SETDMAREG(0, 0, 0, HI_16(p_gpr_pack::TMP1));
-    // TMP0/TMP1 are produced by SETDMAREG and consumed as WRCFG input GPRs.
-    // Keep the WRCFGs behind the same STALL_CFG/THCON barrier used by existing
-    // LLK SETDMAREG->WRCFG sequences so the config write cannot race the GPR
-    // setup. ISA documents WRCFG's GPR source and STALLWAIT's CFG block mask.
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
-    TTI_WRCFG(p_gpr_pack::TMP1, p_cfg::WRCFG_32b, PCK0_ADDR_BASE_REG_1_Base_ADDR32);
-    // Make the helper self-contained: callers may immediately issue PACRs/MOPs
-    // that consume this config, and WRCFG.md requires a one-instruction bubble
-    // before a following consumer.
-    TTI_NOP;
-}
-
-inline void _llk_pack_fast_untilize_clear_output_row_stride_()
-{
-    TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_pack::TMP0));
-    TT_SETDMAREG(0, 0, 0, HI_16(p_gpr_pack::TMP0));
-    // Same SETDMAREG->WRCFG dependency as row-stride programming above: clear
-    // TMP0 first, then keep the WRCFGs behind the established LLK barrier.
-    // ISA documents WRCFG's GPR source and STALLWAIT's CFG block mask.
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
-    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
-    TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK0_ADDR_BASE_REG_1_Base_ADDR32);
-    // Same self-contained WRCFG scheduling bubble as above before later pack
-    // address generation observes the cleared config.
-    TTI_NOP;
+    TTI_NOP; // WRCFG needs a one-instruction bubble before a consuming PACR
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
@@ -424,9 +397,8 @@ inline void _llk_pack_fast_untilize_block_(const std::uint32_t address, const st
 // preserved inside a ~256 KiB window; beyond it the high address bits are
 // dropped and rows overwrite each other (verified on silicon: BF16 full_ct_dim
 // 133/256 corrupt without a rebase, FP32 corrupts from ~ct 137). The window is
-// not pinned down in the public BH ISA docs (see
-// _llk_pack_fast_untilize_program_output_row_stride_); 256 KiB is the
-// silicon-characterized bound used here.
+// not in the public BH ISA docs; 256 KiB is the silicon-characterized bound
+// used here.
 constexpr std::uint32_t PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B = 256 * 1024 / 16;
 
 // Emit one phase (16 output rows) as `runs_per_phase` runs of `rows_per_run`
@@ -512,16 +484,10 @@ inline void _llk_pack_fast_untilize_block_strided_(
     _llk_pack_fast_untilize_restore_pack_counters_<true>();
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_uninit_(const std::uint32_t pack_src_format)
 {
-    // A mismatch would leave the init's channel 1 row stride programmed for the next op.
-    LLK_ASSERT(block_ct_dim == pack_fast_untilize_init_block_ct_dim, "fast_untilize: the uninit's chunk width differs from the init's");
     LLK_ASSERT_BLOCK(pack_fast_untilize_init_block_ct_dim = 0);
-    if constexpr (full_ct_dim > block_ct_dim)
-    {
-        _llk_pack_fast_untilize_clear_output_row_stride_();
-    }
+    // set_packer_strides also zeroes the channel-1 Y stride the strided path programs.
     set_packer_strides<PackMode::Default>(pack_src_format, TILE_C_DIM);
     // init owns the X counter and sets it itself; strides are restored just above, so skip them in init.
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
