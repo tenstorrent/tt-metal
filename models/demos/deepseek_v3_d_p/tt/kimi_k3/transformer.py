@@ -342,7 +342,15 @@ class TtKimiK3Transformer(LightweightModule):
         # output still looks right and only the NEXT chunk inherits the wrong state. MLA is
         # unaffected: it takes its slot from device-resident metadata. Refuse rather than corrupt;
         # fixing it properly needs the carry indexed on-device from that metadata.
-        if controller is not None and self.kda_states is not None and self.kda_states.num_slots > 1:
+        # Perf-only escape hatch: every slot replays on slot 0's KDA carry. Same ops and bytes as a
+        # correct multi-slot trace, wrong KDA numerics. Never set it for accuracy runs.
+        shared_carry = os.environ.get("K3_PERF_SHARED_KDA_CARRY") == "1"
+        if (
+            controller is not None
+            and self.kda_states is not None
+            and self.kda_states.num_slots > 1
+            and not shared_carry
+        ):
             raise NotImplementedError(
                 f"traced prefill supports one KDA slot, but this model has "
                 f"{self.kda_states.num_slots}. A capture resolves the KDA slot at capture time, so "
