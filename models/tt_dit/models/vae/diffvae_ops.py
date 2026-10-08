@@ -146,6 +146,25 @@ def split_qkv(fused: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Te
     return q.clone(), k.clone(), v.clone()
 
 
+def head_mean_matrix(heads: int, head_dim: int) -> torch.Tensor:
+    """``(heads * head_dim, TILE)``: right-multiplying a packed row gives each head's mean in its
+    own column. ``1 / head_dim`` is a power of two here, so bf16 holds it exactly."""
+    matrix = torch.zeros(heads * head_dim, TILE)
+    for head in range(heads):
+        matrix[head * head_dim : (head + 1) * head_dim, head] = 1.0 / head_dim
+    return matrix
+
+
+def head_gain_matrix(gamma: torch.Tensor, heads: int, scale: float = 1.0) -> torch.Tensor:
+    """``(TILE, heads * head_dim)``: spreads a per-head column back over that head's lanes, times
+    the norm's per-lane ``gamma`` and ``scale``. Rows past ``heads`` are zero."""
+    head_dim = gamma.shape[-1]
+    matrix = torch.zeros(TILE, heads * head_dim)
+    for head in range(heads):
+        matrix[head, head * head_dim : (head + 1) * head_dim] = gamma.reshape(-1).float() * scale
+    return matrix
+
+
 def device_major_qkv(fused: torch.Tensor, tp: int) -> torch.Tensor:
     """Reorder ``[q_all | k_all | v_all]`` rows to ``[dev][q | k | v][heads/tp]``.
 

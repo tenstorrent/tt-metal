@@ -112,6 +112,7 @@ def neighborhood_attention_3d(
     stride: tuple[int, int, int] | None = None,
     device_plan: NA3DDevicePlan | None = None,
     h_axis: int | None = None,
+    packed_heads: int | None = None,
 ) -> ttnn.Tensor:
     """Run the executor ``kernel`` names, with the arguments that executor understands.
 
@@ -139,6 +140,7 @@ def neighborhood_attention_3d(
             brick=brick,
             stride=stride,
             h_axis=h_axis,
+            packed_heads=packed_heads,
         )
     assert h_axis is None, f"{kernel.name} does not split H"
     if kernel.bricked:
@@ -488,6 +490,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     brick: tuple[int, int, int] | None = None,
     stride: tuple[int, int, int] | None = None,
     h_axis: int | None = None,
+    packed_heads: int | None = None,
 ) -> ttnn.Tensor:
     """Spatial-W sharded NA3D. ``q``/``k``/``v`` are this chip's W-shard; ``dims`` is the FULL grid.
 
@@ -514,6 +517,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
     ``stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites, defaulting to (1,1,1).
     A caller that derives its own brick must pass the same stride here.
 
+    ``packed_heads``: Q/K/V are ``(batch, 1, bricked_sites, heads * head_dim)`` tiles holding this
+    many heads, the op's own site-major layout, so Q goes in as-is. Needs ``already_bricked``.
+
     ``h_axis`` splits H over a second mesh axis as well (the 2-D split): each chip holds an
     ``H/h x W/w`` tile with all its heads and widens K/V by an H halo first, then a W halo of the
     H-widened tensor, which brings the diagonal neighbours' corners along. It excludes ``tp_axis``.
@@ -526,6 +532,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
     if already_bricked:
         batch, head_count, _, head_dim = tuple(query.shape)
         assert brick is not None, "already_bricked needs the brick the stage converted with"
+        if packed_heads is not None:
+            assert head_count == 1, f"packed Q/K/V are (b, 1, sites, heads * head_dim); got {tuple(query.shape)}"
+            head_count, head_dim = packed_heads, head_dim // packed_heads
     elif len(query.shape) == 4:
         # Flat HEAD-major (batch, heads, sites, head_dim); sites run (t, h, w_local).
         batch, head_count, _, head_dim = tuple(query.shape)
@@ -823,7 +832,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
     # Q is NOT widened: the halo's queries belong to the neighbour, and the op is told so via
     # query_extent/query_origin below.
     with timing_tree.span(device, "q-to-seq", category=timing_tree.RESHAPE, deep=True):
-        if already_bricked and single_head_tiles and query.layout == ttnn.TILE_LAYOUT:
+        if packed_heads is not None and query.layout == ttnn.TILE_LAYOUT:
+            # Packed (b, 1, sites, heads * head_dim) tiles are the op's site-major layout already.
+            query_op = query
+        elif already_bricked and single_head_tiles and query.layout == ttnn.TILE_LAYOUT:
             # One head per chip: the bricked (b, 1, sites, hd) tile form is already the op's layout.
             query_op = ttnn.reshape(query, (batch, 1, query_bricked_sites, channels))
         elif already_bricked:
