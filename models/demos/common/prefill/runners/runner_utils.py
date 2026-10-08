@@ -61,6 +61,18 @@ H2D_PAGE_ALIGNMENT_BYTES = 64
 _H2D_ID_BYTES = 4
 
 
+def log_dram_usage(mesh_device, rank: int, stage: str) -> None:
+    """Per-chip DRAM occupancy; every chip of a mesh allocates in lockstep, so one view covers all."""
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    banks = view.num_banks
+    logger.info(
+        f"[pp rank {rank}] DRAM {stage}: allocated {view.total_bytes_allocated_per_bank * banks / 2**30:.3f} GiB, "
+        f"free {view.total_bytes_free_per_bank * banks / 2**30:.3f} GiB of "
+        f"{view.total_bytes_per_bank * banks / 2**30:.3f} GiB per chip, "
+        f"largest free block {view.largest_contiguous_bytes_free_per_bank / 2**20:.1f} MiB per bank x {banks}"
+    )
+
+
 def h2d_row_len(chunk_size: int, sp_factor: int) -> int:
     assert chunk_size % sp_factor == 0, f"chunk_size={chunk_size} must be divisible by sp_factor={sp_factor}"
     return chunk_size // sp_factor

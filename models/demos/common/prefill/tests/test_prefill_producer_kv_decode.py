@@ -207,3 +207,56 @@ def test_pcc_window_rejects_golden_len_cap_on_windowed_golden(tmp_path, pcc_wind
     pcc_window_env.setenv("PREFILL_PCC_GOLDEN_LEN", "56320")
     with expect_error(ValueError, "PREFILL_PCC_GOLDEN_LEN caps the compare"):
         producer._resolve_pcc_window(trace, 256000, 32)
+
+
+@pytest.fixture
+def schedule_env(monkeypatch):
+    for name in ("PREFILL_PRODUCER_PREFIX_LEN", "PREFILL_PRODUCER_ISL", "PREFILL_PRODUCER_CHUNKS", "PREFILL_NUM_USERS"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(producer, "CHUNK_SIZE", 64)
+    monkeypatch.setattr(producer, "MAX_SEQ_LEN", 64 * 8)
+    return monkeypatch
+
+
+def test_schedule_resumes_every_slot_after_the_prefix(schedule_env):
+    schedule_env.setenv("PREFILL_PRODUCER_PREFIX_LEN", "256")
+    schedule_env.setenv("PREFILL_PRODUCER_CHUNKS", "2")
+    schedule_env.setenv("PREFILL_NUM_USERS", "3")
+    schedule_env.setenv("PREFILL_PRODUCER_MAX_REQUESTS", "3")
+    pushes = []
+    stats = producer.run_schedule(
+        producer._config_from_env(), push_fn=lambda *push: pushes.append(push) or 0.0, sleep_fn=lambda _: None
+    )
+    assert stats.completed == 3
+    assert sorted(pushes) == [(slot, idx, 256 + idx * 64, 320 + idx * 64, 384) for slot in range(3) for idx in range(2)]
+    assert {slot: fill.real_len for slot, fill in stats.resident.items()} == {0: 384, 1: 384, 2: 384}
+
+
+@pytest.mark.parametrize("prefix", ["16", "512"], ids=["unaligned", "no-room-for-a-chunk"])
+def test_schedule_rejects_bad_prefix(schedule_env, expect_error, prefix):
+    schedule_env.setenv("PREFILL_PRODUCER_PREFIX_LEN", prefix)
+    with expect_error(ValueError, "PREFILL_PRODUCER_PREFIX_LEN"):
+        producer._config_from_env()
+
+
+def test_schedule_sends_exactly_isl_tokens_after_the_prefix(schedule_env, tmp_path):
+    schedule_env.setenv("PREFILL_PRODUCER_PREFIX_LEN", "128")
+    schedule_env.setenv("PREFILL_PRODUCER_ISL", "100")
+    schedule_env.setenv("PREFILL_NUM_USERS", "2")
+    schedule_env.setenv("PREFILL_PRODUCER_MAX_REQUESTS", "2")
+    schedule_env.setenv("PREFILL_TRACE_DIR", str(_golden_metadata(tmp_path, token_ids=list(range(300)))))
+    cfg = producer._config_from_env()
+    _, cfg.slot_lengths, pools = producer._resolve_slot_prompts(cfg)
+    assert [len(pool) for pool in pools.values()] == [228]
+    pushes = []
+    producer.run_schedule(cfg, push_fn=lambda *push: pushes.append(push) or 0.0, sleep_fn=lambda _: None)
+    assert sorted(pushes) == [
+        (slot, idx, 128 + idx * 64, min(192 + idx * 64, 228), 228) for slot in range(2) for idx in range(2)
+    ]
+
+
+def test_schedule_rejects_isl_past_the_cache(schedule_env, expect_error):
+    schedule_env.setenv("PREFILL_PRODUCER_PREFIX_LEN", "448")
+    schedule_env.setenv("PREFILL_PRODUCER_ISL", "65")
+    with expect_error(ValueError, "overruns MAX_SEQ_LEN"):
+        producer._config_from_env()

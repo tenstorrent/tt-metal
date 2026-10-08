@@ -31,7 +31,12 @@ from models.demos.common.prefill.runners.runner_utils import (
 )
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_rows as d2d_rows_for
 from models.demos.common.prefill.runners.runner_utils import d2d_activation_width as d2d_width
-from models.demos.common.prefill.runners.runner_utils import make_h2d_spec, num_mtp_tokens, open_mesh_device
+from models.demos.common.prefill.runners.runner_utils import (
+    log_dram_usage,
+    make_h2d_spec,
+    num_mtp_tokens,
+    open_mesh_device,
+)
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 
 
@@ -676,8 +681,11 @@ def main() -> None:
             f"PREFILL_USE_TRACE=1 but runtime {type(runtime).__name__} does not implement "
             "capture_trace(kv_caches); run with PREFILL_USE_TRACE=0."
         )
+    log_dram_usage(mesh_device, rank, "after weights")
     kv_caches = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    log_dram_usage(mesh_device, rank, f"after KV cache ({NUM_USERS} users x {MAX_SEQ_LEN} tokens)")
     runtime.compile(kv_caches)
+    log_dram_usage(mesh_device, rank, "after compile")
 
     _serve_request(runtime, kv_caches, mesh_device, hf_config, rank, num_ranks, is_first_rank)
 
@@ -1005,6 +1013,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         if d2d_out is not None:
             _forward_send_warmup(runtime, d2d_out, rank)
         runtime.capture_trace(kv_caches)
+        log_dram_usage(mesh_device, rank, "after trace capture")
         if use_d2h and layer_ack_service is not None:
             n_warm = getattr(runtime, "warmup_ack_count", lambda: 0)()
             for _ in range(n_warm):
