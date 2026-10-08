@@ -13,6 +13,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
+from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import _layout as _selection_layout
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_OUTPUT_MEMORY_CONFIG,
@@ -43,6 +44,7 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
 
 @dataclass(frozen=True)
 class _ProjectedInputs:
+    # The fused projection; its leading Q+K+V columns are the convolution channels.
     qkv: ttnn.Tensor
     # The fused projection again; the decay's low-rank activations are its columns from decay_rank_offset.
     decay_rank: ttnn.Tensor
@@ -273,21 +275,31 @@ class ttKDA:
         self,
         qkv: ttnn.Tensor,
         incoming_layer_carry: ttnn.Tensor,
-        selections: ChronologicalSelections | None,
         actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         config = self.config
         if not self._is_sequence_parallel:
-            batch, rows, width = qkv.shape
-            new_state = (
-                selections.select_local_final_history(qkv)
-                if selections is not None
-                else ttnn.slice(qkv, (0, rows - (config.conv_kernel_size - 1), 0), (batch, rows, width))
+            # The last three valid rows, selected on device from the chronology.
+            (new_state,) = ttnn.experimental.kda.select_history_rows(
+                qkv,
+                _selection_layout.LOCAL_FINAL_HISTORY,
+                actual_start,
+                self.sequence_parallel_axis,
+                self.active_seq_len_local,
+                width=self._convolution_width,
+                actual_end=actual_end,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             predecessor = incoming_layer_carry
         else:
             predecessor, new_state = exchange_convolution_carry(
-                qkv, sequence_parallel_axis=self.sequence_parallel_axis, selections=selections
+                qkv,
+                sequence_parallel_axis=self.sequence_parallel_axis,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                local_rows=self.active_seq_len_local,
+                width=self._convolution_width,
             )
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv,
@@ -328,7 +340,8 @@ class ttKDA:
             )
         auxiliary_start = self._convolution_width
         return _ProjectedInputs(
-            qkv=_slice_width(projected, 0, auxiliary_start),
+            # The convolution reads its channels in place from the tiled projection.
+            qkv=projected,
             # The decay projection reads its low-rank columns in place.
             decay_rank=projected,
             decay_rank_offset=auxiliary_start,
@@ -470,21 +483,18 @@ class ttKDA:
         the hidden dimension; TP == 1 returns the full hidden dimension.
 
         Optional ``selections`` is a table from ``selections()`` for these same
-        bounds, built by a layer with the same SP geometry; it is built here
-        when omitted.
+        bounds. The layer derives its selections on device from the bounds, so
+        it is accepted for compatibility and not read.
         """
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
-        # All geometries use the same selection graph for full and padded calls.
-        if selections is None:
-            selections = self.selections(actual_start, actual_end)
+        del selections  # Selections are derived on device from the bounds.
         projected = self._project_inputs(hidden_states)
-        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolution_state = ttnn.to_layout(
             state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, selections, actual_start)
+        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, convolution_state, actual_start, actual_end)
         gate = self._compute_decay(projected.decay_rank, projected.decay_rank_offset)
         result = self.recurrence(
             q=q,
@@ -494,7 +504,6 @@ class ttKDA:
             beta=projected.beta,
             beta_logits_column_offset=projected.beta_offset,
             initial_state=state.recurrent,
-            selections=selections if self._is_sequence_parallel else None,
             actual_start=actual_start,
             actual_end=actual_end,
         )

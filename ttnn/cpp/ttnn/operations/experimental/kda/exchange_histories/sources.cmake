@@ -1,0 +1,9 @@
+set(TTNN_OP_EXPERIMENTAL_KDA_EXCHANGE_HISTORIES_API_HEADERS exchange_histories.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_EXCHANGE_HISTORIES_SRCS
+    exchange_histories.cpp
+    device/exchange_histories_device_operation.cpp
+    device/exchange_histories_program_factory.cpp
+)
+
+set(TTNN_OP_EXPERIMENTAL_KDA_EXCHANGE_HISTORIES_NANOBIND_SRCS exchange_histories_nanobind.cpp)

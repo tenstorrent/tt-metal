@@ -37,24 +37,7 @@ TT_KERNEL void derive() {
         for (uint32_t i = 0; i < selection::record_width; ++i) {
             words[i] = 0;
         }
-        if (row == selection::local_final_history) {
-            const uint32_t history_end = topology.valid_rows == 0 ? selection::history_rows : topology.valid_rows;
-            for (uint32_t i = 0; i < selection::history_rows; ++i) {
-                words[i] = history_end - selection::history_rows + i;
-            }
-        } else if (row < selection::final_state) {
-            uint32_t base;
-            if (row == selection::outgoing_history) {
-                base = (topology.local_split ? topology.head_rows : local_rows) - selection::history_rows;
-            } else if (row == selection::predecessor_history) {
-                base = ((topology.rank + sp_size - 1) % sp_size) * selection::history_rows;
-            } else {
-                base = topology.final_owner * selection::history_rows;
-            }
-            for (uint32_t i = 0; i < selection::history_rows; ++i) {
-                words[i] = base + i;
-            }
-        } else {
+        if (row == selection::final_state || row == selection::final_state + 1) {
             // Candidates contain one final state per rank, followed by the
             // completed distributed prefix at index sp_size for unsplit execution.
             const uint32_t selected = topology.split ? topology.final_owner : sp_size;
@@ -64,6 +47,12 @@ TT_KERNEL void derive() {
                 words[1] = BH;
                 words[2] = K;
                 words[3] = V;
+            }
+        } else {
+            uint32_t rows[selection::packed_history_rows];
+            const uint32_t count = selection_history_rows(topology, row, sp_size, local_rows, rows);
+            for (uint32_t i = 0; i < count; ++i) {
+                words[i] = rows[i];
             }
         }
         noc.async_write(

@@ -21,6 +21,7 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_bit_identical,
     collect_accuracy_and_determinism_results,
     assert_equal,
+    make_actual_start,
 )
 
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -241,6 +242,47 @@ def test_qkv_causal_conv1d_silu_work_distribution(
         ("q", "k", "v"), qkv_reference(inputs, history, taps, widths), outputs, strict=True
     ):
         assert_accurate(golden, ttnn.to_torch(output), name=name, pcc_threshold=0.999)
+
+
+@pytest.mark.parametrize(
+    ("sequence", "channel_chunk_size", "actual_start"),
+    [
+        pytest.param(64, 1536, 0, id="single-block"),
+        # Cores own several items on both sides of a channel-block boundary; consecutive items reuse the staged
+        # previous tile row.
+        pytest.param(2080, 768, 0, id="items-cross-blocks"),
+        # A local segment start inside the sequence reads the three carry rows mid-stream.
+        pytest.param(256, 768, 96, id="local-split"),
+    ],
+)
+def test_qkv_causal_conv1d_silu_tiled_input_matches_row_major(
+    device: ttnn.Device, sequence: int, channel_chunk_size: int, actual_start: int
+) -> None:
+    """A tiled input wider than Q+K+V, like the fused input projection, convolves its leading channels bit-exact."""
+    widths = (512, 512, 512)
+    host, (input_tt, history_tt, taps_tt) = qkv_device_inputs(device, sequence=sequence, widths=widths)
+    inputs = host[0]
+    trailing = torch.randn(*inputs.shape[:-1], 160, generator=torch.Generator().manual_seed(17)).bfloat16()
+    tiled_tt = qkv_to_device(torch.cat((inputs, trailing), dim=-1), device, layout=ttnn.TILE_LAYOUT)
+    actual_start_tt = make_actual_start(device, actual_start)
+    expected = _run(
+        input_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        actual_start=actual_start_tt,
+    )
+    outputs = _run(
+        tiled_tt,
+        history_tt,
+        taps_tt,
+        widths=widths,
+        channel_chunk_size=channel_chunk_size,
+        actual_start=actual_start_tt,
+    )
+    for name, golden, output in zip(("q", "k", "v"), expected, outputs, strict=True):
+        assert_bit_identical(ttnn.to_torch(golden), ttnn.to_torch(output), name=f"tiled {name}")
 
 
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
@@ -516,7 +558,7 @@ def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
         ("history_shape", r"history must be \[1,3,Q\+K\+V\]"),
         ("tap_last_dimension", r"tap2 last dimension must equal Q\+K\+V"),
         ("tap_volume", "tap2 logical volume must equal"),
-        ("input_layout", "input must use ROW_MAJOR layout, got Layout::TILE"),
+        ("narrow_tiled_input", r"or tiled \[1,T,W\] with W >= Q\+K\+V"),
         ("history_layout", "history must use ROW_MAJOR layout, got Layout::TILE"),
         ("tap_layout", "tap1 must use TILE layout, got Layout::ROW_MAJOR"),
         ("input_dtype", "input must be BFLOAT16"),
@@ -550,8 +592,8 @@ def test_qkv_causal_conv1d_silu_rejects_invalid_tensors(
         taps_list[2] = qkv_to_device(taps[2].reshape(-1, 1), device, layout=ttnn.TILE_LAYOUT)
     elif case == "tap_volume":
         taps_list[2] = qkv_to_device(torch.cat((taps[2], taps[2]), dim=0), device, layout=ttnn.TILE_LAYOUT)
-    elif case == "input_layout":
-        input_tt = qkv_to_device(inputs, device, layout=ttnn.TILE_LAYOUT)
+    elif case == "narrow_tiled_input":
+        input_tt = qkv_to_device(inputs[..., : -ttnn.TILE_SIZE], device, layout=ttnn.TILE_LAYOUT)
     elif case == "history_layout":
         history_tt = qkv_to_device(history, device, layout=ttnn.TILE_LAYOUT)
     elif case == "tap_layout":

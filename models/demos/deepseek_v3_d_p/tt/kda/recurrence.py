@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
+from models.demos.deepseek_v3_d_p.tt.kda.collectives import sp_all_gather
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
@@ -238,6 +239,7 @@ def _distributed_prefix(
     compute_config: ttnn.DeviceComputeKernelConfig,
     actual_start: ttnn.Tensor,
     local_rows: int,
+    gather_outputs: dict,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
@@ -247,11 +249,8 @@ def _distributed_prefix(
     carry on each independent TP line.
     """
     output_memory = KDA_OUTPUT_MEMORY_CONFIG
-    gathered = ttnn.all_gather(
-        packed,
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=output_memory,
+    gathered = sp_all_gather(
+        packed, outputs=gather_outputs, name="affine_transforms", dim=0, cluster_axis=sequence_parallel_axis
     )
     return ttnn.experimental.kda.chain_affine_transforms(
         gathered,
@@ -268,7 +267,7 @@ def select_final_state(
     rank_final: ttnn.Tensor,
     prefix_final_state: ttnn.Tensor,
     *,
-    selections: ChronologicalSelections,
+    selections: ChronologicalSelections | None,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     local_rows: int,
@@ -419,6 +418,7 @@ def _partition_prefix(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
+    gather_outputs: dict,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     a, b = ttnn.experimental.kda.reduce_affine_transforms(
         summary.a,
@@ -438,6 +438,7 @@ def _partition_prefix(
         compute_config=compute_config.affine_prefix,
         actual_start=actual_start,
         local_rows=local_rows,
+        gather_outputs=gather_outputs,
     )
 
 
@@ -450,10 +451,11 @@ def _scan_sp_grouped_chunks(
     groups: int,
     memory: ttnn.MemoryConfig,
     sequence_parallel_axis: int,
-    selections: ChronologicalSelections,
+    selections: ChronologicalSelections | None,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
+    gather_outputs: dict,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -478,6 +480,7 @@ def _scan_sp_grouped_chunks(
             compute_config=compute_config.affine_prefix,
             actual_start=actual_start,
             local_rows=geometry.local_rows,
+            gather_outputs=gather_outputs,
         )
     else:
         head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
@@ -498,6 +501,7 @@ def _scan_sp_grouped_chunks(
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
             compute_config=compute_config,
+            gather_outputs=gather_outputs,
         )
         # The chronological prefix ends where the split tail begins, supplying its seed.
         group_entry_states = ttnn.experimental.kda.affine_exclusive_scan(
@@ -593,6 +597,8 @@ class KDARecurrence:
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
         self._sequence_parallel_axis = sequence_parallel_axis
+        # This mesh's persistent sequence-parallel all-gather outputs.
+        self._gather_outputs: dict = {}
         self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
         )
@@ -691,8 +697,6 @@ class KDARecurrence:
         ``beta`` is the activated token-major beta, or with ``beta_logits_column_offset`` a wider BF16 tensor whose
         columns from that offset hold beta's pre-sigmoid logits; chunk preparation then applies the sigmoid.
         """
-        if self._sequence_parallel != (selections is not None):
-            raise ValueError("chronological selections must be provided exactly for sequence-parallel recurrence")
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -765,6 +769,7 @@ class KDARecurrence:
             groups=self._groups,
             memory=self._summary_memory,
             compute_config=self._compute_config,
+            gather_outputs=self._gather_outputs,
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,

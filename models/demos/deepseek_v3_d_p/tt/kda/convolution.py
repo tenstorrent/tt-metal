@@ -3,29 +3,34 @@
 """Compact predecessor and replacement carry exchange, with fixed collective participation."""
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.kda.chronological_selections import ChronologicalSelections
 
 
 def exchange_convolution_carry(
     projected_qkv: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
-    selections: ChronologicalSelections,
+    actual_start: ttnn.Tensor,
+    actual_end: ttnn.Tensor | None,
+    local_rows: int,
+    width: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return predecessor history and the replacement logical stream carry.
 
-    Both outputs are BF16 row-major DRAM tensors shaped ``[1, 3, local_channels]``.
-    Predecessor history varies by SP rank; the final carry is replicated across
-    each SP line. Channels remain sharded across TP. The native convolution
-    selects the caller's initial history at the logical sequence start.
+    Both outputs are BF16 row-major DRAM tensors shaped ``[1, 3, local_channels]``. Predecessor history varies by
+    SP rank; the final carry is replicated across each SP line. Channels remain sharded across TP. The native
+    convolution selects the caller's initial history at the logical sequence start. ``projected_qkv`` is the tiled
+    projection whose leading ``width`` columns are the channels. Every selection derives its rows on device from
+    the bounds.
     """
-    outgoing = selections.select_outgoing_history(projected_qkv)
-    gathered_outgoing_history = ttnn.all_gather(
-        outgoing, dim=1, cluster_axis=sequence_parallel_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    # One fabric exchange gathers the outgoing and local final history from the projection, sends the outgoing
+    # rows to the next physical rank and the last valid token's owner's final rows to every rank.
+    predecessor, final_carry = ttnn.experimental.kda.exchange_histories(
+        projected_qkv,
+        width=width,
+        actual_start=actual_start,
+        local_rows=local_rows,
+        actual_end=actual_end,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        sequence_parallel_axis=sequence_parallel_axis,
     )
-    predecessor = selections.select_predecessor_history(gathered_outgoing_history)
-    physical_tail_history = selections.select_local_final_history(projected_qkv)
-    broadcast_tail_histories = ttnn.all_broadcast(physical_tail_history, cluster_axis=sequence_parallel_axis)
-    candidates = ttnn.concat(broadcast_tail_histories, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    final_carry = selections.select_final_history(candidates)
     return predecessor, final_carry

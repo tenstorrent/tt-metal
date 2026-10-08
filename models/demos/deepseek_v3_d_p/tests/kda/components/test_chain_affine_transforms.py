@@ -81,6 +81,7 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
         compute_config=compute_config,
         actual_start=make_actual_start(mesh_device, start),
         local_rows=_ROWS,
+        gather_outputs={},
     )
 
     first_rank = (start // _ROWS) % sp_size
