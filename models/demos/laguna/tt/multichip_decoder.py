@@ -324,6 +324,24 @@ class MultichipDecoder(OptimizedDecoder):
             self.ccl_topology = topologies[topology_name]
             self.num_links = num_links
 
+    def _prefill_chunked_sdpa_kw(self):
+        """Program config for the streamed (paged) prefill SDPA. TTNN's default (no config) runs 32/32 chunks; 64/64
+        measured 160.3 -> 143.4 ms (8192 rows) and 85.0 -> 81.7 ms (4096) for layers 0/1/4 on S p150x4. Chunk starts
+        are block (64) aligned, so q/k chunks must divide 64. TT_LAGUNA_PREFILL_SDPA_QK="q,k" overrides ("0" = default)."""
+        qk = os.environ.get("TT_LAGUNA_PREFILL_SDPA_QK", "64,64")
+        if qk == "0":
+            return {}
+        q, k = (int(v) for v in qk.split(","))
+        grid = self.device.compute_with_storage_grid_size()
+        return {
+            "program_config": ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+                q_chunk_size=q,
+                k_chunk_size=k,
+                exp_approx_mode=False,
+            )
+        }
+
     def _gate(self, attn, ln, g=None):
         """Prefill: flat attention [1, seq, nh*hd] times the per-head softplus gate expanded by one matmul."""
         if getattr(self, "_gate_expand", None) is None or len(attn.shape) != 3 or attn.shape[-2] <= TILE:
@@ -1378,6 +1396,7 @@ class MultichipDecoder(OptimizedDecoder):
                     user_pt,
                     **start_kw,
                     compute_kernel_config=self._sdpa_compute,
+                    **self._prefill_chunked_sdpa_kw(),
                 )
             else:
                 # Sliding layers read from the paged window cache (not a local
@@ -1397,6 +1416,7 @@ class MultichipDecoder(OptimizedDecoder):
                     **start_kw,
                     sliding_window_size=win,
                     compute_kernel_config=self._sdpa_compute,
+                    **self._prefill_chunked_sdpa_kw(),
                 )
             attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn = ttnn.reshape(attn, (1, ch, cfg.num_heads * cfg.head_dim))
