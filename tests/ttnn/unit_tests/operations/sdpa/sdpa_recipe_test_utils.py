@@ -573,7 +573,7 @@ def check_routing(device, case):
     """Precision routing: a call without `precision` that would reach a legacy loop runs a recipe (FP32 dest ->
     ACCURATE; non-ring joint -> STANDARD, or ACCURATE with FP32 dest). With chunk sizes the recipe supports, the
     routed call is bitwise the explicit recipe's; chunk sizes it does not support (Q2048) leave the blocking to the
-    op. Either way the output meets the recipe's FP64 bound."""
+    op; keys that fit one K chunk run as one. Either way the output meets the recipe's FP64 bound."""
     fp32 = fp32_dest_config(device)
     accurate, standard = ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.STANDARD
     if case in ("dense_causal_bfp8", "dense_mask_q2048"):
@@ -591,6 +591,21 @@ def check_routing(device, case):
         expected = reference(q, k, v, key_mask(1000, 1000, causal=True) if causal else mask, 0.1)
         explicit = run(precision=recipe) if causal else None
         tolerance = 1.5 * l2_pct(stored(expected.bfloat16(), dtype), expected)  # BFP8 output, as legacy
+    elif case == "dense_mask_short_k":
+        # Keys that fit one K chunk run as one: the caller's K256 runs as the explicit recipe's K512.
+        q, k, v = randn(1, 4, 500, 64, seed=83), randn(1, 2, 500, 64, seed=84), randn(1, 2, 500, 64, seed=85)
+        mask = key_mask(500, 500, window=200)[None, None]
+        tensors = [to_device(device, x) for x in (q, k, v)]
+        run = lambda k_chunk, **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors,
+            is_causal=False,
+            scale=0.125,
+            attn_mask=to_device(device, mask),
+            program_config=program_config(device, 128, k_chunk),
+            **extra,
+        )
+        routed, recipe = run(256, compute_kernel_config=fp32), accurate
+        explicit, expected, tolerance = run(512, precision=recipe), reference(q, k, v, mask, 0.125), 0.0
     elif case == "chunked_tensor_start":
         chunked = ChunkedCase(device, "accurate", sq=256, blocks_per_seq=4, block=128)
         start = int_tensor(device, [256])
@@ -626,3 +641,70 @@ def check_routing(device, case):
         assert torch.equal(routed, explicit), "the routed call must run the explicit recipe"
     name = "accurate" if recipe == accurate else "standard"
     assert l2_pct(routed, expected) < L2_PCT_BOUND[name] + tolerance
+
+
+def rebind_call(device, case, seed):
+    """One call of check_cache_hit_rebinds' `case` on inputs drawn from `seed`: (output, FP64 reference, variant)."""
+    if case == "dense_mask_sink":
+        q = randn(1, 4, 300, 64, seed=seed)
+        k, v = randn(1, 2, 640, 64, seed=seed + 1), randn(1, 2, 640, 64, seed=seed + 2)
+        mask = randn(1, 1, 300, 640, seed=seed + 3).float()
+        mask[..., 500 + seed % 7 :] = -math.inf
+        mask = mask.bfloat16()
+        sink = (randn(1, 4, 1, 1, seed=seed + 4) * 4).bfloat16()
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *inputs_for(device, "accurate", q, k, v),
+            is_causal=False,
+            attn_mask=to_device(device, mask),
+            attention_sink=to_device(device, sink),
+            program_config=program_config(device, 128, 256),
+            precision=ttnn.SDPAPrecision.ACCURATE,
+        )
+        return out, sink_reference(q, k, v, sink, mask), "accurate"
+    if case == "chunked_paged_sink":
+        chunked = ChunkedCase(device, "accurate", b=2, sq=128, block=128, blocks_per_seq=3, sink=True, seed=seed)
+        out = chunked.run(200, 128, 128, start_tensor=int_tensor(device, [200]))
+        return out, chunked.expected(200), "accurate"
+    if case == "windowed_offset_tensor":
+        cu = [0, 100, 356, 600]
+        q = randn(1, 4, 256, 128, seed=seed)
+        k, v = randn(1, 2, 600, 128, seed=seed + 1), randn(1, 2, 600, 128, seed=seed + 2)
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *inputs_for(device, "accurate", q, k, v),
+            is_causal=True,
+            cu_window_seqlens=int_tensor(device, cu),
+            windowed_q_token_offset_tensor=int_tensor(device, [64]),
+            program_config=program_config(device, 128, 256),
+            precision=ttnn.SDPAPrecision.ACCURATE,
+        )
+        return out, reference(q, k, v, key_mask(256, 600, causal=True, q_offset=64, cu=cu)), "accurate"
+    # joint
+    q, k, v = (randn(1, 2, 300, 64, seed=seed + i) for i in range(3))
+    jq, jk, jv = (randn(1, 2, 77, 64, seed=seed + 3 + i) for i in range(3))
+    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+        *inputs_for(device, "standard", q, k, v),
+        *inputs_for(device, "standard", jq, jk, jv),
+        joint_strategy="rear",
+        program_config=program_config(device, 128, 256),
+        precision=ttnn.SDPAPrecision.STANDARD,
+    )
+    expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
+    return torch.cat([ttnn.to_torch(out), ttnn.to_torch(joint_out)], 2), expected, "standard"
+
+
+def check_cache_hit_rebinds(device, case):
+    """A program-cache hit runs on the call's own buffers: a second call on other values in other buffers (the first
+    call's still allocated) meets its own FP64 bound without adding a program. Covers every buffer-address runtime
+    arg of the dense / joint recipe program (mask, sink, joint Q/K/V and output, Q offset tensor, cu_window_seqlens,
+    page table)."""
+    device.enable_program_cache()
+    kept = []
+    for seed in (100, 200):
+        out, expected, variant = rebind_call(device, case, seed)
+        if not kept:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "the second call must hit the program cache"
+        actual = out if isinstance(out, torch.Tensor) else ttnn.to_torch(out)
+        assert l2_pct(actual, expected) < L2_PCT_BOUND[variant]
+        kept.append(out)
