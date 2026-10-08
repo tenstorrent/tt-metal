@@ -38,8 +38,9 @@ from PIL import Image
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import TURBO_NUM_FORWARDS, MiniMaxH3TurboPipeline
+from ....pipelines.minimax_h3.policy import align_num_frames
 from ....utils import tensor as tt_tensor
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES
