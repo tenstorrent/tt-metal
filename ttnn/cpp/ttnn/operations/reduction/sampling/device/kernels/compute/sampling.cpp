@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_unary/rand.h"
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/rounding.h"
 #include "api/compute/reduce.h"
 #include "api/compute/transpose.h"
 #include "api/compute/bcast.h"
@@ -34,8 +35,9 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     // The random threshold reaches the writer as BF16 (8-bit mantissa), which near 1.0 means
     // ~1/256 resolution: tokens whose cumulative slice lies in the last 0.4% of the mass could
     // never be drawn and the rest of the tail was under-sampled (unit test
-    // test_sampling_distribution.py). Draw values in [0, 256] (integers up to 256 are exact in
-    // BF16); the writer combines two elements of the tile into a 16-bit threshold.
+    // test_sampling_distribution.py). Each element is drawn in [0, 256] and FLOORED on the SFPU
+    // before packing, so every element is an exact integer digit 0..256 in BF16 (integers up to
+    // 256 are exact). The writer combines two such digits into a 16-bit lattice threshold.
     constexpr uint32_t rand_scale = 0x43800000U;  // 256.0f
     constexpr uint32_t rand_from = 0;
 
@@ -46,6 +48,8 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     tile_regs_acquire();
     rand_tile(0, rand_from, rand_scale);
+    rounding_op_tile_init();
+    floor_tile(0);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, dfb_id, 0);

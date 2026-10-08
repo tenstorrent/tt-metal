@@ -148,26 +148,41 @@ def _draw(device, values, k, p, n):
 
 def test_sampling_threshold_uniformity(device):
     """Equal-probability rows, no nucleus cut: the per-rank frequency is the random threshold's
-    histogram over equal-width bins of [0, 1). A uniform threshold gives 1/m everywhere."""
+    histogram over equal-width bins of [0, 1). A uniform threshold gives 1/m everywhere; each
+    rank is asserted within 4 sigma of the multinomial estimate over USERS * N draws."""
+    draws = USERS * N
     for m in (4, 10, 20):
         values = torch.full((1, 1, USERS, W), -30.0)
         values[..., :m] = 0.0
         emp = _draw(device, values, k=m, p=1.0, n=N)
         hist = emp[:, :m].mean(0)  # averaged over the 32 users' streams
-        print(
-            f"\nm={m} (expected {1/m:.4f} each): "
-            + " ".join(f"{h:.3f}" for h in hist)
-            + f"  | max rank drawn: {int((emp[:, :m].sum(0) > 0).nonzero().max())}"
-        )
+        sigma = ((1 / m) * (1 - 1 / m) / draws) ** 0.5
+        print(f"\nm={m} (expected {1/m:.4f} +- {4*sigma:.4f}): " + " ".join(f"{h:.3f}" for h in hist))
+        assert torch.all(
+            (hist - 1 / m).abs() <= 4 * sigma
+        ), f"m={m}: rank frequencies {hist.tolist()} deviate from 1/{m}"
+        assert emp[:, m:].sum() == 0, f"m={m}: a rank beyond the kept set was drawn"
+    # nucleus p=0.95 over 20 near-equal tokens keeps the smallest set whose mass exceeds p (19 tokens).
     values = torch.full((1, 1, USERS, W), -30.0)
-    values[..., :20] = 0.0
+    values[..., :20] = -0.01 * torch.arange(20, dtype=torch.float32)
     emp = _draw(device, values, k=20, p=0.95, n=N)
-    print(f"m=20 with p=0.95: " + " ".join(f"{h:.3f}" for h in emp[:, :20].mean(0)))
+    hist = emp[:, :19].mean(0)
+    # expected: softmax of the 20 near-equal logits, nucleus keeps 19, renormalised
+    probs = torch.softmax(values[0, 0, 0, :20].to(torch.bfloat16).float(), dim=-1)
+    expected = probs[:19] / probs[:19].sum()
+    sigma = (expected * (1 - expected) / draws).sqrt()
+    print("m=20 with p=0.95: " + " ".join(f"{h:.3f}" for h in emp[:, :20].mean(0)))
+    assert torch.all(
+        (hist - expected).abs() <= 5 * sigma
+    ), f"p=0.95: kept-rank frequencies {hist.tolist()} deviate from {expected.tolist()}"
+    assert emp[:, 19:].sum() == 0, "p=0.95: a token outside the nucleus was drawn"
 
 
 def test_sampling_softmax_gap(device):
     """Two-token rows with logit gap d: P(second) must be 1/(1+e^d). Reads out the kernel's
-    softmax accuracy for small probabilities (the tail of a real distribution)."""
+    softmax accuracy and the threshold resolution for small probabilities (the tail of a real
+    distribution). Asserted as a ratio band where N gives enough expected hits (gap <= 6:
+    >= 7 expected hits per row group at N=3000); larger gaps are printed as diagnostics."""
     gaps = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 10]
     values = torch.full((1, 1, USERS, W), -30.0)
     for u in range(USERS):
@@ -175,10 +190,15 @@ def test_sampling_softmax_gap(device):
         values[0, 0, u, 1] = -gaps[u % len(gaps)]
     emp = _draw(device, values, k=2, p=1.0, n=N)
     print()
+    bad = []
     for i, d in enumerate(gaps):
         rows = [u for u in range(USERS) if u % len(gaps) == i]
         got = emp[rows, 1].mean().item()
         exp = 1 / (1 + torch.exp(torch.tensor(float(d)))).item()
-        print(
-            f"gap {d:>4}: P(second) expected {exp:.4f}  device {got:.4f}  ratio {got/exp if exp else float('nan'):.2f}"
-        )
+        ratio = got / exp if exp else float("nan")
+        print(f"gap {d:>4}: P(second) expected {exp:.4f}  device {got:.4f}  ratio {ratio:.2f}")
+        if d <= 6 and not (0.5 <= ratio <= 1.5):
+            bad.append((d, ratio))
+    assert (
+        not bad
+    ), f"P(second) off by more than 50% at gaps {bad} (before the 16-bit threshold: 0.67x at 4, 0.20x at 5, 0 at 6)"
