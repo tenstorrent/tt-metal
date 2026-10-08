@@ -13,7 +13,7 @@
 
 #include <tt_stl/assert.hpp>
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental {
 
 namespace {
 
@@ -107,9 +107,9 @@ std::ostream& operator<<(std::ostream& os, const PhysicalNodeId& id) {
     return os << "(" << cluster_id_view(id) << ", tray " << *id.tray << ", loc " << *id.loc << ")";
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental
 
-auto fmt::formatter<tt::tt_metal::PhysicalNodeId>::format(
-    const tt::tt_metal::PhysicalNodeId& id, format_context& ctx) const -> format_context::iterator {
-    return fmt::format_to(ctx.out(), "({}, tray {}, loc {})", tt::tt_metal::cluster_id_view(id), *id.tray, *id.loc);
+auto fmt::formatter<tt::tt_metal::experimental::PhysicalNodeId>::format(
+    const tt::tt_metal::experimental::PhysicalNodeId& id, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "({}, tray {}, loc {})", tt::tt_metal::experimental::cluster_id_view(id), *id.tray, *id.loc);
 }

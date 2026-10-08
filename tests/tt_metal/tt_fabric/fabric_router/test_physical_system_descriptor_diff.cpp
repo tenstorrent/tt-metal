@@ -59,7 +59,7 @@ PhysicalSystemDescriptor make_descriptor(
                 id,
                 static_cast<ChipId>(asic.label),
                 asic.host,
-                make_physical_node_id(asic.host, TrayID{asic.tray}, ASICLocation{asic.loc})});
+                experimental::make_physical_node_id(asic.host, TrayID{asic.tray}, ASICLocation{asic.loc})});
         graph[asic.host][id];  // an ASIC with no cables still exists
     }
 
@@ -128,7 +128,7 @@ TEST(PhysicalSystemDescriptorDiff, IdenticalDescriptorsMatch) {
     const auto golden = make_descriptor(three_asics(1), three_asic_cables(1));
     const auto candidate = make_descriptor(three_asics(1), three_asic_cables(1));
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_TRUE(delta.matches());
 }
@@ -145,7 +145,7 @@ TEST(PhysicalSystemDescriptorDiff, DisjointAsicIdSpacesWithTheSameAddressesMatch
         EXPECT_FALSE(candidate.get_asic_descriptors().contains(golden_id));
     }
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_TRUE(delta.matches());
 }
@@ -155,7 +155,7 @@ TEST(PhysicalSystemDescriptorDiff, HostSpellingDoesNotSplitTheJoin) {
     const auto golden = make_descriptor({AsicSpec{"host-a", 1, 0, 1}}, {});
     const auto candidate = make_descriptor({AsicSpec{"HOST-A.local.example.com", 1, 0, 77}}, {});
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_TRUE(delta.matches());
 }
@@ -165,7 +165,7 @@ TEST(PhysicalSystemDescriptorDiff, MissingCableIsReportedFromBothEnds) {
     // Drop the cross-host cable (2 chan 2 <-> 3 chan 3).
     const auto candidate = make_descriptor(three_asics(1), {three_asic_cables(1).front()});
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_TRUE(delta.extra_links.empty());
     EXPECT_TRUE(delta.mismatched_links.empty());
@@ -180,8 +180,8 @@ TEST(PhysicalSystemDescriptorDiff, SwappingTheArgumentsTurnsMissingIntoExtra) {
     const auto full = make_descriptor(three_asics(1), three_asic_cables(1));
     const auto reduced = make_descriptor(three_asics(1), {three_asic_cables(1).front()});
 
-    const auto missing = diff_physical_system_descriptors(full, reduced);
-    const auto extra = diff_physical_system_descriptors(reduced, full);
+    const auto missing = experimental::diff_physical_system_descriptors(full, reduced);
+    const auto extra = experimental::diff_physical_system_descriptors(reduced, full);
 
     EXPECT_EQ(directed_records(missing.missing_links), directed_records(extra.extra_links));
     EXPECT_TRUE(missing.extra_links.empty());
@@ -196,7 +196,7 @@ TEST(PhysicalSystemDescriptorDiff, ExtraCableIsNotMissing) {
     const auto golden = make_descriptor(three_asics(1), three_asic_cables(1));
     const auto candidate = make_descriptor(three_asics(1), cables);
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_TRUE(delta.missing_links.empty());
     EXPECT_EQ(count_directed(delta.extra_links), 2u);
@@ -212,7 +212,7 @@ TEST(PhysicalSystemDescriptorDiff, DroppedAndAddedCableAreBothReported) {
             CableSpec{2, 20, 3, 21, PortType::QSFP_DD, false},  // a different pair of channels
         });
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_EQ(count_directed(delta.missing_links), 2u);
     EXPECT_EQ(count_directed(delta.extra_links), 2u);
@@ -228,7 +228,7 @@ TEST(PhysicalSystemDescriptorDiff, MissingAndExtraAsicsAreReported) {
         },
         {});
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_EQ(delta.missing_asics, std::vector<AsicID>{AsicID{3}});
     EXPECT_EQ(delta.extra_asics, std::vector<AsicID>{AsicID{9}});
@@ -241,7 +241,7 @@ TEST(PhysicalSystemDescriptorDiff, MovedChipReadsAsMissingPlusExtraNotMismatched
     const auto golden = make_descriptor({AsicSpec{"host-a", 1, 0, 1}}, {});
     const auto candidate = make_descriptor({AsicSpec{"host-a", 2, 0, 1}}, {});
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_EQ(delta.missing_asics, std::vector<AsicID>{AsicID{1}});
     EXPECT_EQ(delta.extra_asics, std::vector<AsicID>{AsicID{1}});
@@ -252,7 +252,7 @@ TEST(PhysicalSystemDescriptorDiff, BoardTypeMismatchAtTheSameAddressIsReported) 
     const auto golden = make_descriptor({AsicSpec{"host-a", 1, 0, 1, BoardType::N300}}, {});
     const auto candidate = make_descriptor({AsicSpec{"host-a", 1, 0, 1, BoardType::P150}}, {});
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_EQ(delta.mismatched_asics, std::vector<AsicID>{AsicID{1}});
     EXPECT_TRUE(delta.missing_asics.empty());
@@ -267,7 +267,7 @@ TEST(PhysicalSystemDescriptorDiff, RetypedCableIsMismatchedNotMissingAndExtra) {
     cables.back().port_type = PortType::WARP400;
     const auto candidate = make_descriptor(three_asics(1), cables);
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_TRUE(delta.missing_links.empty());
     EXPECT_TRUE(delta.extra_links.empty());
@@ -281,7 +281,7 @@ TEST(PhysicalSystemDescriptorDiff, CableThatChangedLocalityIsMismatched) {
     cables.front().is_local = false;
     const auto candidate = make_descriptor(three_asics(1), cables);
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_EQ(count_directed(delta.mismatched_links), 2u);
     EXPECT_TRUE(delta.missing_links.empty());
@@ -296,8 +296,8 @@ TEST(PhysicalSystemDescriptorDiff, OneCableIsOneComparisonNotTwo) {
     const auto one_sided = make_descriptor(three_asics(1), three_asic_cables(1), /*mirror_cables=*/false);
 
     // Whether the descriptor happens to store both halves does not change the comparison.
-    EXPECT_TRUE(diff_physical_system_descriptors(mirrored, one_sided).matches());
-    EXPECT_TRUE(diff_physical_system_descriptors(one_sided, mirrored).matches());
+    EXPECT_TRUE(experimental::diff_physical_system_descriptors(mirrored, one_sided).matches());
+    EXPECT_TRUE(experimental::diff_physical_system_descriptors(one_sided, mirrored).matches());
 }
 
 // AsicTopology lets the same destination appear in several entries for one source, which is what
@@ -313,11 +313,11 @@ TEST(PhysicalSystemDescriptorDiff, RepeatedDestinationEntriesAreMerged) {
 
     const auto golden = make_descriptor(asics, cables);
     const auto candidate = make_descriptor(asics, cables);
-    EXPECT_TRUE(diff_physical_system_descriptors(golden, candidate).matches());
+    EXPECT_TRUE(experimental::diff_physical_system_descriptors(golden, candidate).matches());
 
     // Dropping one of the two must report exactly that one.
     const auto reduced = make_descriptor(asics, {cables.front()});
-    const auto delta = diff_physical_system_descriptors(golden, reduced);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, reduced);
     EXPECT_EQ(
         directed_records(delta.missing_links),
         (std::vector<std::tuple<uint64_t, uint64_t, uint8_t>>{{1, 2, 1}, {2, 1, 1}}));
@@ -338,7 +338,7 @@ TEST(PhysicalSystemDescriptorDiff, OutputIsSorted) {
     };
 
     const auto golden = make_descriptor(asics, cables);
-    const auto delta = diff_physical_system_descriptors(golden, make_descriptor(asics, {}));
+    const auto delta = experimental::diff_physical_system_descriptors(golden, make_descriptor(asics, {}));
 
     EXPECT_EQ(delta.missing_asics, std::vector<AsicID>{});
     const auto& edges = delta.missing_links.at(AsicID{30});
@@ -355,7 +355,7 @@ TEST(PhysicalSystemDescriptorDiff, MissingAsicTakesItsCablesWithIt) {
     const auto candidate =
         make_descriptor({AsicSpec{"host-a", 1, 0, 1}, AsicSpec{"host-a", 1, 1, 2}}, {three_asic_cables(1).front()});
 
-    const auto delta = diff_physical_system_descriptors(golden, candidate);
+    const auto delta = experimental::diff_physical_system_descriptors(golden, candidate);
 
     EXPECT_EQ(delta.missing_asics, std::vector<AsicID>{AsicID{3}});
     EXPECT_EQ(count_directed(delta.missing_links), 2u);

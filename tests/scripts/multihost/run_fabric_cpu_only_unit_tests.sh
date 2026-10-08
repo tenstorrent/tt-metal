@@ -211,11 +211,14 @@ run_test() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
-  local out status
+  local out status had_errexit=0
   out=$(mktemp)
   # errexit has to be off across the invocation. `set -e` aborts on a failing command in an
   # if/else body, so without this the status check below is never reached: the first failing
-  # test kills the script, nothing lands in FAILURES, and --keep-going does nothing.
+  # test kills the script, nothing lands in FAILURES, and --keep-going does nothing. Remember the
+  # caller's errexit state and restore exactly that: when sourced into an interactive shell this
+  # must not turn errexit ON, or the nonzero return from a failing ad-hoc test closes the shell.
+  [[ $- == *e* ]] && had_errexit=1
   set +e
   # Optional wall-clock cap. One MPI rank that fatals while another sits in a barrier
   # deadlocks prterun forever; this turns that into a failed command instead of a hang.
@@ -228,7 +231,7 @@ run_test() {
     "$@" 2>&1 | tee "$out"
   fi
   status=${PIPESTATUS[0]}
-  set -e
+  if [[ $had_errexit -eq 1 ]]; then set -e; fi
   # A --gtest_filter that matches nothing exits 0, so a suite that was renamed, dropped from
   # sources.cmake, or compiled into a different build tree reads as a pass. This gtest is too
   # old for --gtest_fail_if_no_test_selected, hence matching on the summary line.

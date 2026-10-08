@@ -55,7 +55,7 @@ std::vector<std::string> fsd_host_filter_from_live(
     // Canonical live host set, and the spellings that produced each name so a collision can name them.
     std::map<std::string, std::vector<std::string>> live_spellings;
     for (const auto& hostname : live.get_all_hostnames()) {
-        live_spellings[::tt::tt_metal::canonical_cluster_id_for_node_id(hostname)].push_back(hostname);
+        live_spellings[::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(hostname)].push_back(hostname);
     }
 
     // Two live hosts under one canonical name make the address join ambiguous: cables from one machine
@@ -83,7 +83,7 @@ std::vector<std::string> fsd_host_filter_from_live(
 
     std::set<std::string> fsd_hosts;
     for (int i = 0; i < fsd.hosts_size(); ++i) {
-        fsd_hosts.insert(::tt::tt_metal::canonical_cluster_id_for_node_id(fsd.hosts(i).hostname()));
+        fsd_hosts.insert(::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(fsd.hosts(i).hostname()));
     }
 
     // Zero overlap gets its own message. It is a different operator problem from a partial mismatch --
@@ -174,13 +174,13 @@ void align_factory_descriptor_with_live(
     ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live) {
     std::map<std::string, std::string> live_by_canonical;
     for (const auto& hostname : live.get_all_hostnames()) {
-        live_by_canonical.emplace(::tt::tt_metal::canonical_cluster_id_for_node_id(hostname), hostname);
+        live_by_canonical.emplace(::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(hostname), hostname);
     }
 
     auto& fsd_ranks = fsd.get_host_to_rank_map();
     for (auto& [fsd_hostname, rank] : fsd_ranks) {
         const auto live_hostname =
-            live_by_canonical.find(::tt::tt_metal::canonical_cluster_id_for_node_id(fsd_hostname));
+            live_by_canonical.find(::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(fsd_hostname));
         TT_FATAL(
             live_hostname != live_by_canonical.end(),
             "Factory descriptor host '{}' has no live counterpart. The descriptor should already have been "
@@ -190,10 +190,10 @@ void align_factory_descriptor_with_live(
     }
 
     // This process's own host, under the descriptor's spelling of it.
-    const auto my_canonical = ::tt::tt_metal::canonical_cluster_id_for_node_id(live.my_host_name());
+    const auto my_canonical = ::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(live.my_host_name());
     std::string my_fsd_hostname;
     for (const auto& [fsd_hostname, rank] : fsd_ranks) {
-        if (::tt::tt_metal::canonical_cluster_id_for_node_id(fsd_hostname) == my_canonical) {
+        if (::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(fsd_hostname) == my_canonical) {
             my_fsd_hostname = fsd_hostname;
             break;
         }
@@ -216,13 +216,13 @@ void throw_on_fsd_chips_absent_from_live(
     const ::tt::tt_metal::PhysicalSystemDescriptor& fsd, const ::tt::tt_metal::PhysicalSystemDescriptor& live) {
     std::set<std::string> live_hosts;
     for (const auto& hostname : live.get_all_hostnames()) {
-        live_hosts.insert(::tt::tt_metal::canonical_cluster_id_for_node_id(hostname));
+        live_hosts.insert(::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(hostname));
     }
 
     std::vector<std::string> absent;
     for (const auto& [node_id, unused_asic_id] : fsd.physical_node_to_asic_id()) {
         (void)unused_asic_id;
-        if (!live_hosts.contains(std::string(::tt::tt_metal::cluster_id_view(node_id)))) {
+        if (!live_hosts.contains(std::string(::tt::tt_metal::experimental::cluster_id_view(node_id)))) {
             continue;  // discovery never looked at this host -- see the header
         }
         if (!live.physical_node_to_asic_id().contains(node_id)) {

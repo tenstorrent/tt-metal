@@ -22,8 +22,12 @@ class PhysicalSystemDescriptor;
 }
 
 namespace tt::tt_fabric {
-
 class TopologyMapper;
+}
+
+// Experimental: everything in this header is subject to change without notice; it graduates to
+// the stable tt::tt_fabric namespace only when the downed-links / factory-descriptor work settles.
+namespace tt::tt_fabric::experimental {
 
 enum class LinkScope {
     IntraMesh,
@@ -189,14 +193,14 @@ private:
     // order versus UMD chip ids -- nothing would ever match, and every expected link would read as
     // down.
     struct EndpointKey {
-        tt::tt_metal::PhysicalNodeId node{};
+        tt::tt_metal::experimental::PhysicalNodeId node{};
         chan_id_t chan = 0;
 
         friend bool operator==(const EndpointKey&, const EndpointKey&) = default;
 
         struct Hash {
             std::size_t operator()(const EndpointKey& key) const noexcept {
-                const std::size_t seed = std::hash<tt::tt_metal::PhysicalNodeId>{}(key.node);
+                const std::size_t seed = std::hash<tt::tt_metal::experimental::PhysicalNodeId>{}(key.node);
                 return seed ^ (std::hash<chan_id_t>{}(key.chan) + 0x9e3779b9 + (seed << 6) + (seed >> 2));
             }
         };
@@ -252,7 +256,7 @@ private:
     // The address an ASIC label refers to, whichever descriptor's label space it came from. Callers
     // in the datacenter hold live UMD ids; callers holding a factory descriptor hold file-order
     // labels. Neither is asked to know which.
-    std::optional<tt::tt_metal::PhysicalNodeId> address_of(tt::tt_metal::AsicID asic) const;
+    std::optional<tt::tt_metal::experimental::PhysicalNodeId> address_of(tt::tt_metal::AsicID asic) const;
     bool healthy(const EndpointKey& endpoint) const;
     static std::vector<LinkInfo> copy_records(const std::vector<const LinkInfo*>& records);
 
@@ -262,8 +266,11 @@ private:
     std::vector<LinkInfo> downed_;
     std::vector<LinkInfo> unused_downed_;
 
-    std::unordered_set<EndpointKey, EndpointKey::Hash> fsd_expected_;
-    std::unordered_set<EndpointKey, EndpointKey::Hash> live_present_;
+    // Keyed by the local endpoint, valued with the peer endpoint the cable reaches. Health has to
+    // compare the whole cable, not endpoint presence alone: a miswired cable (expected A:1 <-> B:2,
+    // live A:1 <-> C:3) keeps endpoint A:1 live-present, but it is not the expected link.
+    std::unordered_map<EndpointKey, EndpointKey, EndpointKey::Hash> fsd_expected_;
+    std::unordered_map<EndpointKey, EndpointKey, EndpointKey::Hash> live_present_;
 
     // All of these point into downed_, so every one is rebuilt whenever that vector changes. The
     // unused set is deliberately not indexed: it is reachable only as a whole, through
@@ -275,8 +282,8 @@ private:
     std::unordered_map<MeshPairKey, std::vector<const LinkInfo*>, MeshPairKey::Hash> by_mesh_pair_;
     // Keyed on the source address rather than an ASIC label, so it does not matter which
     // descriptor's labels a caller has.
-    std::unordered_map<tt::tt_metal::PhysicalNodeId, std::vector<const LinkInfo*>> by_src_address_;
+    std::unordered_map<tt::tt_metal::experimental::PhysicalNodeId, std::vector<const LinkInfo*>> by_src_address_;
     std::unordered_map<std::string, std::vector<const LinkInfo*>> by_host_;
 };
 
-}  // namespace tt::tt_fabric
+}  // namespace tt::tt_fabric::experimental

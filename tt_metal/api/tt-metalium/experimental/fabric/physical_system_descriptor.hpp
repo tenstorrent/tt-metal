@@ -58,7 +58,7 @@ struct ASICDescriptor {
     AsicID unique_id;
     ChipId umd_unique_id;
     std::string host_name;
-    PhysicalNodeId physical_node_id;
+    experimental::PhysicalNodeId physical_node_id;
 };
 
 // Specify an ethernet connection between two ASICs
@@ -202,10 +202,10 @@ public:
     AsicID get_asic_id(const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const;
     // The descriptor's own label for an address, and the reverse. find_* is empty when this
     // descriptor does not have that chip; get_* is fatal in that case.
-    std::optional<AsicID> find_asic_id(const PhysicalNodeId& node_id) const;
-    AsicID get_asic_id(const PhysicalNodeId& node_id) const;
-    std::optional<PhysicalNodeId> find_physical_node_id(AsicID asic_id) const;
-    const std::unordered_map<PhysicalNodeId, AsicID>& physical_node_to_asic_id() const { return node_id_to_asic_id_; }
+    std::optional<AsicID> find_asic_id(const experimental::PhysicalNodeId& node_id) const;
+    AsicID get_asic_id(const experimental::PhysicalNodeId& node_id) const;
+    std::optional<experimental::PhysicalNodeId> find_physical_node_id(AsicID asic_id) const;
+    const std::unordered_map<experimental::PhysicalNodeId, AsicID>& physical_node_to_asic_id() const { return node_id_to_asic_id_; }
 
     // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
@@ -213,7 +213,7 @@ public:
         const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
     std::string get_host_name_for_asic(AsicID asic_id) const;
-    PhysicalNodeId get_physical_node_id(AsicID asic_id) const;
+    experimental::PhysicalNodeId get_physical_node_id(AsicID asic_id) const;
     UID get_u_id(const std::string& hostname);
     RackID get_rack_id(const std::string& hostname);
     AisleID get_aisle_id(const std::string& hostname);
@@ -273,7 +273,7 @@ private:
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<AsicID, ASICDescriptor> asic_descriptors_;
     // Address -> this descriptor's ASIC label. Filled by add_asic_descriptor.
-    std::unordered_map<PhysicalNodeId, AsicID> node_id_to_asic_id_;
+    std::unordered_map<experimental::PhysicalNodeId, AsicID> node_id_to_asic_id_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
@@ -289,6 +289,12 @@ private:
     std::string local_hostname_;
     uint32_t local_rank_ = 0;
 };
+
+}  // namespace tt::tt_metal
+
+// Experimental: the delta API below is subject to change without notice; it graduates to the stable
+// tt::tt_metal namespace only when the downed-links / factory-descriptor work settles.
+namespace tt::tt_metal::experimental {
 
 // How a candidate descriptor departs from a golden one.
 //
@@ -335,4 +341,4 @@ struct PhysicalSystemDelta {
 PhysicalSystemDelta diff_physical_system_descriptors(
     const PhysicalSystemDescriptor& golden, const PhysicalSystemDescriptor& candidate);
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental

@@ -136,7 +136,7 @@ protected:
 };
 
 TEST_F(LinkHealthTest, MatchingDescriptorsHaveNoDownedLinks) {
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
 
     EXPECT_TRUE(health.get_downed_links().empty());
     EXPECT_FALSE(health.has_downed_links());
@@ -150,7 +150,7 @@ TEST_F(LinkHealthTest, UnpluggingACableReportsBothDirections) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
 
     ASSERT_EQ(health.get_downed_links().size(), 2u);
     EXPECT_TRUE(health.has_downed_links());
@@ -170,14 +170,14 @@ TEST_F(LinkHealthTest, PhysicalFieldsComeFromTheExpectedDescriptor) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     ASSERT_FALSE(health.get_downed_links().empty());
 
     const auto& record = health.get_downed_links().front();
     const auto& expected_descriptors = expected_->get_asic_descriptors();
     const auto expected_src = expected_descriptors.at(record.src_asic);
 
-    EXPECT_EQ(record.src_cluster_id, tt::tt_metal::canonical_cluster_id_for_node_id(expected_src.host_name));
+    EXPECT_EQ(record.src_cluster_id, tt::tt_metal::experimental::canonical_cluster_id_for_node_id(expected_src.host_name));
     EXPECT_EQ(record.src_tray, expected_src.tray_id);
     EXPECT_EQ(record.src_loc, expected_src.asic_location);
     // The medium is the expected edge's port type.
@@ -189,7 +189,7 @@ TEST_F(LinkHealthTest, IntraMeshRecordsCarryBothDirectionsFromTheMeshGraph) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     ASSERT_FALSE(health.get_downed_links().empty());
 
     for (const auto& record : health.get_downed_links()) {
@@ -210,7 +210,7 @@ TEST_F(LinkHealthTest, HealthIsPresenceInTheLiveDescriptor) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     ASSERT_FALSE(health.get_downed_links().empty());
     const auto& record = health.get_downed_links().front();
 
@@ -228,7 +228,7 @@ TEST_F(LinkHealthTest, SurvivingCablesStayHealthy) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     const auto& downed = health.get_downed_links();
 
     // Every other expected endpoint on the same chip is still present.
@@ -256,7 +256,7 @@ TEST_F(LinkHealthTest, ExtraLiveCablesAreNotDowned) {
         break;
     }
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
 
     EXPECT_TRUE(health.get_downed_links().empty());
     EXPECT_FALSE(health.fsd_rerouting_active());
@@ -267,7 +267,7 @@ TEST_F(LinkHealthTest, PerNodeAndPerDirectionQueriesAgree) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     ASSERT_FALSE(health.get_downed_links().empty());
     const auto record = health.get_downed_links().front();
 
@@ -291,15 +291,15 @@ TEST_F(LinkHealthTest, ScopeQueriesPartitionTheResolvedRecords) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
 
     const auto intra = health.get_downed_intramesh_links();
     const auto inter = health.get_downed_intermesh_links();
     EXPECT_EQ(intra.size() + inter.size(), health.get_downed_links().size());
-    EXPECT_EQ(intra.size(), health.get_downed_links(LinkScope::IntraMesh).size());
-    EXPECT_EQ(inter.size(), health.get_downed_links(LinkScope::InterMesh).size());
+    EXPECT_EQ(intra.size(), health.get_downed_links(experimental::LinkScope::IntraMesh).size());
+    EXPECT_EQ(inter.size(), health.get_downed_links(experimental::LinkScope::InterMesh).size());
     // Unknown is not a bucket -- an unresolved record has no logical view to classify.
-    EXPECT_TRUE(health.get_downed_links(LinkScope::Unknown).empty());
+    EXPECT_TRUE(health.get_downed_links(experimental::LinkScope::Unknown).empty());
 }
 
 TEST_F(LinkHealthTest, PhysicalQueriesFindTheCable) {
@@ -307,7 +307,7 @@ TEST_F(LinkHealthTest, PhysicalQueriesFindTheCable) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     ASSERT_FALSE(health.get_downed_links().empty());
     const auto record = health.get_downed_links().front();
 
@@ -331,7 +331,7 @@ TEST_F(LinkHealthTest, RouteQueriesFindTheCable) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     ASSERT_FALSE(health.get_downed_links().empty());
     const auto record = health.get_downed_links().front();
 
@@ -341,7 +341,7 @@ TEST_F(LinkHealthTest, RouteQueriesFindTheCable) {
         std::vector<chan_id_t>{record.src_chan});
 }
 
-std::size_t count_direction(const std::vector<LinkInfo>& links, const LinkInfo& sample) {
+std::size_t count_direction(const std::vector<experimental::LinkInfo>& links, const experimental::LinkInfo& sample) {
     std::size_t count = 0;
     for (const auto& link : links) {
         if (link.src_node == sample.src_node && link.src_direction == sample.src_direction) {
@@ -358,11 +358,11 @@ TEST_F(LinkHealthTest, MeshGraphCoveredByTheFactoryKeepsTheHoleDowned) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     const auto records = health.get_downed_links();
     ASSERT_EQ(records.size(), 2u);
 
-    RoutingPlaneSnapshot snapshot;
+    experimental::RoutingPlaneSnapshot snapshot;
     for (const auto& record : records) {
         snapshot.expected_planes[record.src_node][record.src_direction] = 2;
         snapshot.psd_cables[record.src_node][record.src_direction] = 1;
@@ -384,11 +384,11 @@ TEST_F(LinkHealthTest, FactoryCablesBeyondTheMeshGraphAreUnused) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     const auto records = health.get_downed_links();
     ASSERT_EQ(records.size(), 2u);
 
-    RoutingPlaneSnapshot snapshot;
+    experimental::RoutingPlaneSnapshot snapshot;
     for (const auto& record : records) {
         snapshot.expected_planes[record.src_node][record.src_direction] = 2;
         snapshot.psd_cables[record.src_node][record.src_direction] = 3;
@@ -413,11 +413,11 @@ TEST_F(LinkHealthTest, MeshGraphCountAboveTheFactoryStaysDowned) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     const auto records = health.get_downed_links();
     ASSERT_EQ(records.size(), 2u);
 
-    RoutingPlaneSnapshot snapshot;
+    experimental::RoutingPlaneSnapshot snapshot;
     for (const auto& record : records) {
         snapshot.expected_planes[record.src_node][record.src_direction] = 4;
         snapshot.psd_cables[record.src_node][record.src_direction] = 1;
@@ -438,7 +438,7 @@ TEST_F(LinkHealthTest, RefreshIsIdempotentAndCanRebind) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     const auto first = health.get_downed_links().size();
     ASSERT_EQ(first, 2u);
 
@@ -459,7 +459,7 @@ TEST_F(LinkHealthTest, IndexesPointIntoTheStoredSet) {
     ASSERT_TRUE(cable.has_value());
     unplug(*live_, *cable);
 
-    LinkHealth health(*mapper_, *live_);
+    experimental::LinkHealth health(*mapper_, *live_);
     const auto& records = health.get_downed_links();
     ASSERT_FALSE(records.empty());
 
@@ -472,11 +472,11 @@ TEST_F(LinkHealthTest, IndexesPointIntoTheStoredSet) {
 }
 
 TEST_F(LinkHealthTest, TheComparisonHasNoMeaningWithoutBothSides) {
-    static_assert(!std::is_default_constructible_v<LinkHealth>);
-    static_assert(!std::is_copy_constructible_v<LinkHealth>);
-    static_assert(!std::is_move_constructible_v<LinkHealth>);
-    static_assert(!std::is_copy_assignable_v<LinkHealth>);
-    static_assert(!std::is_move_assignable_v<LinkHealth>);
+    static_assert(!std::is_default_constructible_v<experimental::LinkHealth>);
+    static_assert(!std::is_copy_constructible_v<experimental::LinkHealth>);
+    static_assert(!std::is_move_constructible_v<experimental::LinkHealth>);
+    static_assert(!std::is_copy_assignable_v<experimental::LinkHealth>);
+    static_assert(!std::is_move_assignable_v<experimental::LinkHealth>);
 }
 
 }  // namespace

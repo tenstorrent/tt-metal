@@ -25,8 +25,8 @@ namespace {
 
 constexpr std::string_view kHost = "bh-glx-110-c01u02";
 
-PhysicalNodeId node(std::string_view cluster_id, uint32_t tray, uint32_t loc) {
-    return make_physical_node_id(cluster_id, TrayID{tray}, ASICLocation{loc});
+experimental::PhysicalNodeId node(std::string_view cluster_id, uint32_t tray, uint32_t loc) {
+    return experimental::make_physical_node_id(cluster_id, TrayID{tray}, ASICLocation{loc});
 }
 
 TEST(PhysicalNodeIdTest, SameAddressGivesSameId) { EXPECT_EQ(node(kHost, 1, 2), node(kHost, 1, 2)); }
@@ -34,7 +34,7 @@ TEST(PhysicalNodeIdTest, SameAddressGivesSameId) { EXPECT_EQ(node(kHost, 1, 2), 
 // An FQDN, a short name and a differently-cased name are the same machine, and different sides of a
 // join report different ones.
 TEST(PhysicalNodeIdTest, CanonicalizationCollapsesFqdnAndCase) {
-    const PhysicalNodeId expected = node(kHost, 1, 2);
+    const experimental::PhysicalNodeId expected = node(kHost, 1, 2);
 
     EXPECT_EQ(node("bh-glx-110-c01u02.tenstorrent.com", 1, 2), expected);
     EXPECT_EQ(node("BH-GLX-110-C01U02", 1, 2), expected);
@@ -45,17 +45,18 @@ TEST(PhysicalNodeIdTest, CanonicalizationCollapsesFqdnAndCase) {
 // telling those hosts apart, so it is part of the address -- stripping it would merge their chips.
 TEST(PhysicalNodeIdTest, RankSuffixIsKept) {
     EXPECT_NE(node("bh-glx-110-c01u02_3", 1, 2), node(kHost, 1, 2));
-    EXPECT_EQ(decode_physical_node_id(node("bh-glx-110-c01u02_3", 1, 2)).cluster_id, "bh-glx-110-c01u02_3");
+    EXPECT_EQ(
+        experimental::decode_physical_node_id(node("bh-glx-110-c01u02_3", 1, 2)).cluster_id, "bh-glx-110-c01u02_3");
     EXPECT_NE(node("t3k_cluster_desc_0", 1, 0), node("t3k_cluster_desc_1", 1, 0));
 }
 
 TEST(PhysicalNodeIdTest, UnderscoreInHostNameIsKept) {
-    EXPECT_EQ(decode_physical_node_id(node("metal-wh-09_spare", 1, 2)).cluster_id, "metal-wh-09_spare");
-    EXPECT_EQ(decode_physical_node_id(node("host_", 1, 2)).cluster_id, "host_");
+    EXPECT_EQ(experimental::decode_physical_node_id(node("metal-wh-09_spare", 1, 2)).cluster_id, "metal-wh-09_spare");
+    EXPECT_EQ(experimental::decode_physical_node_id(node("host_", 1, 2)).cluster_id, "host_");
 }
 
 TEST(PhysicalNodeIdTest, DifferentComponentGivesDifferentId) {
-    const PhysicalNodeId base = node(kHost, 1, 2);
+    const experimental::PhysicalNodeId base = node(kHost, 1, 2);
 
     EXPECT_NE(base, node(kHost, 1, 3));                // loc
     EXPECT_NE(base, node(kHost, 2, 2));                // tray
@@ -64,7 +65,8 @@ TEST(PhysicalNodeIdTest, DifferentComponentGivesDifferentId) {
 }
 
 TEST(PhysicalNodeIdTest, DecodeRestoresTheAddress) {
-    const PhysicalNodeFields fields = decode_physical_node_id(node("BH-GLX-110-C01U02.local", 3, 7));
+    const experimental::PhysicalNodeFields fields =
+        experimental::decode_physical_node_id(node("BH-GLX-110-C01U02.local", 3, 7));
 
     EXPECT_EQ(fields.cluster_id, kHost);  // canonical, not what was passed in
     EXPECT_EQ(fields.tray, TrayID{3});
@@ -72,10 +74,10 @@ TEST(PhysicalNodeIdTest, DecodeRestoresTheAddress) {
 }
 
 TEST(PhysicalNodeIdTest, UnsetIdIsAllZeroesAndMakeNeverReturnsIt) {
-    const PhysicalNodeId unset{};
+    const experimental::PhysicalNodeId unset{};
 
     EXPECT_TRUE(is_unset(unset));
-    EXPECT_TRUE(cluster_id_view(unset).empty());
+    EXPECT_TRUE(experimental::cluster_id_view(unset).empty());
     EXPECT_EQ(unset.tray, TrayID{0});
     EXPECT_EQ(unset.loc, ASICLocation{0});
 
@@ -98,11 +100,11 @@ TEST(PhysicalNodeIdTest, IllegalAddressIsFatal) {
 
     // The limit is UMD's and it is inclusive: an id that exactly fills the buffer is legal, and
     // simply has no NUL terminator.
-    EXPECT_NO_THROW(node(std::string(kPhysicalClusterIdLen - 1, 'a'), 1, 2));
-    EXPECT_NO_THROW(node(std::string(kPhysicalClusterIdLen, 'a'), 1, 2));
+    EXPECT_NO_THROW(node(std::string(experimental::kPhysicalClusterIdLen - 1, 'a'), 1, 2));
+    EXPECT_NO_THROW(node(std::string(experimental::kPhysicalClusterIdLen, 'a'), 1, 2));
 
     // Not truncated: a truncated cluster id would silently collide with its neighbours.
-    EXPECT_THROW(node(std::string(kPhysicalClusterIdLen + 1, 'a'), 1, 2), std::runtime_error);
+    EXPECT_THROW(node(std::string(experimental::kPhysicalClusterIdLen + 1, 'a'), 1, 2), std::runtime_error);
 
     EXPECT_THROW(node(kHost, 0x10000, 2), std::runtime_error);
     EXPECT_THROW(node(kHost, 1, 0x10000), std::runtime_error);
@@ -112,11 +114,11 @@ TEST(PhysicalNodeIdTest, IllegalAddressIsFatal) {
 // Pins the exact bytes, so a change to the packing shows up here rather than as a topology that
 // silently stops matching the FSD.
 TEST(PhysicalNodeIdTest, GoldenVector) {
-    const PhysicalNodeId id = node(kHost, 4, 6);
+    const experimental::PhysicalNodeId id = node(kHost, 4, 6);
 
-    ASSERT_EQ(sizeof(id.cluster_id), kPhysicalClusterIdLen);
+    ASSERT_EQ(sizeof(id.cluster_id), experimental::kPhysicalClusterIdLen);
     EXPECT_EQ(std::string(id.cluster_id, kHost.size()), kHost);
-    for (std::size_t i = kHost.size(); i < kPhysicalClusterIdLen; ++i) {
+    for (std::size_t i = kHost.size(); i < experimental::kPhysicalClusterIdLen; ++i) {
         EXPECT_EQ(id.cluster_id[i], '\0') << "byte " << i << " is not NUL padding";
     }
     EXPECT_EQ(id.tray, TrayID{4});
@@ -127,12 +129,12 @@ TEST(PhysicalNodeIdTest, GoldenVector) {
 // cluster_id_view has to bound itself by the buffer rather than scan for a terminator, or it reads
 // past the id into tray and loc.
 TEST(PhysicalNodeIdTest, FullLengthClusterIdHasNoTerminator) {
-    const std::string full(kPhysicalClusterIdLen, 'a');
-    const PhysicalNodeId id = node(full, 4, 6);
+    const std::string full(experimental::kPhysicalClusterIdLen, 'a');
+    const experimental::PhysicalNodeId id = node(full, 4, 6);
 
-    EXPECT_EQ(id.cluster_id[kPhysicalClusterIdLen - 1], 'a') << "the last byte is id, not padding";
-    EXPECT_EQ(cluster_id_view(id), full);
-    EXPECT_EQ(decode_physical_node_id(id).cluster_id, full);
+    EXPECT_EQ(id.cluster_id[experimental::kPhysicalClusterIdLen - 1], 'a') << "the last byte is id, not padding";
+    EXPECT_EQ(experimental::cluster_id_view(id), full);
+    EXPECT_EQ(experimental::decode_physical_node_id(id).cluster_id, full);
     EXPECT_EQ(id.tray, TrayID{4});
     EXPECT_EQ(id.loc, ASICLocation{6});
 }
@@ -140,10 +142,10 @@ TEST(PhysicalNodeIdTest, FullLengthClusterIdHasNoTerminator) {
 // std::map iteration order is what the solver erases to dense indices, so the order has to be
 // cluster_id bytes, then tray, then loc.
 TEST(PhysicalNodeIdTest, SortOrderIsHostThenTrayThenLoc) {
-    const PhysicalNodeId a = node("host-a", 1, 1);
-    const PhysicalNodeId b = node("host-b", 1, 1);
-    const PhysicalNodeId a_tray2 = node("host-a", 2, 1);
-    const PhysicalNodeId a_loc2 = node("host-a", 1, 2);
+    const experimental::PhysicalNodeId a = node("host-a", 1, 1);
+    const experimental::PhysicalNodeId b = node("host-b", 1, 1);
+    const experimental::PhysicalNodeId a_tray2 = node("host-a", 2, 1);
+    const experimental::PhysicalNodeId a_loc2 = node("host-a", 1, 2);
 
     EXPECT_LT(a, b);
     EXPECT_LT(a, a_tray2);
@@ -155,15 +157,15 @@ TEST(PhysicalNodeIdTest, SortOrderIsHostThenTrayThenLoc) {
 // Two maps built from the same addresses in different insertion orders have to compare equal --
 // that is what makes an FSD-built graph and a live-discovered graph the same graph.
 TEST(PhysicalNodeIdTest, MapOrderIsIndependentOfInsertionOrder) {
-    const std::vector<PhysicalNodeId> ids = {
+    const std::vector<experimental::PhysicalNodeId> ids = {
         node("bh-glx-110-c01u02", 1, 0),
         node("bh-glx-110-c01u02", 2, 0),
         node("bh-glx-110-c01u08", 1, 0),
         node("bh-glx-110-c01u08.tenstorrent.com", 1, 1),
     };
 
-    std::map<PhysicalNodeId, int> forward;
-    std::map<PhysicalNodeId, int> reverse;
+    std::map<experimental::PhysicalNodeId, int> forward;
+    std::map<experimental::PhysicalNodeId, int> reverse;
     for (std::size_t i = 0; i < ids.size(); ++i) {
         forward[ids[i]] = static_cast<int>(i);
         reverse[ids[ids.size() - 1 - i]] = static_cast<int>(ids.size() - 1 - i);
@@ -177,34 +179,34 @@ TEST(PhysicalNodeIdTest, MapOrderIsIndependentOfInsertionOrder) {
 }
 
 TEST(PhysicalNodeIdTest, UsableAsUnorderedContainerKey) {
-    std::unordered_map<PhysicalNodeId, int> by_id;
+    std::unordered_map<experimental::PhysicalNodeId, int> by_id;
     by_id[node(kHost, 1, 2)] = 7;
 
     // A differently-spelled but equal address has to hit the same bucket.
     EXPECT_EQ(by_id.at(node("BH-GLX-110-C01U02.tenstorrent.com", 1, 2)), 7);
     EXPECT_EQ(by_id.count(node(kHost, 1, 3)), 0u);
 
-    std::unordered_set<PhysicalNodeId> ids;
+    std::unordered_set<experimental::PhysicalNodeId> ids;
     ids.insert(node(kHost, 1, 2));
     ids.insert(node(kHost, 1, 2));
     EXPECT_EQ(ids.size(), 1u);
 
     // Equal ids must hash equally (the padding-is-zero property the static_asserts protect).
     EXPECT_EQ(
-        std::hash<PhysicalNodeId>{}(node(kHost, 1, 2)),
-        std::hash<PhysicalNodeId>{}(node("bh-glx-110-c01u02.tenstorrent.com", 1, 2)));
+        std::hash<experimental::PhysicalNodeId>{}(node(kHost, 1, 2)),
+        std::hash<experimental::PhysicalNodeId>{}(node("bh-glx-110-c01u02.tenstorrent.com", 1, 2)));
 }
 
 TEST(PhysicalNodeIdTest, CanonicalHostIsExposedForTheFsdHostFilter) {
     // The FSD host filter joins on the same canonical string, so it is public and has to agree with
     // what make_physical_node_id packs.
-    EXPECT_EQ(canonical_cluster_id_for_node_id("BH-GLX-110-C01U02.tenstorrent.com"), kHost);
-    EXPECT_EQ(canonical_cluster_id_for_node_id("bh-glx-110-c01u02_3"), "bh-glx-110-c01u02_3");
-    EXPECT_EQ(canonical_cluster_id_for_node_id(""), "");
+    EXPECT_EQ(experimental::canonical_cluster_id_for_node_id("BH-GLX-110-C01U02.tenstorrent.com"), kHost);
+    EXPECT_EQ(experimental::canonical_cluster_id_for_node_id("bh-glx-110-c01u02_3"), "bh-glx-110-c01u02_3");
+    EXPECT_EQ(experimental::canonical_cluster_id_for_node_id(""), "");
 
     EXPECT_EQ(
-        decode_physical_node_id(node("BH-GLX-110-C01U02.tenstorrent.com", 1, 2)).cluster_id,
-        canonical_cluster_id_for_node_id("BH-GLX-110-C01U02.tenstorrent.com"));
+        experimental::decode_physical_node_id(node("BH-GLX-110-C01U02.tenstorrent.com", 1, 2)).cluster_id,
+        experimental::canonical_cluster_id_for_node_id("BH-GLX-110-C01U02.tenstorrent.com"));
 }
 
 // A dot is only a domain separator in a real FQDN. Mock descriptors that leave cluster_id empty get a
@@ -213,23 +215,24 @@ TEST(PhysicalNodeIdTest, CanonicalHostIsExposedForTheFsdHostFilter) {
 // the two hosts' chips onto one address.
 TEST(PhysicalNodeIdTest, DotsThatAreNotDomainSeparatorsAreKept) {
     EXPECT_EQ(
-        canonical_cluster_id_for_node_id("dual_glx_2.5d_torus_cluster_desc_rank_0"),
+        experimental::canonical_cluster_id_for_node_id("dual_glx_2.5d_torus_cluster_desc_rank_0"),
         "dual_glx_2.5d_torus_cluster_desc_rank_0");
 
     EXPECT_NE(
         node("dual_glx_2.5d_torus_cluster_desc_rank_0", 3, 1), node("dual_glx_2.5d_torus_cluster_desc_rank_1", 3, 1));
 
     // Still a plain FQDN, so the domain is still dropped.
-    EXPECT_EQ(canonical_cluster_id_for_node_id("host1.example.com"), "host1");
-    EXPECT_EQ(canonical_cluster_id_for_node_id("f10cs04"), "f10cs04");
+    EXPECT_EQ(experimental::canonical_cluster_id_for_node_id("host1.example.com"), "host1");
+    EXPECT_EQ(experimental::canonical_cluster_id_for_node_id("f10cs04"), "f10cs04");
 }
 
 // Mock + FSD is the case the whole encoding exists for: a mock descriptor carrying the UMD cluster_id
 // has to pack the same id as the FSD builder, and the YAML basename must not.
 TEST(PhysicalNodeIdTest, MockWithHostIdMatchesFsdButBasenameDoesNot) {
-    const PhysicalNodeId from_fsd = node(kHost, 1, 2);
-    const PhysicalNodeId from_umd_cluster_id = node(kHost, 1, 2);
-    const PhysicalNodeId from_basename = node("SC20_32x4_revAB_aisleC_cluster_desc_bh-glx-c01u02_rank_0.yaml", 1, 2);
+    const experimental::PhysicalNodeId from_fsd = node(kHost, 1, 2);
+    const experimental::PhysicalNodeId from_umd_cluster_id = node(kHost, 1, 2);
+    const experimental::PhysicalNodeId from_basename =
+        node("SC20_32x4_revAB_aisleC_cluster_desc_bh-glx-c01u02_rank_0.yaml", 1, 2);
 
     EXPECT_EQ(from_umd_cluster_id, from_fsd);
     EXPECT_NE(from_basename, from_fsd);

@@ -335,7 +335,7 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
     // Hand-craft the physical_node_id_to_mesh_rank mapping
     // Mesh 0: ASICs 100, 101 (connected)
     // Mesh 1: ASICs 102, 103 (connected)
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
     physical_node_id_to_mesh_rank[MeshId{0}][node(100)] = MeshHostRankId{0};
     physical_node_id_to_mesh_rank[MeshId{0}][node(101)] = MeshHostRankId{0};
     physical_node_id_to_mesh_rank[MeshId{1}][node(102)] = MeshHostRankId{0};

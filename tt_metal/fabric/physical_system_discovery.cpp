@@ -675,10 +675,12 @@ PhysicalSystemDescriptor run_local_discovery(
     auto hostname = get_local_discovery_hostname(cluster_desc);
 
     // Cluster descriptor basename (mock) or OS hostname (live). When multiple MPI ranks share the same
-    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with MPI rank so
-    // PSD merge keys stay unique and global eth links validate correctly.
+    // discovery hostname (e.g. 64-rank superpod reusing 16 mock descriptors), suffix with the MPI rank so
+    // PSD merge keys stay unique and global eth links validate correctly. The "__rank" marker is
+    // deliberately distinctive: the mapping export strips exactly this suffix, and a plain "_<digits>"
+    // could also be the tail of a genuine cluster id (e.g. "rack_1"), which must never be truncated.
     auto hostname_key = (*(distributed_context->size()) > 1 && !all_hostnames_unique)
-                            ? (hostname + "_" + std::to_string(my_rank))
+                            ? (hostname + "__rank" + std::to_string(my_rank))
                             : hostname;
 
     // Set local hostname and rank (friend access allows direct access to private members)
@@ -716,7 +718,7 @@ PhysicalSystemDescriptor run_local_discovery(
                 src_unique_id,
                 src_chip_id,
                 hostname_key,
-                make_physical_node_id(hostname_key, tray_id, asic_location)});
+                experimental::make_physical_node_id(hostname_key, tray_id, asic_location)});
     };
 
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {

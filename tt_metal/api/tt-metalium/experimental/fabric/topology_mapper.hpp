@@ -66,7 +66,7 @@ struct MappedChipInfo {
     FabricNodeId fabric_node_id{MeshId{0}, 0};
     // The physical key: the address (cluster_id, tray, loc). Every mapper table whose key is a physical
     // chip is keyed on this, so a factory-built descriptor and a live-discovered one name the same chip.
-    tt::tt_metal::PhysicalNodeId physical_node_id{};
+    tt::tt_metal::experimental::PhysicalNodeId physical_node_id{};
     // UMD chip unique id when known. A payload, not an index: it is unset on the factory-only path
     // (generate_rank_bindings), and it is what verify_topology_mapping checks against the Cluster.
     tt::tt_metal::AsicID asic_id{0};
@@ -163,7 +163,7 @@ public:
      * @param physical_node_id
      * @return FabricNodeId
      */
-    FabricNodeId get_fabric_node_id_from_physical_node_id(const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
+    FabricNodeId get_fabric_node_id_from_physical_node_id(const tt::tt_metal::experimental::PhysicalNodeId& physical_node_id) const;
 
     /**
      * @brief Look up a fabric node ID without failing when there is not one
@@ -177,15 +177,15 @@ public:
      * @return std::optional<FabricNodeId>
      */
     std::optional<FabricNodeId> find_fabric_node_id_from_physical_node_id(
-        const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
+        const tt::tt_metal::experimental::PhysicalNodeId& physical_node_id) const;
 
     /**
      * @brief Get the physical node ID (cluster_id, tray, loc) mapped to a fabric node ID
      *
      * @param fabric_node_id
-     * @return tt::tt_metal::PhysicalNodeId
+     * @return tt::tt_metal::experimental::PhysicalNodeId
      */
-    tt::tt_metal::PhysicalNodeId get_physical_node_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    tt::tt_metal::experimental::PhysicalNodeId get_physical_node_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
 
     /**
      * @brief Look up a physical node ID without failing when there is not one
@@ -194,9 +194,9 @@ public:
      * nullopt for them rather than treating the query as a programming error.
      *
      * @param fabric_node_id
-     * @return std::optional<tt::tt_metal::PhysicalNodeId>
+     * @return std::optional<tt::tt_metal::experimental::PhysicalNodeId>
      */
-    std::optional<tt::tt_metal::PhysicalNodeId> find_physical_node_id_from_fabric_node_id(
+    std::optional<tt::tt_metal::experimental::PhysicalNodeId> find_physical_node_id_from_fabric_node_id(
         const FabricNodeId& fabric_node_id) const;
 
     /**
@@ -205,7 +205,7 @@ public:
      * @param physical_node_id
      * @return chip_id_t
      */
-    ChipId get_physical_chip_id_from_physical_node_id(const tt::tt_metal::PhysicalNodeId& physical_node_id) const;
+    ChipId get_physical_chip_id_from_physical_node_id(const tt::tt_metal::experimental::PhysicalNodeId& physical_node_id) const;
 
     /**
      * @brief Get fabric node ID from ASIC ID mapped by the topology mapper
@@ -436,10 +436,10 @@ private:
      * to gather the mappings from all ranks. The mesh host ranks come directly from the gathered
      * local bindings (TT_MESH_HOST_RANK environment variable).
      *
-     * @return std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> Map from mesh ID to
+     * @return std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> Map from mesh ID to
      * ASIC ID to mesh host rank (ordered for deterministic iteration)
      */
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>
     build_physical_node_id_to_mesh_rank_mapping();
 
     /**
@@ -511,7 +511,7 @@ private:
      * @brief Lookup maps with references/pointers to chip_topology_mapping_ for fast access
      */
     std::unordered_map<FabricNodeId, MappedChipInfo*> fabric_node_id_to_mapping_;
-    std::unordered_map<tt::tt_metal::PhysicalNodeId, MappedChipInfo*> physical_node_id_to_mapping_;
+    std::unordered_map<tt::tt_metal::experimental::PhysicalNodeId, MappedChipInfo*> physical_node_id_to_mapping_;
     std::unordered_map<ChipId, MappedChipInfo*> physical_chip_id_to_mapping_;
 
     /**
@@ -522,7 +522,7 @@ private:
     // Rebuild host-rank containers purely from chip_topology_mapping_ container
     // Uses physical_node_id_to_mesh_rank parameter for compatibility with algorithm improvements
     void rebuild_host_rank_structs_from_mapping(
-        const std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank);
+        const std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& physical_node_id_to_mesh_rank);
 
     /**
      * @brief Verify the topology mapping against PSD and cluster API

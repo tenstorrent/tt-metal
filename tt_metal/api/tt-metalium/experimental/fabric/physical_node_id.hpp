@@ -15,7 +15,9 @@
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
-namespace tt::tt_metal {
+// Experimental: everything in this header is subject to change without notice; it graduates to
+// the stable tt::tt_metal namespace only when the downed-links / factory-descriptor work settles.
+namespace tt::tt_metal::experimental {
 
 // The logical address of an ASIC is (cluster_id, tray, loc). PhysicalNodeId packs that address so the
 // same chip gets the same id whether it came from a factory system descriptor or from live/mock
@@ -54,14 +56,14 @@ static_assert(
     std::has_unique_object_representations_v<PhysicalNodeId>,
     "PhysicalNodeId is not byte-comparable; std::hash<PhysicalNodeId> hashes the whole object");
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental
 
 // Declared here, directly under the type, because the declarations below already use PhysicalNodeId
 // as an unordered_map key -- specializing after that first instantiation is ill-formed.
 namespace std {
 template <>
-struct hash<tt::tt_metal::PhysicalNodeId> {
-    std::size_t operator()(const tt::tt_metal::PhysicalNodeId& id) const noexcept {
+struct hash<tt::tt_metal::experimental::PhysicalNodeId> {
+    std::size_t operator()(const tt::tt_metal::experimental::PhysicalNodeId& id) const noexcept {
         // Whole object. Value-initialization zeroes the unused cluster_id bytes, and the static_asserts
         // above rule out padding, so equal ids always hash equally. This is a container hash only --
         // it is not the node's identity.
@@ -70,11 +72,11 @@ struct hash<tt::tt_metal::PhysicalNodeId> {
 };
 }  // namespace std
 
-namespace tt::tt_metal {
+namespace tt::tt_metal::experimental {
 
 // Lowercase, then take the first DNS label if the name is an FQDN.
 //
-// The trailing "_<rank>" that run_local_discovery appends when two ranks report the same host is
+// The trailing "__rank<N>" that run_local_discovery appends when two ranks report the same host is
 // deliberately kept: that suffix is the only thing telling those hosts apart, so removing it here
 // would give their chips the same address and merge them into one solver node.
 //
@@ -110,11 +112,11 @@ inline std::string_view cluster_id_view(const PhysicalNodeId& id) {
 
 std::ostream& operator<<(std::ostream& os, const PhysicalNodeId& id);
 
-}  // namespace tt::tt_metal
+}  // namespace tt::tt_metal::experimental
 
 template <>
-struct fmt::formatter<tt::tt_metal::PhysicalNodeId> {
+struct fmt::formatter<tt::tt_metal::experimental::PhysicalNodeId> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::tt_metal::PhysicalNodeId& id, format_context& ctx) const -> format_context::iterator;
+    auto format(const tt::tt_metal::experimental::PhysicalNodeId& id, format_context& ctx) const -> format_context::iterator;
 };

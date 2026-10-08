@@ -1007,7 +1007,7 @@ void ControlPlane::construct_link_health_after_intermesh() {
     if (this->fsd_physical_system_descriptor_ == nullptr) {
         return;
     }
-    this->link_health_ = std::make_unique<LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
+    this->link_health_ = std::make_unique<experimental::LinkHealth>(*this->topology_mapper_, *this->physical_system_descriptor_);
     this->check_fsd_compatibility_and_downed_fraction();
     this->confirm_local_downed_links();
 }
@@ -1056,7 +1056,7 @@ void ControlPlane::check_fsd_compatibility_and_downed_fraction() {
         downed > 0) {
         std::size_t intra = 0;
         std::size_t inter = 0;
-        auto tally = [&](const std::vector<LinkInfo>& links) {
+        auto tally = [&](const std::vector<experimental::LinkInfo>& links) {
             for (const auto& link : links) {
                 intra += link.is_intramesh();
                 inter += link.is_intermesh();
@@ -1084,7 +1084,7 @@ void ControlPlane::confirm_local_downed_links() {
     TT_ASSERT(this->link_health_ != nullptr);
     const auto local_chips = this->cluster_.get().user_exposed_chip_ids();
 
-    std::vector<LinkInfo> locally_unhealthy;
+    std::vector<experimental::LinkInfo> locally_unhealthy;
     for (const auto& record : this->link_health_->get_downed_links()) {
         if (!record.logical_resolved) {
             continue;  // no logical view, so no chip to ask
@@ -1101,7 +1101,7 @@ void ControlPlane::confirm_local_downed_links() {
             log_warning(
                 tt::LogFabric,
                 "A factory-expected cable is missing from the live descriptor but its ethernet is up: {} "
-                "chan {} (chip {}). Not fatal -- the record stays in LinkHealth.",
+                "chan {} (chip {}). Not fatal -- the record stays in experimental::LinkHealth.",
                 record.src_node,
                 record.src_chan,
                 *chip);
@@ -1119,7 +1119,7 @@ bool ControlPlane::has_factory_descriptor() const {
     return this->fsd_physical_system_descriptor_ != nullptr;
 }
 
-const LinkHealth* ControlPlane::get_link_health() const { return this->link_health_.get(); }
+const experimental::LinkHealth* ControlPlane::get_link_health() const { return this->link_health_.get(); }
 
 bool ControlPlane::fsd_rerouting_active() const {
     return this->link_health_ != nullptr && this->link_health_->fsd_rerouting_active();
@@ -1131,23 +1131,36 @@ bool ControlPlane::is_link_healthy(FabricNodeId fabric_node_id, chan_id_t chan) 
     return this->link_health_ == nullptr ? true : this->link_health_->is_link_healthy(fabric_node_id, chan);
 }
 
-const std::vector<LinkInfo>& ControlPlane::get_downed_links() const {
-    static const std::vector<LinkInfo> kNone;
+const std::vector<experimental::LinkInfo>& ControlPlane::get_downed_links() const {
+    static const std::vector<experimental::LinkInfo> kNone;
     return this->link_health_ == nullptr ? kNone : this->link_health_->get_downed_links();
 }
 
-const std::vector<LinkInfo>& ControlPlane::get_unused_downed_links() const {
-    static const std::vector<LinkInfo> kNone;
+const std::vector<experimental::LinkInfo>& ControlPlane::get_unused_downed_links() const {
+    static const std::vector<experimental::LinkInfo> kNone;
     return this->link_health_ == nullptr ? kNone : this->link_health_->get_unused_downed_links();
 }
 
-const std::vector<LinkInfo>& ControlPlane::get_locally_unhealthy_links() const { return this->locally_unhealthy_; }
+const std::vector<experimental::LinkInfo>& ControlPlane::get_locally_unhealthy_links() const { return this->locally_unhealthy_; }
 
 void ControlPlane::refresh_connectivity_diff() {
     if (this->link_health_ == nullptr) {
         return;
     }
-    this->link_health_->refresh();
+    // Re-discover live connectivity: refresh exists to observe repaired or newly downed cables, and
+    // re-diffing the descriptor captured at init could never see either. The rediscovered view gets
+    // its own member rather than replacing physical_system_descriptor_, which the topology mapper
+    // (and the mapping built on it) still references.
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    this->refreshed_live_descriptor_ =
+        std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(tt::tt_metal::run_physical_system_discovery(
+            *this->cluster_.get().get_cluster_desc(),
+            distributed_context,
+            this->rtoptions_.get().get_target_device()));
+    this->link_health_->refresh(nullptr, this->refreshed_live_descriptor_.get());
+    // refresh() clears the unused-plane classification; reapply the routing-plane snapshot so holes
+    // already classified as unused do not silently reactivate.
+    this->classify_unused_downed_after_plane_trim();
     this->confirm_local_downed_links();
 }
 
@@ -1156,7 +1169,7 @@ void ControlPlane::classify_unused_downed_after_plane_trim() {
         return;
     }
 
-    RoutingPlaneSnapshot snapshot;
+    experimental::RoutingPlaneSnapshot snapshot;
 
     // Expected: what the mesh graph asks for per direction.
     std::unordered_map<MeshId, std::unordered_map<ChipId, std::unordered_map<RoutingDirection, size_t>>> golden;
@@ -1235,7 +1248,7 @@ void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
             log_warning(
                 tt::LogFabric,
                 "STRICT + FSD: skipping fatal on missing connection, chip {} not connected to chip {}. FSD in "
-                "use -- recording in LinkHealth, not fatal.",
+                "use -- recording in experimental::LinkHealth, not fatal.",
                 physical_chip_id,
                 physical_chip_id_other);
             return;
@@ -1537,7 +1550,7 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
                         log_warning(
                             tt::LogFabric,
                             "STRICT + FSD: skipping fatal on short channel set, {} of {} eth channel(s) on "
-                            "M{}D{} in direction {}. FSD in use -- recording in LinkHealth, not fatal.",
+                            "M{}D{} in direction {}. FSD in use -- recording in experimental::LinkHealth, not fatal.",
                             directional_eth_chans.at(direction).size(),
                             num_available_routing_planes,
                             fabric_node_id.mesh_id,
@@ -1659,7 +1672,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                             log_warning(
                                 tt::LogFabric,
                                 "STRICT + FSD: skipping fatal on missing connection M{}D{} to D{}. FSD in use "
-                                "-- recording in LinkHealth, not fatal.",
+                                "-- recording in experimental::LinkHealth, not fatal.",
                                 mesh_id,
                                 fabric_chip_id,
                                 logical_connected_chip_id);
@@ -1675,7 +1688,7 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
                             log_warning(
                                 tt::LogFabric,
                                 "STRICT + FSD: skipping fatal on short connection, {} of {} eth link(s) from "
-                                "physical chip {} to physical chip {}. FSD in use -- recording in LinkHealth, "
+                                "physical chip {} to physical chip {}. FSD in use -- recording in experimental::LinkHealth, "
                                 "not fatal.",
                                 connected_eth_cores.size(),
                                 edge.connected_chip_ids.size(),
@@ -3594,7 +3607,7 @@ void ControlPlane::generate_intermesh_connectivity() {
         log_warning(
             tt::LogFabric,
             "STRICT + FSD: skipping fatal on intermesh shortfall, bound {} of {} requested connection(s). FSD "
-            "in use -- recording in LinkHealth, not fatal.",
+            "in use -- recording in experimental::LinkHealth, not fatal.",
             num_assigned_intermesh_connections,
             get_num_requested_intermesh_connections());
     } else {
@@ -3852,7 +3865,7 @@ void ControlPlane::validate_requested_intermesh_connections(
                     log_warning(
                         tt::LogFabric,
                         "STRICT + FSD: skipping fatal on inter-mesh shortfall between mesh {} and mesh {}, "
-                        "resolved {} of {} requested. FSD in use -- recording in LinkHealth, not fatal.",
+                        "resolved {} of {} requested. FSD in use -- recording in experimental::LinkHealth, not fatal.",
                         src_mesh,
                         dst_mesh,
                         resolved,

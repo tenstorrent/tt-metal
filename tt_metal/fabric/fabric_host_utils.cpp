@@ -29,23 +29,24 @@ namespace tt::tt_fabric {
 
 namespace {
 
-// The export is keyed per physical host, but discovery suffixes its host keys with "_<rank>" when
+// The export is keyed per physical host, but discovery suffixes its host keys with "__rank<N>" when
 // several ranks report the same host (PhysicalSystemDescriptor::my_host_name()), which happens
 // whenever a mock run gives more ranks than cluster descriptors. Undo that suffix so the ranks
 // sharing a host land on one key.
 //
-// The suffix is recognized by its own shape -- a trailing "_<digits>" -- not by what precedes it.
-// It used to require a ".yaml" basename, which stopped matching once the host key became the
-// descriptor's cluster_id (bh-glx-110-d03u02_26) rather than a filename.
+// Only the exact "__rank<digits>" marker is stripped. A plain trailing "_<digits>" is NOT: that
+// shape can be the tail of a genuine cluster id (e.g. "rack_1"), and stripping it would collapse
+// distinct physical hosts onto one mapping key.
 HostName hostname_for_mapping_export(const HostName& hostname, bool mock_enabled) {
     if (!mock_enabled) {
         return hostname;
     }
-    const auto pos = hostname.rfind('_');
-    if (pos == std::string::npos || pos + 1 == hostname.size()) {
+    static constexpr std::string_view kRankMarker = "__rank";
+    const auto pos = hostname.rfind(kRankMarker);
+    if (pos == std::string::npos || pos + kRankMarker.size() == hostname.size()) {
         return hostname;
     }
-    const std::string_view tail = std::string_view(hostname).substr(pos + 1);
+    const std::string_view tail = std::string_view(hostname).substr(pos + kRankMarker.size());
     if (!std::all_of(
             tail.begin(), tail.end(), [](const char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; })) {
         return hostname;

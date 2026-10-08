@@ -28,7 +28,7 @@
 #include <fmt/ranges.h>
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/fabric/physical_node_id.hpp>  // canonical_cluster_id_for_node_id
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>  // experimental::canonical_cluster_id_for_node_id
 #include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include <protobuf/factory_system_descriptor.pb.h>   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
@@ -181,7 +181,7 @@ std::vector<uint32_t> select_host_filter(
     // author wrote (and the reverse). Matching raw strings would retain nothing in that case.
     std::set<std::string> wanted;
     for (const auto& hostname : hostnames) {
-        wanted.insert(::tt::tt_metal::canonical_cluster_id_for_node_id(hostname));
+        wanted.insert(::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(hostname));
     }
 
     std::set<std::string> present;
@@ -189,7 +189,7 @@ std::vector<uint32_t> select_host_filter(
     std::vector<uint32_t> member_host_ids;
     for (int i = 0; i < fsd.hosts_size(); ++i) {
         const std::string& name = fsd.hosts(i).hostname();
-        const auto canonical = ::tt::tt_metal::canonical_cluster_id_for_node_id(name);
+        const auto canonical = ::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(name);
         spellings_by_canonical[canonical].push_back(name);
         if (wanted.contains(canonical)) {
             member_host_ids.push_back(static_cast<uint32_t>(i));

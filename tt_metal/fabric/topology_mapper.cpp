@@ -189,7 +189,7 @@ const MappedChipInfo* TopologyMapper::find_mapping_by_asic_id(tt::tt_metal::Asic
 }
 
 FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_node_id(
-    const tt::tt_metal::PhysicalNodeId& physical_node_id) const {
+    const tt::tt_metal::experimental::PhysicalNodeId& physical_node_id) const {
     auto it = physical_node_id_to_mapping_.find(physical_node_id);
     TT_FATAL(it != physical_node_id_to_mapping_.end(), "Physical node id {} not found in mapping", physical_node_id);
     TT_FATAL(it->second->is_mapped, "Fabric node ID not yet assigned for physical node id {}", physical_node_id);
@@ -197,7 +197,7 @@ FabricNodeId TopologyMapper::get_fabric_node_id_from_physical_node_id(
 }
 
 std::optional<FabricNodeId> TopologyMapper::find_fabric_node_id_from_physical_node_id(
-    const tt::tt_metal::PhysicalNodeId& physical_node_id) const {
+    const tt::tt_metal::experimental::PhysicalNodeId& physical_node_id) const {
     auto it = physical_node_id_to_mapping_.find(physical_node_id);
     if (it == physical_node_id_to_mapping_.end() || !it->second->is_mapped) {
         return std::nullopt;
@@ -205,14 +205,14 @@ std::optional<FabricNodeId> TopologyMapper::find_fabric_node_id_from_physical_no
     return it->second->fabric_node_id;
 }
 
-tt::tt_metal::PhysicalNodeId TopologyMapper::get_physical_node_id_from_fabric_node_id(
+tt::tt_metal::experimental::PhysicalNodeId TopologyMapper::get_physical_node_id_from_fabric_node_id(
     const FabricNodeId& fabric_node_id) const {
     auto it = fabric_node_id_to_mapping_.find(fabric_node_id);
     TT_FATAL(it != fabric_node_id_to_mapping_.end(), "Fabric node id {} not found in mapping", fabric_node_id);
     return it->second->physical_node_id;
 }
 
-std::optional<tt::tt_metal::PhysicalNodeId> TopologyMapper::find_physical_node_id_from_fabric_node_id(
+std::optional<tt::tt_metal::experimental::PhysicalNodeId> TopologyMapper::find_physical_node_id_from_fabric_node_id(
     const FabricNodeId& fabric_node_id) const {
     auto it = fabric_node_id_to_mapping_.find(fabric_node_id);
     if (it == fabric_node_id_to_mapping_.end()) {
@@ -222,7 +222,7 @@ std::optional<tt::tt_metal::PhysicalNodeId> TopologyMapper::find_physical_node_i
 }
 
 ChipId TopologyMapper::get_physical_chip_id_from_physical_node_id(
-    const tt::tt_metal::PhysicalNodeId& physical_node_id) const {
+    const tt::tt_metal::experimental::PhysicalNodeId& physical_node_id) const {
     auto it = physical_node_id_to_mapping_.find(physical_node_id);
     TT_FATAL(it != physical_node_id_to_mapping_.end(), "Physical node id {} not found in mapping", physical_node_id);
     return it->second->physical_chip_id;
@@ -423,7 +423,7 @@ TopologyMapper::TopologyMapper(
     rebuild_lookup_maps();
 
     // Build host rank structures from the complete mapping (same as discovery path)
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
     rebuild_host_rank_structs_from_mapping(physical_node_id_to_mesh_rank);
 }
 
@@ -695,9 +695,9 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_f
     return mapping;
 }
 
-std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>
+std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>
 TopologyMapper::build_physical_node_id_to_mesh_rank_mapping() {
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> mapping;
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> mapping;
     const auto& global_context = this->distributed_context_.get();
     const std::size_t world_size = *global_context.size();
 
@@ -1108,7 +1108,7 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
             i + 1,
             count,
             source_rank);
-        const auto physical_node_id = tt::tt_metal::make_physical_node_id(hostname_str, tray_id, asic_location);
+        const auto physical_node_id = tt::tt_metal::experimental::make_physical_node_id(hostname_str, tray_id, asic_location);
 
         // Find existing entry by address and overwrite it completely, or create new entry if not found
         auto it = physical_node_id_to_mapping_.find(physical_node_id);
@@ -1303,7 +1303,7 @@ MeshContainer<ChipId> TopologyMapper::get_chip_ids(MeshId mesh_id, std::optional
 
 void TopologyMapper::rebuild_host_rank_structs_from_mapping(
     const std::
-        map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>>& /* physical_node_id_to_mesh_rank */) {
+        map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>>& /* physical_node_id_to_mesh_rank */) {
     // Derive per-mesh host sets and per-host coord ranges from current mapping
     std::map<MeshId, std::unordered_set<MeshHostRankId>> mesh_to_hosts;
     std::map<MeshId, std::map<MeshHostRankId, MeshCoordinateRange>> mesh_host_to_range;
@@ -1745,8 +1745,8 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
     // Get the total number of chips in the physical system descriptor
     const auto total_number_of_chips = physical_system_descriptor.get_asic_descriptors().size();
 
-    std::map<MeshId, std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
-    physical_node_id_to_mesh_rank[MeshId{0}] = std::map<tt::tt_metal::PhysicalNodeId, MeshHostRankId>();
+    std::map<MeshId, std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>> physical_node_id_to_mesh_rank;
+    physical_node_id_to_mesh_rank[MeshId{0}] = std::map<tt::tt_metal::experimental::PhysicalNodeId, MeshHostRankId>();
     for (const auto& [asic_id, desc] : physical_system_descriptor.get_asic_descriptors()) {
         physical_node_id_to_mesh_rank[MeshId{0}][desc.physical_node_id] = MeshHostRankId{0};
     }
@@ -1782,7 +1782,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
 
         const auto& physical_node_to_host_rank = physical_node_id_to_mesh_rank.at(mesh_id);
 
-        MappingConstraints<FabricNodeId, tt::tt_metal::PhysicalNodeId> constraints;
+        MappingConstraints<FabricNodeId, tt::tt_metal::experimental::PhysicalNodeId> constraints;
         if (!constraints.add_required_trait_constraint(node_to_host_rank, physical_node_to_host_rank)) {
             TT_THROW("Failed to add required trait constraint for mesh host rank in mesh {}", mesh_id.get());
         }
