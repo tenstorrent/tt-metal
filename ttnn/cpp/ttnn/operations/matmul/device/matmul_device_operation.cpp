@@ -369,6 +369,7 @@ void validate_matmul_bias_shape(
     const std::optional<const Tensor>& optional_bias,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
+    const ttnn::Shape& a_shape,
     const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape,
     const ttnn::Shape& b_shape_padded,
@@ -404,6 +405,13 @@ void validate_matmul_bias_shape(
         expected_bias_height,
         in0_tile.get_height(),
         is_reuse_config ? Mt : 1);
+    // Logical h must be 1 (row-broadcast) or M (reuse config); any other value silently reads padding.
+    const uint32_t expected_logical_h = is_reuse_config ? a_shape[-2] : 1;
+    TT_FATAL(
+        bias_shape[-2] == 1 || bias_shape[-2] == expected_logical_h,
+        "Unsupported bias shape: logical second last dimension of bias, {}, must be 1 (row-broadcast) or {} (M).",
+        bias_shape[-2],
+        expected_logical_h);
     TT_FATAL(
         bias_shape_padded[-1] == b_shape_padded[-1],
         "Unsupported bias shape: padded last dimension of bias, {}, not "
@@ -2422,7 +2430,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_mcast1d_subdevice_worker_grid(input_tensor_a, attributes, chosen_program_config);
     validate_matmul_input_count(attributes, input_tensors, input_tensor_b, chosen_program_config);
     validate_matmul_bias_shape(
-        optional_bias, in0_tile, in1_tile, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
+        optional_bias, in0_tile, in1_tile, a_shape, a_shape_padded, b_shape, b_shape_padded, chosen_program_config);
     validate_matmul_untilize_out(attributes, chosen_program_config);
 
     // ---- per-config validation: one std::visit over the chosen program config ----
