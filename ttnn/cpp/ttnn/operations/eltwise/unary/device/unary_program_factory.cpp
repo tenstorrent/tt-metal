@@ -76,17 +76,11 @@ bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
 
 // Blackhole eltwise_sfpu.cpp: an op of the unary bit-for-bit dump set that loads DEST before it stores, so its SFPU
 // start may space the first load from copy_tile's datacopy with a NOP instead of draining the FPU.
-bool sfpu_start_after_copy(const EltwiseUnaryWithParam& op, bool fp32_dest_acc_en) {
+bool sfpu_start_after_copy(const EltwiseUnaryWithParam& op) {
     switch (op.type()) {
         case UnaryOpType::FILL:  // stores before it loads
         case UnaryOpType::TILED_PROD:
         case UnaryOpType::TYPECAST: return false;
-        case UnaryOpType::EXP: {
-            // the accurate exp with a 32-bit DEST read slower in DRAM with the NOP
-            const auto approx = std::visit(
-                [](auto params) { return params.empty() ? 0.0f : static_cast<float>(params[0]); }, op.get_params());
-            return !fp32_dest_acc_en || approx != 0.0f;
-        }
         default: return true;
     }
 }
@@ -636,8 +630,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
         }
         unary_defines.merge(CMAKE_UNIQUE_NAMESPACE::get_chain_init_once_defines(
             ops_chain, input.dtype(), operation_attributes.fp32_dest_acc_en, chain_block));
-        if (std::all_of(ops_chain.begin(), ops_chain.end(), [&](const auto& op) {
-                return CMAKE_UNIQUE_NAMESPACE::sfpu_start_after_copy(op, operation_attributes.fp32_dest_acc_en);
+        if (std::all_of(ops_chain.begin(), ops_chain.end(), [](const auto& op) {
+                return CMAKE_UNIQUE_NAMESPACE::sfpu_start_after_copy(op);
             })) {
             unary_defines["SFPU_START_AFTER_COPY"] = "1";
         }
