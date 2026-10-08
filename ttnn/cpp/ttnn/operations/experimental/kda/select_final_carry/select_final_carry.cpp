@@ -25,6 +25,11 @@ ttnn::Tensor select_final_carry(
         prefix_final.storage_type() == StorageType::DEVICE && prefix_final.buffer() != nullptr,
         "select_final_carry: prefix_final must be an allocated device tensor");
     auto* mesh = prefix_final.device();
+    TT_FATAL(
+        sequence_parallel_axis < mesh->shape().dims(),
+        "select_final_carry: sequence_parallel_axis {} is out of range for a {}-D mesh",
+        sequence_parallel_axis,
+        mesh->shape().dims());
     const auto topology = ::ttnn::ccl::convert_2d_to_1d_topology(
         ::ttnn::ccl::get_usable_topology(prefix_final, tt::tt_fabric::get_fabric_topology(), sequence_parallel_axis));
     const auto available_links =
