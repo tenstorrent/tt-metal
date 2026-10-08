@@ -60,12 +60,16 @@ bool topk_multicore_structurally_eligible(uint32_t reduced_width, uint32_t num_t
  * 4. Verify that configuration fits within available cores and memory
  * 5. Find contiguous core arrangement that matches the requirement
  * 6. Score each valid configuration with the makespan model
- *    (kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final) and return the minimum
+ *    (kLocalCostFactor * Wt_local + kFinalCostFactor * Wt_final, or with tree_merge
+ *    kLocalCostFactor * Wt_local + kTreeRoundCostFactor * log2(num_cores) + kFinalCostFactor * Kt)
+ *    and return the minimum
  *
  * Memory cost model:
  * - Gather cost: Data movement between cores (2 * num_cores * tile_sizes)
- * - Local cost: Per-core memory usage (split_size/TILE_WIDTH * tile_sizes)
+ * - Local cost: Per-core memory usage (split_size/TILE_WIDTH * tile_sizes), plus the
+ *   4 * Kt landing and merge tiles with tree_merge
  * - Total must fit within L1 memory per core
+ * - With tree_merge a split has to be wider than k (split_size > k) so the local TopK reduces
  *
  * Returns std::nullopt (single-core fallback) instead of throwing when the grid or
  * width cannot support the multi-core layout.
@@ -275,6 +279,7 @@ std::optional<TopKCoreConfig> find_topk_core_config(
  * @param l1_size L1 cache size per core
  * @param value_tile_size Memory size of value tiles
  * @param index_tile_size Memory size of index tiles
+ * @param tree_merge Local results merge pairwise over the local cores before the final core
  * @return true if multi-core execution is feasible, false otherwise
  */
 bool verify_multi_core_cost(

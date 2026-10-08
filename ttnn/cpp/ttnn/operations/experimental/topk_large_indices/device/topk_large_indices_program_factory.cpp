@@ -214,7 +214,7 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t num_rows, uint32_t input_
     }
 
     const uint32_t physical_chunks = tt::div_up(input_last_dim, llk_k);
-    return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::FusedSegmented;
+    return physical_chunks <= max_fused_chunks ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::FusedSegmented;
 }
 
 std::vector<CoreRowAssignment> derive_core_row_assignments(

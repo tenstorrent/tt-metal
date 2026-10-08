@@ -708,7 +708,7 @@ def test_topk_large_indices_metadata_zero_length_does_not_hang(device):
 
     search_len = valid_length + offset is zero only when both are, and calculate_topk_bounds(0, K) yields
     num_chunks = 0 with a wrapped tail_elements ((0 - 1) * K underflows). The reader would then push zero
-    chunks while the Classic / FusedEndToEnd compute bodies unconditionally cb_wait_front on the first one.
+    chunks while the fused compute bodies unconditionally cb_wait_front on the first one.
     Nothing on the host rejects it: the scalar path has TT_FATAL(valid_length > 0), the tensor path cannot
     see the value, and the reader's structural check is a watcher-gated ASSERT that compiles out.
 

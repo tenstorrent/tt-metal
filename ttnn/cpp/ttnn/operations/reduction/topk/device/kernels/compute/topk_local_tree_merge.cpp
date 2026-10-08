@@ -57,7 +57,6 @@ void kernel_main() {
     constexpr std::uint32_t logk = get_compile_time_arg_val(10);
     constexpr std::uint32_t logWt = get_compile_time_arg_val(11);
     constexpr std::uint32_t largest = get_compile_time_arg_val(12);
-    constexpr std::uint32_t sorted = get_compile_time_arg_val(13);
     constexpr bool stable_sort = get_compile_time_arg_val(14) == 1;  // Ties keep the lowest index
 
     // Fused-key stable mode: packed [bf16|u16] keys instead of separate value and index tiles.
@@ -88,7 +87,9 @@ void kernel_main() {
     constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
     const bool switch_dir = (K == 64);
-    uint32_t seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
+    // process_iteration halves the seq_per_2tiles it gets, so each tree merge starts again from this value.
+    constexpr uint32_t initial_seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
+    uint32_t seq_per_2tiles = initial_seq_per_2tiles;
 
     for (std::uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = !largest;
@@ -142,7 +143,7 @@ void kernel_main() {
             // Partners of the next round must be sorted in opposite directions, like direction_init does locally.
             const bool merge_ascending = (largest == 0) != (((core_id >> (r + 1)) & 1) == 1);
             std::uint32_t merge_num_k_sequences = (2 * Kt * 32) / K;
-            uint32_t merge_seq_per_2tiles = std::max<uint32_t>((2 * 32) / K, 2);
+            uint32_t merge_seq_per_2tiles = initial_seq_per_2tiles;
             process_iteration<network_stable, fused_keys, tie_order>(
                 0,  // Single merge step: at m_iter 0 tile t is paired with tile t + Kt
                 K,

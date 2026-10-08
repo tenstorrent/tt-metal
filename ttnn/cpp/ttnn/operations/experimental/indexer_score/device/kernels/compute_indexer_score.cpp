@@ -263,7 +263,9 @@ inline void matmul_phase(uint32_t r, uint32_t col_base, uint32_t cols, uint32_t 
 /** PHASE 2 -- gate-multiply the batch's cb_qk by w and head-reduce into cb_acc_strip via the blocked
  *  bcast-col MUL. Per ct_dim-col sub-batch, one dest acquire holds the col accumulators; each head is one
  *  unpack context (w[h] once + ct_dim cols) MAC'ing onto dest[0..n_cols), so unpack-context sync is per
- *  head, not per (col, head). cb_qk is head-major; whole batch shares one set_mul_mode (w col-independent). */
+ *  head, not per (col, head). With mul_heads_per_pass 0 or >= reduce_heads all heads share one acquire;
+ *  otherwise (above LoFi) each pass of mul_heads_per_pass heads is packed and the passes sum in L1.
+ *  cb_qk is head-major; whole batch shares one set_mul_mode (w col-independent). */
 inline void mul_phase(uint32_t r, uint32_t slot_base, uint32_t col_base, uint32_t cols, uint32_t head_base) {
     const uint32_t batch_tiles = cols * reduce_heads;
     // gate per (head, row); this group's heads are [head_base, +reduce_heads) of row r.

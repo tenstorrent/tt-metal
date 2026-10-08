@@ -83,7 +83,8 @@ tt::DataFormat index_cb_data_format_for(
  *
  * 4. MEMORY AND CORE CONSTRAINTS: Pass verify_multi_core_cost() checks
  *    - Work must be divisible across available cores without remainder
- *    - Memory costs (gather + local per core) must fit within L1 cache limits
+ *    - Memory costs (gather + local per core, plus the landing tiles with the tree merge) must fit within L1
+ *    - With the tree merge each split must be wider than K
  *    - Contiguous rectangular core arrangement must be possible
  *    - Split size must meet minimum dimension per core requirements
  *    - Must be genuinely multi-core beneficial (require > 1 core)

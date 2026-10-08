@@ -35,10 +35,8 @@ void send_tiles(
 void kernel_main() {
     constexpr std::uint32_t receiver_sem_id = get_compile_time_arg_val(0);  // Final core readiness signal
     constexpr std::uint32_t sender_sem_id = get_compile_time_arg_val(1);    // Local core completion signal
-    constexpr std::uint32_t noc_final_x = get_compile_time_arg_val(2);
-    constexpr std::uint32_t noc_final_y = get_compile_time_arg_val(3);
+    // Args 2, 3 and 5 (final core coordinates, K) belong to the non tree writer; destinations come at runtime here.
     constexpr std::uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr std::uint32_t K = get_compile_time_arg_val(5);
     constexpr std::uint32_t Kt = get_compile_time_arg_val(6);
     constexpr std::uint32_t values_dfb_index = get_compile_time_arg_val(7);
     constexpr std::uint32_t output_ind_dfb_index = get_compile_time_arg_val(8);
@@ -48,7 +46,6 @@ void kernel_main() {
     constexpr std::uint32_t landing_indices_dfb_index = get_compile_time_arg_val(12);
     constexpr std::uint32_t credit_sem_id = get_compile_time_arg_val(13);  // Parent freed its landing slot
     constexpr std::uint32_t data_sem_id = get_compile_time_arg_val(14);    // Child landed its tiles
-    constexpr std::uint32_t tree_rounds = get_compile_time_arg_val(15);
 
     const std::uint32_t final_slot = get_arg_val<std::uint32_t>(0);  // Slot in the final core's gather buffer
     const std::uint32_t num_recv_rounds = get_arg_val<std::uint32_t>(1);

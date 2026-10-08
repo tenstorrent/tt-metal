@@ -514,8 +514,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     reader_local_desc.config = ReaderConfigDescriptor{};
 
     // Final reader - Local TopK Results Aggregation Coordinator
-    // Responsibility: Coordinate reception of TopK results from all local cores
-    // Uses semaphore protocol to synchronize with multiple sender cores
+    // Responsibility: Coordinate reception of TopK results from the local cores (the tree survivors with the tree
+    // merge). Uses semaphore protocol to synchronize with the sender cores
     CoreCoord local_cores_physical_start = device.worker_core_from_logical_core(local_cores.at(0));
     CoreCoord local_cores_physical_end = device.worker_core_from_logical_core(local_cores.at(num_cores - 2u));
     const std::vector<std::uint32_t> reader_final_compile_time_args = {
@@ -526,8 +526,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         static_cast<std::uint32_t>(local_cores_physical_end.x),
         static_cast<std::uint32_t>(local_cores_physical_end.y),
         static_cast<std::uint32_t>(Ht),             // Height tiles to process
-        static_cast<std::uint32_t>(Wt_final),       // Total aggregated width tiles
-        static_cast<std::uint32_t>(num_cores - 1),  // Number of local cores sending data
+        static_cast<std::uint32_t>(Wt_final),       // Width tiles the final core merges
+        static_cast<std::uint32_t>(num_cores - 1),  // Local cores the ready signal reaches
         gathered_values_cb_index,                   // Final TopK values destination
         gathered_indices_cb_index                   // Final TopK indices destination
     };
@@ -570,8 +570,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             {landing_values_cb_index,                          // Tree-merge landing slot (values)
              landing_indices_cb_index,                         // Tree-merge landing slot (indices)
              static_cast<std::uint32_t>(credit_semaphore_id),  // Parent -> child: landing slot is free
-             static_cast<std::uint32_t>(data_semaphore_id),    // Child -> parent: tiles landed
-             tree_rounds});
+             static_cast<std::uint32_t>(data_semaphore_id)});  // Child -> parent: tiles landed
     }
 
     KernelDescriptor writer_local_desc;
