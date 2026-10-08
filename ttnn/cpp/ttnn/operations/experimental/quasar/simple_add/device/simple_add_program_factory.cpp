@@ -25,9 +25,10 @@ constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/quasar
 constexpr uint32_t kEntriesPerThread = 2;      // per tile counter: double buffering
 constexpr uint32_t kQuasarComputeThreads = 4;  // every Tensix engine of a Neo cluster
 // Reader and writer DM cores. Each must divide kQuasarComputeThreads so every DM thread round-robins the same
-// number of Tensix tile counters: with 2 of each, reader t feeds Tensix t and t + 2, and writer t drains them.
-// Quasar keeps DM0 (ISR) and DM1 (remapper) for itself, leaving 6 DM cores: 2 readers + 2 writers fit.
-constexpr uint32_t kQuasarReaderThreads = 2;
+// number of Tensix tile counters: with 4 readers, reader t feeds only Tensix t; with 2 writers, writer t drains
+// Tensix t and t + 2. Quasar keeps DM0 (ISR) and DM1 (remapper) for itself, leaving 6 DM cores (DM2..DM7):
+// 4 readers + 2 writers use all of them.
+constexpr uint32_t kQuasarReaderThreads = 4;
 constexpr uint32_t kQuasarWriterThreads = 2;
 static_assert(kQuasarComputeThreads % kQuasarReaderThreads == 0);
 static_assert(kQuasarComputeThreads % kQuasarWriterThreads == 0);
@@ -50,8 +51,8 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     const m2::KernelSpecName WRITER{"writer"};
     const m2::KernelSpecName COMPUTE{"compute"};
 
-    // One Neo cluster: the whole op runs on node (0, 0). On Quasar the reader and the writer each run on 2 DM
-    // cores and the compute kernel on all 4 Tensix engines. Wormhole/Blackhole kernels are single-threaded.
+    // One Neo cluster: the whole op runs on node (0, 0). On Quasar the reader runs on 4 DM cores, the writer on 2
+    // and the compute kernel on all 4 Tensix engines. Wormhole/Blackhole kernels are single-threaded.
     const m2::NodeCoord node{0, 0};
     const bool is_quasar = tensor_args.input_a.device()->arch() == tt::ARCH::QUASAR;
     const uint32_t compute_threads = is_quasar ? kQuasarComputeThreads : 1u;

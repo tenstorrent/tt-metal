@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // simple_add reader: reads tile i of A into dfb::in0 and tile i of B into dfb::in1 from DRAM-interleaved
-// tensors. Explicit sync, as on Blackhole. Runs as N threads, one per DM core (2 on Quasar, 1 on
+// tensors. Explicit sync, as on Blackhole. Runs as N threads, one per DM core (4 on Quasar, 1 on
 // Wormhole/Blackhole): thread t reads tiles t, t+N, t+2N, ... Each push_back rotates to the thread's next
-// tile counter, so tile i still goes to compute thread i % num_compute_threads. With N == 2 and 4 Tensix, DM t
-// alternates between Tensix t and t + 2.
+// tile counter, so tile i still goes to compute thread i % num_compute_threads. With N == 4 and 4 Tensix each
+// thread has one tile counter, so DM t feeds only Tensix t.
 
 #include <cstdint>
 
