@@ -24,6 +24,7 @@
 #include "ttnn/operations/experimental/quasar/tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/reallocate/reallocate_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/simple_add/simple_add_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/to_device/to_device_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/slice_write/slice_write_nanobind.hpp"
@@ -81,6 +82,9 @@ void bind_quasar(nb::module_& mod) {
 
     // reallocate (thin wrapper over quasar move).
     detail::bind_reallocate(m_quasar);
+
+    // simple_add (single-node Metal 2.0 C = A + B).
+    detail::bind_simple_add(m_quasar);
 
     // to_device (thin host->device transfer wrapper).
     detail::bind_to_device(m_quasar);

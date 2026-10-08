@@ -18,6 +18,7 @@ set(UNIT_TESTS_LEGACY_SRC
     test_dm_worker_multicast.cpp
     test_dram_copy_sticks_multi_core.cpp
     test_dram_loopback_single_core.cpp
+    test_eltwise_add_quasar.cpp
     test_eltwise_binary.cpp
     test_generic_binary_reader_matmul_large_block.cpp
     test_interleaved_l1_buffer.cpp

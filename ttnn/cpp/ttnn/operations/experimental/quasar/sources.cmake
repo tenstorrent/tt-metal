@@ -31,6 +31,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     tilize_with_val_padding/tilize_with_val_padding.hpp
     to_layout/to_layout_op.hpp
     reallocate/reallocate.hpp
+    simple_add/simple_add.hpp
     reduction/generic/generic_reductions.hpp
     to_device/to_device.hpp
     typecast/typecast.hpp
@@ -201,6 +202,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     to_layout/to_layout_op.cpp
     # reallocate (thin wrapper over quasar move; no device op / kernels)
     reallocate/reallocate.cpp
+    # simple_add (single-node Metal 2.0 C = A + B; device op + one program factory)
+    simple_add/simple_add.cpp
+    simple_add/device/simple_add_device_operation.cpp
+    simple_add/device/simple_add_program_factory.cpp
     # reduction/generic (internal op; pool_sum used by quasar avg_pool2d — no nanobind)
     reduction/generic/generic_reductions.cpp
     reduction/generic/device/common.cpp
@@ -259,6 +264,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_NANOBIND_SRCS
     tilize_with_val_padding/tilize_with_val_padding_nanobind.cpp
     to_layout/to_layout_nanobind.cpp
     reallocate/reallocate_nanobind.cpp
+    simple_add/simple_add_nanobind.cpp
     to_device/to_device_nanobind.cpp
     typecast/typecast_nanobind.cpp
     sharded_to_interleaved/sharded_to_interleaved_nanobind.cpp
