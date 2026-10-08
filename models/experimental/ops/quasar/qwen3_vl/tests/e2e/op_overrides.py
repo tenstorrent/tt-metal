@@ -145,6 +145,24 @@ def _to_experimental_quasar(name):
     return rewrite
 
 
+_CONCAT_MAX_INPUTS = 32  # more inputs crash or hang the interleaved concat on Quasar (QUASAR_GAPS Q15)
+
+
+def _quasar_wide_concat(args, kwargs):
+    tensors = args[0] if args else kwargs.get("tensors", kwargs.get("input_tensors"))
+    return isinstance(tensors, (list, tuple)) and len(tensors) > _CONCAT_MAX_INPUTS and _on_quasar(tuple(tensors), {})
+
+
+def _concat_in_groups(original, args, kwargs):
+    """Concat at most _CONCAT_MAX_INPUTS tensors per call, then concat the partial results (same output)."""
+    tensors, rest = (args[0], args[1:]) if args else (kwargs.pop("tensors", None) or kwargs.pop("input_tensors"), ())
+    tensors = list(tensors)
+    while len(tensors) > _CONCAT_MAX_INPUTS:
+        groups = [tensors[i : i + _CONCAT_MAX_INPUTS] for i in range(0, len(tensors), _CONCAT_MAX_INPUTS)]
+        tensors = [original(g, *rest, **kwargs) if len(g) > 1 else g[0] for g in groups]
+    return original(tensors, *rest, **kwargs)
+
+
 def _quasar_fp32_dest_acc(args, kwargs):
     ckc = kwargs.get("compute_kernel_config")
     return ckc is not None and getattr(ckc, "fp32_dest_acc_en", False) and _on_quasar(args, kwargs)
@@ -237,6 +255,15 @@ WORKAROUNDS = [
         remove_when="base ttnn.multiply (binary_ng) is ported to Quasar",
         applies=_on_quasar,
         rewrite=_to_experimental_quasar("multiply"),
+    ),
+    Workaround(
+        name="quasar_concat_max_32_inputs",
+        target="ttnn.concat",
+        reason="interleaved concat of more than 32 tensors aborts craq-sim (t_tile_mmio_rd32) or hangs on Quasar; the "
+        "LM head concats its 119 vocab splits (QUASAR_GAPS Q15)",
+        remove_when="ttnn.concat handles more than 32 inputs on Quasar",
+        applies=_quasar_wide_concat,
+        rewrite=_concat_in_groups,
     ),
     Workaround(
         name="quasar_rms_norm_bf16_dest",

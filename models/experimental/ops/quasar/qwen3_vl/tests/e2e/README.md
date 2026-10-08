@@ -32,7 +32,7 @@ Script defaults: `--size tiny --vision-layers 2 --text-layers 2 --decode-steps 1
 | `--debug fast\|default\|deep` | fast: no watcher. default: watcher + LLK asserts, NoC sanitize off. deep: plus dump-all, noinline, per-RISC DPRINT, debug logging |
 | `--noc-sanitize` | re-enable NoC sanitize (20-30x slower) |
 | `--fp32-dest-acc` | keep fp32 dest accumulation in the Quasar config (hardware A/B; undefined on ttsim WH) |
-| `--timeout S` | pytest timeout (WH/BH and emulator 14400, craq-sim 3600) |
+| `--timeout S` | pytest timeout (WH/BH and emulator 14400, craq-sim 10800) |
 | `--ttsim wh\|bh`, `--grid 2x3\|native`, `--config quasar\|native` | `run_wh_bh.sh` only; `--config native` runs the unmodified bf8 config as a hardware control |
 | `--grid 2x3\|8x4` | `run_craq.sh` only |
 | `-- <args>` | passed to pytest, e.g. `-- --qwen-dump-stages` to save golden and TT stage tensors, or `-- --qwen-allow-uncertified` to use host fallbacks not yet checked against the real op (`test_fallbacks.py`) |
