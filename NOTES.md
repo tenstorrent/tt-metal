@@ -37,6 +37,12 @@
 - Scoring is NOT automatic now: on wake run cmp241.py per arm vs $F/diffvae/ref, plus s1x vs def and md5s
   (see the score block in drv/driver261.sh).
 
+## Job 000 result (run 1082)
+- def arm: decode 3.377/3.374 s (mean 3.376), md5 13802b01.../4a47f7a9... Out moved to out_AB_000.
+- s1x arm crashed: `H shard 34 is not whole 32-site bricks` (assert from the S5_2D commit 4ee505fc applied
+  on the 1-D path too). Fix 6b75bdfde1a: the assert applies only with an H axis.
+- Resubmitted 2026-10-08 10:54:58 UTC as blx01 broker job 002, src 6b75bdfde1a, -t 480, env drv/env.yaml.
+
 ## Next
 On wake: read driver.log and run.log. Check DECODE_MEAN_S per arm, the PCC/PSNR lines (cmp vs
 refs) and stage 1 in stage_tree_s1x.txt.
