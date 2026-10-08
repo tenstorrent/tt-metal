@@ -24,8 +24,9 @@ golden (a single-geometry stimuli harness can't lay out two tile shapes cleanly)
 in the G0 tilize state, so the kernel asserts the G1 baseline is NOT reproduced
 (Tile_x_dim / Z-dim differ), proving the transition is load-bearing.
 
-Exercises tiny `face_r_dim < 16` geometry through the test wrapper
-`_llk_unpack_tilize_uninit_wrapper_(dst, num_faces, face_r_dim)`.
+Exercises tiny `face_r_dim < 16` geometry. The end state is set by the C2 reconfig, which rewrites every
+register read back here, so this checks the retarget, not the face_r_dim the C1 uninit restores (the
+uninit restore is checked by test_unpack_tilize_uninit_restore_tiny and test_unpack_tilize_uninit_descriptor).
 """
 
 from dataclasses import dataclass
