@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+// Internal TT/TTI macro-to-compiler interface, not a user-facing SFPI API.
+// The effect marker describes the immediately preceding raw instruction;
+// its implementing compiler pass reconstructs hard-register lifetimes.
+// Existing compilers retain the original raw instruction path below, NOT
+// the allocator protection. Callers explicitly carrying values between raw
+// operations can instead use SFPI's public l_reg reads and assignments.
+// An independent l_reg[R].in_use() at each endpoint is not that lifetime.
 #ifndef TT_LLK_SFPRAWLREG_EFFECT
 #if defined(__riscv_xtt_sfprawlreg_effect)
 #define TT_LLK_SFPRAWLREG_EFFECT(r, w) __builtin_rvtt_sfprawlreg_effect((r), (w))
