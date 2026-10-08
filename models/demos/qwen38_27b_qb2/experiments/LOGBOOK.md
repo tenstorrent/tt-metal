@@ -553,3 +553,37 @@ notes: [shared-qk-and-bandwidth-v1](../galaxy-evidence/shared-qk-and-bandwidth-v
   no claim that the isolated read improvement has reached attention.
 
 [Full-model results and launch receipts](../galaxy-evidence/shared-qk-full-model-v1/README.md).
+
+## Oct 8, 16:03-16:30 UTC: remote-delivery prototype and G0 pass
+
+- Revalidated existing jobs as live before proceeding; no restart or hardware
+  interruption. Previous goal turn made progress by publishing the model gains.
+- Implemented bank-local reader-to-consumer delivery using separate cores,
+  cumulative ready/consumed credits, payload write completion before ready,
+  and consumer completion before slot reuse. Local reader and remote receive
+  storage each have bounded rings. Precision/model defaults remain unchanged.
+- Hardware test covers three placements, depths 1/2/4, packets 8/15 pages;
+  six variants, 24 timing cases including before/after raw-read controls.
+  Correctness checks include two independent allocations, short tails, slow
+  consumers, three trace replays and full-byte equality on all four chips.
+  Large timings check packet markers; they do not imply full-byte validation
+  at the largest volume or attention/production-page-table correctness.
+- **16:19:51:** launched `qwen38-dram-delivery-v1-20261008.service`, PID 3360483
+  observed live, waiting behind the GPQA unit. CPU 355 tests +40 subtests
+  passed; installed semaphore descriptor construction passed without opening
+  hardware. Twelve-hour service cap includes up to ten hours of dependency
+  waiting, then a one-hour hardware/lock limit; 64-GiB/8-CPU bounds. No hardware
+  performance or compilation pass for the new kernels has been claimed.
+- **16:29:48:** G0 terminated cleanly after a passing JUnit test (42m45s).
+  All eight physical TP4 groups pass output and concurrent timing checks.
+  Worst concurrent/isolated TPOT ratio 1.000226 (+0.0226%). Scope remains B1
+  short prompts; this does not measure B32 shared-Q/K Galaxy throughput.
+- GPQA advanced to `starting` with exact-source qualification accepted.
+  Delivery remains queued after it. All snapshots are on the allocated host's
+  local artifact disk; no native install, checkpoint, firmware or NFS writes.
+- Local pre-commit and source-hash comparison passed. SSH stdin collection and
+  staging initially hit the local sandbox network restriction; retried via the
+  required approval mechanism, with no duplicate jobs created.
+
+[Delivery launch](../galaxy-evidence/dram-delivery-launch-v1/README.md),
+[G0 pass](../galaxy-evidence/shared-qk-g0-pass-v1/README.md).

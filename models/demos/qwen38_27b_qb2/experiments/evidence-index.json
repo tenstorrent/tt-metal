@@ -1,21 +1,21 @@
 {
-  "generated_at": "2026-10-08T15:58:40.037258+00:00",
+  "generated_at": "2026-10-08T16:44:28.631654+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 46785,
-      "sha256": "c9cb62c814e496fc27e695c5ccea2e612722e9f80f84d54b2635a6031cd02747"
+      "bytes": 49109,
+      "sha256": "5533109d1e32070d23a977112e6521e3141a30bc6c101eb31f58de8db2684f2b"
     },
     {
       "path": "experiments/OPTIMIZATION-BACKLOG.md",
-      "bytes": 5051,
-      "sha256": "aae87e1d7a276a6eeca4492319ed9b579c046dc9e71853bd9ab0f32e3f063993"
+      "bytes": 5152,
+      "sha256": "8a7067aabbe377d9bd6fa88450be57affb02f1cf86e73fe7d3f0ad66aa1e453e"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 18583,
-      "sha256": "ab9e458ba63999fc0830f82d11882b3fadd8ee2bcbb764841e4c4a36710c676c"
+      "bytes": 19811,
+      "sha256": "9ced0c41321e44b0dac0a319235ca655238167bf241f0ad3ec6c5a6bdb471eea"
     },
     {
       "path": "experiments/SPECULATIVE-DECODE-SCOPE.md",
@@ -917,6 +917,36 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/dram-delivery-launch-v1/README.md",
+      "bytes": 1935,
+      "sha256": "c4b058589b70c2987407f550342e2729ed6c0c4df3610e7821c904b53824a152"
+    },
+    {
+      "path": "galaxy-evidence/dram-delivery-launch-v1/collection.json",
+      "bytes": 176,
+      "sha256": "3a1bbff36a34c914daf6c87167dc1219417f0312db98193ab17904a789c0a406"
+    },
+    {
+      "path": "galaxy-evidence/dram-delivery-launch-v1/dram-delivery-launch-v1.json",
+      "bytes": 2977,
+      "sha256": "0ab04cd37dd36c0abd3e644c33f60bdcdc0e9bf91b1b6026d091c7f341daed30"
+    },
+    {
+      "path": "galaxy-evidence/dram-delivery-launch-v1/dram-delivery-unit-v1.xml.gz",
+      "bytes": 6712,
+      "sha256": "ba1c11bd8a092b9d6b476e0d87dee042cd93cbdfb1d7c9f33bc2c0861c175375"
+    },
+    {
+      "path": "galaxy-evidence/dram-delivery-launch-v1/queue.json",
+      "bytes": 20424,
+      "sha256": "4ff1c70cb0484e7976793b760937470b9b4279b7209e40556e0d67ba691a0a4b"
+    },
+    {
+      "path": "galaxy-evidence/dram-delivery-launch-v1/services.txt",
+      "bytes": 382,
+      "sha256": "72aa1edb8f10dbaae2958627814ee7bad64415bd89eda3872d05b1eba51825b9"
     },
     {
       "path": "galaxy-evidence/eight-replicas-v2/full-model.json",
@@ -3940,6 +3970,26 @@
       "state": "waiting_for_g0",
       "passed": false,
       "updated_at": "2026-10-08T15:55:19Z"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-g0-pass-v1/README.md",
+      "bytes": 1154,
+      "sha256": "3e50b7570445ad38ab2b5a15f76a0e552f8dafdcae06b4ec6e8e02325d193c97"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-g0-pass-v1/full-model.json",
+      "bytes": 261295,
+      "sha256": "3b713b47e15b4677065f9262472a7014a26276dfaf9707ff3be94509bad87f11"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-g0-pass-v1/gpqa-startup.json",
+      "bytes": 15946,
+      "sha256": "c4932f5ae6bcaaae6180bb26eb28b1048ca3f26fe7690baac8f8ea2a4ea4f5dd"
+    },
+    {
+      "path": "galaxy-evidence/shared-qk-g0-pass-v1/hardware.xml.gz",
+      "bytes": 312,
+      "sha256": "a086e53121fa18539fe8c66667cabf4d24b3283fcbb84374d0bd9478b2898e29"
     },
     {
       "path": "galaxy-evidence/storage-recovery-20261007/checkpoint-local-copy.json",

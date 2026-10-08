@@ -20,8 +20,9 @@ single cause that accounts for the whole difference:
   The measured candidate performs FP32 SFPU arithmetic and reductions, with
   tile unpack/pack and circular-buffer synchronization between delta, state
   update and output stages. State is read once from DRAM but revisited in L1.
-  Shared Q/K normalization is repeated across three value heads and four
-  value-column partitions. These costs are visible in the source; their
+  The previous single-step path repeated Q/K normalization across three value
+  heads and four value-column partitions; the tested opt-in shared-Q/K path now
+  removes that duplication. The remaining costs are visible in the source; their
   individual shares of latency have not been isolated by a complete profile.
   B64 recurrence is 596.43 us versus the 206.61-us state-bandwidth-plus-10-us
   target, even before the separate output epilogue.
@@ -251,3 +252,21 @@ above have been superseded by these receipts.
 
 See [new full-model evidence](../galaxy-evidence/shared-qk-full-model-v1/README.md)
 and the [remaining optimization backlog](OPTIMIZATION-BACKLOG.md).
+
+## Latest evidence: Oct 8, 16:30 UTC
+
+The eight-replica G0 check passed in 42m45s including sequential loading.
+Concurrent/isolated TPOT ratios span 0.999951-1.000226, within the unchanged
+3% gate on every physical TP4 group. This is short-prompt B1 qualification;
+B1 uses the fused fallback, so it does not establish shared-Q/K B32 throughput
+or long-context eight-replica scaling. GPQA has advanced into serving startup,
+with no new score yet. [G0 receipt](../galaxy-evidence/shared-qk-g0-pass-v1/README.md).
+
+The bank-local read diagnostic now has a separate remote-delivery prototype:
+eight producers plus eight consumers per chip, cumulative ready/consumed
+credits, bounded rings, and payload-before-notification ordering. CPU tests
+passed (355 +40 subtests); the persistent hardware test waits for GPQA to exit,
+then acquires the global device lock. It checks full bytes under delayed
+consumption and trace replay before timing 272/544/1088 MiB per chip. No native
+attention integration, production KV page table, or throughput gain is claimed.
+[Delivery launch evidence](../galaxy-evidence/dram-delivery-launch-v1/README.md).

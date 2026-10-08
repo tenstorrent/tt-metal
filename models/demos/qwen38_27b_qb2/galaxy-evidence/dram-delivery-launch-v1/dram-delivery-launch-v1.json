@@ -1,0 +1,59 @@
+{
+  "created_at": "2026-10-08T16:19:51.519896+00:00",
+  "source": "/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v1",
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/tt/dram_delivery_probe.py": "80f7a5e31662474674d6aa15d025878ca2737f8a2f306e41db24f412bd558059",
+    "models/demos/qwen38_27b_qb2/tt/dram_delivery_probe_sender.cpp": "c40989afe9111927418d3154a1d757fb431dd8159749cb29adf38a078f901cce",
+    "models/demos/qwen38_27b_qb2/tt/dram_delivery_probe_consumer.cpp": "59e253021e26069d80ebe7074293e623b861e5fdff7777d44612f54abc3d2e54",
+    "models/demos/qwen38_27b_qb2/tests/test_dram_delivery_probe.py": "5ace2f97c5f9f4439aa49ebb9e225ea605cf3cac53276ccf4b37c4480867cb95",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_dram_delivery_probe.py": "bd8ca1abc69647a61dc75821beae24686f4153ab0a0ced8f82b87bb36e086991",
+    "models/demos/qwen38_27b_qb2/demo/run_dram_delivery_probe.py": "5f6f508f56321535b994fa58b8bbe30eeb8773270929962a8d5bd95ba0437035"
+  },
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-dram-delivery-v1-20261008",
+    "--property=RuntimeMaxSec=12h",
+    "--property=TimeoutStopSec=180",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=64G",
+    "--property=CPUQuota=800%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/dram-delivery-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/dram-delivery-v1.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v1",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/bin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v1:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=OMP_NUM_THREADS=8",
+    "--setenv=TT_METAL_INSPECTOR_RPC=0",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_dram_delivery_probe",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/dram-delivery-source-v1",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/dram-delivery-v1",
+    "--after-unit",
+    "qwen38-shared-qk-gpqa-v1-20261008.service"
+  ],
+  "cpu_tests": 355,
+  "cpu_subtests": 40,
+  "variants": 6,
+  "timed_cases": 24,
+  "full_byte_validation_pages": [
+    8,
+    2056
+  ],
+  "full_byte_validation_delays": [
+    0,
+    4096
+  ],
+  "validation_trace_replays": 3,
+  "promoted_to_model": false,
+  "hardware_lock": "/tmp/tt-device.lock",
+  "scope": "Bank-local bulk reads plus eight remote consumers per chip; no production KV paging or attention math"
+}
