@@ -48,3 +48,25 @@ The ref used LTX25_ROOT=/mnt/MLPerf/... -> FORBIDDEN now (job 086 D-state hang).
    commits changed numerics: run a 2nd job with the pre-change tip 9e20d905481 overlay + LTX_S2_SIGMAS=0.909375,0.725,0.421875,0.0;
    it must match this run's md5s (that is the real identity check of the revert).
 5. Clean up /var/tmp/fasth3/t295 (keep run.log + md5s here).
+
+## Run 1178 (2026-10-08 19:16-19:21 UTC): fallback LTX-2.3 A/B submitted via driver on blx01
+- blx03 still 'No route to host'. blx01 up again (rebooted ~19:11 UTC, broker in idle-relift health check).
+- blx01 /var/tmp/fasth3/t48 build bf7db12a14 exists; t220/cache/dit-ltx23 has the bf16 LTX-2.3 cache (t283 job 077
+  ran the standard e2e test on it: 139 s process wall, warm). No LTX-2.5 root, so the job-755 ref md5s
+  (LTX_VERSION=2.5 env) cannot be reproduced; doing the A/B identity check instead.
+- /var/tmp/fasth3/t295 on blx01: treeA = t48 models + f6547442b30 files (S2 default 4 sigmas), treeB = treeA with
+  the 6 changed files at 9e20d905481 (S2 default 3 sigmas). Host import check: A default and B+LTX_S2_SIGMAS both
+  give [0.909375, 0.725, 0.421875, 0.0]; B default gives the old 2-step list.
+- job295.sh (one broker job, -t 520, -w t48): run295b.sh A then B, each its own pytest process, standard test
+  test_pipeline_distilled -k bh_4x8sp1tp0_ring unmodified, SEED=0 LTX_E2E_SEEDS=0,1,2,3,4 (gen0 = cold seed 0,
+  gen1..5 = seeds 0..4), RUN_VBENCH=0 RUN_CLIP=0, bf16, gate fold default. Prints per-gen md5 A vs B MATCH/DIFF.
+- drv295.sh (pgid 19426 on blx01, started 19:19 UTC) waits for uptime >=15 min and a clean broker, submits once,
+  waits, copies `tt-device-mcp logs` to job<ID>.log, writes drv295.done ("DONE job=<id> status=<s>").
+- Wake: `ssh blx01 test -e /var/tmp/fasth3/t295/drv295.done`.
+
+## Next step on wake
+1. cat drv295.done; read outA/run.log, outB/run.log tails and the "[t295] genN A=.. B=.. MATCH" lines (job log or
+   rerun the md5 compare from outA/outB). All 6 MATCH + both T295_EXIT=0 -> revert verified; report job id + md5s.
+   DIFF -> check whether gen0 vs replays differ run-to-run (nondeterminism) before blaming the code.
+2. A drop -> log UTC/box/job/chips, rerun drv295.sh once (it submits fresh).
+3. Copy run logs + md5 lists to tmp/t295/res/, then rm -rf /var/tmp/fasth3/t295 on blx01 (outputs, trees).
