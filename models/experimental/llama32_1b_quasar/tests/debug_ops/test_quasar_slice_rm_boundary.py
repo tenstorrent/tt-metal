@@ -107,9 +107,14 @@ def _readback(x):
 
 def _check_slice(dev, src_h, start_row, end_row, layout):
     """Slice rows [start_row:end_row] of a [B0,B1,src_h,W] tensor and verify against torch.
-    A SEGFAULT here crashes the process (the repro); a clean return + matching values is a PASS."""
+    A SEGFAULT here crashes the process (the repro); a clean return + matching values is a PASS.
+
+    Input is **bfloat16**, matching the e2e SDPA output. Do NOT use float32 here: an fp32 input makes
+    the upload/tilize take the lossless fp32 unpack-to-dest path (tilize_metal2.cpp Fp32Mode::Lossless),
+    which hits the Quasar unpack-to-dest DEST-bank bug fixed by PR #59290 ("wrong at every size, hang at
+    scale" for fp32) -- a tilize fault that has nothing to do with the slice under test."""
     torch.manual_seed(0)
-    t = torch.randn(B0, B1, src_h, W, dtype=torch.float32)
+    t = torch.randn(B0, B1, src_h, W, dtype=torch.float32).to(torch.bfloat16)
     x = _upload(t, dev, layout)
     logger.info(
         f"[slice-repro] src=[{B0},{B1},{src_h},{W}] layout={layout} slice rows [{start_row}:{end_row}] "
