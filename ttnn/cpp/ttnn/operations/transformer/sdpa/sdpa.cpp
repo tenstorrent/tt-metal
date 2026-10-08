@@ -49,12 +49,9 @@ void reject_decode_settings(const std::optional<ttnn::operations::transformer::S
         "program_config.");
 }
 
-// Precision routing: see SDPAPrecisionRecipes.md, "Routing". True when a call without precision may run a recipe on
-// this device.
-bool routes_to_recipes(const ttnn::Tensor& q) {
-    return q.storage_type() == StorageType::DEVICE &&
-           (q.device()->arch() == tt::ARCH::BLACKHOLE || q.device()->arch() == tt::ARCH::WORMHOLE_B0);
-}
+// Precision routing: see SDPAPrecisionRecipes.md, "Routing". True when a call without precision may run a recipe: the
+// recipes run on Blackhole and Wormhole; only device inputs are routed (host inputs fail the op's validation).
+bool routes_to_recipes(const ttnn::Tensor& q) { return q.storage_type() == StorageType::DEVICE; }
 
 // The compute config the legacy kernels would run with (the defaults every SDPA prefill op applies).
 DeviceComputeKernelConfig legacy_compute_config(

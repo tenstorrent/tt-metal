@@ -74,10 +74,9 @@ def check_gqa_crossing(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid, dtype):
     assert_with_pcc(_torch_ref(q, k, v, nh, nkv), got.float(), 0.99 if dtype == ttnn.bfloat8_b else 0.999)
 
 
-def check_concat_wrap_non_streaming(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid):
-    """fp32_dest_acc_en=True runs the non-streaming kernel, whose writer drains a whole Q chunk with write_block
-    instead of write_block_row_grouped. A chunk's rows run into the next query head of the group, so write_block must
-    wrap them too."""
+def check_concat_fp32_dest(device, b, nh, nkv, s, d, q_chunk, k_chunk, grid):
+    """fp32_dest_acc_en=True leaves the streaming kernel and runs the ACCURATE recipe, which does not cross Q heads;
+    at a crossing shape its concat-heads output must still match nlp_concat_heads of the head-major output."""
     (q, k, v), (tq, tk, tv) = _inputs(device, b, nh, nkv, s, d, ttnn.bfloat16, grid)
     pc = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(*grid),

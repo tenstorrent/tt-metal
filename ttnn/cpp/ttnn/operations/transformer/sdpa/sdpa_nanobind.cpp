@@ -392,8 +392,9 @@ void bind_sdpa(nb::module_& mod) {
             attn_mask_block_map (ttnn.Tensor, optional): Defaults to `None`. Non causal with `attn_mask` only. [Bm x Hm x ceil(Sq / q_chunk) x ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR with the mask's batch and head dims, nonzero where a (q chunk, k chunk) block of the mask has a visible entry. Blocks flagged 0 are not read or computed; rows whose every block is 0 are unspecified. Heads whose K/V chunks are forwarded between their cores keep those chains, and stream every block, while fewer than 40 percent of the blocks in a sample of the map's rows are masked; skipping blocks pays only past that.
 
 
-        Grouped-query attention (non-causal, `nqh > nkh`) is scheduled automatically. Cores working on the query
-        heads of one KV head can share its K/V (read once, then forwarded core to core). With a single K chunk
+        On the streaming kernel (BF16 DEST), grouped-query attention (non-causal, `nqh > nkh`) is scheduled
+        automatically. Cores working on the query heads of one KV head can share its K/V (read once, then forwarded
+        core to core). With a single K chunk
         (`k_chunk_size >= s`, `fp32_dest_acc_en=False`), each core also keeps a KV head's K/V across its consecutive
         query chunks instead of re-reading it. When `q_chunk_size` does not divide `s`, a query chunk may run on into
         the next query head of its group if that lowers the most query chunks any core runs (no `attn_mask`, no
@@ -1013,8 +1014,8 @@ void bind_sdpa(nb::module_& mod) {
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
                 device tensor. When omitted, the streaming kernel runs; FP32 DEST, or a blocking it cannot build,
-                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole at op-chosen chunks on the program_config
-                grid. compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
+                runs STANDARD (ACCURATE with FP32 DEST) at op-chosen chunks on the program_config grid.
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -1072,8 +1073,7 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
                 `scaled_dot_product_attention` (V and the output are head_dim_v wide; without input_tensor_v, V is
-                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE. Defaults to
-                `None`.
+                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
