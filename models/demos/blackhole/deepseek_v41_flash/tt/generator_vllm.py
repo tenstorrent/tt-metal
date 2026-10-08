@@ -176,6 +176,11 @@ class DeepseekV41ForCausalLM:
             )
             # BEFORE any prefill / decode trace exists: persistent tensors allocated after a captured trace can sit on its scratch memory (demo DSV41_SPEC_EARLY)
             generator.enable_spec(spec_k)
+            # compile pass of the verify round NOW, before any trace exists: it creates every lazily built persistent tensor (packed inputs, Engram rows, per-T constants); the lazy first use
+            # in ``_spec_seed`` ran it after the prefill trace was captured: a persistent tensor allocated under a live trace is clobbered by its replays (hang on the first request)
+            sp = generator.spec
+            generator.m._admit_idle()  # every user owns a page (the verify round's pool.ensure grows all of them)
+            sp.prepare(torch.zeros(B, sp.n, dtype=torch.long), torch.full((B,), 130, dtype=torch.long))
             logger.info(f"DSV4.1 vLLM: speculative decoding ON, {generator.spec_choice.describe()}")
         self = cls(generator, max_batch_size, max_seq_len)
         if self.bucketing and os.environ.get("DSV41_VLLM_WARM", "1") == "1":
