@@ -8,6 +8,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -22,8 +23,6 @@ namespace {
 
 constexpr uint32_t tiles_cb = 0;
 constexpr uint32_t mode_cb = 1;
-// One DRAM-aligned scratch page receives each chronology scalar before it carries the derived mode.
-constexpr uint32_t mode_page_bytes = 64;
 // A few tiles per copy worker keep the unsplit copy latency-bound.
 constexpr uint32_t tiles_per_copy_worker = 8;
 constexpr const char* kernel_dir =
@@ -86,6 +85,10 @@ tt::tt_metal::ProgramDescriptor build_program(
         sp_size > 1 ? ttnn::ccl::get_forward_backward_line_mcast_distance(sp_size, ring_index, topology, true)
                     : std::tuple<uint32_t, uint32_t>{0, 0};
 
+    // One scratch page receives each chronology scalar read from DRAM before it carries the derived mode, so it is
+    // aligned for both DRAM reads and L1.
+    const uint32_t mode_page_bytes =
+        std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
     const auto state_format = tt::tt_metal::datatype_to_dataformat_converter(in.prefix_final.dtype());
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
         .total_size = 4 * packet_pages * page_size,

@@ -18,6 +18,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 
 namespace ttnn::experimental::prim {
 ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::create_mesh_workload_artifacts(
