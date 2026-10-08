@@ -231,8 +231,7 @@ def test_mtp_sharded_argmax_matches_gathered(mesh_device, B, reset_seeds):
         ccl_topology=lambda: ModelArgs.ccl_topology(SimpleNamespace(num_devices=nd)),
     )
     m._init_sharded_argmax(SimpleNamespace(_lmhead_vocab_sharded=True))
-    assert m._sharded_argmax and m._argmax_B == B
-    logger.info(f"B={B}: reshape [1,1,B,1]->[1,1,B] aliases its input: {m._argmax_out_alias}")
+    assert m._sharded_argmax
 
     logits = torch.randn(1, 1, B, vocab, dtype=torch.float32)  # max of 248k normals is ~5
     logits[0, 0, 0, 100] = logits[0, 0, 0, 2 * shard + 500] = 20.0
@@ -268,7 +267,7 @@ def test_mtp_sharded_argmax_matches_gathered(mesh_device, B, reset_seeds):
     )
 
     def ids(t):
-        assert tuple(t.shape) == (1, 1, B), f"expected [1,1,{B}], got {tuple(t.shape)}"
+        assert tuple(t.shape) == (1, 1, B, 1), f"expected [1,1,{B},1], got {tuple(t.shape)}"
         assert t.dtype == ttnn.uint32 and t.layout == ttnn.ROW_MAJOR_LAYOUT
         per_dev = [ttnn.to_torch(d).reshape(-1)[:B].to(torch.int64) for d in ttnn.get_device_tensors(t)]
         for d in per_dev[1:]:

@@ -4,13 +4,7 @@
 // Reader: initial state S [K,V] once (from s0 or host-provided zeros), then per token
 // q,k [1,K], v [1,V], decay,beta [1,1]. All fp32. Device 2.0 API.
 // Per-token layout: q/k/v are [BH*T, 1, D] and decay/beta [BH*T, 1, 1]; block index = h*T + t.
-//
-// Ring mode (use_blk_idx): s0 is the [BH*T,K,V] per-token-state ring the writer also writes into,
-// and this core's initial state is block idx[h] of it, not block h. idx is one ROW_MAJOR page of
-// BH uint32s; read it whole into a scratch CB and take element h. The caller guarantees
-// idx[h] % BH == h, so this core only reads a block it wrote itself, and the read completes
-// (barrier + push of cb_S) before compute produces the first state the writer stores -- no
-// cross-core ordering and no semaphore.
+// Ring mode (use_blk_idx): the contract is documented on the Python binding.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

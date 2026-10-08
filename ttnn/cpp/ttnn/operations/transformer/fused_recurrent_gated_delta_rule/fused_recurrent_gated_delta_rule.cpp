@@ -119,28 +119,17 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // (device-side fill, uncached), same caveat as chunk_gated_delta_rule.
     //
     // Ring mode: initial_state IS the [T*BH,K,V] per-token ring and also the state output. Pass it
-    // through untouched -- a reshape or typecast here would break the in-place aliasing.
+    // through untouched -- a reshape or typecast here would break the in-place aliasing. The device
+    // op validates it (presence, fp32, shape).
     const bool ring = initial_state_block_idx.has_value();
-    std::optional<ttnn::Tensor> s0;
-    if (ring) {
-        TT_FATAL(
-            output_per_token_state,
-            "fused_recurrent_gated_delta_rule: initial_state_block_idx requires output_per_token_state=True");
-        TT_FATAL(
-            initial_state.has_value(),
-            "fused_recurrent_gated_delta_rule: initial_state_block_idx requires initial_state (the ring)");
-        // as_f32() must be a no-op here (a typecast would allocate a copy and the in-place write
-        // would land in the wrong buffer), so require fp32 up front.
-        TT_FATAL(
-            initial_state->dtype() == DataType::FLOAT32,
-            "fused_recurrent_gated_delta_rule: the ring initial_state must already be fp32, got {}",
-            initial_state->dtype());
-        s0 = *initial_state;  // exact shape [T*BH,K,V] is checked by the device op
-    } else if (initial_state.has_value()) {
-        s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
-    } else {
-        s0 = ttnn::zeros(
-            ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+    std::optional<ttnn::Tensor> s0 = initial_state;
+    if (!ring) {
+        if (initial_state.has_value()) {
+            s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
+        } else {
+            s0 = ttnn::zeros(
+                ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+        }
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);

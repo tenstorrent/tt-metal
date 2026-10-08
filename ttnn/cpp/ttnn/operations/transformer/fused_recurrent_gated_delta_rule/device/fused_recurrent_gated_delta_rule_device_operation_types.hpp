@@ -41,16 +41,8 @@ struct FusedRecurrentGatedDeltaRuleParams {
 //   beta : [BH*T, 1, 1]
 //   initial_state: [BH, K, V] or absent (zeros).
 //
-// "Ring" mode (initial_state_block_idx present, requires output_per_token_state):
-//   initial_state is the [BH*T, K, V] per-token-state RING and is ALSO the state output (in place).
-//   Core h reads its initial state from block idx[h] of that ring instead of block h, and writes its
-//   per-token states back into blocks (t*BH + h). This is the deferred per-head state select the
-//   batched spec-decode commit needs: the host picks each user's accepted slot by writing idx, with
-//   no copy and no extra dispatch.
-//   initial_state_block_idx: [BH] (or [1, BH]) uint32/int32, ROW_MAJOR, interleaved.
-//   CALLER CONTRACT: idx[h] % BH == h for every h. Each core then only ever reads blocks it wrote
-//   itself, and it reads its whole initial state before its first per-token write, so there is no
-//   cross-core ordering requirement (and no semaphore).
+// "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the
+// state output; the contract is documented on the Python binding.
 struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor q;
     Tensor k;

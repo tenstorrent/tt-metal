@@ -106,9 +106,8 @@ def kda_pack_gather(n_users, T, kc, rows_padded):
     L = kc - 1 + T
     assert n_users * L <= rows_padded, f"{n_users} windows of {L} rows exceed {rows_padded}"
     g = torch.zeros(1, n_users * T, rows_padded, dtype=torch.bfloat16)
-    for u in range(n_users):
-        for j in range(T):
-            g[0, u * T + j, u * L + kc - 1 + j] = 1.0
+    r = torch.arange(n_users * T)
+    g[0, r, r // T * L + kc - 1 + r % T] = 1.0
     return g
 
 
@@ -134,11 +133,8 @@ def spec_state_blk_idx(mi, n_users, nv):
     Returns torch.int32 [n_users*nv].
     """
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
-    idx = torch.empty(n_users * nv, dtype=torch.int32)
-    head = torch.arange(nv, dtype=torch.int32)
-    for u in range(n_users):
-        idx[u * nv : (u + 1) * nv] = (int(mi[u]) * n_users + u) * nv + head
-    return idx
+    blk = torch.as_tensor(mi, dtype=torch.int64) * n_users + torch.arange(n_users)
+    return (blk[:, None] * nv + torch.arange(nv)).reshape(-1).to(torch.int32)
 
 
 def spec_conv_sel(mi, n_users, T, kc):
@@ -154,15 +150,12 @@ def spec_conv_sel(mi, n_users, T, kc):
     Returns torch.bfloat16 [n_users, kc-1+T, kc-1+2T] (one-hot, so the matmul is exact).
     """
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
-    rows, cols = kc - 1 + T, kc - 1 + 2 * T
-    sel = torch.zeros(n_users, rows, cols, dtype=torch.bfloat16)
-    for u in range(n_users):
-        m = int(mi[u])
-        assert 0 <= m < T, f"mi[{u}]={m} out of range [0,{T})"
-        for r in range(kc - 1):
-            sel[u, r, m + 1 + r] = 1.0
-        for j in range(T):
-            sel[u, kc - 1 + j, (kc - 1 + T) + j] = 1.0
+    m = torch.as_tensor(mi, dtype=torch.int64)
+    assert bool(((m >= 0) & (m < T)).all()), f"mi={m.tolist()} out of range [0,{T})"
+    sel = torch.zeros(n_users, kc - 1 + T, kc - 1 + 2 * T, dtype=torch.bfloat16)
+    r, j = torch.arange(kc - 1), torch.arange(T)
+    sel[torch.arange(n_users)[:, None], r, m[:, None] + 1 + r] = 1.0
+    sel[:, kc - 1 + j, kc - 1 + T + j] = 1.0
     return sel
 
 
@@ -813,8 +806,8 @@ class TPGatedDeltaNet:
                     src = ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D))
                     ttnn.copy(src, self.conv_states[j + 1])
                 # Prefill wrote the taps directly, so they are the truth and the [B,K,C] window
-                # mirror the fullbatch verify reads its carry from is now behind (re-seeded lazily
-                # by _ensure_conv_win, on the next EAGER verify — the spec loop's seed).
+                # mirror the spec seed reads its carry from is now behind (re-seeded lazily by
+                # _ensure_conv_win, on the spec loop's next eager seed).
                 self._conv_taps_stale = False
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
@@ -1574,27 +1567,14 @@ class TPGatedDeltaNet:
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"
         T = valid_len // n_users
-        assert n_users * T <= tpc.TILE_SIZE
-        if state_blk_idx is None or conv_sel is None:
-            raise ValueError(
-                "forward_verify_recurrent needs state_blk_idx and conv_sel (the deferred-select verify "
-                "is the only verify path; call prepare_spec_verify + seed_spec_state first)"
-            )
         assert self._spec_shape == (n_users, T), (
             f"spec buffers are sized for {self._spec_shape}, verify asked for {(n_users, T)}; "
             "call prepare_spec_verify(n_users, T) before capture"
         )
-        return self._forward_verify_recurrent_batched(x, valid_len, T, n_users, state_blk_idx, conv_sel, pre_gathered)
-
-    def _forward_verify_recurrent_batched(self, x, valid_len, T, n_users, state_blk_idx, conv_sel, pre_gathered):
-        """Gather + ONE decode projection over all valid rows, then the batched conv + recurrence.
-
-        Key fact this rests on: the decode matmul (matmul_1d_decode) is row-independent and
-        processes a full 32-row M-tile however many rows are real, so packing every user's T rows
-        into ONE projection is per-row identical to projecting them one at a time — while collapsing
-        valid_len separate launches into one. The AGMM prefill projection is deliberately avoided:
-        it rounds differently and would drift the state away from plain decode.
-        """
+        # The decode matmul (matmul_1d_decode) is row-independent and processes a full 32-row M-tile
+        # however many rows are real, so one projection over every user's T rows is per-row identical
+        # to projecting them one at a time. The AGMM prefill projection rounds differently and would
+        # drift the state away from plain decode.
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
         return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel)
 
@@ -1677,10 +1657,9 @@ class TPGatedDeltaNet:
         SiLU gate, out-proj, all-reduce. At B = 1 every shape here is the shape that body had at
         T = 1, so the arithmetic is the same arithmetic.
         """
-        tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
-        _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
-        kd, C, rf, K = self.key_dim_tp, self.qkv_dim_tp, Nv // Nk, self.K
-        B = R = n_users
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        C, K = self.qkv_dim_tp, self.K
+        B = n_users
 
         # 1) Conv window. The carry is the shift register's previous K-1 inputs, i.e. taps [1, K) of
         #    the [B, K, C] mirror; E = [carry(K-1) ; this row(1)] is BOTH the conv input and the new
@@ -1694,23 +1673,10 @@ class TPGatedDeltaNet:
         ttnn.deallocate(qkv_new)
         q_all, k_all, v_all = self._kda_conv_packed(E, 1)  # each [1, B, width], SiLU applied
 
-        # 2) q/k/v: the packed KDA call already split them; one row per user -> [B, 1, heads, D].
-        q_all = ttnn.reshape(q_all, (B, 1, Nk, Dk))
-        k_all = ttnn.reshape(k_all, (B, 1, Nk, Dk))
-        v_all = ttnn.reshape(v_all, (B, 1, Nv, Dv))
-        if rf != 1:
-            q_all = ttnn.repeat_interleave(q_all, rf, dim=2)
-            k_all = ttnn.repeat_interleave(k_all, rf, dim=2)
+        # 2) q/k/v heads and gating for every user at once.
+        q_all, k_all, v_all, beta_all, g_all = self._heads_and_gates(q_all, k_all, v_all, a_all, b_all, B, 1)
 
-        # 3) Gating for every user at once.
-        a_new = self._rows_to_users(a_all, B, 1, Nv)
-        b_new = self._rows_to_users(b_all, B, 1, Nv)
-        beta_all = ttnn.sigmoid(b_new, memory_config=_L1)
-        ttnn.deallocate(b_new)
-        g_all = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a_new, tw["dt_bias"]), memory_config=_L1)
-        ttnn.deallocate(a_new)
-
-        # 4) ONE recurrence dispatch, PLAIN mode: initial state is the durable rec_state and the op
+        # 3) ONE recurrence dispatch, PLAIN mode: initial state is the durable rec_state and the op
         #    returns the final state only (there is no per-token ring yet, and at T = 1 the two are
         #    the same state anyway). Identical call — and identical [B,1,Nv,*] shapes — to the fused
         #    recurrent decode step, so it adds no program the decode path does not already have.
@@ -1729,7 +1695,7 @@ class TPGatedDeltaNet:
         for t in (q_all, k_all, v_all, beta_all, g_all):
             ttnn.deallocate(t)
 
-        # 5) State writeback, to the DURABLE buffers. rec_state in place (its address is baked into
+        # 4) State writeback, to the DURABLE buffers. rec_state in place (its address is baked into
         #    the decode traces); the shift register is E itself, which already has exactly K rows.
         #    State is always in-place on main, so no stable/unstable branch.
         ttnn.copy(states, self.rec_state)
@@ -1745,7 +1711,51 @@ class TPGatedDeltaNet:
         self._conv_taps_stale, self._conv_win_stale = True, False
         self.sync_conv_taps()  # clears _conv_taps_stale; both mirrors now hold the seeded window
 
-        # 6) Output tail over the B rows.
+        # 5) Output tail over the B rows.
+        return self._out_tail(o_all, z_all, B, bucket)
+
+    def _rows_to_users(self, t, B, T, width):
+        """[1, B*T, width] -> [B, T, width]. Rows are user-major, so this is a pure regroup.
+
+        B == 1 is the identity (SAME buffer returned — do not free both handles). For B > 1 the
+        reshape allocates, because each user's T rows have to start a fresh tile row; the source is
+        freed here. The tiled reshape builds a host page-map on its program-cache MISS, so a traced
+        body must have been warmed up at this exact shape.
+        """
+        if B == 1:
+            return t
+        out = ttnn.reshape(t, (B, T, width))
+        ttnn.deallocate(t)
+        return out
+
+    def _heads_and_gates(self, q_all, k_all, v_all, a_all, b_all, B, T):
+        """Packed-conv q/k/v and the raw a/b rows -> the fused recurrent op's inputs.
+
+        q/k/v become [B, T, heads, D] (q/k repeated up to the value-head count); beta and g are
+        [B, T, Nv]. Consumes every input."""
+        tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        q_all = ttnn.reshape(q_all, (B, T, Nk, Dk))
+        k_all = ttnn.reshape(k_all, (B, T, Nk, Dk))
+        v_all = ttnn.reshape(v_all, (B, T, Nv, Dv))
+        rf = Nv // Nk
+        if rf != 1:
+            q_all = ttnn.repeat_interleave(q_all, rf, dim=2)
+            k_all = ttnn.repeat_interleave(k_all, rf, dim=2)
+        a_new = self._rows_to_users(a_all, B, T, Nv)
+        b_new = self._rows_to_users(b_all, B, T, Nv)
+        beta_all = ttnn.sigmoid(b_new, memory_config=_L1)
+        ttnn.deallocate(b_new)
+        g_all = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a_new, tw["dt_bias"]), memory_config=_L1)
+        ttnn.deallocate(a_new)
+        return q_all, k_all, v_all, beta_all, g_all
+
+    def _out_tail(self, o_all, z_all, R, bucket):
+        """Gated norm, out-proj and all-reduce over R rows, zero-padded to the bucket.
+
+        rms_norm normalises over the last dim, so one call covers every row. Consumes o_all, z_all."""
+        tw, Nv, Dv = self.tw, self.Nv, self.Dv
+        _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
         out_n = ttnn.rms_norm(ttnn.reshape(o_all, (R, Nv, Dv)), weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
         ttnn.deallocate(o_all)
         out_f_b = ttnn.reshape(out_n, (1, R, self.value_dim_tp))
@@ -1769,20 +1779,6 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o_full)
         return o_red
 
-    def _rows_to_users(self, t, B, T, width):
-        """[1, B*T, width] -> [B, T, width]. Rows are user-major, so this is a pure regroup.
-
-        B == 1 is the identity (SAME buffer returned — do not free both handles). For B > 1 the
-        reshape allocates, because each user's T rows have to start a fresh tile row; the source is
-        freed here. The tiled reshape builds a host page-map on its program-cache MISS, so a traced
-        body must have been warmed up at this exact shape.
-        """
-        if B == 1:
-            return t
-        out = ttnn.reshape(t, (B, T, width))
-        ttnn.deallocate(t)
-        return out
-
     def _verify_fullbatch(self, qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel):
         """The device body of a batched verify. Inputs are the already-projected [1, B*T, *] rows.
 
@@ -1794,10 +1790,9 @@ class TPGatedDeltaNet:
                     B*T per-token states back into the same ring;
           output -> one gated norm + out-proj + all-reduce over the B*T rows.
         """
-        tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
-        _L1, mc, rm = ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
-        kd, C, rf = self.key_dim_tp, self.qkv_dim_tp, Nv // Nk
-        B, R = n_users, n_users * T
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        C = self.qkv_dim_tp
+        B = n_users
 
         # 1) Conv window. cat = [E_prev(K-1+T) ; new qkv(T)] per user; conv_sel is one-hot, so the
         #    matmul is an exact row gather (bf16 in, HiFi4 + fp32 accumulate) that both drops the
@@ -1820,23 +1815,10 @@ class TPGatedDeltaNet:
         q_all, k_all, v_all = self._kda_conv_packed(E_new, T)  # each [1, B*T, width], SiLU applied
         ttnn.deallocate(E_new)
 
-        # 2) q/k/v: the packed KDA call already split them; user-major rows -> [B, T, heads, D].
-        q_all = ttnn.reshape(q_all, (B, T, Nk, Dk))
-        k_all = ttnn.reshape(k_all, (B, T, Nk, Dk))
-        v_all = ttnn.reshape(v_all, (B, T, Nv, Dv))
-        if rf != 1:
-            q_all = ttnn.repeat_interleave(q_all, rf, dim=2)
-            k_all = ttnn.repeat_interleave(k_all, rf, dim=2)
+        # 2) q/k/v heads and gating for every row at once.
+        q_all, k_all, v_all, beta_all, g_all = self._heads_and_gates(q_all, k_all, v_all, a_all, b_all, B, T)
 
-        # 3) Gating for every row at once.
-        a_new = self._rows_to_users(a_all, B, T, Nv)
-        b_new = self._rows_to_users(b_all, B, T, Nv)
-        beta_all = ttnn.sigmoid(b_new, memory_config=_L1)
-        ttnn.deallocate(b_new)
-        g_all = ttnn.multiply(tw["neg_exp_A"], _softplus_add(a_new, tw["dt_bias"]), memory_config=_L1)
-        ttnn.deallocate(a_new)
-
-        # 4) ONE recurrence dispatch, ring mode: initial state per (user, head) comes from the ring
+        # 3) ONE recurrence dispatch, ring mode: initial state per (user, head) comes from the ring
         #    block state_blk_idx names, and every token's state is written back in place. The
         #    returned state IS self._spec_ring, so there is nothing to copy or free.
         o_all, _ring = fused_recurrent_gated_delta_rule_ttnn(
@@ -1855,30 +1837,8 @@ class TPGatedDeltaNet:
         for t in (q_all, k_all, v_all, beta_all, g_all):
             ttnn.deallocate(t)
 
-        # 5) Output tail over the B*T rows (the inverse of the step-1 regroup: rms_norm normalises
-        #    over the last dim, so one call covers every row).
-        out_n = ttnn.rms_norm(ttnn.reshape(o_all, (R, Nv, Dv)), weight=tw["norm_w"], epsilon=1e-6, memory_config=_L1)
-        ttnn.deallocate(o_all)
-        out_f_b = ttnn.reshape(out_n, (1, R, self.value_dim_tp))
-        ttnn.deallocate(out_n)
-        gated = _silu_mul(out_f_b, z_all, mc)
-        ttnn.deallocate(out_f_b)
-        ttnn.deallocate(z_all)
-        partial = self._row_proj(gated, tw["out"])
-        ttnn.deallocate(gated)
-        partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
-        o_red = tt_all_reduce(
-            partial, self.mesh, self.tt_ccl, cluster_axis=0, dim=3, topology=self.args.ccl_topology(), memory_config=mc
-        )
-        if R < bucket:
-            o_rm = ttnn.to_layout(o_red, rm)
-            ttnn.deallocate(o_red)
-            pad = self._verify_pad_buf(bucket - R, o_rm.shape[-1], o_rm.dtype, rm, mc)
-            o_full = ttnn.concat([o_rm, pad], dim=2, memory_config=mc)
-            ttnn.deallocate(o_rm)
-            o_red = ttnn.to_memory_config(ttnn.to_layout(o_full, ttnn.TILE_LAYOUT), mc)
-            ttnn.deallocate(o_full)
-        return o_red
+        # 4) Output tail over the B*T rows.
+        return self._out_tail(o_all, z_all, B * T, bucket)
 
     def _verify_pad_buf(self, rows, width, dtype, layout, mc):
         """Persistent zero pad for the trace-safe verify output (bucket - valid_len rows). Allocated
@@ -1899,7 +1859,7 @@ class TPGatedDeltaNet:
         """Allocate the persistent [B, K, qkv_dim_tp] shift register once, seeded from conv_states.
 
         Row u, tap j of this buffer is user u's conv_states[j] column — the same K taps decode
-        shifts, transposed into one tensor so a commit is one slice and one copy.
+        shifts, transposed into one tensor.
 
         Allocate-and-seed happens on an EAGER call (prepare_spec_verify, the spec loop's seed),
         never lazily inside a captured trace: by capture time the buffer exists and the trace body

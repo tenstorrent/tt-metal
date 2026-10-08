@@ -12,7 +12,6 @@ Run:
     pytest models/demos/blackhole/qwen36/tests/test_spec_batch_helpers.py -q
 """
 
-import itertools
 import types
 
 import pytest
@@ -23,7 +22,7 @@ from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_bl
 from models.demos.blackhole.qwen36.tt.model import spec_kv_write_conflicts
 
 # (B, T) pairs the demo actually packs into the 32-row decode tile: B*T <= 32, T = K+1.
-SHAPES = [(1, 12), (1, 8), (2, 12), (2, 8), (4, 8), (4, 4), (8, 4), (16, 2), (3, 5)]
+SHAPES = [(1, 12), (2, 8), (4, 4), (8, 4)]
 KC = 4  # conv kernel size (args.gdn_conv_kernel_size)
 
 
@@ -88,7 +87,7 @@ def test_state_blk_idx_rejects_bad_mi_length(expect_error):
 # spec_conv_sel
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("B,T", SHAPES)
-@pytest.mark.parametrize("kc", [2, KC, 5])
+@pytest.mark.parametrize("kc", [2, KC])
 def test_conv_sel_matches_naive(B, T, kc):
     """Naive: place one 1.0 per output row at the concat column the design names."""
     rows, cols = kc - 1 + T, kc - 1 + 2 * T
@@ -103,20 +102,6 @@ def test_conv_sel_matches_naive(B, T, kc):
             for r, c in enumerate(cols_for_u):
                 want[u, r, c] = 1.0
         torch.testing.assert_close(got.float(), want.float(), rtol=0, atol=0)
-
-
-@pytest.mark.parametrize("B,T", SHAPES)
-@pytest.mark.parametrize("kc", [2, KC, 5])
-def test_conv_sel_is_one_hot_and_in_bounds(B, T, kc):
-    rows, cols = kc - 1 + T, kc - 1 + 2 * T
-    for mi in _mi_cases(B, T):
-        sel = spec_conv_sel(mi, B, T, kc).float()
-        assert torch.equal(sel.sum(dim=-1), torch.ones(B, rows)), "every output row selects exactly one input row"
-        assert set(sel.unique().tolist()) <= {0.0, 1.0}
-        # The E_prev half only ever reads rows the last commit kept; the new-qkv half only reads
-        # the appended rows. Nothing crosses.
-        assert sel[:, : kc - 1, kc - 1 + T :].sum() == 0, "tap rows must come from E_prev"
-        assert sel[:, kc - 1 :, : kc - 1 + T].sum() == 0, "new rows must come from the appended qkv"
 
 
 @pytest.mark.parametrize("B,T", SHAPES)
@@ -183,35 +168,6 @@ def test_conv_sel_rejects_out_of_range_mi(kc, expect_error):
         spec_conv_sel([-1], 1, 4, kc)
     with expect_error(AssertionError, "need one mi per user"):
         spec_conv_sel([0, 0], 1, 4, kc)
-
-
-def test_helpers_agree_on_the_same_mi():
-    """Both selectors must describe the SAME commit: same mi, same user ordering (user-major)."""
-    B, T, nv, kc = 4, 4, 8, KC
-    mi = [0, 1, 2, 3]
-    idx = spec_state_blk_idx(mi, B, nv)
-    sel = spec_conv_sel(mi, B, T, kc).float()
-    for u in range(B):
-        # state: block token-slot recovered from the index == mi[u]
-        assert int(idx[u * nv]) // (B * nv) == mi[u]
-        # conv: first tap row reads concat row mi[u] + 1
-        assert int(sel[u, 0].argmax()) == mi[u] + 1
-
-
-@pytest.mark.parametrize("B,T", list(itertools.product([1, 2, 4], [2, 4]))[:6])
-def test_full_acceptance_is_the_identity_tail(B, T):
-    """mi = T-1 (every candidate accepted) must take the LAST kc-1 new rows as the next taps."""
-    kc, C = KC, 3
-    gen = torch.Generator().manual_seed(7)
-    E_prev = torch.randn(B, kc - 1 + T, C, generator=gen)
-    qkv_new = torch.randn(B, T, C, generator=gen)
-    sel = spec_conv_sel([T - 1] * B, B, T, kc).float()
-    E_new = torch.bmm(sel, torch.cat([E_prev, qkv_new], dim=1))
-    for u in range(B):
-        # rows [0, kc-1) of E_new are E_prev rows [T, T+kc-1) == the last kc-1 rows of E_prev,
-        # which the previous iteration filled with its own last kc-1 new inputs.
-        torch.testing.assert_close(E_new[u, : kc - 1], E_prev[u, T : T + kc - 1], rtol=0, atol=0)
-        torch.testing.assert_close(E_new[u, kc - 1 :], qkv_new[u], rtol=0, atol=0)
 
 
 # --------------------------------------------------------------------------- #

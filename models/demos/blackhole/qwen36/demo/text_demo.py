@@ -82,6 +82,38 @@ def _spec_requested():
     return os.environ.get("QWEN36_SPEC", "1") != "0"
 
 
+def _sampling_knobs():
+    """QWEN35_* sampling env as (temp, rep_pen, no_repeat, top_k, top_p, presence, seed); seed is None when unset."""
+    env = os.environ.get
+    return (
+        float(env("QWEN35_TEMP", "0") or 0),
+        float(env("QWEN35_REP_PENALTY", "1.0") or 1.0),
+        int(env("QWEN35_NO_REPEAT_NGRAM", "0") or 0),
+        int(env("QWEN35_TOP_K", "0") or 0),
+        float(env("QWEN35_TOP_P", "1.0") or 1.0),
+        float(env("QWEN35_PRESENCE_PENALTY", "0.0") or 0.0),
+        int(env("QWEN35_SEED")) if env("QWEN35_SEED") else None,
+    )
+
+
+def _spec_sampling(model, knobs):
+    """Gate for the single-user and batched spec routing: an MTP head, no repetition penalty / no-repeat-ngram
+    (not wired into spec), and no presence penalty at temperature <= 0 (spec greedy is unpenalized).
+
+    Returns (sampling, None) when spec can run (sampling None = greedy), else (None, knob summary for the log).
+    """
+    temp, rep_pen, no_repeat, top_k, top_p, presence, seed = knobs
+    if model.mtp is None or rep_pen != 1.0 or no_repeat != 0 or (temp <= 0 and presence > 0.0):
+        return None, (
+            f"mtp={model.mtp is not None}, rep={rep_pen}, no_repeat={no_repeat}, temp={temp}, presence={presence}"
+        )
+    if temp <= 0:
+        return None, None
+    from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
+
+    return SpecSamplingParams(temperature=temp, top_k=top_k, top_p=top_p, presence_penalty=presence, seed=seed), None
+
+
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh needs a
 # trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 1 GiB is ample for every checkpoint,
 # including the 40-layer 35B-A3B MoE (~535 MiB captured prefill+decode trace).
@@ -636,18 +668,13 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     one wrong token cannot derail the rest of the run. Teacher forcing always takes plain decode:
     spec decode commits its own accepted drafts and has no way to feed the reference back.
     """
-    # Sampling knobs, read once for spec routing below and plain-decode _pick().
-    _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
-    _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
-    _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
-    _top_k = int(os.environ.get("QWEN35_TOP_K", "0") or 0)
-    _top_p = float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0)
+    # Sampling knobs, read once for spec routing below and plain-decode _pick(); the seed only feeds spec
+    # sampling (unset = SpecSampler draws one and logs it, replayable).
     # Presence penalty (vLLM): subtracted from every already-generated token's logit before temperature.
     # Wired into spec only when temperature > 0 (penalizes the verify rows the accept test uses); plain
     # _pick() applies it at any temperature, including 0 (penalizes the sampled row).
-    _presence = float(os.environ.get("QWEN35_PRESENCE_PENALTY", "0.0") or 0.0)
-    # Host RNG seed for spec sampling; unset = SpecSampler draws one and logs it (replayable).
-    _seed = int(os.environ["QWEN35_SEED"]) if os.environ.get("QWEN35_SEED") else None
+    _knobs = _sampling_knobs()
+    _temp, _rep_pen, _no_repeat, _top_k, _top_p, _presence, _ = _knobs
 
     # Spec decode is the default; QWEN36_SPEC=0 opts out. Temp 0 accepts the greedy argmax prefix; temp > 0
     # runs exact speculative rejection sampling. Repetition penalty / no-repeat-ngram are not wired into spec
@@ -658,27 +685,14 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     if token_acc is not None:
         logger.info("[TP] teacher forcing (token_acc) -> plain single-token decode")
     elif _spec_req:
-        if model.mtp is not None and _rep_pen == 1.0 and _no_repeat == 0 and not (_temp <= 0 and _presence > 0.0):
-            from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
-
-            sampling = (
-                SpecSamplingParams(
-                    temperature=_temp,
-                    top_k=_top_k,
-                    top_p=_top_p,
-                    presence_penalty=_presence,
-                    seed=_seed,
-                )
-                if _temp > 0
-                else None
-            )
+        sampling, _spec_unavailable = _spec_sampling(model, _knobs)
+        if _spec_unavailable is None:
             logger.info("[TP] MTP speculative decode (default path; QWEN36_SPEC=0 opts out)")
             return _run_tp_spec_generation(
                 model, tokenizer, token_ids, max_generated_tokens, num_blocks, sampling=sampling
             )
         logger.info(
-            f"[TP] spec decode unavailable (mtp={model.mtp is not None}, rep={_rep_pen}, "
-            f"no_repeat={_no_repeat}, temp={_temp}, presence={_presence}); it needs an MTP head, a repetition "
+            f"[TP] spec decode unavailable ({_spec_unavailable}); it needs an MTP head, a repetition "
             "penalty / no-repeat-ngram is not wired into the spec path, and a presence penalty at temperature <= 0 "
             "is not wired into spec greedy (SpecSamplingParams requires temperature > 0). Using plain decode."
         )
@@ -1001,13 +1015,7 @@ def _spec_batch_decision(model, batch):
     decode); and the fused GDN kernel maps one core per (user, value-head), so B * gdn_nv_tp
     must fit the worker grid (a backstop here: the tile ceiling binds first for Qwen3.6-27B).
     """
-    _temp = float(os.environ.get("QWEN35_TEMP", "0") or 0)
-    _rep_pen = float(os.environ.get("QWEN35_REP_PENALTY", "1.0") or 1.0)
-    _no_repeat = int(os.environ.get("QWEN35_NO_REPEAT_NGRAM", "0") or 0)
-    _top_k = int(os.environ.get("QWEN35_TOP_K", "0") or 0)
-    _top_p = float(os.environ.get("QWEN35_TOP_P", "1.0") or 1.0)
-    _presence = float(os.environ.get("QWEN35_PRESENCE_PENALTY", "0.0") or 0.0)
-    _seed = int(os.environ["QWEN35_SEED"]) if os.environ.get("QWEN35_SEED") else None
+    knobs = _sampling_knobs()
 
     if os.environ.get("QWEN36_SPEC", "1") == "0":
         return False, None, "QWEN36_SPEC=0 -> plain batched decode (spec-decode baseline)"
@@ -1034,35 +1042,23 @@ def _spec_batch_decision(model, batch):
                 f"-> plain batched decode (max spec batch {_cores // _nv_tp})"
             ),
         )
-    if model.mtp is None or _rep_pen != 1.0 or _no_repeat != 0 or (_temp <= 0 and _presence > 0.0):
+    sampling, unavailable = _spec_sampling(model, knobs)
+    if unavailable is not None:
         return (
             False,
             None,
             (
-                f"spec decode unavailable (mtp={model.mtp is not None}, rep={_rep_pen}, "
-                f"no_repeat={_no_repeat}, temp={_temp}, presence={_presence}); it needs an MTP head, a "
+                f"spec decode unavailable ({unavailable}); it needs an MTP head, a "
                 "repetition penalty / no-repeat-ngram is not wired into the spec path, and a presence "
                 "penalty at temperature <= 0 is not wired into spec greedy. Using plain batched decode."
             ),
         )
-    sampling = None
-    if _temp > 0:
-        from models.demos.blackhole.qwen36.tt.spec_sampling import SpecSamplingParams
-
-        sampling = SpecSamplingParams(
-            temperature=_temp, top_k=_top_k, top_p=_top_p, presence_penalty=_presence, seed=_seed
-        )
     return True, sampling, "multi-user MTP speculative decode (default path; QWEN36_SPEC=0 opts out)"
 
 
-# Draft width cap per batch: verify decodes B*(K+1) rows in one 32-row tile, and the fused verify
-# SDPA only has L1 plans for T = K+1 in {4, 8, 12} (plus the legacy per-row path at T=2).
-# Unlisted batches (3, 5, 6, 7) use the 32//B - 1 row-budget fallback (9, 5, 4, 3), snapped down to
-# the ladder (7, 3, 3, 3). B > 8 never reaches here: _spec_batch_decision routes it to plain decode.
-_SPEC_BATCH_K_CAP = {1: None, 2: 11, 4: 7, 8: 3}  # None = no cap beyond the ISL policy
-_SPEC_K_LADDER = (11, 7, 3)  # allowed K, snapped DOWN to (floor = _SPEC_MIN_K)
-
-
+# Verify decodes B*(K+1) rows in one 32-row tile, and the fused verify SDPA only has L1 plans for
+# T = K+1 in {4, 8, 12} (plus the legacy per-row path at T=2), so K+1 is snapped down to a multiple of 4.
+# B > 8 never reaches here: _spec_batch_decision routes it to plain decode.
 def _spec_batch_draft_len(batch, T, sampling):
     """Auto-K for multi-user spec decode. Returns (K, source_str)."""
     # ISL policy, identical to the single-user path: deeper drafts pay off up to a 4k prompt;
@@ -1077,16 +1073,12 @@ def _spec_batch_draft_len(batch, T, sampling):
             "one decode tile holds 32 (batch*(K+1) <= 32)"
         )
         return K, "QWEN36_SPEC_DRAFT_LEN"
-    cap = _SPEC_BATCH_K_CAP.get(batch)
-    if cap is None:  # unlisted batch (or B=1): fall back to the raw row budget
-        cap = max(1, 32 // batch - 1)
-    K = min(K_isl, cap)
-    K = max((k for k in _SPEC_K_LADDER if k <= K), default=0)  # snap DOWN to a supported verify width
+    cap = 32 // batch - 1
+    K = (min(K_isl, cap) + 1) // 4 * 4 - 1
     assert K >= _SPEC_MIN_K, (
         f"auto K={K} at batch={batch} is below {_SPEC_MIN_K}; "
         f"_spec_batch_decision should have routed batch={batch} to plain decode"
     )
-    assert batch * (K + 1) <= 32, f"batch={batch} K={K} needs {batch * (K + 1)} verify rows (max 32)"
     return K, f"auto (ISL K={K_isl}, batch cap {cap})"
 
 
@@ -1099,7 +1091,7 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     Each iteration drafts K tokens per user with the MTP head, verifies all B*(K+1) rows in one
     traced chunk forward, and commits each user's accepted prefix. Lossless: greedy matches plain
     batched decode token for token; SpecSamplingParams samples the same distribution via rejection
-    sampling. Returns (generated_rows, perf) with generated_rows a list of B token lists.
+    sampling.
 
     Prompts: the one loaded prompt replicated to all B users (so per-row identity is checkable,
     like the plain batched demo). QWEN36_SPEC_BATCH_DISTINCT=1 gives user u the prompt with its
@@ -1136,9 +1128,6 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
         f"lens={p_lens[0]}..{p_lens[-1]} sampling={_samp}"
     )
 
-    profiler = BenchmarkProfiler()
-    profiler.start("run")
-
     # Per-user block budget: prompt + generation + the K draft slots the verify writes past the
     # committed position. Rounded up to a multiple of 32, as the single-user spec path rounds its
     # whole budget, so every user's page-table row stays aligned for chunked-SDPA stick reads.
@@ -1150,42 +1139,31 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     page_tables = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])
     logger.info(f"[TP SPEC B={B}] paged KV: {bpu} blocks/user x {B} = {total_blocks} blocks")
 
-    # spec decode captures no separate prefill trace (eager); keep the key present for the CI JSON.
-    profiler.start("compile_prefill")
-    profiler.end("compile_prefill")
-
     # Warmup on a throwaway decoder (compiles prefill / verify / decode / MTP programs; discarded).
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     # Explicit, model-scoped: spec verify runs the fused GDN op, so decode must use the same math.
     model.set_gdn_fused_decode(True)
     signpost("compile_decode")
-    profiler.start("compile_decode")
     SpeculativeDecoder(model, page_tables, draft_len=K, sampling=sampling).generate(
         prompt_lists, min(6, max_generated_tokens)
     )
-    profiler.end("compile_decode")
     model.free_kv_caches()
 
     # Timed run. generate() records dec.prefill_time (all B prefills = TTFT) and dec.decode_time.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     dec = SpeculativeDecoder(model, page_tables, draft_len=K, sampling=sampling)
     signpost("inference_prefill")
-    profiler.start("inference_prefill")
     rows = dec.generate(prompt_lists, max_generated_tokens)
-    profiler.end("inference_prefill")
     signpost("inference_decode")
-    profiler.start("inference_decode")
-    profiler.end("inference_decode")  # real decode timing comes from dec.decode_time below
     # Host-only log lines: outside the timed windows, before the caches are freed.
     dec.log_stats(prefix=f"TP SPEC B={B}")
     model.free_kv_caches()
-    profiler.end("run")
 
     ttft = dec.prefill_time  # sum over the B sequential prefills
     n_tok = sum(len(r) for r in rows)
     decode_tok_s = ((n_tok / B) / dec.decode_time) if dec.decode_time > 0 else 0.0
     agg_tok_s = (n_tok / dec.decode_time) if dec.decode_time > 0 else 0.0
-    if getattr(dec, "sampler", None) is None:
+    if dec.sampler is None:
         _samp_done = "greedy"
     else:  # the sampler's own seed, so an unset QWEN35_SEED still logs the value that ran
         _sp = dec.sampler.params
@@ -1220,17 +1198,6 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
         for u in range(B):
             assert rows[u] == rows[0], f"user {u} diverged from user 0 (identical prompts must decode identically)"
         assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
-
-    return rows, {
-        "ttft_s": ttft,
-        "decode_tok_s": decode_tok_s,
-        "agg_tok_s": agg_tok_s,
-        "accept_rate": dec.accept_rate(),
-        "iters": dec.iters,
-        "K": K,
-        "n_users": B,
-        "profiler": profiler,
-    }
 
 
 def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch):

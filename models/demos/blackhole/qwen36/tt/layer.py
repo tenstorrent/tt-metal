@@ -179,8 +179,6 @@ class Qwen36DecoderLayer:
         gdn_recurrent=False,
         gdn_seed=False,
         decode_cfg=False,
-        exact_kv_pos=None,
-        exact_kv_pt=None,
         alias_kv_write=False,
         spec_verify_mode=False,
         spec_page_table=None,
@@ -251,8 +249,6 @@ class Qwen36DecoderLayer:
                             chunk_page_table=chunk_page_table,
                             chunk_start_idx=chunk_start_idx if chunk_start_idx is not None else 0,
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
-                            exact_kv_pos=exact_kv_pos,
-                            exact_kv_pt=exact_kv_pt,
                         )
                     else:
                         attn_output = self.attention.forward_prefill(attn_input, cos, sin)

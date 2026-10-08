@@ -22,16 +22,16 @@ from models.tt_transformers.tt.common import Mode
 
 
 def argmax_last(logits):
-    """argmax over the vocab dim of drafter logits -> [1,1,B] uint32 ROW_MAJOR (one id per row).
+    """argmax over the vocab dim of drafter logits -> [1,1,B,1] uint32 ROW_MAJOR (one id per row).
 
     ttnn.argmax needs ROW_MAJOR input: a TILE tensor takes a single-core internal-untilize path that
     is catastrophically slow on a 151k-wide vocab, so untilize multicore first. The GATHERED form:
     ``logits`` is the full replicated [1,1,B,vocab]. Reached through draft_argmax, which is what
-    both the eager draft step (SpeculativeDecoder._draft_argmax) and the traced chain
+    both the eager draft step (SpeculativeDecoder) and the traced chain
     (Qwen36Model._draft_body) call, so the two pick their ids through byte-identical ops.
     """
     u = ttnn.untilize(logits, use_multicore=True)
-    out = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,B] uint32 RM
+    out = ttnn.argmax(u, dim=-1, keepdim=True)  # [1,1,B,1] uint32 RM
     ttnn.deallocate(u)
     return out
 
@@ -39,10 +39,10 @@ def argmax_last(logits):
 def draft_argmax(mtp, logits):
     """Drafter logits -> token id, for whichever LM-head form the flag selected.
 
-    THE shared drafter pick: the eager chain (SpeculativeDecoder._draft/_draft_warmup, via
-    _draft_argmax) and the traced one (Qwen36Model._draft_body) both come through here, so the two
+    THE shared drafter pick: the eager chain (SpeculativeDecoder._draft/_draft_warmup) and the
+    traced one (Qwen36Model._draft_body) both come through here, so the two
     dispatch on one value and switch together — the same reason argmax_last was hoisted to module
-    level in the first place. Both forms take the drafter's own logits and return [1,1,B] uint32
+    level in the first place. Both forms take the drafter's own logits and return [1,1,B,1] uint32
     ROW_MAJOR (one id per row), and neither frees ``logits``: the caller owns it.
 
     QWEN36_DRAFT_SHARDED_ARGMAX (resolved once in Qwen36MTP.__init__) selects the sharded form, in
@@ -159,8 +159,6 @@ class Qwen36MTP:
         self._sharded_argmax = False
         self._shard_off = None  # [1,1,B,_LANES] int32, per device: d * vocab_shard in every lane
         self._sel_lane = None  # [1,1,B,_LANES*num_devices] int32 replicated: lane j holds j
-        self._argmax_B = 1
-        self._argmax_out_alias = True  # does reshape [1,1,B,1] -> [1,1,B] alias its input? (probed at init)
         self._fp32_cfg = None
         self._vocab_shard = 0
         self._maxval_c = 0
@@ -197,7 +195,6 @@ class Qwen36MTP:
         shard = vocab // nd
         B = int(self.args.max_batch_size)
         self._vocab_shard = shard
-        self._argmax_B = B
         # Multi-core max over one vocab shard: ttnn.max(dim=-1) parallelises over tile ROWS, so fold
         # each row's shard into a tall/narrow [R, C=32] grid (R/32 cores per row) instead of reducing a
         # shard-wide tensor on a single core. Verbatim from demo/text_demo.py's greedy path.
@@ -236,28 +233,10 @@ class Qwen36MTP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        # _argmax_sharded ends in reshape([1,1,B,1] -> [1,1,B]): a metadata alias at B = 1 but possibly a
-        # copy at B > 1. Probe once with a tensor of the same shape/dtype/layout/memory config, so the
-        # per-call code knows whether the pre-reshape buffer is still its own to free.
-        probe = ttnn.from_torch(
-            torch.zeros(1, 1, B, 1, dtype=torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
-        probe_r = ttnn.reshape(probe, (1, 1, B))
-        self._argmax_out_alias = (
-            ttnn.get_device_tensors(probe)[0].buffer_address() == ttnn.get_device_tensors(probe_r)[0].buffer_address()
-        )
-        ttnn.deallocate(probe)
-        if not self._argmax_out_alias:
-            ttnn.deallocate(probe_r)  # a copy owns its own buffer; an alias was freed with probe
         self._sharded_argmax = True
         logger.info(
             f"MTP drafter: per-shard argmax enabled (B={B}, vocab {vocab} = {nd} x {shard}, "
-            f"maxval grid {self._maxval_r}x{self._maxval_c}, out reshape alias={self._argmax_out_alias})"
+            f"maxval grid {self._maxval_r}x{self._maxval_c})"
         )
 
     def _maxval_dev(self, shard):
@@ -271,7 +250,7 @@ class Qwen36MTP:
         the fp32 logits it exists to rank. The demo path passes no config because its logits are
         bfloat16, which survives that truncation intact.
         """
-        R, C, B = self._maxval_r, self._maxval_c, self._argmax_B
+        R, C, B = self._maxval_r, self._maxval_c, self.args.max_batch_size
         cfg = self._fp32_cfg
         padded = ttnn.pad(shard, [(0, 0), (0, 0), (0, 0), (0, R * C - self._vocab_shard)], value=self._NEG_FLOOR)
         grid = ttnn.reshape(padded, (1, B, R, C))  # one [R, C] grid per row
@@ -285,7 +264,7 @@ class Qwen36MTP:
         return val
 
     def _argmax_sharded(self, logits_shard):
-        """Global vocab argmax from this device's LOGIT SHARD -> [1,1,B] uint32 ROW_MAJOR.
+        """Global vocab argmax from this device's LOGIT SHARD -> [1,1,B,1] uint32 ROW_MAJOR.
 
         Same contract as the gathered argmax_last — same output shape, dtype, layout and tie-break
         (per row) — but the full vocab row is never materialised. Each device argmaxes its own
@@ -314,7 +293,6 @@ class Qwen36MTP:
         from models.tt_transformers.tt.ccl import tt_all_gather
 
         lanes = self._LANES
-        B = self._argmax_B
         topo = self.args.ccl_topology()
 
         # 1. Local argmax over this device's shard. ttnn.argmax needs ROW_MAJOR for the multicore
@@ -384,15 +362,11 @@ class Qwen36MTP:
         win = ttnn.min(masked, dim=-1, keepdim=True)  # [1,1,B,1] int32, SFPU reduce, exact
         ttnn.deallocate(masked)
 
-        # 8. Back to the argmax_last contract: [1,1,B] uint32 ROW_MAJOR, ready for the chain's
-        #    reshape(idx, (B,1)) into the next step's embedding lookup.
+        # 8. The argmax_last contract: [1,1,B,1] uint32 ROW_MAJOR.
         win_u = ttnn.typecast(win, ttnn.uint32)
         ttnn.deallocate(win)
-        out4 = ttnn.to_layout(win_u, ttnn.ROW_MAJOR_LAYOUT)  # [1,1,B,1] uint32 ROW_MAJOR
+        out = ttnn.to_layout(win_u, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(win_u)
-        out = ttnn.reshape(out4, (1, 1, B))
-        if not self._argmax_out_alias:  # probed in _init_sharded_argmax: a copy leaves out4 to free;
-            ttnn.deallocate(out4)  # an alias IS out's buffer, so freeing it would free the result
         return out
 
     def _make_norm(self, state_dict, weight_key, cache, ag_key):

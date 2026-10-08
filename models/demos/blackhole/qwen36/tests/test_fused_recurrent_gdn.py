@@ -221,7 +221,7 @@ def test_fused_decode_perf(mesh_device):
 # ---------------------------------------------------------------------------
 def _seq_composite_decode(mesh_device, q, k, v, beta, g, s0):
     """The current baseline: run the composite decode kernel token-by-token, threading state
-    (mirrors _forward_verify_recurrent_batched's per-token recurrence loop). Returns per-token
+    (mirrors forward_verify_recurrent's per-token recurrence loop). Returns per-token
     o [T,H,V] and per-token state [T,H,K,V] (device -> torch)."""
     T = q.shape[1]
     s_tt = _to_dev(mesh_device, s0)

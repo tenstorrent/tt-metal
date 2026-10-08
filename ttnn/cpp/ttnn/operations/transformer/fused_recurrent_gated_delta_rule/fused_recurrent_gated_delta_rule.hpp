@@ -32,19 +32,8 @@ namespace ttnn::transformer {
  *                 output_per_token_state -> [B, T, HV, K, V]  (state AFTER each token; verify slots)
  *                 else                    -> [B, HV, K, V]     (final state only)
  *
- * "Ring" mode -- deferred per-head initial-state select, IN PLACE (batched spec-decode commit).
- * Pass `initial_state_block_idx` [BH] uint32/int32 ROW_MAJOR on device (BH = B*HV, h = b*HV + hv,
- * b-major). Then:
- *   * `output_per_token_state` must be True and `initial_state` must be the RING: an fp32 TILE
- *     interleaved tensor of EXACT shape [T*BH, K, V] (block (t*BH + h) = head h's state after
- *     token t). It is passed straight through -- no reshape, no typecast.
- *   * Head h starts from ring block `idx[h]` instead of block `h`, and its per-token states are
- *     written back into the SAME buffer at blocks (t*BH + h).
- *   * The returned state IS that tensor (same buffer, same shape [T*BH, K, V]), not a copy.
- *
- * CALLER CONTRACT: idx[h] % BH == h for every h. Each core then only ever reads a block it wrote
- * itself, and it reads its whole initial state before the first per-token write, so no cross-core
- * ordering is needed (there are no semaphores). Violating this races.
+ * "Ring" mode (initial_state_block_idx): in-place deferred per-head initial-state select; the contract is
+ * documented on the Python binding.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delta_rule(
     const ttnn::Tensor& q,
