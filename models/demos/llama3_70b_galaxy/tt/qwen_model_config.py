@@ -911,13 +911,24 @@ class TtQwenModelArgs(TtModelArgs):
                     )
                 else:  # For seq_len >= 16384, use the best config from sweep results
                     # This covers 16384, 32768, 65536, 131072
+                    # Retuned at S=40960 (Wormhole Galaxy, isolated op, same LoFi/bf4 weights/bf8 out):
+                    # 7x8 m8k8n8 s4x2 3.63 ms -> 7x10 m8k10n8 s1x8 2.84 ms.
+                    if is_blackhole():
+                        return ttnn.MinimalMatmulConfig(
+                            M_block_size=8,
+                            K_block_size=8,
+                            N_block_size=8,
+                            subblock_h=4,
+                            subblock_w=2,
+                            compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        )
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
-                        K_block_size=8,
+                        K_block_size=10,
                         N_block_size=8,
-                        subblock_h=4,
-                        subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        subblock_h=1,
+                        subblock_w=8,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
                     )
 
             self.model_config["PREFILL_FF1_FF3_MINIMAL_MATMUL_CONFIG"] = prefill_ff1_ff3_minimal_matmul_config
