@@ -816,6 +816,9 @@ NativeBlockBroadcast native_block_broadcast(
     using tt::tt_metal::DataType;
     const auto op = attributes.binary_op_type;
     const auto& shard_spec = a.memory_config().shard_spec();
+    if (std::getenv("EB_R3_NATIVE_ALL") != nullptr) {
+        return {.column = true, .scalar = true};  // CI only: native for every format and activation
+    }
     const bool take = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && std::getenv("EB_R3_NO_NATIVE") == nullptr &&
                       (op == BinaryOpType::ADD || op == BinaryOpType::SUB || op == BinaryOpType::MUL) &&
                       attributes.lhs_activations.empty() && attributes.rhs_activations.empty() &&

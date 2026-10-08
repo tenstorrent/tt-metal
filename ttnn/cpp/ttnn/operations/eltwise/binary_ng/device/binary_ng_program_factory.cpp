@@ -1155,9 +1155,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // Blackhole: with an operand activation and more than one DEST section per core, the no-broadcast and Python-scalar
     // kernels run the operand pass over two sections before one binary init, so the intermediate CBs hold two.
     const uint32_t pre_sections = bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 &&
-                                          c_num_tiles_per_shard.value_or(0) > num_tiles_per_cycle &&
+                                          (c_num_tiles_per_shard.value_or(0) > num_tiles_per_cycle ||
+                                           eb_r3_env("EB_R3_PRE_ONE")) &&
                                           !eb_r3_env("EB_R3_NO_PRE_SECTIONS")
-                                      ? 2
+                                      ? (std::getenv("EB_R3_PRE_SECTIONS") ? static_cast<uint32_t>(std::atoi(std::getenv("EB_R3_PRE_SECTIONS"))) : 2)
                                       : 1;
     const uint32_t a_intermediate_tiles =
         (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) * pre_sections;
@@ -1482,11 +1483,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
 
-    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
-    // acquire; without activations an add or sub into bf16 unpacks it with one call.
     if (pre_sections > 1) {
         compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
     }
+
+    // Blackhole: a sharded a with a column or scalar broadcast b, into a sharded c, computes a DEST section of tiles per
+    // acquire; without activations an add or sub into bf16 unpacks it with one call.
     if (bcast_sections) {
         compute_kernel_defines["BCAST_OTHER_CHUNK"] = fp32_dest_acc_en ? "4" : "8";
         if (!has_operand_activations && !has_post_activations && unpack_alone_formats &&
