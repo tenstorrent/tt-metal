@@ -2529,6 +2529,85 @@ bool run_sfpu_typecast(
 
 }  // namespace unit_tests::compute::sfpu
 
+TEST_F(LLKBlackholeSingleCardFixture, SfpuExp21fRetainedCoefficients) {
+    using namespace unit_tests::compute::sfpu;
+    constexpr size_t num_tiles = 4;
+    // Both sides of the exp21f clamps, plus ordinary values that must still match exp(x).
+    const std::vector<float> samples = {
+        -100.0f,
+        -90.0f,
+        -88.5f,
+        -88.04f,
+        -88.03f,
+        -87.5f,
+        -20.0f,
+        -1.0f,
+        -0.5f,
+        0.0f,
+        0.5f,
+        1.0f,
+        20.0f,
+        88.0f,
+        88.5f,
+        88.72f,
+        88.73f,
+        89.0f,
+        100.0f};
+    std::vector<float> input(num_tiles * tt::constants::TILE_HW);
+    for (size_t i = 0; i < input.size(); ++i) {
+        input[i] = samples[i % samples.size()];
+    }
+
+    // Reuse the unary pipeline; only the coefficient-loading policy differs between programs.
+    std::map<std::string, std::string> defines = {
+        {"SFPU_UNARY_OP", "1"},
+        {"SFPU_OP_EXP_INCLUDE", "1"},
+        {"SFPU_OP_CHAIN_0",
+         "exp_tile_init<false>(); "
+         "MATH(_llk_math_eltwise_unary_sfpu_params_([]() __attribute__((always_inline)) { "
+         "const sfpi::vFloat c0 = sfpu::EXP_21F_BF16_C0; "
+         "const sfpi::vFloat c1 = sfpu::EXP_21F_BF16_C1; "
+         "const sfpi::vFloat c2 = sfpu::EXP_21F_BF16_C2; "
+         "for (int i = 0; i < 8; ++i) { "
+         "sfpi::vFloat x = sfpi::dst_reg[0]; "
+         "if constexpr (RETAIN_EXP_COEFFICIENTS) { "
+         "sfpi::dst_reg[0] = sfpu::_sfpu_exp_21f_bf16_<DST_ACCUM_MODE>(x, c0, c1, c2); "
+         "} else { sfpi::dst_reg[0] = sfpu::_sfpu_exp_21f_bf16_<DST_ACCUM_MODE>(x); } "
+         "sfpi::dst_reg++; } }, 0, VectorMode::RC);)"}};
+
+    for (const bool fp32_dest : {false, true}) {
+        SCOPED_TRACE(fp32_dest ? "FP32 destination" : "BF16 destination");
+        const auto format = fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+        const SfpuConfig config{
+            .num_tiles = num_tiles,
+            .l1_input_data_format = format,
+            .l1_output_data_format = format,
+            .cores = CoreRangeSet({CoreRange({0, 0}, {0, 0})}),
+            .approx_mode = false,
+            .unpack_to_dest = fp32_dest,
+            .en_32bit_dest = fp32_dest};
+        const auto packed_input = unit_tests::sfpu_util::typecast_pack(format, input);
+        const auto quantized_input = unit_tests::sfpu_util::typecast_decode(format, packed_input);
+        for (const auto& device : devices_) {
+            defines["RETAIN_EXP_COEFFICIENTS"] = "false";
+            const auto scalar = run_sfpu_pipeline(*device, config, defines, packed_input);
+            defines["RETAIN_EXP_COEFFICIENTS"] = "true";
+            const auto retained = run_sfpu_pipeline(*device, config, defines, packed_input);
+            ASSERT_EQ(retained, scalar);
+            const auto output = unit_tests::sfpu_util::typecast_decode(format, retained);
+            ASSERT_EQ(output.size(), input.size());
+            // This is the BF16 exp approximation in both destination modes. FP32 DST retains
+            // its approximation error (e.g. exp21f(0) = 1.0017248), rather than rounding it away.
+            for (size_t i = 0; i < output.size(); ++i) {
+                if (std::abs(quantized_input[i]) <= 20.0f) {
+                    const float expected = std::exp(quantized_input[i]);
+                    EXPECT_NEAR(output[i], expected, expected * 1e-2f) << "element " << i;
+                }
+            }
+        }
+    }
+}
+
 void run_quasar_sfpu_unpack_to_dest_fp32(
     distributed::MeshDevice& dev, size_t num_tiles, const std::string& sfpu_op, bool dst_full_sync_en) {
     CoreRange core_range({0, 0}, {0, 0});
