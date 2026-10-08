@@ -177,6 +177,97 @@ def test_matches_torch_reference(mesh_device, volume, context_window, stride, ch
     assert correlation > 0.99, f"PCC {correlation:.5f} against the torch reference"
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+def test_program_cache_keys_on_compile_time_inputs(mesh_device):
+    """Calls differing only in a compile-time input must not share a cached program.
+
+    Fidelity, approx exp and the presence of an interior mask are all compiled into the program.
+    If one is missing from the hash, the second call silently reruns the first call's kernel: the
+    output still passes PCC, it just is not what was asked for.
+    """
+    from models.tt_dit.layers.neighborhood_attention_plan import _build_relative_masks
+
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    torch.manual_seed(0)
+    volume, context_window, stride = (8, 16, 16), (3, 3, 3), (1, 1, 1)
+    head_count, head_dim = 2, 64
+    brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    query_chunk_bricks = _query_chunk_bricks(stride, brick)
+    plan = ttnn.transformer.neighborhood_plan(
+        volume, context_window, stride, brick, query_chunk_bricks=query_chunk_bricks
+    )
+
+    site_count = volume[0] * volume[1] * volume[2]
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+    expected = neighborhood_attention_3d(
+        query, key, value, volume=volume, context_window=context_window, stride=stride, brick=brick, scale=1.0
+    )
+    table = bricked_index_table(volume, brick)
+
+    def upload(tensor):
+        bricked = to_bricked(tensor, table).contiguous().reshape(1, 1, -1, head_count * head_dim)
+        return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+        1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+    )
+    inputs = (
+        upload(query),
+        upload(key),
+        upload(value),
+        ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+    )
+    interior_mask = ttnn.from_torch(
+        _build_relative_masks(context_window, brick), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    def compute_config(fidelity, approx):
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=fidelity, math_approx_mode=approx, fp32_dest_acc_en=False, packer_l1_acc=False
+        )
+
+    high = compute_config(ttnn.MathFidelity.HiFi4, False)
+    low = compute_config(ttnn.MathFidelity.LoFi, True)
+
+    def run(config, mask=None):
+        return ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            *inputs,
+            interior_mask=mask,
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            query_chunk_bricks=query_chunk_bricks,
+            head_count=head_count,
+            scale=1.0,
+            tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
+            compute_kernel_config=config,
+        )
+
+    entries = [device.num_program_cache_entries()]
+    outputs = {}
+    for name, config, mask in (("high", high, None), ("low", low, None), ("high_masked", high, interior_mask)):
+        outputs[name] = run(config, mask)
+        entries.append(device.num_program_cache_entries())
+    # A repeat of the first call must hit the cache, or the hash is keyed on something per-call.
+    run(high)
+    entries.append(device.num_program_cache_entries())
+    assert entries == [entries[0] + step for step in (0, 1, 2, 3, 3)], f"program cache entries {entries}"
+
+    def unbrick(device_tensor):
+        bricked = ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0]).float().reshape(1, -1, head_count, head_dim)
+        present = table >= 0
+        natural = torch.zeros_like(expected)
+        natural[:, table[present]] = bricked[:, present]
+        return natural
+
+    actual = {name: unbrick(output) for name, output in outputs.items()}
+    for name, output in actual.items():
+        correlation = pearson(output, expected)
+        assert correlation > 0.99, f"{name}: PCC {correlation:.5f} against the torch reference"
+    assert not torch.equal(actual["high"], actual["low"]), "LoFi + approx exp matched HiFi4 bit for bit"
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
 def test_shards_match_the_whole_volume(mesh_device):
     """Two shards with DIFFERENT origins reproduce the unsharded answer, on one program.

@@ -179,12 +179,22 @@ ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
         attributes.head_count,
         attributes.scale,
         attributes.tiles_per_kv_chunk,
+        // Fidelity, approx exp, fp32 accumulation and DST sync are all compiled into the kernel.
+        attributes.compute_kernel_config,
         tensors.query_tensor.logical_shape(),
         tensors.query_tensor.dtype(),
         tensors.query_tensor.memory_config(),
         tensors.key_tensor.dtype(),
+        tensors.key_tensor.memory_config(),
         tensors.value_tensor.dtype(),
-        attributes.output_memory_config);
+        tensors.value_tensor.memory_config(),
+        tensors.gather_origin_table.memory_config(),
+        // The mask's presence picks the mask path and its circular buffers; every tensor's memory
+        // config reaches the kernels through its compile-time TensorAccessorArgs.
+        tensors.interior_mask.has_value()
+            ? std::optional<tt::tt_metal::MemoryConfig>(tensors.interior_mask->memory_config())
+            : std::nullopt,
+        tensors.output_tensor.has_value() ? tensors.output_tensor->memory_config() : attributes.output_memory_config);
 }
 
 Tensor neighborhood_sdpa(
