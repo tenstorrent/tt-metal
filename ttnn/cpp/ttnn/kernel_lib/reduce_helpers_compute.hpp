@@ -100,7 +100,7 @@
  *   }
  *
  *   A tail-capable Call carries the full and planned tail alternatives and the runtime override
- *   offset. reduce<Call>() selects between them internally: [0] chooses full work; the planned
+ *   offset. reduce<Call>() selects between them internally: [0, 0, 0] chooses full work; the planned
  *   [height, width, batches] chooses tail work, including its auxiliary slice and AVG
  *   normalization. The same call type and compiled kernel run on every core of the grid.
  *   Output lanes beyond the valid non-reduced extent are unspecified; a consumer that needs them

@@ -60,7 +60,7 @@ struct ReduceValidShape {
     std::uint32_t batches = 1;
 };
 
-// Plan both the ordinary block and this exact tail. At runtime [0] selects
+// Plan both the ordinary block and this exact tail. At runtime [0, 0, 0] selects
 // the ordinary block; [height, width, batches] selects the tail on any core using
 // the same compiled kernel. Both auxiliary recipes are prepared upfront.
 // Output lanes beyond the tail's valid non-reduced extent are unspecified.
@@ -162,8 +162,8 @@ struct ReducePlan {
 
     const ReduceCbRequirement* find_cb(ReduceCbRole role) const;
     // Use the same compiled plan on full and tail cores. Initialize the runtime
-    // marker on all cores: [0] selects full work, [height, width, batches] selects tail.
-    // Callers must preserve fixed offsets if other runtime arguments follow.
+    // marker on all cores: [0, 0, 0] selects full work, [height, width, batches] selects tail.
+    // Both have three words, so arguments that follow sit at the same offset on every core.
     std::vector<std::uint32_t> get_runtime_shape_args(bool use_tail = true) const;
     // Append a standalone plan's record and return its base for ReduceCallArgs<CTA_OFFSET, RTA_OFFSET>.
     std::uint32_t append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail = true) const;
@@ -267,7 +267,8 @@ struct ReduceSequencePlan {
     // Contiguous, deduplicated tail records; call descriptors carry their relative offsets.
     std::vector<std::uint32_t> tail_runtime_args;
 
-    // Static sequences return no arguments; full work returns [0]; tail work returns all records.
+    // Static sequences return no arguments; tail work returns all records and full work returns
+    // as many zeros, so arguments that follow sit at the same offset on every core.
     std::vector<std::uint32_t> get_runtime_shape_args(bool use_tail = true) const;
     // Append after caller-owned arguments and return the section base for RTA_OFFSET.
     std::uint32_t append_runtime_args(std::vector<std::uint32_t>& runtime_args, bool use_tail = true) const;

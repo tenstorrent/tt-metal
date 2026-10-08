@@ -1178,7 +1178,7 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
         )
         plan = sequence.calls[0].plan
         assert plan.tail_plan is not None
-        assert plan.get_runtime_shape_args(False) == [0]
+        assert plan.get_runtime_shape_args(False) == [0, 0, 0]
         assert plan.get_runtime_shape_args(True) == list(tail_shape)
         auxiliary_tiles = len(sequence.auxiliary.tiles)
 
@@ -1515,7 +1515,8 @@ def test_reduce_full_and_tail_average(device, dim, algorithm, scalar, use_tail, 
     runtime_args = [999] * 4
     runtime_arg_offset = sequence.append_runtime_args(runtime_args, use_tail=use_tail)
     assert runtime_arg_offset == 4
-    expected_records = [v for shape in planned_tails if shape for v in (*shape, 1)] if use_tail else [0]
+    tail_records = [v for shape in planned_tails if shape for v in (*shape, 1)]
+    expected_records = tail_records if use_tail else [0] * len(tail_records)
     assert runtime_args == [999] * 4 + expected_records
     output_shape = (output_tiles * TILE, TILE)
     output = ttnn.from_torch(
@@ -1601,9 +1602,9 @@ def test_reduce_runtime_tail_rebinds_both_algorithms(device, runtime_arg_offset,
     compute_args, auxiliary_args = _serialize_plan(sequence)
     for use_tail in (False, True):
         runtime_args = plan.get_runtime_shape_args(use_tail)
-        assert runtime_args == ([32, 17, 1] if use_tail else [0])
+        assert runtime_args == ([32, 17, 1] if use_tail else [0, 0, 0])
         if not use_tail:
-            # Full work must neither require nor interpret words after its zero marker.
+            # Full work must not interpret words after its zero record.
             runtime_args += list(full_runtime_suffix)
         width = 17 if use_tail else full_width
         values = (torch.arange(32 * width).reshape(32, width) % 7 - 3).to(torch.bfloat16)
