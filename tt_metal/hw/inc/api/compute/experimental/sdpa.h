@@ -198,7 +198,7 @@ ALWI void sdpa_reduce_sum_row(std::uint32_t src_index, std::uint32_t dst_index, 
 // Packer:
 // Fast Approx Exp uses 3 constants and LoadMacro
 // Non-Approx Exp uses 1 constant for recip. TODO: Look into integrating new polynomial exp in
-// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+// ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_block_ops.hpp
 
 // TODO: Factor this out into a reusable fn in LLK
 template <std::uint32_t scale /* 1.0f in FP32 */>
