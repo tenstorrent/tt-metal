@@ -98,15 +98,15 @@ def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, d
     return default_q_chunk
 
 
-def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads):
-    """Ring SDPA program config: base_program_config (SDPA_PROGCFG for this seq_len) with only q_chunk_size
-    replaced by ring_sdpa_balanced_q_chunk. Grid, k_chunk and exp_approx_mode come from the base config, and
-    the picker's core count is the base grid's, so the two cannot drift apart."""
+def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads, exp_approx_mode):
+    """Ring SDPA program config: base_program_config (SDPA_PROGCFG for this seq_len) with q_chunk_size
+    replaced by ring_sdpa_balanced_q_chunk and exp_approx_mode set by the caller. Grid and k_chunk come from
+    the base config, and the picker's core count is the base grid's, so the two cannot drift apart."""
     grid = base_program_config.compute_with_storage_grid_size
     num_cores = grid.x * grid.y
     cfg = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
-        exp_approx_mode=base_program_config.exp_approx_mode,
+        exp_approx_mode=exp_approx_mode,
         q_chunk_size=ring_sdpa_balanced_q_chunk(
             seq_len, n_local_heads=n_local_heads, num_cores=num_cores, default_q_chunk=base_program_config.q_chunk_size
         ),
@@ -581,11 +581,16 @@ class TtQwenModelArgs(TtModelArgs):
             # ring_distributed SDPA (llama_attention.forward_prefill, batch 1, no prefix) above the traced
             # buckets (> 4096): same config but with a q_chunk that balances Q-chunk pairs over the 70 cores
             # (ring_sdpa_balanced_q_chunk). Wormhole only (measured there); <= 4096 and Blackhole use SDPA_PROGCFG.
+            # exp_approx_mode=True: since #57180 the fp32-dest SDPA kernel honours False with the accurate SFPU
+            # exponential, ~20x the SFPU cost per QK tile; the approximate one is what Llama prefill uses
+            # (model_config.py SDPA_PROGCFG, #58262). HiFi4 and fp32 acc are unchanged.
             def _sdpa_ring_progcfg(seqlen, chunk_start_idx=0):
                 base = self.model_config["SDPA_PROGCFG"](seqlen, chunk_start_idx=chunk_start_idx)
                 if self.is_blackhole or seqlen <= 4096 or chunk_start_idx != 0:
                     return base
-                return qwen_ring_sdpa_program_config(base, seqlen, n_local_heads=self.n_heads // self.n_kv_heads)
+                return qwen_ring_sdpa_program_config(
+                    base, seqlen, n_local_heads=self.n_heads // self.n_kv_heads, exp_approx_mode=True
+                )
 
             self.model_config["SDPA_RING_PROGCFG"] = _sdpa_ring_progcfg
 
