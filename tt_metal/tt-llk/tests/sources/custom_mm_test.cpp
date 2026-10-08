@@ -143,19 +143,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    // dense_packing=true, transpose=false. operandB_face_r_dim = in0 M.
-    // dense_packing MUST be true: the pack thread reads the ct output tiles with the
-    // dense-packing W-stride (consecutive tiles 32 DEST rows apart), so the math must lay
-    // them out 32 rows apart too (ADDR_MOD_2 DEST incr = 32, not 64). With dense_packing
-    // false the math strides output tiles 64 rows apart, so pack reads tile i>0 from the
-    // wrong DEST offset -- tile 0 is correct but every later tile is corrupt. Matches the
-    // proven compressed sibling (matmul_custom_compressed_test.cpp), which passes
-    // dense_packing=true for the identical pack setup.
-    _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, true /* dense_packing */>(params.in0_face_r_dim, CT_DIM);
+    // transpose=false. operandB_face_r_dim = in0 M. CUSTOM_MM_DENSE_PACKING lays the output tiles 32 DEST rows apart
+    // (64 without it); the pack thread below reads them with the matching W-stride.
+    _llk_math_custom_mm_init_<false /* transpose */, CUSTOM_MM_SPLIT_ACC, CUSTOM_MM_DENSE_PACKING>(params.in0_face_r_dim, CT_DIM);
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    if constexpr (CUSTOM_MM_FINALIZE && !CUSTOM_MM_SPLIT_ACC)
+    {
+        // A finalize without split_acc adds DEST rows 8 and 24 of each tile, which no MVMUL wrote: start them at zero
+        _llk_math_clear_dest_section_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        math::reset_counters(p_setrwc::SET_ABD_F);
+    }
 
-    // finalize only with split_acc, on the last call (custom_mm.h arg table).
+    // The finalize runs on the last call.
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
         if constexpr (num_calls > 1)
@@ -166,7 +166,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // writes. Without the delay math keeps up with the unpacker and the boundary is never contended.
             ckernel::wait(2000);
         }
-        if (CUSTOM_MM_SPLIT_ACC && call == num_calls - 1)
+        if (CUSTOM_MM_FINALIZE && call == num_calls - 1)
         {
             _llk_math_custom_mm_<true /* finalize */>(params.in0_face_r_dim, 0 /* dst_index */, kt_per_call, CT_DIM);
         }
@@ -193,15 +193,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     // Same pack setup the compressed driver uses: the in0 face geometry (M rows, 2 faces)
-    // is what lands in DEST, so pack with that geometry and the dense-packing W-stride
-    // (tiles 32 rows apart) that custom_mm_block_init installs for the [M,32] output tiles.
+    // is what lands in DEST, so pack with that geometry and the W-stride the math used: tiles
+    // 32 rows apart with dense packing (what custom_mm_block_init installs), 64 without.
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
     _llk_pack_init_<PackMode::Default, false /*zero_output*/, false /*skip_addrmod_config*/, true /*skip_packer_strides*/>(
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(
+        (CUSTOM_MM_DENSE_PACKING ? TILE_NUM_FACES / 2 : TILE_NUM_FACES) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 
     _llk_packer_wait_for_math_done_();
 

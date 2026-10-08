@@ -71,12 +71,23 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 @dataclass
 class CUSTOM_MM_SPLIT(TemplateParameter):
-    """split_acc: the second K half of every K tile accumulates in rows 8 and 24, and the last call adds it back."""
+    """split_acc: the second K half of every K tile accumulates in rows 8 and 24; finalize (on the last call) adds rows
+    8 and 24 onto 0 and 16; dense_packing: output tiles 32 DEST rows apart instead of 64.
+    """
 
     custom_mm_split_acc: bool = False
+    custom_mm_finalize: bool = False
+    custom_mm_dense_packing: bool = True
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool CUSTOM_MM_SPLIT_ACC = {str(self.custom_mm_split_acc).lower()};"
+        return "\n".join(
+            f"constexpr bool {name} = {str(value).lower()};"
+            for name, value in (
+                ("CUSTOM_MM_SPLIT_ACC", self.custom_mm_split_acc),
+                ("CUSTOM_MM_FINALIZE", self.custom_mm_finalize),
+                ("CUSTOM_MM_DENSE_PACKING", self.custom_mm_dense_packing),
+            )
+        )
 
 
 # in0 (A/SrcB) row count. The header restricts this to {1,2,4,8}; 8 is the largest and
@@ -132,8 +143,17 @@ class CustomMMStimuliConfig(StimuliConfig):
 
 
 def _run_custom_mm(
-    M, kt, ct, formats, dest_acc, calls=CUSTOM_MM_CALLS(), split_acc=False
+    M,
+    kt,
+    ct,
+    formats,
+    dest_acc,
+    calls=CUSTOM_MM_CALLS(),
+    split_acc=False,
+    finalize=None,
+    dense_packing=True,
 ):
+    finalize = split_acc if finalize is None else finalize
     K = kt * DEFAULT_TILE_R_DIM
     N = ct * DEFAULT_TILE_C_DIM
     in0_format = formats.input_format
@@ -207,7 +227,11 @@ def _run_custom_mm(
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             calls,
-            CUSTOM_MM_SPLIT(custom_mm_split_acc=split_acc),
+            CUSTOM_MM_SPLIT(
+                custom_mm_split_acc=split_acc,
+                custom_mm_finalize=finalize,
+                custom_mm_dense_packing=dense_packing,
+            ),
         ],
         runtimes=[
             # Result / in0 use 2 faces (M x 16 each); in1 (B) uses 4 full faces.
@@ -302,6 +326,35 @@ def test_custom_mm(formats, M, kt, ct):
 def test_custom_mm_split_acc(formats, M, kt, ct):
     """split_acc with the finalize, which merges the two K halves of every output tile."""
     _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats), split_acc=True)
+
+
+@blackhole_only
+@parametrize(
+    formats=CUSTOM_MM_FORMATS,
+    M=[1, 8],
+    kt=[2],
+    ct=[1, 4],
+    split_acc=[True, False],
+)
+def test_custom_mm_finalize_tile_stride(formats, M, kt, ct, split_acc):
+    """The finalize with output tiles a full tile apart in DEST (dense_packing off), with and without split_acc."""
+    _run_custom_mm(
+        M,
+        kt,
+        ct,
+        formats,
+        _dest_acc_for(formats),
+        split_acc=split_acc,
+        finalize=True,
+        dense_packing=False,
+    )
+
+
+@blackhole_only
+@parametrize(formats=CUSTOM_MM_FORMATS, M=[1, 8], kt=[2], ct=[1, 4])
+def test_custom_mm_finalize_without_split(formats, M, kt, ct):
+    """A finalize without split_acc adds the zeroed rows 8 and 24 back, so the product is unchanged."""
+    _run_custom_mm(M, kt, ct, formats, _dest_acc_for(formats), finalize=True)
 
 
 ODD_K_CASES = [
