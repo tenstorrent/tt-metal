@@ -384,21 +384,22 @@ inline void _llk_pack_fast_untilize_emit_phase_(
 }
 
 // One call processes one 2/3/4-tile chunk inside a wider row.
-// Output address points at this chunk's row-0 column in the row-major tensor.
+// Output address points at this chunk's row-0 column in the row-major tensor; output_row_stride_16B is the
+// distance between output rows, which decides whether a single base can carry all 32 rows.
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void _llk_pack_fast_untilize_block_strided_(
-    const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B = 0)
+    const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim, const std::uint32_t output_row_stride_16B)
 {
     static_assert(block_ct_dim >= 2 && block_ct_dim <= FAST_UNTILIZE_MAX_UNIT_DIM, "BH fast untilize strided path supports block_ct_dim 2, 3, or 4");
     static_assert(full_ct_dim > block_ct_dim, "Use the contiguous fast_untilize block when the chunk is the full row");
     LLK_ASSERT(unit_dim >= 2 && unit_dim <= block_ct_dim, "fast_untilize pack unit_dim must be in [2, block_ct_dim]");
+    LLK_ASSERT(output_row_stride_16B != 0, "fast_untilize strided pack needs the output row stride");
 
     constexpr std::uint32_t MAX_CARRIED_OUTPUT_Y_ROW = 2 * FAST_UNTILIZE_PHASE_ROWS - 1;
 
     // Fast path: the packer can carry y_dst across all 32 rows of the chunk from
-    // a single base without leaving the window. output_row_stride_16B == 0 means
-    // a legacy caller that did not supply the stride; keep the old carry behavior.
-    const bool carry_full_chunk = output_row_stride_16B == 0 || MAX_CARRIED_OUTPUT_Y_ROW * output_row_stride_16B < PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B;
+    // a single base without leaving the window.
+    const bool carry_full_chunk = MAX_CARRIED_OUTPUT_Y_ROW * output_row_stride_16B < PACKER_CARRIED_OUTPUT_Y_OFFSET_WINDOW_16B;
 
     // Otherwise rebase every rows_per_run rows. rows_per_run is the largest
     // power-of-two divisor of FAST_UNTILIZE_PHASE_ROWS whose top row stays inside

@@ -49,9 +49,13 @@ inline void llk_pack_fast_untilize_block(
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void llk_pack_fast_untilize_block_strided_at_address(
-    const std::uint32_t address, const std::uint32_t unit_dim, std::uint32_t& prev_unit_dim) {
+    const std::uint32_t address,
+    const std::uint32_t unit_dim,
+    std::uint32_t& prev_unit_dim,
+    const std::uint32_t output_row_stride_16B) {
     SAN_HOOK(unsupported());
-    ckernel::_llk_pack_fast_untilize_block_strided_<block_ct_dim, full_ct_dim>(address, unit_dim, prev_unit_dim);
+    ckernel::_llk_pack_fast_untilize_block_strided_<block_ct_dim, full_ct_dim>(
+        address, unit_dim, prev_unit_dim, output_row_stride_16B);
 }
 
 template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
