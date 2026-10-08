@@ -43,6 +43,7 @@ so a run can be resumed from another machine. Scripts avoid `gh run list --branc
 | `ci_triage.sh <run_id>` | every non-green job of a run with its failing tests |
 | `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main? |
 | `bot_threads.sh <pr>` | bot feedback still unanswered; ack handled summaries by URL |
+| `bots_pending.sh <pr>` | what must still finish before the head SHA is "bots quiet"; empty = quiet |
 
 ---
 
@@ -184,13 +185,27 @@ login looks like.
 ```bash
 $SKILL/scripts/dispatch.sh "LLK PR Review" main -f pr_number=<PR>     # ~45 min; record the run id
 ```
-Other reviewers may or may not fire on a draft. **Learn it on the first PR**: note which bots posted
-within 60 min of the push, and treat that set as "the auto reviewers" for the run.
+The other reviewers (skills reviewers, Repo Assist, Silencer, …) are **workflow runs attached to
+the head SHA** — queued, in progress, or completed — and Copilot, the one reviewer that is a GitHub
+app, sits in the PR's requested reviewers until it submits. So whether bots are done is **observed,
+not guessed**:
+```bash
+$SKILL/scripts/bots_pending.sh <PR>      # empty output = bots quiet on the current head SHA
+```
+It lists: `RUN` (a run on the head SHA still queued/in progress — reviewers, static checks, PR gate;
+any event, incl. `pull_request_target`), `DISPATCH` (an LLK PR Review run for this PR, or a run id you
+pass, not completed), `COPILOT` (review requested, not submitted), `SETTLE` (no run has registered
+yet and the head is under 10 min old — GitHub needs a minute or two to queue runs after a push; after
+10 min with nothing registered, nothing is coming), and the `bot_threads.sh` lines.
 
-**Bots quiet for a SHA** = (a) every review run you dispatched for that SHA has completed (or
-infra-failed and been re-dispatched once), **and** (b) 45 min have passed since the push with no new
-bot comment, **and** (c) `bot_threads.sh <PR>` is empty. Pure rebases (no code change) don't need a
-fresh LLK PR Review dispatch — but the 45-min quiet window still applies before any CI is spent on it.
+**Bots quiet for a SHA** = `bots_pending.sh <PR>` prints nothing. A reviewer run that infra-failed
+counts as completed once it has been re-dispatched once (retry table). Pure rebases (no code change)
+don't need a fresh LLK PR Review dispatch, but `bots_pending.sh` must still be empty before CI is
+spent on the new SHA — reviewers that trigger on `synchronize` will have run again. Waiting for the
+auto-triggered static checks / PR gate here is deliberate: they are already running, and a failure
+there means another push anyway, so it costs nothing and saves a Sanity + Nightly run.
+
+Poll it with the same discipline as any wait: a background loop every 2–5 min, not a tight loop.
 
 **Every bot comment gets handled, on every push, for the life of the PR.** A CI fix, a review fix, or a
 rebase is a new head SHA, bots review it again, and those comments are in scope too.
