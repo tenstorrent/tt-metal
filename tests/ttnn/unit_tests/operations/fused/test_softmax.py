@@ -978,8 +978,9 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
 
 # The dim range check used size_t arithmetic and ran before the rank-0 exit, so a 0-D input always
 # threw with a wrapped dim, and an out-of-range dim was reported as 18446744073709551613.
+@pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
 @pytest.mark.parametrize("dim", [0, -1])
-def test_softmax_rank_0_returns_one(device, dim):
+def test_softmax_rank_0_returns_one(device, op, dim):
     torch_input = torch.randn(())
     tt_input = ttnn.from_torch(
         torch_input,
@@ -988,21 +989,23 @@ def test_softmax_rank_0_returns_one(device, dim):
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    tt_output = ttnn.softmax(tt_input, dim=dim)
+    tt_output = op(tt_input, dim=dim)
     assert tt_output.memory_config().buffer_type == ttnn.BufferType.L1
     tt_output = ttnn.to_torch(tt_output)
     assert tt_output.shape == torch.Size([])
     assert tt_output.item() == 1.0
 
 
+@pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
 @pytest.mark.parametrize("dim", [1, -2])
-def test_softmax_rank_0_rejects_out_of_range_dim(device, expect_error, dim):
+def test_softmax_rank_0_rejects_out_of_range_dim(device, expect_error, op, dim):
     tt_input = ttnn.from_torch(torch.randn(()), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, rf"expected to be in range of \[-1, 0\], but got {dim}"):
-        ttnn.softmax(tt_input, dim=dim)
+        op(tt_input, dim=dim)
 
 
-def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error):
+@pytest.mark.parametrize("op", [ttnn.softmax, ttnn.softmax_in_place], ids=["softmax", "softmax_in_place"])
+def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error, op):
     tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
-        ttnn.softmax(tt_input, dim=-7)
+        op(tt_input, dim=-7)
