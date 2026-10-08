@@ -21,6 +21,10 @@ This module is the leaf of that dependency: it must not import from golden_gener
 sfpu_domains.
 """
 
+# exp_with_base(x) = exp(EXP_WITH_BASE_SCALE * x), base e^0.5: EXP_WITH_BASE_SCALE_BF16
+# (and its fp32 form for exp_init) in sfpu_operations.h.
+EXP_WITH_BASE_SCALE = 0.5
+
 # Comparison ops (UnaryGt/Lt/Ge/Le/Eq/Ne) compare x against this.
 UNARY_COMP_THRESHOLD = 0.5
 
@@ -53,3 +57,24 @@ LRELU_NEGATIVE_SLOPE = 0.1
 
 # UnaryMax/MinInt32 and UnaryMax/MinUint32 compare against this scalar.
 INT_MAXMIN_SCALAR = 1000
+
+# Unary bitwise and / or / xor (calculate_sfpu_unary_bitwise) combine x with this scalar: high bits
+# set, a byte of ones, a byte of zeros and a mixed low byte. Non-negative, like RSUB_INT32_SCALAR:
+# the harness stores Int32 in L1 as sign-magnitude, so only non-negative results round-trip.
+UNARY_BITWISE_SCALAR = 0x70FF00F5
+
+# rsub_scalar_int32 computes this scalar minus x (non-negative for every non-negative x).
+RSUB_INT32_SCALAR = 0x7FFFFFFF
+
+# remainder_uint32 (calculate_remainder_uint32_scalar) divides the unsigned bit pattern by this;
+# a non-power-of-two below 2**31 takes the kernel's general branch.
+REMAINDER_UINT32_SCALAR = 1000
+
+# softcap(x) = beta * tanh(x / beta); the harness passes beta and 1 / beta.
+SOFTCAP_BETA = 5.0
+
+# Compile-time configs of the fused GLU kernels: clamped_silu_glu's DeepSeek-V4 clamp limit,
+# situ_glu's Kimi gate / up betas.
+CLAMPED_SILU_GLU_LIMIT = 10.0
+SITU_GLU_BETA_GATE = 4.0
+SITU_GLU_BETA_UP = 25.0

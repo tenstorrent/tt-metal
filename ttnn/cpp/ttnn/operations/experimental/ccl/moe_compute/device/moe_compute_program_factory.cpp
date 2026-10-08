@@ -53,22 +53,22 @@ uint32_t get_num_rows_st(const ttnn::Tensor& tensor) {
 std::tuple<
     std::vector<tt::tt_metal::CoreCoord>,  // T cores
     std::vector<tt::tt_metal::CoreCoord>,  // MM cores
-    CoreRangeSet,            // T CoreRangeSet
-    CoreRangeSet,            // MM CoreRangeSet
-    CoreRangeSet,            // T + MM CoreRangeSet
-    CoreRangeSet,            // Combine CoreRangeSet
-    CoreRangeSet,            // C + MM CoreRangeSet
-    CoreRangeSet,            // All worker cores (T + MM + C)
+    tt::tt_metal::CoreRangeSet,            // T tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // MM tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // T + MM tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // Combine tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // C + MM tt::tt_metal::CoreRangeSet
+    tt::tt_metal::CoreRangeSet,            // All worker cores (T + MM + C)
     std::vector<tt::tt_metal::CoreCoord>,  // Combine vector of CoreCoord
-    CoreRange,               // T bounding box
-    CoreRange>               // MM bounding box
+    tt::tt_metal::CoreRange,               // T bounding box
+    tt::tt_metal::CoreRange>               // MM bounding box
 get_cores(
     ttnn::MeshDevice* mesh_device,
     const uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
     uint32_t bh_ring_size,
-    const CoreRangeSet& mux_core_range_set) {
+    const tt::tt_metal::CoreRangeSet& mux_core_range_set) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
         mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set, bh_ring_size);
 
@@ -1477,12 +1477,27 @@ MoEComputeMeshWorkloadFactory::create_at(
             .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
             .optional_output_tensor = tensor_args.optional_output_tensor};
 
-        // Each combine core consumes output pages from a column of compute cores;
-        // compute_cores_per_combine_core = matmul_num_cores / combine_data_parallel_cores
-        // is variable across shipped models (e.g., 3 for output_width_shard_dim=4 with
-        // matmul_num_cores=12; 4 for output_width_shard_dim=3 with matmul_num_cores=12).
-        // With ring size = live bank count, matmul_num_cores is 12 on WH and 7/8 on BH.
-        const uint32_t compute_cores_per_combine_core = matmul_core_range_set.num_cores() / combine_data_parallel_cores;
+        // Each combine column (width shard) is fed by the ring cores whose w2 width slice
+        // [w2_offset, w2_offset + w2_tiles) overlaps it. The ring size (12 on WH, 7/8 on BH) need
+        // not be a multiple of the column count, so a ring core may feed more than one column.
+        // Must match dm1's combine_col_begin / combine_col_end.
+        std::vector<std::vector<CoreCoord>> compute_cores_by_combine_column(combine_data_parallel_cores);
+        uint32_t w2_offset_tiles = 0;
+        for (uint32_t ring_pos = 0; ring_pos < matmul_num_cores; ++ring_pos) {
+            const uint32_t w2_tiles =
+                moe_ring::w2_shard_tiles(hidden_tiles, ring_pos, intermediate_tiles, matmul_num_cores);
+            const uint32_t col_begin = w2_offset_tiles / output_shard_width_tiles;
+            const uint32_t col_end = (w2_offset_tiles + w2_tiles - 1) / output_shard_width_tiles + 1;
+            for (uint32_t col = col_begin; col < col_end; ++col) {
+                compute_cores_by_combine_column.at(col).push_back(ring_pos2core[ring_pos]);
+            }
+            w2_offset_tiles += w2_tiles;
+        }
+        TT_FATAL(
+            w2_offset_tiles == hidden_tiles,
+            "moe_compute: w2 width slices cover {} tiles, expected hidden_tiles {}",
+            w2_offset_tiles,
+            hidden_tiles);
         auto selective_reduce_combine_artifacts = build_selective_reduce_combine_program_artifacts(
             program,
             combine_params,
@@ -1494,8 +1509,7 @@ MoEComputeMeshWorkloadFactory::create_at(
             final_barrier_semaphore,
             tilize_combine_sync_semaphore_id,
             matmul_combine_sync_semaphore_id,
-            compute_cores_per_combine_core,
-            ring_pos2core);
+            compute_cores_by_combine_column);
 
         combine_kernel_handles = {
             selective_reduce_combine_artifacts.reader_kernel_id, selective_reduce_combine_artifacts.writer_kernel_id};

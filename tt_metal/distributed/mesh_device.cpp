@@ -10,12 +10,14 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/host_region.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <algorithm>
@@ -51,7 +53,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
-#include "impl/streaming_profiler/streaming_profiler_receiver.hpp"
+#include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "distributed/sd_mesh_command_queue.hpp"
@@ -1072,6 +1074,17 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         mesh_command_queues_.clear();
     }
 
+    // Release the pinned host region first: it names pages the NIC was told about, and
+    // unpinning must happen while the cluster is still live. release() runs ahead of the
+    // overlays being unmapped, which is why this cannot wait for the destructor.
+    // Released, NOT reset: a later host_region() returns this same object, so a leg and the
+    // mesh never hold two different regions. It dies with its last holder -- this mesh or a
+    // RingAlias -- and clear_aliases() on a released region is safe. release() is idempotent,
+    // so the second close_impl() from ~MeshDevice is harmless.
+    if (host_region_) {
+        host_region_->release();
+    }
+
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
     if (realtime_profiler_) {
@@ -1220,9 +1233,24 @@ void MeshDeviceImpl::validate_sub_device_manager_tracker() const {
     }
 }
 
+SubDeviceManagerId MeshDeviceImpl::acquire_command_list_builder() {
+    auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Only one CommandListBuilder may exist for a MeshDevice");
+    validate_sub_device_manager_tracker();
+    command_list_builder_active_ = true;
+    return sub_device_manager_tracker_->get_active_sub_device_manager_id();
+}
+
+void MeshDeviceImpl::release_command_list_builder() {
+    auto lock = lock_api();
+    TT_ASSERT(command_list_builder_active_);
+    command_list_builder_active_ = false;
+}
+
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot create a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
@@ -1230,22 +1258,33 @@ SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
 SubDeviceManagerId MeshDeviceImpl::create_sub_device_manager(
     ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot create a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     return sub_device_manager_tracker_->create_sub_device_manager(sub_devices, local_l1_size);
 }
 void MeshDeviceImpl::remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot remove a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->remove_sub_device_manager(sub_device_manager_id);
     this->allocator_impl()->unregister_active_traces(sub_device_manager_id);
 }
 void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot load a sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
+    // Sub-device managers aren't supported with manual Fast Dispatch: the session's L1 preflight can't see
+    // buffers under a non-default manager, and loading one inside a session left terminate_fast_dispatch
+    // hanging on a Blackhole Galaxy. Loads need the Fast Dispatch flag, which a session sets, so refuse here.
+    TT_FATAL(
+        !::tt::tt_metal::experimental::DispatchContext::get().is_fast_dispatch_session_active(),
+        "Sub-device managers are not supported with manual Fast Dispatch: a session opened with "
+        "DispatchContext::initialize_fast_dispatch is active.");
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
     auto lock = lock_api();
+    TT_FATAL(!command_list_builder_active_, "Cannot clear the sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
 }
@@ -1356,11 +1395,11 @@ const std::shared_ptr<distributed::multihost::DistributedContext>& MeshDeviceImp
     return coowner_context_;
 }
 
-std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     return get_devices().front()->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 std::unordered_map<uint32_t, CoreCoord> MeshDeviceImpl::get_optimal_dram_bank_to_logical_worker_assignment(
-    NOC noc, const MeshCoordinate& coord) {
+    NOC noc, const MeshCoordinate& coord) const {
     // The assignment is a device-local physical property that can only be queried for a local device.
     // If `coord` maps to a local device, use it. Otherwise (a remote device) fall back to an arbitrary
     // local device's assignment; this is a best-effort approximation that is exact only when the mesh
@@ -1773,6 +1812,16 @@ TensorPrefetcherManager& MeshDeviceImpl::tensor_prefetcher(MeshDevice* mesh_devi
     return *tensor_prefetcher_;
 }
 
+std::shared_ptr<experimental::HostRegion> MeshDeviceImpl::host_region() {
+    if (!host_region_) {
+        // A closed mesh has no live PCIe endpoint to provision against; a fresh region here
+        // would only hide the caller's mistake.
+        TT_FATAL(is_initialized(), "host_region() on a closed mesh: there is no PCIe endpoint to provision against");
+        host_region_ = std::make_shared<experimental::HostRegion>();
+    }
+    return host_region_;
+}
+
 CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot select a DRAM sender core for a null device");
     const auto& soc_desc = metal_env().get_cluster().get_soc_desc(device->id());
@@ -2026,11 +2075,11 @@ std::vector<CoreCoord> MeshDevice::ethernet_cores_from_logical_cores(
     const std::vector<CoreCoord>& logical_cores) const {
     return pimpl_->ethernet_cores_from_logical_cores(logical_cores);
 }
-std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) {
+std::vector<CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) const {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc);
 }
 std::unordered_map<uint32_t, CoreCoord> MeshDevice::get_optimal_dram_bank_to_logical_worker_assignment(
-    NOC noc, const MeshCoordinate& coord) {
+    NOC noc, const MeshCoordinate& coord) const {
     return pimpl_->get_optimal_dram_bank_to_logical_worker_assignment(noc, coord);
 }
 CoreCoord MeshDevice::virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const {

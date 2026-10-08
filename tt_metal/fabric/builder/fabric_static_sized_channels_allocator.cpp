@@ -5,7 +5,6 @@
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "impl/context/metal_context.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <enchantum/enchantum.hpp>
@@ -48,6 +47,18 @@ size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_number_of_slots(
         channel_id,
         vc_id);
     return receiver_channels_num_buffers[vc_id][channel_id];
+}
+
+size_t FabricStaticSizedChannelsAllocator::get_remote_receiver_channel_number_of_slots(
+    size_t vc_id, size_t channel_id) const {
+    TT_FATAL(
+        vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
+    TT_FATAL(
+        channel_id < remote_receiver_channels_num_buffers[vc_id].size(),
+        "Remote receiver channel ID {} out of bounds for VC{}",
+        channel_id,
+        vc_id);
+    return remote_receiver_channels_num_buffers[vc_id][channel_id];
 }
 
 size_t FabricStaticSizedChannelsAllocator::get_receiver_channel_base_address(size_t vc_id, size_t channel_id) const {
@@ -597,7 +608,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     };
 
     // auto axis_index = static_cast<std::size_t>(options.edm_axis);
-    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    auto arch = options.arch;
     size_t arch_index;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         arch_index = 0;
@@ -767,7 +778,7 @@ void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     // allocated but unused). When emitting the kernel-side SENDER_TO_ENTRY_IDX mapping we
     // must skip past the *per-VC* unused slots, not the total unused slots — the kernel
     // compacts its sender channels in (VC0, VC1, VC2) order using the ACTUAL_* counts
-    // (see VC1_SENDER_CHANNEL_START / VC2_SENDER_CHANNEL_START in
+    // (see VC1_LOCAL_CHANNEL_START / VC2_LOCAL_CHANNEL_START in
     // fabric_erisc_router_ct_args.hpp), so each VC's used channels must point into its
     // own allocator-entry region.
     //

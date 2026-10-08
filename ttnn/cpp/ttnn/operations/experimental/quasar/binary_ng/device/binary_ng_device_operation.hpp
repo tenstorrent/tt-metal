@@ -55,6 +55,8 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_a = Layout::TILE;
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
+        // Parameters of the op being run, for ops that take any; empty for ops that do not.
+        std::optional<binary::BinaryOpParams> op_params;
 
         // `worker_grid` is hashed because get_worker_grid resolves it from MUTABLE device state, so
         // unhashed a cache hit could reuse a program placed on a different core set. `sub_device_id`
@@ -79,7 +81,8 @@ struct BinaryNgDeviceOperation {
             "equal_nan",
             "scalar",
             "rtol",
-            "atol");
+            "atol",
+            "op_params");
         auto attribute_values() const {
             return std::make_tuple(
                 binary_op_type,
@@ -101,7 +104,8 @@ struct BinaryNgDeviceOperation {
                 equal_nan,
                 scalar,
                 rtol,
-                atol);
+                atol,
+                binary_op_type == BinaryOpType::BIAS_GELU ? op_params : std::optional<binary::BinaryOpParams>{});
         }
         DataType get_dtype() const;
     };
@@ -134,7 +138,8 @@ struct BinaryNgDeviceOperation {
 
     // Quasar-native DFB factory. Starts as a mechanical copy of ProgramFactoryMetalV2 so later commits
     // read as a diff of what "native" means (>2 of 6 DM cores, >1 of 4 Tensix). Opt-in via
-    // TTNN_QSR_NATIVE, so the metal_v2 path stays live as the A/B reference arm.
+    // TTNN_QSR_NATIVE, so the metal_v2 path stays live as the A/B reference arm, except for DRAM shards,
+    // which only this factory runs on Quasar.
     // Must stay a stateless literal type -- the framework default-constructs it into static storage.
     struct ProgramFactoryQuasarNative {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
@@ -154,8 +159,9 @@ struct BinaryNgDeviceOperation {
     // select_program_factory.
     static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
 
-    // Strict subset of matches_metal_v2_slice, plus TTNN_QSR_NATIVE. Checked first; its leading test is
-    // the cached env bool, so the non-native hot-path cost is a load and a branch.
+    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards, which
+    // that slice sends to the descriptor. Needs TTNN_QSR_NATIVE. Checked first; its leading test is the
+    // cached env bool, so the non-native hot-path cost is a load and a branch.
     static bool matches_quasar_native_slice(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);

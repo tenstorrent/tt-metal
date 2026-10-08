@@ -4,14 +4,11 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <filesystem>
 #include <algorithm>
 #include <memory>
 #include <mutex>
-#include <future>
 #include <set>
 #include <vector>
-#include <unordered_set>
 
 #include <tracy/Tracy.hpp>
 
@@ -31,12 +28,13 @@
 #include "jit_build/build_env_manager.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
+#include "llrt/core_descriptor.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
 #include <umd/device/types/xy_pair.hpp>
 #include "debug/inspector/data.hpp"
-#include "debug/noc_logging.hpp"
 #include "debug/watcher_server.hpp"
 #include "debug/noc_debugging.hpp"
 #include "dispatch/topology.hpp"
@@ -181,6 +179,17 @@ void MetalContext::initialize(
         if (dispatch_core_config_ != resolved_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
             fw_compile_hash != fw_compile_hash_) {
+            // The legacy implicit context keeps tearing down underneath open devices; an explicit MetalEnv refuses.
+            const bool devices_open = device_manager_ && device_manager_->is_initialized() &&
+                                      !device_manager_->get_all_active_devices().empty();
+            TT_FATAL(
+                env_owned_ || !devices_open,
+                "Cannot change num_command_queues ({} -> {}), dispatch_core_config or worker_l1_size ({} -> {}) of a "
+                "MetalEnv while MeshDevices created from it are open. Close them first.",
+                num_hw_cqs_,
+                num_hw_cqs,
+                worker_l1_size_,
+                worker_l1_size);
             log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
             teardown();
         } else {
@@ -431,7 +440,7 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     MetalEnvDescriptor desc{};
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);
-        desc = MetalEnvDescriptor(*mock_cluster_desc);
+        desc.mock_cluster_desc_path = std::move(*mock_cluster_desc);
     }
     g_default_env = new MetalEnv(std::move(desc));
     MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, *g_default_env);
@@ -662,7 +671,25 @@ void MetalContext::initialize_fabric_config() {
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().initialize_fabric_tensix_datamover_config();
+    auto& env_impl = MetalEnvAccessor(*env_).impl();
+    if (!tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config()) ||
+        env_impl.get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+        return;
+    }
+
+    tt_fabric::FabricTensixSessionInputs inputs{.active_devices = device_manager_->get_all_active_devices()};
+    if (!inputs.active_devices.empty()) {
+        // Mux core placement is the same on every device, so take it from the first one.
+        const auto device_id = inputs.active_devices.front()->id();
+        auto& dispatch_core_manager = get_dispatch_core_manager();
+        const auto num_hw_cqs = dispatch_core_manager.get_num_hw_cqs();
+        const auto dispatch_core_config = dispatch_core_manager.get_dispatch_core_config();
+        inputs.logical_fabric_mux_cores =
+            tt::get_logical_fabric_mux_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+        inputs.logical_dispatch_mux_cores =
+            tt::get_logical_dispatch_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+    }
+    env_impl.initialize_fabric_tensix_datamover_config(inputs);
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const {
@@ -678,11 +705,6 @@ tt_fabric::FabricReliabilityMode MetalContext::get_fabric_reliability_mode() con
 const tt_fabric::FabricRouterConfig& MetalContext::get_fabric_router_config() const {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
     return MetalEnvAccessor(*env_).impl().get_fabric_router_config();
-}
-
-void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
-    TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().set_fabric_tensix_config(fabric_tensix_config);
 }
 
 tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const {

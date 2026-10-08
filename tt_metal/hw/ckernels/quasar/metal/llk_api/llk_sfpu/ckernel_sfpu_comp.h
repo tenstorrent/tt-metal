@@ -9,6 +9,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 
@@ -212,6 +213,20 @@ inline void calculate_zero_comp() {
 
         traits::store(result);
     }
+}
+
+// The Int32 unary comparisons (unary_*_tile_int32) are not ported to Quasar. The Compute API
+// keeps one signature on every arch, so their kernel entry points (ne / eq call the metal
+// calculate_comp_unary_int, gt / ge / lt / le the tt-llk _calculate_comp_unary_int_ on
+// Blackhole / Wormhole) reject the call here.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_unary_int([[maybe_unused]] int scalar) {
+    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
+}
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void _calculate_comp_unary_int_([[maybe_unused]] int scalar) {
+    LLK_ASSERT(false, "Int32 unary comparisons (unary_*_tile_int32) are not supported on Quasar");
 }
 
 }  // namespace sfpu

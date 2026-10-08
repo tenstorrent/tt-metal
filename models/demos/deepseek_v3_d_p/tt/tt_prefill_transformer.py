@@ -29,14 +29,18 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     global_to_local_token_id,
     reverse_reorder_tensor_chunks,
     rotated_row_of_position,
-    rotated_rows_are_contiguous,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
-from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import MTPDeviceEmbedSource, MTPDeviceGeneration
+from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
+    MTPDeviceEmbedSource,
+    MTPDeviceGeneration,
+    MTPSplitChipLookahead,
+)
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import (
     build_mtp_generation_keep_mask,
     build_mtp_generation_select,
+    build_sp_rank_tensor,
 )
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
@@ -183,6 +187,7 @@ class TtPrefillTransformer(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -203,7 +208,7 @@ class TtPrefillTransformer(LightweightModule):
             "kv_only_last_layer requires is_last_rank: a non-last pipeline rank must hand its hidden state "
             "to the next rank, which a kv-only last layer does not produce"
         )
-        # GLM-5.2 indexer reuse: global per-layer full/shared map (None on models without it -> every
+        # GLM-5.3 indexer reuse: global per-layer full/shared map (None on models without it -> every
         # layer computes its own indexer, i.e. current behavior). first_layer_idx maps this rank's
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
@@ -284,6 +289,7 @@ class TtPrefillTransformer(LightweightModule):
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
+                use_fused_rmsnorm=use_fused_rmsnorm,
             )
             self.layers.append(layer)
 
@@ -388,6 +394,11 @@ class TtPrefillTransformer(LightweightModule):
                 "TtMTPModule's **block_kwargs)"
             )
             assert self.embed is not None, "MTP needs the embedding table on this rank (see --- Embedding ---)"
+        self._mtp_sp_rank = (
+            build_sp_rank_tensor(mesh_device, self.sp_factor, self.mesh_shape, sp_axis)
+            if mtp_predictor is not None and self.sp_factor > 1
+            else None
+        )
 
         logger.info(f"TtPrefillTransformer construction complete ({num_layers} layers)")
 
@@ -404,12 +415,15 @@ class TtPrefillTransformer(LightweightModule):
             layer.set_trace_controller(controller)
 
     def release_sub_device_managers(self):
-        """Remove every MoE-created overlap sub-device manager before closing the mesh device.
-        Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
+        """Remove every MoE-created overlap sub-device manager and free the MTP SP-rank tensor before closing the
+        mesh device. Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
         has been observed to segfault the teardown. Safe/idempotent — call once at end of a run."""
         self.mesh_device.clear_loaded_sub_device_manager()
         for layer in self.layers:
             layer.release_sub_device_managers()
+        if self._mtp_sp_rank is not None:
+            ttnn.deallocate(self._mtp_sp_rank)
+            self._mtp_sp_rank = None
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
@@ -534,7 +548,7 @@ class TtPrefillTransformer(LightweightModule):
         else:
             h = token_ids
 
-        # GLM-5.2 reuse: hold the most recent "full" layer's top-k indices and inject them into the
+        # GLM-5.3 reuse: hold the most recent "full" layer's top-k indices and inject them into the
         # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
         # exactly as before.
         reuse = self.indexer_types is not None
@@ -648,7 +662,7 @@ class TtPrefillTransformer(LightweightModule):
     def mtp_generate_embedding(self, h_normed: ttnn.Tensor, last_row: int) -> ttnn.Tensor:
         """``H^k -> [1, 1, 32*sp, H/tp]``: the greedy next token at ``last_row``, embedded and
         SP-broadcast so every chip can read it. ``last_row`` is the chip-major flat row carrying the
-        chunk's last real position, which is ``actual_isl - 1`` only on a slab-aligned chunk.
+        chunk's last real position, which is ``actual_isl - 1`` only when the chunk starts on a chunk boundary.
         """
         assert self.lm_head is not None, "MTP generation needs the LM head (last rank, build_tail)"
         logits, _ = self.lm_head(h_normed, last_row)
@@ -668,11 +682,15 @@ class TtPrefillTransformer(LightweightModule):
         ttnn.deallocate(ids)
         if self.sp_factor == 1:
             return emb
-        gathered = ttnn.all_gather(
-            emb, dim=-2, cluster_axis=self.sp_axis, num_links=self.num_links, topology=self.sp_topology
-        )
+        gathered = self._mtp_all_gather_sp(emb)
         ttnn.deallocate(emb)
         return gathered
+
+    def _mtp_all_gather_sp(self, rows: ttnn.Tensor) -> ttnn.Tensor:
+        """``[1, 1, 32, H/tp]`` per chip -> ``[1, 1, 32*sp, H/tp]`` on every chip, in SP order."""
+        return ttnn.all_gather(
+            rows, dim=-2, cluster_axis=self.sp_axis, num_links=self.num_links, topology=self.sp_topology
+        )
 
     def _mtp_build_generation(
         self, union, actual_isl: int, actual_start: int, actual_end: int, *, provided_levels: int = 0
@@ -703,6 +721,7 @@ class TtPrefillTransformer(LightweightModule):
             mesh_shape=self.mesh_shape,
             sp_axis=self.sp_axis,
             num_mtp_tokens=union.num_mtp_tokens,
+            num_levels=self.num_mtp_levels,
             chunk_start=actual_start,
             actual_end=actual_end,
         )
@@ -735,31 +754,37 @@ class TtPrefillTransformer(LightweightModule):
         assert (
             0 <= provided_levels <= self.num_mtp_levels
         ), f"provided_levels {provided_levels} outside [0, {self.num_mtp_levels}]"
-        isl_per_chip = self.seq_len // self.sp_factor
-        assert rotated_rows_are_contiguous(fwd_kwargs["actual_start"], isl_per_chip), (
-            f"MTP needs a chunk start that is a multiple of the per-chip shard {isl_per_chip}; got "
-            f"{fwd_kwargs['actual_start']}. Off that boundary the rotated chunk leaves the boundary chip's "
-            "rows position-discontiguous, and an MTP window is a ROW shift, so level k would read the wrong "
-            "position on that chip. Resume on a multiple of chunk_size // sp_factor."
+        split_lookahead = MTPSplitChipLookahead.for_chunk_start(
+            fwd_kwargs["actual_start"],
+            self.seq_len // self.sp_factor,
+            self.sp_factor,
+            self._mtp_sp_rank,
+            self._mtp_all_gather_sp,
+            chunk_end=fwd_kwargs["actual_end"],
+            num_levels=self.num_mtp_levels,
         )
         generation = None
-        if provided_levels < self.num_mtp_levels:
-            generation = self._mtp_build_generation(
+        try:
+            union.set_split_chip_lookahead(split_lookahead)
+            if provided_levels < self.num_mtp_levels:
+                generation = self._mtp_build_generation(
+                    union,
+                    actual_isl,
+                    fwd_kwargs["actual_start"],
+                    fwd_kwargs["actual_end"],
+                    provided_levels=provided_levels,
+                )
+            source = MTPDeviceEmbedSource(
                 union,
-                actual_isl,
-                fwd_kwargs["actual_start"],
-                fwd_kwargs["actual_end"],
+                generation=generation,
                 provided_levels=provided_levels,
             )
-        source = MTPDeviceEmbedSource(
-            union,
-            generation=generation,
-            provided_levels=provided_levels,
-        )
-        fwd_kwargs["actual_isl"] = actual_isl
-        try:
+            fwd_kwargs["actual_isl"] = actual_isl
             out = self.mtp_predictor.forward(source, h_normed, rope_tensors, kvpe_cache, **fwd_kwargs)
         finally:
             if generation is not None:
                 generation.deallocate()
+            if split_lookahead is not None:
+                union.set_split_chip_lookahead(None)
+                split_lookahead.deallocate()
         return out, source.generated_tokens

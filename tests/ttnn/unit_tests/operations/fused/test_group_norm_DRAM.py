@@ -15,11 +15,24 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole, skip_for_blackhole
 
-
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 # atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.
 NON_TILE_ALIGNED_ATOL = 0.08
-WELFORD_MODES = ("legacy", "welford_normal", "welford_reciprocal")
+STATISTICS_MODES = ("tile_reduction", "two_pass")
+
+
+def _use_two_pass_statistics(statistics_mode):
+    if statistics_mode not in STATISTICS_MODES:
+        raise ValueError(f"Unknown GroupNorm statistics mode: {statistics_mode!r}")
+    return statistics_mode == "two_pass"
+
+
+def test_group_norm_statistics_mode_validation(expect_error):
+    assert not _use_two_pass_statistics("tile_reduction")
+    assert _use_two_pass_statistics("two_pass")
+    with expect_error(ValueError, "Unknown GroupNorm statistics mode"):
+        _use_two_pass_statistics("legacy")
+
 
 GROUP_NORM_DRAM_SHAPES = [
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
@@ -159,7 +172,7 @@ def run_group_norm_DRAM(
     num_out_blocks,
     cores_y,
     cores_x,
-    welford_mode,
+    statistics_mode,
     use_input_mask,
     perf_test_mode=False,
     specify_grid=True,
@@ -176,7 +189,7 @@ def run_group_norm_DRAM(
         grid_for_params = grid_size
     else:
         # Exercises the C++ automatic grid selection.
-        # We must prepare gamma/beta/mask/reciprocals for that *same* auto-selected
+        # We must prepare gamma/beta/mask for that *same* auto-selected
         # grid; otherwise their shapes (driven by num_virtual_cols/num_virtual_rows)
         # would not match the grid the op actually picks at runtime.
         grid_for_params = ttnn.determine_expected_group_norm_dram_grid_size(
@@ -187,9 +200,7 @@ def run_group_norm_DRAM(
             num_batches=N,
         )
 
-    # Determine welford and reciprocals settings
-    use_welford = welford_mode in ("welford_normal", "welford_reciprocal")
-    use_reciprocals = welford_mode == "welford_reciprocal"
+    use_welford = _use_two_pass_statistics(statistics_mode)
 
     # torch input tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
@@ -221,37 +232,6 @@ def run_group_norm_DRAM(
         [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_for_params, return_mask=True
     )
 
-    # Create reciprocals tensor if needed
-    reciprocals_tensor = None
-    if use_reciprocals:
-        # Generate reciprocals tensor
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid_for_params)
-        reciprocals_tensor = ttnn.from_torch(
-            torch_reciprocals,
-            dtype=ttnn.DataType.FLOAT32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                buffer_type=ttnn.BufferType.L1,
-                shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(
-                        {
-                            ttnn.CoreRange(
-                                ttnn.CoreCoord(0, 0),
-                                ttnn.CoreCoord(grid_for_params.x - 1, grid_for_params.y - 1),
-                            )
-                        }
-                    ),
-                    (
-                        torch_reciprocals.shape[0] // (grid_for_params.x * grid_for_params.y),
-                        torch_reciprocals.shape[1],
-                    ),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        )
-
     # groupnorm
 
     num_itr = 2  # second iteration to help catch potential runtime args issue.
@@ -271,7 +251,6 @@ def run_group_norm_DRAM(
             inplace=False,
             num_out_blocks=num_out_blocks if specify_grid else None,
             use_welford=use_welford,
-            reciprocals=reciprocals_tensor,
         )
         ttnn.synchronize_device(device)
 
@@ -295,7 +274,7 @@ def run_group_norm_DRAM(
                 # the explicit num_out_blocks used in the specify_grid=True branch.
                 # Different num_out_blocks chunks the per-block partial reductions
                 # differently, producing visible bfloat16 rounding drift on the
-                # legacy two-pass mean/variance path.
+                # tile-reduction mean/variance path.
                 atol = 0.085
                 frobenius_threshold = 0.030
 
@@ -311,7 +290,7 @@ def run_group_norm_DRAM(
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_DRAM_SHAPES)
-@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
 def test_group_norm_DRAM(
     device,
     N,
@@ -322,7 +301,7 @@ def test_group_norm_DRAM(
     num_out_blocks,
     cores_y,
     cores_x,
-    welford_mode,
+    statistics_mode,
     specify_grid=True,
     perf_test_mode=False,
 ):
@@ -336,7 +315,7 @@ def test_group_norm_DRAM(
         num_out_blocks,
         cores_y,
         cores_x,
-        welford_mode,
+        statistics_mode,
         use_input_mask=True,
         perf_test_mode=perf_test_mode,
         specify_grid=specify_grid,
@@ -368,7 +347,7 @@ def test_group_norm_DRAM_row_major_smoke(device, input_layout, output_layout):
         1,
         1,
         1,
-        "legacy",
+        "tile_reduction",
         use_input_mask=True,
         input_layout=input_layout,
         output_layout=output_layout,
@@ -379,10 +358,10 @@ def test_group_norm_DRAM_row_major_smoke(device, input_layout, output_layout):
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", GROUP_NORM_NO_INPUT_MASK_DRAM_SHAPES
 )
-@pytest.mark.parametrize("welford_mode", WELFORD_MODES)
+@pytest.mark.parametrize("statistics_mode", STATISTICS_MODES)
 @pytest.mark.parametrize("specify_grid", [True])
 def test_group_norm_no_input_mask_DRAM(
-    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, welford_mode, specify_grid
+    device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, statistics_mode, specify_grid
 ):
     run_group_norm_DRAM(
         device,
@@ -394,7 +373,7 @@ def test_group_norm_no_input_mask_DRAM(
         num_out_blocks,
         cores_y,
         cores_x,
-        welford_mode,
+        statistics_mode,
         use_input_mask=False,
         specify_grid=specify_grid,
     )
@@ -492,10 +471,11 @@ def run_group_norm_non_tile_aligned_DRAM(
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
 @pytest.mark.parametrize("N, C, H, W, num_groups", GROUP_NORM_NON_TILE_ALIGNED_DRAM_SHAPES)
-@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize("use_welford", [False, True], ids=["tile_reduction", "two_pass_tile_fallback"])
 def test_group_norm_non_tile_aligned_DRAM(device, N, C, H, W, num_groups, use_welford):
     # Fused interleaved group_norm must match torch even when N*H*W is not a multiple of the tile
-    # height. use_welford=True is routed to the two-pass path; auto grid selection.
+    # height. use_welford=True requests stable statistics but falls back to tile reduction so the
+    # padding rows can be masked; auto grid selection is used.
     if device.core_grid.y == 7:
         pytest.skip()
 
@@ -709,67 +689,6 @@ def test_group_norm_non_tile_aligned_garbage_padding_DRAM(device):
     max_abs_err = (out - ref).abs().max().item()
     logger.info(f"garbage tile-padding rows: max_abs_err={max_abs_err}")
     assert max_abs_err < 0.08, f"max abs error {max_abs_err} with garbage padding rows (see #50682)"
-
-
-@pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-@pytest.mark.parametrize(
-    "N, cores_y, num_out_blocks",
-    [
-        # The grid fixes num_virtual_rows, hence whether a batch is split across core rows and so
-        # which cores hold the padding row-tile.
-        pytest.param(1, 1, None, id="N1_grid1x8_whole_batch_per_core"),
-        pytest.param(1, 2, None, id="N1_grid2x8_batch_split_2"),
-        pytest.param(1, 4, None, id="N1_grid4x8_batch_split_4_block_h_1"),
-        pytest.param(2, 1, None, id="N2_grid1x8_two_batches_per_core"),
-        pytest.param(2, 4, None, id="N2_grid4x8_batch_split_2"),
-        # num_out_blocks=3 over block_h=4 leaves the last out-block empty -- the case that breaks a
-        # naive "last block, last row" test.
-        pytest.param(1, 1, 3, id="N1_grid1x8_num_out_blocks_3_empty_last_block"),
-        pytest.param(1, 1, 4, id="N1_grid1x8_num_out_blocks_4"),
-    ],
-)
-def test_group_norm_non_tile_aligned_dirty_padding_grids_DRAM(device, N, cores_y, num_out_blocks):
-    # Which core applies the row mask depends on how the grid splits H*W, and with N > 1 the padding
-    # recurs once per batch on the same core -- a single auto-selected grid reaches neither. Also
-    # pins the out-block indexing: num_out_blocks not dividing block_h can leave the last out-block
-    # with zero rows, so the final row-tile is found by its global index within the batch.
-    cores_x = 8
-    if device.core_grid.y < cores_y or device.core_grid.x < cores_x:
-        pytest.skip(f"device grid too small for {cores_x}x{cores_y}")
-
-    torch.manual_seed(0)
-    C, HW, G, padded = 512, 100, 32, 128
-
-    real = torch.rand((N, 1, HW, C), dtype=torch.bfloat16)
-    ref = torch.nn.functional.group_norm(real.view(N, HW, C).permute(0, 2, 1).reshape(N, C, 1, HW).float(), G)
-    ref = ref.permute(0, 2, 3, 1).reshape(N, 1, HW, C)
-
-    buf = torch.zeros((N, 1, padded, C), dtype=torch.bfloat16)
-    buf[:, :, :HW, :] = real
-    buf[:, :, HW:, :] = 7.0
-
-    tt = ttnn.from_torch(
-        buf, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    tt = ttnn.reshape(tt, ttnn.Shape([N, 1, HW, C]), ttnn.Shape([N, 1, padded, C]))
-    out = ttnn.group_norm(
-        tt,
-        num_groups=G,
-        inplace=False,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        core_grid=ttnn.CoreGrid(y=cores_y, x=cores_x),
-        num_out_blocks=num_out_blocks,
-    )
-    out = ttnn.to_torch(ttnn.from_device(out)).float()[:, :, :HW, :]
-
-    max_abs_err = (out - ref).abs().max().item()
-    pcc = torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item()
-    logger.info(f"N={N} grid={cores_x}x{cores_y} num_out_blocks={num_out_blocks}: max_abs_err={max_abs_err} pcc={pcc}")
-    assert max_abs_err < 0.08, (
-        f"max abs error {max_abs_err} with dirty tile padding at N={N} grid={cores_x}x{cores_y} "
-        f"num_out_blocks={num_out_blocks}; group_norm must be independent of its padding (see #52685)"
-    )
-    assert pcc > 0.999, f"pcc {pcc} with dirty tile padding (see #52685)"
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
@@ -1012,47 +931,43 @@ GN_INTERLEAVED_SHAPES = [
 
 
 @pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x", GN_INTERLEAVED_SHAPES)
-# One case per (reduction path x input dtype) pair.
-# Those two axes interact: the accuracy thresholds branch on use_welford x in_dtype,
-# and fp32 input on the welford path additionally aliases cb_x onto cb_in0 and enables
-# UnpackToDestFp32. On the other hand, gamma/beta dtype interacts with neither: it only selects
-# the gamma/beta CB format, it is varied across the six cases rather than crossed with them.
+# Cover every (statistics mode x input dtype) pair. Input dtype affects the accuracy thresholds and
+# FP32 Welford buffer configuration; gamma/beta dtype only selects the parameter CB format, so it is
+# varied across the matrix instead of introducing another Cartesian-product axis.
 @pytest.mark.parametrize(
-    "welford_mode, in_dtype, gb_dtype",
+    "statistics_mode, in_dtype, gb_dtype",
     [
-        ("legacy", ttnn.bfloat16, ttnn.bfloat16),
-        ("legacy", ttnn.bfloat16, ttnn.float32),
-        ("legacy", ttnn.float32, ttnn.float32),
-        ("legacy", ttnn.float32, ttnn.bfloat16),
-        ("welford_normal", ttnn.bfloat16, ttnn.float32),
-        ("welford_normal", ttnn.float32, ttnn.bfloat16),
-        ("welford_reciprocal", ttnn.bfloat16, ttnn.bfloat16),
-        ("welford_reciprocal", ttnn.float32, ttnn.float32),
+        ("tile_reduction", ttnn.bfloat16, ttnn.bfloat16),
+        ("tile_reduction", ttnn.bfloat16, ttnn.float32),
+        ("tile_reduction", ttnn.float32, ttnn.float32),
+        ("tile_reduction", ttnn.float32, ttnn.bfloat16),
+        ("two_pass", ttnn.bfloat16, ttnn.float32),
+        ("two_pass", ttnn.float32, ttnn.bfloat16),
+        ("two_pass", ttnn.bfloat16, ttnn.bfloat16),
+        ("two_pass", ttnn.float32, ttnn.float32),
     ],
     ids=[
-        "legacy-bf16-gb_bf16",
-        "legacy-bf16-gb_fp32",
-        "legacy-fp32-gb_fp32",
-        "legacy-fp32-gb_bf16",
-        "welford_normal-bf16-gb_fp32",
-        "welford_normal-fp32-gb_bf16",
-        "welford_reciprocal-bf16-gb_bf16",
-        "welford_reciprocal-fp32-gb_fp32",
+        "tile_reduction-bf16-gb_bf16",
+        "tile_reduction-bf16-gb_fp32",
+        "tile_reduction-fp32-gb_fp32",
+        "tile_reduction-fp32-gb_bf16",
+        "two_pass-bf16-gb_fp32",
+        "two_pass-fp32-gb_bf16",
+        "two_pass-bf16-gb_bf16",
+        "two_pass-fp32-gb_fp32",
     ],
 )
 def test_group_norm_interleaved_all_config(
-    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype, welford_mode
+    device, N, C, H, W, num_groups, num_out_blocks, grid_y, grid_x, in_dtype, gb_dtype, statistics_mode
 ):
-    # Interleaved (DRAM) group_norm across all WELFORD_MODES. The modes differ only in
-    # use_welford/use_reciprocals and the accuracy thresholds; everything else (fp32/bf16 input,
+    # Interleaved (DRAM) group_norm across both statistics modes. The modes differ only in
+    # use_welford and the accuracy thresholds; everything else (fp32/bf16 input,
     # fp32/bf16 gamma-beta, gamma/beta/mask prep via dram_group_norm_params_from_torch) is identical.
     # Interleaved input/output is TILE-only (ROW_MAJOR is rejected by the op for non-sharded tensors).
     grid = ttnn.CoreGrid(y=grid_y, x=grid_x)
     torch.manual_seed(0)
 
-    # Determine welford and reciprocals settings
-    use_welford = welford_mode in ("welford_normal", "welford_reciprocal")
-    use_reciprocals = welford_mode == "welford_reciprocal"
+    use_welford = _use_two_pass_statistics(statistics_mode)
 
     x = torch.rand((N, C, H, W), dtype=torch.float32)
     w = torch.rand((C,), dtype=torch.float32)
@@ -1063,7 +978,7 @@ def test_group_norm_interleaved_all_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
-        fp32_dest_acc_en=True,  # required for FP32 (Welford path, or legacy fp32 DEST accumulation)
+        fp32_dest_acc_en=True,  # required for FP32 on either statistics backend
         packer_l1_acc=False,
     )
 
@@ -1075,26 +990,6 @@ def test_group_norm_interleaved_all_config(
     [gt, bt], mask = ttnn.dram_group_norm_params_from_torch(
         [w, b], C, num_groups, device, core_grid=grid, return_mask=True, dtype=gb_dtype
     )
-
-    # Create reciprocals tensor if needed (host-precomputed 1/count fed via the reciprocals= arg)
-    reciprocals_tensor = None
-    if use_reciprocals:
-        torch_reciprocals = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, grid)
-        reciprocals_tensor = ttnn.from_torch(
-            torch_reciprocals,
-            dtype=ttnn.DataType.FLOAT32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=ttnn.MemoryConfig(
-                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                buffer_type=ttnn.BufferType.L1,
-                shard_spec=ttnn.ShardSpec(
-                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}),
-                    (torch_reciprocals.shape[0] // (grid.x * grid.y), torch_reciprocals.shape[1]),
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            ),
-        )
 
     out = ttnn.group_norm(
         xt,
@@ -1109,7 +1004,6 @@ def test_group_norm_interleaved_all_config(
         use_welford=use_welford,
         num_out_blocks=num_out_blocks,
         inplace=False,
-        reciprocals=reciprocals_tensor,
     )
     out = ttnn.to_torch(ttnn.from_device(out)).float().reshape(ref.shape)
 
