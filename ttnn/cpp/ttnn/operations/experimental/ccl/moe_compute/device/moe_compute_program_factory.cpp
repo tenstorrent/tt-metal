@@ -1307,6 +1307,12 @@ MoEComputeMeshWorkloadFactory::create_at(
     if (const char* fi = std::getenv("MOE_COMPUTE_FID_INCR")) {
         matmul_compute_defines["MM_FIDELITY_INCR"] = fi;
     }
+    if (const char* f1 = std::getenv("MOE_COMPUTE_FID_W01")) {
+        matmul_compute_defines["MM_FID_W01"] = f1;  // 0 LoFi, 2 HiFi2, 3 HiFi3, 4 HiFi4
+    }
+    if (const char* f2 = std::getenv("MOE_COMPUTE_FID_W2")) {
+        matmul_compute_defines["MM_FID_W2"] = f2;
+    }
     auto matmul_compute_kernel_handle = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp",
