@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Pinned to the same image the scheduled fleet run uses.
-DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.80.0-dev20261006-45-g1d758e27faf"
+DEFAULT_IMAGE="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh:v0.81.0-dev20261008-64-gfd8be32f36c"
 
 # The suite as it ships in the image. --entrypoint "" means nothing else sets
 # the environment up, so run_diag.sh does it itself off its own location.
@@ -18,7 +18,7 @@ RUN_DIAG="/home/user/tt-metal/tools/scaleout/exabox/health_check_test_suite/run_
 
 # tt-syseng-diag, for the QSFP phase. Same defaults as the Ansible role.
 DEFAULT_DIAG_PKG_REPO="tenstorrent/tt-syseng-diag-packages"
-DEFAULT_DIAG_PKG_VERSION="v0.0.1"
+DEFAULT_DIAG_PKG_VERSION="0.0.4"
 
 # Where host files handed to the container (input snapshot, QSFP descriptor,
 # triage checkout) are mounted read-only.
