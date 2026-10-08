@@ -2568,6 +2568,19 @@ def run_chunked_transformer_updated(
     assert not perf_failures, "chunk timing out of baseline tolerance:\n  " + "\n  ".join(perf_failures)
 
 
+def _moe_block_overridden() -> bool:
+    """True when $TT_DS_PREFILL_MOE_BLOCK forces a MoE block other than the one the chunked baselines were recorded on
+    (dispatch_combine on the Galaxy; "auto" resolves to it there). Such a run (e.g. the all-gather block's legs) records
+    its chunk times against no baseline: the tables describe the other block."""
+    from models.demos.deepseek_v3_d_p.tt.moe.moe_block import MOE_BLOCK_ENV
+
+    block = os.environ.get(MOE_BLOCK_ENV)
+    if block in (None, "", "auto", "dispatch_combine"):
+        return False
+    logger.warning(f"${MOE_BLOCK_ENV}={block}: chunk timing is record-only (the baselines are dispatch_combine's)")
+    return True
+
+
 def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_isl, perf_margin=None):
     """Resolve the chunked-Kimi perf gate for one parametrization: returns
     ``(baseline_chunk_times_s, margin)`` for run_chunked_transformer_updated.
@@ -2589,7 +2602,9 @@ def kimi_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_i
         if use_trace
         else (KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S, UNTRACED_PERF_MARGIN)
     )
-    baseline = table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    baseline = (
+        table.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 and not _moe_block_overridden() else None
+    )
     return baseline, (default_margin if perf_margin is None else perf_margin)
 
 
@@ -2616,7 +2631,11 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
             "GLM_TRACED_PERF_MARGIN before adding an untraced baseline"
         )
         return None, perf_margin
-    baseline = GLM_TRACED_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+    baseline = (
+        GLM_TRACED_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters))
+        if preload_isl == 0 and not _moe_block_overridden()
+        else None
+    )
     if baseline is not None and not any(baseline):
         logger.info(
             f"[perf gate] GLM traced baseline for (L{num_layers}, {n_chunks} chunks, {num_iters} iters) "

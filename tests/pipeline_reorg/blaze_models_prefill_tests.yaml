@@ -482,8 +482,8 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_block.py -k "galaxy-8x4 and all_gather" -vvv --tb=short
     '
   test_type: moe_block_accuracy
-  test_tags: [kimi_k2_7, kimi_k3, glm_5_3, moe, moe_block]
-  test_group: module
+  test_tags: [moe_block]
+  test_group: moe_block  # only when named (its own workflow job): never part of \"all\"
   skus:
     bh_sc1:
       timeout: 90
@@ -495,18 +495,18 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.7-1T, Kimi-K3-2.8T, GLM-5.3-744B) MoE block perf 5k, all_gather vs dispatch_combine"
-  # Report-only until the Galaxy baselines are in test_moe_block_perf.EXPECTED_NS: device time per block and per op.
+- name: "(Kimi-K2.7-1T, Kimi-K3-2.8T, GLM-5.3-744B) all-gather MoE block perf 5k"
+  # Report-only until the Galaxy baselines are in test_moe_block_perf.EXPECTED_NS: device time per op.
   fabric_profile: torus_xy
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_perf.py -k "galaxy-8x4" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_block_perf.py -k "galaxy-8x4 and all_gather" -vvv --tb=short
     '
   test_type: moe_block_perf
-  test_tags: [kimi_k2_7, kimi_k3, glm_5_3, moe, moe_block]
-  test_group: module
+  test_tags: [moe_block]
+  test_group: moe_block  # only when named (its own workflow job): never part of \"all\"
   skus:
     bh_sc1_high_power:
       timeout: 60
@@ -1991,3 +1991,242 @@
   team: ttnn
   budget_type: demo
   sp_config: sc1
+
+
+# The all-gather MoE block (TtMoe moe_block="all_gather", forced by $TT_DS_PREFILL_MOE_BLOCK) through the same
+# full-model leg as kimi_chunked_accuracy_suite; only the MoE block differs. Perf baselines are dispatch_combine's, so chunk
+# timing here is record-only (test_prefill_transformer_chunked._moe_block_overridden).
+- name: "(Kimi-K2.7-1T) all-gather MoE block: chunked prefill padded accuracy 15k@5k, no-trace and traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export TT_DS_PREFILL_MOE_BLOCK=all_gather  # the all-gather MoE block only
+      export DS_PREFILL_REUSE_MODEL=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_padded -k "kimi_k2_7 and torus-xy-8x4 and L61 and mid15k and (notrace or traced)" -xvs --tb=short
+    '
+  test_type: kimi_moe_ag_accuracy
+  test_tags: [moe_block, moe_ag_e2e]
+  test_group: moe_block  # only when named (its own workflow job): never part of \"all\"
+  skus:
+    bh_sc1:
+      timeout: 104
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# The all-gather MoE block (TtMoe moe_block="all_gather", forced by $TT_DS_PREFILL_MOE_BLOCK) through the same
+# full-model leg as kimi_chunked_perf_suite; only the MoE block differs. Perf baselines are dispatch_combine's, so chunk
+# timing here is record-only (test_prefill_transformer_chunked._moe_block_overridden).
+- name: "(Kimi-K2.7-1T) all-gather MoE block: chunked prefill perf code_debug 55k@5k, no-trace and traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
+    export KIMI_K2_7_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export TT_DS_PREFILL_MOE_BLOCK=all_gather  # the all-gather MoE block only
+      export DS_PREFILL_REUSE_MODEL=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_perf -k "kimi_k2_7 and torus-xy-8x4 and L61 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
+    '
+  test_type: kimi_moe_ag_perf
+  test_tags: [moe_block, moe_ag_e2e]
+  test_group: moe_block  # only when named (its own workflow job): never part of \"all\"
+  skus:
+    bh_sc1_high_power:
+      timeout: 72
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# The all-gather MoE block (TtMoe moe_block="all_gather", forced by $TT_DS_PREFILL_MOE_BLOCK) through the same
+# full-model leg as glm_chunked_accuracy_suite; only the MoE block differs. Perf baselines are dispatch_combine's, so chunk
+# timing here is record-only (test_prefill_transformer_chunked._moe_block_overridden).
+- name: "(GLM-5.3-744B) all-gather MoE block: chunked prefill accuracy code_debug 55k@5k + padded 15k@5k, no-trace and traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
+    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export TT_DS_PREFILL_MOE_BLOCK=all_gather  # the all-gather MoE block only
+      export DS_PREFILL_REUSE_MODEL=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_padded -k "glm53 and torus-xy-8x4 and L78 and (warm_cache or mid15k)" -xvs --tb=short
+    '
+  test_type: glm_moe_ag_accuracy
+  test_tags: [moe_block, moe_ag_e2e]
+  test_group: moe_block  # only when named (its own workflow job): never part of \"all\"
+  skus:
+    bh_sc1:
+      timeout: 212
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+# TRACED twin of the perf job above: identical config except the use_trace axis, so the two are directly
+# comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
+# replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
+# time than its untraced twin.
+
+
+# The all-gather MoE block (TtMoe moe_block="all_gather", forced by $TT_DS_PREFILL_MOE_BLOCK) through the same
+# full-model leg as glm_chunked_perf_suite; only the MoE block differs. Perf baselines are dispatch_combine's, so chunk
+# timing here is record-only (test_prefill_transformer_chunked._moe_block_overridden).
+- name: "(GLM-5.3-744B) all-gather MoE block: chunked prefill perf code_debug 55k@5k, no-trace and traced"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
+    export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4
+    export TT_GLM53_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill
+    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export TT_DS_PREFILL_MOE_BLOCK=all_gather  # the all-gather MoE block only
+      export DS_PREFILL_REUSE_MODEL=1
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
+    '
+  test_type: glm_moe_ag_perf
+  test_tags: [moe_block, moe_ag_e2e]
+  test_group: moe_block  # only when named (its own workflow job): never part of \"all\"
+  skus:
+    bh_sc1_high_power:
+      timeout: 166
+      tier: 2
+      release_ready: false
+  owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# ===== DeepSeek-V4 =====================================================================================
+
+# DeepSeek-V4 suites: one job per SKU, one section per test, run serially on one allocation.
+# * The perf suite stays on bh_sc1_high_power: its tests skip on other hosts.
+# * Each section runs in its own subshell under `timeout -k 2m <N>m`; a timeout is a FAIL.
+# * The first failed section ends the job with its exit code, and later sections report NOT RUN:
+#   nothing resets the devices between sections (tt-metal#57706).
+
+
+# The all-gather MoE block (TtMoe moe_block="all_gather", forced by $TT_DS_PREFILL_MOE_BLOCK) through the same
+# full-model leg as k3_transformer_suite; only the MoE block differs. Perf baselines are dispatch_combine's, so chunk
+# timing here is record-only (test_prefill_transformer_chunked._moe_block_overridden).
+- name: "(Kimi-K3-2.8T) all-gather MoE block: prefill transformer L24, chunked L24 and traced L24 vs golden trace"
+  # Three legs folded into one. None is short, but each paid its own ~5.5 min "Setup multihost job"
+  # and all three carry identical environments -- same checkpoint, same TTNN cache, same mesh
+  # descriptor -- so three allocations bought nothing. Measured test-step times on run 36717057668:
+  # 479 / 725 / 368 s.
+  #
+  # No fabric_profile, as before: the fabric comes from each test's own device_params, and adding
+  # the key here would swap the mesh descriptor and change nothing else.
+  #
+  # [3/3] is the only K3 PCC gate on the captured-trace path rather than eager, and its
+  # TT_KIMI_K3_PREFILL_TTNN_CACHE export is load-bearing: conftest's `weight_cache_path` fixture
+  # reads `variant.ttnn_cache_env` and nothing else, with no fallback to the share, so without it
+  # the fixture points at the checkpoint dir and the section dies on `TTNN cache incomplete`.
+  cmd: |
+    # Sections run in order and the suite stops at the FIRST failure: a failed test can leave the
+    # devices unreset, so the next section must not start (tt-metal#57706, enforced by
+    # .github/scripts/utils/lint_pipeline_cmds.py). That is a real trade against the separate legs
+    # this replaces -- a failure in an early section now masks the later ones.
+    #
+    # Each body is the leg's previous `cmd` verbatim, wrapped in a subshell with its mpirun bounded,
+    # so it can be diffed against the leg it replaces. All three sections here happen to export the
+    # same environment, so the subshell is only keeping them independent -- unlike the accuracy suite
+    # above, where it is load-bearing because one section must NOT see another's KIMI_K3_HF_MODEL.
+    # Repeating the exports per section rather than hoisting them is what keeps each body verbatim.
+
+    k3_transformer_depth() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      timeout -k 2m 70m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        export TT_DS_PREFILL_MOE_BLOCK=all_gather  # the all-gather MoE block only
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L24" -vvv --tb=short
+      '
+    )
+
+    k3_chunked_prefill() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        export TT_DS_PREFILL_MOE_BLOCK=all_gather  # the all-gather MoE block only
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -k "L24" -vvv --tb=short
+      '
+    )
+
+    k3_transformer_traced() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        export TT_DS_PREFILL_MOE_BLOCK=all_gather  # the all-gather MoE block only
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_k3_prefill_transformer_chunked -k "L24 and chunks_eleven and traced and iters1 and no_determinism" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/3] (Kimi-K3-2.8T) prefill transformer accuracy L24 vs golden trace ====="
+    k3_transformer_depth || exit $?
+    echo "===== [2/3] (Kimi-K3-2.8T) chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    k3_chunked_prefill || exit $?
+    echo "===== [3/3] (Kimi-K3-2.8T) traced chunked prefill accuracy L24 55k@5k vs golden trace ====="
+    k3_transformer_traced || exit $?
+    echo "===== all 3 sections passed ====="
+  test_type: k3_moe_ag_transformer
+  # Only its own tokens: the K3 legs' section tokens must not also pull in this all-gather-block copy.
+  test_tags: [moe_block, moe_ag_e2e]
+  test_group: moe_block  # only when named (its own workflow job): never part of \"all\"
+  skus:
+    bh_sc1:
+      # Exactly the sum of the per-section bounds (70 + 90 + 45),
+      # so the time budget for this bucket is unchanged by the fold.
+      timeout: 205
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+# ===== GLM-5.3-744B ====================================================================================
