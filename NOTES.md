@@ -70,3 +70,11 @@ The ref used LTX25_ROOT=/mnt/MLPerf/... -> FORBIDDEN now (job 086 D-state hang).
    DIFF -> check whether gen0 vs replays differ run-to-run (nondeterminism) before blaming the code.
 2. A drop -> log UTC/box/job/chips, rerun drv295.sh once (it submits fresh).
 3. Copy run logs + md5 lists to tmp/t295/res/, then rm -rf /var/tmp/fasth3/t295 on blx01 (outputs, trees).
+
+## Run 1189 (2026-10-08 19:28-19:31 UTC): resubmitted on blx01, broker job 116
+- Run 1178's driver ended NOT_SUBMITTED: run-bg needs PYTHON_ENV_DIR (it looked for $W/tt-metal/python_env).
+  Fix: tmp/t295/env295.yaml (PYTHON_ENV_DIR=/var/tmp/fasth3/t48/python_env, TT_METAL_HOME, HOME/TMPDIR under
+  /var/tmp/fasth3) passed with `-e`. treeA/treeB and run295b.sh were missing on blx01; reran setup295b.sh
+  (treeA default 4 sigmas, treeB default 3 sigmas, SETUP_OK).
+- Driver pgid 105997 started 19:29 UTC; job 116 queued 19:29:50 UTC behind ltx-host job 115. No drops of ours.
+- Wake: `ssh blx01 test -e /var/tmp/fasth3/t295/drv295.done`. Then follow "Next step on wake" above.
