@@ -1672,7 +1672,7 @@ void kernel_main() {
     // L1 is not guaranteed to be zero-initialized, and stale values here can
     // incorrectly enable RT profiler paths when host-side RT setup is skipped.
     rt_profiler_msg->realtime_profiler_core_noc_xy = 0;
-    rt_profiler_msg->realtime_profiler_remote_state_addr = 0;
+    rt_profiler_msg->realtime_profiler_remote_wr_idx_addr = 0;
     rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
 
     dispatch_cb_reader.init();

@@ -51,6 +51,7 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_rand.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
@@ -98,6 +99,7 @@
 #include "llk_sfpu/ckernel_sfpu_add_top_row.h"      // calculate_add_top_row (top four rows of two tiles, Float32/Int32)
 #include "llk_sfpu/ckernel_sfpu_atan2.h"            // calculate_sfpu_atan2 / calculate_sfpu_atan2_init (float atan2)
 #include "llk_sfpu/ckernel_sfpu_binary.h"           // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_binary_bcast.h"     // calculate_binary_bcast / init_binary_bcast (float add/sub/mul, row/col bcast)
 #include "llk_sfpu/ckernel_sfpu_binary_bitwise.h"   // calculate_sfpu_binary_bitwise (int32 and/or/xor)
 #include "llk_sfpu/ckernel_sfpu_binary_fmod.h"      // calculate_sfpu_binary_fmod / calculate_fmod_int32
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"   // calculate_binary_max_min / _init_binary_max_min_
@@ -128,6 +130,17 @@
 //    and init_ternary_sfpu_operation_quasar().
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
+
+// rand defaults; the RAND_RANGE / RAND_SEED template parameters override them.
+#ifndef RAND_FROM_BITS
+#define RAND_FROM_BITS 0x3F800000u // 1.0f
+#endif
+#ifndef RAND_SCALE_BITS
+#define RAND_SCALE_BITS 0x40000000u // 2.0f
+#endif
+#ifndef RAND_SEED
+#define RAND_SEED 0x12345678u
+#endif
 
 namespace test_utils
 {
@@ -459,6 +472,10 @@ void init_unary_sfpu_operation_quasar()
     {
         // tanh_derivative_tile's kernel: the accurate sech^2 form, whatever fast_and_approx says.
         tanh_derivative_sech2_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::rand)
+    {
+        init_rand<APPROX>(static_cast<std::uint32_t>(RAND_SEED));
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
@@ -1188,6 +1205,18 @@ void call_unary_sfpu_operation_quasar(
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_derivative_sech2, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
     }
+    else if constexpr (OPERATION == SfpuType::rand)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_rand,
+            (APPROX, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(RAND_FROM_BITS),
+            static_cast<std::uint32_t>(RAND_SCALE_BITS));
+    }
     else
     {
         static_assert(unhandled_op<OPERATION>, "call_unary_sfpu_operation_quasar: unhandled Quasar unary SFPU operation");
@@ -1236,15 +1265,25 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  *         and skip the sign-magnitude<->2's-complement casts. Must match the calculate step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         calculate step; atan2 uses it to select the LUT-only reciprocal path.
+ * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel.
  * @param zero_point fp32 bit-pattern of the zero-point loaded once by the quant
  *        family init (DEQUANT expects the bits of -zero_point); ignored by the
  *        other ops, which have no runtime init argument.
  * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
  */
-template <ckernel::BinaryOp OP, bool is_fp32_dest_acc_en = false, bool SIGN_MAGNITUDE_FORMAT = false, bool APPROXIMATION_MODE = false>
+template <
+    ckernel::BinaryOp OP,
+    bool is_fp32_dest_acc_en          = false,
+    bool SIGN_MAGNITUDE_FORMAT        = false,
+    bool APPROXIMATION_MODE           = false,
+    ckernel::BroadcastType BCAST_TYPE = ckernel::BroadcastType::NONE>
 void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point = 0)
 {
-    if constexpr (OP == BinaryOp::MUL)
+    if constexpr (BCAST_TYPE != BroadcastType::NONE)
+    {
+        init_binary_bcast<OP, BCAST_TYPE>();
+    }
+    else if constexpr (OP == BinaryOp::MUL)
     {
         sfpu_binary_init<APPROXIMATION_MODE, BinaryOp::MUL>(); // no-op for MUL; harmless on the int path
     }
@@ -1361,6 +1400,8 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  *         and skip the sign-magnitude<->2's-complement casts. Must match the init step.
  * @tparam APPROXIMATION_MODE Whether to use the operation's approximate path. Must match the
  *         init step; atan2 uses it to select the LUT-only reciprocal path.
+ * @tparam BCAST_TYPE NONE, or COL / ROW for the src1-broadcast ADD / SUB / MUL kernel (float only,
+ *         Default rounding; ignores ITERATIONS and APPROXIMATION_MODE).
  * @param src0_tile,src1_tile,dst_tile Operand / result tile indices. COPY_DEST ignores
  *        `src1_tile` and writes `src0_tile` onto `dst_tile`.
  * @param math_format Dest encoding. Int32 vs float path for MUL and max/min; COPY_DEST
@@ -1375,10 +1416,17 @@ template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     int ITERATIONS                             = SFPU_ITERATIONS,
     bool SIGN_MAGNITUDE_FORMAT                 = false,
-    bool APPROXIMATION_MODE                    = false>
+    bool APPROXIMATION_MODE                    = false,
+    ckernel::BroadcastType BCAST_TYPE          = ckernel::BroadcastType::NONE>
 void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
 {
-    if constexpr (OP == BinaryOp::ADD)
+    if constexpr (BCAST_TYPE != BroadcastType::NONE)
+    {
+        static_assert(dst_rounding_mode == ckernel::DstRoundingMode::Default, "binary_bcast does not implement NearestEven rounding");
+        LLK_ASSERT(math_format != DataFormat::Int32, "binary_bcast supports float formats only");
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_binary_bcast, (OP, BCAST_TYPE), src0_tile, src1_tile, dst_tile, VectorMode::None);
+    }
+    else if constexpr (OP == BinaryOp::ADD)
     {
         if (math_format == DataFormat::Int32)
         {
