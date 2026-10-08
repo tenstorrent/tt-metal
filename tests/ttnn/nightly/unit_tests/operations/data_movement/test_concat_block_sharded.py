@@ -933,6 +933,23 @@ def test_ragged_width_concat_col_major(device):
     _run_width_concat_u32(device, [16] * 5, grid_cols=2, grid_rows=5, orientation=ttnn.ShardOrientation.COL_MAJOR)
 
 
+def test_ragged_width_unaligned_last_input(device):
+    """The last input's own width need not be alignment-sized, only the prefixes before it.
+
+    Widths [20, 23] over 6 grid columns. Input 0 is ragged (shard 4, capacity 24 holding
+    20) with an 80 byte prefix, so the start guard passes; input 1 is 23 wide, which is not
+    a multiple of 4 elements, so its last source shard carries 3 columns and the output
+    tail clips. Every other width case here is a multiple of 4, so this accepted path is
+    otherwise never exercised.
+
+    The shape is constrained on three sides at once, which is why it is not rounder: every
+    shard row and the output shard row must be 16 byte aligned (4, 4 and 8 columns here),
+    the prefix must be aligned, and input 0 must be ragged so the case also fails without
+    the fix.
+    """
+    _run_width_concat_u32(device, [20, 23], grid_cols=6, grid_rows=2)
+
+
 def test_ragged_width_unaligned_prefix_rejected(device, expect_error):
     """Width 11 puts the boundary 44 bytes in, inside a 16-byte unit.
 

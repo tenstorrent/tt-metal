@@ -206,31 +206,8 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             shard_grid_w,
             out_total_w,
             output.logical_shape());
-        // Each input starts at the sum of the widths before it, a byte offset inside the
-        // destination shard, and a NOC transfer cannot start unaligned -- it copies the wrong bytes
-        // rather than failing. Only ragged widths reach this: the shard-row check above already
-        // forces an exact width to a multiple of the alignment.
-        //
-        // The quantity wanted here is the NOC alignment (NOC_L1_{READ,WRITE}_ALIGNMENT_BYTES), not
-        // the L1 allocation alignment: they agree at 16 B on Wormhole and Blackhole, but Quasar
-        // decouples them and shifts the data, so its NOC alignment is 1 B. Hal::get_read_alignment
-        // is unreachable from TTNN (same limitation noted in all_gather.cpp), so this check is
-        // conservative on Quasar -- it rejects ragged prefixes the NOC could service there.
-        uint32_t prefix_w = 0;
-        for (uint32_t i = 0; i + 1 < num_input_tensors; i++) {
-            prefix_w += input_total_w[i];
-            TT_FATAL(
-                (prefix_w * element_size) % l1_alignment == 0,
-                "Width concat: input {} starts at column {} ({} bytes), not L1-aligned ({} bytes). "
-                "A ragged width puts the boundary inside a shard and the NOC cannot write at an "
-                "unaligned offset. Pad each width to a multiple of {} elements, or concat before "
-                "sharding.",
-                i + 1,
-                prefix_w,
-                prefix_w * element_size,
-                l1_alignment,
-                l1_alignment / element_size);
-        }
+        // The per-input start alignment is checked in validate_on_program_cache_miss, before a
+        // factory is chosen, since it depends only on the input shapes, dtype and alignment.
     }
 
     // --- Circular Buffers ---
