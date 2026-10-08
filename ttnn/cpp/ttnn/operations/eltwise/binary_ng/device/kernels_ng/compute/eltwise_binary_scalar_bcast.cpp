@@ -76,7 +76,7 @@ ALWI void process_tile(
         num_tiles_per_cycle);
     EXP_CB_POST_BCAST.wait_front(num_tiles_per_cycle);
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT)
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
@@ -91,7 +91,7 @@ ALWI void process_tile(
 
         exp_dfb_out.reserve_back(num_tiles_per_cycle);
 
-#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
@@ -144,7 +144,7 @@ void kernel_main() {
     pack_relu_config(ReluConfig::zero());
 #endif
 
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or BINARY_POST_REINIT)
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
