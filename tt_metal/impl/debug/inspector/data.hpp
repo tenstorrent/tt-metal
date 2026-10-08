@@ -15,16 +15,28 @@
 #include <unordered_set>
 #include <vector>
 
+namespace tt::tt_metal {
+class MetalContext;
+class MetalEnvImpl;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::inspector {
 
+// An inspector session: the inspector state of one MetalContext (and the MetalEnv it uses).
+// It is owned by that MetalContext and registered with the Inspector for as long as it lives.
 class Data {
 public:
     ~Data();
 
 private:
+    // `context` must outlive this object.
     Data(
+        MetalContext& context,
         std::optional<int> rank,
-        ContextId context_id);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+        uint64_t fw_compile_hash);  // NOLINT - False alarm, tt::tt_metal::Inspector is calling this constructor.
+
+    // Whether tensor specs should be captured on op dispatch.
+    bool capture_tensor_specs() const;
 
     void serialize_rpc();
     RpcServer& get_rpc_server();
@@ -58,7 +70,13 @@ private:
         const std::unordered_map<tt_cxy_pair, CoreInfo>& core_info,
         const std::unordered_map<ChipId, std::vector<uint32_t>>& cq_to_event_by_device);
 
-    ContextId context_id;  // Owning MetalContext's id
+    // The owning MetalContext, for runtime state (device manager, build envs).
+    MetalContext& context_;
+    // The MetalEnv used by the owning context, for low level queries (HAL, cluster, rtoptions, control plane,
+    // system mesh). Do not cache the control plane or system mesh: the env rebuilds them when fabric is
+    // reconfigured. Inspector settings are read through the env's rtoptions on demand (except the error reporting
+    // policy used by the TT_INSPECTOR_* macros, see logger.hpp).
+    MetalEnvImpl& env_;
 
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
@@ -100,8 +118,9 @@ private:
     std::mutex kernel_path_mutex;
     std::unordered_map<int, std::vector<std::string>> kernel_id_to_processor_elf_paths;
 
-    // fw_compile_hash needs to be atomic because it is set in MetalContext::initialize()
-    std::atomic<uint64_t> fw_compile_hash;
+    // Hash of the compile settings that the firmware was built with, reported over RPC.
+    // Fixed at construction, i.e. before the RPC server starts.
+    const uint64_t fw_compile_hash;
     friend class tt::tt_metal::Inspector;
 };
 

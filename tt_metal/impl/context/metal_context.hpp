@@ -137,9 +137,6 @@ public:
 
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
 
-    inspector::Data* get_inspector_data() const {
-        return inspector_data_.get();
-    }
     std::unique_ptr<DPrintServer>& dprint_server() { return dprint_server_; }
     std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
 

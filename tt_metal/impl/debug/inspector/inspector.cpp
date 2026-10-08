@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "distributed/mesh_socket_utils.hpp"
 #include "program.hpp"
+#include <atomic>
 #include <map>
 #include <memory>
 #include <optional>
@@ -29,50 +30,119 @@
 namespace tt::tt_metal {
 
 namespace {
-inspector::Data* get_inspector_data() {
-    // TODO: we assume inspector only works on the silicon context
-    // https://github.com/tenstorrent/tt-metal/issues/39745
-    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).get_inspector_data();
+
+// Tracks which MetalContext has an active inspector session.
+//
+// Only one context can be inspected at a time: the inspector only works on silicon, and there is a single silicon
+// MetalContext per process. Inspector state that is specific to a context (anything the RPC handlers query, e.g.
+// HAL, cluster, devices) lives in that context's session. Hooks that cannot tell which context an event belongs to
+// record to the active session, if any.
+//
+// TODO: hooks still use current(). Hooks that know their context should use find(context), and the others should
+// iterate over all sessions (a for_each() to add), after which current() goes away. Supporting several inspected
+// contexts then only needs a collection as storage here, plus a separate RPC endpoint and log directory per session.
+class SessionRegistry {
+public:
+    // Reserves the registry for `context`. Must happen before the session is constructed, because constructing it
+    // wipes the log directory and binds the RPC port. Returns false if another context already holds it.
+    bool try_claim(const MetalContext& context) {
+        const MetalContext* expected = nullptr;
+        return owner_.compare_exchange_strong(expected, &context, std::memory_order_acq_rel);
     }
-    return nullptr;
-}
+
+    // Gives up a claim for which no session was published (construction failed).
+    void abandon_claim(const MetalContext& context) {
+        const MetalContext* expected = &context;
+        owner_.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel);
+    }
+
+    // Makes a constructed session visible to the hooks. The caller must hold the claim.
+    void publish(inspector::Data& session) { session_.store(&session, std::memory_order_release); }
+
+    // Removes a published session and releases the claim.
+    void unpublish(const inspector::Data* session) {
+        // Compared by address only, never dereferenced.
+        inspector::Data* expected = const_cast<inspector::Data*>(session);
+        if (session_.compare_exchange_strong(expected, nullptr, std::memory_order_acq_rel)) {
+            owner_.store(nullptr, std::memory_order_release);
+        }
+    }
+
+    // The session of the (only) inspected context, or nullptr. Transitional, see the TODO above.
+    inspector::Data* current() const { return session_.load(std::memory_order_acquire); }
+
+    // The session of `context`, or nullptr if `context` is not inspected. Only compares addresses, so it is safe
+    // to call with a context that is being destroyed.
+    inspector::Data* find(const MetalContext& context) const {
+        auto* session = current();
+        return (session != nullptr && owner_.load(std::memory_order_acquire) == &context) ? session : nullptr;
+    }
+
+private:
+    std::atomic<const MetalContext*> owner_{nullptr};
+    std::atomic<inspector::Data*> session_{nullptr};
+};
+
+SessionRegistry g_sessions;
+
+// Error reporting policy for the TT_INSPECTOR_* macros. Set from the claiming context's rtoptions before its session
+// is constructed. These settings only come from environment variables, so all envs agree on them.
+std::atomic<bool> g_initialization_is_important{false};
+std::atomic<bool> g_warn_on_write_exceptions{true};
+
 }  // namespace
 
-// Inspector is not used on mock devices
-bool Inspector::is_enabled() {
-    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        auto& ctx = tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID);
-        if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-            return false;
-        }
-        return ctx.rtoptions().get_inspector_enabled();
-    }
-    return false;
+namespace inspector {
+
+bool initialization_is_important() { return g_initialization_is_important.load(std::memory_order_relaxed); }
+
+bool warn_on_write_exceptions() { return g_warn_on_write_exceptions.load(std::memory_order_relaxed); }
+
+}  // namespace inspector
+
+// Inspector is not used on mock devices; no session is created for them.
+bool Inspector::is_enabled() { return g_sessions.current() != nullptr; }
+
+bool Inspector::should_capture_tensor_specs() {
+    auto* data = g_sessions.current();
+    return data != nullptr && data->capture_tensor_specs();
 }
 
-std::unique_ptr<inspector::Data> Inspector::initialize(std::optional<int> rank, ContextId context_id) {
-    if (!is_enabled()) {
-        // Inspector is not enabled, skipping initialization.
+std::unique_ptr<inspector::Data> Inspector::initialize(
+    MetalContext& context, std::optional<int> rank, uint64_t fw_compile_hash) {
+    const auto& rtoptions = context.rtoptions();
+    if (!rtoptions.get_inspector_enabled() ||
+        context.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        // Inspector is not enabled or not supported for this context, skipping initialization.
         return nullptr;
     }
+    if (!g_sessions.try_claim(context)) {
+        log_warning(
+            tt::LogInspector,
+            "Inspector is already active on another MetalContext; it will not be enabled for context {}.",
+            context.get_context_id());
+        return nullptr;
+    }
+    g_initialization_is_important.store(
+        rtoptions.get_inspector_initialization_is_important(), std::memory_order_relaxed);
+    g_warn_on_write_exceptions.store(rtoptions.get_inspector_warn_on_write_exceptions(), std::memory_order_relaxed);
     try {
-        auto* data = new inspector::Data(rank, context_id);
-
-        return std::unique_ptr<inspector::Data>(data);
+        auto session = std::unique_ptr<inspector::Data>(new inspector::Data(context, rank, fw_compile_hash));
+        g_sessions.publish(*session);
+        return session;
     } catch (const std::exception& e) {
+        g_sessions.abandon_claim(context);
         TT_INSPECTOR_LOG("Failed to initialize Inspector: {}", e.what());
         throw;
     }
 }
 
-void Inspector::serialize_rpc() {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
+void Inspector::unregister_session(const inspector::Data* session) noexcept { g_sessions.unpublish(session); }
+
+void Inspector::serialize_rpc(const MetalContext& context) {
+    auto* data = g_sessions.find(context);
     if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
+        // Inspector is not active on this context or failed to initialize, no need to print failure message again.
         return;
     }
     try {
@@ -86,7 +156,7 @@ void Inspector::program_created(const detail::ProgramImpl* program) noexcept {
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -106,7 +176,7 @@ void Inspector::program_destroyed(const detail::ProgramImpl* program) noexcept {
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -129,7 +199,7 @@ void Inspector::program_compile_started(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -149,7 +219,7 @@ void Inspector::program_compile_already_exists(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -172,7 +242,7 @@ void Inspector::program_kernel_compile_finished(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -209,7 +279,7 @@ void Inspector::program_compile_finished(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -230,7 +300,7 @@ void Inspector::program_set_binary_status(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -250,7 +320,7 @@ void Inspector::mesh_device_created(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -271,7 +341,7 @@ void Inspector::mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_de
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -290,7 +360,7 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -309,7 +379,7 @@ void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -329,7 +399,7 @@ void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buff
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         return;
     }
@@ -359,7 +429,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         return;
     }
@@ -444,7 +514,7 @@ void Inspector::global_semaphore_created(const distributed::MeshBuffer* buffer, 
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         return;
     }
@@ -466,7 +536,7 @@ void Inspector::global_semaphore_reset(const distributed::MeshBuffer* buffer, ui
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         return;
     }
@@ -484,7 +554,7 @@ void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -504,7 +574,7 @@ void Inspector::mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mes
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -526,7 +596,7 @@ void Inspector::mesh_workload_add_program(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -545,7 +615,7 @@ void Inspector::mesh_workload_set_program_binary_status(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -569,7 +639,7 @@ void Inspector::emit_debug_entry(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -615,7 +685,7 @@ void Inspector::release_trace(distributed::MeshTraceId trace_id) noexcept {
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         return;
     }
@@ -637,7 +707,7 @@ void Inspector::set_dispatch_core_info(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -660,7 +730,7 @@ void Inspector::set_dispatch_s_core_info(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -683,7 +753,7 @@ void Inspector::set_prefetcher_core_info(
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -696,35 +766,10 @@ void Inspector::set_prefetcher_core_info(
     }
 }
 
-// Clear dispatch core info to clear stale entries
-// Used in MetalContext::teardown() to clear stale entries
-void Inspector::clear_all_core_info() {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        std::scoped_lock locks(
-            data->dispatch_core_info_mutex, data->dispatch_s_core_info_mutex, data->prefetcher_core_info_mutex);
-        data->dispatch_core_info.clear();
-        data->dispatch_s_core_info.clear();
-        data->prefetcher_core_info.clear();
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to clear all core infos: {}", e.what());
-    }
-}
-
 inspector::RpcServer& Inspector::get_rpc_server() {
-    if (is_enabled()) {
+    if (auto* data = g_sessions.current()) {
         try {
-            auto* data = get_inspector_data();
-            if (data) {
-                return data->get_rpc_server();
-            }
+            return data->get_rpc_server();
         } catch (const std::exception& e) {
             TT_INSPECTOR_LOG("Failed to get RPC server: {}", e.what());
         }
@@ -733,27 +778,11 @@ inspector::RpcServer& Inspector::get_rpc_server() {
     return empty_rpc_server;
 }
 
-void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
-    if (!is_enabled()) {
-        return;
-    }
-    auto* data = get_inspector_data();
-    if (!data) {
-        // Inspector failed to initialize, no need to print failure message again.
-        return;
-    }
-    try {
-        data->fw_compile_hash.store(fw_compile_hash, std::memory_order_release);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to set FW compile hash: {}", e.what());
-    }
-}
-
 void Inspector::enable_kernel_path_collection() {
     if (!is_enabled()) {
         return;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize, no need to print failure message again.
         return;
@@ -771,7 +800,7 @@ std::string Inspector::get_kernel_elf_path(int watcher_kernel_id, uint32_t proce
     if (!is_enabled()) {
         return elf_path;
     }
-    auto* data = get_inspector_data();
+    auto* data = g_sessions.current();
     if (!data) {
         // Inspector failed to initialize.
         return elf_path;
@@ -796,14 +825,12 @@ namespace experimental::inspector {
 
 bool IsEnabled() { return Inspector::is_enabled(); }
 
-bool ShouldCaptureTensorSpecs() {
-    return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_capture_tensor_specs();
-}
+bool ShouldCaptureTensorSpecs() { return Inspector::should_capture_tensor_specs(); }
 
 std::optional<tt::tt_metal::distributed::MeshTraceId> GetCurrentMeshTraceId(
     tt::tt_metal::distributed::MeshDevice* mesh_device) {
     // mesh_command_queue().trace_id() is only supported in fast dispatch and would throw otherwise.
-    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    if (!mesh_device->impl().metal_env().get_rtoptions().get_fast_dispatch()) {
         return std::nullopt;
     }
     return mesh_device->mesh_command_queue().trace_id();

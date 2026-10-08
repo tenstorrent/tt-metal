@@ -23,6 +23,8 @@ class MeshWorkloadImpl;
 class MeshSocket;
 }  // namespace distributed
 
+class MetalContext;
+
 namespace inspector {
 class Data;
 class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
@@ -30,10 +32,19 @@ class RpcServer;  // NOLINT(cppcoreguidelines-virtual-class-destructor)
 
 class Inspector {
 public:
+    // True if an inspector session is active, i.e. a MetalContext on which the inspector is enabled was initialized.
     static bool is_enabled();
 
-    static std::unique_ptr<inspector::Data> initialize(std::optional<int> rank, ContextId context_id);
-    static void serialize_rpc();
+    // Whether tensor specs should be captured on op dispatch. False if there is no active session.
+    static bool should_capture_tensor_specs();
+
+    // Creates the inspector session for `context` and registers it so that the hooks below record to it. The caller
+    // (the MetalContext) owns the returned session and must keep `context` alive for as long as the session lives.
+    // Returns nullptr if the inspector is disabled or `context` targets a mock device. Only one context can be
+    // inspected at a time: if another context already has a session, a warning is logged and nullptr is returned.
+    static std::unique_ptr<inspector::Data> initialize(
+        MetalContext& context, std::optional<int> rank, uint64_t fw_compile_hash);
+    static void serialize_rpc(const MetalContext& context);
 
     static void program_created(const detail::ProgramImpl* program) noexcept;
     static void program_destroyed(const detail::ProgramImpl* program) noexcept;
@@ -105,9 +116,6 @@ public:
         ChipId device_id,
         ChipId servicing_device_id);
 
-    // static method for clearing all core info to clear stale entries
-    static void clear_all_core_info();
-
     // Helper function to get the ELF path for a given kernel and processor index (risc_id). The mapping
     // is captured at compile time, so it remains valid after the Kernel object has been destroyed and
     // correctly resolves riscs that share a single binary. Returns an empty string if data is not available.
@@ -116,7 +124,10 @@ public:
 
     static inspector::RpcServer& get_rpc_server();
 
-    static void set_build_env_fw_compile_hash(uint64_t fw_compile_hash);
+private:
+    friend class inspector::Data;
+    // Called by the session's destructor.
+    static void unregister_session(const inspector::Data* session) noexcept;
 };
 
 }  // namespace tt::tt_metal
