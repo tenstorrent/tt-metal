@@ -90,7 +90,7 @@ inline void _llk_pack_dest_section_done_()
     if constexpr (Dst == DstSync::SyncHalf)
     {
         flip_packer_dest_offset_id();
-        select_packer_dest_registers<Dst>();
+        TT_RMWCIB1(0xff, get_packer_dest_offset() >> 8, DEST_TARGET_REG_CFG_PACK_SEC0_Offset_ADDR32);
     }
 }
 
