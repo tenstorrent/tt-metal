@@ -78,11 +78,25 @@ void kernel_main() {
 #endif
         for (uint32_t row = 0; row < q_tiles; ++row) {
             cb.wait_front(SDPA_RECIPE_DHT);
+#ifdef SDPA_RECIPE_CONCAT_HEADS
+            // Output [B, 1, Sq, H x Dv]: this head's Dv columns of the sequence's tile row (padding rows dropped).
+            constexpr uint32_t heads = SDPA_RECIPE_CONCAT_HEADS;
+            constexpr uint32_t row_tiles = (primary_rows + 31) / 32;
+            const uint32_t head = job / SDPA_RECIPE_Q_JOBS;
+            const uint32_t tile_row = (job % SDPA_RECIPE_Q_JOBS) * q_tiles + row;
+            if (tile_row < row_tiles) {
+                const uint32_t page = ((head / heads * row_tiles + tile_row) * heads + head % heads) * SDPA_RECIPE_DHT;
+                for (uint32_t col = 0; col < SDPA_RECIPE_DHT; ++col) {
+                    noc.async_write(cb, out.primary, 2048, {.offset_bytes = col * 2048}, {.page_id = page + col});
+                }
+            }
+#else
             for (uint32_t col = 0; col < SDPA_RECIPE_DHT; ++col) {
                 out.visit(job * q_tiles * SDPA_RECIPE_DHT + row * SDPA_RECIPE_DHT + col, [&](const auto& destination, uint32_t page) {
                     noc.async_write(cb, destination, 2048, {.offset_bytes = col * 2048}, {.page_id = page});
                 });
             }
+#endif
             noc.async_write_barrier();
             cb.pop_front(SDPA_RECIPE_DHT);
         }

@@ -45,6 +45,7 @@ uint32_t recipe_subblock_width(uint32_t tiles);
 
 // `scale` is the softmax scale the exp folds in (default 1/sqrt(head dim)). The ring and exp ring factories pass
 // theirs to the compute kernel themselves and only take the CB layout, defines and compute config from here.
+// `vd_tiles`: V / output head dim in tiles when it differs from the QK head dim `d_tiles` (MLA; 0: the same).
 tt::tt_metal::ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy,
     const CoreRangeSet& grid,
@@ -52,7 +53,8 @@ tt::tt_metal::ProgramDescriptor recipe_compute_program(
     uint32_t q_tiles = 8,
     uint32_t k_tiles = 16,
     uint32_t d_tiles = 4,
-    std::optional<float> scale = std::nullopt);
+    std::optional<float> scale = std::nullopt,
+    uint32_t vd_tiles = 0);
 
 // The recipe owns the numerics: compute_kernel_config (fidelity, approx mode, FP32 dest, L1 accumulation) and
 // program_config.exp_approx_mode are accepted and ignored. `scale` may be any finite positive value.
@@ -101,15 +103,36 @@ struct RecipeKeyRange {
     uint32_t q_offset = 0;
     std::optional<Tensor> q_offset_tensor;  // device int32 [1]: overrides q_offset when the kernel runs (trace-safe)
     std::optional<Tensor> segments;         // cu_window_seqlens, int32/uint32 [n], row-major
-    // Chunked prefill: K/V are cache blocks [blocks, KV heads, block size, D] and this int32 [B, 1] page table names
-    // each batch's block (one block per sequence).
+    // Chunked prefill: K/V are cache blocks [blocks, KV heads, block size, D] and this int32 [B, blocks per sequence]
+    // page table names each sequence's blocks in order; its K length is blocks per sequence x block size.
     std::optional<Tensor> page_table;
+    // This call's view of a shared paged cache (block size, KV heads) when the cache was allocated for another
+    // layer's shape; inactive: the cache's shape.
+    PagedCacheGeometryOverride paged_geometry;
     bool active() const { return causal || sliding_window > 0 || segments.has_value(); }
 };
+
+// Dense recipe features outside the key range.
+struct RecipeDenseOptions {
+    // MLA: V and the output have this head dim (0: Q's). V may be K itself (the same tensor): its first head_dim_v
+    // columns are read as V.
+    uint32_t head_dim_v = 0;
+    // Per-head sink logits [1, H, 1, 1] (BF16 or FP32, tiled, DRAM): each head's softmax denominator gains
+    // exp(scale * sink), as legacy SDPA's attention_sink (unscaled logits).
+    std::optional<Tensor> attention_sink;
+    // Write the output as [B, 1, Sq, H * Dv] (heads concatenated per row) instead of [B, H, Sq, Dv].
+    bool output_concat_heads = false;
+};
+
+// Logical K length of a recipe call: a paged cache's blocks per sequence x block size, else K's sequence length.
+uint32_t recipe_k_rows(const Tensor& k, const RecipeKeyRange& key_range);
 
 // L1 bytes the key-range CBs add to a recipe layout (mask row groups excluded): the control pages, the all-masked
 // template tile and the scratch page for the device tensors.
 uint32_t recipe_key_range_extra_bytes(const RecipeKeyRange& key_range);
+
+// L1 bytes the dense options add to a recipe layout (the sink page CB).
+uint32_t recipe_dense_options_extra_bytes(const RecipeDenseOptions& options);
 
 // attn_mask: optional additive mask [1|B, 1|H, Sq, Sk] (BF16/BFP8/BFP4, tiled, interleaved), already
 // multiplied by 1/scale like legacy SDPA; it is L1-accumulated onto the QK scores before the row max.
@@ -123,6 +146,7 @@ Tensor run_recipe(
     const std::optional<Tensor>& attn_mask = std::nullopt,
     std::optional<float> scale = std::nullopt,
     const tt::tt_metal::MemoryConfig& output_memory_config = ttnn::DRAM_MEMORY_CONFIG,
-    const RecipeKeyRange& key_range = {});
+    const RecipeKeyRange& key_range = {},
+    const RecipeDenseOptions& options = {});
 
 }  // namespace ttnn::operations::transformer::sdpa::detail

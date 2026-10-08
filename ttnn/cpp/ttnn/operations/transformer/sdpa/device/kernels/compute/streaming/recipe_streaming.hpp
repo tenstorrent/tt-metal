@@ -1016,10 +1016,68 @@ void salad_correct_fused(
 }
 #endif
 
+#ifdef SDPA_RECIPE_SINK
+// Attention sink (SDPA_RECIPE_SINK is its page CB): the reader's page per Q chunk holds the head's sink logit (FP32,
+// or BF16 in the low half word). Normalization adds k * exp(scale * (sink - m)) to every row's denominator
+// (calculate_sdpa_sink_denominator), m being the maxima the row's P were taken against, in row order.
+static uint32_t recipe_sink_bits, recipe_sink_row;
+// The CB holding the Q chunk's maxima the rows' P were taken against (set before normalizing).
+static uint32_t recipe_sink_max_cb;
+static __attribute__((noinline)) void recipe_read_sink() {
+    CircularBuffer(SDPA_RECIPE_SINK).wait_front(1);
+    const uint32_t word = ckernel::read_tile_value(SDPA_RECIPE_SINK, 0, 0);
+#ifdef SDPA_RECIPE_SINK_BF16
+    recipe_sink_bits = word << 16;
+#else
+    recipe_sink_bits = word;
+#endif
+    CircularBuffer(SDPA_RECIPE_SINK).pop_front(1);
+    recipe_sink_row = 0;
+}
+// The score path's mean factor k: P (as PV and l see it) over exp(scale * (s - m)). Measured on device with a sink
+// that takes nearly all of each row's weight (output / reference -> k / kRecipeSinkExpFactor), next to the exps'
+// emulated means: the FP32 grid's offset 2^(-44.73/1024) = 0.9702 with the cubic's mean ripple (ACCURATE 1.0,
+// BALANCED 1.0006, whose BF16 P and HiFi2 PV take about 0.6% more), and STANDARD / FAST's linear-mantissa exp
+// (offset 2^(-11.18/256), mean (1 + f) / 2^f = 1.0407: 1.0096, measured 1.0051) with its 2^-28 headroom.
+#if defined(SDPA_RECIPE_ACCURATE)
+constexpr float kRecipeSinkExpFactor = 0.9699356f;
+#elif defined(SDPA_RECIPE_FP32)
+constexpr float kRecipeSinkExpFactor = 0.9650970f;
+#else
+constexpr float kRecipeSinkExpFactor = 1.0051060f / static_cast<float>(1u << kRefMaxExpOctaves);
+#endif
+constexpr uint32_t kRecipeSinkExpFactorBits = __builtin_bit_cast(uint32_t, kRecipeSinkExpFactor);
+// This row's maxima into dest tile `dest` (the denominator is in tile 0).
+ALWI void recipe_sink_load_max(uint32_t max_cb, uint32_t dest) {
+    CircularBuffer(max_cb).wait_front(recipe_sink_row + 1);
+    sdpa_stream_reconfig_srca(max_cb);
+    copy_init(max_cb);
+    copy_tile(max_cb, recipe_sink_row, dest);
+}
+#ifdef SDPA_RECIPE_FP32
+template <uint32_t scale_fp32>
+struct RecipeSinkHook {
+    ALWI void load(uint32_t dest) const { recipe_sink_load_max(recipe_sink_max_cb, dest); }
+    ALWI void apply() const {
+        PACK((SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sdpa_sink_denominator,
+            (scale_fp32, kRecipeSinkExpFactorBits),
+            0,
+            VectorMode::C,
+            recipe_sink_bits)));
+        recipe_sink_row++;
+    }
+};
+#endif
+#endif
+
 /**
  * Per-row streaming normalization: matmul_reduce + recip-in-DST + mul_bcast_cols.
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
+ * Attention sink (SDPA_RECIPE_SINK): recipe_sink_max_cb holds the Q chunk's maxima the rows' P were taken against.
  */
 template <
     bool profiling_enabled,
@@ -1027,12 +1085,18 @@ template <
     uint32_t dst_size,
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
-    uint32_t normalized_out_cb>
+    uint32_t normalized_out_cb,
+    uint32_t scale_fp32 = 0>
 static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_streaming(
     uint32_t cur_sum_cb, uint32_t cur_out_cb, uint32_t sbh) {
 #ifdef SDPA_RECIPE_FP32
+#ifdef SDPA_RECIPE_SINK
+    sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(
+        cur_sum_cb, cur_out_cb, scratch_cb, normalized_out_cb, sbh, sdpa_pack, RecipeSinkHook<scale_fp32>{});
+#else
     sdpa::streaming::normalize_rows<head_dim_t_, col_identity_cb>(
         cur_sum_cb, cur_out_cb, scratch_cb, normalized_out_cb, sbh, sdpa_pack);
+#endif
 #else
 
     configure_single_tile_pack(scratch_cb);
@@ -1084,6 +1148,19 @@ static __attribute__((noinline, noclone)) SDPA_RECIPE_COLD void normalize_row_st
             matmul_block_no_mop(norm_sum_cb, col_identity_cb, 0, 0, 0, false, N, 1, N);
 #else
             matmul_block(norm_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+#endif
+#ifdef SDPA_RECIPE_SINK
+            recipe_sink_load_max(recipe_sink_max_cb, 1);
+            MATH((SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_sdpa_sink_denominator,
+                (scale_fp32, kRecipeSinkExpFactorBits),
+                0,
+                VectorMode::C,
+                recipe_sink_bits)));
+            recipe_sink_row++;
+            sdpa_stream_reconfig_srca(norm_sum_cb);
 #endif
 
             recip_tile_init();
@@ -1919,14 +1996,17 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             fold_first(sbh);
             CircularBuffer(cur.sum).push_back(sbh);
             CircularBuffer(out_cb).push_back(sbh * vDHt * sdpa_out_stride);
+#ifdef SDPA_RECIPE_SINK
+            recipe_sink_max_cb = cur.max;
+#endif
             normalize_row_streaming<
                 profiling_enabled,
                 vDHt,
                 dst_size,
                 cb_col_identity,
                 cb_recip_scratch,
-                cb_normalized_out>(
-                cur.sum, out_cb, sbh);
+                cb_normalized_out,
+                scale_fp32>(cur.sum, out_cb, sbh);
 
             pushed++;
         };
@@ -2213,8 +2293,8 @@ template <
     bool independent_q_release = false>
 ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     static_assert(
-        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && DHt == vDHt &&
-        DHt >= 1);
+        Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && kRecipeValidKTiles<Sk_chunk_t> && vDHt <= DHt &&
+        vDHt >= 1);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;
     auto& cur = state.cur;
@@ -2321,6 +2401,9 @@ void sdpa_standard_v2(
         RecipeAccumulatorState state{{cb_sum_A, cb_max_A, cb_out_im_A}, {cb_sum_B, cb_max_B, cb_out_im_B}};
 #ifdef SDPA_RECIPE_KRANGE
         k_num_chunks = recipe_read_key_range();
+#endif
+#ifdef SDPA_RECIPE_SINK
+        recipe_read_sink();
 #endif
         sdpa_segment_v2<Configuration...>(state, k_num_chunks, true, true);
     }
