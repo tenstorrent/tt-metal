@@ -680,6 +680,35 @@ def test_the_measure_recorder_files_one_row_under_the_variant_just_resolved(
     assert rows[0]["arch"] == MEASURED_ARCH.name
     # A max of 0 means something only over lanes that were measured.
     assert (rows[0]["lanes"], rows[0]["unmeasurable"]) == (32, 0)
+    assert rows[0]["nonfinite"] == 0
+
+
+def test_the_measure_recorder_writes_the_nonfinite_count_the_headroom_report_reads(
+    tmp_path, monkeypatch
+):
+    """The count is the sweep's only link to the headroom report's non-finite check,
+    which reads it back by name; renamed on one side, the check reads 0 for every cell
+    and passes. Written through the recorder and read through the report's own reader.
+    """
+    from helpers.ulp import ulp_distance
+    from helpers.ulp_budget_diff import _nonfinite_cells
+    from helpers.utils import _record_ulp_measurement
+
+    read = _measure_rows(tmp_path, monkeypatch)
+    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
+    accuracy_contract(
+        MathOperation.Abs,
+        output_format=DataFormat.Float16_b,
+        input_format=DataFormat.Float16_b,
+        arch=MEASURED_ARCH,
+    )
+    _record_ulp_measurement(
+        ulp_distance(golden, golden.clone()),
+        mask=torch.ones(32, dtype=torch.bool),
+        nonfinite=7,
+    )
+    (row,) = read()
+    assert list(_nonfinite_cells([row]).values()) == [7]
 
 
 def _measure_rows(tmp_path, monkeypatch):
