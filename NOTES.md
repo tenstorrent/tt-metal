@@ -68,3 +68,9 @@
 3. If def is faster and PCC >= 0.9999, PSNR within 0.5 dB: in this worktree
    `git switch ttp/t261-r2-diffvae-det-stages-1-4-on-all-32-chip-land` (local branch, head 5833f56096f),
    `ttp push --detach`, then switch back. If t48 moved, ttp push rebases.
+
+## Validation job (run 1083)
+- blx01 recovered 11:09 UTC (broker hold 018 ended, ready). Note: job 003 (smarton t263, not this task) was killed by the
+  10:58 UTC chips 16-23 drop.
+- 2026-10-08 11:12:44 UTC: submitted blx01 broker job 019 (run261r.sh, src 5833f56096f, build t272/b cae4b52657d,
+  arms off vs def, -t 480). Log /var/log/tt-device-broker/2026-10-08_111244_019.log, out /var/tmp/fasth3/t261/out_R.
