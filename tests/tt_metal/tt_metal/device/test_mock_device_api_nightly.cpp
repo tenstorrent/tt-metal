@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <tt-metalium/experimental/mock_device/mock_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/types/arch.hpp>
@@ -36,10 +37,10 @@ TEST_F(MockDeviceAPINightlyFixture, NIGHTLY_SwitchFromMockToRealHardwareWithDevi
     // and reinitializes base objects (cluster_, hal_) with real hardware
     experimental::disable_mock_mode();
     EXPECT_FALSE(experimental::is_mock_mode_registered());
-    // "Real" hardware is the simulator when TT_METAL_SIMULATOR is set.
-    const tt::TargetDevice real_target = MetalContext::instance().rtoptions().get_simulator_enabled()
-                                             ? tt::TargetDevice::Simulator
-                                             : tt::TargetDevice::Silicon;
+    // "Real" hardware is the simulator when TT_METAL_SIMULATOR is set. Read the environment directly rather than
+    // rtoptions, whose target the cluster copies, so a restore that wrongly picks the target still fails here.
+    const tt::TargetDevice real_target =
+        std::getenv("TT_METAL_SIMULATOR") != nullptr ? tt::TargetDevice::Simulator : tt::TargetDevice::Silicon;
     EXPECT_EQ(MetalContext::instance().get_cluster().get_target_device_type(), real_target);
 
     // Create real hardware device - verifies full reinitialization worked correctly
