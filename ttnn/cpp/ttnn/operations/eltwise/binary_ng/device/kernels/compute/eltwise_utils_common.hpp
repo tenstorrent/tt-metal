@@ -91,3 +91,18 @@ static_assert(
 #define ISCLOSE_RT_ARG_PARAMS
 #define ISCLOSE_RT_ARG_FWD
 #endif
+
+#if defined(ARCH_BLACKHOLE)
+#include "api/compute/tile_move_copy.h"
+// copy_tile whose unpack call polls the context semaphore first (the opt-in form of _llk_unpack_A_)
+ALWI void copy_tile_early_poll(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    LLK_SAN_FUNCTION();
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, true>(
+        in_cb_id, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+        dst_tile_index, in_cb_id)));
+}
+#define BINARY_NG_COPY_TILE copy_tile_early_poll
+#else
+#define BINARY_NG_COPY_TILE copy_tile
+#endif

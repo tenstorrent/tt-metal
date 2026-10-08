@@ -9,20 +9,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "eltwise_utils_common.hpp"
 
-#if defined(ARCH_BLACKHOLE)
-// copy_tile whose unpack call polls the context semaphore first (the opt-in form of _llk_unpack_A_)
-ALWI void copy_tile_early_poll(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
-    LLK_SAN_FUNCTION();
-    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, true>(
-        in_cb_id, in_tile_index)));
-    MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
-        dst_tile_index, in_cb_id)));
-}
-#define BINARY_NG_COPY_TILE copy_tile_early_poll
-#else
-#define BINARY_NG_COPY_TILE copy_tile
-#endif
-
 // Reads `per_core_block_size` tiles from cb_pre, runs the per-operand activation chain
 // on each tile in DST, and writes the results into cb_post — i.e. produces the
 // "activated" input that the downstream binary op consumes. cb_out is passed in only
