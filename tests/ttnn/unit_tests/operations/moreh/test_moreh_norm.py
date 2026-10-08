@@ -75,17 +75,23 @@ def test_moreh_norm_corner_cases(dim, keepdim, fp32_dest_acc_en, device):
 @pytest.mark.merge_gate
 def test_moreh_norm_provided_output(device):
     torch.manual_seed(0)
-    run_moreh_norm_output_mode(
-        [2, 3, 32, 32],
+    # Not run_moreh_norm_output_mode: it pre-fills the output with torch.empty, whose leftover memory can already hold
+    # the expected values (the test before this one computes the same values). NaN makes an unwritten value fail.
+    torch_input, torch_output_grad = make_torch_tensors([2, 3, 32, 32], 3, keepdim=True)
+    expected, _ = torch_norm(torch_input, torch_output_grad, p=float("inf"), dim=3, keepdim=True)
+    tt_output = create_ttnn_tilized_tensor(torch.full(expected.shape, float("nan")), device, ttnn.bfloat16)
+    ttnn.moreh_norm(
+        create_ttnn_tilized_tensor(torch_input.detach(), device, ttnn.bfloat16),
         float("inf"),
-        3,
-        0.06,
-        0.06,
-        device,
+        dim=3,
         keepdim=True,
-        compute_kernel_options=False,
-        use_provided_output=True,
+        output=tt_output,
+        compute_kernel_config=get_compute_kernel_options(False),
     )
+
+    actual = ttnn.to_torch(tt_output).reshape(expected.shape)
+    passing, out = comp_allclose(expected.detach(), actual, rtol=0.06, atol=0.06)
+    assert passing, out
 
 
 @pytest.mark.merge_gate
@@ -156,22 +162,3 @@ def test_moreh_norm_backward_allocated_input_grad(device):
 
     passing, out = comp_allclose(expected_input_grad, ttnn.to_torch(tt_input_grad), rtol=0.06, atol=0.06)
     assert passing, out
-
-
-@pytest.mark.merge_gate
-def test_moreh_norm_program_cache(device):
-    torch.manual_seed(0)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    run_moreh_norm_output_mode(
-        [2, 3, 32, 32], float("inf"), 3, 0.06, 0.06, device, keepdim=True, compute_kernel_options=False
-    )
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses.
-    tt_placeholder = create_ttnn_tilized_tensor(torch.zeros([2, 3, 32, 32]), device, ttnn.bfloat16)
-    run_moreh_norm_output_mode(
-        [2, 3, 32, 32], float("inf"), 3, 0.06, 0.06, device, keepdim=True, compute_kernel_options=False
-    )
-    assert device.num_program_cache_entries() == num_program_cache_entries

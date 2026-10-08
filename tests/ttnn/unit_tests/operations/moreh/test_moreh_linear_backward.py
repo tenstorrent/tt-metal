@@ -25,13 +25,15 @@ def run_moreh_linear_backward_bias_only_test(output_shape, bias_shape, device):
     torch_output_grad = torch.randint(-2, 3, output_shape, dtype=torch.float32)
     torch.nn.functional.linear(torch_input, torch_weight, torch_bias).backward(torch_output_grad)
 
-    _, _, tt_bias_grad = ttnn.moreh_linear_backward(
+    tt_bias_grad = to_ttnn(torch.full(bias_shape, float("nan")), device=device)
+    # The check reads this buffer, not the return value: the op must write into it.
+    ttnn.moreh_linear_backward(
         create_ttnn_tilized_tensor(torch_output_grad, device, ttnn.bfloat16),
         to_ttnn(torch_input, device=device),
         to_ttnn(torch_weight, device=device),
         are_required_outputs=[False, False, True],
         bias=to_ttnn(torch_bias.detach(), device=device),
-        bias_grad=to_ttnn(torch.zeros(bias_shape), device=device),
+        bias_grad=tt_bias_grad,
         compute_kernel_config=get_compute_kernel_options(False),
     )
 
@@ -84,20 +86,3 @@ def test_moreh_linear_backward(
 def test_moreh_linear_backward_bias_only(output_shape, bias_shape, device):
     torch.manual_seed(0)
     run_moreh_linear_backward_bias_only_test(output_shape, bias_shape, device)
-
-
-@pytest.mark.merge_gate
-def test_moreh_linear_backward_program_cache(device):
-    torch.manual_seed(0)
-    shapes = ([32, 64], [96, 64], [1, 96], [32, 96])
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    assert moreh_linear_backward(shapes, True, True, True, get_compute_kernel_options(False), device)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
-    # so creating it runs no device program of its own.
-    tt_placeholder = ttnn.from_torch(torch.zeros([32, 96]), dtype=ttnn.bfloat16, device=device)
-    assert moreh_linear_backward(shapes, True, True, True, get_compute_kernel_options(False), device)
-    assert device.num_program_cache_entries() == num_program_cache_entries

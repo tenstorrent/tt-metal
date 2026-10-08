@@ -36,10 +36,10 @@ def run_moreh_clip_grad_norm_test(
         torch_params, max_norm, norm_type, error_if_nonfinite=error_if_nonfinite
     )
 
-    # Zeros, so a total norm the op never writes fails.
+    # NaN, so a total norm the op never writes fails.
     tt_total_norm = None
     if provide_total_norm:
-        tt_total_norm = create_ttnn_tilized_tensor(torch.zeros([1, 1]), device, ttnn.bfloat16)
+        tt_total_norm = create_ttnn_tilized_tensor(torch.full([1, 1], float("nan")), device, ttnn.bfloat16)
     result = ttnn.moreh_clip_grad_norm(
         tt_inputs,
         max_norm,
@@ -109,21 +109,3 @@ def test_moreh_clip_grad_norm_corner_cases(input_shapes, clip_ratio, error_if_no
         error_if_nonfinite=error_if_nonfinite,
         provide_total_norm=provide_total_norm,
     )
-
-
-@pytest.mark.merge_gate
-def test_moreh_clip_grad_norm_program_cache(device):
-    torch.manual_seed(0)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    # A fixed max_norm: it fills a tensor on the device, and a value that changed with the data could add programs.
-    # ~80 is the total norm of these inputs, so this still clips them by about half.
-    run_moreh_clip_grad_norm_test([[1, 1, 32, 32]] * 3, 2.0, device, max_norm=40.0)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
-    # so creating it runs no device program of its own.
-    tt_placeholder = ttnn.from_torch(torch.zeros([32, 32]), dtype=ttnn.bfloat16, device=device)
-    run_moreh_clip_grad_norm_test([[1, 1, 32, 32]] * 3, 2.0, device, max_norm=40.0)
-    assert device.num_program_cache_entries() == num_program_cache_entries

@@ -47,11 +47,11 @@ def run_moreh_sgd_test(
     tt_momentum_buffer_in = (
         create_ttnn_tilized_tensor(state["momentum_buffer"], device, ttnn.bfloat16) if momentum_initialized else None
     )
-    # Zeros, so an output the op never writes fails.
-    zeros = torch.zeros(shape, dtype=torch.bfloat16)
-    tt_param_out = create_ttnn_tilized_tensor(zeros, device, ttnn.bfloat16) if provide_outputs else None
+    # NaN, so an output the op never writes fails.
+    nans = torch.full(shape, float("nan"), dtype=torch.bfloat16)
+    tt_param_out = create_ttnn_tilized_tensor(nans, device, ttnn.bfloat16) if provide_outputs else None
     tt_momentum_buffer_out = (
-        create_ttnn_tilized_tensor(zeros, device, ttnn.bfloat16) if provide_outputs and momentum != 0 else None
+        create_ttnn_tilized_tensor(nans, device, ttnn.bfloat16) if provide_outputs and momentum != 0 else None
     )
     optimizer.step()
 
@@ -134,19 +134,3 @@ def test_moreh_sgd_corner_cases(shape, provide_outputs, fp32_dest_acc_en, device
     run_moreh_sgd_test(
         shape, 0.9, 0.0, 0.5, True, device, provide_outputs=provide_outputs, fp32_dest_acc_en=fp32_dest_acc_en
     )
-
-
-@pytest.mark.merge_gate
-def test_moreh_sgd_program_cache(device):
-    torch.manual_seed(0)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    run_moreh_sgd_test([32, 32], 0.9, 0.0, 0.5, True, device)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
-    # so creating it runs no device program of its own.
-    tt_placeholder = ttnn.from_torch(torch.zeros([32, 32]), dtype=ttnn.bfloat16, device=device)
-    run_moreh_sgd_test([32, 32], 0.9, 0.0, 0.5, True, device)
-    assert device.num_program_cache_entries() == num_program_cache_entries

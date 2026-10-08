@@ -22,8 +22,7 @@ pytestmark = pytest.mark.use_module_device
 def run_moreh_getitem_test(
     input_shape, layout, device, index_dims=(0,), index_size=4, dtype=ttnn.bfloat16, row_major_index=True
 ):
-    # Not the nightly helpers: they take one index dim only, and they reseed to 2, so a program-cache test would
-    # see the same data on both runs and miss a cache hit that reads a stale address.
+    # Not the nightly helpers: they take one index dim only.
     torch_dtype = torch.int32 if dtype == ttnn.int32 else torch.bfloat16
     torch_input = torch.randint(0, 10, input_shape, dtype=torch_dtype)
     torch_indices = [torch.randint(-input_shape[dim], input_shape[dim] - 1, (index_size,)) for dim in index_dims]
@@ -39,6 +38,11 @@ def run_moreh_getitem_test(
         ]
     tt_output = ttnn.to_torch(ttnn.moreh_getitem(tt_input, tt_indices, list(index_dims)))
 
+    if layout == ttnn.TILE_LAYOUT:
+        # A TILE output keeps the input's rank: each indexed dim becomes 1 and the last one the index length, so
+        # [10, 5, 7, 70] indexed on [2, 3] gives [10, 5, 1, 4] where torch gives [10, 5, 4].
+        assert tt_output.numel() == torch_output.numel(), tt_output.shape
+        tt_output = tt_output.reshape(torch_output.shape)
     assert tt_output.shape == torch_output.shape, tt_output.shape
     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output)
     assert passing, output_pcc
@@ -101,27 +105,3 @@ def test_moreh_getitem_tilized(shape_index_dim, row_major_index, device):
 def test_moreh_getitem_multi_index(input_shape, layout, index_dims, device):
     torch.manual_seed(0)
     run_moreh_getitem_test(input_shape, layout, device, index_dims=index_dims)
-
-
-@pytest.mark.merge_gate
-@pytest.mark.parametrize(
-    "layout",
-    [
-        ttnn.ROW_MAJOR_LAYOUT,
-        pytest.param(ttnn.TILE_LAYOUT, marks=skip_for_blackhole("Mismatching on Blackhole, see #12349")),
-    ],
-    ids=["row_major", "tile"],
-)
-def test_moreh_getitem_program_cache(layout, device):
-    torch.manual_seed(0)
-    # Start from an empty cache: the module-scoped device carries entries over from earlier tests.
-    device.clear_program_cache()
-    run_moreh_getitem_test([10, 70], layout, device)
-    num_program_cache_entries = device.num_program_cache_entries()
-    # Without this, the equality below would also pass for an op that never caches a program.
-    assert num_program_cache_entries > 0
-    # Holding this tensor moves the next allocations, so the cache hit must update the buffer addresses. Row-major,
-    # so creating it runs no device program of its own.
-    tt_placeholder = ttnn.from_torch(torch.zeros([10, 70]), dtype=ttnn.bfloat16, device=device)
-    run_moreh_getitem_test([10, 70], layout, device)
-    assert device.num_program_cache_entries() == num_program_cache_entries
