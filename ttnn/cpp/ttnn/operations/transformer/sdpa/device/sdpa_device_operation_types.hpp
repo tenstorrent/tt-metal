@@ -42,6 +42,10 @@ struct SDPAParams {
     // head's K/V once instead of once per Q chunk, and no K/V chains are built between cores. Non-causal, unmasked,
     // one K chunk (k_chunk_size >= Sk), streaming compute only.
     bool reuse_kv = false;
+    // Blackhole streaming kernel with one K chunk: take each softmax denominator from the exp'd scores with a matmul on
+    // the math thread instead of L1-accumulating it on the pack thread. Faster where the pack thread paces the softmax,
+    // but the row sum then accumulates in one 16-bit DST tile, which is noisier as Sk grows. No effect elsewhere.
+    bool math_thread_row_sums = false;
 };
 
 struct SDPAInputs {

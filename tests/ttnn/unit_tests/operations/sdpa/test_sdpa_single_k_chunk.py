@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """With one K chunk (``k_chunk_size`` covering all of Sk) there is no online-softmax correction, so on Blackhole the
-streaming kernel (``fp32_dest_acc_en=False``) takes each softmax row's denominator from the exp'd scores with a matmul
-on the math thread, a whole normalize row group at a time, instead of accumulating it on the pack thread. Every masking
+streaming kernel (``fp32_dest_acc_en=False``) can take each softmax row's denominator from the exp'd scores with a
+matmul on the math thread, a whole normalize row group at a time, instead of accumulating it on the pack thread
+(``math_thread_row_sums=True``; off by default, ignored on other architectures). Every masking
 mode, a padded sequence and Q chunks whose tile count is not a multiple of the normalize row group go through that
 path here, checked against torch and against the same call split into several K chunks (the per-chunk sum path)."""
 
@@ -37,7 +38,7 @@ def _torch_mask(mode, b, s, user_mask):
     return None
 
 
-def _run(device, mode, q, k, v, user_mask, q_chunk, k_chunk, dst_full_sync_en=False):
+def _run(device, mode, q, k, v, user_mask, q_chunk, k_chunk, dst_full_sync_en=False, math_thread_row_sums=False):
     b, _, s, _ = q.shape
     tt = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     pc = ttnn.SDPAProgramConfig(
@@ -53,7 +54,12 @@ def _run(device, mode, q, k, v, user_mask, q_chunk, k_chunk, dst_full_sync_en=Fa
         packer_l1_acc=False,
         dst_full_sync_en=dst_full_sync_en,
     )
-    kwargs = dict(program_config=pc, compute_kernel_config=ck, is_causal=mode in ("causal", "windowed_causal"))
+    kwargs = dict(
+        program_config=pc,
+        compute_kernel_config=ck,
+        is_causal=mode in ("causal", "windowed_causal"),
+        math_thread_row_sums=math_thread_row_sums,
+    )
     if mode == "mask":
         kwargs["attn_mask"] = tt(user_mask)
     if mode.startswith("windowed"):
@@ -78,8 +84,8 @@ def test_sdpa_single_k_chunk(device, mode, b, nh, nkv, s, d, q_chunk):
     q, k, v = (torch.randn(b, n, s, d) for n in (nh, nkv, nkv))
     user_mask = torch.bernoulli(torch.full((b, 1, s, s), 0.25)) * -1e9 if mode == "mask" else None
 
-    single = _run(device, mode, q, k, v, user_mask, q_chunk, _round_up(s, TILE))
-    chunked = _run(device, mode, q, k, v, user_mask, q_chunk, 128)
+    single = _run(device, mode, q, k, v, user_mask, q_chunk, _round_up(s, TILE), math_thread_row_sums=True)
+    chunked = _run(device, mode, q, k, v, user_mask, q_chunk, 128, math_thread_row_sums=True)
 
     g = nh // nkv
     gt = torch.nn.functional.scaled_dot_product_attention(
@@ -110,7 +116,7 @@ def test_sdpa_single_k_chunk_full_sync(device, d, q_chunk):
     torch.manual_seed(0)
     b, nh, nkv, s = 1, 8, 2, 256
     q, k, v = (torch.randn(b, n, s, d) for n in (nh, nkv, nkv))
-    single = _run(device, "none", q, k, v, None, q_chunk, s, dst_full_sync_en=True)
+    single = _run(device, "none", q, k, v, None, q_chunk, s, dst_full_sync_en=True, math_thread_row_sums=True)
     g = nh // nkv
     gt = torch.nn.functional.scaled_dot_product_attention(
         q, k.repeat_interleave(g, dim=1), v.repeat_interleave(g, dim=1)
@@ -120,3 +126,17 @@ def test_sdpa_single_k_chunk_full_sync(device, d, q_chunk):
     row_scale = (single * gt).sum(-1) / (gt * gt).sum(-1)
     worst = (row_scale - 1).abs().max().item()
     assert worst < 0.1, f"an output row is off by a factor {1 + worst:.4f}"
+
+
+def test_sdpa_single_k_chunk_row_sums_off_by_default(device):
+    """The pack-thread row sums stay the default: a call without the flag is bit-identical to math_thread_row_sums=False,
+    and the flag only changes the denominators, so the two paths agree to bf16 noise."""
+    torch.manual_seed(0)
+    b, nh, nkv, s, d = 1, 8, 2, 1024, 64
+    q, k, v = (torch.randn(b, n, s, d) for n in (nh, nkv, nkv))
+    default = _run(device, "none", q, k, v, None, 128, s)
+    off = _run(device, "none", q, k, v, None, 128, s, math_thread_row_sums=False)
+    on = _run(device, "none", q, k, v, None, 128, s, math_thread_row_sums=True)
+    assert torch.equal(default, off)
+    ok, pcc = comp_pcc(off, on, 0.999)
+    assert ok, f"math_thread_row_sums on vs off: {pcc}"

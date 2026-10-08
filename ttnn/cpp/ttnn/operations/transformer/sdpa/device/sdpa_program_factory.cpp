@@ -262,15 +262,19 @@ WriterGqaPackArgs writer_gqa_pack_args(bool output_concat_heads, uint32_t gqa_pa
     return {};
 }
 
-// Single-K-chunk row sums on the math thread (compute_streaming.hpp): normalize takes a whole row group's denominators
-// from the exp'd scores, so the recip scratch CB must hold a row group. The kernel uses the path only where `enabled`
-// allows it (compute arg 30), so sizing and use cannot disagree; every other call keeps the 1-tile scratch. The kernel
-// derives the row group from its DEST_AUTO_LIMIT, which full sync doubles (dest_helpers.hpp).
+// Single-K-chunk row sums on the math thread (compute_streaming.hpp), opt-in (math_thread_row_sums): normalize takes a
+// whole row group's denominators from the exp'd scores, so the recip scratch CB must hold a row group. Off by default:
+// the sum accumulates in one 16-bit DST tile per row, which rounds the whole running sum on every K tile, while the
+// pack thread's per-position L1 sums average their rounding out over the row (SDXL's 0.993 / 0.997 PCC bars fail on
+// it). The kernel uses the path only where `enabled` allows it (compute arg 30), so sizing and use cannot disagree;
+// every other call keeps the 1-tile scratch. The kernel derives the row group from its DEST_AUTO_LIMIT, which full sync
+// doubles (dest_helpers.hpp).
 struct SingleKChunkRowSums {
     bool enabled = false;
     uint32_t recip_scratch_tiles = 1;
 };
 SingleKChunkRowSums single_k_chunk_row_sums(
+    bool requested,
     tt::ARCH arch,
     bool use_streaming_compute,
     bool use_attention_sink,
@@ -282,7 +286,8 @@ SingleKChunkRowSums single_k_chunk_row_sums(
     const uint32_t kernel_dst_size = dst_full_sync_en ? 2 * dst_size : dst_size;
     const uint32_t norm_row_h =
         ttnn::transformer::sdpa::streaming_qktv_h(out_subblock_h, out_subblock_w, kernel_dst_size, Sq_chunk_t);
-    if (use_streaming_compute && arch == tt::ARCH::BLACKHOLE && !use_attention_sink && Sq_chunk_t % norm_row_h == 0) {
+    if (requested && use_streaming_compute && arch == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+        Sq_chunk_t % norm_row_h == 0) {
         return {true, norm_row_h};
     }
     return {};
@@ -655,6 +660,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool use_zigzag_balancing = use_causal_kernel;
 
     const SingleKChunkRowSums row_sums = single_k_chunk_row_sums(
+        operation_attributes.math_thread_row_sums,
         device->arch(),
         use_streaming_compute,
         use_attention_sink,

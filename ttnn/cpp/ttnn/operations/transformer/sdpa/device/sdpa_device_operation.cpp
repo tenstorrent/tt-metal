@@ -691,7 +691,8 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
     bool pack_gqa_heads,
-    bool reuse_kv) {
+    bool reuse_kv,
+    bool math_thread_row_sums) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -714,6 +715,7 @@ Tensor sdpa(
             .output_concat_heads = output_concat_heads,
             .pack_gqa_heads = pack_gqa_heads,
             .reuse_kv = reuse_kv,
+            .math_thread_row_sums = math_thread_row_sums,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

@@ -63,6 +63,7 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     bool output_concat_heads = false,
     bool pack_gqa_heads = false,
-    bool reuse_kv = false);
+    bool reuse_kv = false,
+    bool math_thread_row_sums = false);
 
 }  // namespace ttnn::prim

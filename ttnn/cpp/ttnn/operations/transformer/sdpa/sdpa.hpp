@@ -45,7 +45,10 @@ ttnn::Tensor scaled_dot_product_attention(
     bool pack_gqa_heads = false,
     /// Keep K/V in the CBs across a core's consecutive Q chunks of the same (batch, KV head) instead of re-reading
     /// them (single K chunk, non-causal, unmasked; the K/V chains between cores are not built).
-    bool reuse_kv = false);
+    bool reuse_kv = false,
+    /// Blackhole, one K chunk, fp32_dest_acc_en=False: softmax row sums on the math thread instead of the pack thread.
+    /// Faster when the pack thread paces the softmax (batched GQA prefill), slightly less accurate as Sk grows.
+    bool math_thread_row_sums = false);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
