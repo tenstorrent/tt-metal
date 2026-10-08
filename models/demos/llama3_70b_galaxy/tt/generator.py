@@ -570,7 +570,10 @@ class Generator(WarmupForwardMixin):
 
         explicit_seeded_prefill = False
         seed_values = []
-        requires_slot_stable_prefill = False
+        # Host sampling (sampling_params is None) hides the per-row sampling params from the generator,
+        # and the host sampler may run greedy or seeded sampling on any row, so keep the prefill
+        # slot-stable. Batched prefill stays available to the on-device sampling path below.
+        requires_slot_stable_prefill = return_logits
         if do_device_sampling and sampling_params is not None:
             seed_values = _as_list(getattr(sampling_params, "seed", None))
             temperature_values = _as_list(getattr(sampling_params, "temperature", None))
