@@ -246,7 +246,10 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
-    const std::vector<CoreCoord> padded_cores = corerange_to_cores(all_cores_padded, num_cores_padded, row_major);
+    // Output shards are placed using the output's own orientation, which may differ from the input's.
+    const bool row_major_padded = shard_spec_padded.orientation == ShardOrientation::ROW_MAJOR;
+    const std::vector<CoreCoord> padded_cores =
+        corerange_to_cores(all_cores_padded, num_cores_padded, row_major_padded);
 
     TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
