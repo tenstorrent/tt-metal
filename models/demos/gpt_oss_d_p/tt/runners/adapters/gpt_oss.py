@@ -168,6 +168,16 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
             logger.info("Loading real bf16 gpt-oss weights (slow: safetensors read)...")
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
 
+        # A reduced first-rank run must construct only the layers its KV cache
+        # holds. Model otherwise follows the checkpoint's full layer count.
+        if params.first_layer_idx == 0 and params.num_layers < hf_config.num_hidden_layers:
+            from copy import deepcopy
+
+            hf_config = deepcopy(hf_config)
+            hf_config.num_hidden_layers = params.num_layers
+            if getattr(hf_config, "layer_types", None) is not None:
+                hf_config.layer_types = hf_config.layer_types[: params.num_layers]
+
         return TtPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
