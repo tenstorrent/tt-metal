@@ -77,6 +77,13 @@ and no persisted credentials. The two agents see PR text only as data and can on
 emit a dispatch (the first) or a comment (the second), both rewritten by
 deterministic post-steps.
 
+Who can start a run: only people with write access. The command checks the
+commenter's repository permission before its agent starts; dispatching
+`llk-sfpu-report` by hand needs write access; and the summary posts only for a
+dispatched report run, started by someone with write access or by `/llk-sfpu-test`
+itself (`github-actions[bot]`). A fork PR's own workflow runs are `pull_request`
+events, so they cannot make the summary post.
+
 ## Locally
 
 On a machine with a Wormhole or Blackhole card, from the tt-llk test venv
