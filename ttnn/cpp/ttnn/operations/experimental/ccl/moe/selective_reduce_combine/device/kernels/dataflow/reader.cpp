@@ -45,11 +45,13 @@ void get_token_activation_offsets(
             continue;
         }
 
-        const auto token_split_offset = token_split_offsets[e];
-        auto* expert_token_activations_ptr = token_activations_ptr + token_split_offset * ActivationStride;
-        const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offset) * MapStride];
+        const auto st_start = dense_token_maps_ptr[(e * (GlobalNumTokens + 1) + token_split_offsets[e]) * MapStride];
 
-        for (uint32_t t = token_split_offset; t < GlobalNumTokens; ++t) {
+        // The first activation row of st_start. Scan from row 0: the split offset counts e_t entries, and a token
+        // that names one expert at several k has one entry per k but one activation row, so the offset can lie past
+        // the row. The rows are in e_t order (tilize merges both the same way) but not sorted by token id.
+        auto* expert_token_activations_ptr = token_activations_ptr;
+        for (uint32_t t = 0; t < GlobalNumTokens; ++t) {
             if (expert_token_activations_ptr[0] == st_start) {
                 token_activation_offsets[e] = t;
                 break;
