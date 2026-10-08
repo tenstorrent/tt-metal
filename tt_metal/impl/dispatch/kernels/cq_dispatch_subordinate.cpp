@@ -274,14 +274,18 @@ void begin_worker_completion_tracking(uint32_t sub_device_index) {
     const uint32_t sub_device_mask = 1U << sub_device_index;
     ASSERT((tracked_sub_device_mask & sub_device_mask) == 0);
     ASSERT(workers_per_sub_device[sub_device_index] != 0);
+    ASSERT(workers_per_sub_device[sub_device_index] <= overlay::fds_signalling::num_worker_lanes);
 
-    uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(
-        overlay::fds_signalling::go_group_for_sub_device(sub_device_index));
+    const uint32_t group_id = overlay::fds_signalling::go_group_for_sub_device(sub_device_index);
+    uint32_t workers_with_stale_completion = overlay::fds_signalling::dispatch_read_group_status(group_id);
     while (workers_with_stale_completion != 0) {
         const uint32_t worker_lane = __builtin_ctz(workers_with_stale_completion);
         overlay::fds_signalling::dispatch_clear_worker_status(worker_lane);
         workers_with_stale_completion &= ~(1U << worker_lane);
     }
+    // Where group status is sticky, clearing the input lanes leaves the stale dones counted. No done for this group
+    // can arrive before its go is queued, so clearing every lane drops nothing.
+    overlay::fds_signalling::dispatch_clear_group_status(group_id);
 
     collected_worker_completion_count[sub_device_index] = 0;
     tracked_sub_device_mask |= sub_device_mask;
@@ -305,6 +309,8 @@ void init_fds_signalling() {
     for (uint32_t group_id = overlay::fds_signalling::idle_group_id + 1; group_id <= max_num_worker_sems; ++group_id) {
         overlay::fds_signalling::dispatch_config_group(
             group_id, overlay::fds_signalling::all_worker_lanes_mask, overlay::fds_signalling::dispatch_done_threshold);
+        // Where group status is sticky, start without the dones a previous run left in it.
+        overlay::fds_signalling::dispatch_clear_group_status(group_id);
     }
     // A previous run that left the pacing count at 0 with auto dispatch enabled releases queued entries only every
     // 2^32 cycles, so draining its queue at init would take up to one more than the number of queued entries,
@@ -432,9 +438,7 @@ void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t
         rt_record_rd_idx = msg->record_rd_idx;
         if (realtime_profiler_record_ring_full(next_wr_idx)) {
             msg->record_full_wait_count = msg->record_full_wait_count + 1;
-            volatile tt_reg_ptr uint32_t* wall_clock =
-                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-            const uint32_t wait_start = wall_clock[WALL_CLOCK_LOW_INDEX];
+            const uint32_t wait_start = realtime_profiler_wall_clock_lo();
             WAYPOINT("RPFW");
             do {
                 invalidate_l1_cache();
@@ -443,7 +447,7 @@ void publish_realtime_profiler_record(volatile tt_l1_ptr realtime_profiler_msg_t
             WAYPOINT("RPFD");
             // Report the wait in-band on the record about to be published; the BRISC turns it into a
             // dispatch-stall marker for the host. 0 means "no wait", so a wait is never stored as 0.
-            const uint32_t wait_cycles = wall_clock[WALL_CLOCK_LOW_INDEX] - wait_start;
+            const uint32_t wait_cycles = realtime_profiler_wall_clock_lo() - wait_start;
             msg->records[rt_record_wr_idx & (REALTIME_PROFILER_RECORD_SLOTS - 1)].kernel_end.header =
                 wait_cycles != 0 ? wait_cycles : 1;
         }

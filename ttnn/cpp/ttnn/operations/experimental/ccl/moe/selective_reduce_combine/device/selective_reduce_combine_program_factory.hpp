@@ -92,8 +92,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const std::optional<GlobalSemaphore>& cross_device_semaphore,
     uint32_t metadata_sync_semaphore_id,
     uint32_t compute_sync_semaphore_id,
-    uint32_t compute_cores_per_combine_cores = 0,
-    const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id = std::nullopt);
+    // Fused moe_compute only: for each data-parallel (width) column, the compute cores whose
+    // output feeds that column. Presence switches the writer to a double-buffered source.
+    const std::optional<std::vector<std::vector<CoreCoord>>>& compute_cores_by_combine_column = std::nullopt);
 
 // Runtime argument override function. Semaphore kernel runtime-arg slots are written as
 // raw addresses; pass 0 for the fused moe_compute FullLocal path (unused by the writer).
