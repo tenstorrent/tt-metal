@@ -1,0 +1,39 @@
+{
+  "configuration": {
+    "layers": 60,
+    "cp": 8,
+    "tp": 4,
+    "cache_capacity": 262144,
+    "allocated_slots": 4,
+    "request_lengths": [
+      8192,
+      8192,
+      8192,
+      8192
+    ],
+    "packed_tokens": 32768,
+    "activation_storage": "default L1"
+  },
+  "after_smaller_shapes": {
+    "passed": false,
+    "operation": "MLP gate projection",
+    "error": "Statically allocated dataflow buffers clash with L1 buffers",
+    "live_buffer_address": 1087680,
+    "static_region_end": 1111680,
+    "core_range": "[0-0 - 11-7]"
+  },
+  "fresh_process": {
+    "passed": false,
+    "operation": "MLP gate projection",
+    "error": "Statically allocated dataflow buffers clash with L1 buffers",
+    "live_buffer_address": 1109952,
+    "static_region_end": 1111680,
+    "core_range": "[0-0 - 11-7]"
+  },
+  "measured_fallback": "GEMMA4_ACTIVATIONS_DRAM_ONLY=1; enabled explicitly per four-full-request scenario by GEMMA4_LOAD_FULL_DRAM=1 in the benchmark",
+  "measured_fallback_cases": [
+    "full4_early",
+    "full4_late",
+    "full4_mixed"
+  ]
+}

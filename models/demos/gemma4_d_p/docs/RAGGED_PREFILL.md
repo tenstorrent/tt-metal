@@ -139,6 +139,15 @@ There is no automatic retile or cache reinterpretation fallback.
 
 ## Validation and measurements
 
+For the 256K canonical 2K/4K/8K sweep and loaded early/late/mixed-prefix
+comparisons, see the [performance report](perf/ragged_load_2026_10_08/report.html)
+and [all charts as PDF](perf/ragged_load_2026_10_08/charts.pdf). The artifact includes
+every canonical chunk's timing, repeated loaded measurements, and a reproduction
+script. The study uses `tests/test_ragged_prefill_load.py`, with four populated
+256K slots and the default native paths as references. Four full packed 8K chunks
+exceed the default L1 budget; those measurements explicitly use the existing
+DRAM-activation override and are marked separately.
+
 For an editable perf-only workload, with the model/cache environment from
 `PREFILL_SERVICE.md`:
 
