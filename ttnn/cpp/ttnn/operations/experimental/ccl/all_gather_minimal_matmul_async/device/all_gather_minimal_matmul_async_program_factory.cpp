@@ -34,21 +34,44 @@ constexpr uint32_t kFsdpMuxKernelIdx = 7;
 
 // in0 common: [in0, bias, ag_input, sem_backward, sem_forward, barrier_sem,
 //              (ternary_a, ternary_b, broadcast)?, outputs...]
+constexpr uint32_t kIn0BufferSlot = 0;
+constexpr uint32_t kIn0BiasSlot = 1;
+constexpr uint32_t kIn0InputSlot = 2;
 constexpr uint32_t kIn0SemBackwardSlot = 3;
 constexpr uint32_t kIn0SemForwardSlot = 4;
 constexpr uint32_t kIn0BarrierSemSlot = 5;
+constexpr uint32_t kIn0TernaryASlot = kIn0BarrierSemSlot + 1;
 
 // in1 common: [in1, bias, (ternary_a, ternary_b, broadcast)?, (local_weight, fsdp_sem_bwd, fsdp_sem_fwd)?, outputs...]
+constexpr uint32_t kIn1BufferSlot = 0;
+constexpr uint32_t kIn1BiasSlot = 1;
 constexpr uint32_t kIn1FixedArgCount = 2;
 constexpr uint32_t kIn1TernaryArgCount = 3;
 constexpr uint32_t kIn1FsdpLocalWeightArgCount = 1;
+constexpr uint32_t kIn1FsdpSemaphoreArgCount = 2;
 
 // compute common: [scalar, broadcast_ternary_b] when fused ternary is enabled
 constexpr uint32_t kComputeScalarSlot = 0;
 constexpr uint32_t kComputeBroadcastSlot = 1;
 
+constexpr uint32_t in0_output_start_slot(bool has_fused_ternary) {
+    return kIn0BarrierSemSlot + 1u + (has_fused_ternary ? kIn1TernaryArgCount : 0u);
+}
+
+constexpr uint32_t in1_local_weight_slot(bool has_fused_ternary) {
+    return kIn1FixedArgCount + (has_fused_ternary ? kIn1TernaryArgCount : 0u);
+}
+
 constexpr uint32_t in1_fsdp_sem_backward_slot(bool has_fused_ternary) {
-    return kIn1FixedArgCount + (has_fused_ternary ? kIn1TernaryArgCount : 0u) + kIn1FsdpLocalWeightArgCount;
+    return in1_local_weight_slot(has_fused_ternary) + kIn1FsdpLocalWeightArgCount;
+}
+
+constexpr uint32_t in1_output_start_slot(bool has_fused_ternary, bool fsdp_fused) {
+    uint32_t slot = in1_local_weight_slot(has_fused_ternary);
+    if (fsdp_fused) {
+        slot += kIn1FsdpLocalWeightArgCount + kIn1FsdpSemaphoreArgCount;
+    }
+    return slot;
 }
 
 constexpr uint32_t in1_fsdp_sem_forward_slot(bool has_fused_ternary) {
@@ -1253,8 +1276,9 @@ tt::tt_metal::ProgramDescriptor all_gather_minimal_matmul_async_factory_helper(
         }
     }
 
-    // Common runtime args (same for all cores). Global-semaphore addresses and the fused-ternary
-    // scalar are re-applied in override_runtime_arguments.
+    // Common runtime args (same for all cores). Buffer addresses, global-semaphore addresses, and the
+    // fused-ternary scalar are re-applied in override_runtime_arguments.
+    // A repeated input Buffer* empties resolve_bindings; this workload path does not rebuild.
     // in0 common args: [in0_addr, in2_addr, in3_addr, sem_backward, sem_forward, barrier_sem, [ternary_a, ternary_b],
     // output_addrs...]
     {
@@ -1832,13 +1856,26 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const AllGatherMinimalMatmulAsyncParams& attributes,
     const AllGatherMinimalMatmulAsyncInputs& tensor_args,
-    std::vector<ttnn::Tensor>& /*output_tensor*/,
+    std::vector<ttnn::Tensor>& output_tensor,
     std::optional<ttnn::MeshCoordinate> /*mesh_coordinate*/) {
     // Derive has_fused_ternary from scalar presence, matching validate and create.
     // validate guarantees that scalar and tensors are always provided together.
     const bool has_fused_ternary = attributes.fused_ternary_scalar.has_value();
     // Same gate as create: persistent_weight_buffer is passed iff fsdp_cluster_axis is set.
     const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
+
+    // Repeated input buffers empty resolve_bindings, and this workload path does not rebuild.
+    auto required_address = [](const ttnn::Tensor& tensor) -> uint32_t {
+        auto* buffer = tensor.buffer();
+        TT_FATAL(buffer != nullptr, "all_gather_minimal_matmul_async cache hit requires an allocated buffer");
+        return buffer->address();
+    };
+    const uint32_t bias_addr =
+        tensor_args.bias_tensor.has_value() ? required_address(tensor_args.bias_tensor.value()) : 0u;
+    const uint32_t ag_output_addr = required_address(output_tensor.at(0));
+    const uint32_t input_addr = required_address(tensor_args.input_tensor);
+    const uint32_t in1_addr =
+        fsdp_fused ? required_address(output_tensor.at(1)) : required_address(tensor_args.weight_tensor);
 
     const uint32_t sem_backward = attributes.semaphore.at(0).address();
     const uint32_t sem_forward = attributes.semaphore.at(1).address();
@@ -1848,27 +1885,74 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
     auto& in0_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0SenderKernelIdx);
     auto& in0_receiver_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverFabricKernelIdx);
     auto& in0_receiver_no_fabric_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn0ReceiverNoFabricKernelIdx);
-    in0_sender_common[kIn0SemBackwardSlot] = sem_backward;
-    in0_sender_common[kIn0SemForwardSlot] = sem_forward;
-    in0_sender_common[kIn0BarrierSemSlot] = barrier_sem;
-    in0_receiver_fabric_common[kIn0SemBackwardSlot] = sem_backward;
-    in0_receiver_fabric_common[kIn0SemForwardSlot] = sem_forward;
-    in0_receiver_fabric_common[kIn0BarrierSemSlot] = barrier_sem;
-    in0_receiver_no_fabric_common[kIn0SemBackwardSlot] = sem_backward;
-    in0_receiver_no_fabric_common[kIn0SemForwardSlot] = sem_forward;
-    in0_receiver_no_fabric_common[kIn0BarrierSemSlot] = barrier_sem;
+    auto write_in0 = [&](auto& common) {
+        common[kIn0BufferSlot] = ag_output_addr;
+        common[kIn0BiasSlot] = bias_addr;
+        common[kIn0InputSlot] = input_addr;
+        common[kIn0SemBackwardSlot] = sem_backward;
+        common[kIn0SemForwardSlot] = sem_forward;
+        common[kIn0BarrierSemSlot] = barrier_sem;
+    };
+    write_in0(in0_sender_common);
+    write_in0(in0_receiver_fabric_common);
+    write_in0(in0_receiver_no_fabric_common);
+
+    auto& in1_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1SenderKernelIdx);
+    auto& in1_receiver_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx);
+    auto write_in1_fixed = [&](auto& common) {
+        common[kIn1BufferSlot] = in1_addr;
+        common[kIn1BiasSlot] = bias_addr;
+    };
+    write_in1_fixed(in1_sender_common);
+    write_in1_fixed(in1_receiver_common);
+
+    if (has_fused_ternary) {
+        const uint32_t ternary_a_addr = required_address(tensor_args.fused_ternary_input_a.value());
+        const uint32_t ternary_b_addr = required_address(tensor_args.fused_ternary_input_b.value());
+        auto write_ternary = [&](auto& common, uint32_t ternary_a_slot) {
+            common[ternary_a_slot] = ternary_a_addr;
+            common[ternary_a_slot + 1] = ternary_b_addr;
+        };
+        write_ternary(in0_sender_common, kIn0TernaryASlot);
+        write_ternary(in0_receiver_fabric_common, kIn0TernaryASlot);
+        write_ternary(in0_receiver_no_fabric_common, kIn0TernaryASlot);
+        write_ternary(in1_sender_common, kIn1FixedArgCount);
+        write_ternary(in1_receiver_common, kIn1FixedArgCount);
+    }
 
     if (fsdp_fused) {
+        const uint32_t local_weight_addr = required_address(tensor_args.weight_tensor);
+        const uint32_t local_weight_slot = in1_local_weight_slot(has_fused_ternary);
         const uint32_t fsdp_sem_backward_slot = in1_fsdp_sem_backward_slot(has_fused_ternary);
         const uint32_t fsdp_sem_forward_slot = in1_fsdp_sem_forward_slot(has_fused_ternary);
         const uint32_t fsdp_sem_backward = attributes.fsdp_semaphore.at(0).address();
         const uint32_t fsdp_sem_forward = attributes.fsdp_semaphore.at(1).address();
-        auto& in1_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1SenderKernelIdx);
-        auto& in1_receiver_common = tt::tt_metal::GetCommonRuntimeArgs(program, kIn1ReceiverKernelIdx);
-        in1_sender_common[fsdp_sem_backward_slot] = fsdp_sem_backward;
-        in1_sender_common[fsdp_sem_forward_slot] = fsdp_sem_forward;
-        in1_receiver_common[fsdp_sem_backward_slot] = fsdp_sem_backward;
-        in1_receiver_common[fsdp_sem_forward_slot] = fsdp_sem_forward;
+        auto write_fsdp = [&](auto& common) {
+            common[local_weight_slot] = local_weight_addr;
+            common[fsdp_sem_backward_slot] = fsdp_sem_backward;
+            common[fsdp_sem_forward_slot] = fsdp_sem_forward;
+        };
+        write_fsdp(in1_sender_common);
+        write_fsdp(in1_receiver_common);
+    }
+
+    const size_t mm_outputs_start = 1 + (fsdp_fused ? 1 : 0);
+    TT_FATAL(
+        output_tensor.size() > mm_outputs_start, "all_gather_minimal_matmul_async cache hit is missing matmul outputs");
+    const uint32_t in0_out_slot = in0_output_start_slot(has_fused_ternary);
+    const uint32_t in1_out_slot = in1_output_start_slot(has_fused_ternary, fsdp_fused);
+    const uint32_t last_offset = static_cast<uint32_t>(output_tensor.size() - mm_outputs_start - 1);
+    TT_FATAL(
+        in0_out_slot + last_offset < in0_sender_common.size() && in1_out_slot + last_offset < in1_sender_common.size(),
+        "all_gather_minimal_matmul_async output runtime-arg slots exceed common args");
+    for (size_t i = mm_outputs_start; i < output_tensor.size(); ++i) {
+        const uint32_t addr = required_address(output_tensor[i]);
+        const uint32_t offset = static_cast<uint32_t>(i - mm_outputs_start);
+        in0_sender_common[in0_out_slot + offset] = addr;
+        in0_receiver_fabric_common[in0_out_slot + offset] = addr;
+        in0_receiver_no_fabric_common[in0_out_slot + offset] = addr;
+        in1_sender_common[in1_out_slot + offset] = addr;
+        in1_receiver_common[in1_out_slot + offset] = addr;
     }
 
     // Same gate as create: compute common args exist only when the scalar is set.
