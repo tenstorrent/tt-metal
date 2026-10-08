@@ -374,7 +374,11 @@ def _run_demo(
             ):  # one more prefill (not timed) returning the logits of every user's last token
                 _, lg_ = generator.prefill_forward_text(input_tokens_prefill, return_logits=True, **prefill_kw)
                 lg_ = lg_[:batch_size].float()
-                torch.save(lg_, os.environ["DSV41_PREFILL_LOGITS"])
+                torch.save(
+                    lg_,
+                    os.environ["DSV41_PREFILL_LOGITS"]
+                    + f".{os.environ.get('DSV41_CUR_SCENARIO')}.umoe{os.environ.get('DSV41_PF_MHC_UMOE', 'd')}",
+                )
                 for u_ in range(min(batch_size, 2)):
                     v_, i_ = lg_[u_].topk(5)
                     logger.info(
