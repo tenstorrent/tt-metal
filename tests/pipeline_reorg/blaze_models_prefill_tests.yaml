@@ -1781,6 +1781,7 @@
       export PREFILL_TORUS_XY_CERTIFIED=1
       timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
         test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP multi-turn: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; every selected case is pretrained, so all would skip and leave the job green"; exit 1; }
+        export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py::test_mtp_multiturn_pcc -k "torus-xy-8x4 and pretrained and levels7" -vvv --tb=short
       '
     ) || exit $?
