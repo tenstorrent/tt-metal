@@ -130,11 +130,11 @@ TT_KERNEL void dataflow(
             noc.async_read_barrier();
             a.push_back(a_tiles);
         } else {
-            SharedInput inputs[1] = {{&a, a_tiles, value_block == 0 ? stage_a() : 0}};
+            kda::SharedInput inputs[1] = {{&a, a_tiles, value_block == 0 ? stage_a() : 0}};
             if (value_block == 0) {
-                multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
+                kda::multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
             } else {
-                receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
+                kda::receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
                 noc.async_read_barrier();
             }
         }

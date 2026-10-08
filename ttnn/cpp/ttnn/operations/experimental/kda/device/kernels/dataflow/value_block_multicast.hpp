@@ -13,6 +13,8 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 
+namespace kda {
+
 // Inputs that do not depend on the value columns are identical for every value block of a head. With
 // mcast_shared, value block 0 reads them from DRAM once and multicasts them into its siblings' buffers.
 // The slot addresses match on every core because every block makes the same reserve/push sequence on
@@ -86,3 +88,5 @@ FORCE_INLINE void receive_shared(
         input.buffer->push_back(input.tiles);
     }
 }
+
+}  // namespace kda
