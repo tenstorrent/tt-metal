@@ -46,10 +46,9 @@ std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) 
 // (compute_streaming.hpp). Routed dense, chunked and MLA calls choose their blocking (the program_config chunk sizes
 // were tuned for the legacy kernels; resolve_dense_recipe_blocking); joint, ring, exp ring and ring-distributed calls
 // keep them when the recipe supports them.
-// TODO(SDPA recipes on Wormhole): the recipes run on Blackhole only, so Wormhole keeps the legacy loops until the
-// Wormhole port lands; remove this arch gate (one use per entry point) with it.
 bool routes_to_recipes(const ttnn::Tensor& q) {
-    return q.storage_type() == StorageType::DEVICE && q.device()->arch() == tt::ARCH::BLACKHOLE;
+    return q.storage_type() == StorageType::DEVICE &&
+           (q.device()->arch() == tt::ARCH::BLACKHOLE || q.device()->arch() == tt::ARCH::WORMHOLE_B0);
 }
 
 // The compute config the legacy kernels would run with (the defaults every SDPA prefill op applies).
@@ -976,7 +975,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         operations::transformer::sdpa::detail::reject_auto_blocking_without_recipe(program_config);
     }
     bool routed = false;
-    if (!precision && routes_to_recipes(input_tensor_q)) {
+    // Exp ring recipes are Blackhole-only (a ring of four; Wormhole keeps the legacy exp ring kernels).
+    if (!precision && routes_to_recipes(input_tensor_q) && input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE) {
         const auto legacy_config = legacy_compute_config(input_tensor_q, compute_kernel_config);
         routed = !ttnn::prim::detail::exp_ring_streaming_compute_supported(
             program_config.q_chunk_size / 32,
@@ -1217,7 +1217,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx,
     std::optional<SDPAPrecision> precision) {
-    // Without precision, Blackhole runs STANDARD, or ACCURATE with FP32 DEST (this op always left the streaming
+    // Without precision, the op runs STANDARD, or ACCURATE with FP32 DEST (this op always left the streaming
     // kernels for the legacy loop).
     const bool routed = !precision && routes_to_recipes(input_tensor_q);
     if (routed) {
