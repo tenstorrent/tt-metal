@@ -15,7 +15,9 @@ Vocabulary
 import torch
 
 MESH_ROWS = 4
-MAX_USERS_PER_ROW = 32  # mHC kernels: at most 32 users per mesh row
+MAX_USERS_PER_ROW = (
+    16  # largest supported build: batch 64 (16 users per mesh row); B=128 (32) is no longer supported by the adapter
+)
 PAGE_TOKENS = 128
 SUPPORTED_BATCHES = (
     4,
@@ -62,7 +64,7 @@ def padded_batch(max_num_seqs: int, rows: int = MESH_ROWS) -> int:
     b = -(-max_num_seqs // rows) * rows
     if b // rows > MAX_USERS_PER_ROW:
         raise ValueError(
-            f"max_num_seqs {max_num_seqs} needs {b // rows} users per mesh row; at most {MAX_USERS_PER_ROW} (batch 128)"
+            f"max_num_seqs {max_num_seqs} needs {b // rows} users per mesh row; at most {MAX_USERS_PER_ROW} (batch 64)"
         )
     return b
 
