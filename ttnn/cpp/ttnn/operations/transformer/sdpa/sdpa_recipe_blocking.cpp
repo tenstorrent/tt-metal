@@ -120,15 +120,17 @@ double block_overhead(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t 
 
 // The recipe's own circular buffers and build flags (recipe_compute_program), which dense, joint
 // and the B-E ring and exp-ring program factories adopt as their compute layout.
-RecipeBuild recipe_build(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles) {
+RecipeBuild recipe_build(
+    const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, uint32_t d_tiles, uint32_t vd_tiles = 0) {
     static std::mutex mutex;
-    static std::map<std::tuple<uint8_t, uint8_t, uint32_t, uint32_t, uint32_t>, RecipeBuild> memo;
+    static std::map<std::tuple<uint8_t, uint8_t, uint32_t, uint32_t, uint32_t, uint32_t>, RecipeBuild> memo;
     const auto key = std::make_tuple(
         static_cast<uint8_t>(policy.selection.recipe),
         static_cast<uint8_t>(policy.selection.kv_storage),
         q_tiles,
         k_tiles,
-        d_tiles);
+        d_tiles,
+        vd_tiles);
     {
         std::lock_guard lock(mutex);
         if (auto it = memo.find(key); it != memo.end()) {
@@ -136,7 +138,7 @@ RecipeBuild recipe_build(const PrecisionPolicy& policy, uint32_t q_tiles, uint32
         }
     }
     const CoreRangeSet core(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    const auto program = recipe_compute_program(policy, core, 1, q_tiles, k_tiles, d_tiles);
+    const auto program = recipe_compute_program(policy, core, 1, q_tiles, k_tiles, d_tiles, std::nullopt, vd_tiles);
     RecipeBuild build{.cb_bytes = recipe_cb_bytes(program)};
     for (const auto& cb : program.cbs) {
         build.fused_cb_bytes += recipe_fused_cb(cb) ? cb.total_size : 0;
@@ -234,7 +236,7 @@ RecipeL1Estimate recipe_l1_bytes(
         case RecipeOp::Joint: {
             const uint32_t rows =
                 recipe_compute_q_tiles(policy, q_tiles, k_tiles, context.mask_page_bytes > 0, context.extra_bytes > 0);
-            const auto build = recipe_build(policy, rows, k_tiles, d_tiles);
+            const auto build = recipe_build(policy, rows, k_tiles, d_tiles, context.vd_tiles);
             // attn_mask CB: two row groups when they fit, one otherwise (sdpa_recipe.cpp). The minimum layout
             // also drops the fused chunks' CBs (check_recipe_l1_fit).
             const uint64_t mask_group = uint64_t{recipe_mask_group_rows(policy)} * k_tiles * context.mask_page_bytes;
@@ -287,20 +289,21 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                 continue;
             }
             // Dense/joint L1 grows with Q and K: stop at the first K that does not fit.
-            if (dense && recipe_l1_bytes(
-                             p.op,
-                             p.policy,
-                             qt,
-                             kt,
-                             p.d_tiles,
-                             {.mask_page_bytes = p.mask_page_bytes, .extra_bytes = p.extra_l1_bytes})
-                                 .minimum > p.l1_bytes) {
+            if (dense &&
+                recipe_l1_bytes(
+                    p.op,
+                    p.policy,
+                    qt,
+                    kt,
+                    p.d_tiles,
+                    {.mask_page_bytes = p.mask_page_bytes, .extra_bytes = p.extra_l1_bytes, .vd_tiles = p.vd_tiles})
+                        .minimum > p.l1_bytes) {
                 break;
             }
             any_fit = true;
             const uint32_t q_chunk = qt * kTile;
             const uint32_t k_chunk = kt * kTile;
-            const RecipeBuild build = recipe_build(p.policy, qt, kt, p.d_tiles);
+            const RecipeBuild build = recipe_build(p.policy, qt, kt, p.d_tiles, dense ? p.vd_tiles : 0);
             const double block = block_cost(p.policy, qt, kt, p.d_tiles, build, dense);
             // K tiles of a Q chunk's first K/V block: the chunk, or the whole (primary) sequence when shorter.
             const uint32_t first_k_tiles = std::min(kt, std::max(1u, div_up(p.k_rows, kTile)));
@@ -332,7 +335,10 @@ std::vector<RecipeBlocking> recipe_blocking_candidates(const RecipeBlockingProbl
                         chain == 0 ? div_up(batch_heads * jobs_per_head, cores) : div_up(jobs_per_head, chain),
                         div_up(p.k_rows + p.joint_k_rows, k_chunk),
                         p.grid,
-                        RecipeL1Context{.mask_page_bytes = p.mask_page_bytes, .extra_bytes = p.extra_l1_bytes});
+                        RecipeL1Context{
+                            .mask_page_bytes = p.mask_page_bytes,
+                            .extra_bytes = p.extra_l1_bytes,
+                            .vd_tiles = p.vd_tiles});
                     break;
                 }
                 case RecipeOp::Ring: {
@@ -513,7 +519,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const std::optional<SDPAProgramConfig>& program_config,
     const Tensor* attn_mask,
     uint64_t reserved_l1_bytes,
-    const RecipeKeyRange* key_range) {
+    const RecipeKeyRange* key_range,
+    const RecipeDenseOptions* options) {
     if (!recipe_blocking_requested(program_config) || q.storage_type() != StorageType::DEVICE) {
         return program_config;
     }
@@ -526,15 +533,22 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
         .exp_approx_mode = std::nullopt});
     auto problem = base_problem(joint_q ? RecipeOp::Joint : RecipeOp::Dense, policy, q, config);
     problem.q_rows = q.padded_shape()[2];
-    problem.k_rows = k.padded_shape()[2];
+    // A paged cache's K length is its blocks per sequence x block size.
+    problem.k_rows = key_range ? div_up(recipe_k_rows(k, *key_range), kTile) * kTile : k.padded_shape()[2];
     problem.joint_q_rows = joint_q ? joint_q->padded_shape()[2] : 0;
     problem.joint_k_rows = joint_k ? joint_k->padded_shape()[2] : 0;
+    if (options && options->head_dim_v) {
+        problem.vd_tiles = div_up(options->head_dim_v, kTile);
+    }
     const uint64_t free_l1 = recipe_free_l1(*device);
     problem.l1_bytes = free_l1 > reserved_l1_bytes ? free_l1 - reserved_l1_bytes : 0;
     problem.mask_page_bytes = attn_mask ? attn_mask->buffer()->page_size() : 0;
     if (key_range && key_range->active()) {
         problem.mask_page_bytes = 576;  // BFP4 mask tiles
         problem.extra_l1_bytes = recipe_key_range_extra_bytes(*key_range);
+    }
+    if (options) {
+        problem.extra_l1_bytes += recipe_dense_options_extra_bytes(*options);
     }
     const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
     return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");

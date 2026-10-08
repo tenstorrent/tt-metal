@@ -24,11 +24,11 @@
 
 #include <cstdint>
 
-// Each dataflow kernel's half of the scratch CB (the writer's starts SDPA_RECIPE_SCRATCH_WRITER bytes in): 64 B
-// slots for the Q offset and a page-table row, then cu_window_seqlens.
+// Each dataflow kernel's half of the scratch CB (the writer's starts SDPA_RECIPE_SCRATCH_WRITER bytes in): a slot for
+// the Q offset, then cu_window_seqlens. The reader's page-table row follows both halves
+// (SDPA_RECIPE_PAGE_TABLE_OFFSET).
 struct RecipeScratch {
     static constexpr uint32_t Offset = 0;
-    static constexpr uint32_t PageTable = 64;
     static constexpr uint32_t Segments = 128;
 };
 
