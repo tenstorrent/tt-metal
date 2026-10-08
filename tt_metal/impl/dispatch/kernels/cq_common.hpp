@@ -137,6 +137,15 @@ FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(
 
 constexpr bool use_fabric(uint64_t fabric_router_xy) { return fabric_router_xy != 0; }
 
+#ifdef ARCH_BLACKHOLE
+// NOC_RET_ADDR_MID holds the high 32 bits of the destination and the with_state issuers only reprogram the low
+// 32, so a destination that carries past 2^32 part way through a transfer would keep writing into the previous
+// 4GB window.
+FORCE_INLINE void cq_noc_set_ret_addr_mid(uint32_t noc, uint32_t cmd_buf, uint64_t dst_addr) {
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_MID, (uint32_t)(dst_addr >> 32));
+}
+#endif
+
 // Compose a multicast destination from a host-packed NOC_MULTICAST_ENCODING
 // rectangle and a local offset. On XY backends this is the ordinary packed
 // composition. Under ATT a packed rectangle must not go through
@@ -154,14 +163,25 @@ template <
     enum CQNocWait wait = CQ_NOC_WAIT,
     enum CQNocSend send = CQ_NOC_SEND,
     uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
-    bool update_counters = false>
+    bool update_counters = false,
+    bool set_ret_mid = false>
 FORCE_INLINE void cq_noc_async_write_with_state(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
+    static_assert(!set_ret_mid || wait, "set_ret_mid writes NOC_RET_ADDR_MID, which needs the ready wait first");
     if constexpr (wait) {
         WAYPOINT("CNSW");
         while (!noc_cmd_buf_ready(noc, cmd_buf));
         WAYPOINT("CNSD");
     }
+
+#ifdef ARCH_BLACKHOLE
+    // Only for callers whose MID comes from this dst_addr. A caller that points MID somewhere else, such as a
+    // PCIe batch opened by cq_noc_async_write_init_state_pcie, must leave this off or its routing is lost.
+    // The command buffer has to be idle to accept this, which is what the wait above guarantees.
+    if constexpr (set_ret_mid) {
+        cq_noc_set_ret_addr_mid(noc, cmd_buf, dst_addr);
+    }
+#endif
 
     noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, flags, CQ_NOC_send, CQ_NOC_wait, false>(
         noc, src_addr, dst_addr, size, ndests);
@@ -206,22 +226,27 @@ FORCE_INLINE void cq_noc_async_wwrite_with_state(
 // flush_last_transfer sets the flush packet tag on the final transfer so that a credit atomic issued after
 // this call -- typically from CBWriter::release_pages -- cannot commit to L1 ahead of the payload.
 // No-op on tt-1xx, which has no packet tags.
+
+// send is exposed so a test can drive the address walk without putting traffic on the wire. Production callers
+// leave it at CQ_NOC_SEND.
 template <
     bool write_last_packet = true,
     bool update_counters = false,
     enum CQNocWait wait_first = CQ_NOC_WAIT,
     uint32_t cmd_buf = NCRISC_WR_CMD_BUF,
-    bool flush_last_transfer = false>
+    bool flush_last_transfer = false,
+    enum CQNocSend send = CQ_NOC_SEND,
+    bool set_ret_mid = false>
 inline uint32_t cq_noc_async_write_with_state_any_len(
     uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1, uint8_t noc = noc_index) {
     if (size > NOC_MAX_BURST_SIZE) {
-        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, CQ_NOC_SEND, cmd_buf, update_counters>(
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, wait_first, send, cmd_buf, update_counters, set_ret_mid>(
             src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests);
         src_addr += NOC_MAX_BURST_SIZE;
         dst_addr += NOC_MAX_BURST_SIZE;
         size -= NOC_MAX_BURST_SIZE;
         while (size > NOC_MAX_BURST_SIZE) {
-            cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
+            cq_noc_async_write_with_state<CQ_NOC_SnDl, CQ_NOC_WAIT, send, cmd_buf, update_counters, set_ret_mid>(
                 src_addr, dst_addr, NOC_MAX_BURST_SIZE, ndests, noc);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
@@ -234,7 +259,7 @@ inline uint32_t cq_noc_async_write_with_state_any_len(
             noc_set_packet_tags<cmd_buf>(/*snoop=*/false, /*flush=*/true);
         }
 #endif
-        cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, CQ_NOC_SEND, cmd_buf, update_counters>(
+        cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_WAIT, send, cmd_buf, update_counters, set_ret_mid>(
             src_addr, dst_addr, size, ndests, noc);
 #if defined(ARCH_QUASAR)
         if constexpr (flush_last_transfer) {
@@ -269,6 +294,32 @@ FORCE_INLINE void cq_noc_async_write_init_state(
 
     noc_write_init_state<cmd_buf, cmd_flags>(noc, vc);
     cq_noc_async_write_with_state<flags, CQ_NOC_wait, CQ_NOC_send, cmd_buf>(src_addr, dst_addr, size, ndests);
+}
+
+// Same as cq_noc_async_write_init_state, but for a destination routed through the PCIe core. The with_state
+// issuers do not program NOC_RET_ADDR_MID, so the routing bit is set once here and stays for the whole
+// batch. Pair every call with noc_async_write_clear_pcie_state on the same command buffer.
+template <uint32_t cmd_buf = NCRISC_WR_CMD_BUF>
+FORCE_INLINE void cq_noc_async_write_init_state_pcie(uint64_t dst_noc_addr, uint8_t noc = noc_index) {
+#ifdef ARCH_BLACKHOLE
+    WAYPOINT("CNIW");
+    uint32_t heartbeat = 0;
+    while (!noc_cmd_buf_ready(noc, cmd_buf)) {
+        IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
+    }
+    WAYPOINT("CNID");
+
+    DEBUG_SANITIZE_NO_LINKED_TRANSACTION(noc, DEBUG_SANITIZE_NOC_UNICAST);
+
+    noc_write_init_state<cmd_buf, CQ_NOC_mkp>(noc, NOC_UNICAST_WRITE_VC);
+    noc_cmd_buf_set_ret_addr_mid_pcie(noc, cmd_buf, dst_noc_addr);
+    NOC_CMD_BUF_WRITE_REG(
+        noc, cmd_buf, NOC_RET_ADDR_COORDINATE, (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+#else
+    // Only Blackhole keeps PCIe routing in a MID register that the with_state issuers leave alone, so
+    // everywhere else the ordinary init_state already programs the routing.
+    cq_noc_async_write_init_state<CQ_NOC_sNdl, false, false, cmd_buf>(0, dst_noc_addr, 0, 1, noc);
+#endif
 }
 // Similar to the above function but this one takes noc-xy coordinates as a separate argument to permit 64-bit
 // addressing at NOC tile

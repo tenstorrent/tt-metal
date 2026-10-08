@@ -5,6 +5,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_sliding_window_work_plan.cpp
+    test_quasar_matmul_unified_subblock.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
@@ -33,9 +34,11 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_constraints.cpp
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
+    test_layernorm_stats_selector.cpp
     test_matmul.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
+    test_program_cache_l1.cpp
     test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp

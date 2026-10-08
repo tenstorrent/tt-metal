@@ -53,12 +53,18 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must have TILE layout, got {}", bias.layout());
     TT_FATAL(bias.dtype() == DataType::BFLOAT16, "Bias tensor must have BFLOAT16 dtype, got {}", bias.dtype());
 
-    // Validate input shape: [B, hidden_dim] with B=32
+    // Validate input shape: one physical tile of up to 32 logical tokens. The
+    // kernel always computes that tile; sub-tile decode batches consume only
+    // their logical rows.
     auto input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 2, "Input tensor must be rank 2, got rank {}", input_shape.rank());
     auto B = input_shape[0];
     auto hidden_dim = input_shape[1];
-    TT_FATAL(B == 32, "topk_router_gpt only supports batch_size=32 (hardcoded for decode mode), got {}", B);
+    TT_FATAL(B >= 1 && B <= 32, "topk_router_gpt requires batch_size in [1, 32], got {}", B);
+    TT_FATAL(
+        input.padded_shape()[0] == 32,
+        "topk_router_gpt requires one physical 32-row input tile, got padded batch size {}",
+        input.padded_shape()[0]);
     TT_FATAL(hidden_dim % 32 == 0, "Input hidden_dim must be divisible by 32 (tile size), got {}", hidden_dim);
 
     // Validate weight shape: [hidden_dim, num_experts]
@@ -80,6 +86,10 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(bias_shape.rank() == 2, "Bias tensor must be rank 2, got rank {}", bias_shape.rank());
     TT_FATAL(bias_shape[0] == B, "Bias tensor dim 0 must match batch size {}, got {}", B, bias_shape[0]);
     TT_FATAL(
+        bias.padded_shape()[0] == 32,
+        "topk_router_gpt requires one physical 32-row bias tile, got padded batch size {}",
+        bias.padded_shape()[0]);
+    TT_FATAL(
         bias_shape[1] == attrs.num_experts,
         "Bias tensor dim 1 must match num_experts {}, got {}",
         attrs.num_experts,
@@ -98,15 +108,18 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
 
     uint32_t k_padded = tt::round_up(attrs.k, 8);
 
-    // Slot 0: indices_rm [B, k_padded] uint16 RM
-    auto idx_spec = tt::tt_metal::TensorSpec(
-        ttnn::Shape({B, k_padded}),
-        tt::tt_metal::TensorLayout(DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm));
+    const auto logical_shape = ttnn::Shape({B, attrs.k});
+    const auto padded_shape = ttnn::Shape({32, k_padded});
 
-    // Slot 1: weights_rm [B, k_padded] bf16 RM
-    auto wgt_spec = tt::tt_metal::TensorSpec(
-        ttnn::Shape({B, k_padded}),
-        tt::tt_metal::TensorLayout(DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm));
+    // The data-movement kernel emits all 32 physical rows. Preserve the
+    // caller's logical B while allocating those rows in the RM backing buffer.
+    const auto idx_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+        DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm, logical_shape, padded_shape);
+    auto idx_spec = tt::tt_metal::TensorSpec(logical_shape, idx_layout);
+
+    const auto wgt_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+        DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm, logical_shape, padded_shape);
+    auto wgt_spec = tt::tt_metal::TensorSpec(logical_shape, wgt_layout);
 
     return {idx_spec, wgt_spec};
 }

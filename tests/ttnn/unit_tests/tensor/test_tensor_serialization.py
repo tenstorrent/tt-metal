@@ -118,3 +118,73 @@ def test_sharded_tensor_serialization(tmp_path, device, tensor_spec):
     assert ttnn_tensor_from_file.spec == tensor_spec
     torch_tensor_from_file = ttnn.to_torch(ttnn_tensor_from_file)
     assert torch.allclose(py_tensor, torch_tensor_from_file)
+
+
+def _dump_host_tensor(tmp_path, name="tensor.tensorbin"):
+    torch_tensor = torch.arange(32 * 64, dtype=torch.float32).reshape(32, 64)
+    tt_tensor = ttnn.Tensor(torch_tensor, ttnn.float32)
+    file_name = tmp_path / name
+    ttnn.dump_tensor(str(file_name), tt_tensor)
+    return file_name, torch_tensor
+
+
+def test_dump_tensor_leaves_only_the_final_file(tmp_path):
+    """dump_tensor writes through a temporary sibling and renames it into place, so a reader
+    never sees a half-written file; nothing but the final file may remain."""
+    file_name, torch_tensor = _dump_host_tensor(tmp_path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [file_name.name]
+    assert torch.equal(ttnn.to_torch(ttnn.load_tensor(str(file_name))), torch_tensor)
+
+
+def test_dump_tensor_replaces_an_existing_file_atomically(tmp_path):
+    """Replacing a file must publish the new content without touching the inode a loaded tensor
+    is still mapped from; an in-place writer would truncate under that reader."""
+    file_name, torch_tensor = _dump_host_tensor(tmp_path)
+    original = ttnn.load_tensor(str(file_name))
+    replacement = torch_tensor + 1
+    ttnn.dump_tensor(str(file_name), ttnn.Tensor(replacement, ttnn.float32))
+    assert sorted(p.name for p in tmp_path.iterdir()) == [file_name.name]
+    assert torch.equal(ttnn.to_torch(original), torch_tensor)
+    assert torch.equal(ttnn.to_torch(ttnn.load_tensor(str(file_name))), replacement)
+
+
+def test_dump_tensor_keeps_the_replaced_files_permissions(tmp_path):
+    """The temporary file is created with the destination's mode, so replacing a 0600 cache file
+    under umask 022 does not publish it as 0644; a new file still follows the umask."""
+    file_name, torch_tensor = _dump_host_tensor(tmp_path)
+    file_name.chmod(0o600)
+    old_umask = os.umask(0o022)
+    try:
+        _dump_host_tensor(tmp_path)
+        fresh, _ = _dump_host_tensor(tmp_path, name="fresh.tensorbin")
+    finally:
+        os.umask(old_umask)
+    assert file_name.stat().st_mode & 0o777 == 0o600
+    assert fresh.stat().st_mode & 0o777 == 0o644
+    assert torch.equal(ttnn.to_torch(ttnn.load_tensor(str(file_name))), torch_tensor)
+
+
+@pytest.mark.parametrize("keep_fraction", [0.999, 0.5])
+def test_load_tensor_rejects_a_file_truncated_after_its_header(tmp_path, keep_fraction, expect_error):
+    """A header-complete file whose data section is cut short must raise, not load a buffer that
+    runs past the mapping (the segfault seen on cold multi-process cache builds)."""
+    file_name, _ = _dump_host_tensor(tmp_path)
+    data = file_name.read_bytes()
+    truncated = tmp_path / "truncated.tensorbin"
+    truncated.write_bytes(data[: int(len(data) * keep_fraction)])
+    with expect_error(RuntimeError, "truncated or corrupt"):
+        ttnn.load_tensor(str(truncated))
+
+
+def test_as_tensor_regenerates_a_truncated_cache_file(tmp_path):
+    torch_tensor = torch.arange(32 * 64, dtype=torch.float32).reshape(32, 64)
+    cache_stem = tmp_path / "weight"
+    cached = ttnn.as_tensor(torch_tensor, dtype=ttnn.float32, cache_file_name=str(cache_stem))
+    (cache_file,) = tmp_path.glob("weight_*.tensorbin")
+    assert torch.equal(ttnn.to_torch(cached), torch_tensor)
+    data = cache_file.read_bytes()
+    cache_file.write_bytes(data[: len(data) // 2])
+    regenerated = ttnn.as_tensor(torch_tensor, dtype=ttnn.float32, cache_file_name=str(cache_stem))
+    assert torch.equal(ttnn.to_torch(regenerated), torch_tensor)
+    assert cache_file.read_bytes() == data
+    assert sorted(p.name for p in tmp_path.iterdir()) == [cache_file.name]

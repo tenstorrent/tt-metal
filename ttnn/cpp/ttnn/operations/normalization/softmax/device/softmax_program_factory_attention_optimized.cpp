@@ -81,6 +81,8 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     const tt::DataFormat mask_cb_data_format =
         has_mask ? datatype_to_dataformat_converter(tensor_args.mask.value().dtype()) : tt::DataFormat::Float16_b;
     const std::uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
+    // The writer fills the padding tile with bfloat16 -inf whatever the mask dtype.
+    const std::uint32_t mask_padded_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
 
     const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
@@ -285,9 +287,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     }
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MASK_PADDED,
-        .entry_size = mask_tile_size,
+        .entry_size = mask_padded_tile_size,
         .num_entries = in5_t,
-        .data_format_metadata = mask_cb_data_format});
+        .data_format_metadata = tt::DataFormat::Float16_b});
     if (attributes.numeric_stable) {
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = MAX,
@@ -469,7 +471,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         add_unpack(IN0, in0_cb_data_format);
         add_unpack(MAX_SCALER, max_scaler_cb_data_format);
         add_unpack(SUM_SCALER, sum_scaler_cb_data_format);
-        add_unpack(MASK_PADDED, mask_cb_data_format);
+        add_unpack(MASK_PADDED, tt::DataFormat::Float16_b);
         add_unpack(EXPS, im_cb_data_format);
         add_unpack(RECIP_SUM_EXPS, im_cb_data_format);
         if (has_mask) {

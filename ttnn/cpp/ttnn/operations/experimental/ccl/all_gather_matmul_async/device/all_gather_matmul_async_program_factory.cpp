@@ -153,7 +153,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
         {std::move(program),
          shared_variables_t{
              .matmul_shared_variables = std::move(matmul_shared_variables),
-             .all_gather_async_shared_variables = std::move(all_gather_async_shared_variables)}});
+             .all_gather_async_shared_variables = all_gather_async_shared_variables}});
 }
 
 AllGatherMatmulAsyncMeshWorkloadFactory::cached_mesh_workload_t
@@ -218,7 +218,7 @@ AllGatherMatmulAsyncMeshWorkloadFactory::create_mesh_workload(
             operation_attributes.matmul.untilize_out);
 
         workload.add_program(single_coord_range, std::move(cached_program.program));
-        shared_variables[single_coord_range] = std::move(cached_program.shared_variables);
+        shared_variables.emplace(single_coord_range, std::move(cached_program.shared_variables));
     }
 
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
@@ -230,6 +230,11 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
     const AllGatherMatmulAsyncInputs& tensor_args,
     AllGatherMatmulAsyncResult& tensor_return_value) {
     // Fuse the override runtime arguments callbacks
+    const auto ccl_args = AllGatherProgramArtifacts::collect_runtime_args(
+        operation_attributes.all_gather_async_attributes.barrier_semaphore,
+        operation_attributes.all_gather_async_attributes.semaphore,
+        tensor_args.input_tensor,
+        tensor_return_value[0]);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
@@ -264,22 +269,7 @@ void AllGatherMatmulAsyncMeshWorkloadFactory::override_runtime_arguments(
                 }},
             shared_vars.matmul_shared_variables);
 
-        auto& all_gather_async_shared_variables = shared_vars.all_gather_async_shared_variables;
-        const auto& all_gather_async_attributes = operation_attributes.all_gather_async_attributes;
-        all_gather_async_minimal_default_helper_override_runtime_arguments(
-            program,
-            all_gather_async_shared_variables.reader_kernel_id,
-            all_gather_async_shared_variables.writer_kernel_id,
-            all_gather_async_shared_variables.all_cores,
-            all_gather_async_attributes.num_links,
-            all_gather_async_shared_variables.num_directions_per_link,
-            all_gather_async_shared_variables.num_workers_per_direction,
-            all_gather_async_shared_variables.num_mux_cores_per_direction_per_link,
-            all_gather_async_shared_variables.num_cores_per_link,
-            all_gather_async_attributes.barrier_semaphore,
-            all_gather_async_attributes.semaphore,
-            tensor_args.input_tensor,
-            tensor_return_value[0]);
+        shared_vars.all_gather_async_shared_variables.override_runtime_arguments(ccl_args);
     }
 }
 

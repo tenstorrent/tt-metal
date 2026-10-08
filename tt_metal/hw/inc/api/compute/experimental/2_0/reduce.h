@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "sanitizer/api.h"
 
 #ifdef TRISC_MATH
 #include "llk_math_reduce_api.h"
@@ -51,6 +52,7 @@ template <
     DataFormat OF,
     TensorShape OS>
 ALWI void reduce_init(LLKOperand<DF, DS> /*data*/, LLKOperand<OF, OS> /*out*/) {
+    SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_init: illegal data tile shape.");
     static_assert(is_legal_tile_shape(OS), "reduce_init: illegal output tile shape.");
     UNPACK((llk_unpack_AB_reduce_init_impl<reduce_type, reduce_dim>(DS)));
@@ -84,6 +86,7 @@ ALWI void reduce_tile(
     std::uint32_t itile,
     std::uint32_t itile_scaler,
     std::uint32_t idst) {
+    SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_tile: illegal data tile shape.");
     static_assert(is_legal_tile_shape(SS), "reduce_tile: illegal scaler tile shape.");
     // REDUCE_ROW for any pool other than MAX physically swaps the SrcA/SrcB byte streams in the LLK, but the
@@ -129,6 +132,7 @@ ALWI void reduce_block(
     std::uint32_t itile_scaler,
     std::uint32_t start_idst,
     std::uint32_t ntiles) {
+    SAN_HOOK(unsupported());
     static_assert(is_legal_tile_shape(DS), "reduce_block: illegal data tile shape.");
     static_assert(is_legal_tile_shape(SS), "reduce_block: illegal scaler tile shape.");
     for (std::uint32_t i = 0; i < ntiles; ++i) {
@@ -153,6 +157,7 @@ ALWI void reduce_block(
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM_FACES) {
+    SAN_HOOK(unsupported());
     MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(
         idst, tensor_shape_from_num_faces(MAX_FACE_R_DIM, num_faces))));
 }
@@ -171,6 +176,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = MAX_NUM
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+    SAN_HOOK(unsupported());
     MATH((llk_math_reduce<reduce_type, reduce_dim, is_fp32_dest_acc_en, MATH_FIDELITY>(idst, tensor_shape)));
 }
 
@@ -180,6 +186,7 @@ ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tenso
  */
 // clang-format on
 ALWI void reduce_uninit() {
+    SAN_HOOK(unsupported());
     MATH((llk_math_reduce_uninit()));
     PACK((llk_pack_reduce_mask_clear()));
 }

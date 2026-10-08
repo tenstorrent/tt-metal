@@ -29,7 +29,8 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     model._prefill_trace_controller = (
         SimpleNamespace(layer_ack=lambda idx: events.append(("ack", idx))) if ack_mode == "segmented_trace" else None
     )
-    model.mesh_config = SimpleNamespace(cp_degree=8)
+    model.mesh_config = SimpleNamespace(cp_degree=8, tp_degree=1)
+    model.ccl_manager = None
     model._get_rope_mats = lambda idx, **kwargs: (idx, idx)
 
     def layer(idx):

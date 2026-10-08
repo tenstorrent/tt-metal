@@ -525,7 +525,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    const auto& cores = tt::tt_metal::grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -1027,10 +1027,18 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         std::vector<KernelSpecName> kernels_here;
 
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // Single-row/col clamp (ported from the experimental/quasar 2D matmul factory): the mcast "+1"
+        // corner (the first receiver past the sender) does not exist when a dimension has a single core --
+        // e.g. the 2-core emulator (2x1 grid), where start_core_y+1 = (0,1) has no core and
+        // worker_core_from_logical_core throws "No core coordinate found at (0,1)". Clamp the +1 to the
+        // sender's own coord when that dimension is single-core; the degenerate mcast then covers 0 receivers
+        // so the clamped rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device.worker_core_from_logical_core(left_core);
@@ -1940,7 +1948,7 @@ ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory:
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
     const tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -2168,7 +2176,7 @@ create_program_mcast_in0_in1(
     CoreRange all_cores(
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
-    const auto& cores = grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
+    const auto& cores = tt::tt_metal::grid_to_cores(all_cores.start_coord, all_cores.end_coord, true);
     //////////////////////////////////////////////////////////////////////////////////////////
     //       IN0 SENDER (interleaved only) and IN1 SENDER (both interleaved and sharded)
     //////////////////////////////////////////////////////////////////////////////////////////
@@ -3029,13 +3037,13 @@ create_program_mcast_in0_in1(
 
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
-    const auto& in0_sender_interleaved_cores = grid_to_cores(
+    const auto& in0_sender_interleaved_cores = tt::tt_metal::grid_to_cores(
         in0_sender_interleaved.start_coord, in0_sender_interleaved.end_coord, true);  // Only used for interleaved in0
-    const auto& in1_sender_cores = grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
+    const auto& in1_sender_cores = tt::tt_metal::grid_to_cores(in1_sender.start_coord, in1_sender.end_coord, true);
     const auto& in1_receiver_cores = corerange_to_cores(in1_receiver, std::nullopt, true);
     std::vector<CoreCoord> in1_receiver_other_cores;
     if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
-        in1_receiver_other_cores = grid_to_cores(
+        in1_receiver_other_cores = tt::tt_metal::grid_to_cores(
             in0_receiver_in1_receiver_interleaved_other_cores.value().start_coord,
             in0_receiver_in1_receiver_interleaved_other_cores.value().end_coord,
             true);
@@ -3043,10 +3051,18 @@ create_program_mcast_in0_in1(
 
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
-        CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
+        // Single-row/col clamp (ported from the experimental/quasar 2D matmul factory): the mcast "+1"
+        // corner (the first receiver past the sender) does not exist when a dimension has a single core --
+        // e.g. the 2-core emulator (2x1 grid), where start_core_y+1 = (0,1) has no core and
+        // worker_core_from_logical_core throws "No core coordinate found at (0,1)". Clamp the +1 to the
+        // sender's own coord when that dimension is single-core; the degenerate mcast then covers 0 receivers
+        // so the clamped rectangle is unused. Multi-row/col grids (num_cores_with_work_* > 1) are unchanged.
+        CoreCoord left_core_plus_one = {
+            (std::size_t)start_core_x + (num_cores_with_work_c > 1 ? 1u : 0u), (std::size_t)core.y};
         CoreCoord right_core = {(std::size_t)start_core_x + num_cores_with_work_c - 1, (std::size_t)core.y};
         CoreCoord top_core = {(std::size_t)core.x, (std::size_t)start_core_y};
-        CoreCoord top_core_plus_one = {(std::size_t)core.x, (std::size_t)start_core_y + 1};
+        CoreCoord top_core_plus_one = {
+            (std::size_t)core.x, (std::size_t)start_core_y + (num_cores_with_work_r > 1 ? 1u : 0u)};
         CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)start_core_y + num_cores_with_work_r - 1};
 
         auto left_core_physical = device.worker_core_from_logical_core(left_core);

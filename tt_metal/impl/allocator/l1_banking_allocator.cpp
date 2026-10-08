@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <functional>
 #include <iterator>
+#include <numeric>
 #include <memory>
 #include <optional>
 #include <random>
@@ -284,6 +285,22 @@ AllocatorConfig L1BankingAllocator::generate_config(
         const auto noc_coord =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_id, core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
+    }
+    // With NoC address translation tables a worker is reached by an endpoint selector, and the tables list the workers
+    // in logical row-major order; hardware that walks banks (the Quasar address generator's banking loop) needs bank i
+    // to be the i-th endpoint.
+    if (hal.noc_att_enabled()) {
+        const size_t num_l1_banks = std::count_if(
+            config.core_type_from_noc_coord_table.begin(),
+            config.core_type_from_noc_coord_table.end(),
+            [](const auto& entry) { return entry.second == AllocCoreType::ComputeAndStore; });
+        BankMapping identity(num_l1_banks);
+        std::iota(identity.begin(), identity.end(), 0u);
+        TT_FATAL(
+            config.l1_bank_remap.empty() || config.l1_bank_remap == identity,
+            "l1_bank_remap must be empty (or the identity) when the NoC address translation tables are enabled: they "
+            "require L1 bank i to be the i-th worker in row-major core order.");
+        config.l1_bank_remap = std::move(identity);
     }
     return config;
 }

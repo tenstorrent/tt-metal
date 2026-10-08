@@ -141,7 +141,7 @@ _REAL_GATE_SOURCES = {
     # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
     "kimi_k3": _RealGateSource(
         env_var="KIMI_K3_HF_MODEL",
-        fallbacks=("/mnt/models/blaze/moonshotai/Kimi-K3",),
+        fallbacks=("/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e",),
         hf_repo="moonshotai/Kimi-K3",
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
     ),

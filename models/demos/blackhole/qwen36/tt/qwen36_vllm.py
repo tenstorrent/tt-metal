@@ -136,7 +136,12 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             offline = os.getenv("HF_HUB_OFFLINE") == "1" or os.getenv("CI") == "true"
             name_or_path = snapshot_download(name_or_path, local_files_only=offline)
         args, model, _ = create_tt_model(
-            mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, hf_model=name_or_path
+            mesh_device,
+            max_batch_size=max_batch_size,
+            max_seq_len=max_seq_len,
+            hf_model=name_or_path,
+            # vLLM does not drive spec decode yet (vllm-tt-plugin#110): skip the MTP head, its weights and its KV cache.
+            enable_mtp=False,
         )
         # Attach the TT vision tower so prefill can splice image/video embeddings (multimodal path).
         # No-op cost for text-only requests; get_image_features / get_video_features are only invoked

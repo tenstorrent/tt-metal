@@ -50,7 +50,7 @@ struct GroupingItemInfo {
     tt::tt_metal::ASICLocation asic_location{0};  // Only valid if type == ASIC_LOCATION
     tt::tt_metal::TrayID tray_id{0};              // From optional instance tray_id (asic_location only); 0 = UNSET
 
-    std::string grouping_name;   // Only valid if type == GROUPING_REF
+    std::string grouping_name;  // Only valid if type == GROUPING_REF
     std::vector<CornerOrientation>
         corners;  // Corner orientations (can have multiple, e.g., 1D endpoints have 2, 1x1 has all 4)
     // Note: Counts are represented by having multiple items. Use items.size() to get the count.
@@ -441,7 +441,8 @@ public:
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
         bool unique_shapes = false,
-        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {});
+        const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank = {},
+        const std::set<tt::tt_metal::AsicID>& placement_asic_allowlist = {});
 
     // No PGD: seat from MGD placement fallbacks.
     SatPlacementEnumerationSession(
@@ -450,7 +451,8 @@ public:
         PlacementSolveStats* stats,
         const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
         const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank = {},
-        bool unique_shapes = false);
+        bool unique_shapes = false,
+        const std::set<tt::tt_metal::AsicID>& placement_asic_allowlist = {});
 
     SatPlacementEnumerationSession(const SatPlacementEnumerationSession&) = delete;
     SatPlacementEnumerationSession& operator=(const SatPlacementEnumerationSession&) = delete;
@@ -520,7 +522,11 @@ private:
     };
     std::unique_ptr<MasterSolve> master_solve_;
 
-    void finish_init(const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank);
+    // `asic_id_to_mesh_rank` names each rank-bound mesh's exact chips (seat footprint and allowed set);
+    // `placement_asic_allowlist` only narrows where any mesh may sit.
+    void finish_init(
+        const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank,
+        const std::set<tt::tt_metal::AsicID>& placement_asic_allowlist);
     void invalidate_pending_solve();
     std::set<const Candidate*> seats_matching(
         MeshId mesh_id, const std::unordered_set<tt::tt_metal::AsicID>& asics) const;
