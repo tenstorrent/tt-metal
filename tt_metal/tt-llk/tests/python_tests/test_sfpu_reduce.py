@@ -52,6 +52,7 @@ INT32_MIN = torch.iinfo(torch.int32).min  # 0x80000000
 INT32_PAD_MIN = INT32_MIN + 1  # -0x7FFFFFFF
 UINT16_MAX = torch.iinfo(torch.uint16).max  # 0xFFFF
 UINT32_MAX = torch.iinfo(torch.uint32).max  # 0xFFFFFFFF
+UINT32_BIT31 = 2**31  # 0x80000000
 
 dimension_combinations = [
     [m, n]
@@ -468,15 +469,15 @@ def _run_integer_reduce(
     input_format=DataFormat.Int32,
     tile=None,
 ):
-    """Reduce one 32x32 integer tile on device and return (golden_slice, device_slice).
+    """Reduce integer data on device and return (golden_slice, device_slice).
 
-    By default the tile is random Int32 in ``base_range`` with ``injected_value`` at a few scattered
-    positions, checked against the golden model. With ``tile`` (a 32x32 tensor) that tile is reduced as
-    given in ``input_format`` and the golden slice is None.
+    By default the data is one random Int32 tile in ``base_range`` with ``injected_value`` at a few
+    scattered positions, checked against the golden model. With ``tile`` (a [rows, cols] tensor of whole
+    tiles) that block is reduced as given in ``input_format`` and the golden slice is None.
     """
     formats = InputOutputFormat(input_format, input_format)
     dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
-    input_dimensions = [TILE_DIM, TILE_DIM]
+    input_dimensions = [TILE_DIM, TILE_DIM] if tile is None else list(tile.shape)
     torch_format = format_dict[formats.input_format]
 
     tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
@@ -500,12 +501,14 @@ def _run_integer_reduce(
     # in 6 distinct columns and 6 distinct rows, so 6 of the 32 reduced columns (for column reduce) /
     # rows (for row reduce) actually see the extreme value; the remaining lanes just reduce the random
     # data. Positions taken on the 32x32 grid.
-    grid = src_A.view(TILE_DIM, TILE_DIM)
-    inject_positions = [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]
     if tile is None:
+        grid = src_A.view(TILE_DIM, TILE_DIM)
+        inject_positions = [(0, 0), (5, 7), (13, 3), (20, 20), (31, 31), (7, 15)]
         for r, c in inject_positions:
             grid[r, c] = injected_value
-    src_A = grid.flatten() if tile is None else tile.flatten().to(torch_format)
+        src_A = grid.flatten()
+    else:
+        src_A = tile.flatten().to(torch_format)
 
     dst_dim = (
         [32, tile_cnt * 32]
@@ -637,10 +640,18 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
 
 
 @pytest.mark.parametrize(
-    "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
+    "mathop, dims",
+    [
+        (MathOperation.ReduceColumn, [TILE_DIM, TILE_DIM]),
+        (MathOperation.ReduceRow, [TILE_DIM, TILE_DIM]),
+        # Multi-tile rows: the bit-31 flip must cover every tile of the block.
+        (MathOperation.ReduceRow, [TILE_DIM, 2 * TILE_DIM]),
+        (MathOperation.ReduceRow, [2 * TILE_DIM, 2 * TILE_DIM]),
+    ],
+    ids=["col-1x1", "row-1x1", "row-1x2", "row-2x2"],
 )
 @pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
-def test_uint32_reduce_max_min_bit31(mathop, reduce_pool):
+def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
     """UInt32 MAX/MIN must order words with bit 31 set above the rest.
 
     SFPSWAP compares in sign-magnitude, which ranks a word with bit 31 set as negative. The tile mixes
@@ -652,16 +663,16 @@ def test_uint32_reduce_max_min_bit31(mathop, reduce_pool):
 
     torch.manual_seed(0)
     values = torch.randint(
-        2**31 - 16, 2**31 + 16, (TILE_DIM, TILE_DIM), dtype=torch.int64
+        UINT32_BIT31 - 16, UINT32_BIT31 + 16, dims, dtype=torch.int64
     )
     values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
-    for i, extreme in enumerate([3, INT32_MAX, 0x80000005]):
+    for i, extreme in enumerate([3, INT32_MAX, UINT32_BIT31 + 5]):
         values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
     # 0, 0x80000000 and UINT32_MAX in one row and one column, so they meet in a compare-and-swap
     # (after the flip, 0 and 0x80000000 are the -0 / +0 pair).
     meet = 20
-    values[meet, 0:3] = torch.tensor([0, 0x80000000, UINT32_MAX])
-    values[21:23, meet] = torch.tensor([0x80000000, UINT32_MAX])
+    values[meet, 0:3] = torch.tensor([0, UINT32_BIT31, UINT32_MAX])
+    values[21:23, meet] = torch.tensor([UINT32_BIT31, UINT32_MAX])
     values[meet, meet] = 0
     reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
     golden = (

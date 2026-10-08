@@ -1431,7 +1431,7 @@ inline void flip_sign_bits(const std::uint32_t num_tiles) {
             for (std::uint32_t column = 0; column <= ODD_COLUMNS; column += ODD_COLUMNS) {
                 const std::uint32_t addr = tile * ROWS_PER_TILE + row + column;
                 TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
-                TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+                TTI_SFPXOR(0 /*imm12_math*/, p_sfpu::LREG7, p_sfpu::LREG0, 0 /*instr_mod1*/);
                 TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, addr);
             }
         }
@@ -1831,6 +1831,9 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     // in a 32-bit dest. A 32-bit output (e.g. UInt32) keeps the full word, so it uses the plain store. This is
     // driven by the OUTPUT format and is independent of the load-time masking above.
     constexpr bool pack_low16 = (is_fp32_dest_accum_en && output_format == DataFormat::UInt16);
+    static_assert(
+        !(int32_max_min && pack_low16),
+        "Int32/UInt32 MAX/MIN stores the full 32-bit word; a UInt16 output (low-16 store) is not supported");
 
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {

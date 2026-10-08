@@ -301,7 +301,7 @@ inline void perform_reduce_col_sum_avg() {
 //
 // Replay slots (REPLAY_BUF_SIZE = 32 per thread; the FPU ops' windows start at ckernel::math::replay_buf_offset = 16):
 //   init_reduce_sum_avg:                [0, 9)   column tree-add windows; row SUM/AVG replays [0, 6)
-//   init_reduce_max_min:                [0, 11)  LOADMACRO column window (float)
+//   init_reduce_max_min:                [0, 11)  LOADMACRO column window (float, UInt16 in a 16-bit Dest)
 //   init_reduce_max_min_int32:          [0, 3)   manual 3-swap window (UInt16 in 32-bit Dest)
 //   init_reduce_max_min_int32_signed:   [0, 15)  signed Int32 column window
 //
@@ -1121,7 +1121,7 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     configure_addrmod_max_min(num_cols);
 
     // Record replay buffer for compare-and-swap operations.
-    // Note: this LOADMACRO-based path is only used for float formats. UInt16 in 32-bit dest
+    // Note: this LOADMACRO-based path is only used for float formats and UInt16 in a 16-bit Dest. UInt16 in 32-bit dest
     // cannot use it because the fused load+swap leaves no place to mask the garbage high bits, so it
     // is routed to the manual calculate_reduce_max_min_uint16() path instead.
     constexpr std::uint32_t buffer_len = 11;
@@ -1695,14 +1695,13 @@ inline void init_reduce_max_min_int32_signed() {
  *        path. Uses LREG0 and LREG7.
  */
 inline void flip_sign_bits(const std::uint32_t num_tiles) {
-    constexpr std::uint32_t ODD_COLUMNS = 2;
     TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);  // 0x80000000
     for (std::uint32_t tile = 0; tile < num_tiles; tile++) {
         for (std::uint32_t row = 0; row < ROWS_PER_TILE; row += ROWS_PER_LOAD) {
-            for (std::uint32_t column = 0; column <= ODD_COLUMNS; column += ODD_COLUMNS) {
+            for (std::uint32_t column = 0; column <= COL_REDUCE_ODD_COLUMNS; column += COL_REDUCE_ODD_COLUMNS) {
                 const std::uint32_t addr = tile * ROWS_PER_TILE + row + column;
                 TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
-                TTI_SFPXOR(0, p_sfpu::LREG7, p_sfpu::LREG0, 0);
+                TTI_SFPXOR(0 /*imm12_math*/, p_sfpu::LREG7, p_sfpu::LREG0, 0 /*instr_mod1*/);
                 TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, addr);
             }
         }
@@ -1925,6 +1924,9 @@ inline void calculate_reduce(
     // in a 32-bit dest. A 32-bit output (e.g. UInt32) keeps the full word, so it uses the plain store. This is
     // driven by the OUTPUT format and is independent of the load-time masking above.
     constexpr bool pack_low16 = (is_fp32_dest_acc_en && output_format == DataFormat::UInt16);
+    static_assert(
+        !(int32_max_min && pack_low16),
+        "Int32/UInt32 MAX/MIN stores the full 32-bit word; a UInt16 output (low-16 store) is not supported");
 
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN) {
