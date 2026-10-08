@@ -11,12 +11,13 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 #include "impl/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.hpp"
-#include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/jit_build_settings.hpp"
 #include "llrt/hal.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -146,11 +147,23 @@ std::unordered_map<DFBSpecName, uint8_t> RecordRelayPipeIds(
 // ----------------------------------------------------------------------------
 
 using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
+using SemaphoreNameToScopeMap = std::unordered_map<SemaphoreSpecName, SemScope>;
 
 struct SemaphoreHandles {
     SemaphoreNameToIdMap id;
-    sem_solver::SemaphoreNameToScopeMap scope;
+    SemaphoreNameToScopeMap scope;
 };
+
+// Decides how each semaphore is accessed. The answer is a SemScope, which codegen bakes into every
+// binding's token, so the kernel receives it as a compile-time constant. Per semaphore, picks the
+// fastest access path that keeps its operations atomic, from the binder census
+// (CollectedSpecData::semaphore_binders). Every declared semaphore resolves, bound or not.
+//
+// The mechanism depends on the target device, not just the ProgramSpec: emule has no cached
+// pool, and Gen1 only ever gets LOCAL_NONATOMIC or COMPUTE_ATOMIC. So the same spec can resolve
+// differently on different devices.
+SemaphoreNameToScopeMap ResolveSemaphoreScopes(
+    const ProgramSpec& spec, const CollectedSpecData::SemaphoreBinderCensus& census, MetalEnvImpl& env);
 
 // Register semaphores with the Program
 SemaphoreHandles RegisterSemaphores(
@@ -162,9 +175,9 @@ SemaphoreHandles RegisterSemaphores(
 // Register semaphores with a Kernel
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec,
-    const sem_solver::SemaphoreBinderCensus& semaphore_binders,
+    const CollectedSpecData::SemaphoreBinderCensus& semaphore_binders,
     const SemaphoreNameToIdMap& semaphore_name_to_id,
-    const sem_solver::SemaphoreNameToScopeMap& semaphore_name_to_scope);
+    const SemaphoreNameToScopeMap& semaphore_name_to_scope);
 
 // ----------------------------------------------------------------------------
 // Scratchpads (scratchpad.cpp)

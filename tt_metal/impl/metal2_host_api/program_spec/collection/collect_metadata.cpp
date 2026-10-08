@@ -3,8 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
+
+#include <unordered_set>
+
+#include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
+
 #include "impl/metal2_host_api/helpers.hpp"
-#include "impl/metal2_host_api/semaphore_scope.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -214,6 +219,47 @@ void DeriveNodeSets(const ProgramSpec& spec, CollectedSpecData& collected) {
     }
 }
 
+// Phase 4 -- "Semaphore binder census". Needs phase 3 (kernel_node_set turns a list of binding
+// kernels into an instance count and a node set).
+// Establishes: the invariants of semaphore_binders.
+void CollectSemaphoreBinders(const ProgramSpec& spec, CollectedSpecData& collected) {
+    CollectedSpecData::SemaphoreBinderCensus& census = collected.semaphore_binders;
+
+    for (const auto& kernel : spec.kernels) {
+        for (const auto& binding : kernel.semaphore_bindings) {
+            CollectedSpecData::SemaphoreBinderInfo& sem_info = census[binding.semaphore_spec_name];
+            // A kernel may bind a given semaphore only once. A second binding would be the same
+            // harts reaching the same L1 word under a second name: the derivation below would
+            // count those harts twice (over-sizing the cached pool's seed), and the generated
+            // kCachedSemaphores list would carry two entries for the single row they share.
+            for (const auto& rec : sem_info.binders) {
+                TT_FATAL(
+                    rec.kernel != &kernel,
+                    "Kernel '{}' binds semaphore '{}' more than once (accessor names '{}' and '{}'). A "
+                    "kernel may bind a given semaphore at most once; to refer to it by another name in "
+                    "kernel code, alias the handle (constexpr auto x = sem::y) instead.",
+                    kernel.unique_id,
+                    binding.semaphore_spec_name,
+                    rec.binding->accessor_name,
+                    binding.accessor_name);
+            }
+            sem_info.binders.push_back({&kernel, &binding});
+        }
+    }
+
+    // Derive each semaphore's binder instance count and binder node set: union of binding-kernels' node sets.
+    for (auto& [sem_name, sem_info] : census) {
+        for (const auto& rec : sem_info.binders) {
+            const NodeRangeSet& binder_nodes = collected.kernel_node_set.at(rec.kernel->unique_id);
+            // Not a hart count for Gen1 compute: num_threads is forced to 1 there, but one compute
+            // kernel is three TRISC binaries with two semaphore writers (UNPACK and PACK). Gen1
+            // compute binders are routed to COMPUTE_ATOMIC without consulting this count.
+            sem_info.binder_instance_count += binder_nodes.num_cores() * rec.kernel->num_threads;
+            sem_info.binder_node_set = sem_info.binder_node_set.merge(binder_nodes);
+        }
+    }
+}
+
 }  // namespace
 
 CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
@@ -223,10 +269,7 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     CollectNameLookups(spec, collected);
     CollectResourceUsers(spec, collected);
     DeriveNodeSets(spec, collected);
-
-    // semaphore_binders: needs the kernel node sets. Also rejects a kernel that binds the same
-    // semaphore twice.
-    collected.semaphore_binders = sem_solver::CollectSemaphoreBinders(spec, collected.kernel_node_set);
+    CollectSemaphoreBinders(spec, collected);
 
     return collected;
 }

@@ -41,7 +41,6 @@
 #include "impl/metal2_host_api/program_spec/construction/kernel_lowering.hpp"
 #include "impl/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.hpp"
 #include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
-#include "impl/metal2_host_api/semaphore_scope.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
