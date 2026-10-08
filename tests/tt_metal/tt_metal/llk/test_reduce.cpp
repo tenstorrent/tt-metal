@@ -896,7 +896,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeReduceColumnMxFp4) {
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
-        .math_fidelity = MathFidelity::HiFi4,
+        // Quasar's first fidelity phase covers the Float16_b operands in full
+        .math_fidelity = MathFidelity::LoFi,
         // MxFp4 + column (H) reduce selects the 2x-packed src-register format on Quasar only when the
         // scaler is MxFp4 too; the reader here generates a Float16_b scaler, so this runs the plain
         // MxFp4 -> Float16_b path. Covering the 2x path needs a reader that writes an MxFp4 scaler tile.
