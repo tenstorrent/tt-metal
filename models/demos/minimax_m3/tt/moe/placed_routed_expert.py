@@ -3,13 +3,18 @@
 
 """Load-time expert placement for the M3 EP MoE (M3_KA_EXPERT_PLACEMENT, see utils/expert_placement.py).
 
-Two pieces, both pure byte moves (no rounding, no re-tilize):
-  * ``permute_router_columns``: the router gate weight [hidden, E] and the e_score_correction_bias [1, E] get
-    their expert columns permuted (bf16 -> torch -> bf16), so the router emits label n for expert perm[n].
+Pieces (no rounding, no re-tilize):
   * ``make_placed_routed_expert_cls``: a TtRoutedExpert whose cache-only loader reads the 8 cached local-slot
     tensors of each projection (bf4 multi-device host tensors, one shard per chip), and rebuilds every slot from
     the shards of the experts the placement puts there before moving it to the device exactly as
     TtRoutedExpert does. It never writes the cache.
+  * ``build_relabel_table`` (default, M3_KA_EXPERT_RELABEL=gather): the router stays as it is and its top-k expert
+    ids are mapped to labels by one ``ttnn.gather`` from a per-layer [tokens, 160] uint16 table, so every routing
+    decision (including the gate's resolution of TF32-tied scores) is bit-identical to the default placement.
+  * ``permute_router_columns`` (M3_KA_EXPERT_RELABEL=router, rejected): the router gate weight [hidden, E] and the
+    e_score_correction_bias [1, E] get their expert columns permuted (bf16 byte moves), so the router emits label
+    n for expert perm[n]. The gate's top-k is not stable and compares TF32 keys, so tied scores resolve by column
+    position and ~4 % of the routing decisions per layer change (measured, docs 32).
 """
 
 from pathlib import Path
@@ -33,6 +38,31 @@ def permute_router_columns(t, perm, mesh_device):
     )
     ttnn.deallocate(t)
     return out
+
+
+RELABEL_WIDTH = 160  # >= NUM_EXPERTS + 1 (pad-row sentinel id == NUM_EXPERTS), whole tiles
+
+
+def build_relabel_table(mesh_device, perm, num_tokens):
+    """Replicated uint16 TILE [num_tokens, RELABEL_WIDTH] table whose every row is label_of[expert id] (the inverse
+    of perm[label] = expert), identity past the 128 experts so the gate's pad-row sentinel (id 128) and the gather's
+    zero-filled tile padding stay valid. ``ttnn.gather(table, -1, topk_ids)`` then turns the router's top-k expert
+    ids into placement labels in place (same order, same weights)."""
+    import torch
+
+    perm = torch.as_tensor([int(x) for x in perm], dtype=torch.int64)
+    ep.validate(perm)
+    row = torch.arange(RELABEL_WIDTH, dtype=torch.int64)
+    row[: ep.NUM_EXPERTS] = ep.inverse(perm)
+    table = row[None, :].expand(num_tokens, RELABEL_WIDTH).contiguous().to(torch.int32)
+    return ttnn.from_torch(
+        table,
+        device=mesh_device,
+        dtype=ttnn.uint16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 def make_placed_routed_expert_cls(perm):

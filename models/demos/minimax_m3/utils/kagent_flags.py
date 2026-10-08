@@ -13,10 +13,15 @@ one tree runs both arms of an A/B. Read once at import (set them before the mode
   M3_KA_MM_FIDELITY     comma list of matmul groups to run LoFi + fp32 dest acc instead of the HiFi2 default:
                            qkv, index, shared, dense (precision-changing -> L2 gate)
   M3_KA_EXPERT_PLACEMENT  path to a per-layer expert placement (utils/expert_placement.py): relabels the routed
-                           experts of each listed MoE layer so the hot ones spread over the 16 chips. The router's
-                           columns and the cached expert weights are permuted at load (exact bytes); routing
-                           decisions are unchanged. Column-preserving placements are bit-exact; cross-column ones
-                           change the TP reduce-scatter summation grouping (class B). Read at model build.
+                           experts of each listed MoE layer so the hot ones spread over the 16 chips. The cached
+                           expert weights are permuted at load (exact bytes) and the router's expert ids are mapped
+                           to labels (M3_KA_EXPERT_RELABEL); routing decisions are unchanged. Column-preserving
+                           placements are bit-exact; cross-column ones change the TP reduce-scatter summation
+                           grouping (class B). Read at model build.
+  M3_KA_EXPERT_RELABEL  gather (default): the router is unchanged and one ttnn.gather per MoE layer maps expert ids
+                           to placement labels, so routing decisions stay bit-identical. router: permute the
+                           router columns instead (no extra op; changes the gate's TF32-tie resolution -> rejected,
+                           docs 32 §3)
 """
 
 import os
@@ -31,6 +36,8 @@ SKIP_IDX_SPLIT = _on("M3_KA_SKIP_IDX_SPLIT")
 MOE_SINGLE_RS = _on("M3_KA_MOE_SINGLE_RS")
 MM_FIDELITY = {g.strip() for g in os.getenv("M3_KA_MM_FIDELITY", "").split(",") if g.strip()}
 EXPERT_PLACEMENT = os.getenv("M3_KA_EXPERT_PLACEMENT", "").strip() or None
+EXPERT_RELABEL = os.getenv("M3_KA_EXPERT_RELABEL", "gather").strip().lower()
+assert EXPERT_RELABEL in ("gather", "router"), f"M3_KA_EXPERT_RELABEL must be gather or router, got {EXPERT_RELABEL}"
 
 
 _LOFI = None
