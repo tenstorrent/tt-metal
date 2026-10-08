@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_b1.micro_ops.sdpa.op import SdpaSingleCore
         (18, 16, 4, 2, 1),
         (18, 16, 4, 8, 0.5),
         (18, 16, 8, 4, 0.85),
+        (16, 16, 2, 3, 1),
     ],
 )
 def test_sdpa(device, num_tiles_k, num_tiles_v, chunk_size, num_chunks, scale):

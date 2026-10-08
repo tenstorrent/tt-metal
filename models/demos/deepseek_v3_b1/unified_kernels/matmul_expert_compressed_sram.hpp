@@ -209,6 +209,9 @@ struct MatmulExpertCompressedSRAM {
                 }
 
                 if (num_sram_experts > 0) {
+                    if constexpr (!CTArgs::use_compression) {
+                        custom_mm_block_bank_init(cb_in0, cb_in1);
+                    }
                     cb_reserve_back(cb_out, out_w);
                     tile_regs_acquire();
 
@@ -240,19 +243,23 @@ struct MatmulExpertCompressedSRAM {
                                 cb_in0, in0_base + (k_offset + in0_slot_idx * num_tiles_k) * in0_page_size);
                         }));
 
+                        // Plain calls alternate the configuration banks: each expert's words go in while the last runs
                         if (++sram_idx < num_sram_experts) {
                             if constexpr (CTArgs::use_compression) {
                                 compressed_custom_mm_block<false>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
-                                custom_mm_block<false>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                                custom_mm_block<false, false, true>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                             }
                         } else {
                             if constexpr (CTArgs::use_compression) {
                                 compressed_custom_mm_block<true>(cb_in0, cb_in1, meta_addr, 0, k_for_mm, out_w);
                             } else {
-                                custom_mm_block<true>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
+                                custom_mm_block<true, false, true>(cb_in0, cb_in1, 0, 0, 0, k_for_mm, out_w);
                             }
                         }
+                    }
+                    if constexpr (!CTArgs::use_compression) {
+                        custom_mm_block_bank_end();
                     }
 
                     tile_regs_commit();

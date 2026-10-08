@@ -827,8 +827,8 @@ struct FlashMLADecode {
                     transpose_v,
                     packed_tile_size,
                     exp_approx_mode,
-                    /*qk_signal_granularity=*/1,
-                    /*exp_signal_granularity=*/1,
+                    /*qk_signal_granularity=*/Sk_chunk_t,
+                    /*exp_signal_granularity=*/Sk_chunk_t,
                     output_granularity,
                     false>(
                     cb_q_in,
