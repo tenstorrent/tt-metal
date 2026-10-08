@@ -21,10 +21,11 @@ from tests.ttnn.utils_for_testing import (
 # 88.7228 -- see ckernel_sfpu_i0.h for the full rationale.
 I0_MAX_INPUT = 88.5
 
-# Worst-case ULP error measured on silicon over the kernel's full input domain,
-# including the exhaustive bfloat16 sweep below: 6.0 ULP for float32 and 0.91 ULP
-# for bfloat16, confirmed bit-identical on Blackhole p150b and Wormhole n300 with
-# the same seed. Budgets below carry ~2x headroom over those measurements.
+# Worst-case ULP error measured on Blackhole p150a over the kernel's full input
+# domain: 6.0 ULP for float32 (a 2,000,001-point sweep of [-88.5, 88.5], worst at
+# x = -5.9458, just inside the |x| <= 6 polynomial region) and 0.64 ULP for bfloat16
+# (every bfloat16 input against the float32 golden, worst at x = 85.5). Budgets
+# below carry 2x and 3x headroom over those measurements.
 #
 # Units are the true spacing of the output dtype (what comp_ulp/assert_with_ulp use),
 # not a relative-mantissa proxy -- the two differ by up to 2x within a binade and
@@ -35,27 +36,28 @@ _MAX_ULP = {
     ttnn.bfloat16: 2,
 }
 
-# test_unary_category1_bfloat16.py::test_bessel_ops gates ttnn.i0 separately, at
+# test_unary_category1_bfloat16.py::test_bessel_ops checks ttnn.i0 separately, at
 # assert_with_ulp(..., ulp_threshold=1) over an exhaustive bfloat16 sweep of
 # [-10, 10]. It measures 1.0 and passes.
 #
-# That 1.0 and the 0.91 above are not the same measurement, and comparing them
+# That 1.0 and the 0.64 above are not the same measurement, and comparing them
 # directly is a mistake. comp_ulp only resolves below 1 ULP when the golden is
 # higher precision than the output: test_bessel_ops compares a bfloat16 golden
 # against a bfloat16 output, and two bfloat16 values are always a whole number of
 # bfloat16 ULPs apart. So on that ruler 1.0 means "never more than one bfloat16
-# step off" -- the tightest it can express short of bit-exactness, not a near-miss.
-# The 0.91 is the distance from the float32 reference, on a ruler fine enough to
-# see fractions. The device output is the same in both cases.
+# step off" -- the tightest it can express short of bit-exactness, not a marginal
+# pass. The 0.64 is the distance from the float32 reference, on a ruler fine enough
+# to see fractions. The device output is the same in both cases.
 #
 # Measured together on one build, bfloat16 output throughout:
-#   bfloat16 golden, [-10, 10]   1.00   (worst at x = 6.03125)
+#   bfloat16 golden, [-10, 10]    1.00  (worst at x = 0.48046875)
 #   bfloat16 golden, all bfloat16 1.00  (same worst point)
-#   float32  golden, all bfloat16 0.91  (worst at x = 63.25)
-#   float32  golden, [-10, 10]   0.87   (worst at x = 8.8125)
-# The two bfloat16-golden rows share a worst case at x = 6.03125, just past the
-# |x| = 6 region split -- the poly and asymptotic branches disagree by one step
-# there, which is where this kernel's accuracy is tightest.
+#   float32  golden, all bfloat16 0.64  (worst at x = 85.5)
+#   float32  golden, [-10, 10]    0.61  (worst at x = 7.71875)
+# At x = 0.48046875, I0 = 1.0585506 lies 0.006 of a bfloat16 step below the
+# midpoint between 1.0546875 and 1.0625: the golden rounds down, and the kernel's
+# value, 4.6e-5 above I0, rounds up. A one-step difference of that kind is what
+# 1.00 on this ruler records; only a correctly rounded kernel avoids it everywhere.
 
 
 def _quantise(x, dtype):

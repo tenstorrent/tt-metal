@@ -4,9 +4,10 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 
@@ -15,154 +16,148 @@ namespace ckernel::sfpu {
 // ======================================================================
 // i0(x) — modified Bessel function of the first kind, order 0.
 //
-// Two-region implementation, exploiting that i0 is even: i0(-x) = i0(x).
-//   |x| <= 6:  Maclaurin series, I0(x) = sum_k (x^2/4)^k / (k!)^2,
-//              degree-8 minimax fit in t=x^2 (9 terms incl. the leading
-//              1.0), Remez-derived. Max rel err ~3.1e-07 in idealized
-//              arithmetic, dominated in practice by rounding t = fl(x*x)
-//              itself rather than by the polynomial fit — see the note
-//              below.
-//   |x| >  6:  asymptotic expansion (Abramowitz & Stegun 9.7.1)
-//                i0(x) = exp(|x|) / sqrt(|x|) * Q(1/|x|)
-//              Both the exp variant and Q's degree follow the DEST width
-//              (is_fp32_dest_acc_en) — the precision the output can hold —
-//              not the input dtype. 32-bit DEST: fp32-accurate exp,
-//              degree-5 fit (6 coeffs). 16-bit DEST: 21f exp, degree-4
-//              fit (5 coeffs) — one term shorter, since BF16 output
-//              precision cannot see the extra term (0/498 exhaustive
-//              BF16 values in [6, 88.5] differ from the correctly-rounded
-//              result). 1/sqrt(2*pi) folded into Q's leading term in both.
+// Two regions, exploiting that i0 is even: i0(-x) = i0(x).
+//   |x| <= 6:  I0 = 1 + t * P(t), t = x^2, P a minimax fit weighted for
+//              relative I0 error.
+//   |x| >  6:  I0 = exp(|x|) / sqrt(|x|) * Q(1/|x|)  (Abramowitz & Stegun
+//              9.7.1), with 1/sqrt(2*pi) folded into Q's leading term.
 //
-// Measured worst case over the full domain (200k-sample random sweep over
-// [-88.5, 88.5], both dtypes, same seed on both arches): 6.0 FP32 ULP (at
-// x = -5.93, inside region 1) and 0.91 BF16 ULP. Blackhole p150b and
-// Wormhole n300 silicon produced bit-identical results -- same worst-case
-// x, same output, same reference, to the last digit -- so the WH/BH source
-// identity this file maintains is measured equivalence, not an inference
-// from it. See tests/.../test_unary_i0.py's _MAX_ULP for the test budget
-// (12 / 2), which carries headroom over these numbers.
+// The SFPU executes both regions for every vector, so a tile costs the sum
+// of the two; each piece is sized to the precision the output can hold, and
+// all of them key on is_fp32_dest_acc_en (the DEST width), never on
+// INP_FLOAT32 -- a bf16-in/float32-out call runs a 32-bit DEST with
+// INP_FLOAT32 undefined, and its output must keep float32 precision.
 //
-// Region-1 accuracy near the |x| = 6 boundary is bounded by FP32 rounding
-// of t = fl(x*x) rather than by the polynomial's degree, and the region-2
-// rsqrt Newton step alone costs ~1.7 FP32 ULP -- both floors already
-// exceed what a longer fit would buy, which is why each region uses only
-// as many terms as its own arithmetic can resolve.
+//                32-bit DEST                      16-bit DEST
+//   P(t)         degree 8 in t                    degree 5 in t
+//   exp(|x|)     Cody-Waite + degree-6 poly       bit pattern of |x|/ln2 + 383,
+//                                                 cubic correction
+//   1/sqrt(|x|)  magic seed, cubic correction,    magic seed, cubic correction
+//                one Newton step
+//   Q(u)         degree 5                         degree 1
 //
-// Code shape (chosen to relieve SFPI LRA budget), mirroring i1: region-1's
-// result lives in a local `val` inside a nested scope, so its LRegs are
-// freed by the scope exit -- not a DST store/reload -- before the
-// asymptotic block needs them.
+// Cost is set by instruction count plus stalls, not by FLOPs: an SFPLOADI
+// pair materialises each float32 constant, and Blackhole stalls an
+// instruction that reads the result of the SFPMAD issued just before it
+// (Wormhole pads that slot with an SFPNOP). Hence the shape below:
+//   - every polynomial coefficient that accuracy allows is bf16- or
+//     fp16-exact, so it loads with one SFPLOADI instead of two (constrained
+//     minimax fits);
+//   - the rsqrt seed constant and the two cubic-correction constants live
+//     in the programmable constant registers, set once in i0_init();
+//   - the 1/sqrt(|x|) chain is interleaved with region 1's Horner chain, so
+//     each fills the other's SFPMAD latency slots. The interleave changes
+//     no arithmetic (outputs measured bit-identical to the sequential order)
+//     and takes 7% off the per-tile time on Blackhole p150a in both modes.
 //
-// No input clamp: abs_x is never clamped to 88.5 before use. Every lane
-// a clamp would change is a lane
-// with |x| > 88.5, and every one of those is unconditionally overwritten
-// below by the overflow branch — so a clamp only ever protects a value
-// that is then discarded. The unclamped polynomial/asymptotic paths can
-// produce garbage (even overflow to inf, or NaN for NaN input) on those
-// lanes; since SFPU lanes are independent and the garbage never reaches
-// the store, this is safe and costs nothing.
+// Measured on Blackhole p150a: 0.6391 bf16 ULP worst case over every
+// bfloat16 input against the float32 golden (16-bit DEST); 6 float32 ULP
+// over a 2,000,001-point sweep of [-88.5, 88.5] (32-bit DEST). See
+// tests/.../test_unary_i0.py's _MAX_ULP for the test budgets (12 / 2).
+//
+// Region 1 on a 32-bit DEST is limited by float32 rounding of t = fl(x*x)
+// and of the Horner chain, not by the fit (1.0e-8 relative): the worst case
+// sits just below the |x| = 6 split.
+//
+// No input clamp: abs_x is never clamped to 88.5 before use. Every lane a
+// clamp would change has |x| > 88.5, and every one of those is
+// unconditionally overwritten below by the overflow branch -- so a clamp
+// only ever protects a value that is then discarded. Both exp
+// constructions assume |x| <= 88.5 (they assemble the exponent field
+// directly) and produce garbage above it; SFPU lanes are independent and
+// that garbage never reaches the store.
 //
 // Overflow and +/-inf both resolve to +inf here: multiplying by infinity
 // rather than assigning it lets one predicate cover both. The 88.5 cutoff
-// is Q's fitted boundary, not exp()'s true saturation point (88.7228) --
-// a narrow finite, torch-matching band above 88.5 also lands on +inf here,
-// accepted rather than re-fit since it's invisible in BF16 and already
-// deep in i0's exponential blow-up. NaN survives regardless of which
-// branch it takes:
-// lanes the compare excludes propagate NaN through ordinary arithmetic in
-// region 1, lanes it includes propagate NaN through this SFPMUL the same
-// way _sfpu_exp_fp32_accurate_ relies on 0*inf = NaN -- so correctness
-// does not depend on how SFPSETCC orders NaN against the threshold.
-// The true I0 stays representable to x = 91.9008 (I0 = 3.4028e+38), but
-// no exp()-first formulation can reach it without the intermediate
-// overflowing.
+// is Q's fitted boundary, not exp()'s true saturation point (88.7228) -- a
+// narrow finite, torch-matching band above 88.5 also returns +inf here,
+// accepted rather than re-fit since it is invisible in BF16 and already deep
+// in i0's exponential growth. NaN survives regardless of which branch it
+// takes: lanes the compare excludes propagate NaN through ordinary
+// arithmetic in region 1, lanes it includes propagate NaN through this
+// SFPMUL (0*inf and NaN*inf are NaN) -- so correctness does not depend on
+// how SFPSETCC orders NaN against the threshold. The true I0 stays
+// representable to x = 91.9008 (I0 = 3.4028e+38), but no exp()-first
+// formulation can reach it without the intermediate overflowing.
 //
-// On the BF16 path NaN still emerges as +inf regardless of this branch:
-// a DRAM round-trip with no op returns NaN intact, so the payload is
-// lost unpacking BF16 into DST, upstream of this kernel entirely.
+// On the BF16 path NaN still emerges as +inf regardless of this branch: a
+// DRAM round-trip with no op returns NaN intact, so the payload is lost
+// unpacking BF16 into DST, upstream of this kernel entirely.
 //
 // APPROXIMATION_MODE is accepted for call-site compatibility; both paths
 // are already the accurate ones and it does not select a cheaper route.
 // ======================================================================
 
-// Asymptotic path is outlined to keep register pressure within SFPI's
-// LRA budget. Returns exp(|x|) * 1/sqrt(|x|) * Q(1/|x|).
-// Note: this function must stay minimalist — SFPU LRA is limited.
-// Every operation here competes with the main loop.
-//
-// Keyed on the DEST width, not on INP_FLOAT32: the exp variant and Q's degree
-// set the precision of the result, so they follow the precision the output can
-// hold. INP_FLOAT32 only says what the input was, and a bf16-in/float32-out
-// call has a 32-bit DEST with INP_FLOAT32 undefined.
+// exp(|x|) * rsqrt_y * Q(rsqrt_y^2), with rsqrt_y = 1/sqrt(|x|) from the
+// caller. Each branch is ordered so independent work fills SFPMAD latency
+// slots.
 template <bool is_fp32_dest_acc_en>
-inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x) {
-    // exp(|x|) — unsafe variants in both paths. For the |x| in [6, 88.5] that
-    // reaches the store, overflow/underflow is impossible and the safe
-    // wrappers' clamping/guards would be dead code. Above 88.5 these wrap and
-    // return garbage; the caller overwrites those lanes unconditionally.
-    sfpi::vFloat exp_abs;
+inline sfpi::vFloat calculate_i0_asymptotic_(const sfpi::vFloat abs_x, const sfpi::vFloat rsqrt_y) {
+    // 1/|x| = (1/sqrt(|x|))^2 -- reuses the rsqrt instead of a fresh reciprocal.
+    // Q(u) on u in [1/88.5, 1/6], minimax for relative error.
     if constexpr (is_fp32_dest_acc_en) {
-        exp_abs = _sfpu_exp_fp32_accurate_unsafe_(abs_x);
-    } else {
-        // The helper's own is_fp32_dest_acc_en stays true: false would round
-        // the exp to bf16 mid-computation, and i0 rounds once, at its store.
-        exp_abs = _sfpu_exp_21f_bf16_unsafe_<true /* is_fp32_dest_acc_en */>(abs_x);
-    }
-
-    // 1/sqrt(|x|) via Quake-style magic constant + two Newton refinements.
-    // Computed first so that 1/|x| can be derived as rsqrt_y^2 without a
-    // separate sfpu_reciprocal call.
-    //
-    // The Newton refinement is 32-bit DEST only. Without it the result is
-    // ~343 FP32 ULP off, far outside the budget in the teens, so float32
-    // keeps it; on a 16-bit DEST dropping it changes no measured maximum
-    // (0.9071 ULP against the float32 golden over every bfloat16 input,
-    // 1.0 on test_bessel_ops' bfloat16 ruler, both unchanged) and saves 6%
-    // of the bf16 kernel's time per tile on Blackhole.
-    const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
-    sfpi::vFloat rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vInt(0x5f1110a0) - rsqrt_i);
-    sfpi::vFloat c0 = (-rsqrt_y) * (abs_x * rsqrt_y);
-    rsqrt_y = rsqrt_y * (2.2825186f + c0 * (2.2533049f + c0));
-    if constexpr (is_fp32_dest_acc_en) {
-        c0 = 1.0f + (-rsqrt_y) * (abs_x * rsqrt_y);
-        rsqrt_y = c0 * sfpi::addexp(rsqrt_y, -1 /* exp */) + rsqrt_y;
-    }
-
-    // 1/|x| = (1/sqrt(|x|))^2 — reuses the refined rsqrt instead of a fresh reciprocal.
-    const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
-
-    // Q(y) on y in [1/88.5, 1/6]; leading term is 1/sqrt(2*pi) = 0.39894228.
-    // This outlined function does not stress the main loop's LRA, so full
-    // precision is safe.
-    //
-    // 32-bit DEST: degree-5 (6 coeffs). 16-bit DEST: degree-4 (5 coeffs) —
-    // one term shorter, verified against an exhaustive sweep of all
-    // BF16-representable values in [6, 88.5] (0/498 differ from the
-    // correctly-rounded result). Coefficients must stay FP32 in both cases:
-    // rounding the degree-4 Q's leading term to BF16 (which would let sfpi
-    // use SFPADDI's 16-bit immediate instead of an SFPLOADI pair) costs
-    // 1.27e-03 relative on that term alone — four orders of magnitude above
-    // the accuracy budget.
-    sfpi::vFloat correction;
-    if constexpr (is_fp32_dest_acc_en) {
-        correction = PolynomialEvaluator::eval(
+        const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
+        // Degree 5, fit 3.4e-8 relative, with the top four coefficients bf16- or
+        // fp16-exact.
+        const sfpi::vFloat correction = PolynomialEvaluator::eval(
             inv_abs_x,
-            3.9894214272e-01f,
-            4.9887448549e-02f,
-            2.7172168717e-02f,
-            4.6332854778e-02f,
-            -1.0997270793e-01f,
-            6.5736579895e-01f);
-    } else {
-        correction = PolynomialEvaluator::eval(
-            inv_abs_x, 3.9894300699e-01f, 4.9790032208e-02f, 3.0512193218e-02f, -9.7926484887e-04f, 1.8299004436e-01f);
-    }
+            3.9894217e-01f,
+            4.9883097e-02f,
+            0.0273284912109375f,
+            0.04400634765625f,
+            -0.0947265625f,
+            0.62109375f);
 
-    // i0 is even — no sign restoration needed (cf. i1's copysgn).
-    return exp_abs * rsqrt_y * correction;
+        // exp(|x|) to ~1 float32 ULP (7.6e-8 relative over [6, 88.5] in float32
+        // arithmetic):
+        // j = rint(|x|/ln2), f = |x| - j*ln2 in two parts, e^f by a degree-6
+        // polynomial, 2^j added to the exponent. ln2_hi = 0.693359375 has 11
+        // significant bits and j <= 128, so j*ln2_hi is exact and |x| - j*ln2_hi
+        // is exact (Sterbenz); ln2_lo = ln2 - ln2_hi. |x| >= 0 makes j >= 0, so
+        // its sign-magnitude form is already the integer the exponent needs.
+        // rsqrt_y * Q is formed while the rounding to j is in flight, so the
+        // last multiply waits on nothing.
+        const sfpi::vFloat jx = abs_x * 1.442695f;
+        const sfpi::vFloat scale = rsqrt_y * correction;
+        const sfpi::vSMag16 j = sfpi::convert<sfpi::vSMag16>(jx, sfpi::RoundMode::Nearest);
+        const sfpi::vFloat jf = sfpi::convert<sfpi::vFloat>(j, sfpi::RoundMode::Nearest);
+        sfpi::vFloat f = jf * -0.693359375f + abs_x;
+        f = jf * 2.1219444e-04f + f;
+        // e^f = 1 + f * (1 + f * (c2 + f * (... + f * c6))), minimax on
+        // |f| <= 0.348 (3.97e-9 relative); c5 and c6 are fp16-exact.
+        sfpi::vFloat r = PolynomialEvaluator::eval(
+            f, 4.9999994e-01f, 1.6666515e-01f, 4.1668385e-02f, 0.00836944580078125f, 1.3818741e-03f);
+        r = r * f + 1.0f;
+        r = r * f + 1.0f;
+        return sfpi::setexp(r, sfpi::exexp(r, sfpi::ExponentMode::Biased) + sfpi::as<sfpi::vInt>(j)) * scale;
+    } else {
+        // exp(|x|) from the bit pattern of w = |x|/ln2 + 383: for |x| in
+        // [0, 89.4], w lies in [383, 512), so its exponent is fixed and its 23
+        // fraction bits hold (|x|/ln2 + 127) * 2^15. Shifted left by 8 they
+        // read as a float32 z = 2^n * (1 + r), n = floor(|x|/ln2), r the
+        // fraction to 15 bits -- the integer split costs two instructions.
+        // exp(|x|) = z * C(m), C(m) = 2^(m-1)/m with m = 1 + r, a cubic fit
+        // (8.7e-4 relative, all four coefficients fp16-exact).
+        const sfpi::vFloat w = abs_x * 1.442695f + 383.0f;
+        const sfpi::vFloat inv_abs_x = rsqrt_y * rsqrt_y;
+        const sfpi::vFloat z = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(sfpi::exman(w)) << 8);
+        const sfpi::vFloat c = PolynomialEvaluator::eval(
+            sfpi::setexp(z, 127), 1.775390625f, -1.376953125f, 0.70751953125f, -0.10650634765625f);
+        // Degree 1, fit 4.9e-4 relative, both coefficients fp16-exact.
+        const sfpi::vFloat correction = inv_abs_x * 0.05609130859375f + 0.398681640625f;
+        return z * c * rsqrt_y * correction;
+    }
 }
 
-inline void i0_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// The rsqrt seed constant and its cubic-correction constants, shared by both
+// DEST widths. Programmable registers hold them across the loop, where each
+// would otherwise be an SFPLOADI pair per iteration.
+inline void i0_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = 0x5f1110a0;
+    sfpi::vConstFloatPrgm1 = 2.2825186f;
+    sfpi::vConstFloatPrgm2 = 2.2533049f;
+}
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_i0() {
@@ -177,53 +172,81 @@ inline void calculate_i0() {
 #pragma GCC unroll 1
     for (int d = 0; d < ITERATIONS; d++) {
         // i0 is even, so the sign is never needed: take |x| up front with a
-        // plain abs. No clamp — see the file-level comment for why an
+        // plain abs. No clamp -- see the file-level comment for why an
         // unclamped magnitude here is safe.
         const sfpi::vFloat x = sfpi::dst_reg[0];
         const sfpi::vFloat abs_x = sfpi::abs(x);
 
-        sfpi::vFloat val;
-        // ─── Polynomial path (always; valid for |x| <= 6) ────────────────
-        // Computed unconditionally so its LRegs are free for the asymptotic
-        // block to reuse.
+        // ─── Region 1 (always; valid for |x| <= 6) and 1/sqrt(|x|) ──────────
+        // Computed unconditionally, in a nested scope so their temporaries
+        // are freed before the asymptotic block needs the LRegs.
         //
-        // Degree-8 minimax fit in t (Remez, weighted for relative I0 error),
-        // not truncated Maclaurin — a naive truncation at this degree is
-        // measurably worse. k = 1 and k = 2 are pinned to their exact
-        // Maclaurin values (1/4 and 1/64): both are BF16-representable, so
-        // sfpi folds them into SFPADDI's immediate instead of materialising
-        // them with an SFPLOADI pair.
+        // P is evaluated by Horner (p) with the 1/sqrt(|x|) chain (rsqrt_y)
+        // interleaved statement by statement; see the file-level comment.
+        // 1/sqrt(|x|): magic seed vConstIntPrgm0 - (bits >> 1), then the cubic
+        // correction y * (k1 + c * (k2 + c)), c = -|x| * y^2 (2.0e-5 relative);
+        // a 32-bit DEST adds one Newton step (7.3e-8), without which the
+        // result is ~343 float32 ULP off.
+        sfpi::vFloat val;
+        sfpi::vFloat rsqrt_y;
         {
             const sfpi::vFloat t = abs_x * abs_x;
-            val = 1.0f + t * PolynomialEvaluator::eval(
-                                 t,
-                                 2.5000000000e-01f,
-                                 1.5625000000e-02f,
-                                 4.3402606389e-04f,
-                                 6.7823571044e-06f,
-                                 6.7718225694e-08f,
-                                 4.7797393821e-10f,
-                                 2.1436320601e-12f,
-                                 1.4051053479e-14f);
+            const sfpi::vInt rsqrt_i = sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(abs_x) >> 1);
+            if constexpr (is_fp32_dest_acc_en) {
+                // Degree 8 in t (9 terms incl. the leading 1), 1.0e-8 relative.
+                // k = 1, 2 are the exact Maclaurin values 1/4 and 1/64; k = 7, 8
+                // are bf16-exact, with the rest refit around them.
+                sfpi::vFloat p = t * 1.4044321e-14f + 2.145839e-12f;
+                rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - rsqrt_i);
+                p = p * t + 4.7780996e-10f;
+                sfpi::vFloat c = abs_x * rsqrt_y;
+                p = p * t + 6.7723136e-08f;
+                c = (-rsqrt_y) * c;
+                p = p * t + 6.7822934e-06f;
+                sfpi::vFloat k = sfpi::vConstFloatPrgm2 + c;
+                p = p * t + 4.3402635e-04f;
+                k = c * k + sfpi::vConstFloatPrgm1;
+                p = p * t + 0.015625f;
+                rsqrt_y = rsqrt_y * k;
+                p = p * t + 0.25f;
+                c = abs_x * rsqrt_y;
+                val = p * t + 1.0f;
+                c = (-rsqrt_y) * c + 1.0f;
+                rsqrt_y = c * sfpi::addexp(rsqrt_y, -1 /* exp */) + rsqrt_y;
+            } else {
+                // Degree 5 in t, 1.3e-4 relative, every coefficient bf16- or
+                // fp16-exact: bf16 output cannot see the terms the 32-bit fit
+                // carries beyond it.
+                sfpi::vFloat p = t * 1.2572855e-07f + 4.7385693e-06f;
+                rsqrt_y = sfpi::as<sfpi::vFloat>(sfpi::vConstIntPrgm0 - rsqrt_i);
+                p = p * t + 4.632473e-04f;
+                sfpi::vFloat c = abs_x * rsqrt_y;
+                p = p * t + 0.01546478271484375f;
+                c = (-rsqrt_y) * c;
+                p = p * t + 0.250244140625f;
+                sfpi::vFloat k = sfpi::vConstFloatPrgm2 + c;
+                val = p * t + 1.0f;
+                k = c * k + sfpi::vConstFloatPrgm1;
+                rsqrt_y = rsqrt_y * k;
+            }
         }
 
-        // ─── Asymptotic overwrite for OOD lanes (|x| > 6); +inf past 88.5 ──
+        // ─── Asymptotic overwrite for |x| > 6; +inf past 88.5 ─────────────
+        // Overflow and +/-inf -> +inf is nested inside the asymptotic block
+        // (|x| > 88.5 implies |x| > 6), one predicate round-trip fewer per
+        // iteration; NaN lanes keep the NaN that region 1's arithmetic
+        // propagates, or take it from the SFPMUL. See the file-level comment.
         v_if(abs_x > I0_THRESHOLD) {
-            val = calculate_i0_asymptotic_<is_fp32_dest_acc_en>(abs_x);
+            val = calculate_i0_asymptotic_<is_fp32_dest_acc_en>(abs_x, rsqrt_y);
             v_if(abs_x > I0_MAX_INPUT) { val = abs_x * std::numeric_limits<float>::infinity(); }
             v_endif;
         }
         v_endif;
 
-        // Overflow and +/-inf → +inf is handled inside the asymptotic block
-        // above (|x| > 88.5 implies |x| > 6), one predicate round-trip fewer
-        // per iteration; NaN lanes fail both compares and keep the NaN that
-        // region 1's arithmetic propagates. See the file-level comment for
-        // the SFPMUL/NaN assumption behind the multiply-by-infinity form.
-        // Same key as the asymptotic branch: a bf16-in/float32-out call
-        // (ttnn.i0(bf16_tensor, output_tensor=<float32 tensor>), a supported
-        // mixed-dtype combination) runs DEST in 32-bit mode with INP_FLOAT32
-        // undefined, and its output must not be rounded down to BF16 here.
+        // A bf16-in/float32-out call (ttnn.i0(bf16_tensor, output_tensor=<float32
+        // tensor>), a supported mixed-dtype combination) runs DEST in 32-bit mode
+        // with INP_FLOAT32 undefined, and its output must not be rounded down to
+        // BF16 here -- hence the DEST-width key.
         if constexpr (!is_fp32_dest_acc_en) {
             val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
         }
