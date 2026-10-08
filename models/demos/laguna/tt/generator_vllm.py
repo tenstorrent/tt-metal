@@ -3395,8 +3395,13 @@ class LagunaForCausalLM:
         if self._streaming_prefill_active():
             start_gt_zero_cases = self._prefill_stream_warm_cases(bs)
             # Fine-bucket tails: run only the tail itself at its nonzero start (the outer chunk before it is
-            # already warm); the canonical case runs the whole two-chunk prompt from 0.
-            fine_tails = self._fine_prefill_buckets() and not bool(self._PREFIX_CACHE_ENABLED)
+            # already warm); the canonical case runs the whole two-chunk prompt from 0. DFlash also runs each
+            # tail case from 0: its controller takes a start>0 chunk as the continuation of the active request.
+            fine_tails = (
+                self._fine_prefill_buckets()
+                and not bool(self._PREFIX_CACHE_ENABLED)
+                and not bool(self._DFLASH_SERVING_ENABLED)
+            )
             warm_ranges = [((end - bucket) if fine_tails else 0, end, bucket) for bucket, end in start_gt_zero_cases]
         else:
             single_shot = (
