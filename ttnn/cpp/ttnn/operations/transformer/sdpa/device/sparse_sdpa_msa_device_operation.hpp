@@ -82,7 +82,7 @@ struct SparseSDPAMsaOperation {
     // Re-checks invariants excluded from the program hash, such as interleaved K/V length and cache_batch_idx.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     // Rejects an explicit block-cache slot request that L1 cannot honour at all; runs on misses and hits.
-    static void validate_kv_cache_request(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_kv_cache_request(const operation_attributes_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
