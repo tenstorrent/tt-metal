@@ -166,7 +166,7 @@ def select(build: str, root: str, headers: list[str]) -> tuple[list[dict], list[
     Returns (entries, requested headers with no stub, headers under tt_metal/api
     that are not in the public header set and so have no stub; --all only).
     """
-    stub_dir = os.path.join(build, "tt_metal", "tt_metal_verify_interface_header_sets") + os.sep
+    stub_dir = os.path.join(os.path.realpath(build), "tt_metal", "tt_metal_verify_interface_header_sets") + os.sep
     api_dir = os.path.join(root, "tt_metal", "api") + os.sep
     stubs = {}
     with open(os.path.join(build, "compile_commands.json")) as db:
