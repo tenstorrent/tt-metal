@@ -26,20 +26,7 @@
 // sibling producers), and the writer serializes it.
 namespace tt::tt_fabric::manifest {
 
-// A capturable range of L1.
-struct L1Region {
-    uint32_t address = 0;
-    uint32_t size = 0;
-    // Set for arrays: size == num_elements * size_per_element.
-    std::optional<uint32_t> num_elements;
-    std::optional<uint32_t> size_per_element;
-    // Schema string, e.g. "u32" or "struct:EDMChannelWorkerLocationInfo" (schema_name()).
-    std::string schema;
-    // If true, the host zeroes the region before launch (get_fabric_router_addresses_to_clear()).
-    bool cleared_by_host = false;
-};
-
-// Which register of a stream a stream ref reads.
+// Which register of a stream a content::Stream reads.
 enum class StreamRegister : uint8_t {
     // The increment-on-write credit or slot count.
     BUF_SPACE_AVAILABLE,
@@ -47,12 +34,42 @@ enum class StreamRegister : uint8_t {
     REMOTE_SRC,
 };
 
-// A stream register reference.
-struct StreamRef {
+// What a field or a typed member holds.
+namespace content {
+
+// Memory at `address` in L1 where `type` exists.
+struct L1 {
+    uint32_t address = 0;
+    layout::Type type;
+    // If true, the host zeroes the memory before launch (get_fabric_router_addresses_to_clear()).
+    bool cleared_by_host = false;
+};
+
+// A stream register.
+struct Stream {
     uint32_t stream_id = 0;
     StreamRegister reg = StreamRegister::BUF_SPACE_AVAILABLE;
-    std::string schema;
+    layout::Type type;
 };
+
+struct Number {
+    uint32_t value = 0;
+};
+
+struct Flag {
+    bool value = false;
+};
+
+// One of an enum's values, which readers name by its type.
+struct Enum {
+    layout::Type type;
+    uint32_t value = 0;
+    bool (*is_enumerator)(uint32_t value) = nullptr;
+};
+
+}  // namespace content
+
+using Content = std::variant<content::L1, content::Stream, content::Number, content::Flag, content::Enum>;
 
 // One of a router's L1 credit counter arrays (L1CreditCounters).
 enum class CreditCounterArray : uint8_t {
@@ -69,7 +86,7 @@ struct CounterRef {
 };
 
 // Credits are held in a stream register or in an element of an L1 counter array.
-using CreditRef = std::variant<StreamRef, CounterRef>;
+using CreditRef = std::variant<content::Stream, CounterRef>;
 
 // A router on the same chip and routing plane, named by the direction it faces.
 struct SiblingRouterRef {
@@ -118,10 +135,10 @@ enum class NocCmdBuf : uint32_t {
 // indexed by this router's sender compact index, and the receiver arrays by the peer router's sender compact index
 // (the receiver counts credits for the peer's sender channels).
 struct L1CreditCounters {
-    L1Region to_sender_ack;
-    L1Region to_sender_completion;
-    L1Region receiver_ack;
-    L1Region receiver_completion;
+    content::L1 to_sender_ack;
+    content::L1 to_sender_completion;
+    content::L1 receiver_ack;
+    content::L1 receiver_completion;
 };
 
 // High level information about a particular router.
@@ -162,59 +179,13 @@ enum class FieldCategory : uint8_t {
     CONTROL_INFO,
 };
 
-// The type at an address or in a stream register.
-struct ElementType {
-    FieldType type;
-    uint32_t size = 0;
-};
-
-// Easy accessor to get ElementType from T without manual construction.
-template <typename T>
-constexpr ElementType element_type() {
-    return {field_type<T>(), sizeof(T)};
-}
-
-// What a field's argument is, and what reading it needs. The manifest names a field's kind by its type's name in
-// snake case (kind_name), so renaming one of these structs renames its kind in the manifest.
-namespace kind {
-
-// The address of an `element` in the router's L1.
-struct L1Value {
-    ElementType element;
-};
-
-// A stream id. The field is the stream's `reg` register, which holds an `element`.
-struct Stream {
-    StreamRegister reg = StreamRegister::REMOTE_SRC;
-    ElementType element;
-};
-
-struct Number {};
-
-// 0 or 1.
-struct Flag {};
-
-// One of an enum's values, which readers name by its schema.
-struct Enum {
-    ElementType element;
-    bool (*is_enumerator)(uint32_t value) = nullptr;
-};
-
-}  // namespace kind
-
-using Kind = std::variant<kind::L1Value, kind::Stream, kind::Number, kind::Flag, kind::Enum>;
-
 // A fact the router kernel is fed, read through the field tables (fabric_manifest_fields.hpp).
 struct Field {
     std::string_view key;
     // Tag used for logical grouping of information in decode / visualizer.
     FieldCategory category = FieldCategory::LIFECYCLE;
-    // Describes what the field's value holds.
-    Kind kind;
-    // What the kernel is fed: the address, the stream id or the value.
-    uint32_t arg = 0;
-    // L1Value only: whether the host zeroes the region before launch (get_fabric_router_addresses_to_clear()).
-    bool cleared_by_host = false;
+    // Underlying content that the value the kernel is fed points to.
+    Content content;
 };
 
 // The credits a sender channel receives back from the peer's receiver.
@@ -231,7 +202,8 @@ struct SenderChannel {
     std::vector<uint32_t> serviced_by;
     // Null when nothing feeds the channel.
     std::optional<SenderChannelProducer> producer;
-    L1Region ring_buffer;
+    // Null when the channel has no slots.
+    std::optional<content::L1> ring_buffer;
     SenderChannelCredits credits;
     // Arguments the kernel is fed for the channel, read through the field table.
     std::vector<Field> fields;
@@ -246,7 +218,8 @@ struct ReceiverChannel {
     // The VC whose downstream edges the channel's step is given. Null when no ERISC runs the step, or when the step
     // forwards to no sibling.
     std::optional<uint32_t> forwards_on;
-    L1Region ring_buffer;
+    // Null when the channel has no slots.
+    std::optional<content::L1> ring_buffer;
     // Arguments the kernel is fed for the channel, read through the field table.
     std::vector<Field> fields;
 };
