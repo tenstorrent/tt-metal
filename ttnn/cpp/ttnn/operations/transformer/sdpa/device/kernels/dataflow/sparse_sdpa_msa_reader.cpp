@@ -63,14 +63,13 @@ void kernel_main() {
     constexpr uint32_t cb_k_cache = get_compile_time_arg_val(ct::CB_K_CACHE);
     constexpr uint32_t cb_v_cache = get_compile_time_arg_val(ct::CB_V_CACHE);
     constexpr uint32_t cb_slot = get_compile_time_arg_val(ct::CB_SLOT);
-    // cb_slot depth = blocks the reader may run ahead of compute, so a miss's DRAM read overlaps the previous
-    // block's math. At depth 2 compute may still be reading the previous block's slot once reserve_back(cb_slot)
-    // returns, so that one slot is never the victim; at depth 1 there is no such slot and the check is compiled out.
-    constexpr uint32_t KV_CACHE_SLOT_DEPTH = get_compile_time_arg_val(ct::KV_CACHE_SLOT_DEPTH);
-    static_assert(KV_CACHE_SLOT_DEPTH <= 2, "a deeper cb_slot queue would need more than one protected slot");
+    // cb_slot is two deep: the reader runs one block ahead of compute, so a miss's DRAM read overlaps the previous
+    // block's math, and compute may still be reading the previous block's slot once reserve_back(cb_slot) returns,
+    // so that one slot is never the victim.
+    static_assert(sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH == 2, "the reader protects exactly one previous slot");
     static_assert(
-        KV_CACHE_SLOTS == 0 || KV_CACHE_SLOT_DEPTH == 1 || KV_CACHE_SLOTS >= 2,
-        "depth 2 needs a second slot to evict into");
+        KV_CACHE_SLOTS == 0 || KV_CACHE_SLOTS >= sparse_sdpa_msa::KV_CACHE_SLOTS_MIN,
+        "the protected slot needs a second slot to evict into");
 
     // K/V use RuntimeTensorShape so T can vary without recompilation.
     constexpr auto q_args = TensorAccessorArgs<ct::COUNT, 0>();
@@ -283,18 +282,15 @@ void kernel_main() {
                 slot_cb.reserve_back(1);
                 const bool miss = slot == KV_CACHE_SLOTS;
                 if (miss) {
-                    // Round-robin victim; at depth 2 the previous block's slot is skipped and the next one is free
-                    // (SLOTS >= 2).
+                    // Round-robin victim; the previous block's slot is skipped and the next one is free (SLOTS >= 2).
                     const auto next_victim = [&]() {
                         const uint32_t cand = kv_rr_next;
                         kv_rr_next = (kv_rr_next + 1 == KV_CACHE_SLOTS) ? 0 : kv_rr_next + 1;
                         return cand;
                     };
                     slot = next_victim();
-                    if constexpr (KV_CACHE_SLOT_DEPTH > 1) {
-                        if (slot == kv_prev_slot) {
-                            slot = next_victim();
-                        }
+                    if (slot == kv_prev_slot) {
+                        slot = next_victim();
                     }
                 }
                 // The writer hears about every miss (it fills the lower halves) and about the token's last block
@@ -314,9 +310,7 @@ void kernel_main() {
                 }
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_cb.get_write_ptr()) = slot;
                 slot_cb.push_back(1);
-                if constexpr (KV_CACHE_SLOT_DEPTH > 1) {
-                    kv_prev_slot = slot;
-                }
+                kv_prev_slot = slot;
             } else {
                 // Streamed path: the reader reserves the whole block, the writer fills the lower half and the
                 // reader the upper half; compute pops it after the chunk.

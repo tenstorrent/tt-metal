@@ -68,7 +68,6 @@ enum : uint32_t {
     CB_K_CACHE,
     CB_V_CACHE,
     CB_SLOT,
-    KV_CACHE_SLOT_DEPTH,
     COUNT
 };
 }  // namespace reader_ct
@@ -146,6 +145,9 @@ enum : uint32_t {
 
 // Per-core K/V block cache.
 constexpr uint32_t KV_CACHE_SLOTS_MAX = 64;      // bounds the reader's per-block residency scan
-constexpr uint32_t KV_CACHE_SLOT_DEPTH_MAX = 2;  // blocks the reader may run ahead of compute
+constexpr uint32_t KV_CACHE_SLOT_DEPTH = 2;      // cb_slot depth: the reader runs one block ahead of compute
+// A cache needs two slots: the reader never evicts the previous block's slot (compute may still read it), and a
+// one-slot cache would have no run-ahead anyway. Fewer fitting selects the streamed kernels.
+constexpr uint32_t KV_CACHE_SLOTS_MIN = 2;
 
 }  // namespace sparse_sdpa_msa

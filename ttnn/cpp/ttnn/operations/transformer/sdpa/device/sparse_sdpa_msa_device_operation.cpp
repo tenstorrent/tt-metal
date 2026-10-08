@@ -140,12 +140,18 @@ void SparseSDPAMsaOperation::validate_kv_cache_request(const SparseSDPAMsaParams
     if (attrs.kv_cache_blocks.value_or(0) == 0) {  // off or auto
         return;
     }
+    TT_FATAL(
+        attrs.kv_cache_blocks.value() >= sparse_sdpa_msa::KV_CACHE_SLOTS_MIN,
+        "sparse_sdpa_msa: kv_cache_blocks={} but the block cache needs at least {} slots (0 = auto, unset = off)",
+        attrs.kv_cache_blocks.value(),
+        sparse_sdpa_msa::KV_CACHE_SLOTS_MIN);
     const KvCachePlan& kv = attrs.kv_cache_plan;
     TT_FATAL(
         kv.slots > 0,
-        "sparse_sdpa_msa: kv_cache_blocks={} but no L1 is left for one {} B K+V block slot ({} B free after the "
+        "sparse_sdpa_msa: kv_cache_blocks={} but no L1 is left for {} {} B K+V block slots ({} B free after the "
         "op's own CBs)",
         attrs.kv_cache_blocks.value(),
+        sparse_sdpa_msa::KV_CACHE_SLOTS_MIN,
         kv.block_bytes,
         kv.free_l1);
 }
@@ -348,12 +354,12 @@ SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
     // L1 buffers fill the interleaved-L1 bank top-down, so its end (not l1_size_per_core(), which also spans
     // L1_SMALL) is the bound when nothing is live. Anything this mesh-level view misses, e.g. a HYBRID allocator's
     // per-device buffers, trips the CB/buffer overlap check at program launch, which fails rather than corrupts.
-    // No slot fitting selects the streamed kernels; they need the same L1 as one slot, so that program fails at
-    // launch exactly where the cache-off op would.
+    // Fewer than KV_CACHE_SLOTS_MIN fitting selects the streamed kernels; they need the L1 of one slot, so that
+    // program fails at launch only where the cache-off op would.
     auto* device = t.q.device();
     const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
     uint64_t base_bytes =
-        tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH_MAX, cb_align);
+        tt::align(static_cast<uint64_t>(message_page_bytes(1)) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, cb_align);
     for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
         base_bytes += tt::align(static_cast<uint64_t>(s.page_size) * s.num_pages, cb_align);
     }
@@ -365,8 +371,9 @@ SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
         static_cast<uint32_t>(std::min<uint64_t>(plan.free_l1 / plan.block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
     const uint32_t requested = attrs.kv_cache_blocks.value();
     plan.slots = requested == 0 ? n_fit : std::min(requested, n_fit);
-    // depth <= slots: the reader's victim search needs one slot outside the in-flight set (its static_assert).
-    plan.slot_depth = std::min(sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH_MAX, std::max(plan.slots, 1u));
+    if (plan.slots < sparse_sdpa_msa::KV_CACHE_SLOTS_MIN) {
+        plan.slots = 0;
+    }
     return plan;
 }
 

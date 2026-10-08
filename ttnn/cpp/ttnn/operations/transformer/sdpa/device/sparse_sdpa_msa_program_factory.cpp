@@ -101,16 +101,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     // streamed K/V block buffers. The plan is hashed, so this layout is fixed for the program's lifetime.
     const KvCachePlan& kv = attrs.kv_cache_plan;
     const uint32_t kv_cache_slots = kv.slots;
-    const uint32_t kv_cache_slot_depth = kv.slot_depth;
     for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/kv_cache_slots > 0)) {
         cb(s.id, s.page_size, s.num_pages, s.df);
     }
     if (kv_cache_slots > 0) {
         cb(cb_k_cache, k_tile_bytes, kv_cache_slots * k_tiles_per_block, g.k_df);
         cb(cb_v_cache, v_tile_bytes, kv_cache_slots * v_tiles_per_block, g.v_df);
-        // Depth = blocks the reader may run ahead of compute (a miss's DRAM read overlaps the previous block's
-        // math); at depth 2 the reader keeps the previous block's slot off the victim list.
-        cb(cb_slot, message_page_bytes(1), kv_cache_slot_depth, bf);
+        // The reader runs one block ahead of compute (a miss's DRAM read overlaps the previous block's math) and
+        // keeps the previous block's slot off the victim list.
+        cb(cb_slot, message_page_bytes(1), sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH, bf);
     }
 
     // Block-cyclic ("slab") cache: the invP remap is baked as compile-time args, so a natural-order cache folds
@@ -169,7 +168,6 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     reader_args.set(rct::CB_K_CACHE, cb_k_cache);
     reader_args.set(rct::CB_V_CACHE, cb_v_cache);
     reader_args.set(rct::CB_SLOT, cb_slot);
-    reader_args.set(rct::KV_CACHE_SLOT_DEPTH, kv_cache_slot_depth);
     std::vector<uint32_t> reader_ct = reader_args.take();
     std::vector<uint32_t> reader_crt;
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(reader_ct, reader_crt);

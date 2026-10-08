@@ -150,10 +150,10 @@ def _assert_kv_cache_parity(device, q, k, v, indices, kv_cache_blocks, **kw):
 
 @run_for_blackhole()
 @pytest.mark.parametrize("kv_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["kv_bf16", "kv_bfp8"])
-@pytest.mark.parametrize("kv_cache_blocks", [0, 1, 2, 16], ids=["auto", "n1", "n2", "n16"])
+@pytest.mark.parametrize("kv_cache_blocks", [0, 2, 16], ids=["auto", "n2", "n16"])
 def test_msa_native_kv_cache_byte_identical(device, kv_dtype, kv_cache_blocks):
-    # Random 16-of-20 selections over several tokens per core (sorted rows). n1: the depth-1 build. n2: the
-    # smallest run-ahead build (2 slots, every block a miss). n16: hits and evictions over the 20-block set.
+    # Random 16-of-20 selections over several tokens per core (sorted rows). n2: the smallest cache (every block
+    # a miss, the previous slot always protected). n16: hits and evictions over the 20-block set.
     # auto: the whole set resident. Q is never cached, so fp8 Q only shrinks the Q CBs in the L1 budget: one
     # auto run covers it, as does the clamp of an oversized count to what fits.
     d, H, S, topk, nblk = _D, 16, 1024, 16, 20
@@ -252,6 +252,8 @@ def test_msa_native_kv_cache_no_room(device, expect_error):
     )
     try:
         with expect_error(RuntimeError, "no L1 is left"):
+            run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=2)
+        with expect_error(RuntimeError, "at least 2 slots"):
             run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=1)
     finally:
         ttnn.deallocate(pinned)

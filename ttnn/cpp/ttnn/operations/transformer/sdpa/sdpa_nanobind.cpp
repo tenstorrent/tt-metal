@@ -473,8 +473,8 @@ void bind_sdpa(nb::module_& mod) {
                 again by a later query on the same core is read from L1 instead of DRAM. None (default) = off,
                 byte-identical to the streamed path. 0 = auto: as many slots as fit in the L1 below the lowest
                 live L1 buffer after the op's own CBs (at most 64); the count is resolved when the program is
-                created and is part of its cache key, so a trace replays the program it captured; none fitting
-                falls back to the streamed kernels. N > 0 = min(N, that limit); raises if none fits.
+                created and is part of its cache key, so a trace replays the program it captured; fewer than two
+                fitting falls back to the streamed kernels. N >= 2 = min(N, that limit); raises if two do not fit.
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
