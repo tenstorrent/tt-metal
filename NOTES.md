@@ -21,8 +21,32 @@ Base: origin/ttp/t48-ltx25-integrated 5833f56096f (decode 2.714 s, blx01 job 019
   -t 450. Output: /var/tmp/fasth3/t274/out_D (stage_tree_mm.txt, stage_tree_mr.txt, run.log).
   (Job 024 was a failed submit: the first driver skipped the checkout; exit 9, no device work.)
 
+## Job 026 result (blx01, stage 5 NA ms/block)
+- default 120.8; reader only (math ablated, t263 job 020) 103.0; mm (math+mask ablated) 42; mr (math+reads ablated) 95.2.
+- So per-brick mask generation is the reader cost (~95 ms/block), not K/V NOC reads (~42). The #263
+  "per-tile NOC issue" hypothesis is wrong for this op.
+- Cause (inferred, not DPRINT-verified): W/H-edge cores (critical path) refill the 224-tile persistent
+  mask block about 3x per W row: in W-fastest index order the first/last 2 chunks of every row have
+  their own WindowClamp.
+
+## Fix (run 2): DIFFVAE_NA_EDGE_ORDER=1 (opt-in), commit ac876509daa
+- kernels/neighborhood_edge_order.hpp: EdgeGroupedOrder visits a core's range grouped by
+  (head/batch, H edge position, W edge position), each group in index order. Reader and writer use it;
+  compute is order-agnostic. Depth per axis = ceil((window/2) / (brick_sites * chunk_bricks)) = 2 for
+  stage 5; T is not grouped. In the program hash. Output should be md5-identical to default (only the
+  order changes); the arms differ in program hash, so check NA ms/block, not md5, for validity.
+- Host check: the order is a permutation of each core's range (start 0/100/5000, 308 items).
+- Not yet built or run on device: blx01 was unreachable (No route to host) at 2026-10-08 ~11:55 local.
+
 ## Next step
-- On wake: `ssh g15blx01 bash /var/tmp/fasth3/t274/drv/probe.sh` exits 0 -> read
-  `grep neighborhood-sdpa out_D/stage_tree_{mm,mr}.txt` (the 1-count lines are stage 5 per block).
-  mm << 103 -> mask generation is the cost: cache/skip it (e.g. make the WindowClamp key ignore the
-  key phase, or a relative table with phase). mr << 103 -> K/V reads: brick-contiguous K/V.
+- When `ssh g15blx01 true` works and blx01.READY / broker fsm is healthy: `bash t274-drv/go274.sh`
+  (copies bundle + scripts, starts driver: incremental build of $F/t263/b @ac876509daa, then ONE broker
+  job, arms base / edge:DIFFVAE_NA_EDGE_ORDER=1, both profiled, -t 450, out /var/tmp/fasth3/t274/out_E).
+  Hand off waiting on `ssh g15blx01 bash /var/tmp/fasth3/t274/drv/probe.sh`.
+- Read: `grep neighborhood-sdpa out_E/stage_tree_{base,edge}.txt` (1-count lines = stage 5 per block),
+  decode times in run.log, md5 of both arms. PCC/PSNR vs /var/tmp/fasth3/diffvae/ref: check how
+  decode261.py scores (HOST_SEEDS / SARMS 4th arg of run274.sh; driver passes only 3 args today).
+- Gain >= 5% (~0.14 s off 2.714 s) and quality neutral: flip default (edge_order_requested() default
+  on, =0 off), cherry-pick ONLY ac876509daa + the flip onto a -land branch from
+  origin/ttp/t48-ltx25-integrated (enum conflict: ablate_mask entry is absent there, resolve by
+  dropping it), rebuild/verify, `ttp push --detach`; notes via `ttp push --own --detach`.
