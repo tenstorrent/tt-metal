@@ -162,6 +162,17 @@ python -m models.demos.gemma4_d_p.scripts.ragged_8k_report \
     --output models/demos/gemma4_d_p/docs/perf/ragged_8k_reduce_scatter_2026_10_08
 ```
 
+For the operation-level explanation of **one chunked 8K call versus one ragged
+4×2K batch**, see the [layer profile PDF](perf/ragged_8k_layer_profile_2026_10_08/layer_profile.pdf)
+and [timings, counts and raw data](perf/ragged_8k_layer_profile_2026_10_08/report.html).
+The existing `test_prefill_layer_perf_chunk_n` measures global layer 5 first,
+then sliding layer 0, at zero and 248K prefix per request. Both paths allocate
+four 256K cache slots and use reduce-scatter. These isolated-layer profiles use
+random caches and one replay per cell; they explain operation costs, rather
+than replacing the five-replay full-model latency measurements above.
+The [reproduction script](perf/ragged_8k_layer_profile_2026_10_08/reproduce.sh)
+also shows how to redraw the figures from archived measurements without hardware.
+
 For the 256K canonical 2K/4K/8K sweep and loaded early/late/mixed-prefix
 comparisons, see the [performance report](perf/ragged_load_2026_10_08/report.html)
 and [all charts as PDF](perf/ragged_load_2026_10_08/charts.pdf). The artifact includes

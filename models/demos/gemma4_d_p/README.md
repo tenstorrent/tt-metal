@@ -53,6 +53,16 @@ tt-perf-report --start-signpost gemma4-layer-global-chunk15-start \
                --end-signpost gemma4-layer-global-chunk15-stop ops_perf_results_<ts>.csv
 ```
 
+For an equal-token comparison of one chunked 8K call with one ragged 4×2K batch,
+use the same layer test in separate processes. Set
+`GEMMA4_LAYER_PERF_CHUNKS=0,31` and `GEMMA4_LAYER_PERF_SLOTS=4` in both runs.
+Leave `GEMMA4_LAYER_PERF_RAGGED_LENGTHS` empty for chunked execution; set it to
+`2048,2048,2048,2048` for ragged execution. All requests in the ragged batch use
+the selected chunk's start position. The existing layer-only timing boundaries
+exclude input embedding, RoPE preparation and host staging from both paths.
+The manifest records request lengths, useful tokens, cache slots and reduction
+mode. Use separate profiler output and `PREFILL_SUMMARIES` directories per run.
+
 Global layers use tied QK projection; sliding layers use QKV. Weight caches are separated by dtype and mesh geometry. A valid completion marker permits cache-only loading; otherwise weights are loaded from the checkpoint. Set `GEMMA4_PREFILL_LOAD_FULL_WEIGHTS=1` to force checkpoint loading. Offline text input also needs the demo's cached corpus.
 
 ## Model and cache interfaces

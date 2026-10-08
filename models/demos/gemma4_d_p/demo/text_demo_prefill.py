@@ -153,7 +153,7 @@ def _hf_text_config(hf_model_id):
 # ── The prefill model under test ────────────────────────────────────────────
 
 
-def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None):
+def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None, *, max_batch_size=1):
     """Create a CP prefill model with ring caches for one or more chunks."""
     if mesh_config.cp_degree <= 1:
         raise ValueError("This demo requires context parallel prefill")
@@ -169,7 +169,7 @@ def _build_prefill_model(mesh_config, hf_model_id, chunk_size, context_len=None)
     t0 = time.time()
     model_args, model, kv_cache, _state_dict = create_tt_model(
         mesh_config=mesh_config,
-        max_batch_size=1,
+        max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         dtype=MODEL_DTYPE,
         force_rebuild=_load_full_weights(),
@@ -444,10 +444,15 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     Each layer is compiled and captured once, then each selected chunk is measured once.
     Ring caches are initialized with random values before measurement.
     Inputs are token embeddings, so this is an isolated-layer benchmark.
+    GEMMA4_LAYER_PERF_RAGGED_LENGTHS=2048,2048,2048,2048 selects one full
+    packed 8K batch. GEMMA4_LAYER_PERF_CHUNKS=0,31 selects specific positions.
+    GEMMA4_LAYER_PERF_SLOTS=4 gives both paths the same cache allocation.
     """
     from models.demos.gemma4_d_p.scripts.layer_perf_report import write_manifest
     from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
+    from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
+    from models.demos.gemma4_d_p.tt.ragged_prefill import PrefillRequest, RaggedAttentionLayout, RaggedPrefillPlan
 
     mesh_config = _mesh_config(mesh_device)
     cp = mesh_config.cp_degree
@@ -457,7 +462,10 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         pytest.skip(geometry_error)
     n_chunks = context_len // chunk_size
     layer_types = ["global", "local"] if layer_type == "both" else [layer_type]
-    if chunk_idx == "ci":
+    selected_chunks = os.getenv("GEMMA4_LAYER_PERF_CHUNKS", "")
+    if selected_chunks:
+        cells_by_type = {lt: tuple(int(i) for i in selected_chunks.split(",")) for lt in layer_types}
+    elif chunk_idx == "ci":
         cells_by_type = {lt: LAYER_PERF_CI_CELLS[lt] for lt in layer_types}
     elif chunk_idx == "all":
         cells_by_type = {lt: tuple(range(n_chunks)) for lt in layer_types}
@@ -469,6 +477,15 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     chunk_idxs = sorted({i for idxs in cells_by_type.values() for i in idxs})
     cells = [(lt, idx) for idx in chunk_idxs for lt in layer_types if idx in cells_by_type[lt]]
     model_layer_types = {"global": "full_attention", "local": "sliding_attention"}
+    ragged_lengths = tuple(int(n) for n in os.getenv("GEMMA4_LAYER_PERF_RAGGED_LENGTHS", "").split(",") if n)
+    slots = int(os.getenv("GEMMA4_LAYER_PERF_SLOTS", str(len(ragged_lengths) or 1)))
+    if slots < max(1, len(ragged_lengths)):
+        raise ValueError("Layer-perf cache slots must cover all active requests")
+    plan = None
+    if ragged_lengths:
+        if sum(ragged_lengths) != chunk_size or any(n <= 0 or n % 32 for n in ragged_lengths):
+            raise ValueError("Layer-perf ragged lengths must be tile-aligned and fill exactly one chunk")
+        plan = RaggedPrefillPlan(ragged_lengths, chunk_size, cp, mesh_config.tp_degree)
 
     hf_model_id = _hf_model_id()
     text_config = _hf_text_config(hf_model_id)
@@ -477,15 +494,18 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         hf_model_id=hf_model_id,
         chunk_size=chunk_size,
         context_len=context_len,
+        max_batch_size=slots,
     )
     tokens_all = _get_prefill_tokens(hf_model_id, context_len, model_args.vocab_size)
+    lane_metadata = tuple(PrefillMetadata(mesh_config, clamp_valid=True) for _ in ragged_lengths)
+    ragged_layout = RaggedAttentionLayout(plan, mesh_config, lane_metadata) if plan else None
 
     layer_idxs = {lt: find_layer_idx(text_config, model_layer_types[lt]) for lt in layer_types}
     type_desc = ", ".join(f"{lt}=layer{layer_idxs[lt]}" for lt in layer_types)
     logger.info(
         f"[layer_perf_chunk] ctx={context_len} chunk={chunk_size} n_chunks={n_chunks} cp={cp} | "
         f"cells={len(cells)} chunks={chunk_idxs[0]}..{chunk_idxs[-1]} "
-        f"types=({type_desc})"
+        f"types=({type_desc}) ragged_lengths={ragged_lengths} slots={slots}"
     )
 
     host_input_tokens = ttnn.from_torch(
@@ -512,8 +532,19 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     def _stage(idx):
         """Refresh tokens, ring metadata, semaphores, and RoPE positions before replay."""
         chunk_start = idx * chunk_size
+        chunk_tokens = tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous()
+        positions = torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0)
+        if plan is not None:
+            requests = tuple(
+                PrefillRequest(slot, slot, chunk_start, tuple(chunk_tokens[0, :length].tolist()))
+                for slot, length in enumerate(ragged_lengths)
+            )
+            chunk_tokens = torch.tensor(plan.pack(requests), dtype=torch.int32).unsqueeze(0)
+            positions = torch.tensor(plan.pack(requests, positions=True), dtype=torch.int32).unsqueeze(0)
+            for metadata, req in zip(lane_metadata, requests):
+                metadata.update(slot_idx=req.slot_id, kv_actual_global=req.actual_start, valid_global=req.actual_end)
         staged = ttnn.from_torch(
-            tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
+            chunk_tokens,
             device=None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -522,7 +553,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
         model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
         pos_host = ttnn.from_torch(
-            torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
+            positions,
             device=None,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -564,6 +595,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
                 packed_sliding_rope=packed_rope if lt == "local" else None,
+                ragged_layout=ragged_layout,
+                stable_reductions=model.stable_prefill_reductions,
             )
 
         return prepare, forward
@@ -573,7 +606,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         prepare, fwd = _make_forward(lt)
         capture_at = cells_by_type[lt][0]
         t0 = time.time()
-        compile_out = fwd(prepare(), _stage(capture_at))
+        compile_start = _stage(capture_at)
+        compile_out = fwd(prepare(), compile_start)
         ttnn.synchronize_device(mesh_device)
         compile_out.deallocate(True)
         compile_s = time.time() - t0
@@ -638,6 +672,8 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
                     "layer_idx": layer_idxs[lt],
                     "chunk_start": chunk_start,
                     "measured_ms": measured_s * 1000,
+                    "request_lengths": list(ragged_lengths) if plan else [chunk_size],
+                    "useful_tokens": chunk_size,
                     "start_signpost": sp_start,
                     "stop_signpost": sp_stop,
                 }
@@ -652,15 +688,20 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     finally:
         for tid in (*traces.values(), *prep_traces.values()):
             ttnn.release_trace(mesh_device, tid)
+        for metadata in lane_metadata:
+            metadata.deallocate()
 
     assert torch.isfinite(hidden).all(), f"{layer_types[-1]} layer produced non-finite output"
     assert float(hidden.std()) > 0.001, f"{layer_types[-1]} layer output is degenerate"
     write_manifest(
-        request.node.callspec.id,
+        request.node.callspec.id + ("-ragged-" + "x".join(map(str, ragged_lengths)) if plan else ""),
         results,
         context_len=context_len,
         chunk_size=chunk_size,
         mesh_shape=tuple(mesh_device.shape),
+        allocated_slots=slots,
+        ragged_lengths=list(ragged_lengths),
+        tp_reduction="fixed_fp32" if model.stable_prefill_reductions else "reduce_scatter",
     )
 
     n_local = model_args.layer_types.count("sliding_attention")
