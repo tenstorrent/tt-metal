@@ -329,18 +329,6 @@ ALWI void sigmoid_tile_init_pack() {
 
 template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sigmoid_tile_pack(uint32_t idst) {
-#ifdef ARCH_BLACKHOLE
-    if constexpr (vec_mode == VectorMode::RC && !(is_fp32_dest_acc_en && !fast_and_approx)) {
-        PACK(SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_sigmoid,
-            (fast_and_approx, is_fp32_dest_acc_en, 32 /* ITERATIONS */),
-            idst,
-            VectorMode::None));
-        return;
-    }
-#endif
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
