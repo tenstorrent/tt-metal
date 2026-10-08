@@ -114,11 +114,9 @@ inline void _llk_unpack_tilize_wrapper_(
 }
 
 inline void _llk_unpack_tilize_uninit_wrapper_(
-    const std::uint32_t unpack_dst_format,
-    const std::uint32_t num_faces                   = 4,
-    [[maybe_unused]] const std::uint32_t face_r_dim = ckernel::MAX_FACE_R_DIM)
+    const std::uint32_t unpack_dst_format, const std::uint32_t num_faces = 4, const std::uint32_t face_r_dim = ckernel::MAX_FACE_R_DIM)
 {
-    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(ckernel::MAX_FACE_R_DIM, num_faces));
+    _llk_unpack_tilize_uninit_(unpack_dst_format, ckernel::tensor_shape_from_num_faces(face_r_dim, num_faces));
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
