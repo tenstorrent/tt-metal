@@ -120,7 +120,7 @@ bool is_cleared_by_host(const ManifestRouterInputs& inputs, size_t address) {
 
 // An array of T filling `size` bytes at `address`.
 template <typename T>
-manifest::L1Region l1_array(const ManifestRouterInputs& inputs, size_t address, size_t size) {
+manifest::content::L1 l1_array(const ManifestRouterInputs& inputs, size_t address, size_t size) {
     TT_FATAL(
         size % sizeof(T) == 0,
         "Fabric manifest: array at {:#x} is {} bytes, not a whole number of {}-byte elements",
@@ -129,10 +129,7 @@ manifest::L1Region l1_array(const ManifestRouterInputs& inputs, size_t address, 
         sizeof(T));
     return {
         .address = static_cast<uint32_t>(address),
-        .size = static_cast<uint32_t>(size),
-        .num_elements = static_cast<uint32_t>(size / sizeof(T)),
-        .size_per_element = static_cast<uint32_t>(sizeof(T)),
-        .schema = manifest::schema_name_of<T>(),
+        .type = layout::array_of<T>(static_cast<uint32_t>(size / sizeof(T))),
         .cleared_by_host = is_cleared_by_host(inputs, address),
     };
 }
@@ -178,15 +175,21 @@ manifest::L1CreditCounters collect_credit_counters(const ManifestRouterInputs& i
     };
 }
 
-// A channel's packet slots, each `slot_size` bytes. No struct describes a slot: it holds a packet.
-manifest::L1Region ring_buffer_region(
+// A channel's packet slots, each `slot_size` bytes, or none when it has no slots. No struct describes a slot: it
+// holds a packet.
+std::optional<manifest::content::L1> ring_buffer(
     const ManifestRouterInputs& inputs, size_t address, size_t num_slots, size_t slot_size) {
-    return {
+    if (num_slots == 0) {
+        return std::nullopt;
+    }
+    return manifest::content::L1{
         .address = static_cast<uint32_t>(address),
-        .size = static_cast<uint32_t>(num_slots * slot_size),
-        .num_elements = static_cast<uint32_t>(num_slots),
-        .size_per_element = static_cast<uint32_t>(slot_size),
-        .schema = "packet_ring",
+        .type =
+            {
+                .element = layout::element::Bytes{},
+                .size = static_cast<uint32_t>(num_slots * slot_size),
+                .count = static_cast<uint32_t>(num_slots),
+            },
         .cleared_by_host = is_cleared_by_host(inputs, address),
     };
 }
@@ -204,29 +207,37 @@ std::string arg_name(const manifest::NamedArg& arg, const FieldIndex& index) {
     TT_THROW("Fabric manifest: unknown argument index {}", static_cast<int>(arg.index));
 }
 
-// `field`, given the value of its source.
+// `field`, with its content's address, stream id or value filled in from `arg`, the value of its source.
 manifest::Field make_field(const ManifestRouterInputs& inputs, const manifest::RouterField& field, uint32_t arg) {
     const std::string_view key = field.key.value;
-    const manifest::Kind& kind = field.kind.value;
-    TT_FATAL(
-        !std::holds_alternative<manifest::kind::Flag>(kind) || arg <= 1,
-        "Fabric manifest: field {} is a flag, but is {}",
-        key,
-        arg);
-    if (const auto* enum_kind = std::get_if<manifest::kind::Enum>(&kind)) {
-        TT_FATAL(
-            enum_kind->is_enumerator(arg),
-            "Fabric manifest: field {} is {}, which is not a {}",
-            key,
-            arg,
-            manifest::schema_name(enum_kind->element.type, enum_kind->element.size));
-    }
+    manifest::Content content = field.content.value;
+    std::visit(
+        ttsl::overloaded{
+            [&](manifest::content::L1& l1) {
+                l1.address = arg;
+                l1.cleared_by_host = is_cleared_by_host(inputs, arg);
+            },
+            [&](manifest::content::Stream& stream) { stream.stream_id = arg; },
+            [&](manifest::content::Number& number) { number.value = arg; },
+            [&](manifest::content::Flag& flag) {
+                TT_FATAL(arg <= 1, "Fabric manifest: field {} is a flag, but is {}", key, arg);
+                flag.value = arg != 0;
+            },
+            [&](manifest::content::Enum& enumerator) {
+                TT_FATAL(
+                    enumerator.is_enumerator(arg),
+                    "Fabric manifest: field {} is {}, which is not a {}",
+                    key,
+                    arg,
+                    manifest::schema_name(enumerator.type));
+                enumerator.value = arg;
+            },
+        },
+        content);
     return {
         .key = key,
         .category = field.category.value,
-        .kind = kind,
-        .arg = arg,
-        .cleared_by_host = std::holds_alternative<manifest::kind::L1Value>(kind) && is_cleared_by_host(inputs, arg),
+        .content = std::move(content),
     };
 }
 
@@ -294,10 +305,11 @@ struct ChannelContext {
 };
 
 // The stream register the kernel is fed under `name`.
-manifest::StreamRef fed_stream(const ManifestRouterInputs& inputs, const std::string& name) {
+manifest::content::Stream fed_stream(const ManifestRouterInputs& inputs, const std::string& name) {
     return {
         .stream_id = emitted_value(inputs.kernel.named_ct_args, name),
-        .schema = manifest::schema_name_of<uint32_t>(),
+        .reg = manifest::StreamRegister::BUF_SPACE_AVAILABLE,
+        .type = layout::type_of<uint32_t>(),
     };
 }
 
@@ -405,7 +417,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         ctx.mux_mode && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
         ctx.trimming.has_value() && !ctx.trimming->is_sender_channel_used(c));
     sender.producer = collect_local_producer(ctx, index);
-    sender.ring_buffer = ring_buffer_region(
+    sender.ring_buffer = ring_buffer(
         inputs,
         ctx.allocator.get_sender_channel_base_address(index.vc, index.channel),
         ctx.allocator.get_sender_channel_number_of_slots(index.vc, index.channel),
@@ -467,7 +479,7 @@ manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, co
         index.vc,
         kernel_receiver_channel(ctx, index.vc));
     receiver.forwards_on = collect_forwards_on(ctx, index.vc, serviced);
-    receiver.ring_buffer = ring_buffer_region(
+    receiver.ring_buffer = ring_buffer(
         inputs,
         ctx.allocator.get_receiver_channel_base_address(index.vc, index.channel),
         ctx.allocator.get_receiver_channel_number_of_slots(index.vc, index.channel),

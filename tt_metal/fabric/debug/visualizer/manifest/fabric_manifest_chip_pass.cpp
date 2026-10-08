@@ -98,11 +98,13 @@ tt::tt_metal::CoreCoord router_virtual_core(const tt::Cluster& cluster, ChipId p
         physical_chip_id, router_logical_core(cluster, physical_chip_id, chan), CoreType::ETH);
 }
 
-// The value of the field keyed `key`.
-uint32_t field_arg(const std::vector<manifest::Field>& fields, std::string_view key) {
+// The value of the flag field keyed `key`.
+bool flag_field(const std::vector<manifest::Field>& fields, std::string_view key) {
     const auto it = std::ranges::find(fields, key, &manifest::Field::key);
     TT_FATAL(it != fields.end(), "Fabric manifest: no field keyed {}", key);
-    return it->arg;
+    const auto* flag = std::get_if<manifest::content::Flag>(&it->content);
+    TT_FATAL(flag != nullptr, "Fabric manifest: field {} is not a flag", key);
+    return flag->value;
 }
 
 // The collected routers in the order ControlPlane lists the chip's active channels, each with its key and cores.
@@ -231,7 +233,7 @@ void join_edges(std::vector<manifest::Router>& routers, const ControlPlane& cont
                 const auto landed = landed_by.find({chan, vc, ch});
                 if (landed == landed_by.end()) {
                     TT_FATAL(
-                        field_arg(sender.fields, manifest::k_static_connection_key) == 0,
+                        !flag_field(sender.fields, manifest::k_static_connection_key),
                         "Fabric manifest: {} channel {}'s VC{} sender {} waits for a sibling to connect, but no "
                         "sibling's edge lands on it",
                         node,
