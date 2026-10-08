@@ -18,7 +18,9 @@ KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # The chunk terms stay in interleaved L1 for both scans when their share of each worker core fits this budget;
-# larger geometries keep them in DRAM.
+# larger geometries keep them in DRAM. Kimi-K3 on Galaxy SP8xTP4 (24 heads, 640 rows per device) needs 256 KiB per
+# core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
+# Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
