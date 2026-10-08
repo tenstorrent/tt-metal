@@ -4,11 +4,13 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/experimental/bfloat8.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -78,4 +80,26 @@ TEST(HostOnlyTest, Bfp8Conversion) {
 
     EXPECT_EQ(unpacked_bfp8b_tile_vec_rm_out, tiled_to_rm_fp32_vec);
     EXPECT_EQ(unpacked_bfp8b_tile_vec_tile_out, rm_to_tiled_fp32_vec);
+}
+
+TEST(HostOnlyTest, Bfp8UnpackWithExplicitAlignment) {
+    // 64 exponent bytes of 127 then 1024 mantissa bytes of 0x40 encode a tile of 1.0f.
+    std::vector<uint32_t> ones_tile(1088 / 4, 0x40404040);
+    std::fill_n(ones_tile.begin(), 64 / 4, 0x7f7f7f7f);
+    EXPECT_EQ(
+        tt_metal::experimental::unpack_bfp8_tiles_into_float_vec(
+            ones_tile, /*row_major_output=*/true, /*is_exp_a=*/false, /*l1_alignment=*/16),
+        std::vector<float>(1024, 1.0f));
+
+    std::vector<float> fp32_vec(2 * 1024);
+    for (size_t i = 0; i < fp32_vec.size(); i++) {
+        fp32_vec[i] = static_cast<float>(i % 97) - 48.0f;
+    }
+    auto packed = pack_as_bfp8_tiles(ttsl::make_const_span(fp32_vec), /*row_major_input=*/true, /*is_exp_a=*/false);
+    for (bool row_major_output : {false, true}) {
+        EXPECT_EQ(
+            tt_metal::experimental::unpack_bfp8_tiles_into_float_vec(
+                packed, row_major_output, /*is_exp_a=*/false, /*l1_alignment=*/16),
+            unpack_bfp8_tiles_into_float_vec(packed, row_major_output, /*is_exp_a=*/false));
+    }
 }
