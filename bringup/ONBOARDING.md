@@ -100,7 +100,7 @@ Use `tt-multiagent` to split independent tracks across worktrees under `/mnt/tt-
 ## 7b. Open risks
 
 - Unequal head dims may not map onto existing SDPA ops; the probe decides pad-to-192 vs a new path.
-- 8 experts per chip with bfp8 and the ring layout: tile counts unverified for the one-copy mode.
+- 8 experts per chip with bfp8 and the ring layout: one-copy mode implemented and verified (bringup/mimo_v26/notes/ring_moe.md, section ONE weight copy).
 - Expert skew in real data can be extreme (DSV4: one expert about 63x the mean); random-token tests hide it. Test with real text.
 - MTP has no HF reference code: needs a reference built from the config and checkpoint tensor names.
 - Skills are unvalidated against a real bring-up (all say "Last validated against commit: <none yet>"). Update that line as you validate.
