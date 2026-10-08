@@ -11,18 +11,12 @@ from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tens
 
 pytestmark = pytest.mark.use_module_device
 
-# input_grad is output_grad broadcast back over the reduced dims, divided by how many values were averaged. Reducing
-# W or H sets the wt_need_bcast / ht_need_bcast compile-time args; the other dims broadcast through reader runtime
-# args. 63 x 63 leaves the last tile in H and W partly filled.
-
 
 def run_moreh_mean_backward_test(
     input_shape, dim, device, keepdim=True, fp32_dest_acc_en=False, create_input_grad=False
 ):
-    # Not nightly run_moreh_mean_backward: its output_grad is in [0, 1), so after dividing by the number of averaged
-    # values (63 for one W dim, 23814 for all dims) every expected value is within its 0.1 tolerance of zero, and an op
-    # that writes zeros, or nothing, still passes. Here output_grad is scaled by that number, so the expected values
-    # are in [0, 1); input_grad starts as NaN, so a value the op never writes fails.
+    # Not nightly run_moreh_mean_backward: its expected values are within tolerance of zero, so a zero output passes.
+    # Here output_grad is scaled up by the number of averaged values, and input_grad starts as NaN.
     torch_input = torch.rand(input_shape, requires_grad=True)
     torch_output = torch.mean(torch_input, dim=dim, keepdim=keepdim)
     num_averaged = torch_input.numel() // torch_output.numel()
@@ -68,14 +62,10 @@ def test_moreh_mean_backward(dim, device):
 @pytest.mark.parametrize(
     "input_shape, dim, keepdim, fp32_dest_acc_en, create_input_grad",
     [
-        # keepdim=False drops N and C here.
         ([2, 3, 63, 63], [0, 1], False, False, False),
         ([3, 4, 5, 17, 22], [2], True, False, False),
         ([2, 3, 63, 63], [3], True, True, False),
-        # No input_grad passed: the op allocates it from input_grad_shape.
         ([2, 3, 63, 63], [1, 3], True, False, True),
-        # 149 tiles: a prime above any device's core count, so the work split leaves a second core group and the
-        # factory builds its second compute kernel.
         ([1, 1, 32, 149 * 32], [2], True, False, False),
     ],
     ids=["keepdim_false", "rank_5", "fp32_dest_acc", "allocated_input_grad", "core_group_2"],

@@ -12,7 +12,6 @@ from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tens
 pytestmark = pytest.mark.use_module_device
 
 # Nightly has no moreh_sgd helper (its logic is inline in test_* functions), so this file has its own.
-# weight_decay != 0, momentum != 0, momentum_initialized and nesterov each set a kernel define; dampening is a scalar.
 
 
 def run_moreh_sgd_test(
@@ -29,10 +28,8 @@ def run_moreh_sgd_test(
     x = torch.rand(shape).to(torch.bfloat16)
     y = torch.rand(shape).to(torch.bfloat16)
     weight = torch.nn.Parameter(torch.randn(shape).to(torch.bfloat16))
-    # Summed, not averaged: the gradient stays around 1 instead of 1e-3, so without weight decay the momentum buffer
-    # still moves well past the 0.05 tolerance and an unwritten buffer fails. With lr, momentum and weight_decay
-    # near 1 every value stays near 1 too: nightly's lr=3.0, momentum=7.7, weight_decay=2.2 push intermediates into
-    # the hundreds, where bfloat16 rounds to 1.0 and a result that cancels to ~1 is off by ~2.
+    # Summed, so the gradient stays around 1, well above the tolerance. lr, momentum and weight_decay stay near 1:
+    # nightly's larger values push intermediates into the hundreds, where bfloat16 loses the result.
     torch.nn.functional.l1_loss(x * weight, y, reduction="sum").backward()
     optimizer = torch.optim.SGD(
         [weight], lr=1.0, momentum=momentum, dampening=dampening, weight_decay=weight_decay, nesterov=nesterov
@@ -69,7 +66,7 @@ def run_moreh_sgd_test(
         momentum_initialized=momentum_initialized,
         compute_kernel_config=get_compute_kernel_options(fp32_dest_acc_en),
     )
-    # With provided outputs, check those buffers themselves: the op must write into them.
+    # Check the provided buffers themselves, not the return value.
     actual_outputs = [tt_param_out, tt_momentum_buffer_out] if provide_outputs else result
 
     expected_outputs = [weight.detach()]
@@ -118,13 +115,10 @@ def test_moreh_sgd(momentum, dampening, weight_decay, nesterov, momentum_initial
     "shape, provide_outputs, fp32_dest_acc_en",
     [
         ([32, 32], True, True),
-        # No outputs passed: the op allocates param_out and the momentum buffer.
         ([32, 32], False, False),
-        # Partly filled tiles in H or W: the tile count used to come from the logical shape and skip them (#51278).
+        # Regression for #51278: the tile count came from the logical shape and skipped partial tiles.
         ([1, 1, 30, 32], True, False),
         ([1, 1, 32, 40], True, False),
-        # 149 tiles: a prime above any device's core count, so the work split leaves a second core group and the
-        # factory builds its second compute kernel.
         ([32, 149 * 32], True, False),
     ],
     ids=["fp32_dest_acc", "allocated_outputs", "h_partial", "w_partial", "core_group_2"],

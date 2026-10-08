@@ -16,15 +16,12 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "start_end_step, dtype, tilized",
     [
-        # Every length leaves the last tile partly filled.
         ([10.9, -13, -0.3], "bfloat16", True),
         ([-100, 320, 1], "int32", True),
         ([2.3, 15.3, 0.5], "float32", True),
-        # Row-major output uses a separate writer kernel, which clamps the partial last chunk.
         ([10.9, -13, -0.3], "bfloat16", False),
         ([-100, 320, 1], "int32", False),
         ([2.3, 15.3, 0.5], "float32", False),
-        # 149 tiles: more than any device's core count, so cores write several tiles each.
         ([0, 4763, 1], "int32", True),
         ([0, 4763, 1], "int32", False),
     ],
@@ -47,8 +44,7 @@ def test_moreh_arange(start_end_step, dtype, tilized, device):
 @pytest.mark.merge_gate
 def test_moreh_arange_provided_output(device):
     torch.manual_seed(0)
-    # Not the nightly helper: it fills the provided output with torch.empty, which can already hold the
-    # expected values. NaN makes an output the op never writes fail.
+    # Not the nightly helper: it fills the output with torch.empty, which can already hold the expected values.
     expected = torch.arange(10.9, -13, -0.3).to(torch.bfloat16)
     tt_output = ttnn.from_torch(
         torch.full([1, len(expected)], float("nan")), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT

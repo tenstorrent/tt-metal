@@ -11,8 +11,7 @@ from tests.ttnn.unit_tests.operations.test_utils import create_ttnn_tilized_tens
 
 pytestmark = pytest.mark.use_module_device
 
-# Not the nightly helper: it pre-fills every output with its input, and one step at lr=1e-2 moves the values by less
-# than the 0.1 tolerance, so an op that writes nothing still passes.
+# Not the nightly helper: its outputs start as the inputs, which stay within tolerance after one step.
 
 
 def run_moreh_adamw_test(shape, device, amsgrad=True, fp32_dest_acc_en=False, step=8, provide_outputs=True):
@@ -23,8 +22,7 @@ def run_moreh_adamw_test(shape, device, amsgrad=True, fp32_dest_acc_en=False, st
 
     def backward():
         optimizer.zero_grad()
-        # Summed, not averaged: the gradients, and so the moments, stay around 1 instead of 1e-3, well above the 0.1
-        # tolerance, so a moment the op never writes fails.
+        # Summed, so the moments stay around 1, well above the tolerance.
         torch.nn.functional.l1_loss(x * weight, y, reduction="sum").backward()
 
     for _ in range(step - 1):
@@ -32,7 +30,6 @@ def run_moreh_adamw_test(shape, device, amsgrad=True, fp32_dest_acc_en=False, st
         optimizer.step()
     backward()
 
-    # Before the first step the optimizer has no state yet; the op then starts from zero moments.
     state = optimizer.state[weight]
     zeros = torch.zeros(shape, dtype=torch.bfloat16)
     tt_param = create_ttnn_tilized_tensor(weight.detach(), device, ttnn.bfloat16)
@@ -69,7 +66,7 @@ def run_moreh_adamw_test(shape, device, amsgrad=True, fp32_dest_acc_en=False, st
         max_exp_avg_sq_out=tt_outputs[3] if amsgrad else None,
         compute_kernel_config=get_compute_kernel_options(fp32_dest_acc_en),
     )
-    # With provided outputs, check those buffers themselves: the op must write into them.
+    # Check the provided buffers themselves, not the return value.
     actual_outputs = tt_outputs if provide_outputs else result[:num_outputs]
 
     expected_outputs = [weight.detach(), state["exp_avg"], state["exp_avg_sq"]]
@@ -85,7 +82,6 @@ def run_moreh_adamw_test(shape, device, amsgrad=True, fp32_dest_acc_en=False, st
 @pytest.mark.parametrize("amsgrad", [True, False], ids=["amsgrad", "no_amsgrad"])
 def test_moreh_adamw(amsgrad, fp32_dest_acc_en, device):
     torch.manual_seed(0)
-    # AMSGRAD and FP32_DEST_ACC_EN are the two defines: four compiled variants.
     run_moreh_adamw_test([32, 32], device, amsgrad=amsgrad, fp32_dest_acc_en=fp32_dest_acc_en)
 
 
@@ -93,14 +89,9 @@ def test_moreh_adamw(amsgrad, fp32_dest_acc_en, device):
 @pytest.mark.parametrize(
     "shape, step, provide_outputs",
     [
-        # 149 tiles: a prime above any device's core count, so the work split leaves a second core group and the
-        # factory builds its second compute kernel.
         ([32, 149 * 32], 8, True),
-        # Smaller than one tile in H and W, so the single tile is mostly padding.
         ([5, 3], 8, True),
-        # The first optimizer step: the op starts from zero moments.
         ([32, 32], 1, True),
-        # No outputs passed: the op allocates them.
         ([32, 32], 8, False),
     ],
     ids=["core_group_2", "hw_unaligned", "step_1", "allocated_outputs"],

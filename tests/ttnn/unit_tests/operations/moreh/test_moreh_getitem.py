@@ -14,10 +14,6 @@ from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_getitem import (
 
 pytestmark = pytest.mark.use_module_device
 
-# A ROW_MAJOR input runs the Rm factory, which can't index the last (W) dim. A TILE input runs the Tilized factory,
-# which builds separate kernels when W is indexed, and a ROW_MAJOR_INDEX or TILIZE_INDEX variant per index layout.
-# Every nightly getitem device test is skipped on Blackhole (#12349); the Tilized cases here are too.
-
 
 def run_moreh_getitem_test(input_shape, layout, device, index_dims):
     # Not the nightly helpers: they take one index dim only.
@@ -30,8 +26,7 @@ def run_moreh_getitem_test(input_shape, layout, device, index_dims):
     tt_output = ttnn.to_torch(ttnn.moreh_getitem(tt_input, tt_indices, list(index_dims)))
 
     if layout == ttnn.TILE_LAYOUT:
-        # A TILE output keeps the input's rank: each indexed dim becomes 1 and the last one the index length, so
-        # [10, 5, 7, 70] indexed on [2, 3] gives [10, 5, 1, 4] where torch gives [10, 5, 4].
+        # A TILE output keeps the input's rank: [10, 5, 1, 4] where torch gives [10, 5, 4].
         assert tt_output.numel() == torch_output.numel(), tt_output.shape
         tt_output = tt_output.reshape(torch_output.shape)
     assert tt_output.shape == torch_output.shape, tt_output.shape
@@ -43,12 +38,10 @@ def run_moreh_getitem_test(input_shape, layout, device, index_dims):
 @pytest.mark.parametrize(
     "shape_index_dim, dtype, index_size",
     [
-        # A rank-5 input indexed on each dim the Rm factory allows: N, C, D, H.
         ([[10, 2, 5, 7, 70], 0], torch.bfloat16, 4),
         ([[10, 2, 5, 7, 70], 1], torch.bfloat16, 4),
         ([[10, 2, 5, 7, 70], 2], torch.bfloat16, 4),
         ([[10, 2, 5, 7, 70], 3], torch.bfloat16, 4),
-        # A rank-2 input is padded to 5 dims on the host.
         ([[10, 70], 0], torch.bfloat16, 4),
         ([[10, 5, 70], 1], torch.int32, 4),
         ([[10, 70], 0], torch.bfloat16, 100),
@@ -67,7 +60,6 @@ def test_moreh_getitem_row_major(shape_index_dim, dtype, index_size, device):
     [
         ([[10, 5, 64], 1], True),
         ([[7, 70], 0], False),
-        # Indexing the last dim runs the *_tilize_w kernels, which pick elements out of 16-wide tile faces.
         ([[1, 5, 7, 3, 80], 4], True),
         ([[5, 64], 1], False),
     ],

@@ -17,11 +17,7 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize(
     "input_shape, output_size, kernel_size, dilation, padding, stride",
     [
-        # 32-value input rows are DRAM-aligned, so on Wormhole the reader reads them directly.
         ((1, 9, 32), (6, 10), (3, 3), (1, 1), (0, 0), (1, 1)),
-        # 36-value input rows are not DRAM-aligned, so the reader goes through the scratch buffer (always on
-        # Blackhole). 240 output rows give each Wormhole core several; dilation, padding and stride hit every skip
-        # branch.
         ((5, 64, 36), (12, 12), (4, 4), (2, 2), (3, 3), (2, 2)),
     ],
     ids=["aligned_row", "unaligned_row"],
@@ -34,7 +30,6 @@ def test_moreh_fold(input_shape, output_size, kernel_size, dilation, padding, st
 @pytest.mark.merge_gate
 def test_moreh_fold_rank_2_input(device):
     torch.manual_seed(0)
-    # A rank-2 input has no batch dim; the factory then sets N = 1.
     run_fold_test(device, (128, 324), (32, 32), (4, 4), (2, 2), (5, 5), (2, 2), torch.bfloat16)
 
 
@@ -42,8 +37,7 @@ def test_moreh_fold_rank_2_input(device):
 def test_moreh_fold_l1_short_row(device):
     torch.manual_seed(0)
     # Not the nightly helper: it has no memory_config argument.
-    # Regression for #57475: an 8-value (16-byte) output row is shorter than its 32-byte-rounded page, and an
-    # L1 output exposed the writer spilling that rounding padding past the row.
+    # Regression for #57475: the writer spilled page-rounding padding past a short L1 output row.
     torch_input = torch.randn((1, 4, 21), dtype=torch.bfloat16) + 1
     expected = torch.nn.functional.fold(torch_input, (4, 8), (2, 2), (1, 1), (0, 0), (1, 1))
 
