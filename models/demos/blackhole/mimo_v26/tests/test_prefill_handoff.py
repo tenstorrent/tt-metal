@@ -98,14 +98,20 @@ def test_prefill_handoff(mesh_device):
     ft = pf.first_tokens(res["last"])
     w = model.ck.get("model.norm.weight").float()
     lm = model.ck.get("lm_head.weight").float()
-    pcs, agree = [], []
+    pcs, agree, gaps = [], [], {}
     for b in range(B):
         x = ref_h[b, lens[b] - 1].float()
         hn = (x * torch.rsqrt(x.pow(2).mean() + 1e-6) * w).bfloat16().float()
         ref = hn @ lm.T
         pcs.append(pcc(ft[where[b]][1], ref))
         agree.append(int(ft[where[b]][0] == int(ref.argmax())))
-    rec("first_token_vs_cpu", pcc_min=round(min(pcs), 5), top1_agree=sum(agree), of=B)
+        if not agree[-1]:  # near-tie check: CPU top1-top2 gap and the CPU logit of the device token
+            t2 = ref.topk(2).values
+            gaps[b] = dict(
+                cpu_gap=round(float(t2[0] - t2[1]), 4),
+                cpu_logit_of_dev_token=round(float(ref[int(ft[where[b]][0])]), 4),
+            )
+    rec("first_token_vs_cpu", pcc_min=round(min(pcs), 5), top1_agree=sum(agree), of=B, disagree=gaps)
 
     # ---- KV pool vs dump
     tabs = lay.tables()
