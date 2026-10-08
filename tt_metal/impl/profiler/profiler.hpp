@@ -60,7 +60,7 @@ struct SyncInfo {
 
 struct FabricEventMarkers {
     std::vector<tracy::TTDeviceMarker> fabric_write_markers;
-    tracy::TTDeviceMarker fabric_routing_fields_marker;
+    tracy::TTDeviceMarker fabric_routing_metadata_marker;
     tracy::TTDeviceMarker local_noc_write_marker;
     std::optional<tracy::TTDeviceMarker> fabric_mux_marker;
 };

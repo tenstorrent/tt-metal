@@ -34,7 +34,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_A         = params.buffer_A;
     const Operand& buffer_B         = params.buffer_B;
 #endif
-    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         ZONE_SCOPED("INIT")
@@ -106,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     DataFormat src_format                     = is_2x_format ? unpack_dst_format : static_cast<DataFormat>(formats.math);
     const bool use_int32_dest_alu             = is_fp32_dest_acc_en && static_cast<DataFormat>(formats.pack_src) == DataFormat::Int32;
     const bool is_int_fpu_en                  = use_int32_dest_alu && (REDUCE_DIM == ReduceDim::REDUCE_ROW || REDUCE_DIM == ReduceDim::REDUCE_SCALAR);
-    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
@@ -213,7 +213,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
-    const ckernel::TensorShape tensor_shape_A = tensor_shape_from_params(params);
+    const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
     constexpr std::uint32_t max_tiles_dest    = is_fp32_dest_acc_en ? 4 : 8;
 
     {
