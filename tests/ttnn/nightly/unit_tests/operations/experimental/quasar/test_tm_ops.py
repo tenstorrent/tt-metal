@@ -18,6 +18,18 @@ _LAYOUT_IDS = ["TILE", "RM"]
 L1_INTERLEAVED = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
 
+def _holed_grid(device):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 7 or compute_grid.y < 8:
+        pytest.skip(f"needs a 7x8 compute grid, device has {compute_grid.x}x{compute_grid.y}")
+    return ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+        }
+    )
+
+
 def _explicit_height_shard_config(device, ncores, sh, sw, buffer_type=ttnn.BufferType.L1):
     compute_grid = device.compute_with_storage_grid_size()
     if ncores > compute_grid.x * compute_grid.y:
@@ -444,3 +456,55 @@ def test_quasar_fold_tile_zero_stride_fatal(device, expect_error):
         assert not _qsr_is_tile_native_fold_supported(t, sh, sw), f"predicate must reject stride ({sh},{sw})"
         with expect_error(RuntimeError, r"stride_[hw] .* must be > 0"):
             _qsr_prim_fold(t, sh, sw)
+
+
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_quasar_pad_rm_sharded_height_only_non_contiguous_grid(device, shard_orient):
+    """[1, 8, 8, 128] -> [1, 8, 32, 128] on a 40-core grid with column 4 missing. Deriving cores from the
+    bounding box addressed the hole core (4, 0), where no kernel runs."""
+    torch.manual_seed(0)
+    shard_grid = _holed_grid(device)
+    n, c, h, w, shard_h = 1, 8, 8, 128, 32
+    x = torch.randint(-100, 100, (n, c, h, w), dtype=torch.int32).to(torch.bfloat16)
+    ref = torch.nn.functional.pad(x, (0, 0, 0, shard_h - h), value=0)
+
+    mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient),
+    )
+    tt_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mc)
+    out = ttnn.experimental.quasar.pad(tt_in, padding=((0, 0), (0, shard_h - h), (0, 0)), value=0, memory_config=mc)
+    got = ttnn.to_torch(ttnn.from_device(out))
+    assert got.shape == ref.shape
+    assert torch.equal(ref, got)
+
+
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+def test_quasar_pad_rm_sharded_height_only_non_contiguous_grid_straddles_hole(device, shard_orient):
+    torch.manual_seed(0)
+    shard_grid = _holed_grid(device)
+    n, c, h, w = 1, 1, 1280, 128
+    in_shard_h, out_shard_h = 32, 40
+    h_padded = out_shard_h * 40
+    x = torch.randint(-100, 100, (n, c, h, w), dtype=torch.int32).to(torch.bfloat16)
+    ref = torch.nn.functional.pad(x, (0, 0, 0, h_padded - h), value=0)
+
+    in_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (in_shard_h, w), shard_orient),
+    )
+    out_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, (out_shard_h, w), shard_orient),
+    )
+    tt_in = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.experimental.quasar.pad(
+        tt_in, padding=((0, 0), (0, h_padded - h), (0, 0)), value=0, memory_config=out_mc
+    )
+    got = ttnn.to_torch(ttnn.from_device(out))
+    assert got.shape == ref.shape
+    bad = torch.nonzero(~torch.all(ref[0, 0] == got[0, 0], dim=-1)).flatten()
+    assert bad.numel() == 0, f"rows differ: {bad[:16].tolist()} (of {bad.numel()})"
