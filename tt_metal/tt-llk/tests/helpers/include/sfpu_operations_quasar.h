@@ -51,6 +51,7 @@
 #include "llk_sfpu/ckernel_sfpu_negative.h"
 #include "llk_sfpu/ckernel_sfpu_polygamma.h"
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_rand.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
 #include "llk_sfpu/ckernel_sfpu_relu.h"
@@ -129,6 +130,17 @@
 //    and init_ternary_sfpu_operation_quasar().
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
+
+// rand defaults; the RAND_RANGE / RAND_SEED template parameters override them.
+#ifndef RAND_FROM_BITS
+#define RAND_FROM_BITS 0x3F800000u // 1.0f
+#endif
+#ifndef RAND_SCALE_BITS
+#define RAND_SCALE_BITS 0x40000000u // 2.0f
+#endif
+#ifndef RAND_SEED
+#define RAND_SEED 0x12345678u
+#endif
 
 namespace test_utils
 {
@@ -460,6 +472,10 @@ void init_unary_sfpu_operation_quasar()
     {
         // tanh_derivative_tile's kernel: the accurate sech^2 form, whatever fast_and_approx says.
         tanh_derivative_sech2_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::rand)
+    {
+        init_rand<APPROX>(static_cast<std::uint32_t>(RAND_SEED));
     }
     // rsub_scalar_int32 is stateless: its compute API init is SFPU_UNARY_INIT(unused).
 }
@@ -1188,6 +1204,18 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::tanh_derivative)
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanh_derivative_sech2, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);
+    }
+    else if constexpr (OPERATION == SfpuType::rand)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_rand,
+            (APPROX, ITERATIONS),
+            dst_index,
+            VectorMode::RC,
+            static_cast<std::uint32_t>(RAND_FROM_BITS),
+            static_cast<std::uint32_t>(RAND_SCALE_BITS));
     }
     else
     {

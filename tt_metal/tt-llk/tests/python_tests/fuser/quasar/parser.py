@@ -294,6 +294,7 @@ UNARY_SFPU_OPS = {
     MathOperation.Abs,
     MathOperation.AbsInt32,
     MathOperation.Fill,
+    MathOperation.Rand,
     MathOperation.Exp,
     MathOperation.Gelu,
     MathOperation.Reciprocal,
