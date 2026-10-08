@@ -78,11 +78,6 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
-      run-models-sanity-tests:
-        required: false
-        default: true
-        type: boolean
-        description: "Run model sanity tests (WH Galaxy)"
       run-llk-sanity-tests:
         required: false
         default: false
@@ -197,11 +192,6 @@ on:
         default: true
         type: boolean
         description: "Run Blackhole multi-card sanity tests"
-      run-models-sanity-tests:
-        required: false
-        default: true
-        type: boolean
-        description: "Run model sanity tests (WH Galaxy)"
       run-llk-sanity-tests:
         required: false
         default: false
@@ -662,29 +652,10 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ needs.resolve-ref.outputs.sha }}
 
-  # Model sanity tests (WH Galaxy). The gate requires an explicit true, so a push to
-  # main and the scheduled runs leave this leg out: `inputs` is null on those events.
-  models-sanity-tests:
-    if: ${{ always() && !cancelled() && needs.build-artifact.result == 'success' && needs.generate-sku-matrix.outputs.run-wormhole == 'true' && toJSON(inputs.run-models-sanity-tests) == 'true' }}
-    # bake-env-dev-full is in needs but deliberately absent from the if: above.
-    # A failed bake leaves the ref empty and the leg falls back to the artifact
-    # path, which a gate on the bake would turn into a skipped suite instead.
-    needs: [build-artifact, generate-sku-matrix, bake-env-dev-full, resolve-ref]
-    secrets: inherit
-    uses: ./.github/workflows/models-sanity-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      ref: ${{ needs.resolve-ref.outputs.sha }}
-      summary-scope: ${{ inputs.platform }}
-
   # LLK sanity (tt-llk python_tests smoke, WH + BH). Opt-in: run-llk-sanity-tests defaults
-  # to false, so this leg is off unless a caller asks for it. The `== 'true'` gate is the
-  # same shape models-sanity-tests uses — note that input defaults to true, so for it the
-  # gate only excludes push/schedule, where `inputs` is null; here it excludes those events
-  # *and* every call that does not opt in.
+  # to false, so this leg is off unless a caller asks for it. The `== 'true'` gate (rather
+  # than `!= 'false'`, which every default-true toggle above uses) excludes push/schedule,
+  # where `inputs` is null, *and* every call that does not opt in.
   llk-sanity-tests:
     needs: [resolve-docker-pull-refs, generate-sku-matrix, resolve-ref]
     if: ${{ always() && !cancelled() && needs.resolve-docker-pull-refs.result == 'success' &&
@@ -748,7 +719,6 @@ jobs:
       - ttsim-sanity-tests
       - runtime-sim-sanity-tests
       - blackhole-multi-card-fast-sanity-tests
-      - models-sanity-tests
       # The two LLK legs are deliberately absent, as fabric-sanity-tests already is: an
       # impl belongs here only once it uploads per-leg ai_summary/job artifacts, and
       # llk-smoke-impl uploads none (it publishes JUnit instead). Reconciliation flags an
