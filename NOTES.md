@@ -13,3 +13,9 @@
 - Then: on ttp/t277-land `ttp push --detach` (rebase onto latest t48; #276 touches the same reader).
 - 12:07 UTC: build ok (27 s incremental, transformer unity rebuilt). Broker job 043 submitted (-t 240).
   First launch failed before submit (script name typo, no device work).
+- Job 043 done, no drops: default 2.313 s, off (DIFFVAE_NA_EDGE_ORDER=0) 2.531 s, one process each,
+  both md5 be633a6944d3767c9d4818909ea23034 (seed 0).
+- md5 judgment: be633a... is the t48 747bc0612f1 baseline. #273 job 021 seed 0 gave be633a... with
+  DET_A2A on (t48 default) and 2797bc... with DET_A2A=0. #274 ran on 5833f56096f (no A2A), hence
+  its 2797bc.... So edge order is bit-identical on t48: OK to land.
+- Next: on ttp/t277-land `ttp push --detach`; then back on this branch `ttp push --own --detach`.
