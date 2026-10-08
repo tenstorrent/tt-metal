@@ -21,6 +21,8 @@ inline constexpr std::uint32_t StateCfgWordCount    = CFG_STATE_SIZE * 4;
 inline constexpr std::uint32_t StateCfgBankCount    = 2;
 inline constexpr std::uint32_t ConfigDualWriteWords = StateCfgWordCount;
 inline constexpr std::uint32_t ThreadCfgWordCount   = THD_STATE_SIZE;
+inline constexpr std::uint32_t ThreadCfgWordMask    = 0xffffu;
+inline constexpr std::uint32_t CregSelectorMax      = 0x7ffu;
 
 inline constexpr std::uint32_t ThreadCfgBase = StateCfgBankCount * StateCfgWordCount + ConfigDualWriteWords;
 

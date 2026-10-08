@@ -113,7 +113,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
 
     if constexpr (F.scope == RegisterScope::Thread)
     {
-        return detail::read_thread_word_mmio<Target, addr>() & 0xffffu;
+        return detail::read_thread_word_mmio<Target, addr>() & detail::ThreadCfgWordMask;
     }
     else
     {
@@ -156,7 +156,7 @@ inline __attribute__((always_inline)) void read(hal::Gpr<GprIndex>)
 {
     static_assert(A == Access::TensixCfgUnit, "RDCFG requires Access::TensixCfgUnit");
     static_assert(GprIndex != hal::detail::DynamicGprIndex, "RDCFG requires a compile-time GPR index: use hal::gpr<Index>()");
-    static_assert(GprIndex < 64u, "RDCFG GPR index must be in [0, 63]");
+    static_assert(GprIndex < hal::detail::GprCount, "RDCFG GPR index must be in [0, 63]");
     static_assert(F.scope == RegisterScope::State, "RDCFG cannot read thread CFG (SETC16) fields");
     static_assert(F.width <= 32, "field wider than 32b cannot be selected through a single CFG word");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
@@ -204,7 +204,7 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
-            TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & 0xffffu);
+            TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & detail::ThreadCfgWordMask);
         }
         else
         {

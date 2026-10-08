@@ -63,7 +63,7 @@ inline __attribute__((always_inline)) std::uint32_t read_thread_word_mmio()
 {
     constexpr std::uint32_t thread_index = compute_thread_index<Target>();
     constexpr std::uint32_t creg_addr    = ThreadCfgBase + thread_index * ThreadCfgWordCount + Addr;
-    static_assert(creg_addr <= 0x7ffu, "thread CFG address exceeds the RISC CREG selector");
+    static_assert(creg_addr <= CregSelectorMax, "thread CFG address exceeds the RISC CREG selector");
 
     reg_write(RISCV_DEBUG_REG_TENSIX_CREG_READ, creg_addr);
     wait(1 /*cycles*/);
