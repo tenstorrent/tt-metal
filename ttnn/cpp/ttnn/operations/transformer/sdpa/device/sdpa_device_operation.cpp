@@ -36,6 +36,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
     const Tensor& v = use_mla ? tensors.k : tensors.v.value();
+    // The kernel accumulates in BF16 DEST only; ttnn.transformer runs FP32-DEST calls on the ACCURATE recipe.
+    TT_FATAL(
+        !ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
+        "SDPA without a precision recipe requires fp32_dest_acc_en=false (FP32 DEST runs SDPAPrecision.ACCURATE)");
 
     // Basic tensor properties
     for (const auto* input_tensor : {&q, &k, &v}) {
