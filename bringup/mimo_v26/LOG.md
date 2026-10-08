@@ -2227,3 +2227,14 @@
 - claim: RING MoE with W2 at LoFi (MOE_COMPUTE_FID_W2=0, W0/W1 HiFi3, fp32 acc, bfp8) GSM8K n=128 max_new 512 full 48 layers, default ring + device loop, MIMO_EXPERT_OP=unified, LD_LIBRARY_PATH=artifacts/ringk_full_7a16eb305aa/lib: run a (host 30) and run b (host 48) both 112/128 = 87.5% (Wilson 80.7-92.2; HiFi3 baseline 113/128), all 128 completion texts identical between a and b, step median 57.6 / 58.9 ms (baseline HiFi3 63.4 ms: -9 pct); gate >=109 passed
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AP_gsm_ringw2lofi_a_h30_7a16eb305aa.log
 - paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
+
+## E261008-0225-e82
+- date: 2026-10-08T02:25:23
+- commit: 196b79fa91e
+- branch: ssinghal/mimo-ringk
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: RING MoE with W2=LoFi as the DEFAULT (moe_ring.py setdefault MOE_COMPUTE_FID_W2=0; only LD_LIBRARY_PATH=artifacts/ringk_full_7a16eb305aa/lib and MIMO_EXPERT_OP=unified set) at 196b79fa91e: test_verify_decode 48 layers U=1,2,4: argmax 100% token-exact vs sequential, features bit-identical, verify repeat bit-identical; 4-layer closed-loop oracle (test_decode_reconf, reconfigure U=32,1,4 in one process): tokens equal the oracle 100% (teacher-forced and free-running), step logits PCC min 0.99875 / 0.99978 / 0.99935, DRAM identical on return (log moe_AQ_default_reconf4_h48_196b79fa91e.log, jsonl moe_AQ_default_reconf4.jsonl)
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AQ_default_verify48.jsonl
+- paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
