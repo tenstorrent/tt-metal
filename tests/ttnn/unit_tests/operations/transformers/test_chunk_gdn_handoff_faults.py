@@ -25,6 +25,13 @@ pytestmark = pytest.mark.skipif(not is_blackhole(), reason="chunk_gated_delta_ru
 
 _OPT_IN = os.environ.get("GDN_HANDOFF_FAULT_TESTS") == "1"
 _CHILD_FAULT = os.environ.get("GDN_HANDOFF_FAULT_CHILD")  # set by the parent test: the fault id to compile in
+_CHILD_GEOM = os.environ.get("GDN_HANDOFF_FAULT_GEOM", "perhead")  # and the geometry: per-head producers or the pool
+# bh12-nv2np7-nc8 per head (NP >= 2 for the wrong-owner fault, NC > 3 for the never-credited chunk); the pool of 78 at
+# BH=16 (3 home producers per head + 30 extras, so the faulted credits cross heads).
+GEOMS = {
+    "perhead": dict(hk=4, hv=12, nv=2, np_producers=7, pool=False),
+    "pool": dict(hk=4, hv=16, nv=2, np_producers=78, pool=True),
+}
 
 # fault id (gdn_handoff::HandoffFault) -> name, RISCs that may assert, waypoints they may stop at, C9 timeout expected
 FAULTS = {
@@ -34,7 +41,12 @@ FAULTS = {
     1: ("double_credit", {"BRISC", "NCRISC"}, {"TXCR", "DONE", "RXRS", "RXVL"}, False),
     2: ("wrong_canary", {"NCRISC"}, {"RXVL"}, False),  # C8 after the flag
     3: ("short_push", {"NCRISC"}, {"RXVL"}, False),  # C3 at the next push into the slot
-    4: ("wrong_owner", {"BRISC", "NCRISC"}, {"TXCR", "RXVL"}, True),  # chunk 1 credited to the owner's neighbour: C9 on whichever side expires first
+    4: (
+        "wrong_owner",
+        {"BRISC", "NCRISC"},
+        {"TXCR", "RXVL"},
+        True,
+    ),  # chunk 1 credited to the owner's neighbour: C9 on whichever side expires first
     5: ("no_credit", {"BRISC", "NCRISC"}, {"TXCR", "RXVL"}, True),  # C9
 }
 _RISC_ORDER = ["BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"]  # field order of the watcher's "Last waypoint" line
@@ -45,22 +57,35 @@ _TIMEOUT_WORD = re.compile(r"0x[ef][0-9a-f]{7}")  # ring-buffer stages 14 / 15: 
 def test_handoff_fault_child(device):
     from tests.ttnn.unit_tests.operations.transformers.test_chunk_gdn_fused import _fused_vs_phased
 
-    # bh12-nv2np7-nc8 at depth 2: NP >= 2 for the wrong-owner fault, NC > 3 for the never-credited chunk.
+    g = GEOMS[_CHILD_GEOM]
     _fused_vs_phased(
-        device, 4, 12, 8, 2, 7, 20261005, handoff_depth=2, handoff_checks=True, handoff_fault=int(_CHILD_FAULT)
+        device,
+        g["hk"],
+        g["hv"],
+        8,
+        g["nv"],
+        g["np_producers"],
+        20261005,
+        handoff_depth=2,
+        handoff_checks=True,
+        handoff_fault=int(_CHILD_FAULT),
+        producer_pool=g["pool"],
     )
-    pytest.fail(f"handoff_fault={_CHILD_FAULT} ran to completion: the check it targets did not trip")
+    pytest.fail(f"handoff_fault={_CHILD_FAULT} ({_CHILD_GEOM}) ran to completion: the check it targets did not trip")
 
 
 @pytest.mark.skipif(
     not _OPT_IN, reason="opt in with GDN_HANDOFF_FAULT_TESTS=1 (trips watcher asserts, resets the board)"
 )
+@pytest.mark.parametrize("geom", list(GEOMS))
 @pytest.mark.parametrize("fault", list(FAULTS), ids=lambda f: FAULTS[f][0])
-def test_handoff_fault_trips_check(fault):
+def test_handoff_fault_trips_check(fault, geom):
     name, riscs, waypoints, expect_timeout = FAULTS[fault]
+    name = f"{name}/{geom}"
     env = dict(
         os.environ,
         GDN_HANDOFF_FAULT_CHILD=str(fault),
+        GDN_HANDOFF_FAULT_GEOM=geom,
         TT_METAL_WATCHER="1",
         TT_METAL_WATCHER_NOINLINE="1",
         TT_METAL_WATCHER_DISABLE_ETH="1",
