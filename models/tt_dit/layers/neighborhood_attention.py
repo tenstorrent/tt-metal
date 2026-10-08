@@ -46,8 +46,10 @@ from .neighborhood_attention_plan import (
     brick_override,
     cached_bricked_plan,
     cached_device_plan,
+    gather_rephase_enabled,
     halo_sites,
     key_phase_applies,
+    key_phase_gather_index,
     key_phase_geometry,
     lean_layout_enabled,
 )
@@ -151,6 +153,26 @@ def neighborhood_attention_3d(
         ccl_manager=ccl_manager,
         gna_stride=stride,
     )
+
+
+_GATHER_INDEX_CACHE: dict = {}
+
+
+def _cached_gather_index(device, resident, phased, brick, front, cut_h, cut_w) -> ttnn.Tensor:
+    """The key-phase gather index on ``device``, uploaded once per geometry: one row of 32 per
+    output tile row, the shape ``ttnn.embedding`` tilizes in place."""
+    key = (id(device), resident, phased, brick, front, cut_h, cut_w)
+    if key not in _GATHER_INDEX_CACHE:
+        index = key_phase_gather_index(resident, phased, brick, front, cut_h, cut_w)
+        _GATHER_INDEX_CACHE[key] = ttnn.from_torch(
+            index.reshape(-1, SITES_PER_BRICK),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+    return _GATHER_INDEX_CACHE[key]
 
 
 def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
@@ -738,6 +760,22 @@ def neighborhood_attention_3d_bricked_w_sharded(
         cut_h, cut_w = halo_h - low_h, halo - low_w
         assert cut_h >= 0 and cut_w >= 0 and cut_h + phased_h <= resident[1] and cut_w + phased_w <= resident[2]
         with timing_tree.span(device, f"{lane}: key-phase rebrick", category=timing_tree.RESHAPE, deep=True):
+            if gather_rephase:
+                index = _cached_gather_index(device, resident, op_resident, tuple(brick), front, cut_h, cut_w)
+                rows = (
+                    tensor if tensor.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+                )
+                gathered = ttnn.embedding(
+                    index,
+                    ttnn.reshape(rows, (1, 1, bricked_sites, channels)),
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if rows is not tensor:
+                    ttnn.deallocate(rows)
+                ttnn.deallocate(tensor)
+                phased_sites = brick_count(op_resident, brick) * SITES_PER_BRICK
+                return ttnn.reshape(gathered, (batch, 1, phased_sites, channels))
             # to_layout on a row-major tensor returns a new handle to the same buffer.
             if tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
                 rows = tensor
@@ -773,6 +811,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         widen = widened
     if key_phase:
         exchange_only = widen
+        gather_rephase = gather_rephase_enabled() and batch == 1
 
         def widen(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
             return rephased(exchange_only(tensor, lane), lane)
