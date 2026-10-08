@@ -410,10 +410,10 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCopyBlockIdFreeIdentity) {
     EXPECT_EQ(src_vec, result);
 }
 
-// tilize_init then copy, and reduce_init then copy, with no uninit and no reconfig between them.
-// Both tiles are a tiled Float16_b identity copy. A stale tilize mode or reduce edge mask fails this.
+// tilize_init, reduce_init, and pack_untilize_init each followed by copy, with no uninit and no reconfig.
+// Every tile is a tiled Float16_b identity copy. A stale tilize mode, reduce edge mask, or untilize pack fails this.
 TEST_F(LLKBlackholeSingleCardFixture, TensixInitChainIdFreeGolden) {
-    constexpr std::uint32_t num_tiles = 2;
+    constexpr std::uint32_t num_tiles = 3;
     auto src_vec = create_random_vector_of_bfloat16(
         tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result = unit_tests::llk::single_core::run_unary(

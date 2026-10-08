@@ -11,6 +11,7 @@
 
 // Id-free init helpers. Each 2.0 op init calls the helpers for the threads it uses, then its own
 // MOP / addrmod setup. Unconditional writes; no format cache (add one only if BH .text regresses).
+// noinline: the inits are ALWI, so an inline helper would be copied into every init call site.
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_tilize_api.h"  // _llk_unpack_tilize_uninit_ + unpack reconfig
@@ -24,7 +25,7 @@ template <
     bool is_fp32_dest_acc_en,
     ckernel::experimental::LLKMemDescriptor DESC_A,
     ckernel::experimental::LLKMemDescriptor DESC_B>
-inline void llk_unpack_config() {
+__attribute__((noinline)) void llk_unpack_config() {
     constexpr DataFormat A = DESC_A.format;
     constexpr DataFormat B = DESC_B.format;
     constexpr DataFormat reg_a = ckernel::infer_unpack_dst_format_2op<A, B>(is_fp32_dest_acc_en);
@@ -59,7 +60,7 @@ template <
     ckernel::experimental::LLKMemDescriptor DESC_A,
     ckernel::experimental::LLKMemDescriptor DESC_B,
     bool datacopy_zero_flag = false>
-inline void llk_math_config() {
+__attribute__((noinline)) void llk_math_config() {
     constexpr DataFormat reg_a = ckernel::infer_unpack_dst_format_2op<DESC_A.format, DESC_B.format>(is_fp32_dest_acc_en);
     constexpr DataFormat reg_b = ckernel::infer_unpack_dst_format_2op<DESC_B.format, DESC_A.format>(is_fp32_dest_acc_en);
     _llk_math_reconfig_data_format_<is_fp32_dest_acc_en, false>(
@@ -76,8 +77,10 @@ inline void llk_math_config() {
 
 // Clear the reduce edge mask, then program Default-mode formats, strides, and MOP.
 // reduce_init sets the mask again after this so it survives. Every other init leaves it clear.
+// Also undoes pack_untilize: Default strides, addrmods, MOP, and X count overwrite every untilize write.
+// The last pack config wins. Relu is never touched: only hw_configure sets it (off), and 2.0 never enables it.
 template <bool is_fp32_dest_acc_en, ckernel::experimental::LLKMemDescriptor OUT_DESC>
-inline void llk_pack_config() {
+__attribute__((noinline)) void llk_pack_config() {
     _llk_pack_reduce_mask_clear_();
     llk_pack_reconfig_data_format<OUT_DESC, is_fp32_dest_acc_en>();
     llk_pack_init<OUT_DESC, is_fp32_dest_acc_en>();
