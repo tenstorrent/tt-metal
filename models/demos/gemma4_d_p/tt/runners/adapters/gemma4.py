@@ -29,7 +29,6 @@ def validate_params(params):
         "first_layer_idx": 0,
         "is_first_rank": True,
         "is_last_rank": True,
-        "max_seq_len": Gemma4ServiceConfig.MAX_SEQ_LEN,
         "chunk_size": Gemma4ServiceConfig.CHUNK_SIZE,
         "sp_axis": 0,
         "tp_axis": 1,
@@ -39,6 +38,13 @@ def validate_params(params):
     for name, value in expected.items():
         if getattr(params, name) != value:
             raise ValueError(f"Gemma4 prefill requires {name}={value}, got {getattr(params, name)}")
+    if not (params.chunk_size <= params.max_seq_len <= Gemma4ServiceConfig.MAX_SEQ_LEN) or (
+        params.max_seq_len % params.chunk_size
+    ):
+        raise ValueError(
+            f"Gemma4 prefill requires max_seq_len to be a multiple of {params.chunk_size} "
+            f"in [{params.chunk_size}, {Gemma4ServiceConfig.MAX_SEQ_LEN}], got {params.max_seq_len}"
+        )
     if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USER_SLOTS:
         raise ValueError(f"Gemma4 prefill requires 1 to {Gemma4ServiceConfig.MAX_USER_SLOTS} KV slots")
 
@@ -53,7 +59,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
 
     @property
     def hf_model_id(self):
-        return self.hf_model_default
+        return os.getenv("PREFILL_HF_MODEL") or os.getenv("HF_MODEL") or self.hf_model_default
 
     def load_hf_config(self):
         from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, validate_31b_config
