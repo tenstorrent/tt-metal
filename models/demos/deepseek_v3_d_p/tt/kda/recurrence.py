@@ -616,7 +616,11 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
         )
-        return self._finish(self._execute(prepared, state, actual_start, actual_end, selections), geometry)
+        result = self._execute(prepared, state, actual_start, actual_end, selections)
+        # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory.
+        for tensor in prepared.as_kernel_args():
+            ttnn.deallocate(tensor)
+        return self._finish(result, geometry)
 
     def _run_direct(
         self,

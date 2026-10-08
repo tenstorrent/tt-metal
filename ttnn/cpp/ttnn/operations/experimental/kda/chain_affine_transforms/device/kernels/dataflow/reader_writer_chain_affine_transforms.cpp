@@ -10,29 +10,49 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
-template <typename Accessor>
-FORCE_INLINE void issue_tensor_block_read(
-    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t page, uint32_t tiles) {
-    for (uint32_t tile = 0; tile < tiles; tile++) {
-        noc.async_read(
-            accessor,
-            buffer,
-            buffer.get_entry_size(),
-            {.page_id = page + tile},
-            {.offset_bytes = tile * buffer.get_entry_size()});
+// Read Kt rows of Vt tiles starting at row_page, rows row_stride pages apart, into the buffer in row-major order.
+template <uint32_t Kt, uint32_t Vt, typename Accessor>
+FORCE_INLINE void issue_value_slice_read(
+    Noc& noc, const Accessor& accessor, DataflowBuffer& buffer, uint32_t row_page, uint32_t row_stride) {
+    const uint32_t tile_bytes = buffer.get_entry_size();
+    for (uint32_t row = 0; row < Kt; ++row) {
+        for (uint32_t column = 0; column < Vt; ++column) {
+            noc.async_read(
+                accessor,
+                buffer,
+                tile_bytes,
+                {.page_id = row_page + row * row_stride + column},
+                {.offset_bytes = (row * Vt + column) * tile_bytes});
+        }
     }
 }
 
-// One worker owns one head's state: it streams each chronological step's [A | B] rows to compute and writes the
-// entry state and final carry that compute publishes.
-template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t sp_rank, uint32_t sp_size, uint32_t local_rows>
-TT_KERNEL void dataflow(uint32_t head) {
+// One worker owns one value block of one head's state: it streams each chronological step's A and its own B
+// columns to compute and writes its columns of the entry state and final carry that compute publishes.
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t Vt_full,
+    uint32_t BH,
+    uint32_t mcast_shared,
+    uint32_t sp_rank,
+    uint32_t sp_size,
+    uint32_t local_rows>
+TT_KERNEL void dataflow(
+    uint32_t head,
+    uint32_t value_block,
+    uint32_t peer_x0,
+    uint32_t peer_y0,
+    uint32_t peer_x1,
+    uint32_t peer_y1,
+    uint32_t receivers) {
     constexpr uint32_t a_tiles = Kt * Kt;
     constexpr uint32_t state_tiles = Kt * Vt;
-    constexpr uint32_t row_tiles = Kt + Vt;
-    // A head's [K, V] state is one contiguous page range, stored in the DFB in page order.
-    const uint32_t state_page = head * state_tiles;
+    constexpr uint32_t row_tiles = Kt + Vt_full;
+    // This block's columns of a head's [K, V] state: Kt rows of Vt tiles, strided by the full width.
+    const uint32_t state_page = head * Kt * Vt_full + value_block * Vt;
 
     const auto transforms_accessor = TensorAccessor(tensor::transforms);
     const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
@@ -43,19 +63,33 @@ TT_KERNEL void dataflow(uint32_t head) {
     DataflowBuffer b(dfb::b);
     DataflowBuffer out(dfb::out);
     Noc noc;
+    Semaphore ready(sem::ready);
+    Semaphore valid(sem::valid);
+    if constexpr (mcast_shared) {
+        if (value_block == 0) {
+            // set_multicast sources its payload from this local word; preset it to VALID once.
+            valid.set(1);
+        }
+    }
 
     const auto write_state = [&](DataflowBuffer& source, const auto& destination) {
         const uint32_t tile_bytes = source.get_entry_size();
-        for (uint32_t tile = 0; tile < state_tiles; ++tile) {
-            noc.async_write(
-                source, destination, tile_bytes, {.offset_bytes = tile * tile_bytes}, {.page_id = state_page + tile});
+        for (uint32_t row = 0; row < Kt; ++row) {
+            for (uint32_t column = 0; column < Vt; ++column) {
+                noc.async_write(
+                    source,
+                    destination,
+                    tile_bytes,
+                    {.offset_bytes = (row * Vt + column) * tile_bytes},
+                    {.page_id = state_page + row * Vt_full + column});
+            }
         }
         noc.async_write_barrier();
     };
 
     // The initial state does not depend on the chronology, so its reads share one barrier with actual_start.
     initial.reserve_back(state_tiles);
-    issue_tensor_block_read(noc, initial_state_accessor, initial, state_page, state_tiles);
+    issue_value_slice_read<Kt, Vt>(noc, initial_state_accessor, initial, state_page, Vt_full);
     kda_chronology::Topology topology{};
     {
         DataflowBuffer chronology(dfb::chronology_compute);
@@ -81,31 +115,29 @@ TT_KERNEL void dataflow(uint32_t head) {
     for (uint32_t step = 0; step < sp_size; ++step) {
         const uint32_t rank = (topology.first_rank + step) % sp_size;
         const uint32_t transform_row = (rank * BH + head) * Kt;
-        a.reserve_back(a_tiles);
+        // B: this block's columns of the B half of the step's [A | B] rows.
         b.reserve_back(state_tiles);
-        const uint32_t a_bytes = a.get_entry_size();
-        const uint32_t b_bytes = b.get_entry_size();
-        for (uint32_t row = 0; row < Kt; ++row) {
-            const uint32_t row_page = (transform_row + row) * row_tiles;
-            for (uint32_t column = 0; column < Kt; ++column) {
-                noc.async_read(
-                    transforms_accessor,
-                    a,
-                    a_bytes,
-                    {.page_id = row_page + column},
-                    {.offset_bytes = (row * Kt + column) * a_bytes});
-            }
-            for (uint32_t column = 0; column < Vt; ++column) {
-                noc.async_read(
-                    transforms_accessor,
-                    b,
-                    b_bytes,
-                    {.page_id = row_page + Kt + column},
-                    {.offset_bytes = (row * Vt + column) * b_bytes});
+        issue_value_slice_read<Kt, Vt>(
+            noc, transforms_accessor, b, transform_row * row_tiles + Kt + value_block * Vt, row_tiles);
+        // A: every value block needs the whole A half.
+        const auto stage_a = [&]() {
+            a.reserve_back(a_tiles);
+            issue_value_slice_read<Kt, Kt>(noc, transforms_accessor, a, transform_row * row_tiles, row_tiles);
+            return a.get_write_ptr();
+        };
+        if constexpr (!mcast_shared) {
+            stage_a();
+            noc.async_read_barrier();
+            a.push_back(a_tiles);
+        } else {
+            SharedInput inputs[1] = {{&a, a_tiles, value_block == 0 ? stage_a() : 0}};
+            if (value_block == 0) {
+                multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
+            } else {
+                receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
+                noc.async_read_barrier();
             }
         }
-        noc.async_read_barrier();
-        a.push_back(a_tiles);
         b.push_back(state_tiles);
         // Compute publishes the carry after step entry_step - 1; drain it once the next inputs are queued.
         if (entry_step != 0 && step == entry_step) {
@@ -117,4 +149,13 @@ TT_KERNEL void dataflow(uint32_t head) {
     out.wait_front(state_tiles);
     write_state(out, final_state_accessor);
     out.pop_front(state_tiles);
+    if constexpr (mcast_shared) {
+        // Retire the multicast writes and ready increments before exit; dispatch re-initializes both semaphores on
+        // every launch.
+        if (value_block == 0) {
+            noc.async_write_barrier();
+        } else {
+            noc.async_atomic_barrier();
+        }
+    }
 }
