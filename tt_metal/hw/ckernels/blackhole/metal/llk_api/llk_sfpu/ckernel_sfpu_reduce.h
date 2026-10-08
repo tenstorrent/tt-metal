@@ -2154,5 +2154,19 @@ inline void calculate_reduce(
     }
 }
 
+// After copy_tile: its later ZEROACCs, the SETC16 and the NOP put the three instructions SFPLOAD needs between the
+// copy's DEST writes and the first DEST load (face 2 at the earliest), so the start skips the FPU drain.
+template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format, bool is_fp32_dest_acc_en>
+inline void sfpu_reduce_after_copy(std::uint32_t dst_index, std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    TTI_NOP;
+    _llk_math_eltwise_sfpu_apply_vector_mode_(
+        calculate_reduce<pool_type, reduce_dim, format, is_fp32_dest_acc_en>,
+        VectorMode::RC_custom,
+        block_ct_dim,
+        block_rt_dim);
+    _llk_math_eltwise_sfpu_done_();
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

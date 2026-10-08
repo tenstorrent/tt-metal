@@ -375,6 +375,12 @@ ALWI void reduce(
 #else
     constexpr bool hoist_sfpu_init = false;
 #endif
+    // Every SFPU reduce here follows copy_tile or SFPU work, so its start spaces the first DEST load with a NOP.
+#ifdef ARCH_BLACKHOLE
+    constexpr bool sfpu_start_after_copy = true;
+#else
+    constexpr bool sfpu_start_after_copy = false;
+#endif
     bool sfpu_init_live = false;
 
     DataflowBuffer input_dfb(input_dfb_id);
@@ -557,7 +563,8 @@ ALWI void reduce(
                         sfpu_reduce_init<reduce_type, reduce_format>();
                         sfpu_init_live = true;
                     }
-                    sfpu_reduce<reduce_type, reduce_format, reduce_dim>(dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
+                    sfpu_reduce<reduce_type, reduce_format, reduce_dim, DST_ACCUM_MODE, sfpu_start_after_copy>(
+                        dst_idx, /*ct_dim=*/1, /*rt_dim=*/1);
                 }
 
                 // Call post-reduce operation (e.g., recip_tile for softmax)
@@ -684,7 +691,7 @@ ALWI void reduce(
                         sfpu_init_live = true;
                     }
                     for (uint32_t k = 0; k < current_chunk; ++k) {
-                        sfpu_reduce<reduce_type, reduce_format, reduce_dim>(
+                        sfpu_reduce<reduce_type, reduce_format, reduce_dim, DST_ACCUM_MODE, sfpu_start_after_copy>(
                             sfpu_base_dst + k, /*ct_dim=*/1, /*rt_dim=*/1);
                     }
                 }
