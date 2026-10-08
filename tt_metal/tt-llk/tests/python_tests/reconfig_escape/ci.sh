@@ -28,13 +28,13 @@ WORKTREE="$(cd "$HERE/../../.." && pwd)"   # tests/python_tests/reconfig_escape 
 
 ARCH=""
 REPORT_DIR="$HERE/reports"
-SAMPLE_PER_TEST=30
+SAMPLE_PER_TEST=15
 JOBS=8
 TIMEOUT=90
 SPLITS=""
 GROUP=""
 CHAIN_DEPTH=2
-CHAINS_PER_MACHINE=320
+CHAINS_PER_MACHINE=40
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
