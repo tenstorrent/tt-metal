@@ -33,11 +33,12 @@ inline void calculate_exp_bw_bf16() {
         v_if(g0_c >= 255.0f) { g0 = std::numeric_limits<float>::infinity(); }
         v_endif;
         vFloat product0 = grad * g0;
+        v_if(sfpi::exexp(g0_z) < 0) { product0 = 0.0f; }
+        v_elseif(setsgn(grad, 0) == 0.0f && sfpi::as<vInt>(x) < 0x44320000) { product0 = 0.0f; }
+        v_endif;
         vFloat scaled0 = convert<vFloat16b>(product0, RoundMode::Nearest);
         vFloat result = scaled0;
-        // A NaN compares by its sign; select it by its BF16 encoding: exponent all ones, mantissa nonzero.
-        vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();
-        v_if((raw & 0x00ff) == 0x00ff && (raw & 0x7f00) != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(sfpi::is_nan(x)) { result = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
         dst_reg[d] = result;
     }

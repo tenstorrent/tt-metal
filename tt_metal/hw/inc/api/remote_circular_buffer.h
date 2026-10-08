@@ -507,6 +507,7 @@ public:
         uint32_t coalesced_page_size,
         const typename noc_traits_t<Src>::src_args_type& src_args =
             typename noc_traits_t<Src>::src_args_type{}) {
+        tt_buf_rw::note_if_bound<tt_buf_rw::kRead, Src>();  // op-to-op R/W inference (api/dataflow/buf_rw_note.h)
         auto src_addr = noc_traits_t<Src>::template src_addr<Noc::AddressType::LOCAL_L1>(
             src, noc, src_args);
         remote_cb_push_back_and_write_pages<update_remote_pointer == RemotePointerUpdate::UPDATE_OVER_NOC>(
