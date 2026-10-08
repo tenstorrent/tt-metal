@@ -14,6 +14,15 @@ A/B of the NA compute-config knobs DIFFVAE_NA_APPROX_EXP=1 and DIFFVAE_NA_FIDELI
 
 ## Result (job 887, completed, no drops)
 - Warm 1080p 145f decode, seeds 0,1: def 3.511 s, approx 3.512 s, lofi 3.510 s, def recheck 3.513 s. No gain.
-- PCC/PSNR identical in all arms (0.999956/55.51 dB s0, 0.999957/55.07 dB s1): the outputs match the default
-  to every digit, so both knobs look inert on this decode path (NA compute config not honored or already equal).
-- Nothing landed on t48. Do not redo.
+- PCC/PSNR identical in all arms (0.999956/55.51 dB s0, 0.999957/55.07 dB s1), md5-identical to def.
+- INVALID (review #245): NeighborhoodSDPAOperation::compute_program_hash does not hash compute_kernel_config,
+  so with all arms in one process (def first) approx and lofi reused the cached HiFi2/exact-exp program.
+  The knobs were never applied. Rerun with one process per arm: t246 below.
+
+## t246: rerun, one python process per arm (blx01)
+- tt-project/t246/: decode246.py (asserts one arm per process, prints the NA config it built), run246.sh
+  (ARMLIST -> one process each), driver246.sh (job A: def approx lofi, -t 480; job B: both def, -t 330, only
+  if approx and lofi both pass). Copied to blx01 /var/tmp/fasth3/t246/drv; b = t238/b at 34a571c5f47 (= t48 tip).
+- 2026-10-08 01:58 UTC: driver started (setsid), job A = broker job 889.
+- Next: `ssh g15blx01 cat /var/tmp/fasth3/t246/drv/driver.marker`; read drv/driver.log (MD5 lines, cmp lines),
+  outA/run.log (DECODE seed lines per arm), outA/cmp_*.json, outB/ if run.
