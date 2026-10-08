@@ -370,25 +370,12 @@ std::pair<uint32_t, uint32_t> paged_block_view(const Tensor& k, const RecipeKeyR
     return {k.logical_shape()[2], k.logical_shape()[1]};
 }
 
-// A core's share of one head's Q chunks: a contiguous [first, first + count) of the zigzag order 0, J-1, 1, J-2, ...
-// (dataflow/recipe_key_range.hpp). Pairs cost the same under a causal mask; with fewer than two chunks per core the
-// heaviest go alone.
-std::vector<std::pair<uint32_t, uint32_t>> recipe_zigzag_split(uint32_t jobs, uint32_t chain) {
-    std::vector<std::pair<uint32_t, uint32_t>> split;
-    uint32_t first = 0;
-    for (uint32_t r = 0; r < chain; ++r) {
-        uint32_t count;
-        if (jobs >= 2 * chain) {
-            const uint32_t pairs = jobs / 2;
-            count = 2 * (pairs / chain + (r < pairs % chain ? 1 : 0)) + (jobs % 2 != 0 && r + 1 == chain ? 1 : 0);
-        } else {
-            count = r < jobs - chain ? 2 : 1;
-        }
-        split.emplace_back(first, count);
-        first += count;
-    }
-    TT_ASSERT(first == jobs);
-    return split;
+// Q chunks a core runs in the key-range snake deal (dataflow/recipe_key_range.hpp: recipe_snake_job): one per full
+// round of `cores` sorted chunks, plus one if its position in the last, partial round is below the remainder.
+uint32_t recipe_snake_count(uint32_t core, uint32_t cores, uint32_t total_jobs) {
+    const uint32_t rounds = total_jobs / cores;
+    const uint32_t position = rounds % 2 == 0 ? core : cores - 1 - core;
+    return rounds + (position < total_jobs % cores ? 1 : 0);
 }
 
 void validate_key_range(const Tensor& q, const RecipeKeyRange& key_range) {
@@ -632,7 +619,8 @@ static std::vector<Tensor> run_recipe_segments(
                                               program_config ? program_config->max_cores_per_head_batch : 16u});
     TT_FATAL(chain > 0, "SDPA recipes require at least one compute core per head");
     const uint32_t total_jobs = batch_heads * jobs_per_head;
-    const uint32_t cores = global_jobs ? std::min(grid_cores, total_jobs) : chain * batch_heads;
+    // Key ranges have no chain: all heads' Q chunks are dealt over the whole grid (recipe_snake_count).
+    const uint32_t cores = global_jobs || keyed ? std::min(grid_cores, total_jobs) : chain * batch_heads;
     std::vector<CoreCoord> coordinates;
     std::set<CoreRange> ranges;
     for (uint32_t i = 0; i < cores; ++i) {
@@ -725,7 +713,14 @@ static std::vector<Tensor> run_recipe_segments(
         program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_PRIMARY_ROWS", std::to_string(k_rows));
         program.kernels.front().defines.emplace_back("SDPA_RECIPE_K_JOINT_ROWS", std::to_string(joint_k_rows));
     }
-    for (uint32_t i = 0; i < 3; ++i) {
+    // Key ranges share K/V between the cores running one head's Q chunks in a snake round when some head has more
+    // than one core (dataflow/reader_recipe.cpp: RecipeKvShare); it needs a second ready semaphore. Sliding and
+    // segment windows start neighbouring Q chunks' shared chunks at different points of their K ranges; with the FP32
+    // recipes' single K/V slot a sender then waits for each receiver to catch up (measured 10 heads x 8192^2, window
+    // 1024, Q256/K256: ACCURATE 0.87 ms unshared, 1.29 ms shared), so they share causal and chunked ranges only.
+    const bool prefix_ranges = key_range.sliding_window == 0 && !key_range.segments;
+    const bool kv_share = keyed && batch_heads < cores && (prefix_ranges || !policy.fp32_destination);
+    for (uint32_t i = 0; i < (kv_share ? 4u : 3u); ++i) {
         program.semaphores.push_back({.id = i, .core_ranges = grid, .initial_value = i == 2 ? 1u : 0u});
     }
     const std::string prefix = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
@@ -807,6 +802,13 @@ static std::vector<Tensor> run_recipe_segments(
             kernel->defines.emplace_back("SDPA_RECIPE_SEGMENTS", segment_bounds);
             kernel->defines.emplace_back("SDPA_RECIPE_SCRATCH_CB", std::to_string(kRecipeKeyScratchCb));
         }
+        if (kv_share) {
+            reader.defines.emplace_back("SDPA_RECIPE_KV_SHARE", "1");
+        }
+        for (auto* kernel : {&reader, &writer}) {
+            kernel->defines.emplace_back("SDPA_RECIPE_CORES", std::to_string(cores));
+            kernel->defines.emplace_back("SDPA_RECIPE_BATCH_HEADS", std::to_string(batch_heads));
+        }
         writer.defines.emplace_back("SDPA_RECIPE_Q_JOBS", std::to_string(jobs_per_head));
         if (key_range.q_slab_rows) {
             for (auto* kernel : {&reader, &writer}) {
@@ -842,6 +844,10 @@ static std::vector<Tensor> run_recipe_segments(
         reader.defines.emplace_back(
             "SDPA_RECIPE_READ_BARRIER_TILES",
             std::to_string(std::clamp<uint32_t>((512 / cores) * (1024 + 128) / kv_page, 1, 16)));
+        if (kv_share) {
+            // With K/V sharing one core per head and round reads the shared chunks: the chain head's interval.
+            reader.defines.emplace_back("SDPA_RECIPE_SHARED_READ_BARRIER_TILES", "16");
+        }
         if (paged) {
             reader.defines.emplace_back("SDPA_RECIPE_Q_HEADS", std::to_string(qs[1]));
             reader.defines.emplace_back("SDPA_RECIPE_KV_HEADS", std::to_string(kv_heads));
@@ -868,9 +874,6 @@ static std::vector<Tensor> run_recipe_segments(
     }
     const uint32_t sink_address = options.attention_sink ? options.attention_sink->buffer()->address() : 0;
     auto compute = std::move(program.kernels.front());
-    // Key ranges: no K/V chain (each Q chunk reads its own K range), Q chunks in zigzag order.
-    const auto zigzag =
-        keyed ? recipe_zigzag_split(jobs_per_head, chain) : std::vector<std::pair<uint32_t, uint32_t>>{};
     for (uint32_t i = 0; i < cores; ++i) {
         const auto core = coordinates[i];
         const uint32_t head = i / chain, rank = i % chain;
@@ -882,11 +885,16 @@ static std::vector<Tensor> run_recipe_segments(
         const uint32_t offset = (global_jobs ? 0 : head * jobs_per_head) + part * (split_jobs / split_ways) +
                                 std::min(part, split_jobs % split_ways);
         if (keyed) {
-            // A contiguous range of positions in the heads' zigzag orders (position z: head z / J, its zigzag
-            // entry z % J): the chain's zigzag split of one head, or with more batch/heads than cores the even split
-            // of all of them.
-            const uint32_t z_first = global_jobs ? offset : head * jobs_per_head + zigzag[rank].first;
-            const uint32_t z_count = global_jobs ? count : zigzag[rank].second;
+            // Core i's Q chunks in the snake deal of all heads' chunks (dataflow/recipe_key_range.hpp).
+            const uint32_t z_first = i;
+            const uint32_t z_count = recipe_snake_count(i, cores, total_jobs);
+            // K/V sharing partners: cores i -/+ batch_heads (dataflow/reader_recipe.cpp: RecipeKvShare).
+            const auto lower = kv_share && i >= batch_heads
+                                   ? q.device()->worker_core_from_logical_core(coordinates[i - batch_heads])
+                                   : CoreCoord(0, 0);
+            const auto higher = kv_share && i + batch_heads < cores
+                                    ? q.device()->worker_core_from_logical_core(coordinates[i + batch_heads])
+                                    : CoreCoord(0, 0);
             reader.runtime_args.emplace_back(
                 core,
                 KernelDescriptor::CoreRuntimeArgs{
@@ -897,10 +905,10 @@ static std::vector<Tensor> run_recipe_segments(
                     z_count,
                     0,
                     1,
-                    0,
-                    0,
-                    0,
-                    0,
+                    static_cast<uint32_t>(lower.x),
+                    static_cast<uint32_t>(lower.y),
+                    static_cast<uint32_t>(higher.x),
+                    static_cast<uint32_t>(higher.y),
                     0,
                     key_range.q_offset});
             for (const auto& tensor : {key_range.q_offset_tensor, key_range.segments, key_range.page_table}) {

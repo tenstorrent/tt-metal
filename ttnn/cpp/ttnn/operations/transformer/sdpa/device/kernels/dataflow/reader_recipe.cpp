@@ -11,8 +11,9 @@
 //   9 downstream_physical_x, 10 downstream_physical_y, 11 downstream_Q_jobs.
 // Semaphores on EVERY participating core: 0 ready=0, 1 received=0, 2 valid=1.
 // For singleton chains, rank=0, length=1, downstream_Q_jobs=0; coordinates unused.
-// Key ranges (SDPA_RECIPE_KRANGE: causal, sliding window, chunked, windowed; recipe_key_range.hpp): singleton
-// chains; args 3/4 are a range of positions in the heads' zigzag orders; 12 scalar Q offset, 13-15 the Q offset,
+// Key ranges (SDPA_RECIPE_KRANGE: causal, sliding window, chunked, windowed; recipe_key_range.hpp): no chain link;
+// arg 3 is the core's index in the snake deal of all heads' Q chunks, 4 its Q chunk count, 7-10 its K/V sharing
+// partners (SDPA_RECIPE_KV_SHARE: RecipeKvShare, semaphore 3 too), 12 the scalar Q offset, 13-15 the Q offset,
 // cu_window_seqlens and page table addresses (0 when absent); with Q slabs (ring-distributed SDPA) 16-17 the slabs'
 // first Q chunks. Each Q chunk reads only its K range; the writer generates the edge chunks' masks.
 // Attention sink (SDPA_RECIPE_SINK_CB): runtime arg SDPA_RECIPE_SINK_ARG is the sink tensor's address; each Q chunk
@@ -53,6 +54,14 @@ constexpr uint32_t reader_barrier_tiles = SDPA_RECIPE_READ_BARRIER_TILES;
 #else
 constexpr uint32_t reader_barrier_tiles = 16;
 #endif
+// K/V sharing (RecipeKvShare): one core per head and round reads the shared chunks, so it keeps more reads in flight
+// (measured 10 heads x 8192^2 causal: STANDARD 1.56 -> 1.49 ms, FAST BFP8 0.96 -> 0.88 ms; 16 tiles on every read
+// slows sliding windows and GQA instead).
+#ifdef SDPA_RECIPE_SHARED_READ_BARRIER_TILES
+constexpr uint32_t shared_barrier_tiles = SDPA_RECIPE_SHARED_READ_BARRIER_TILES;
+#else
+constexpr uint32_t shared_barrier_tiles = reader_barrier_tiles;
+#endif
 constexpr uint32_t kv_tiles = SDPA_K_CHUNK_TILES * SDPA_RECIPE_DHT;
 #ifdef SDPA_RECIPE_V_DHT
 constexpr uint32_t v_tiles = SDPA_K_CHUNK_TILES * SDPA_RECIPE_V_DHT;
@@ -61,7 +70,12 @@ constexpr uint32_t v_tiles = kv_tiles;
 #endif
 
 template <uint32_t tile_bytes, bool transpose, typename Accessor>
-FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint32_t first_page, uint32_t write_ptr) {
+FORCE_INLINE void read_kv_from_dram(
+    const Noc& noc,
+    const Accessor& tensor,
+    uint32_t first_page,
+    uint32_t write_ptr,
+    uint32_t barrier_tiles = reader_barrier_tiles) {
     // Sequential source requests distribute traffic over the interleaved banks;
     // K scatters the tile grid in L1, without transposing individual tiles.
     for (uint32_t p = 0; p < kv_tiles; ++p) {
@@ -72,7 +86,7 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
             })) {
             noc.async_write_zeros(destination, tile_bytes);
         }
-        if ((p + 1) % reader_barrier_tiles == 0) {
+        if ((p + 1) % barrier_tiles == 0) {
             noc.async_read_barrier();
         }
     }
@@ -94,7 +108,12 @@ FORCE_INLINE void read_kv_from_dram(const Noc& noc, const Accessor& tensor, uint
 // the padding of a partial last row.
 template <uint32_t tile_bytes, bool transpose, uint32_t width, typename Accessor, typename RowPage>
 FORCE_INLINE void read_kv_rows(
-    const Noc& noc, const Accessor& tensor, uint32_t row0, const RowPage& row_page, uint32_t write_ptr) {
+    const Noc& noc,
+    const Accessor& tensor,
+    uint32_t row0,
+    const RowPage& row_page,
+    uint32_t write_ptr,
+    uint32_t barrier_tiles = reader_barrier_tiles) {
     constexpr uint32_t row_tiles = (SDPA_RECIPE_KV_ROWS + 31) / 32;
     auto tile = [](uint32_t r, uint32_t c) { return transpose ? c * SDPA_K_CHUNK_TILES + r : r * width + c; };
     uint32_t issued = 0;
@@ -116,7 +135,7 @@ FORCE_INLINE void read_kv_rows(
                 tile_bytes,
                 {.page_id = page + c},
                 {});
-            if (++issued % reader_barrier_tiles == 0) {
+            if (++issued % barrier_tiles == 0) {
                 noc.async_read_barrier();
             }
         }
@@ -176,6 +195,78 @@ FORCE_INLINE void read_mask_chunk(
         cb.push_back(SDPA_K_CHUNK_TILES);
     }
 }
+#endif
+
+#ifdef SDPA_RECIPE_KV_SHARE
+// K/V sharing between the cores running one head's Q chunks in the same snake round. In round r, deal position p runs
+// Q chunk j and position p + heads (downstream) chunk j - 1 of the same head; position p's core is core (r even) or
+// cores - 1 - core (r odd), so a core's two partners are cores core -/+ heads (runtime args 7-10), downstream the
+// higher one in even rounds. A full K chunk of both this core's and upstream's Q chunk comes from upstream, other full
+// chunks are read here (all of them if this core leads the round: p < heads), and full chunks of both this core's and
+// downstream's Q chunk go downstream; both ends process their full chunks in ascending order. (Both ends of the key
+// interval rise with the row, so neighbouring Q chunks share most of their full chunks.) Store and forward: the
+// receiver passes its CB write pointer in the sender's ready semaphore (one per direction, so a partner already in the
+// next round cannot be mistaken for this one), then waits for the received semaphore.
+struct RecipeKvShare {
+    static constexpr uint32_t ready_from_lower = 0, received = 1, valid = 2, ready_from_higher = 3;
+    // Full chunks of upstream's and downstream's Q chunks (empty without that partner).
+    uint32_t up_begin = 0, up_end = 0, down_begin = 0, down_end = 0;
+    uint32_t up_x = 0, up_y = 0, down_x = 0, down_y = 0;
+    uint32_t ready = 0;  // semaphore id: the upstream core's for this core's ready, this core's for downstream's
+
+    template <typename ChunksOf>
+    RecipeKvShare(uint32_t core, uint32_t round, uint32_t total_jobs, uint32_t job, const ChunksOf& chunks_of) {
+        constexpr uint32_t cores = SDPA_RECIPE_CORES, heads = SDPA_RECIPE_BATCH_HEADS;
+        const uint32_t p = round % 2 == 0 ? core : cores - 1 - core;
+        const uint32_t active = total_jobs - round * cores < cores ? total_jobs - round * cores : cores;
+        const bool lower_is_up = round % 2 == 0;
+        const uint32_t lower_x = get_arg_val<uint32_t>(7), lower_y = get_arg_val<uint32_t>(8);
+        const uint32_t higher_x = get_arg_val<uint32_t>(9), higher_y = get_arg_val<uint32_t>(10);
+        up_x = lower_is_up ? lower_x : higher_x;
+        up_y = lower_is_up ? lower_y : higher_y;
+        down_x = lower_is_up ? higher_x : lower_x;
+        down_y = lower_is_up ? higher_y : lower_y;
+        // This core is on upstream's higher side in even rounds, and downstream on this core's.
+        ready = lower_is_up ? ready_from_higher : ready_from_lower;
+        // Upstream runs this head's next Q chunk, downstream its previous one (recipe_snake_job: entries s -/+ heads).
+        if (p >= heads) {
+            const RecipeChunkRange up = chunks_of(job + 1);
+            up_begin = up.full_begin;
+            up_end = up.full_end;
+        }
+        if (p + heads < active) {
+            const RecipeChunkRange down = chunks_of(job - 1);
+            down_begin = down.full_begin;
+            down_end = down.full_end;
+        }
+    }
+
+    bool receives(uint32_t k) const { return k >= up_begin && k < up_end; }
+    bool forwards(uint32_t k) const { return k >= down_begin && k < down_end; }
+
+    void receive(const Noc& noc, uint32_t address) const {
+        Semaphore<> done(received);
+        done.set(0);
+        noc.inline_dw_write<NocOptions::INLINE_L1>(
+            UnicastEndpoint{}, address, {.noc_x = up_x, .noc_y = up_y, .addr = get_semaphore(ready)});
+        done.wait(1);
+    }
+
+    void forward(const Noc& noc, uint32_t address, uint32_t bytes) const {
+        Semaphore<> posted(ready);
+        posted.wait_min(1);
+        const uint32_t destination = posted.value();
+        posted.set(0);
+        noc.async_write(
+            CoreLocalMem<uint32_t>(address),
+            UnicastEndpoint{},
+            bytes,
+            {.offset_bytes = 0},
+            {.noc_x = down_x, .noc_y = down_y, .addr = destination});
+        noc.async_writes_flushed();
+        Semaphore<>(valid).relay_unicast(noc, Semaphore<>(received), down_x, down_y);
+    }
+};
 #endif
 
 void kernel_main() {
@@ -333,9 +424,9 @@ void kernel_main() {
 #endif
     for (uint32_t qi = 0; qi < jobs; ++qi) {
 #ifdef SDPA_RECIPE_KRANGE
-        // Position first_job + qi of the heads' zigzag orders (host: run_recipe_segments).
-        const uint32_t z = first_job + qi;
-        const uint32_t job = z - z % queries_per_head + recipe_zigzag_job(z % queries_per_head, queries_per_head);
+        // Runtime arg 3 is this core's index in the snake deal (recipe_key_range.hpp: recipe_snake_job).
+        const uint32_t job =
+            recipe_snake_job(first_job, qi, SDPA_RECIPE_CORES, SDPA_RECIPE_BATCH_HEADS, queries_per_head);
 #else
         const uint32_t job = first_job + qi;
 #endif
@@ -414,33 +505,78 @@ void kernel_main() {
 #endif
 
 #ifdef SDPA_RECIPE_KRANGE
-        // K chunks of this Q chunk (recipe_key_range.hpp; the writer sends compute the range and the edge masks).
-        // The chain is off: every core reads its own K/V.
+        // K chunks of this Q chunk (recipe_key_range.hpp; the writer sends compute the range and the edge masks):
+        // the edge chunks, read here, then the full ones. With SDPA_RECIPE_KV_SHARE the full ones come from the
+        // core one Q chunk later in this head (upstream) unless this core leads its round, and go on to the core one
+        // Q chunk earlier (downstream) for as many as it needs (RecipeKvShare).
+        // Out of line: K/V sharing also asks for the neighbouring Q chunks' ranges.
+        auto chunks_of = [&](uint32_t q_job) __attribute__((noinline)) {
 #ifdef SDPA_RECIPE_Q_SLAB_JOBS
-        const uint32_t q_row0 = q_chunk * q_tiles * 32;
+            const uint32_t row0 = slabs.chunk(q_job % queries_per_head) * q_tiles * 32;
 #else
-        const uint32_t q_row0 = (job % queries_per_head) * q_tiles * 32;
+            const uint32_t row0 = (q_job % queries_per_head) * q_tiles * 32;
 #endif
-        const uint32_t q_row_end = q_row0 + q_tiles * 32 < q_primary_rows ? q_row0 + q_tiles * 32 : q_primary_rows;
-        const RecipeChunkRange range = keys.chunks(q_row0, q_row_end, SDPA_K_CHUNK_TILES * 32, k_chunks);
-        for (uint32_t ki = range.first; ki < range.end; ++ki) {
+            const uint32_t row_end = row0 + q_tiles * 32 < q_primary_rows ? row0 + q_tiles * 32 : q_primary_rows;
+            return keys.chunks(row0, row_end, SDPA_K_CHUNK_TILES * 32, k_chunks);
+        };
+        const RecipeChunkRange range = chunks_of(job);
+#ifdef SDPA_RECIPE_KV_SHARE
+        const RecipeKvShare share(first_job, qi, SDPA_RECIPE_BATCH_HEADS * queries_per_head, job, chunks_of);
+#endif
+        for (uint32_t i = 0; i < range.count(); ++i) {
+            const uint32_t ki = range.at(i);
             [[maybe_unused]] const uint32_t first_kv_page = kvbase + ki * kv_tiles;
+#ifdef SDPA_RECIPE_KV_SHARE
+            const bool shared = i >= range.edges();
+            const bool receive = shared && share.receives(ki);
+            const bool forward = shared && share.forwards(ki);
+            const uint32_t barrier = shared ? shared_barrier_tiles : reader_barrier_tiles;
+#else
+            constexpr bool receive = false, forward = false;
+            constexpr uint32_t barrier = reader_barrier_tiles;
+#endif
             kcb.reserve_back(kv_tiles);
-#ifdef SDPA_RECIPE_KV_ROWS
-            read_kv_rows<kbytes, true, SDPA_RECIPE_DHT>(
-                noc, k_tensor, ki * SDPA_K_CHUNK_TILES, k_row, kcb.get_write_ptr());
-#else
-            read_kv_from_dram<kbytes, true>(noc, k, first_kv_page, kcb.get_write_ptr());
+            const uint32_t kptr = kcb.get_write_ptr();
+            if (receive) {
+#ifdef SDPA_RECIPE_KV_SHARE
+                share.receive(noc, kptr);
 #endif
+            } else {
+#ifdef SDPA_RECIPE_KV_ROWS
+                read_kv_rows<kbytes, true, SDPA_RECIPE_DHT>(
+                    noc, k_tensor, ki * SDPA_K_CHUNK_TILES, k_row, kptr, barrier);
+#else
+                read_kv_from_dram<kbytes, true>(noc, k, first_kv_page, kptr, barrier);
+#endif
+            }
+            // Compute may start on the chunk while it is forwarded: this reader overwrites the slot only later.
             kcb.push_back(kv_tiles);
-            vcb.reserve_back(v_tiles);
-#ifdef SDPA_RECIPE_KV_ROWS
-            read_kv_rows<vbytes, false, SDPA_RECIPE_V_DHT>(
-                noc, v_tensor, ki * SDPA_K_CHUNK_TILES, v_row, vcb.get_write_ptr());
-#else
-            read_kv_from_dram<vbytes, false>(noc, v, first_kv_page, vcb.get_write_ptr());
+            if (forward) {
+#ifdef SDPA_RECIPE_KV_SHARE
+                share.forward(noc, kptr, kv_tiles * kbytes);
 #endif
+            }
+            vcb.reserve_back(v_tiles);
+            const uint32_t vptr = vcb.get_write_ptr();
+            if (receive) {
+#ifdef SDPA_RECIPE_KV_SHARE
+                share.receive(noc, vptr);
+#endif
+            } else {
+#ifdef SDPA_RECIPE_KV_ROWS
+                read_kv_rows<vbytes, false, SDPA_RECIPE_V_DHT>(
+                    noc, v_tensor, ki * SDPA_K_CHUNK_TILES, v_row, vptr, barrier);
+#else
+                read_kv_from_dram<vbytes, false>(noc, v, first_kv_page, vptr, barrier);
+#endif
+            }
+            // Compute may start on the chunk while it is forwarded: this reader overwrites the slot only later.
             vcb.push_back(v_tiles);
+            if (forward) {
+#ifdef SDPA_RECIPE_KV_SHARE
+                share.forward(noc, vptr, v_tiles * vbytes);
+#endif
+            }
         }
 #else
         const bool receive = link.should_receive(head);

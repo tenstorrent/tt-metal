@@ -2256,18 +2256,39 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 }
 
 #ifdef SDPA_RECIPE_KRANGE
-// Key-range calls: the reader's control page per Q chunk (reader_recipe.cpp, recipe_key_range.hpp) holds its K
-// chunks [first, end) and the fully visible ones [full_begin, full_end); the rest are edge chunks.
+// Key-range calls: the writer's control page per Q chunk (writer_recipe.cpp, recipe_key_range.hpp) holds its K
+// chunks [first, end) and the fully visible ones [full_begin, full_end) within them; the rest are edge chunks. The
+// edge chunks are processed first (trailing, then leading), so only a Q chunk's first K chunk misses the fused path.
 constexpr uint32_t kRecipeKeyRangeCb = 17;
-static uint32_t recipe_k_first, recipe_full_begin, recipe_full_end;
+static uint32_t recipe_k_edges;
+#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+static uint32_t recipe_k_first, recipe_full_begin, recipe_full_end, recipe_k_end;
+// RecipeChunkRange::at: the K chunk processed i-th.
+static uint32_t recipe_k_chunk_at(uint32_t i) {
+    const uint32_t trailing = recipe_k_end - recipe_full_end;
+    if (i < trailing) {
+        return recipe_full_end + i;
+    }
+    i -= trailing;
+    const uint32_t leading = recipe_full_begin - recipe_k_first;
+    return i < leading ? recipe_k_first + i : recipe_full_begin + (i - leading);
+}
+#endif
 static __attribute__((noinline)) uint32_t recipe_read_key_range() {
     CircularBuffer(kRecipeKeyRangeCb).wait_front(1);
-    recipe_k_first = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 0);
+    const uint32_t first = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 0);
     const uint32_t end = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 1);
-    recipe_full_begin = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 2);
-    recipe_full_end = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 3);
+    const uint32_t full_begin = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 2);
+    const uint32_t full_end = ckernel::read_tile_value(kRecipeKeyRangeCb, 0, 3);
     CircularBuffer(kRecipeKeyRangeCb).pop_front(1);
-    return end - recipe_k_first;
+    recipe_k_edges = (end - first) - (full_end - full_begin);
+#ifdef SDPA_RECIPE_K_PRIMARY_ROWS
+    recipe_k_first = first;
+    recipe_full_begin = full_begin;
+    recipe_full_end = full_end;
+    recipe_k_end = end;
+#endif
+    return end - first;
 }
 #endif
 
@@ -2308,10 +2329,9 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
 #endif
     for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; ++k_chunk) {
 #ifdef SDPA_RECIPE_KRANGE
-        const uint32_t k_index = recipe_k_first + state.processed_chunks + k_chunk;
-        recipe_edge_chunk = k_index < recipe_full_begin || k_index >= recipe_full_end;
+        recipe_edge_chunk = state.processed_chunks + k_chunk < recipe_k_edges;
 #ifdef SDPA_RECIPE_K_PRIMARY_ROWS
-        recipe_k_tile_offset = k_index * Sk_chunk_t;
+        recipe_k_tile_offset = recipe_k_chunk_at(state.processed_chunks + k_chunk) * Sk_chunk_t;
 #endif
 #elif defined(SDPA_RECIPE_K_PRIMARY_ROWS)
         recipe_k_tile_offset = (state.processed_chunks + k_chunk) * Sk_chunk_t;
