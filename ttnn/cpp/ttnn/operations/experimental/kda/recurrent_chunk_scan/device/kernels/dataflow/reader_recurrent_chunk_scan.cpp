@@ -85,6 +85,7 @@ template <
     uint32_t mcast_shared,
     uint32_t summary,
     uint32_t groups_per_head,
+    uint32_t late_on_writer,
     uint32_t has_actual_end,
     uint32_t sp_rank,
     uint32_t sp_size,
@@ -100,8 +101,6 @@ TT_KERNEL void reader(
     uint32_t receivers) {
     const auto v_beta_accessor = TensorAccessor(tensor::v_beta);
     const auto kd_accessor = TensorAccessor(tensor::kd);
-    const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed);
-    const auto final_decay_accessor = TensorAccessor(tensor::final_decay);
     const auto t_inv_accessor = TensorAccessor(tensor::t_inv);
 
     DataflowBuffer state(dfb::state);
@@ -110,8 +109,6 @@ TT_KERNEL void reader(
     DataflowBuffer kd(dfb::kd);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
-    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
-    DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
     Noc noc;
     Semaphore ready(sem::ready);
@@ -168,62 +165,79 @@ TT_KERNEL void reader(
             group_entry_states_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
     }
 
-    for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
-        const uint32_t head_chunk = head * num_chunks + chunk;
-        // Publish the restart seed just in time, never before the loop. The state
-        // DFB holds one kv payload and compute frees it only via pop_front at the
-        // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
-        // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
-        // whenever it is non-zero, so chunk 0 has always been consumed by now.
-        if constexpr (summary) {
-            if (reset_chunk != 0 && chunk == reset_chunk) {
-                seed_summary_pair<Kt, Vt>(state, noc, value_block);
-            }
-        } else {
-            if (reset_chunk != 0 && chunk == reset_chunk) {
-                const auto tail_entry_states_accessor = TensorAccessor(tensor::tail_entry_states);
-                read_and_publish_value_slice<Vt, Vt_full>(
-                    tail_entry_states_accessor,
-                    tail_entry_states,
-                    noc,
-                    (head / groups_per_head) * Kt * Vt_full,
-                    Kt,
-                    value_block);
-            }
-        }
-        read_and_publish_value_slice<Vt, Vt_full>(
-            v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
-        // Value-independent inputs, in the order compute consumes them.
-        const auto for_each_shared_input = [&](auto&& input) {
-            input(kd_accessor, kd, head_chunk * chunk_key_tiles, chunk_key_tiles);
-            input(t_inv_accessor, t_inv, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-            if constexpr (!summary) {
-                input(TensorAccessor(tensor::q_decay), q_decay, head_chunk * chunk_key_tiles, chunk_key_tiles);
-                input(TensorAccessor(tensor::intra), intra, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
-            }
-            input(k_decay_transposed_accessor, k_decay_transposed, head_chunk * key_chunk_tiles, key_chunk_tiles);
-            input(final_decay_accessor, final_decay, head_chunk * Kt, Kt);
-        };
-        if constexpr (!mcast_shared) {
-            // Publish each buffer once its reads land so compute overlaps the next buffer's reads.
-            for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
-                stage_contiguous_tiles(accessor, buffer, noc, base, tiles);
-                noc.async_read_barrier();
-                buffer.push_back(tiles);
-            });
-        } else {
-            SharedInput inputs[summary ? 4 : 6];
-            uint32_t count = 0;
-            for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
-                const uint32_t slot = value_block == 0 ? stage_contiguous_tiles(accessor, buffer, noc, base, tiles) : 0;
-                inputs[count++] = {&buffer, tiles, slot};
-            });
-            if (value_block == 0) {
-                multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
+    // With late_on_writer the writer multicasts the state update's inputs (k_dec_t and dl) and these stay null.
+    const auto stream_chunks = [&](DataflowBuffer* k_decay_transposed, DataflowBuffer* final_decay) {
+        for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
+            const uint32_t head_chunk = head * num_chunks + chunk;
+            // Publish the restart seed just in time, never before the loop. The state
+            // DFB holds one kv payload and compute frees it only via pop_front at the
+            // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
+            // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
+            // whenever it is non-zero, so chunk 0 has always been consumed by now.
+            if constexpr (summary) {
+                if (reset_chunk != 0 && chunk == reset_chunk) {
+                    seed_summary_pair<Kt, Vt>(state, noc, value_block);
+                }
             } else {
-                receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
+                if (reset_chunk != 0 && chunk == reset_chunk) {
+                    const auto tail_entry_states_accessor = TensorAccessor(tensor::tail_entry_states);
+                    read_and_publish_value_slice<Vt, Vt_full>(
+                        tail_entry_states_accessor,
+                        tail_entry_states,
+                        noc,
+                        (head / groups_per_head) * Kt * Vt_full,
+                        Kt,
+                        value_block);
+                }
+            }
+            read_and_publish_value_slice<Vt, Vt_full>(
+                v_beta_accessor, v_beta, noc, head_chunk * Ct * Vt_full, Ct, value_block);
+            // Value-independent inputs, in the order compute consumes them.
+            const auto for_each_shared_input = [&](auto&& input) {
+                input(kd_accessor, kd, head_chunk * chunk_key_tiles, chunk_key_tiles);
+                input(t_inv_accessor, t_inv, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+                if constexpr (!summary) {
+                    input(TensorAccessor(tensor::q_decay), q_decay, head_chunk * chunk_key_tiles, chunk_key_tiles);
+                    input(TensorAccessor(tensor::intra), intra, head_chunk * chunk_chunk_tiles, chunk_chunk_tiles);
+                }
+                if constexpr (!late_on_writer) {
+                    input(
+                        TensorAccessor(tensor::k_decay_transposed),
+                        *k_decay_transposed,
+                        head_chunk * key_chunk_tiles,
+                        key_chunk_tiles);
+                    input(TensorAccessor(tensor::final_decay), *final_decay, head_chunk * Kt, Kt);
+                }
+            };
+            if constexpr (!mcast_shared) {
+                // Publish each buffer once its reads land so compute overlaps the next buffer's reads.
+                for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                    stage_contiguous_tiles(accessor, buffer, noc, base, tiles);
+                    noc.async_read_barrier();
+                    buffer.push_back(tiles);
+                });
+            } else {
+                SharedInput inputs[summary ? 4 : (late_on_writer ? 4 : 6)];
+                uint32_t count = 0;
+                for_each_shared_input([&](const auto& accessor, DataflowBuffer& buffer, uint32_t base, uint32_t tiles) {
+                    const uint32_t slot =
+                        value_block == 0 ? stage_contiguous_tiles(accessor, buffer, noc, base, tiles) : 0;
+                    inputs[count++] = {&buffer, tiles, slot};
+                });
+                if (value_block == 0) {
+                    multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
+                } else {
+                    receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
+                }
             }
         }
+    };
+    if constexpr (late_on_writer) {
+        stream_chunks(nullptr, nullptr);
+    } else {
+        DataflowBuffer k_decay_transposed(*dfb::get_token_if_present<"k_decay_transposed">());
+        DataflowBuffer final_decay(*dfb::get_token_if_present<"final_decay">());
+        stream_chunks(&k_decay_transposed, &final_decay);
     }
     if constexpr (mcast_shared) {
         // Retire the multicast writes and ready increments before exit; dispatch re-initializes both semaphores on

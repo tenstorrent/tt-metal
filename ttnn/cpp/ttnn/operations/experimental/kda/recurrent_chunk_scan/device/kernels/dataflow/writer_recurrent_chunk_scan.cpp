@@ -13,6 +13,7 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/dataflow/value_block_multicast.hpp"
 
 template <uint32_t Rows, uint32_t Vt, uint32_t RowStride, uint32_t PacketRows, bool Consume = true, typename Accessor>
 FORCE_INLINE void write_value_slice(
@@ -149,18 +150,87 @@ FORCE_INLINE void write_summary(
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull>
+// The peers' segment and receiver count for the writer's multicast of the state update's inputs.
+struct LatePeers {
+    uint32_t x0;
+    uint32_t y0;
+    uint32_t x1;
+    uint32_t y1;
+    uint32_t receivers;
+};
+
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t VtFull, uint32_t late_on_writer>
 FORCE_INLINE void write_recurrent(
-    uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t valid_chunks, uint32_t final_head) {
+    uint32_t head,
+    uint32_t value_block,
+    uint32_t num_chunks,
+    uint32_t valid_chunks,
+    uint32_t final_head,
+    const LatePeers& peers) {
     const auto output_accessor = TensorAccessor(tensor::output);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
     DataflowBuffer output(dfb::output);
     DataflowBuffer final_state(dfb::final_state);
     Noc noc;
 
-    for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
+    const auto write_output = [&](uint32_t chunk) {
         const uint32_t row_base = (head * num_chunks + chunk) * Ct * VtFull;
         write_value_slice<Ct, Vt, VtFull, Ct>(output_accessor, output, noc, row_base, value_block * Vt);
+    };
+    if constexpr (late_on_writer) {
+        // Value block 0 multicasts each chunk's k_dec_t and dl on this NoC, one chunk ahead of the output it
+        // drains, while the reader multicasts the other inputs on its own.
+        constexpr uint32_t key_chunk_tiles = Kt * Ct;
+        DataflowBuffer k_decay_transposed(*dfb::get_token_if_present<"k_decay_transposed">());
+        DataflowBuffer final_decay(*dfb::get_token_if_present<"final_decay">());
+        const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed);
+        const auto final_decay_accessor = TensorAccessor(tensor::final_decay);
+        Semaphore ready(sem::ready_late);
+        Semaphore valid(sem::valid_late);
+        const bool sender = value_block == 0;
+        if (sender) {
+            // set_multicast sources its payload from this local word; preset it to VALID once.
+            valid.set(1);
+        }
+        const auto publish = [&](uint32_t chunk) {
+            const uint32_t head_chunk = head * num_chunks + chunk;
+            SharedInput inputs[2] = {
+                {&k_decay_transposed,
+                 key_chunk_tiles,
+                 sender ? stage_contiguous_tiles(
+                              k_decay_transposed_accessor,
+                              k_decay_transposed,
+                              noc,
+                              head_chunk * key_chunk_tiles,
+                              key_chunk_tiles)
+                        : 0},
+                {&final_decay,
+                 Kt,
+                 sender ? stage_contiguous_tiles(final_decay_accessor, final_decay, noc, head_chunk * Kt, Kt) : 0}};
+            if (sender) {
+                multicast_shared(noc, inputs, ready, valid, peers.x0, peers.y0, peers.x1, peers.y1, peers.receivers);
+            } else {
+                receive_shared(noc, inputs, ready, valid, peers.x0, peers.y0);
+            }
+        };
+        publish(0);
+        for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
+            if (chunk + 1 < valid_chunks) {
+                publish(chunk + 1);
+            }
+            write_output(chunk);
+        }
+        // Retire the multicast writes and ready increments before exit; dispatch re-initializes both semaphores
+        // on every launch.
+        if (sender) {
+            noc.async_write_barrier();
+        } else {
+            noc.async_atomic_barrier();
+        }
+    } else {
+        for (uint32_t chunk = 0; chunk < valid_chunks; ++chunk) {
+            write_output(chunk);
+        }
     }
     // Preserve every valid group's state at its own index. Also publish the last
     // valid state in the final physical slot used by the layer's carry selection.
@@ -178,8 +248,18 @@ template <
     uint32_t Vt_full,
     uint32_t summary,
     uint32_t packed_head,
+    uint32_t late_on_writer,
     uint32_t has_actual_end>
-TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, uint32_t group) {
+TT_KERNEL void writer(
+    uint32_t head,
+    uint32_t value_block,
+    uint32_t num_chunks,
+    uint32_t group,
+    uint32_t peer_x0,
+    uint32_t peer_y0,
+    uint32_t peer_x1,
+    uint32_t peer_y1,
+    uint32_t receivers) {
     kda_chronology::Topology topology{};
     uint32_t groups = 0;
     uint32_t valid_chunks = num_chunks;
@@ -215,6 +295,7 @@ TT_KERNEL void writer(uint32_t head, uint32_t value_block, uint32_t num_chunks, 
                 final_head = head - group + groups - 1;
             }
         }
-        write_recurrent<Ct, Kt, Vt, Vt_full>(head, value_block, num_chunks, valid_chunks, final_head);
+        write_recurrent<Ct, Kt, Vt, Vt_full, late_on_writer>(
+            head, value_block, num_chunks, valid_chunks, final_head, {peer_x0, peer_y0, peer_x1, peer_y1, receivers});
     }
 }
