@@ -386,3 +386,60 @@ Fresh evidence at the same quietbox root: `topk-public-api.{log,xml}`,
 `topk-public-formats-O2.{log,xml}`.
 These are separate from the upstream-based macro companion PR: passing the
 explicit-state region does not validate every opcode in the effect decoder.
+
+## Targeted compiler fix — 2026-10-08
+
+Compiler commit `064ef4565ea` extends the existing opt-in launch-flatten pass
+to raw-delivery loops containing both explicit LREG reads and writes. The
+generic size estimate charges these markers even when allocation emits no
+moves. Pure raw loops and replay-owner-only loops remain excluded; proven
+trip counts, body admission, word/function budgets and QSR exclusion are
+unchanged. No new pass, global size-limit change, or kernel-name special case.
+
+Fresh Linux builds compare baseline `846eae4da23` against that one patch.
+On Blackhole, with the public-API TopK source, O3, explicit scheduling,
+live-in pass disabled, and the same launch-flatten flag for both arms:
+
+| Compiler / launch-flatten | Hand cycles | Public-API threaded cycles | Exact cases |
+|---|---:|---:|---:|
+| Baseline / on | 5038 | 5186 | 72 PASS |
+| Patched / off | 5038 | 5186 | 72 PASS |
+| Patched / on | 5038 | 4929 | 72 PASS |
+
+Five profiling executions per arm; whole TOPK_BODY, not isolated merge timing.
+The targeted change removes the observed regression: threaded is **2.16%
+faster than hand** in this workload. Its dump requests complete unrolling of
+loop39, nine delivery words per trip, eight trips. The global diagnostic
+`max-completely-peeled-insns=300` option is NOT present. Patched O2/default
+scheduling with launch-flatten enabled also passes all 72 exact cases.
+
+Compiler tests: new positive regression fails its two unroll assertions before
+the patch (50 PASS / 2 FAIL in the focused suite), then the complete focused
+suite passes (52 PASS / 0 FAIL). Fresh full `rvtt.exp` with SFPI enabled:
+**8,085 PASS, 2 expected XFAIL, zero unexpected failures**, including 1,537
+SFPI checks. Expected failures are the two `rv/raw-race-wh.C` assembly scans.
+
+To reproduce the fixed configuration, use the re-run commands above with the
+patched compiler/backend and append **`-mtt-tensix-optimize-launch-flatten`**
+to TT_LLK_EXTRA_COMPILER_OPTIONS (do not append the global diagnostic limit).
+For the control, replace that option with
+`-mno-tt-tensix-optimize-launch-flatten`. Run both implementation arms with
+the same options. Compiler checks, from the GCC build's `gcc/` directory:
+
+```sh
+SFPI=/path/to/matching/installed-sfpi make -k check-g++ \
+  RUNTESTFLAGS='rvtt.exp=launch-flatten*.C'
+SFPI=/path/to/matching/installed-sfpi make -k check-g++ RUNTESTFLAGS='rvtt.exp'
+```
+
+Inspect `g++.sum`: make's exit status alone did not report the baseline scan
+failures. Evidence under the same quietbox root: `flatten-baseline-tests/`,
+`flatten-patched-tests/`, `flatten-full-tests/`, `topk-flatten-baseline`,
+`topk-flatten-patched`, `topk-flatten-off`, and `topk-flatten-patched-O2`
+(logs/XML/build artifacts as applicable). Compiler build logs are
+`fullstack-baseline-build.log` and `fullstack-patched-build.log`.
+
+This resolves the measured performance blocker with an existing compiler knob.
+It does not expand the input/architecture coverage stated above, enable the
+test adaptation as a production default, validate all raw opcodes, or justify
+removing the live-in pass globally.
