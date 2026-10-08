@@ -942,7 +942,8 @@ TEST_F(LLKQuasarMeshDeviceSingleCardFixture, DISABLED_TensixComputeReduceColumnM
         .rtol = 0.1f,
         .golden_function = ::unit_tests::compute::gold_reduce_h,
         .result_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH},
-        .math_fidelity = MathFidelity::HiFi4,
+        // Quasar's first fidelity phase covers the Float16_b operands in full
+        .math_fidelity = MathFidelity::LoFi,
         // Plain MxFp4 path: the reader's scaler is Float16_b (see the comment above the test)
         .input_format = tt::DataFormat::MxFp4,
     };
