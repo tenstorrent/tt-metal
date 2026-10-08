@@ -68,7 +68,17 @@ def accumulate(bucket, row):
     for key, name in DURATIONS.items():
         value = metric(row, name)
         if value is None:
-            bucket[f"missing_{key}_rows"] += 1
+            # Data-movement-only programs have no TRISC interval. Require both
+            # kernel provenance and all three binary sizes to prove absence;
+            # an empty timing by itself remains a missing measurement.
+            no_compute_kernel = (
+                key == "compute_ns"
+                and row.get("COMPUTE KERNEL SOURCE") == "[]"
+                and row.get("COMPUTE KERNEL HASH") == "[]"
+                and all(row.get(f"TENSIX COMPUTE {i} MAX KERNEL SIZE [B]") == "0" for i in range(3))
+            )
+            prefix = "not_applicable" if no_compute_kernel else "missing"
+            bucket[f"{prefix}_{key}_rows"] += 1
         else:
             bucket[key] += value
 
@@ -156,7 +166,9 @@ def analyze(rows, receipt, *, expected_cases=PROFILE_CASES):
         accounting=(
             "Durations remain separate per device. Inclusive stages overlap; exclusive stages partition each "
             "device total. Firmware sums may include overlapping execution. Per-RISC durations include waits "
-            "and alone cannot establish a bandwidth or compute bottleneck. Device-op rows are not program counts."
+            "and alone cannot establish a bandwidth or compute bottleneck. Absent compute timings are marked "
+            "not applicable only when source/hash lists are empty and all compute binary sizes are zero; "
+            "they are not zero-time measurements. Device-op rows are not program counts."
         ),
         remaining_p0=["Reconcile full-model traced op time with TPOT within 5%", "Measure TP8 collective costs"],
         device_totals=device_totals,

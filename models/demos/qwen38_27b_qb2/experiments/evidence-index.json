@@ -1,16 +1,16 @@
 {
-  "generated_at": "2026-10-08T06:46:35.234844+00:00",
+  "generated_at": "2026-10-08T07:32:57.763570+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
       "path": "experiments/LOGBOOK.md",
-      "bytes": 34706,
-      "sha256": "c72bdbcc769a62a59066d4687a9c21ce6575d5f18671d8cc48a5a9d4310aaba8"
+      "bytes": 37251,
+      "sha256": "82acd93f0d7c85983ece1f5b570d6ae1659234c5d74e05b0d99469cba2e6097e"
     },
     {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 13111,
-      "sha256": "e7125322e1872d7bd6de8e8c6d767c41318d7698acb84108bec4537c16e1505c"
+      "bytes": 16575,
+      "sha256": "4addfd0f3aafc2e0b3814db86992a16439846681ea4f9ab94c76d9b9a960d8f1"
     },
     {
       "path": "experiments/TT-LAB-REVIEW.md",
@@ -2688,6 +2688,121 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/README.md",
+      "bytes": 4531,
+      "sha256": "71a39bdcf28ade45f594f4bad99c809a33156295452382aa4896435f32065051"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/attention-half-tile-hardware-v1.log.gz",
+      "bytes": 10742,
+      "sha256": "bd3f60d0fe79bdd367c31830e6b79046e30a119adaa704b8a23a416522da1cb4"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/attention-half-tile-hardware-v1/hardware.json.gz",
+      "bytes": 17480,
+      "sha256": "58eafe87eabc3b1044d78a29902fd2b030d3e51ffdb8ce79f2e715c8af34b36c"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/attention-half-tile-hardware-v1/hardware.xml.gz",
+      "bytes": 308,
+      "sha256": "0c8d8313f519fdfc406b9cf189189df3fa8978ae60e5e6d4a7c66578d2ec4aef"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/attention-half-tile-hardware-v1/queue.json",
+      "bytes": 30262,
+      "sha256": "7c3bde594513d7bf3d42dd22b8f9ffb1674a82a6bb31ee33f7ee421606633a8f"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-launch-v4.json",
+      "bytes": 3338,
+      "sha256": "840fdacf0cae81147ac52f447fc729486360dc02c7c645d390cd19916fd4d19f"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-unit-v4.xml.gz",
+      "bytes": 5779,
+      "sha256": "e28efbeb944e7d488d64da135356b805d527f58228ff2619bd3ac35c4dd32807"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3-recovery-v1/analysis/profile-summary.json",
+      "bytes": 177125,
+      "sha256": "c4282e9bd411e54e0fa2f50c5493afe2bfa031e3e6164c10d4d20cf7e6ed354e"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3-recovery-v1/analysis/report.md.gz",
+      "bytes": 1060,
+      "sha256": "6685fc7f9e9eded4b001893e4185ed1303eedc985081bf75e2ed6d5d4945f26b"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3.log.gz",
+      "bytes": 86073,
+      "sha256": "a770f20ac11c4fcea40eb9a69f808a09ebc96b163cede9a0cb1077da9712ba5d"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/queue.json",
+      "bytes": 15827,
+      "sha256": "c5f837fcd5acaaac8bd670dbfb764818c1a2e7fbdae1f9f015d8540d2e7b11c7"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/s32768-b16-native/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "0a06568b4aeb909219ca437180399484874711a5125dfa6fe5d2104d7aca7fbc"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/s32768-b16-native/profile.json",
+      "bytes": 12875,
+      "sha256": "f0f0dde8dfb6853b70ae0f942d93882062dcdbd7a9735068a5aa211cbf30fe46"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/s32768-b16-native/tracy/.logs/cpp_device_perf_report.csv.gz",
+      "bytes": 128694,
+      "sha256": "0a42488c5668f33f932e903e9698c30d3ca8bd07322e8fcbb8e888db6564ccbd"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v3/s32768-b16-native/tracy/reports/2026_10_08_06_53_00/ops_perf_results_2026_10_08_06_53_00.csv.gz",
+      "bytes": 251531,
+      "sha256": "f5d912ef440c8737800175edad970e7d26a1abe7820509e9adf40fe547c5cc9c"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/bounded-layer-profile-v4/queue.json",
+      "bytes": 15735,
+      "sha256": "b7ba825188c6b5af90017f7a0a1d4ae192603c4a435a04124ea1e099bbbb2a01"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/native/attempt-01/command.json",
+      "bytes": 646,
+      "sha256": "71e0013516a3e6c243c1e0d3b56c79c6ce058c3a42782485b40a65b8fabeb1a8"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/native/attempt-01/hardware.xml.gz",
+      "bytes": 300,
+      "sha256": "5adabe4d6cf3a6ed2fa5b817a633b10528a09928d293bb7446dfd2c7c863760d"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/native/sweep.json",
+      "bytes": 16233,
+      "sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/single-step/attempt-01/command.json",
+      "bytes": 651,
+      "sha256": "44adfcd0b072742a3f754c2f2a9d0eeccca4493e1adc100c9eae41125dbcba73"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/single-step/attempt-01/hardware.xml.gz",
+      "bytes": 304,
+      "sha256": "faca713c4a0ea8ee0eacc16ec6061e510017a4a3e43e0d65c81144ecc793a489"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/capacity-pairs-v1/s32768-b32/single-step/sweep.json",
+      "bytes": 16300,
+      "sha256": "950c75f8426ca1d2a18f6f6c12ed924eb833fe63e0de49cae6e81df61615a692"
+    },
+    {
+      "path": "galaxy-evidence/profile-recovery-and-throughput-v1/collection.json",
+      "bytes": 6386,
+      "sha256": "98ffd841c3139a231a40504f16db966dee81624e7e8dff5fb6c7e2e83c255f6a"
     },
     {
       "path": "galaxy-evidence/profile-recovery-v1/launch-profile-recovery-v1.json",

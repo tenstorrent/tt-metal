@@ -2,6 +2,8 @@
 
 Current user priorities: **32K ISL first, 16K second; 128K/256K remain active
 secondary optimization targets**. Report gains and losses across all four.
+Maximize achieved performance; 2680 output tok/s/Galaxy is a checkpoint, not a
+stopping target.
 
 We are partway through P1/P2, not at the projected "after P2" performance point.
 The plan's 4.7-ms fixed overhead and 85% peak-DRAM utilization are modeling
@@ -55,7 +57,7 @@ The incomplete P0 capture cannot justify a precise percentage decomposition.
 | Phase / requirement | Current evidence | Remaining gate |
 |---|---|---|
 | G0: eight TP4 replicas | Historical physical eight-replica short-context baseline passed output agreement and <3% TPOT degradation; aggregate 288.16 tok/s at B1. | Repeat qualification for the new attention/GDN policy and long-context operating points. An 8x TP4 projection is not this test. |
-| P0: stage attribution | Device profiling was attempted; export/recovery failed completeness after a 67.5-GB CSV and memory pressure. Only three of six windows were recoverable. | A bounded, complete per-stage capture, launch counts and calibrated bandwidth/collective costs. No qualified stage attribution from the failed capture. |
+| P0: stage attribution | Earlier export failed after a 67.5-GB CSV. A new bounded native 32K/B16 two-layer capture is now recovered with all four ranks and complete applicable RISC intervals. | Complete the single-step and other-geometry captures, reconcile against traced full-model TPOT, and calibrate compute/bandwidth/collective costs. |
 | P1: one-token recurrence | Opt-in custom Metal recurrence is integrated into decode, updates FP32 state in place, eliminates the candidate path's out-of-place state copy, and fuses FP32 Q/K normalization. 4,096 changing-input steps and rebinding checks pass. | Gated RMSNorm and SiLU(z) epilogue are still separate; the public/native op and complete fusion boundary are not finished. Every measured standalone latency misses the bandwidth-plus-10-us gate. |
 | P2: graph cleanup | Compact decode paths, batched RoPE, packed projections and packed convolution for multiples of eight exist. Full-model B32 fixed-shape traces are measured. | No proof of <=15 programs/layer or L1 retention across the full graph. Small/irregular batches retain a per-user convolution path. Gating/layout conversions remain. |
 | P2: B32/B64 serving buckets | Fixed-shape B32 benchmark works. Resident serving bucket selection still uses 1/8/16. | Extend and qualify B32/B64 resident buckets. Full-model B64 is blocked by the DRAM-sharded projection M==1 limit and remains unmeasured. Component B64 recurrence is not full-model support. |
@@ -85,7 +87,8 @@ These timings include trace dispatch/synchronization. The target uses the plan's
 512-GB/s/chip assumption. Real layer-0 block timing including projection,
 convolution, preparation, recurrence and output epilogue/projection improves
 29.1% at B16 and 40.6% at B32; B1/B8 regress. The full model at 32K/B16 improves
-23.86%. The fresh 128K/B16 pair improves 14.99%; earlier 128K/B8 and
+23.86%; the completed 32K/B32 pair improves 40.09%. The fresh 128K/B16 pair
+improves 14.99%; earlier 128K/B8 and
 256K/B4 were approximately flat/slightly slower. This favors a batch-dependent
 recurrence choice; new model-eval qualification is still pending. See
 [integration evidence](../galaxy-evidence/gdn-model-integration-v1/README.md) and
@@ -110,24 +113,29 @@ active secondary tuning targets. Hardware runs retain BFP8 KV/FP32 state.
   These are component measurements, not full-model improvements.
 - **Accurate partial-query simulator passed:** all 16 candidate cases and eight
   full-tile controls pass; candidate partial-query outputs are bit-identical to
-  the full-query controls. Six original partial-query cases failed. Hardware
-  timing, production-instruction parity and model evaluation remain untested.
+  the full-query controls. Six original partial-query cases failed. Subsequent
+  physical hardware checks passed; model evaluation remains untested.
   The retained first attempt failed a generated-file evidence lookup, fixed in
   v2 without relaxing numerical or source-verification checks.
-- **Bounded profile v3 queued at 06:35:55 UTC:** prioritize 32K/B16/B32, then
-  16K/B16/B32, then 128K/B16 and 256K/B8. The v2 attempt rejected a profiling
-  flag before opening devices because it used the wrong safe-test wrapper.
-  V3 freezes the Metal wrapper and validates shell syntax/Tracy first. CPU
-  validation passed 276 tests plus 40 subtests. No profile measurement yet.
-- **Physical partial-query sweep queued at 06:40:24 UTC:** 10 geometries,
-  30 full/partial/full cases, production instructions and unchanged BFP8 KV.
-  CPU validation passed 295 tests plus 40 subtests; completed simulator
-  receipts and the exact candidate header are rechecked before hardware.
-- Native **32K/B32 full-model** completed at 250.13 output tok/s per TP4,
-  5184.79 prefill input tok/s. Its single-step comparison is in progress.
-  All three controllers are persistent systemd user jobs; `Linger=yes` was
-  verified. Current source/launch/failure evidence is in
-  [hardware-followup-launch-v1](../galaxy-evidence/hardware-followup-launch-v1).
+- **Bounded profile v4 queued at 07:25:25 UTC:** 12 captures prioritizing
+  32K/B16/B32, then 16K/B16/B32, then 128K/B16 and 256K/B8. V3 hardware passed
+  but its collector incorrectly demanded compute timings from programs with
+  no compute kernel. The fix requires empty source/hash lists and three zero
+  compute-binary sizes before treating absent timings as not applicable.
+  Reanalysis of a copy of the original capture passes all four ranks. Remote
+  CPU validation passed 292 tests plus 40 subtests. Single-step stage attribution
+  is still queued; this capture is native recurrence with synthetic caches.
+- **Physical partial-query sweep completed:** 30 cases, ten qualified
+  full/partial/full comparisons, production instructions and unchanged BFP8 KV.
+  Every candidate output is bit-identical to its control. Attention-call gains
+  at 32K/B8/B16/B32 are 4.28/2.16/0.85%; at 16K, 7.03/3.48/1.38%. Regressions
+  at 128K/B16 and 256K/B4 are 0.33/1.18%. Not promoted to the full model.
+- **32K/B32 full-model pair completed:** 250.13 native versus 350.42 single-step
+  output tok/s per TP4, **40.09% uplift**. Prefill remains ~5185 input tok/s.
+  The 2803 output tok/s/Galaxy figure is an eight-replica projection. Persistent
+  capacity and corrected profiling jobs remain active with `Linger=yes`.
+  Results, failures and recovery are in
+  [profile-recovery-and-throughput-v1](../galaxy-evidence/profile-recovery-and-throughput-v1).
 - KV is still interleaved. A source audit of Blaze's 92% bandwidth reference
   identifies bank-local streaming and transaction-ID buffering as useful next
   experiments. The cited rate is recorded expert-matmul streaming bandwidth,
@@ -145,11 +153,12 @@ The existing baseline G0 and failed P0 recovery receipts are respectively
 
 ## Long-context throughput projection and traffic limits
 
-Best completed operating points as of the paired 128K/B16 receipt above:
+Completed operating points (256K matched pair still running):
 
 | Context | Batch per TP4 | Measured output tok/s per TP4 | 8x projection, output tok/s/Galaxy | Ideal traffic-model ceiling at that batch |
 |---|---:|---:|---:|---:|
 | 32K, single-step GDN | 16 | 259.22 | 2,074 | 6,991 |
+| 32K, single-step GDN | 32 | 350.42 | 2,803 | 8,654 |
 | 128K, single-step GDN | 16 | 163.36 | 1,307 | 2,841 |
 | 262016, native GDN | 8 | 89.98 | 720 | 1,459 |
 
@@ -158,6 +167,37 @@ measurement. The ceiling is an optimistic one-read traffic model at assumed
 512 GB/s/chip, excluding collectives, launches, compute stalls, conversion traffic
 and additional buffers. It is not a promised optimized result or measured DRAM
 utilization, and does not complete P0/P5 calibration.
+
+At 32K/B32, the ideal per-step traffic budget is **7.04 ms weights + 4.72 ms
+state read/write + 17.83 ms KV = 29.58 ms**, versus the measured **91.32-ms
+TPOT**. Current throughput is 32.4% of this optimistic ceiling. The remaining
+61.74 ms cannot all be called dispatch overhead: it includes additional memory
+traffic, math, synchronization, collectives, layouts and launch effects that
+the simplified model excludes. At 128K/B16 the ratio is 46.0%; at 256K/B8 the
+earlier native point is 49.3%. These ratios are not DRAM-counter utilization.
+
+### Stage evidence against the memory lower bound
+
+Compare boundaries carefully: native two-layer profile kernels are eager with
+real weights and synthetic activations/cache; attention and single-step GDN
+microbenchmarks are separate traced calls. No complete optimized stage profile
+or compute/communication roofline is available yet.
+
+| Stage and geometry | Measured time | Optimistic memory time | Interpretation / next lever |
+|---|---:|---:|---|
+| BFP8 attention, 32K/B32, one attention layer | 1480 us full-query; 1468 us partial-query | 1114 us KV scan | About 75% useful-KV bandwidth. Bank-local reads and pipelining have more potential than partial-query arithmetic alone. |
+| Single-step GDN, B32, one recurrent layer | 309 us | 98 us state read/write | About 32% of the state-only ceiling. FP32 SFPU work, repeated Q/K normalization, unpack/pack and synchronization remain; gated output norm remains external. |
+| Single-step GDN, B16 | 175 us | 49 us state read/write | About 28% of the state-only ceiling. Additional operands and computation omitted from the lower bound. |
+| MLP gate/up + down, B16, per layer | 98-100 us summed matmul kernel intervals | 73.4 us weights | Roughly 74% weight-only equivalent bandwidth; collectives, layouts and other MLP ops are additional. Native-profile evidence. |
+| Vocabulary head, B16 | 494-501 us summed matmul kernel intervals | 349 us logical weights | Roughly 70% weight-only equivalent bandwidth; excludes padding/activation traffic, concat, layout and sampling. Native-profile evidence. |
+| Packed-convolution preparation, B16 | 110-111 us over 13 device-op rows | Not calibrated | Layout conversion remains material; 3 tilize calls account for about 73 us of kernel intervals on rank 8. |
+| RoPE path, 32K/B16 | 63-64 us over 16 device-op rows | Not calibrated | Most rows are layout/data movement; retain activations in compatible layouts and fuse where measured useful. |
+
+The old native recurrence uses 33 device-op rows and 580-584 us of summed kernel
+intervals per recurrent layer in this capture. This supports targeting graph
+cleanup, but is not a direct estimate of the remaining cost in the single-step
+variant. Likewise firmware intervals can include waits for preceding ops; do
+not sum them as an end-to-end critical path or call RISC durations active time.
 
 For a TP4 chip, per-step bytes are modeled as:
 

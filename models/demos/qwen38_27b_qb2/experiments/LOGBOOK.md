@@ -350,6 +350,41 @@ tool, not a replacement for hardware, long-horizon state checks, or model evals.
   completed native 32K/B32 receipt are in
   [hardware-followup-launch-v1](../galaxy-evidence/hardware-followup-launch-v1).
 
+## Physical attention completion and recovered profile, Oct 8 UTC
+
+- **06:51:12:** matched 32K/B32 single-step model completed three repeats and
+  clean close: 350.417 output tok/s per TP4, 10.951 tok/s/user, 91.320-ms TPOT.
+  Native was 250.133 output tok/s: **40.092% uplift**. Prefill remains about
+  5185 input tok/s. Eight-replica projection is 2803.34 output tok/s, not a
+  physical Galaxy result or model-eval pass. The user clarified that the goal
+  is maximum performance; 2680 is a checkpoint, not an optimization ceiling.
+- **06:53:** v3 profile hardware test/export succeeded; its collector failed
+  on missing TRISC times for data-movement-only ops. CSV source/hash lists and
+  all three compute binary sizes prove these ops contain no compute kernel.
+  Corrected accounting distinguishes proven non-applicability from missing
+  measurements. Unknown/contradictory metadata still fails. Retained the failed
+  receipt and log, and reanalyzed a copy without changing original evidence.
+- **06:58:11:** physical partial-query test closed devices cleanly. All 30
+  cases and ten bracketed comparisons passed; all candidate outputs are
+  bit-identical to controls, with production instructions. Call throughput
+  gains: 32K/B8/B16/B32 +4.28/+2.16/+0.85%; 16K +7.03/+3.48/+1.38%.
+  128K/B16 and 256K/B4 regress 0.33/1.18%; retain context/batch policy choice.
+  Full-model attention promotion and additive gains with placement are untested.
+- **07:25:25:** frozen v4 profiler launched after 292 tests plus 40 subtests
+  passed. Its source includes only the collector fix, preserving the current
+  GDN kernel. A local pytest attempt lacked the dependency; remote validation
+  passed. Recovered native 32K/B16 capture has all four ranks and 161 device-op
+  rows per rank (96 data-movement-only). The corrected 12-capture queue uses
+  the shared lock, 64-GiB/12-hour limits and unchanged export caps.
+- Calculated current memory-traffic ceilings: 32K/B32 8654 output tok/s/Galaxy
+  vs 2803 projection (32.4%); 128K/B16 2841 vs 1307 (46.0%). These use assumed
+  peak bandwidth and omit extra traffic/compute/collectives. They are not
+  measured DRAM utilization. Raw files and 21 verified original hashes are in
+  [profile-recovery-and-throughput-v1](../galaxy-evidence/profile-recovery-and-throughput-v1).
+- Remaining performance priorities: reduce GDN arithmetic/normalization and
+  layout overhead, tune bank-local KV traffic, qualify B64 to amortize weights,
+  and measure physical eight-replica scaling. No precision reduction promoted.
+
 ## Remaining gates and next experiments
 
 1. Finish the fresh-process capacity pairs; keep OOM, accuracy, and timing outcomes

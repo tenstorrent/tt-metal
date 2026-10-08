@@ -79,8 +79,8 @@ def collect(root, length, batch, variant):
         report = analyze(rows, receipt, expected_cases=[(length, batch)])
     if not report["measurements_complete"]:
         raise ValueError("Incomplete bounded device timings")
-    # All three RISC intervals must exist to support even wait-inclusive stage
-    # discussion. They are concurrent intervals, never additive active time.
+    # Every applicable RISC interval must exist. Proven data-movement-only
+    # programs have no compute interval. Intervals include waits and overlap.
     if any(
         row.get(f"missing_{name}_rows")
         for row in report["device_totals"]

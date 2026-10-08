@@ -10,6 +10,12 @@ import pytest
 from models.demos.qwen38_27b_qb2.tests.bounded_profile import CASES, SCOPE, check_artifact_budget, collect
 from models.demos.qwen38_27b_qb2.tests.layer_profile_report import DURATIONS, analyze
 
+COMPUTE_METADATA = {
+    "COMPUTE KERNEL SOURCE": "[]",
+    "COMPUTE KERNEL HASH": "[]",
+    **{f"TENSIX COMPUTE {i} MAX KERNEL SIZE [B]": "0" for i in range(3)},
+}
+
 
 def fixture(root):
     length, batch = CASES[0]
@@ -53,7 +59,15 @@ def fixture(root):
         (trace / "cpp_device_perf_report.csv").write_text("compact-timings")
         with (trace / "ops_perf_results.csv").open("w", newline="") as stream:
             writer = csv.DictWriter(
-                stream, fieldnames=["OP TYPE", "OP CODE", "DEVICE ID", "GLOBAL CALL COUNT", *DURATIONS.values()]
+                stream,
+                fieldnames=[
+                    "OP TYPE",
+                    "OP CODE",
+                    "DEVICE ID",
+                    "GLOBAL CALL COUNT",
+                    *DURATIONS.values(),
+                    *COMPUTE_METADATA,
+                ],
             )
             writer.writeheader()
             writer.writerows(rows)
@@ -111,6 +125,34 @@ def test_incomplete_or_changed_capture_cannot_publish_timings(tmp_path, failure,
         rows.pop()
     write()
     with expect_error(ValueError, "Missing|missing|Incomplete"):
+        collect(tmp_path, *CASES[0], "native")
+    assert not (tmp_path / "analysis").exists()
+
+
+def test_data_movement_requires_no_compute_interval_with_binary_proof(tmp_path):
+    _, rows, write = fixture(tmp_path)
+    op = next(row for row in rows if row.get("DEVICE ID") == "0")
+    del op[DURATIONS["compute_ns"]]
+    op.update(COMPUTE_METADATA, **{"OP CODE": "CopyDeviceOperation"})
+    write()
+    report = collect(tmp_path, *CASES[0], "native")
+    device = next(row for row in report["device_totals"] if row["device"] == 0)
+    assert device["not_applicable_compute_ns_rows"] == 1
+    assert not device.get("missing_compute_ns_rows")
+    assert device["device_op_rows"] == 2 and device["firmware_ns"] == 200
+    assert device["compute_ns"] == 100  # Only the other, measured compute op.
+
+
+@pytest.mark.parametrize("field", list(COMPUTE_METADATA))
+@pytest.mark.parametrize("value", ["", "unknown", "1"])
+def test_missing_compute_is_not_excused_without_complete_binary_proof(tmp_path, field, value, expect_error):
+    _, rows, write = fixture(tmp_path)
+    op = next(row for row in rows if row.get("DEVICE ID") == "0")
+    del op[DURATIONS["compute_ns"]]
+    op.update(COMPUTE_METADATA)
+    op[field] = value
+    write()
+    with expect_error(ValueError, "Missing wait-inclusive per-RISC"):
         collect(tmp_path, *CASES[0], "native")
     assert not (tmp_path / "analysis").exists()
 

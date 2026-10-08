@@ -1,0 +1,134 @@
+{
+  "collected_at": "2026-10-08T07:27:00.111098+00:00",
+  "root": "/home/ttuser/qwen38-artifacts-20261007",
+  "systemd": "RuntimeMaxUSec=14h\nMainPID=2502739\nExecMainStatus=0\nId=qwen38-capacity-pairs-v1-20261007.service\nActiveState=active\nSubState=running\n\nRuntimeMaxUSec=12h\nMainPID=0\nExecMainStatus=1\nId=qwen38-bounded-layer-profile-v3-20261008.service\nActiveState=failed\nSubState=failed\n\nRuntimeMaxUSec=12h\nMainPID=2728952\nExecMainStatus=0\nId=qwen38-bounded-layer-profile-v4-20261008.service\nActiveState=active\nSubState=running\n\nRuntimeMaxUSec=infinity\nMainPID=0\nExecMainStatus=0\nId=qwen38-attention-half-tile-hardware-v1-20261008.service\nActiveState=inactive\nSubState=dead\n",
+  "loginctl": "State=active\nLinger=yes\n",
+  "files": [
+    {
+      "path": "bounded-layer-profile-v3.log",
+      "sha256": "30f2abe3dfe04cead60d33ea7399542edc639e55fc8c0c487cdc5f97e80c843c",
+      "bytes": 3497519,
+      "stored_path": "bounded-layer-profile-v3.log.gz"
+    },
+    {
+      "path": "bounded-layer-profile-v3/queue.json",
+      "sha256": "c5f837fcd5acaaac8bd670dbfb764818c1a2e7fbdae1f9f015d8540d2e7b11c7",
+      "bytes": 15827,
+      "stored_path": "bounded-layer-profile-v3/queue.json"
+    },
+    {
+      "path": "bounded-layer-profile-v3/s32768-b16-native/profile.json",
+      "sha256": "f0f0dde8dfb6853b70ae0f942d93882062dcdbd7a9735068a5aa211cbf30fe46",
+      "bytes": 12875,
+      "stored_path": "bounded-layer-profile-v3/s32768-b16-native/profile.json"
+    },
+    {
+      "path": "bounded-layer-profile-v3/s32768-b16-native/hardware.xml",
+      "sha256": "b693b6714d0a6200852392c9fd224fafbee23e9ca2e57f203e76860afcae978b",
+      "bytes": 545,
+      "stored_path": "bounded-layer-profile-v3/s32768-b16-native/hardware.xml.gz"
+    },
+    {
+      "path": "bounded-layer-profile-v3-recovery-v1/analysis/profile-summary.json",
+      "sha256": "c4282e9bd411e54e0fa2f50c5493afe2bfa031e3e6164c10d4d20cf7e6ed354e",
+      "bytes": 177125,
+      "stored_path": "bounded-layer-profile-v3-recovery-v1/analysis/profile-summary.json"
+    },
+    {
+      "path": "bounded-layer-profile-v3-recovery-v1/analysis/report.md",
+      "sha256": "76ff1c6d3731a06db818ca85cff4f792bd3f87588342e12aa95383cee11dca86",
+      "bytes": 2920,
+      "stored_path": "bounded-layer-profile-v3-recovery-v1/analysis/report.md.gz"
+    },
+    {
+      "path": "bounded-layer-profile-launch-v4.json",
+      "sha256": "840fdacf0cae81147ac52f447fc729486360dc02c7c645d390cd19916fd4d19f",
+      "bytes": 3338,
+      "stored_path": "bounded-layer-profile-launch-v4.json"
+    },
+    {
+      "path": "bounded-layer-profile-unit-v4.xml",
+      "sha256": "33d7ee705f2d0ceda80aef0fe276bf459c886186d2b348634d757ca86fafdbf2",
+      "bytes": 95102,
+      "stored_path": "bounded-layer-profile-unit-v4.xml.gz"
+    },
+    {
+      "path": "bounded-layer-profile-v4/queue.json",
+      "sha256": "b7ba825188c6b5af90017f7a0a1d4ae192603c4a435a04124ea1e099bbbb2a01",
+      "bytes": 15735,
+      "stored_path": "bounded-layer-profile-v4/queue.json"
+    },
+    {
+      "path": "attention-half-tile-hardware-v1/hardware.json",
+      "sha256": "880a98e35688c401d9df34d8f7b12e15c8269da159f01b5de445f8be1d2f001e",
+      "bytes": 427582,
+      "stored_path": "attention-half-tile-hardware-v1/hardware.json.gz"
+    },
+    {
+      "path": "attention-half-tile-hardware-v1/hardware.xml",
+      "sha256": "5632d44e3da5923ee37f5c69260de8ad4366ffe90c6914b6a465a0845eb47bca",
+      "bytes": 561,
+      "stored_path": "attention-half-tile-hardware-v1/hardware.xml.gz"
+    },
+    {
+      "path": "attention-half-tile-hardware-v1/queue.json",
+      "sha256": "7c3bde594513d7bf3d42dd22b8f9ffb1674a82a6bb31ee33f7ee421606633a8f",
+      "bytes": 30262,
+      "stored_path": "attention-half-tile-hardware-v1/queue.json"
+    },
+    {
+      "path": "attention-half-tile-hardware-v1.log",
+      "sha256": "d0734402571cd9dfa6ba930c3b2f11988026e5cad4f31aa429cd23aade29f754",
+      "bytes": 124512,
+      "stored_path": "attention-half-tile-hardware-v1.log.gz"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/native/sweep.json",
+      "sha256": "1855494b617e20e2ed981471329c79355e49e19dbe6aa3b569bc07a5e8d81db5",
+      "bytes": 16233,
+      "stored_path": "capacity-pairs-v1/s32768-b32/native/sweep.json"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/native/attempt-01/command.json",
+      "sha256": "71e0013516a3e6c243c1e0d3b56c79c6ce058c3a42782485b40a65b8fabeb1a8",
+      "bytes": 646,
+      "stored_path": "capacity-pairs-v1/s32768-b32/native/attempt-01/command.json"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/native/attempt-01/hardware.xml",
+      "sha256": "3ea8c6eb3e59d7c30f272b672f1887b8f6406af6120662fa2f479a4fef2e3fb1",
+      "bytes": 541,
+      "stored_path": "capacity-pairs-v1/s32768-b32/native/attempt-01/hardware.xml.gz"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/single-step/sweep.json",
+      "sha256": "950c75f8426ca1d2a18f6f6c12ed924eb833fe63e0de49cae6e81df61615a692",
+      "bytes": 16300,
+      "stored_path": "capacity-pairs-v1/s32768-b32/single-step/sweep.json"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/single-step/attempt-01/command.json",
+      "sha256": "44adfcd0b072742a3f754c2f2a9d0eeccca4493e1adc100c9eae41125dbcba73",
+      "bytes": 651,
+      "stored_path": "capacity-pairs-v1/s32768-b32/single-step/attempt-01/command.json"
+    },
+    {
+      "path": "capacity-pairs-v1/s32768-b32/single-step/attempt-01/hardware.xml",
+      "sha256": "f7be51dcbd148fd8325ced90a61c5ea4ecd567c641e4d67f136648c2f0210afd",
+      "bytes": 541,
+      "stored_path": "capacity-pairs-v1/s32768-b32/single-step/attempt-01/hardware.xml.gz"
+    },
+    {
+      "path": "bounded-layer-profile-v3/s32768-b16-native/tracy/reports/2026_10_08_06_53_00/ops_perf_results_2026_10_08_06_53_00.csv",
+      "sha256": "a3e08f5cffc70dca19781ed8d53753bffddd7eb53589593e60b4a5d74dcc6579",
+      "bytes": 3312036,
+      "stored_path": "bounded-layer-profile-v3/s32768-b16-native/tracy/reports/2026_10_08_06_53_00/ops_perf_results_2026_10_08_06_53_00.csv.gz"
+    },
+    {
+      "path": "bounded-layer-profile-v3/s32768-b16-native/tracy/.logs/cpp_device_perf_report.csv",
+      "sha256": "4d482a4c57159fc1c030bc97fda21465d9538922278c5029ce298823ccc87019",
+      "bytes": 477958,
+      "stored_path": "bounded-layer-profile-v3/s32768-b16-native/tracy/.logs/cpp_device_perf_report.csv.gz"
+    }
+  ]
+}
