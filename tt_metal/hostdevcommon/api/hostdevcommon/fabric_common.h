@@ -186,11 +186,12 @@ struct Routing2DCodec {
     static constexpr uint8_t Y2_NORTH = 1;
     static constexpr uint8_t Y2_SOUTH = 2;
     static constexpr uint8_t Y2_Z = 3;
-    // X axis: encoding 3 has no meaning on X (no express dimension) and is reserved-invalid.
+    // X axis: same layout as Y. Z is the intra-mesh express link when the mesh's chords run along X;
+    // a mesh carries chords on one axis only, so at most one of Y2_Z / X2_Z is ever populated.
     static constexpr uint8_t X2_STOP = 0;
     static constexpr uint8_t X2_EAST = 1;
     static constexpr uint8_t X2_WEST = 2;
-    static constexpr uint8_t X2_INVALID = 3;
+    static constexpr uint8_t X2_Z = 3;
 
     // ---- Packed-row helpers ---------------------------------------------------
     // Rows hold ceil(axis/4) bytes, 4 entries per byte, entry 0 at the LSBs of byte 0.
@@ -210,8 +211,7 @@ struct Routing2DCodec {
     }
 
     // ---- Widen (2-bit -> one-hot action byte) -----------------------------------
-    // STOP and X2_INVALID widen to 0; the caller pokes ACTION_LOCAL_DELIVER at its own coordinate
-    // afterwards.
+    // STOP widens to 0; the caller pokes ACTION_LOCAL_DELIVER at its own coordinate afterwards.
     static constexpr uint8_t widen_y(uint8_t action_2bit) {
         switch (action_2bit) {
             case Y2_NORTH: return ACTION_NORTH;
@@ -224,6 +224,7 @@ struct Routing2DCodec {
         switch (action_2bit) {
             case X2_EAST: return ACTION_EAST;
             case X2_WEST: return ACTION_WEST;
+            case X2_Z: return ACTION_Z;
             default: return 0;
         }
     }
@@ -392,17 +393,15 @@ struct McastTreeEdgeByteReader {
     }
 };
 
-// True when this Y tree contains a transit chord. X has no express encoding, so it never does.
+// True when this axis's tree contains a transit chord, i.e. the mesh's express links run along it.
 // A chord is a real second output of one branch and must stay on the canonical tree.
 template <typename EdgeReader>
 inline bool mcast_axis_has_transit_chord(const std::uint8_t* tree_region, std::uint32_t axis_len, bool is_y_axis) {
-    if (!is_y_axis) {
-        return false;
-    }
+    const std::uint8_t z_code = is_y_axis ? Routing2DCodec::Y2_Z : Routing2DCodec::X2_Z;
     const std::uint32_t edge_count = Routing2DCodec::mcast_tree_edge_count(axis_len);
     for (std::uint32_t i = 0; i < edge_count; ++i) {
         const std::uint16_t edge = EdgeReader::get(tree_region, i);
-        if (Routing2DCodec::mcast_edge_output(edge) == Routing2DCodec::Y2_Z) {
+        if (Routing2DCodec::mcast_edge_output(edge) == z_code) {
             return true;
         }
     }
@@ -572,11 +571,12 @@ inline void encode_2d_mcast_maps(
         mcast_prune_axis<EdgeReader>(out_y, tree_y, y_size, needed_y, /*is_y_axis=*/true);
     }
 
-    // Every target row carries the encode root column's E/W teeth, and delivers only if that column is
-    // itself a target. Indexed by encode_root_x rather than the anchor, since the teeth are what this
-    // chip has to launch.
+    // Every target row carries the encode root column's X teeth (E/W, plus Z when the chords run along
+    // X), and delivers only if that column is itself a target. Indexed by encode_root_x rather than the
+    // anchor, since the teeth are what this chip has to launch.
     const std::uint8_t x_root_action = out_x[encode_root_x];
-    const std::uint8_t teeth = x_root_action & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST);
+    const std::uint8_t teeth =
+        x_root_action & (Routing2DCodec::ACTION_EAST | Routing2DCodec::ACTION_WEST | Routing2DCodec::ACTION_Z);
     const std::uint8_t deliver = x_root_action & Routing2DCodec::ACTION_LOCAL_DELIVER;
     for (std::uint32_t y = 0; y < y_size; ++y) {
         if (mcast_test_row_bit(y_targets, y)) {
