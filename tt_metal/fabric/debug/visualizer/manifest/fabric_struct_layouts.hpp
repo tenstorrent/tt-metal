@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -238,7 +239,10 @@ using DescribedStructs = std::tuple<
 
 // The layout of go_msg_t on the active Ethernet core, built at run time from the HAL's generated accessors. The host
 // cannot name the raw go_msg_t (dev_msgs.h is compiled only inside the HAL's per-arch files), so this layout is not
-// in DescribedStructs, and instead a gtest checks its coverage for each arch.
+// in DescribedStructs, and instead a gtest (test: ) checks its coverage for each arch.
 std::vector<Member> go_msg_layout(const tt::tt_metal::Hal& hal);
+
+// The struct name go_msg_layout describes.
+inline constexpr std::string_view go_msg_name = "go_msg_t";
 
 }  // namespace tt::tt_fabric::layout
