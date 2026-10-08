@@ -270,6 +270,10 @@ class MultichipDecoder(OptimizedDecoder):
         self._ag_reduce = _parse_binary_env("TT_LAGUNA_AG_REDUCE", True)  # decode all-reduce as all_gather+sum
         self._route_dense_mask = _parse_binary_env("TT_LAGUNA_ROUTE_DENSE_MASK", True)  # mask router, no topk#2
         self._route_rank = _parse_binary_env("TT_LAGUNA_ROUTE_RANK", True)  # 1-token router: rank<K, no topk
+        # batched decode (2..32 tokens) router: per-token rank<K as well, instead of the 1-core top-k chain
+        self._route_rank_batch = _parse_binary_env("TT_LAGUNA_ROUTE_RANK_BATCH", False)
+        self._head_norm_4d = _parse_binary_env("TT_LAGUNA_HEAD_NORM_4D", True)  # decode q/k norm without flattening
+        self._decode_heads_op = _parse_binary_env("TT_LAGUNA_DECODE_HEADS_OP", False)  # fused decode head split/concat
         self._fused_kv_update = _parse_binary_env("TT_LAGUNA_FUSED_KV_UPDATE", True)  # K+V cache in one op
         self._sharded_residual = _parse_binary_env("TT_LAGUNA_SHARDED_RESIDUAL", True)  # decode residual in L1 shards
         self._glu_out_sharded = _parse_binary_env("TT_LAGUNA_GLU_OUT_SHARDED", True)  # decode MLP out stays sharded
@@ -578,6 +582,18 @@ class MultichipDecoder(OptimizedDecoder):
             # expert ids 0..E-1 (fp32, exact): one-hot compare replaces the 1-core router cut-off gather
             w["expert_iota_f32"] = rep_tt(
                 "expert_iota", lambda: torch.arange(E, dtype=torch.float32).reshape(1, 1, 1, E), ttnn.float32
+            )
+            # the same two rows repeated over a full 32-token tile: a batch-32 decode's bias add and one-hot compares
+            # then read equal-shape operands instead of broadcasting one row (~12-16 us per op on that path)
+            w["e_bias_f32_rows"] = rep_tt(
+                "e_bias_rows",
+                lambda: g("mlp.experts.e_score_correction_bias").reshape(1, 1, 1, E).expand(1, 1, TILE, E).contiguous(),
+                ttnn.float32,
+            )
+            w["expert_iota_f32_rows"] = rep_tt(
+                "expert_iota_rows",
+                lambda: torch.arange(E, dtype=torch.float32).reshape(1, 1, 1, E).expand(1, 1, TILE, E).contiguous(),
+                ttnn.float32,
             )
             if cfg.norm_topk_prob:  # 1/routed_scaling [E, E]: the router's row-sum-and-broadcast matmul
                 inv_scale = 1.0 / cfg.routed_scaling
@@ -1487,9 +1503,23 @@ class MultichipDecoder(OptimizedDecoder):
             qkv = self._dram_mm(ln, self.w["wqkv"], self.w["wqkv_ds"], cfg.hidden, self.meta["qkv_w"], self._ck_qkv)
             if self.use_dram_sharded:
                 qkv = ttnn.sharded_to_interleaved(qkv, ttnn.DRAM_MEMORY_CONFIG)
-        q, k, v = self._split_qkv(qkv, B, memory_config=split_mem)
-        q = self._per_head_norm(q, self.w["q_norm"])
-        k = self._per_head_norm(k, self.w["k_norm"])
+        if fold_g and B <= TILE and getattr(self, "_decode_heads_op", False):
+            # one fused head split (q/k/v height-sharded, one user per core) instead of 3 slices + 3 tile-relayout
+            # reshapes (the q reshape alone ~20 us at B = 32)
+            q_sh, k_sh0, v_sh0 = ttnn.experimental.nlp_create_qkv_heads_decode(
+                ttnn.slice(qkv, [0, 0, 0, 0], [1, 1, B, self.meta["qkv_w"]], memory_config=ttnn.L1_MEMORY_CONFIG),
+                num_heads=cfg.num_heads,
+                num_kv_heads=cfg.num_kv_heads,
+                overlap_qk_coregrid=True,
+                memory_config=self._qkv_heads_decode_memcfg,
+            )
+            q = ttnn.sharded_to_interleaved(q_sh, ttnn.L1_MEMORY_CONFIG)
+            k = ttnn.sharded_to_interleaved(k_sh0, ttnn.L1_MEMORY_CONFIG)
+            v = v_sh0  # _shard_kv moves it onto the KV-write cores
+        else:
+            q, k, v = self._split_qkv(qkv, B, memory_config=split_mem)
+        q = self._per_head_norm_decode(q, self.w["q_norm"])
+        k = self._per_head_norm_decode(k, self.w["k_norm"])
         # share the DRAM cos/sin gather across layers of a kind (rope_mats); shard to L1
         # PER LAYER (an L1-sharded cos_sh cannot be hoisted — scratch, clobbered by later layers).
         if rope_mats is None:  # local fallback (layer PCC tests / direct callers)
@@ -1563,8 +1593,18 @@ class MultichipDecoder(OptimizedDecoder):
         # softplus is elementwise, so it commutes with the reshape and runs as the mul's rhs activation (one op)
         g = ttnn.reshape(g, (1, B, cfg.num_heads, 1))
         softplus = ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)  # ttnn.softplus defaults
-        attn = ttnn.mul(attn, g, input_tensor_b_activations=[softplus])
         q_w = self.meta["q_w"]
+        if B == TILE and getattr(self, "_decode_heads_op", False):
+            # fused head concat: [1, 32, heads, hd] one user per core -> [1, 1, 32, heads * hd] width-sharded on one
+            # core per head, then a small reshard onto WO's input grid (replaces an ~20 us tile-relayout reshape)
+            attn = ttnn.mul(attn, g, input_tensor_b_activations=[softplus], memory_config=ttnn.L1_MEMORY_CONFIG)
+            attn = ttnn.to_memory_config(attn, self._qkv_heads_decode_memcfg)
+            attn = ttnn.experimental.nlp_concat_heads_decode(attn, num_heads=cfg.num_heads)
+            if self.use_dram_sharded and self._reshape_to_shard:
+                attn = ttnn.to_memory_config(attn, _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden)))
+            o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
+            return self._decode_tail(o, residual, B, next_norm_cores)
+        attn = ttnn.mul(attn, g, input_tensor_b_activations=[softplus])
         # the flatten writes the WO DRAM-sharded matmul's width-sharded input layout directly (no i2s in _dram_mm)
         wo_in = (
             _width_sharded_l1(TILE, q_w, _decode_shard_cores(q_w, cfg.hidden))
@@ -1573,6 +1613,11 @@ class MultichipDecoder(OptimizedDecoder):
         )
         attn = ttnn.reshape(attn, (1, 1, B, cfg.num_heads * cfg.head_dim), memory_config=wo_in)
         o = self._dram_mm(attn, self.w["wo"], self.w["wo_ds"], q_w, cfg.hidden, self._ck_o)
+        return self._decode_tail(o, residual, B, next_norm_cores)
+
+    def _decode_tail(self, o, residual, B, next_norm_cores):
+        """WO output (row-parallel partial) -> all-reduce, residual add, post norm, MLP, residual add."""
+        cfg = self.cfg
         if self.use_dram_sharded and not self._ag_reduce:  # the decode all_gather reads the sharded output
             o = ttnn.sharded_to_interleaved(o, ttnn.L1_MEMORY_CONFIG)
         o = self._reduce(o)  # row-parallel partial -> replicated
@@ -1589,6 +1634,14 @@ class MultichipDecoder(OptimizedDecoder):
         if res_mem is not None and next_norm_cores == res_cores:
             out_mem = res_mem
         return ttnn.add(h, mlp_out, memory_config=out_mem)
+
+    def _per_head_norm_decode(self, x, weight):
+        """Per-head RMSNorm of decode q/k [1, B, heads, head_dim]. The norm reduces each row over head_dim, so it
+        runs on the 4D tile tensor as is; flattening to [1, 1, B * heads, head_dim] (the shared helper) is a real
+        data move when heads is not a multiple of 32 (~6-10 us per reshape at B = 32, two per tensor)."""
+        if not getattr(self, "_head_norm_4d", False):
+            return self._per_head_norm(x, weight)
+        return ttnn.rms_norm(x, weight=weight, epsilon=self.cfg.eps, compute_kernel_config=self._norm_ck)
 
     def input_norm_cores(self):
         """Width-shard grid the decode input norm uses (handed off to the fused QKV+gate matmul)."""

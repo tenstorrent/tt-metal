@@ -983,8 +983,25 @@ class OptimizedDecoder(LightweightModule):
                 rank = ttnn.sum(ttnn.gt(ttnn.transpose(sel, -2, -1), sel), dim=2, keepdim=True)  # [1, 1, 1, E]
                 dense = ttnn.mul(logits32, ttnn.lt(rank, K), input_tensor_a_activations=sig)
                 return logits, None, self._dense_routing(cfg, dense)
+            T = logits32.shape[-2]
+            if want_dense and self._route_rank and 1 < T <= TILE and getattr(self, "_route_rank_batch", False):
+                # batched decode (2..32 tokens): the same exact fp32 rank per token, one token per batch entry --
+                # [1, T, E, 1] > [1, T, 1, E] is T broadcast [E, E] compares on the full grid, summed over dim 2.
+                # Replaces the 1-core coarse top-(K+1) (~44 us at 32 rows), its untilize/tilize index chain and
+                # the one-hot cut-off ops (~140 us per batch-32 MoE layer in all).
+                E = cfg.num_experts
+                sig = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)]
+                sel = ttnn.add(logits32, self.w["e_bias_f32"], input_tensor_a_activations=sig)  # [1, 1, T, E]
+                sel_t = ttnn.reshape(sel, (1, T, 1, E))
+                gt = ttnn.gt(ttnn.transpose(sel_t, -2, -1), sel_t, dtype=ttnn.bfloat16)  # 0/1, exact in bf16
+                rank = ttnn.sum(gt, dim=2, keepdim=True)  # [1, T, 1, E]: ranks <= E - 1 = 255, exact in bf16
+                mask = ttnn.reshape(ttnn.lt(rank, K), (1, 1, T, E))
+                dense = ttnn.mul(logits32, mask, input_tensor_a_activations=sig)
+                return logits, None, self._dense_routing(cfg, dense)
             scores = ttnn.sigmoid(logits32)
-            sel = ttnn.add(scores, self.w["e_bias_f32"])
+            # a full 32-token tile reads the row-repeated bias / expert ids (no row broadcast), when loaded
+            full_tile = logits32.shape[-2] == TILE and "e_bias_f32_rows" in self.w
+            sel = ttnn.add(scores, self.w["e_bias_f32_rows" if full_tile else "e_bias_f32"])
             _, idx_coarse = ttnn.topk(ttnn.typecast(sel, ttnn.bfloat16), k=K + 1, dim=-1, sorted=True)
             rows = [idx_coarse.shape[i] for i in range(len(idx_coarse.shape) - 1)]
             pair_idx = ttnn.slice(idx_coarse, [0] * len(rows) + [K - 1], rows + [K + 1])
@@ -992,7 +1009,7 @@ class OptimizedDecoder(LightweightModule):
                 # one-hot (iota == idx) mask of the K-th and (K+1)-th experts + masked fp32 sum: full-grid
                 # eltwise ops instead of the ~32 us 1-core gather and its 1-core fill-pads.
                 pair_f = ttnn.typecast(pair_idx, ttnn.float32)
-                iota = self.w["expert_iota_f32"]
+                iota = self.w["expert_iota_f32_rows" if full_tile else "expert_iota_f32"]
                 ik = ttnn.slice(pair_f, [0] * len(rows) + [0], rows + [1])
                 ik1 = ttnn.slice(pair_f, [0] * len(rows) + [1], rows + [2])
                 onehot = ttnn.add(ttnn.eq(iota, ik), ttnn.eq(iota, ik1))
