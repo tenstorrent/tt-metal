@@ -33,21 +33,23 @@ replace VCS with emulator or ask the user to choose again.
 
 ## Steps
 
-Make targeted Edits — do not rewrite the file from scratch. Run these in order.
+Make targeted Edits — do not rewrite the file from scratch. Run these in order. First record the comment budget: `grep -c '//' "$WORKTREE_DIR/$GENERATED_KERNEL"` → `PRE_COMMENTS`. After your edits the kernel may hold at most `1.3 × PRE_COMMENTS` `//` comment lines; doxygen blocks are capped separately in step 1 (why: reviewers cut 2–4× comment bloat on every one of the 10 SFPU parity PRs).
 
 ### 1. Doxygen docstrings
 
-If the kernel has no doxygen docstrings, add them per `.claude/references/doxygen-style.md`: high-signal, low-noise — `@brief`, `@param`, `@tparam`, `@note` only. Omit redundant or obvious information. If docstrings already exist, leave them unless they violate that style or misstate behavior.
+If the kernel has no doxygen docstrings, add them per `.claude/references/doxygen-style.md`: high-signal, low-noise — `@brief` (one line), one line per `@param`/`@tparam`, at most two `@note` lines. Omit redundant or obvious information. If docstrings already exist, leave them unless they violate that style or misstate behavior.
+
+**No new claims.** Do not write correctness or convergence arguments, test-coverage claims, or cross-arch ABI-parity claims; copy a "why" from the analysis verbatim or leave it out (why: lcm/gcd shipped a false "removes at least one bit" rationale). Say "emulator", never "hardware", unless silicon ran it. Derive each init/finalize `@note` from the registers and Dest tiles the function actually writes.
 
 **Derive every documented range and contract from the code, not from parameter names.** Read the `static_assert`s and `if constexpr` dispatch for each `@tparam`/`@param`. Where a parameter quantises (e.g. `num_rows <= 9` runs exactly 9 rows, `10..32` runs all 32), document the effective behavior, not the accepted range. Never document as supported a parameter combination the code silently ignores; flag it in your self-log instead. Cross-check against the analysis §6a and the shared compute-API doc table for the op.
 
 ### 2. Annotate magic-number arguments
 
-Iterate the worktree changes with read-only `git diff`. For every function call on a changed line, every positional / magic-number argument must carry an inline `/* name */` comment. Example: in `foo(2 /* count */, 5)` the `5` is missing its comment — add `5 /* <name> */`. Add every missing one.
+Iterate the worktree changes with read-only `git diff`, kernel and test `.cpp` alike. For every function call on a changed line, every literal or computed argument carries the callee's formal parameter name as `/*name*/` (no spaces), taken from the macro or function signature: `TTI_SFPLOAD(..., 0 /*done*/, base + off /*dest_reg_addr*/)`. Fix any `/* name */`-style or misnamed comment the same way. A derived literal is written from its base constant (`GCD_REPLAY_DEPTH - 1`, not `31`); one named constant per quantity.
 
 ### 3. Reuse existing helpers
 
-If the kernel re-implements logic that already exists as a helper in `tt_llk_{TARGET_ARCH}/common/inc/...`, delete the re-implemented copy and call the existing helper.
+If the kernel re-implements logic that already exists as a helper in `tt_llk_{TARGET_ARCH}/common/inc/...`, delete the re-implemented copy and call the existing helper. In test sources, use `quasar_test_common.h` helpers and existing `helpers` constants (e.g. the dvalid-chain setup, `FACE_DIM`) instead of local copies.
 
 ### 4. Reuse existing constants
 
@@ -55,7 +57,7 @@ If a magic number equals an existing named constant, replace the literal with th
 
 ### 5. Trim over-explained comments
 
-Shorten long or convoluted comments that could be stated simply. Remove repetitive or redundant comments. Keep the non-obvious "why".
+Comments state why, not what: delete any that restates the instruction it sits on or ISA semantics. Keep the non-obvious "why" and each NOP's errata citation. Then re-check the budget (`≤ 1.3 × PRE_COMMENTS`). Also diff-scan the dispatcher and test files the run touched: trim their new docstrings to 1–2 lines and fix any comment that enumerates op or format sets the run changed.
 
 ### 6. Compile-check once
 
@@ -63,7 +65,7 @@ Steps 3 and 4 can break the build, so compile once after the edits. Use the comp
 
 ### 7. Run pre-commit to green
 
-From `$WORKTREE_DIR`, run `pre-commit run --files <files you changed>` in a loop. The formatting hooks auto-fix, so re-run until it exits clean.
+From `$WORKTREE_DIR` (the repo-root config, never `tt_metal/tt-llk/.pre-commit-config.yaml`), run `pre-commit run --files <every file the run changed>` in a loop. The formatting hooks auto-fix, so re-run until it exits clean.
 
 ### 8. Final functional test (last step)
 
@@ -96,7 +98,7 @@ Doxygen: added / already present / fixed
 Magic-number args annotated: {N}
 Helpers reused: {list or none}
 Constants reused: {list or none}
-Comments trimmed: {N}
+`//` comment lines: {PRE_COMMENTS} -> {N} (cap 1.3x)
 Compile: PASSED / FAILED (reverted {edit})
 pre-commit: clean
 Final test: PASS
@@ -104,4 +106,4 @@ Final test: PASS
 
 ## Self-Logging (CRITICAL — DO NOT SKIP)
 
-Before returning, write your reasoning log to `{LOG_DIR}/agent_prettifier.md` with the Write tool. Include the cleanup decisions per step, the compile result, and anything surprising. If no `LOG_DIR` was provided, skip logging.
+Before returning, write your reasoning log to `{LOG_DIR}/agent_prettifier.md` with the Write tool: the cleanup decisions per step, the compile result, the comment-line counts, anything surprising, and a final `## Open risks` section per `codegen/references/logging.md` § Open risks (or "none"). If no `LOG_DIR` was provided, skip logging.

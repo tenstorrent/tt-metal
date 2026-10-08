@@ -310,4 +310,8 @@ One bullet per attempt — the next cycle must not retrace these.
 
 ## Open questions / handoffs
 If v${N+1} is still likely, the specific evidence the next refiner would need. If escalating, what a human needs to unblock. Else "none".
+
+## Open risks
+Per `codegen/references/logging.md` § Open risks (`R<n> CLOSED … evidence:` / `R<n> DEFERRED … PR:`), or "none".
+A risk the next tester can settle becomes a REQUIRED Coverage-Matrix row in the refined analysis.
 ```

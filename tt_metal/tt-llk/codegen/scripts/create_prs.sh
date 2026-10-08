@@ -4,6 +4,8 @@
 #   ./codegen/scripts/create_prs.sh              # create all 9 PRs
 #   ./codegen/scripts/create_prs.sh fill sign    # create specific PRs only
 #   ./codegen/scripts/create_prs.sh --dry-run    # print commands without running
+#   ./codegen/scripts/create_prs.sh --from-run <LOG_DIR>  # PR for one codegen run, body from
+#                                                         # <LOG_DIR>/<kernel>_pr_body.md
 #
 # Prerequisites:
 #   gh auth login
@@ -12,12 +14,14 @@ set -euo pipefail
 
 DRY_RUN=false
 SELECTED=()
+FROM_RUN=""
 
 while [[ $# -gt 0 ]]; do
   case $1 in
     --dry-run) DRY_RUN=true; shift ;;
+    --from-run) FROM_RUN="$2"; shift 2 ;;
     --help|-h)
-      echo "Usage: $0 [--dry-run] [kernel1 kernel2 ...]"
+      echo "Usage: $0 [--dry-run] [--from-run LOG_DIR | kernel1 kernel2 ...]"
       exit 0 ;;
     *) SELECTED+=("$1"); shift ;;
   esac
@@ -50,6 +54,19 @@ create_pr() {
   echo "  Done."
   echo ""
 }
+
+# --from-run: one PR from a finished run. Refuses while the open-risks gate is red;
+# the body is the <= 15-line description build_report.py --pr-body wrote.
+if [[ -n "$FROM_RUN" ]]; then
+  SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  python3 "$SCRIPTS/quasar/open_risks.py" check --log-dir "$FROM_RUN" || {
+    echo "open risks are not closed or deferred; refusing to create the PR" >&2; exit 3; }
+  read -r kernel branch < <(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]+"/run.json")); print(d["kernel"], d["git_branch"])' "$FROM_RUN")
+  body_file="$FROM_RUN/${kernel}_pr_body.md"
+  [[ -s "$body_file" ]] || { echo "missing $body_file (run execute_step_write_report)" >&2; exit 3; }
+  create_pr "$kernel" "$branch" "[LLK][Feature] Implement ${kernel} for Quasar" "$(cat "$body_file")"
+  exit 0
+fi
 
 should_run() {
   local kernel="$1"

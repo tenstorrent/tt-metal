@@ -296,6 +296,17 @@ Every agent writes a reasoning log to `{LOG_DIR}/agent_{name}.md` during executi
 
 If no `LOG_DIR` is provided, agents skip logging (backward compatible).
 
+### Open risks (gate)
+
+Every self-log ends with an `## Open risks` section: one bullet per risk the stage saw — an untested path or value, an unverified hazard or delay, a concern it judged "negligible". Each entry is exactly one of:
+
+```
+- R1 CLOSED: <risk> — evidence: <test id, file:line, or ticket that settles it>
+- R2 DEFERRED: <risk> — PR: <one line for the PR body's Open risks>
+```
+
+or the word `none`. `OPEN` is not a final state. Outside this section, any line using a waiver word (`untested`, `not exercised`, `negligible`, `conservative`, `may be wrong`, `assume`) must cite its entry as `(R<n>)`. `scripts/quasar/open_risks.py check` enforces both; the orchestrator (Step 7b) and `create_prs.sh --from-run` refuse to finish while it is red. Do not reword a risk to dodge the scan — close it with a test, or defer it with text a reviewer can act on. (why: in 12+ cases across the 10 SFPU parity PRs a stage logged the real bug, then passed.)
+
 ---
 
 ## Reviewing Logs After a Run

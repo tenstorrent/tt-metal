@@ -54,7 +54,7 @@ Then report the run failed with reason "no space on device" and end. Do not run 
 ## Pipeline Overview
 
 ```
-analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimizer  →  format  →  report
+analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimizer  →  format  →  pre-PR gates  →  report
 ```
 
 - **analyzer** (`llk-analyzer.md`) — returns `codegen/artifacts/{op}_analysis.md`.
@@ -62,7 +62,7 @@ analyzer  →  [ writer → tester → refiner ] × up to 3 cycles  →  optimiz
 - **tester** (`llk-tester.md`) — returns `PASS`, `STUCK` (→ refiner, cycles 1-2), or `ENV_ERROR` (never routed to the refiner).
 - **refiner** (`llk-analysis-refiner.md`) — returns `REFINED` or `ESCALATE`.
 - **Loop cap: 3 writer-tester cycles**. Cycles 1 and 2 can hand off to the refiner; cycle 3 CANNOT (the refiner itself caps at v2 = 2 refinements = 3 total cycles). If cycle 3 still fails, the run is reported `failed`.
-- **optimizer** and **format** only run on success of tester.
+- **optimizer**, **format** and the **pre-PR gates** (Step 7b) only run on success of tester. A run whose gates stay red is never `success`.
 - **perf comparison** (`PERF_ENABLED=true`, set by Step 2a) — the original is measured before the hide; the optimizer keeps only candidates that pass the functional test and are not slower; Step 6b records the verdict as a soft outcome that never changes `STATUS`.
 
 Agent playbooks live in `codegen/agents/quasar/`.
@@ -592,6 +592,18 @@ Agent tool:
 
 Wait for completion.
 
+### Step 7b: Pre-PR gates (open risks, perf header, reference drift)
+
+Every agent self-log ends with `## Open risks`, each entry CLOSED (evidence) or DEFERRED (PR text) — rules in `codegen/references/logging.md` § Open risks. EXECUTE:
+```bash
+source codegen/scripts/quasar/orchestrator_steps.sh
+execute_step_pre_pr_gates
+```
+It runs the PR Gate's `test_perf_header_gate.py`, lists upstream commits to the reference since the run's base (`DRIFT:`), and runs `open_risks.py check`, which also flags waiver words (`untested`, `not exercised`, `negligible`, `conservative`, `may be wrong`, `assume`) that no entry covers.
+
+- `GATES: PASS` → Step 8.
+- `GATES: FAIL` → do **not** finalize yet. Group the `OPEN` / `MISSING` / `MALFORMED` / `WAIVER` lines by self-log and re-spawn each owning agent once (latest cycle; a `PERF_HEADER_GATE: FAIL` goes to the tester), foreground, with: "Read and follow codegen/references/logging.md § Open risks. Resolve only these items in {log}: {lines}. Close each with evidence (run the test that settles it — the tester's `TEST_FILE_USED`/`TEST_K` must still pass with `--maxfail 0` if you change the kernel or a test) or defer it with one PR line. Never reword a line just to pass the scan." Then run `execute_step_pre_pr_gates final`. If it still prints `GATES: FAIL`, the step marks the run `compiled` with the findings as `OBSTACLE`; quote them in your final report and go to Step 8.
+
 ---
 
 ## Step 8: Finalize and Report
@@ -660,7 +672,10 @@ execute_step_extract_transcripts
 The report is built from `run.json` + the agent self-logs + the transcripts (it
 aggregates each agent's Assumptions / Reasoning / tool+command summary and all
 the run metrics). EXECUTE the following — it writes
-`codegen/artifacts/{KERNEL_NAME}_report.md` and prints it:
+`codegen/artifacts/{KERNEL_NAME}_report.md` and prints it, and writes the PR
+description `$LOG_DIR/{KERNEL_NAME}_pr_body.md` (≤ 15 lines: what, scope, test
+matrix, the DEFERRED open risks, follow-ups; `create_prs.sh --from-run $LOG_DIR`
+uses it and refuses while the open-risks gate is red):
 
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh

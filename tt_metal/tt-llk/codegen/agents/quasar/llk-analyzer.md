@@ -138,6 +138,8 @@ Grep: pattern="<entry>|<init>|<compute-API wrapper name>", path="tt_metal/hw/inc
 
 Write a `## Production Callers` section listing, for each hit: file:line, the template arguments and runtime values it binds (layout, row counts, accumulate/mode flags, `VectorMode`), and any `#if[n]def ARCH_{TARGET}` guard that excludes the target from the include or wrapper. A target-arch caller (e.g. `ttnn/.../experimental/quasar/...`) is the strongest signal of which paths matter. If the compute-API wrapper is gated out for the target, say so — the writer un-gates it (see §6e). "None found" is a valid answer; guessing is not.
 
+Also grep the reference arch's LLK and compute-API wrappers (e.g. `api/compute/welford.h`) for `ASSERT`/`LLK_ASSERT` on runtime params and extra Dest tiles (`dst + 1`). Quasar has no wrapper layer, so §6b moves each one into the kernel as an `LLK_ASSERT` (why: welfords PR #59440, ema PR #57129).
+
 ---
 
 ## Step 2: Survey the Target — Existing Kernels First
@@ -152,7 +154,7 @@ Take *what the kernel does* from the reference. The reference is a different arc
 
 ### 2a: Read the canonical target pattern
 
-For SFPU kernels, each existing kernel exposes its interface through a **single entry point** — the `calculate_{op}` compute function, plus an `init_{op}` only when the op needs LUT/constant pre-loading. Everything else (the `_sfp_rows_` inner processor, work registers, addrmods) is implementation detail reached from that entry. Read the entry point(s) to learn the shape. Every Quasar SFPU kernel has the same shape; document it in the output. Math/pack/unpack kernels do not follow this shape — read the closest sibling `llk_*` kernel and document its own conventions instead.
+For SFPU kernels, each existing kernel exposes its interface through a **single entry point** — the `calculate_{op}` compute function, plus an `init_{op}` only when the op needs LUT/constant pre-loading or records a replay. Everything else (the `_sfp_rows_` inner processor, work registers, addrmods) is implementation detail reached from that entry. Read the entry point(s) to learn the shape. Every Quasar SFPU kernel has the same shape; document it in the output. Math/pack/unpack kernels do not follow this shape — read the closest sibling `llk_*` kernel and document its own conventions instead.
 
 Example of SFPU kernel type:
 ```cpp
@@ -182,10 +184,10 @@ When analyzing, be aware of:
 - Neccessery includes for this kernel
 - Namespace: `namespace ckernel { namespace sfpu { ... } }` (Blackhole uses `ckernel::sfpu` — do **not** copy that form).
 - Address mode: `ADDR_MOD_7`, pre-configured by `_eltwise_sfpu_configure_addrmod_()`. Never invent a new addrmod.
-- If writing init function with address mode settings, use `ADDR_MOD_6`. DO NOT use `csr_read<CSR::TRISC_ID>()` when programming this address mode, this is done on blackhole or wormhole but should not be explicit like this for quasar.
+- A non-default address mode uses `ADDR_MOD_6`. No op owns it (topk/cumsum reprogram it and nothing restores it), so program it at the top of the compute call unless every production caller runs init directly before compute; never ask callers to re-call init to restore it (why: rand PR #59437). DO NOT use `csr_read<CSR::TRISC_ID>()` when programming it — that is Blackhole/Wormhole only.
 - Default load/store: `TTI_SFPLOAD(reg, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0)`, use if applicable
 - Unroll: `#pragma GCC unroll 8` on the iterations loop.
-- Use available CONSTANTS and helpers in the REPO!!
+- Use available CONSTANTS and helpers in the REPO!! If the reference calls a common-layer helper the target lacks (e.g. `init_prng_seed`), plan to add it to `tt_llk_quasar/common/inc/ckernel.h`, not to inline it — a sibling op in the same batch needs it too (why: rand #59437 and dropout #59436 shipped two seeding paths).
 - Conditional execution: `TTI_SFPSETCC` + `TTI_SFPENCC` (hardware CC register) in raw-intrinsic kernels for SFPU kerenles if applicable
 - Never mix `SFPI` and raw `TTI`/`TT` in one kernel — every function in the file must use the same style. Pick one (all `SFPI` or all `TTI`/`TT`) and convert any mixed reference to it.
 - `SFPI_MODE=false` → target the raw `TTI`/`TT` version. `SFPI_MODE=true` → plan the `TTI`/`TT` sequence first, then map each step to its SFPI equivalent, using only features and builtins current SFPI supports (verify support before relying on one).
@@ -195,8 +197,7 @@ When analyzing, be aware of:
 
 ### 2b: Read the target test harness
 
-**SFPU kernels — the test harness is a fixed unified test, not a per-op file.** New
-SFPU ops are *appended* to a consolidated test for their category. **Classify the op** from the parent wrapper it must fit:
+**SFPU kernels — the default harness is the unified test for the category.** An op that needs a new test parameter, a non-golden (statistical) oracle, or state carried across tiles gets its own `test_{op}_quasar.py` instead (tester 1A.3b); say which in `## SFPU Category`. **Classify the op** from the parent wrapper it must fit:
 - One Dest source → **unary**
 - Two Dest sources → result → **binary**
 - Three or more operands (select between them) → **ternary**
@@ -225,7 +226,7 @@ Treat the injected content as your playbook for this step. For the problem at ha
    ```
    Grep: pattern="^{INSTRUCTION}:", path="tt_llk_{TARGET_ARCH}/instructions/assembly.yaml"
    ```
-   If zero matches, the instruction does not exist on this arch. Find an alternative or flag as gap.
+   If zero matches, the instruction does not exist on this arch. Find an alternative or flag as gap. `assembly.yaml` is ground truth for field encodings: when Confluence pseudocode, an in-tree kernel or a prior codegen run disagrees with it, follow the yaml and record both (why: gcd PR #59258 took SFPSWAP imm12 polarity from a topk run).
 5. **Reference-side ISA** — `mcp__deepwiki__ask_question` on `tenstorrent/tt-isa-documentation` for Blackhole/Wormhole equivalents when porting.
 
 Produce an **Available Instructions** table:
@@ -294,24 +295,26 @@ inline void calculate_{KERNEL_NAME}([runtime_args]);
 ```
 
 - For every **template parameter**: name it, state which situation it resolves (format / mode / comparison / …), cite the `TTI_` operand or the `if constexpr` / traits dispatch it feeds, and justify why it must be compile-time.
-- For every **runtime parameter**: name it, give its type (usually `uint32_t`), and cite how it is consumed.
+- For every **runtime parameter**: name it, give its type (usually `uint32_t`), cite how it is consumed, and give its valid domain. A value the hardware would misread (e.g. bit 31 in a signed compare) gets an `LLK_ASSERT`, never a mask, a saturation or a "caller must" note (why: dropout PR #59436). For each compare against a threshold param, state the result at both ends of its range (dropout p=0 still dropped).
 - Explicitly list any reference-only parameter to DROP (e.g. Blackhole's `template <int ITERATIONS>` → Quasar's runtime `int iterations`).
 - If you drop a whole behavior rather than folding it into a template param, justify it in §6e Risks — silent scope narrowing is a defect.
 - **Document effective semantics, not accepted ranges.** When a parameter quantises (e.g. `num_rows <= 9` runs a fixed 9-row network, `10..32` a 32-row one), state what the code actually does for each value. The writer and prettifier copy this into the docstrings.
 
 #### Code-path coverage matrix (MANDATORY)
 
-Write a `## Code-Path Coverage Matrix` section: one row per distinct code path reachable from the public entry — every `if constexpr` / template-parameter branch and every runtime mode that changes the instruction stream (e.g. `chunk == 0` vs `chunk > 0`). Columns: path, the parameter values that select it, the production callers that reach it (from `## Production Callers`), and **REQUIRED / optional**. Mark a row REQUIRED when a production caller reaches it; if no caller exists, every row is REQUIRED. The tester must run every REQUIRED row, so a path that ships untested is a defect you create here by omitting it.
+Write a `## Code-Path Coverage Matrix` section: one row per distinct code path reachable from the public entry — every `if constexpr` / template-parameter branch and every runtime mode that changes the instruction stream (e.g. `chunk == 0` vs `chunk > 0`), every runtime `if` on a param value (e.g. the LFSR lock-up seed), each documented aliasing contract (out==in0, out==in1), and each Int32 Dest encoding a caller produces (two's complement by default). Columns: path, the parameter values that select it, the production callers that reach it (from `## Production Callers`), and **REQUIRED / optional**. Mark a row REQUIRED when a production caller reaches it; if no caller exists, every row is REQUIRED. The tester must run every REQUIRED row, so a path that ships untested is a defect you create here by omitting it.
 
 Then cover the **cross-product** of path-selecting template parameters: state for each combination whether it is implemented, rejected by `static_assert`, or silently ignored. "Silently ignored" (e.g. `accumulate=true` on a path that never reads it) must become a `static_assert` in §6b unless a production caller relies on it — even when the reference has the same gap.
 
 ### 6b: Instruction sequence pseudocode
 
-Mark any 2-cycle instructions and the hazard-avoidance strategy (implicit stall or explicit `NOP` instruction).
+Mark any 2-cycle instructions and the hazard-avoidance strategy (implicit stall or explicit `NOP` instruction). Apply `codegen/references/quasar-hw-facts.md` directly.
 
-**Every NOP needs a cited hazard.** For each padding NOP name the producer→consumer instruction pair and the ISA / errata line that requires it (e.g. "SFPSWAP is 2-cycle on Quasar; TEN-4581: the SFPU misses the hazard of a 2-cycle op followed by SFPSWAP"), and put that citation in the code comment the writer emits. Do not write "conservative, may be over-padded" and hand it off — resolve it through `llk-arch-lookup` now. In-tree code is not proof either way: an existing kernel that omits the NOP may itself be wrong, and one that has it may cite a bug that does not exist on the target.
+**Every NOP needs a cited hazard.** For each padding NOP name the producer→consumer instruction pair and the errata ID that lists the consumer as unscoreboarded, and put that citation in the code comment the writer emits. "2-cycle latency" alone is not a citation: an interlocked consumer stalls by itself. SFPSWAP: never a NOP after it (hardware always stalls the next instruction, TEN-4581); one NOP before it only when its input comes from a 2-cycle op issued on the previous cycle (TEN-4605). Do not write "conservative, may be over-padded" and hand it off — resolve it through `llk-arch-lookup` now. In-tree code and prior codegen runs are not proof either way (gcd and lcm copied a dead NOP from `binary_max_min.h`).
 
-**Keep the reference's record-once structure.** If the reference records a replay buffer or MOP in its init (`grep -n 'load_replay_buf\|lltt::record' ` on the init body) and replays it from compute, specify the same split for the target: record in init, replay in compute — for every layout / mode the reference records, not just the first one. Dropping a reference replay needs a target constraint that applies to the record-and-replay form (TEN-4690 bans only `execute_while_loading=1`, not recording). If the init's recording would be clobbered by another math-thread op, keep it in init and document the re-init contract instead.
+**Fill latency slots.** An interlocked 2-cycle op still stalls a dependent consumer, so order independent instructions into each MAD/SWAP latency slot rather than one serial chain (why: ema PR #57129, -21% cycles). Every fixed delay (settle loop, poll-less wait) and every data-dependent loop/replay count needs a cited spec/RTL bound or a bound derived with a short host script, plus the worst-case input that reaches it for the tester (why: rand 1024 vs 1600 settle; gcd/lcm used Euclid's worst case for Stein's algorithm). Select lanes bitwise, never by multiplying by 0/1 (0×Inf = NaN; binary_bcast).
+
+**Keep the reference's replay structure.** If the reference records a replay buffer or MOP in its init (`grep -n 'load_replay_buf\|lltt::record' ` on the init body) and replays it from compute, specify the same split for the target: record in init, replay in compute — for every layout / mode the reference records, not just the first one. Statelessness or a sibling that records per call (`binary_max_min`) is not a reason to drop it. Dropping a reference replay needs a target constraint that applies to the record-and-replay form (TEN-4690 bans only `execute_while_loading=1`, not recording). Before prescribing an init recording, list init's other side effects: if init reseeds or resets state, or a production caller runs compute without init, keep a per-call recording (why: rand PR #59437 — re-calling init restarts the PRNG). Never prescribe "re-call init after other ops"; a recording other math-thread ops could clobber goes in SFPU-owned replay bank 1 (hw-facts).
 
 **Immediate-value convention in pseudocode.** When an instruction takes a hex immediate that encodes a *semantic* quantity — a mathematical coefficient, a format bit-pattern, a round-to-nearest-even bias... Any constant that will need naming
 
@@ -334,6 +337,7 @@ Surface every uncertainty, if exists, before handing off:
 - Format edge cases where the infrastructure may disagree.
 - Reference-only features being explicitly dropped (call them out so the next agent doesn't resurrect them).
 - Hardware constraints you're unsure about (pipeline hazards, 2-cycle ops, LOADMACRO rules).
+- Every risk here also goes in your self-log's `## Open risks`: a risk a test can settle becomes a REQUIRED Coverage-Matrix row (log `R<n> CLOSED: <risk> — evidence: matrix row <name>`); one only a human can settle is `R<n> DEFERRED: <risk> — PR: <line>`.
 - Every in-scope operation lacking a golden, `MathOperation`/`SfpuType` enum entry, or dispatcher wiring — state that its golden and missing test infrastructure must be implemented in the plan.
 - Every compute-API include or wrapper that `## Production Callers` shows gated out for the target (`#ifndef ARCH_{TARGET}`) — the writer must un-gate it, with the `VectorMode` the target kernel needs (a kernel that addresses the whole tile itself runs under `VectorMode::None`, not the per-face `RC`).
 - Every hand-off must name the agent that will act on it (writer / tester / optimizer). "The optimizer may later ..." with no matching instruction in that agent's prompt is a dead end — resolve it here instead.
@@ -375,6 +379,7 @@ Everything has to come from
 ### Format constraints
 
 - If there is any reason why data format can't be implemented in contrast to reference architecture explain the produce the explanation for that HAS to CONTAIN proof of Confluence pages or code lines that are proof that it can't work
+- Int32: Dest defaults to two's complement (unpack-to-dest copies L1 verbatim). Sign-magnitude only behind an opt-in template parameter, as add / mul_int32 / binary_comp do; cite the sibling defaults (why: unary_max_min PR #59439).
 
 [FORMAT] -> {
     [REASON]
@@ -542,9 +547,8 @@ in vs. flag as infeasible (§6e), which Confluence instructions to rely on.
 - **Read** (DeepWiki): repo + question + the summarized answer.
 - **Written**: `codegen/artifacts/{KERNEL_NAME}_analysis.md` + this self-log.
 
-## Open questions / handoffs
-Things the writer / tester must verify or that you left unresolved. If none,
-write "None". Examples:
-- The 2-cycle hazard for SFPMAD→SFPSTORE is cited from the SFPU MAS but not
-  confirmed with a simulator trace — writer should add a NOP if the test fails.
+## Open risks
+Per `codegen/references/logging.md` § Open risks — `R<n> CLOSED: … — evidence: …` or
+`R<n> DEFERRED: … — PR: …`, or "none". Example:
+- R1 CLOSED: lock-up seed 0xFFFFFFFF unhandled — evidence: matrix row `seed=LOCKUP` (REQUIRED)
 ```
