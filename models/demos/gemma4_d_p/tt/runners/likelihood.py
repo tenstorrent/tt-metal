@@ -10,8 +10,9 @@ prompt position, whose logits are a served request's first output token, is repo
 
     python -m models.demos.gemma4_d_p.tt.runners.likelihood REFERENCE CANDIDATE
 
-Each argument is a directory holding ``hidden_samples.safetensors`` (a TT run or a CPU reference) or a GPU trace
-directory, whose final-layer stream covers every position.
+Each argument is a directory or file holding ``hidden_samples.safetensors`` (a TT run or a CPU reference). The
+reference may instead be a GPU trace directory, whose final-layer stream covers every position; the candidate's saved
+positions decide which are scored.
 """
 
 import argparse
@@ -131,9 +132,8 @@ def load_gpu_samples(trace_dir, positions):
         f"decoder_output_layer_{metadata['n_layers'] - 1}"
     ]
     positions = torch.as_tensor(positions, dtype=torch.int64)
-    if positions.max().item() >= stream["row_count"]:
-        raise ValueError(f"GPU trace covers {stream['row_count']} positions, not {positions.max().item() + 1}")
     hidden = torch.empty((len(positions), stream["shape_tail"][0]), dtype=torch.bfloat16)
+    loaded = torch.zeros(len(positions), dtype=torch.bool)
     for chunk in stream["chunks"]:
         start, end = chunk["row_start"], chunk["row_end"]
         selected = ((positions >= start) & (positions < end)).nonzero().flatten()
@@ -142,6 +142,11 @@ def load_gpu_samples(trace_dir, positions):
                 rows = tensors.get_slice(f"decoder_output_layer_{metadata['n_layers'] - 1}")
                 first, last = positions[selected[0]].item(), positions[selected[-1]].item()
                 hidden[selected] = rows[first - start : last + 1 - start][positions[selected] - first]
+            loaded[selected] = True
+    # A short or gapped stream would otherwise leave uninitialized rows to be scored.
+    if not loaded.all():
+        missing = positions[~loaded]
+        raise ValueError(f"GPU trace has no rows for {len(missing)} requested positions, from {missing[0].item()}")
     return Samples(positions, hidden, next_tokens(metadata["token_ids"], positions.tolist()))
 
 
@@ -239,6 +244,26 @@ def summarize(scores):
         all=_summary(scores, torch.ones_like(last)),
         last_position=dict(position=context_len - 1, **_summary(scores, last)),
     )
+
+
+def check_limits(report, limits):
+    """One (name, required, achieved, passed) row per depth bin and metric.
+
+    ``limits`` maps each bin's first position to (minimum top-1 agreement, maximum ΔNLL, maximum top-k KL). A
+    missing value, such as ΔNLL for a bin without gold tokens, fails its criterion.
+    """
+    rows = []
+    for entry in report["bins"]:
+        min_top1, max_delta_nll, max_kl = limits[entry["start"]]
+        depth = f"{entry['start'] // 1024}-{entry['end'] // 1024}K"
+        for name, sign, limit, achieved in (
+            (f"Top-1 {depth}", ">=", min_top1, entry["top1_agreement"]),
+            (f"ΔNLL {depth}", "<=", max_delta_nll, entry["delta_nll"]),
+            (f"Top-{report['top_k']} KL {depth}", "<=", max_kl, entry["topk_kl"]),
+        ):
+            passed = achieved is not None and (achieved >= limit if sign == ">=" else achieved <= limit)
+            rows.append((name, f"{sign} {limit:.6f}", achieved, passed))
+    return rows
 
 
 def compare(reference, candidate, head=None):
