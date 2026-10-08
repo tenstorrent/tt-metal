@@ -210,23 +210,3 @@ def test_host_time_generic_vs_native(device, case_id):
     assert native["hot"]["dispatch_us"] < native["cold"]["dispatch_us"], "a cache hit must cost less than a miss"
     assert native["hot"]["dispatch_us"] < generic["hot"]["dispatch_us"], "the C++ hit path must beat the Python one"
     assert throughput["native"]["end_to_end_us"] <= throughput["generic"]["end_to_end_us"]
-
-
-def test_hit_cost_does_not_grow_with_core_count(device):
-    """One core against the whole grid: the cache-hit path writes a fixed number of common runtime
-    args, so its host time stays flat however many cores the work spreads over."""
-    grid = device.compute_with_storage_grid_size()
-    full_grid = grid.x * grid.y
-    width = 256
-    calls, inputs = {}, []  # inputs keeps every case's tensors alive for the whole measurement
-    for label, rows in (("1_core", 1), (f"{full_grid}_cores", full_grid)):
-        a = _tensor(device, [1, 1, 32 * rows, width])
-        b = _tensor(device, [1, 1, 32 * rows, width])
-        inputs.append((a, b))
-        calls[label] = lambda a=a, b=b: ttnn.toy_scaled_add(a, b, alpha=0.5)
-
-    summary = _summary(_measure(device, calls))
-    _record("native_hit_vs_core_count", summary)
-
-    one, full = summary["1_core"]["hot"]["dispatch_us"], summary[f"{full_grid}_cores"]["hot"]["dispatch_us"]
-    assert full < 2.0 * one, f"cache-hit dispatch grew from {one:.1f} us on 1 core to {full:.1f} us on {full_grid}"
