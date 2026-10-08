@@ -157,7 +157,7 @@ void kernel_main() {
 
 #ifdef ARCH_QUASAR
         // Quasar (quirk #1): ckl::add uses the default InitReconfigOwner::Chain, so it re-inits the UNPACK
-        // side (add_tiles_init for cos_interm/sin_interm) itself -- but the chain does reconfig, not pack_init,
+        // side (add_init for cos_interm/sin_interm) itself -- but the chain does reconfig, not pack_init,
         // so it does NOT re-program the pack BFD. Retarget the packer to `out` before its PackTile.
         pack_init(dfb::out);
 #endif

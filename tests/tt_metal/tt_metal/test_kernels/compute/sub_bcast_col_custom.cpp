@@ -15,6 +15,7 @@
 // tile_regs_acquire().
 
 #include <cstdint>
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/pack.h"
 #include "api/compute/reg_api.h"
@@ -47,7 +48,7 @@ void kernel_main() {
     constexpr std::uint32_t icb1 = dfb::in1;
     constexpr std::uint32_t ocb = dfb::out;
 
-    binary_op_init_common(icb0, icb1, ocb);
+    compute_kernel_hw_startup(icb0, icb1, ocb);
     sub_bcast_cols_init_short_custom(icb0, icb1, ct_dim);
 
     // One bcast tile per row of a block, held for the whole run and never popped per block, so

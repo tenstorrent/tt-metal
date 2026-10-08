@@ -9,8 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-// Exercises the uniform op_block Compute API surface (copy_block + pack_block), i.e. the renamed
-// performant block paths that superseded copy_block_matmul_partials / pack_tile_block. Mirrors
+// Exercises the uniform op_block Compute API surface (copy_block + pack_block). Mirrors
 // eltwise_copy_block_matmul_partials.cpp but issues a single block call per ublock instead of a
 // loop of single-tile calls, so the golden (identity copy) is identical.
 void kernel_main() {
