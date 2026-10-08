@@ -76,3 +76,16 @@ Tray-2 incident 2026-10-07 19:49 UTC (bridge-reset chips 8-15, broker job 417/41
 - Next wake: read drv251.done. FILL_NOT_OK: check out_fill/run.log (timeout while JIT compiling -> submit the
   timed job by hand; drop -> rerun fill once). TIME_DONE: parse out_time/run.log E2E_WALL_S gen=1..5 (gen0 = capture).
   After a drop mid-timed run, rerun with T220_SEEDS = seeds not yet saved (ltx_av_fast_1920x1088_<gen>.mp4).
+
+## 2026-10-08 03:00 UTC (#251 attempt 1, standard wake)
+- Fill job 901 (blx01) = pytest timeout at 570 s, NOT a drop or compile error. All weight caches hit (only
+  vae_enc was built, 27 s); the copied blx03 JIT cache gave 0/3148 hits (prewarm skipped 704 entries as
+  foreign-tree), so everything compiled cold. Warmup finished (audio decode done 02:48:30) 1 s before the
+  timeout. JIT cache on blx01 is now 6.0 GB, so a rerun should get much further.
+- drv251b.sh (blx01 pid 1525001, own session): waits until no smarton/hold/upgrade job runs or is queued
+  (t249 job 905 was running), submits fill2 (seed 0, -t 600), waits; if completed submits time
+  (seeds 0-4 in one process: T220_SEEDS=1,2,3,4, -t 600), waits. Marker /var/tmp/fasth3/t220/drv251b.done
+  (FILL_NOT_SUBMITTED / FILL_NOT_OK / TIME_NOT_SUBMITTED / TIME_DONE job=.. status=..), log drv251b.done.log.
+- Next wake: FILL_NOT_OK -> read out_fill2/run.log (2nd timeout => restructure: skip audio warmup or split;
+  drop => rerun once, 2 drops => skip). TIME_DONE -> parse out_time/run.log E2E_WALL_S (gen0 = capture,
+  gen1 = seed 0, gen2-5 = seeds 1-4); timeout -> rerun with seeds not yet saved.
