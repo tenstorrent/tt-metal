@@ -652,7 +652,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 
 fi # bh-subtorus-sc16
 
-######################################
+an 
 # Factory-descriptor reliability.
 # A matching descriptor reports no downed links. The 4-host pod deletes three same-host cables and
 # one cross-host cable. The subtorus connection the mesh graph does not use is unused. The torus
@@ -668,52 +668,40 @@ fi # bh-subtorus-sc16
 ######################################
 if run_group "bh-fsd-reliability"; then
 
-# Every factory-descriptor test except the ones that need a pod the live cluster does not match.
-# The two-channel tests fail on a complete descriptor. The incompatible test fails when ingest accepts it.
+# Healthy-pod tests only; the excluded ones need missing links or an incompatible pairing.
 FSD_HEALTHY_FILTER="FactoryDescriptorControlPlaneFixture.*-FactoryDescriptorControlPlaneFixture.ACableTheMeshGraphDoesNotUseIsUnused:FactoryDescriptorControlPlaneFixture.StrictSystemHealthRejectsARelaxedMeshGraph:FactoryDescriptorControlPlaneFixture.MeshGraphCountAboveTheFactoryDropsTheRoutingPlane:FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount:FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest"
 
-# One host's mock against the multi-host FSD that describes it. The host filter narrows the descriptor to
-# this rank's slice and the mesh is solved on it.
+# Healthy single host against the multi-host FSD; the host filter narrows it to this rank's slice.
 FSD_AISLEC_DIR=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_aisleC
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c01u02_rank_38.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
 
-# Same path on a subtorus FSD, whose host slice carries 280 expected connections rather than 240, so the
-# wrap-around cables go through the diff as well.
+# Same on the subtorus FSD, so the wrap-around cables go through the diff too.
 FSD_SUBTORUS_POD_DIR=tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revC_subtorus_aisleD
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_cluster_desc/SC16_32x4_revC_subtorus_aisleD_cluster_desc_bh-glx-110-d02u02_rank_0.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
 
-# Four hosts, one mesh per host, so a same-host cable is intramesh and a cross-host cable is intermesh.
-# --factory-system-descriptor is what puts the path on every rank.
+# Healthy four-host pod, one mesh per host: same-host cables are intramesh, cross-host intermesh.
 FSD_QUAD_HOST_MGD="${MGD_CUSTOM}/fsd_quad_host_mesh_graph_descriptor.textproto"
 FSD_QUAD_HOST_DESCRIPTOR="$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto"
 
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_MGD}" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
 
-# Same pod, count 2 relaxed. Chip 0 chan 0 to chip 8 chan 0 is the subtorus connection the mesh
-# graph does not use, so it is unused. Chip 15 chan 4 to chip 23 chan 4 is the torus connection
-# (four factory cables, one removed, mesh graph asks for 2) and is unused. Chip 0 chan 6 to chip 4
-# chan 0 is the mesh connection (two factory cables, one removed) and stays downed. Planes stay at 2.
-# Intermesh connections are all RELAXED, with a different count on each boundary. Mesh 2 to mesh 3
-# asks for 4 against 15 live cables, so the one missing factory cable is unused. STRICT system
-# health rejects this graph because intra-mesh is still relaxed.
+# KNOWN FAILURE to fix: a 4x8 mesh over [2,2] host ranks seats whole on one host, and the rank-split
+# hostnames (__rank<N>) no longer join the FSD even though the descriptor is the right one.
+run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_ring_ring_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${FSD_HEALTHY_FILTER}"
+
+# Missing-links pod: holes the mesh graph still needs stay downed, holes past its count are unused.
 FSD_MISSING_LINKS_MAPPING="${FSD_SUBTORUS_POD_DIR}/SC16_32x4_revC_subtorus_aisleD_missing_links/SC16_32x4_revC_subtorus_aisleD_missing_links_mapping.yaml"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.ACableTheMeshGraphDoesNotUseIsUnused:FactoryDescriptorControlPlaneFixture.StrictSystemHealthRejectsARelaxedMeshGraph"
 
-# Intra count 4 on the same missing-link pod. The mesh connection is mesh graph 4, factory 2, live 1.
-# Planes drop to the factory count of 2, and one channel per direction stays downed. Intermesh
-# connections are all RELAXED. Mesh 2 to mesh 3 asks for 16, so the one missing factory cable stays
-# downed and 15 live cables are registered.
+# Mesh graph asks for more channels than the factory has: planes drop to the factory count.
 FSD_QUAD_HOST_INTRA4_MGD="${MGD_CUSTOM}/fsd_quad_host_intra_count4_mesh_graph_descriptor.textproto"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_INTRA4_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.MeshGraphCountAboveTheFactoryDropsTheRoutingPlane"
 
-# Same missing-link pod with STRICT intermesh. Every count fits in the factory cables and in the
-# live cables, so the one missing factory cable is unused and initialization succeeds. A used
-# downed intermesh link, or a count past either descriptor, fails. Intra-mesh stays relaxed.
+# STRICT intermesh with every count covered by both descriptors: the hole is unused, init succeeds.
 FSD_QUAD_HOST_STRICT_INTERMESH_MGD="${MGD_CUSTOM}/fsd_quad_host_strict_intermesh_mesh_graph_descriptor.textproto"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${FSD_QUAD_HOST_STRICT_INTERMESH_MGD}" --mock-cluster-rank-binding "${FSD_MISSING_LINKS_MAPPING}" --factory-system-descriptor "${FSD_QUAD_HOST_DESCRIPTOR}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.StrictIntermeshAllowsAnUnusedHoleWhenBothDescriptorsCoverTheCount"
 
-# Aisle C's live host against the aisle D factory descriptor. The two name no host in common, so ingest
-# rejects the descriptor before the mapper runs.
+# Aisle C host against the aisle D FSD: no common host, refused at ingest.
 run_test env TT_METAL_MOCK_CLUSTER_DESC_PATH=$FSD_AISLEC_DIR/SC16_32x4_revC_aisleC_cluster_desc/SC16_32x4_revC_aisleC_cluster_desc_bh-glx-110-c01u02_rank_38.yaml TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH=$FSD_SUBTORUS_POD_DIR/SC16_32x4_revC_subtorus_aisleD_factory_system_descriptor.textproto TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FactoryDescriptorControlPlaneFixture.AnIncompatibleDescriptorFailsAtIngest"
 
 fi # bh-fsd-reliability
