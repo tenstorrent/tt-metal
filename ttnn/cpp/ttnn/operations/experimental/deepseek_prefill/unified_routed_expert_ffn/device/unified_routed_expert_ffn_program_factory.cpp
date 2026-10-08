@@ -148,6 +148,13 @@ void patch_common_buffer_addresses(tt::tt_metal::RuntimeArgsData& args, const Vi
     });
     TT_FATAL(slot == args.size(), "patched {} common runtime args, cached program has {}", slot, args.size());
 }
+
+// RING_WEIGHTS mode (see weight_runs.hpp / device operation): the decode moe_compute ring tensors are read in place.
+bool is_ring_weights_f(const ttnn::Tensor& w) {
+    const auto& mem = w.memory_config();
+    return w.logical_shape().rank() == 6 && mem.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+           mem.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED;
+}
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_descriptor(
@@ -165,10 +172,31 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
+    const bool ring_weights = is_ring_weights_f(t.gate_projs[0]);
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;  // = N_gate K = emb / TILE
+    // Ring weights: 8 ring cores (= the op's 8 N columns); N is the multiple of 8 whose 7-padded size is the stored w2
+    // K-row count and whose per-core group count (2 N tiles per group) is the stored w0_w1 group count.
+    uint32_t ring_n_tiles = 0;
+    if (ring_weights) {
+        const uint32_t rd = down_shape[-2] / TILE, groups = gate_shape[-3];
+        for (uint32_t n = 8; n <= 8 * rd; n += 8) {
+            if (((n + 6) / 7) * 7 == rd && (n / 8 + 1) / 2 == groups) {
+                ring_n_tiles = n;
+            }
+        }
+        TT_FATAL(
+            ring_n_tiles != 0,
+            "ring weights: cannot infer the intermediate size from w0_w1 {} / w2 {}",
+            gate_shape,
+            down_shape);
+        TT_FATAL(
+            down_shape[-3] * 4 * 8 == K_gate_tiles && ((K_gate_tiles + 6) / 7) * 7 == gate_shape[-2] / TILE,
+            "ring weights: w2 hidden groups / w0_w1 K rows do not match x ({} tiles)",
+            K_gate_tiles);
+    }
+    const uint32_t N_gate_tiles_full = ring_weights ? ring_n_tiles : gate_shape[-1] / TILE;  // = hidden / TILE
+    const uint32_t K_down_tiles = ring_weights ? ring_n_tiles : down_shape[-2] / TILE;       // = hidden / TILE
+    const uint32_t N_down_tiles_full = ring_weights ? K_gate_tiles : down_shape[-1] / TILE;  // = emb / TILE
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -193,8 +221,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // per_core_M / num_chunks at runtime from the device token count, never
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
-    uint32_t GRID_X = kCoreGridX;
-    uint32_t GRID_Y = kCoreGridY;
+    uint32_t GRID_X = ring_weights ? 8u : kCoreGridX;  // ring weights: one N column per ring core / DRAM bank
+    uint32_t GRID_Y = kCoreGridY;                      // ring weights: 8 columns x 8 rows
     // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
@@ -216,15 +244,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
-    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
+    const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
+        grid_size.x >= GRID_X && grid_size.y >= GRID_Y,
         "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
-        kCoreGridX,
-        kCoreGridY,
+        GRID_X,
+        GRID_Y,
         grid_size.x,
         grid_size.y);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
@@ -978,6 +1006,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("FUSE_BIAS", "1");
     }
+    if (ring_weights) {
+        reader_defines.emplace_back("RING_WEIGHTS", "1");
+        reader_defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
+    }
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/"
@@ -1059,6 +1091,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
+    if (ring_weights) {
+        writer_kernel_desc.defines.emplace_back("RING_WEIGHTS", "1");
+        writer_kernel_desc.defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
+    }
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Compute kernel compile-time args: positional + named CB ids.
@@ -1150,6 +1186,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // the SFPU fp32-dest template derive from this, staying in sync with
     // DST_CAPACITY / ComputeConfig.fp32_dest_acc_en (single source above).
     compute_defines.emplace_back("FP32_DEST_ACC_EN", kFp32DestAccEn ? "1" : "0");
+    if (ring_weights) {
+        compute_defines.emplace_back("ADAPT_GRID_Y", std::to_string(GRID_Y));
+    }
     if (op.activation == RoutedExpertActivation::SwiGluOai) {
         // SwiGLU-OAI activation (MiniMax-M3 / gpt-oss): clamp(gate,max=L),
         // clamp(up,±L), (up+1)*gate*sigmoid(alpha*gate). Bakes alpha=1.702,
