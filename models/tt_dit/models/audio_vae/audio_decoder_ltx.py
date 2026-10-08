@@ -58,6 +58,16 @@ def _env_flag(name: str, *, default: bool) -> bool:
     raise ValueError(f"{name}={val!r} is not a boolean (expected one of {_TRUE_TOKENS | _FALSE_TOKENS})")
 
 
+def _trace_gates(traced: bool) -> tuple[bool, bool, bool]:
+    """(vocoder, BWE, mel-VAE) trace flags. Each decoder replays its trace bit-identically to the eager decode;
+    ``LTX_VOC_TRACE`` / ``LTX_VAE_TRACE`` =0 force that part eager."""
+    return (
+        traced and _env_flag("LTX_VOC_TRACE", default=True),
+        traced,
+        traced and _env_flag("LTX_VAE_TRACE", default=True),
+    )
+
+
 class LTXAudioDecoderAdapter:
     """Owns the LTX audio decode stack: parses the checkpoint's ``audio_vae`` / ``vocoder`` config,
     builds the ``MelDecoder`` + ``VocoderWithBWE`` (two vocoders via the BWE path), selects the
@@ -182,9 +192,11 @@ class LTXAudioDecoderAdapter:
             mesh_device=self._mesh_device,
             dtype=ttnn.float32,
         )
-        self._vocoder_with_bwe.use_trace = self._traced and _env_flag("LTX_VOC_TRACE", default=True)
-        self._vocoder_with_bwe.use_trace_bwe = self._traced
-        self._mel_decoder.use_trace = self._traced and _env_flag("LTX_VAE_TRACE", default=False)
+        (
+            self._vocoder_with_bwe.use_trace,
+            self._vocoder_with_bwe.use_trace_bwe,
+            self._mel_decoder.use_trace,
+        ) = _trace_gates(self._traced)
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
