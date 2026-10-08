@@ -12,7 +12,7 @@ namespace tt::tt_metal::detail {
 // not join on destruction, so drain all submitted work before propagating an
 // error from submission or execution. Allocate every future slot before launch.
 template <typename Submit>
-void run_bfp_tasks(size_t count, Submit&& submit) {
+void run_bfp_tasks(size_t count, const Submit& submit) {
     std::vector<std::shared_future<void>> pending(count);
     try {
         for (size_t i = 0; i < count; ++i) {
