@@ -130,10 +130,14 @@ void kernel_main() {
 
                             cb_compute_output.reserve_back(tile_granularity);
                             tile_regs_wait();  // acquire lock on DST for PACK thread
+#ifdef ARCH_BLACKHOLE
+                            pack_block_mop(0, cb_compute_output_id, tiles_to_read);
+#else
                             for (uint32_t tile_id = 0; tile_id < tiles_to_read; ++tile_id) {
                                 pack_tile(tile_id, cb_compute_output_id, tile_id);  // pack results from DST registers
                                                                                     // to output circular buffers
                             }
+#endif
                             tile_regs_release();  // release lock on DST by PACK thread
                             cb_compute_output.push_back(tile_granularity);
                         }

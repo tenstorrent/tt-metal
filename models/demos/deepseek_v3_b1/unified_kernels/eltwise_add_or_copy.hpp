@@ -129,9 +129,13 @@ struct EltwiseAddOrCopy {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, cb_out, num_tiles);
+#else
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     pack_tile(i, cb_out);
                 }
+#endif
                 tile_regs_release();
                 cb_pop_front(cb_in0_wait, cb_in0_wait_tiles);
             } else {
@@ -144,9 +148,13 @@ struct EltwiseAddOrCopy {
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                pack_block_mop(0, cb_out, num_tiles);
+#else
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     pack_tile(i, cb_out);
                 }
+#endif
                 tile_regs_release();
             }
 

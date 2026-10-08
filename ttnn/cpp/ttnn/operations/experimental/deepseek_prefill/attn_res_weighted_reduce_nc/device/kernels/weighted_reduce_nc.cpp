@@ -91,9 +91,13 @@ void kernel_main() {
             cb_out0_obj.reserve_back(sites_in_group);
             pack_reconfig_data_format(cb_out0);
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, cb_out0, sites_in_group);
+#else
             for (uint32_t s = 0; s < sites_in_group; ++s) {
                 pack_tile(s, cb_out0);
             }
+#endif
             tile_regs_release();
             cb_out0_obj.push_back(sites_in_group);
 

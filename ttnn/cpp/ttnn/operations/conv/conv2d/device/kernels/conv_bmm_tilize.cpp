@@ -486,7 +486,7 @@ void kernel_main() {
                         }
 
                         uint32_t start_dst_index = 0;
-                        pack_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+                        pack_block_mop(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 
                         tile_regs_release();
                         curr_out_dfb.push_back(out_subblock_num_tiles);
@@ -553,9 +553,13 @@ void kernel_main() {
 
                         dfb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+                        pack_block_mop(0, untilize_mode_out_cb_id, out_subblock_num_tiles);
+#else
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                             pack_tile(i, untilize_mode_out_cb_id);
                         }
+#endif
                         tile_regs_release();
                         dfb_untilize_mode_out.push_back(out_subblock_num_tiles);
 

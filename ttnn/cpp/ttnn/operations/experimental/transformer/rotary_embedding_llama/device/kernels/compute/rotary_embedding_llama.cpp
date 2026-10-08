@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #define ELTWISE_BINARY_PER_TILE_HANDOFF true
+#define CKL_ELTWISE_CHAIN_PACK_BLOCK
+
 #include <cstdint>
 
 #include "api/compute/common.h"
@@ -124,10 +126,17 @@ void kernel_main() {
                 pack_reconfig_data_format(out_dfb, rotated_in_interm_dfb);
                 matmul_init(in_dfb, trans_mat_dfb);
                 ACQ();
+#ifdef ARCH_BLACKHOLE
+                for (uint32_t j = 0; j < Wt; ++j) {
+                    matmul_tiles(in_dfb, trans_mat_dfb, j, in1_index, j);
+                }
+                pack_block_mop(0, rotated_in_interm_dfb, Wt);
+#else
                 for (uint32_t j = 0; j < Wt; ++j) {
                     matmul_tiles(in_dfb, trans_mat_dfb, j, in1_index, j);
                     pack_tile(j, rotated_in_interm_dfb, j);
                 }
+#endif
                 REL();
                 rotated_in_interm_dfb_obj.push_back(Wt);
                 reconfig_data_format(trans_mat_dfb, rotated_in_interm_dfb, in_dfb, sin_dfb);

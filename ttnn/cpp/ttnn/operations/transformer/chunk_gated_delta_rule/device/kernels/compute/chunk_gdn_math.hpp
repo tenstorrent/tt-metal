@@ -115,9 +115,13 @@ inline void mm(
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, o, nb);
+#else
         for (uint32_t j = 0; j < nb; j++) {
             pack_tile(j, o, t0 + j);
         }
+#endif
         tile_regs_release();
     }
     CircularBuffer(o).push_back(Mt * Nt);
@@ -996,9 +1000,13 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, cb.ointer, nb);
+#else
             for (uint32_t j = 0; j < nb; j++) {
                 pack_tile(j, cb.ointer, t0 + j);
             }
+#endif
             tile_regs_release();
         }
         CircularBuffer(cb.ointer).push_back(cv);
@@ -1042,9 +1050,13 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, cb.out, nb);
+#else
             for (uint32_t j = 0; j < nb; j++) {
                 pack_tile(j, cb.out, t0 + j);
             }
+#endif
             tile_regs_release();
         }
         CircularBuffer(cb.out).push_back(cv);
@@ -1075,9 +1087,13 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, dst, nb);
+#else
             for (uint32_t j = 0; j < nb; j++) {
                 pack_tile(j, dst, t0 + j);
             }
+#endif
             tile_regs_release();
         }
         CircularBuffer(dst).push_back(kv);

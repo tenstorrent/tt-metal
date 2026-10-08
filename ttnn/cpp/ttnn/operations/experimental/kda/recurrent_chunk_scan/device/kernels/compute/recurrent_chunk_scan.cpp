@@ -41,12 +41,16 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, output_id, subblock_rows * subblock_columns);
+#else
             for (uint32_t row = 0; row < subblock_rows; ++row) {
                 for (uint32_t column = 0; column < subblock_columns; ++column) {
                     pack_tile(
                         row * subblock_columns + column, output_id, (row_start + row) * Nt + column_start + column);
                 }
             }
+#endif
             tile_regs_release();
         }
     }
@@ -81,9 +85,13 @@ FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuff
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, output_id, count);
+#else
             for (uint32_t tile = 0; tile < count; ++tile) {
                 pack_tile(tile, output_id, first + tile);
             }
+#endif
             tile_regs_release();
         }
         output.push_back(PacketTiles);
@@ -109,9 +117,13 @@ FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output) {
             }
             tile_regs_commit();
             tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+            pack_block_mop(0, output_id, count);
+#else
             for (uint32_t tile = 0; tile < count; ++tile) {
                 pack_tile(tile, output_id, first + tile);
             }
+#endif
             tile_regs_release();
         }
         output.push_back(PacketTiles);
@@ -142,9 +154,13 @@ FORCE_INLINE void multiply_by_decay(
         }
         tile_regs_commit();
         tile_regs_wait();
+#ifdef ARCH_BLACKHOLE
+        pack_block_mop(0, output_id, block_tiles);
+#else
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             pack_tile(tile, output_id, block_start + tile);
         }
+#endif
         tile_regs_release();
     }
     output.push_back(count);
