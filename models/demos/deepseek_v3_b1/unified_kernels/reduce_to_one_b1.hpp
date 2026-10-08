@@ -262,6 +262,44 @@ struct ReduceToOneB1 {
         }
 
 #endif
+#if defined(COMPILE_FOR_TRISC)
+        // Blackhole adds each received tile from one source bank (SrcDvalid::PerTile) in every kernel
+        static ALWI void add_received_init() {
+#if defined(ARCH_BLACKHOLE)
+            state_configure(CTArgs::received_cb, __builtin_LINE());
+            UNPACK((llk_unpack_A_init<
+                    BroadcastType::NONE,
+                    true /* acc_to_dest */,
+                    EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+                    false /* unpack_to_dest */,
+                    SrcDvalid::PerTile>(false, false, CTArgs::received_cb)));
+            MATH((llk_math_eltwise_binary_init<
+                  EltwiseBinaryType::ELWADD,
+                  BroadcastType::NONE,
+                  MATH_FIDELITY,
+                  EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+                  SrcDvalid::PerTile>(CTArgs::received_cb, CTArgs::received_cb, false /* acc_to_dest */)));
+#else
+            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb);
+#endif
+        }
+
+        static ALWI void add_received_tile(uint32_t i) {
+#if defined(ARCH_BLACKHOLE)
+            UNPACK((llk_unpack_A<BroadcastType::NONE, true /* acc_to_dest */, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                CTArgs::received_cb, i)));
+            MATH((llk_math_eltwise_binary<
+                  EltwiseBinaryType::ELWADD,
+                  BroadcastType::NONE,
+                  DST_ACCUM_MODE,
+                  MathFidelity::LoFi,
+                  EltwiseBinaryReuseDestType::DEST_TO_SRCA,
+                  SrcDvalid::PerTile>(CTArgs::received_cb, CTArgs::received_cb, i, true /* clear_fp32_dst_acc */)));
+#else
+            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, i, i);
+#endif
+        }
+#endif
 
         void impl([[maybe_unused]] const RTArgs& args) {
             // Early return if this core is not a reduce core (worker or fabric)
@@ -607,11 +645,10 @@ struct ReduceToOneB1 {
             cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
 
             // Accumulate from received_cb page 0 (LEAF data)
-            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb);
+            add_received_init();
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                    CTArgs::received_cb, i, i);
+                add_received_tile(i);
             }
             cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
 
@@ -619,8 +656,7 @@ struct ReduceToOneB1 {
                 // Accumulate from received_cb page 1 (ROOT3 data)
                 cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                        CTArgs::received_cb, i, i);
+                    add_received_tile(i);
                 }
                 cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
             }
@@ -629,8 +665,7 @@ struct ReduceToOneB1 {
                 // Accumulate from received_cb page 2 (ROOT2 data)
                 cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
                 for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                        CTArgs::received_cb, i, i);
+                    add_received_tile(i);
                 }
                 cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
             }
