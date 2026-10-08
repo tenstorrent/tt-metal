@@ -8,71 +8,79 @@ Usage:
     check_eth_status.py
 
 Description:
-    Checks the link on every active ethernet core (the cores metal found trained when it started).
-    Base-firmware state is read twice, at least 3 s apart; eth_status_sampling takes the first sample early.
-    Reports port and link state, retrain count, heartbeat progress and, on Blackhole, the eth firmware mailboxes.
-    A link that is down in both samples on live or freshly refreshed evidence is an error. Retrain counts are
-    reported but never flagged.
+    Checks the link on every active ethernet core: the cores metal found trained when it started (from Inspector),
+    or, without Inspector, the channels connected to another chip on this host when triage starts (links to other
+    hosts are not checked).
+    Reads base-firmware state once and reports port and link state, retrain, CRC and FEC counts, the heartbeat and
+    firmware signature and, on Blackhole, ERR_STAT, the TX/RX queue counters and the eth firmware mailboxes.
+    A link that is down on a port expected to be up is an error. Counters are reported but never flagged.
+    Cores running eth firmware older than UMD supports show raw values only, with no findings.
 
 Owner:
     nhuang-tt
 """
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, fields
+import struct
 
-from eth_status_sampling import (
-    ALL_ONES,
-    BH_BOOT_RESULTS,
-    BH_BOOT_RESULTS_WORDS,
-    BH_HEARTBEAT,
-    BH_LOCAL_INFO,
-    BH_MAILBOX,
-    BH_MAILBOX_SLOT_SIZE,
-    BH_MAILBOX_SLOTS,
-    BH_PCS_STATUS,
-    BH_PORT_STATUS,
-    BH_RETRAIN_COUNT,
-    BH_RX_LINK_UP,
-    WH_BOOT_RESULTS,
-    WH_BOOT_RESULTS_WORDS,
-    WH_HEARTBEAT,
-    WH_LAUNCH_ERISC_APP_FLAG,
-    WH_LINK_ERROR_STATUS,
-    WH_LINK_STATUS,
-    WH_LINK_UP,
-    WH_LOCAL_ETH_ID,
-    WH_PORT_DISABLE_MASK,
-    WH_RETRAIN_COUNT,
-    WH_RETRAIN_FORCE,
-    WH_SHARED_HEARTBEAT,
-    WH_TRAIN_STATUS,
-    EthCoreSample,
-    EthStatusSampling,
-    get_read_plan,
-    run as get_eth_status_sampling,
-)
 from run_checks import run as get_run_checks
-from triage import (
-    ScriptConfig,
-    hex_serializer,
-    log_check_location,
-    log_warning_location,
-    run_script,
-    triage_field,
-)
-from triage_session import get_triage_session
+from triage import ScriptConfig, hex_serializer, log_check_location, log_warning_location, run_script, triage_field
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.tt_exalens_lib import read_from_device, read_word_from_device
 import utils
 
 script_config = ScriptConfig(
-    depends=["run_checks", "eth_status_sampling"],
+    depends=["run_checks"],
 )
 
-# Top 16 bits of a heartbeat word name its writer.
-BASE_FW_SIGNATURE = 0xABCD
-ROUTER_SIGNATURE = 0xDCBA
-WRITER_NAMES = ((BASE_FW_SIGNATURE, "base FW"), (ROUTER_SIGNATURE, "router"))
+# What a failed host read returns.
+ALL_ONES = 0xFFFFFFFF
+
+# Wormhole base firmware: wormhole/eth_fw_api.h, eth_l1_address_map.h, UMD wormhole_eth.hpp.
+WH_HEARTBEAT = 0x1C  # base FW (0xABCD) once per loop pass
+WH_ETH_FW_VERSION = 0x210  # major in bits 23:16, minor 15:12, patch 11:0
+WH_PORT_DISABLE_MASK = 0x1008  # bit N = channel N disabled
+WH_TRAIN_STATUS = 0x1104  # 0 in progress, 1 success, 2 fail
+WH_LINK_ERROR_STATUS = 0x1440  # training error code
+WH_BOOT_RESULTS = 0x1EC0  # boot_results_t
+WH_BOOT_RESULTS_WORDS = 80
+WH_LINK_STATUS = 0x1ED4  # link is up only when it equals WH_LINK_UP
+WH_LINK_UP = 6
+WH_RETRAIN_COUNT = 0x1EDC
+WH_RETRAIN_FORCE = 0x1EFC  # 1 while a requested retrain is pending
+WH_CRC_ERRORS = 0x1F7C
+WH_SHARED_HEARTBEAT = 0x1F80  # base FW (0xABCD) and fabric router (0xDCBA)
+WH_CORRECTED_CODEWORDS = 0x1F90  # FEC corr_cw: high word, then low word
+WH_UNCORRECTED_CODEWORDS = 0x1F98
+
+# Blackhole base firmware: blackhole/eth_fw_api.h, 32-bit device layout.
+BH_BOOT_RESULTS = 0x7CC00  # boot_results_t (1 KB), then the eth FW mailboxes (64 B)
+BH_BOOT_RESULTS_WORDS = 272
+BH_PORT_STATUS = 0x7CC04
+BH_HEARTBEAT = 0x7CC70  # heartbeat[0]: base FW (0xABCD) and fabric router (0xDCBA)
+BH_RETRAIN_COUNT = 0x7CE00
+BH_RX_LINK_UP = 0x7CE04  # snapshot, up only when it equals 1
+# The counters below are u64, low word first.
+BH_RX_BAD_FCS = 0x7CE60  # frames_rxd_badfcs: received frames that failed the Ethernet CRC
+BH_CORRECTED_CODEWORDS = 0x7CE90
+BH_UNCORRECTED_CODEWORDS = 0x7CE98
+BH_TXQ_RESENDS = 0x7CEA0  # txq0..2_resend_cnt
+BH_RXQ_DROPS = 0x7CEB8  # rxq0..2_pkt_drop
+BH_QUEUES = 3
+BH_ETH_FW_VERSION = 0x7CFBC  # fw_version_t: patch, minor and major bytes
+BH_MAILBOX = 0x7D000  # HOST, RISC1, CMFW, OTHER
+BH_MAILBOX_SLOTS = 4
+BH_MAILBOX_SLOT_SIZE = 16  # msg + 3 args
+BH_PCS_STATUS = 0xFFB9800C  # live link status, up only when it equals 1
+BH_ERR_STAT = 0xFFB980D8  # latched ETH_CTRL error status; reading does not clear it
+
+# Oldest eth FW these addresses hold for (UMD's minimum ERISC FW versions).
+WH_MIN_ETH_FW_VERSION = (6, 14, 0)
+BH_MIN_ETH_FW_VERSION = (1, 4, 1)
+# First Blackhole eth FW that writes the TXQ/RXQ counters.
+BH_QUEUE_COUNTERS_MIN_ETH_FW_VERSION = (1, 5, 0)
 
 WH_TRAIN_STATUS_NAMES = {0: "Training", 1: "Trained", 2: "Train failed"}
 # Link error codes from here up mean nothing is plugged in (UMD ETH_LINK_UNUSED_ERROR_CODE_RANGE_START).
@@ -83,7 +91,8 @@ BH_PORT_STATUS_NAMES = {0: "Unknown", 1: "Up", 2: "Down", 3: "Unused"}
 MAILBOX_SLOT_NAMES = ("HOST", "RISC1", "CMFW", "OTHER")
 MAILBOX_CALL = 0xCA11  # posted, not picked up yet
 MAILBOX_CALL_ACK = 0xCEDE  # picked up, handler still running (eth FW >= 1.5.0)
-MAILBOX_STATUS_NAMES = {MAILBOX_CALL: "CALL", MAILBOX_CALL_ACK: "CALL_ACK", 0xD0E5: "DONE"}
+MAILBOX_DONE = 0xD0E5
+MAILBOX_STATUS_NAMES = {MAILBOX_CALL: "CALL", MAILBOX_CALL_ACK: "CALL_ACK", MAILBOX_DONE: "DONE"}
 MAILBOX_TYPE_NAMES = {
     0x1: "LINK_STATUS_CHECK",
     0x2: "RELEASE_CORE",
@@ -94,12 +103,8 @@ MAILBOX_TYPE_NAMES = {
 
 # Finding messages carry no values, so sqlite can group by message; values stay in the columns.
 LINK_DOWN = "Eth link is down"
-LINK_DOWN_STALE = "Eth link reported down by a stale snapshot"
-LINK_CHANGED = "Eth link state changed during sampling"
 PORT_NOT_TRAINED = "Eth port is not trained"
 PORT_STATUS_INVALID = "Eth port status is invalid"
-MAILBOX_NOT_SERVICED = "Eth firmware mailbox request not serviced"
-BASE_FW_NOT_PROGRESSING = "Eth base firmware is not progressing"
 CORE_UNREADABLE = "Eth core is unreadable"
 
 
@@ -109,30 +114,24 @@ class EthCoreCheckData:
     port_status: str | None = triage_field("Port Status")
     link: str | None = triage_field("Link")
     retrain_count: int | None = triage_field("Retrain Count")
-    heartbeat: str | None = triage_field("Heartbeat")
+    crc_errors: int | None = triage_field("CRC Errors")
+    corrected_codewords: int | None = triage_field("Corr CW")
+    uncorrected_codewords: int | None = triage_field("Uncorr CW")
     mailbox: str | None = triage_field("Mailbox")
-    physical_channel: int | None = triage_field("Phys Chan", verbose=1)
+    eth_fw: str | None = triage_field("ETH FW", verbose=1)
+    fw_signature: int | None = triage_field("FW Signature", hex_serializer, verbose=1)  # tt_eth_firmware_signature
     rx_link_up: str | None = triage_field("RX Link Up", verbose=1)
-    retrain_delta: int | None = triage_field("Retrain Delta", verbose=1)
-    heartbeat_values: str | None = triage_field("Heartbeat Values", verbose=1)
+    err_stat: int | None = triage_field("ERR_STAT", hex_serializer, verbose=1)
+    txq_resends: str | None = triage_field("TXQ Resends", verbose=1)
+    rxq_drops: str | None = triage_field("RXQ Drops", verbose=1)
+    heartbeat: str | None = triage_field("Heartbeat", verbose=2)
     link_raw: int | None = triage_field("Link Raw", hex_serializer, verbose=2)
-    sample_gap: float | None = triage_field("Sample Gap", verbose=2)
     mailbox_raw: str | None = triage_field("Mailbox Raw", verbose=2)
 
-    def __init__(self):
-        self.channel = None
-        self.port_status = None
-        self.link = None
-        self.retrain_count = None
-        self.heartbeat = None
-        self.mailbox = None
-        self.physical_channel = None
-        self.rx_link_up = None
-        self.retrain_delta = None
-        self.heartbeat_values = None
-        self.link_raw = None
-        self.sample_gap = None
-        self.mailbox_raw = None
+    def __init__(self, channel: int | None):
+        for field in fields(self):
+            setattr(self, field.name, None)
+        self.channel = channel
 
 
 @dataclass
@@ -141,75 +140,69 @@ class EthFinding:
     message: str
 
 
-def _block_unreadable(words: dict[int, int], address: int, count: int) -> bool:
-    return all(words[address + 4 * index] == ALL_ONES for index in range(count))
-
-
-def _new_signatures(
-    address: int, first: EthCoreSample | None, second: EthCoreSample, burst: list[dict[int, int]]
-) -> set[int] | None:
-    """Signatures of the values written to a heartbeat word after the first sample, or None if it can't tell."""
-    if first is None or first.words[address] == ALL_ONES:
-        return None
-    before = first.words[address]
-    later = [second.words[address]] + [reads[address] for reads in burst if address in reads]
-    return {value >> 16 for value in later if value not in (before, ALL_ONES)}
-
-
-def _heartbeat_text(signatures: list[set[int] | None], halted: bool) -> str:
-    written: set[int] = set()
-    for found in signatures:
-        if found is None:
-            return "One sample"
-        written |= found
-    writers = [name for signature, name in WRITER_NAMES if signature in written]
-    if writers:
-        return f"Moving ({', '.join(writers)})"
-    if written:
-        return "Moving"
-    return "Frozen (halted by triage)" if halted else "Frozen"
-
-
-def _values_text(address: int, first: EthCoreSample | None, second: EthCoreSample) -> str:
-    after = f"{second.words[address]:#010x}"
-    return after if first is None else f"{first.words[address]:#010x} -> {after}"
-
-
-def _link_text(up_before: bool | None, up_after: bool, stale: bool) -> str:
-    text = "Up" if up_after else "Down"
-    if up_before is not None and up_before != up_after:
-        text = f"{'Up' if up_before else 'Down'} -> {text}"
-    return f"{text} (stale)" if stale else text
-
-
-def _link_findings(up_before: bool | None, up_after: bool, fresh: bool, expected_up: bool) -> list[EthFinding]:
-    if up_before is None:
-        return []
-    if up_before != up_after:
-        return [EthFinding(False, LINK_CHANGED)]
-    if up_after or not expected_up:
-        return []
-    return [EthFinding(True, LINK_DOWN)] if fresh else [EthFinding(False, LINK_DOWN_STALE)]
-
-
-def _retrains(row: EthCoreCheckData, address: int, first: EthCoreSample | None, second: EthCoreSample) -> None:
-    after = second.words[address]
-    if after == ALL_ONES:
-        return
-    row.retrain_count = after
-    if first is not None and first.words[address] != ALL_ONES:
-        row.retrain_delta = (after - first.words[address]) & 0xFFFFFFFF
+def _read_core(location: OnChipCoordinate, context: Context) -> dict[int, int]:
+    words: tuple[int, ...]
+    if location.device.is_wormhole():
+        block, count = WH_BOOT_RESULTS, WH_BOOT_RESULTS_WORDS
+        words = (WH_HEARTBEAT, WH_ETH_FW_VERSION, WH_PORT_DISABLE_MASK, WH_TRAIN_STATUS, WH_LINK_ERROR_STATUS)
+    else:
+        block, count = BH_BOOT_RESULTS, BH_BOOT_RESULTS_WORDS
+        words = (BH_PCS_STATUS, BH_ERR_STAT)
+    data = read_from_device(location, block, num_bytes=4 * count, context=context)
+    values = {block + 4 * index: value for index, value in enumerate(struct.unpack(f"<{count}I", data))}
+    for address in words:
+        values[address] = read_word_from_device(location, address, context=context)
+    return values
 
 
 def _unreadable_row(row: EthCoreCheckData) -> tuple[EthCoreCheckData, list[EthFinding]]:
-    row.port_status = row.link = row.heartbeat = "Unreadable"
+    row.port_status = row.link = "Unreadable"
     return row, [EthFinding(False, CORE_UNREADABLE)]
+
+
+def _unsupported_fw_row(row: EthCoreCheckData) -> tuple[EthCoreCheckData, list[EthFinding]]:
+    # Older FW may lay base-FW L1 out differently, so only raw words and live registers are kept, with no findings.
+    row.port_status = "Unsupported FW"
+    return row, []
+
+
+def _wormhole_fw_version(word: int) -> tuple[int, int, int]:
+    return (word >> 16) & 0xFF, (word >> 12) & 0xF, word & 0xFFF
+
+
+def _blackhole_fw_version(word: int) -> tuple[int, int, int]:
+    return (word >> 16) & 0xFF, (word >> 8) & 0xFF, word & 0xFF
+
+
+def _eth_fw_version(
+    row: EthCoreCheckData, word: int, decode: Callable[[int], tuple[int, int, int]]
+) -> tuple[int, int, int] | None:
+    """Fills the ETH FW column; None when the word holds no version (unreadable, or 0, which no FW writes)."""
+    if word in (0, ALL_ONES):
+        row.eth_fw = "Unreadable" if word == ALL_ONES else "Unknown"
+        return None
+    version = decode(word)
+    row.eth_fw = ".".join(str(part) for part in version)
+    return version
+
+
+def _u64(words: dict[int, int], address: int, high_first: bool = False) -> int:
+    first, second = words[address], words[address + 4]
+    return (first << 32) | second if high_first else (second << 32) | first
+
+
+def _queue_counts(words: dict[int, int], address: int) -> str:
+    return "/".join(str(_u64(words, address + 8 * queue)) for queue in range(BH_QUEUES))
+
+
+def _signature(word: int) -> int | None:
+    return None if word == ALL_ONES else word >> 16
 
 
 def _wormhole_port_status(words: dict[int, int], channel: int | None) -> str:
     disable_mask = words[WH_PORT_DISABLE_MASK]
     train_status = words[WH_TRAIN_STATUS]
-    if ALL_ONES in (disable_mask, words[WH_RETRAIN_FORCE], train_status, words[WH_LINK_ERROR_STATUS]):
+    if ALL_ONES in (disable_mask, train_status, words[WH_LINK_ERROR_STATUS]):
         return "Unreadable"
     if channel is not None and (disable_mask >> channel) & 1:
         return "Disabled"
@@ -220,57 +213,31 @@ def _wormhole_port_status(words: dict[int, int], channel: int | None) -> str:
     return WH_TRAIN_STATUS_NAMES.get(train_status, "Invalid")
 
 
-def decode_wormhole_core(
-    channel: int | None,
-    first: EthCoreSample | None,
-    second: EthCoreSample,
-    burst: list[dict[int, int]],
-    halted: bool,
-) -> tuple[EthCoreCheckData, list[EthFinding]]:
-    row = EthCoreCheckData()
-    row.channel = channel
-    words = second.words
-    if _block_unreadable(words, WH_BOOT_RESULTS, WH_BOOT_RESULTS_WORDS):
+def decode_wormhole_core(channel: int | None, words: dict[int, int]) -> tuple[EthCoreCheckData, list[EthFinding]]:
+    row = EthCoreCheckData(channel)
+    if all(words[WH_BOOT_RESULTS + 4 * index] == ALL_ONES for index in range(WH_BOOT_RESULTS_WORDS)):
         return _unreadable_row(row)
-    if first is not None and _block_unreadable(first.words, WH_BOOT_RESULTS, WH_BOOT_RESULTS_WORDS):
-        first = None
+    row.link_raw = words[WH_LINK_STATUS]
+    row.heartbeat = f"0x1C {words[WH_HEARTBEAT]:#010x}, 0x1F80 {words[WH_SHARED_HEARTBEAT]:#010x}"
+    version = _eth_fw_version(row, words[WH_ETH_FW_VERSION], _wormhole_fw_version)
+    if version is not None and version < WH_MIN_ETH_FW_VERSION:
+        return _unsupported_fw_row(row)
     findings: list[EthFinding] = []
 
-    row.physical_channel = words[WH_LOCAL_ETH_ID]
     row.port_status = _wormhole_port_status(words, channel)
     if row.port_status in WH_NOT_TRAINED_STATES:
         findings.append(EthFinding(False, PORT_NOT_TRAINED))
     elif row.port_status == "Invalid":
         findings.append(EthFinding(False, PORT_STATUS_INVALID))
+    row.link = "Up" if words[WH_LINK_STATUS] == WH_LINK_UP else "Down"
+    if row.link == "Down" and row.port_status not in ("Disabled", "Not connected"):
+        findings.append(EthFinding(True, LINK_DOWN))
 
-    # 0x1C moves only when base FW runs its loop, which is also when it refreshes link_status.
-    base_fw = _new_signatures(WH_HEARTBEAT, first, second, burst)
-    shared = _new_signatures(WH_SHARED_HEARTBEAT, first, second, burst)
-    base_fw_moving = base_fw is not None and BASE_FW_SIGNATURE in base_fw
-    row.heartbeat = _heartbeat_text([base_fw, shared], halted)
-    row.heartbeat_values = (
-        f"0x1C {_values_text(WH_HEARTBEAT, first, second)}, "
-        f"0x1F80 {_values_text(WH_SHARED_HEARTBEAT, first, second)}"
-    )
-    # Without metal firmware on the core, nothing stops base FW from looping.
-    no_metal_firmware = (
-        first is not None and words[WH_LAUNCH_ERISC_APP_FLAG] == 0 and first.words[WH_LAUNCH_ERISC_APP_FLAG] == 0
-    )
-    if base_fw == set() and no_metal_firmware and not halted:
-        findings.append(EthFinding(False, BASE_FW_NOT_PROGRESSING))
-
-    row.link_raw = words[WH_LINK_STATUS]
-    up_after = words[WH_LINK_STATUS] == WH_LINK_UP
-    up_before = None if first is None else first.words[WH_LINK_STATUS] == WH_LINK_UP
-    row.rx_link_up = "Up" if up_after else "Down"
-    row.link = _link_text(up_before, up_after, stale=first is not None and not base_fw_moving)
-    findings += _link_findings(
-        up_before, up_after, fresh=base_fw_moving, expected_up=row.port_status not in ("Disabled", "Not connected")
-    )
-
-    _retrains(row, WH_RETRAIN_COUNT, first, second)
-    if first is not None:
-        row.sample_gap = round(second.timestamp - first.timestamp, 2)
+    row.fw_signature = _signature(words[WH_HEARTBEAT])
+    row.retrain_count = words[WH_RETRAIN_COUNT]
+    row.crc_errors = words[WH_CRC_ERRORS]
+    row.corrected_codewords = _u64(words, WH_CORRECTED_CODEWORDS, high_first=True)
+    row.uncorrected_codewords = _u64(words, WH_UNCORRECTED_CODEWORDS, high_first=True)
     return row, findings
 
 
@@ -286,69 +253,43 @@ def _mailbox_text(words: dict[int, int]) -> str:
     return ", ".join(slots) if slots else "Idle"
 
 
-def _mailbox_pending_in_both(first: dict[int, int], second: dict[int, int]) -> bool:
-    for index in range(BH_MAILBOX_SLOTS):
-        address = BH_MAILBOX + index * BH_MAILBOX_SLOT_SIZE
-        if first[address] == second[address] and second[address] >> 16 in (MAILBOX_CALL, MAILBOX_CALL_ACK):
-            return True
-    return False
-
-
-def decode_blackhole_core(
-    channel: int | None,
-    first: EthCoreSample | None,
-    second: EthCoreSample,
-    burst: list[dict[int, int]],
-    halted: bool,
-) -> tuple[EthCoreCheckData, list[EthFinding]]:
-    row = EthCoreCheckData()
-    row.channel = channel
-    words = second.words
-    if _block_unreadable(words, BH_BOOT_RESULTS, BH_BOOT_RESULTS_WORDS):
+def decode_blackhole_core(channel: int | None, words: dict[int, int]) -> tuple[EthCoreCheckData, list[EthFinding]]:
+    row = EthCoreCheckData(channel)
+    if all(words[BH_BOOT_RESULTS + 4 * index] == ALL_ONES for index in range(BH_BOOT_RESULTS_WORDS)):
         return _unreadable_row(row)
-    if first is not None and _block_unreadable(first.words, BH_BOOT_RESULTS, BH_BOOT_RESULTS_WORDS):
-        first = None
+    row.heartbeat = f"{words[BH_HEARTBEAT]:#010x}"
+    row.mailbox_raw = " ".join(
+        f"{words[BH_MAILBOX + 4 * index]:#010x}" for index in range(BH_MAILBOX_SLOTS * BH_MAILBOX_SLOT_SIZE // 4)
+    )
+    row.err_stat = None if words[BH_ERR_STAT] == ALL_ONES else words[BH_ERR_STAT]
+    # PCS_STATUS is a live register; port_status and rx_link_up are snapshots base FW may not have refreshed.
+    pcs_status = words[BH_PCS_STATUS]
+    row.link = "Unreadable" if pcs_status == ALL_ONES else ("Up" if pcs_status == 1 else "Down")
+    if pcs_status != ALL_ONES:
+        row.link_raw = pcs_status
+    version = _eth_fw_version(row, words[BH_ETH_FW_VERSION], _blackhole_fw_version)
+    if version is not None and version < BH_MIN_ETH_FW_VERSION:
+        return _unsupported_fw_row(row)
     findings: list[EthFinding] = []
 
-    row.physical_channel = (words[BH_LOCAL_INFO] >> 16) & 0xFF
-    port = words[BH_PORT_STATUS]
-    row.port_status = "Unreadable" if port == ALL_ONES else BH_PORT_STATUS_NAMES.get(port, "Invalid")
+    row.port_status = BH_PORT_STATUS_NAMES.get(words[BH_PORT_STATUS], "Invalid")
     if row.port_status == "Unknown":
         findings.append(EthFinding(False, PORT_NOT_TRAINED))
     elif row.port_status == "Invalid":
         findings.append(EthFinding(False, PORT_STATUS_INVALID))
+    if row.link == "Down" and row.port_status != "Unused":
+        findings.append(EthFinding(True, LINK_DOWN))
+    row.rx_link_up = "Up" if words[BH_RX_LINK_UP] == 1 else "Down"
 
-    rx_link_up = words[BH_RX_LINK_UP]
-    row.rx_link_up = "Unreadable" if rx_link_up == ALL_ONES else ("Up" if rx_link_up == 1 else "Down")
-    pcs_after = words[BH_PCS_STATUS]
-    pcs_before = None if first is None else first.words[BH_PCS_STATUS]
-    if ALL_ONES not in (pcs_after, pcs_before):
-        # PCS_STATUS is live; port_status and rx_link_up are snapshots base FW may not have refreshed.
-        row.link_raw = pcs_after
-        up_before = None if pcs_before is None else pcs_before == 1
-        row.link = _link_text(up_before, pcs_after == 1, stale=False)
-        findings += _link_findings(up_before, pcs_after == 1, fresh=True, expected_up=row.port_status != "Unused")
-    elif rx_link_up == ALL_ONES:
-        row.link = "Unreadable"
-    else:
-        up_before = None if first is None else first.words[BH_RX_LINK_UP] == 1
-        row.link = _link_text(up_before, rx_link_up == 1, stale=True)
-        findings += _link_findings(up_before, rx_link_up == 1, fresh=False, expected_up=row.port_status != "Unused")
-
-    signatures = _new_signatures(BH_HEARTBEAT, first, second, burst)
-    row.heartbeat = _heartbeat_text([signatures], halted)
-    row.heartbeat_values = _values_text(BH_HEARTBEAT, first, second)
-
+    row.fw_signature = _signature(words[BH_HEARTBEAT])
     row.mailbox = _mailbox_text(words)
-    row.mailbox_raw = " ".join(
-        f"{words[BH_MAILBOX + 4 * index]:#010x}" for index in range(BH_MAILBOX_SLOTS * BH_MAILBOX_SLOT_SIZE // 4)
-    )
-    if first is not None and _mailbox_pending_in_both(first.words, words):
-        findings.append(EthFinding(False, MAILBOX_NOT_SERVICED))
-
-    _retrains(row, BH_RETRAIN_COUNT, first, second)
-    if first is not None:
-        row.sample_gap = round(second.timestamp - first.timestamp, 2)
+    row.retrain_count = words[BH_RETRAIN_COUNT]
+    row.crc_errors = _u64(words, BH_RX_BAD_FCS)
+    row.corrected_codewords = _u64(words, BH_CORRECTED_CODEWORDS)
+    row.uncorrected_codewords = _u64(words, BH_UNCORRECTED_CODEWORDS)
+    if version is None or version >= BH_QUEUE_COUNTERS_MIN_ETH_FW_VERSION:
+        row.txq_resends = _queue_counts(words, BH_TXQ_RESENDS)
+        row.rxq_drops = _queue_counts(words, BH_RXQ_DROPS)
     return row, findings
 
 
@@ -359,30 +300,20 @@ def _logical_channel(location: OnChipCoordinate) -> int | None:
         return None
 
 
-def get_eth_core_data(location: OnChipCoordinate, sampling: EthStatusSampling) -> EthCoreCheckData | None:
+def get_eth_core_data(location: OnChipCoordinate, context: Context) -> EthCoreCheckData | None:
     device = location.device
-    plan = get_read_plan(location)
-    if plan is None:
+    if not device.is_wormhole() and not device.is_blackhole():
         utils.ERROR(f"Unsupported architecture for check_eth_status: {device._arch}")
         return None
     channel = _logical_channel(location)
-    first = sampling.get_initial_sample(location)
     try:
-        second = sampling.read_sample(location)
-        assert second is not None
-        burst: list[dict[int, int]] = []
-        if first is not None and any(first.words[address] == second.words[address] for address in plan.heartbeats):
-            burst = sampling.read_heartbeat_burst(location)
+        words = _read_core(location, context)
     except Exception as e:
         log_warning_location(location, f"{CORE_UNREADABLE}: {e}")
-        row = EthCoreCheckData()
-        row.channel = channel
-        return _unreadable_row(row)[0]
+        return _unreadable_row(EthCoreCheckData(channel))[0]
 
-    session = get_triage_session()
-    halted = any(session.is_halted_core(location, risc_name) for risc_name in location.noc_block.risc_names)
     decode = decode_wormhole_core if device.is_wormhole() else decode_blackhole_core
-    row, findings = decode(channel, first, second, burst, halted)
+    row, findings = decode(channel, words)
     for finding in findings:
         if finding.is_error:
             log_check_location(location, False, finding.message)
@@ -393,10 +324,8 @@ def get_eth_core_data(location: OnChipCoordinate, sampling: EthStatusSampling) -
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
-    sampling = get_eth_status_sampling(args, context)
-    sampling.wait_for_second_sample()
     return run_checks.run_per_block_check(
-        lambda location: get_eth_core_data(location, sampling), block_filter=["active_eth"]
+        lambda location: get_eth_core_data(location, context), block_filter=["active_eth"]
     )
 
 
