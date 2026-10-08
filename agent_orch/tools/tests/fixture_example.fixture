@@ -1,0 +1,12 @@
+{
+  "_comment": "The illustrative round-1 tree from the Dream-RSI walkthrough artifact.",
+  "noise_pct": 3.0,
+  "rounds": [
+    {"round": 1, "W": 4, "R": 4, "branches": {
+      "1": [1.08, 1.12, 1.13, 1.13],
+      "2": ["build_error", 1.15, 1.22, 1.27],
+      "3": [1.01, 0.99, 1.00, 1.01],
+      "4": ["accuracy_fail", "accuracy_fail", "hang", "accuracy_fail"]
+    }}
+  ]
+}
