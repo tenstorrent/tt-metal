@@ -978,8 +978,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     std::optional<SDPAPrecision> precision) {
     const std::size_t ring_size =
         (cluster_axis == 0) ? mesh_device.get_view().num_rows() : mesh_device.get_view().num_cols();
-    // The legacy exp ring kernel builds only its streaming path; any other blocking (and FP32 DEST) fails to
-    // compile there, so on Blackhole those calls run a recipe (STANDARD, or ACCURATE with FP32 DEST).
+    // The legacy exp ring kernel has only its streaming path; its factory rejects any other blocking (and FP32
+    // DEST), so on Blackhole those calls run a recipe (STANDARD, or ACCURATE with FP32 DEST).
     if (!precision) {
         numeric::reject_auto_blocking_without_recipe(program_config);
     }
