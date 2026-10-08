@@ -988,8 +988,8 @@ void bind_sdpa(nb::module_& mod) {
                 tech_reports/FlashAttention/SDPAPrecisionRecipes.md). Each Q chunk's online-softmax state stays
                 in L1 across ring steps and is normalized once, on the last. logical_n may be a scalar or a
                 device tensor. When omitted, the streaming kernel runs; FP32 DEST, or a blocking it cannot build,
-                runs STANDARD (ACCURATE with FP32 DEST) on Blackhole at op-chosen chunks on the program_config
-                grid. compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
+                runs STANDARD (ACCURATE with FP32 DEST) at op-chosen chunks on the program_config grid.
+                compute_kernel_config and exp_approx_mode are accepted and ignored; scale is honored.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -1047,8 +1047,7 @@ void bind_sdpa(nb::module_& mod) {
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             precision (ttnn.SDPAPrecision, optional): Named numerical recipe, as for
                 `scaled_dot_product_attention` (V and the output are head_dim_v wide; without input_tensor_v, V is
-                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE. Defaults to
-                `None`.
+                K's first head_dim_v columns). When omitted, FP32 DEST runs ACCURATE. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
