@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <span>
@@ -37,6 +38,25 @@ public:
         // Reuse; where the estimate picks the family, a candidate with this many times fewer cores busy is out.
         // Basis: the Wormhole family sweep; range 1.25 to 2 performs about the same.
         double one_d_core_advantage = 1.5;
+        // With batched B, Reuse against the multicast families is decided by the lowest fitted time, unless that
+        // is less than batched_family_margin times better than the rules' choice (a choice between two multicast
+        // families stays with the rules: overriding it lost in each of the 5 designed cases where it happened). Each
+        // family's time (microseconds) is a linear fit on its candidate's roofline terms (cycles) and its serial steps
+        // (output blocks times K blocks on the busiest core): the rules' core and input counts don't see that Reuse
+        // holds a batch's whole N per core (narrow K steps once that is wide) nor how many rounds the batch takes.
+        // Basis: Wormhole per-family timings of v2's own candidates (each family forced) on 110 batched-B probe cases
+        // and 680 designed cases; fitted on either set and scored on the other, the rule-based choice's 15 probe
+        // regressions vs the previous selector go to 8 and the designed set's 23 to 24. The Wormhole fit is used on
+        // every architecture.
+        struct FamilyTime {
+            double per_compute_cycle = 0;
+            double per_noc_cycle = 0;
+            double per_dram_cycle = 0;
+            double per_step = 0;
+            double fixed = 0;
+        };
+        std::array<FamilyTime, 4> family_time{};  // indexed by Family
+        double batched_family_margin = 1.1;
     };
     struct Params {
         Tuned tuned;

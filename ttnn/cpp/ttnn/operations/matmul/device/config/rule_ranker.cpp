@@ -87,9 +87,54 @@ bool one_tile_2d(const Candidate& c) {
     return c.family == Family::Mcast2D && std::min(c.blocking.per_core_M, c.blocking.per_core_N) == 1;
 }
 
+// Serial steps on the busiest core: output blocks times K blocks, per batch loop (Reuse: its rounds of blocks)
+uint64_t serial_steps(const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) {
+    const uint64_t k_blocks = div_up(p.Kt, c.blocking.in0_block_w);
+    if (c.family == Family::Reuse) {
+        return div_up(p.batch_a * p.Mt / c.blocking.per_core_M, hw.grid.x * hw.grid.y) * k_blocks;
+    }
+    const uint64_t loops = c.fuse_batch ? 1 : std::max(p.batch_a, p.batch_b);
+    return uint64_t{c.blocking.per_core_M / c.blocking.out_block_h} * (c.blocking.per_core_N / c.blocking.out_block_w) *
+           k_blocks * loops;
+}
+
+// The fitted time of a candidate (see Tuned::family_time), in microseconds
+double fitted_time(const RuleRanker::Tuned& tuned, const MatmulDesc& p, const HardwareDesc& hw, const Candidate& c) {
+    const auto& f = tuned.family_time[static_cast<size_t>(c.family)];
+    const RooflineTerms t = roofline(p, hw, c.family, c.blocking, c.fuse_batch);
+    return f.per_compute_cycle * t.compute + f.per_noc_cycle * t.noc + f.per_dram_cycle * t.dram +
+           f.per_step * static_cast<double>(serial_steps(p, hw, c)) + f.fixed;
+}
+
 }  // namespace
 
-RuleRanker::Params RuleRanker::Params::for_arch(tt::ARCH /*arch*/) { return {}; }
+RuleRanker::Params RuleRanker::Params::for_arch(tt::ARCH /*arch*/) {
+    Params params;
+    // Wormhole fit (see Tuned::family_time); indexed by Family
+    params.tuned.family_time = {{
+        {.per_compute_cycle = 0.000829,
+         .per_noc_cycle = 0.0,
+         .per_dram_cycle = 0.002078,
+         .per_step = 0.4456,
+         .fixed = 11.76},
+        {.per_compute_cycle = 0.00123,
+         .per_noc_cycle = 0.000989,
+         .per_dram_cycle = 0.000976,
+         .per_step = 0.3309,
+         .fixed = 8.65},
+        {.per_compute_cycle = 0.000916,
+         .per_noc_cycle = 0.000807,
+         .per_dram_cycle = 0.003598,
+         .per_step = 0.2865,
+         .fixed = 10.66},
+        {.per_compute_cycle = 0.000851,
+         .per_noc_cycle = 0.001077,
+         .per_dram_cycle = 0.002288,
+         .per_step = 0.0,
+         .fixed = 3.746},
+    }};
+    return params;
+}
 
 RuleRanker::RuleRanker() : RuleRanker(std::nullopt, std::make_shared<RooflineEstimator>()) {}
 
@@ -129,15 +174,7 @@ std::vector<const Candidate*> RuleRanker::rank(
             firsts.begin(), firsts.end(), [&](const Candidate& x, const Candidate& y) { return key(x) < key(y); });
         chosen = best;
         if (p.batch_b > 1 && best->family != Family::Reuse) {
-            auto steps = [&](const Candidate& c) {
-                const uint64_t k_blocks = div_up(p.Kt, c.blocking.in0_block_w);
-                if (c.family == Family::Reuse) {
-                    return div_up(p.batch_a * p.Mt / c.blocking.per_core_M, hw.grid.x * hw.grid.y) * k_blocks;
-                }
-                const uint64_t loops = c.fuse_batch ? 1 : std::max(p.batch_a, p.batch_b);
-                return uint64_t{c.blocking.per_core_M / c.blocking.out_block_h} *
-                       (c.blocking.per_core_N / c.blocking.out_block_w) * k_blocks * loops;
-            };
+            auto steps = [&](const Candidate& c) { return serial_steps(p, hw, c); };
             const double best_cycles = cycles(*best);
             for (const auto& c : firsts) {
                 if (c.family == Family::Reuse && !std::get<0>(key(c)) && steps(c) <= steps(*best) &&
@@ -146,6 +183,38 @@ std::vector<const Candidate*> RuleRanker::rank(
                     break;
                 }
             }
+        }
+    }
+    // Batched B: the family with the lowest fitted time, each family represented by the candidate it would run
+    // (its batch-looping one, if any). Only the choice for or against Reuse is made this way: overriding a 2D or 1D
+    // rule pick with another multicast family lost in each of the 5 designed cases where it happened
+    const bool batched =
+        std::any_of(firsts.begin(), firsts.end(), [](const Candidate& c) { return c.family == Family::Reuse; });
+    if (chosen && batched) {
+        auto runs = [&](const Candidate& first) -> const Candidate& {
+            const Candidate* original = first_of[&first - firsts.data()];
+            for (const auto& c : candidates) {
+                if (&c != original && c.family == original->family) {
+                    return c;
+                }
+            }
+            return *original;
+        };
+        const double chosen_time = fitted_time(params.tuned, p, hw, runs(*chosen));
+        const Candidate* fastest = chosen;
+        double fastest_time = chosen_time;
+        for (const auto& c : firsts) {
+            if (chosen->family != Family::Reuse && c.family != Family::Reuse) {
+                continue;
+            }
+            const double t = fitted_time(params.tuned, p, hw, runs(c));
+            if (t < fastest_time) {
+                fastest = &c;
+                fastest_time = t;
+            }
+        }
+        if (fastest_time * params.tuned.batched_family_margin < chosen_time) {
+            chosen = fastest;
         }
     }
     std::vector<const Candidate*> result;
