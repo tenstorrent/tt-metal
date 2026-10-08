@@ -23,9 +23,6 @@ PERF_LOOP_FACTOR = 32
     tile_dimensions=get_valid_perf_tile_dimensions_bcast,
     broadcast_type=get_valid_broadcast_types,
     input_dimensions=get_perf_input_dimensions_bcast,
-    run_types=[ALL_PERF_RUN_TYPES],
-    loop_factor=[PERF_LOOP_FACTOR],
-    is_perf=[True],
 )
 def test_perf_unpack_bcast(
     perf_report,
@@ -34,9 +31,6 @@ def test_perf_unpack_bcast(
     tile_dimensions,
     broadcast_type,
     input_dimensions,
-    run_types,
-    loop_factor,
-    is_perf,
 ):
     _run_unpack_bcast_test(
         formats,
@@ -44,8 +38,8 @@ def test_perf_unpack_bcast(
         tile_dimensions,
         broadcast_type,
         input_dimensions,
-        run_types=run_types,
-        loop_factor=loop_factor,
-        is_perf=is_perf,
+        run_types=ALL_PERF_RUN_TYPES,
+        loop_factor=PERF_LOOP_FACTOR,
+        is_perf=True,
         perf_report=perf_report,
     )

@@ -62,6 +62,21 @@ inline std::uint32_t srcb_valids_per_tile(const std::uint32_t num_faces)
     }
 }
 
+struct SrcValidsPerTile
+{
+    std::uint32_t paired;
+    std::uint32_t a_only;
+    std::uint32_t b_only;
+};
+
+inline SrcValidsPerTile src_valids_per_tile(const std::uint32_t num_faces)
+{
+    const std::uint32_t srca_valids = srca_valids_per_tile(num_faces);
+    const std::uint32_t srcb_valids = srcb_valids_per_tile(num_faces);
+    const std::uint32_t paired      = std::min(srca_valids, srcb_valids);
+    return {paired, srca_valids - paired, srcb_valids - paired};
+}
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_A.h"
@@ -102,14 +117,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && !unpack_to_dest)
         {
-            const std::uint32_t srca_valids = srca_valids_per_tile(num_faces);
-            const std::uint32_t srcb_valids = srcb_valids_per_tile(num_faces);
-            const std::uint32_t paired      = std::min(srca_valids, srcb_valids);
+            const SrcValidsPerTile valids = src_valids_per_tile(num_faces);
             for (std::uint32_t tile = 0; tile < LOOP_FACTOR * num_tiles; ++tile)
             {
-                _perf_unpack_loop_set_valid<true /* set_a */, true /* set_b */>(paired);
-                _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(srca_valids - paired);
-                _perf_unpack_loop_set_valid<false /* set_a */, true /* set_b */>(srcb_valids - paired);
+                _perf_unpack_loop_set_valid<true /* set_a */, true /* set_b */>(valids.paired);
+                _perf_unpack_loop_set_valid<true /* set_a */, false /* set_b */>(valids.a_only);
+                _perf_unpack_loop_set_valid<false /* set_a */, true /* set_b */>(valids.b_only);
             }
         }
         else
@@ -168,14 +181,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr ((PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION) && !unpack_to_dest)
         {
-            const std::uint32_t srca_valids = srca_valids_per_tile(num_faces);
-            const std::uint32_t srcb_valids = srcb_valids_per_tile(num_faces);
-            const std::uint32_t paired      = std::min(srca_valids, srcb_valids);
+            const SrcValidsPerTile valids = src_valids_per_tile(num_faces);
             for (std::uint32_t tile = 0; tile < LOOP_FACTOR * NUM_BLOCKS * NUM_TILES_IN_BLOCK; ++tile)
             {
-                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(paired);
-                _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(srca_valids - paired);
-                _perf_math_loop_clear_valid<false /* clear_a */, true /* clear_b */>(srcb_valids - paired);
+                _perf_math_loop_clear_valid<true /* clear_a */, true /* clear_b */>(valids.paired);
+                _perf_math_loop_clear_valid<true /* clear_a */, false /* clear_b */>(valids.a_only);
+                _perf_math_loop_clear_valid<false /* clear_a */, true /* clear_b */>(valids.b_only);
             }
         }
         else
@@ -236,7 +247,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-            formats.pack_src, formats.pack_dst, TEST_FACE_R_DIM * TEST_FACE_C_DIM * 4, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
+            formats.pack_src, formats.pack_dst, TEST_FACE_R_DIM * TEST_FACE_C_DIM * num_faces /* tile_size */, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, TEST_FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_wrapper_<sync_mode, is_fp32_dest_acc_en, PackMode::Default>();
         PROFILER_SYNC();
