@@ -70,7 +70,8 @@ def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=N
         prefill_mapper = replicate
 
     rope = Gemma4TextRotaryEmbedding(hf_config)
-    x_dummy = torch.randn(1, max_seq_len, hf_config.hidden_size)
+    # The rotary module reads only x's device and dtype.
+    x_dummy = torch.empty(1, 1, 1)
     pos_ids = torch.arange(max_seq_len).unsqueeze(0)
 
     caches_4d = {}

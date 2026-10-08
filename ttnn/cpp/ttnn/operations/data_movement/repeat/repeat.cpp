@@ -317,6 +317,20 @@ MemoryConfig derive_output_mem_config(
         input_mc.is_sharded() ? MemoryConfig(input_mc.memory_layout(), input_mc.buffer_type()) : input_mc);
 }
 
+// Fills in a shard_spec for a sharded config that has none, sized to working_tensor. nullopt when no
+// valid spec exists; each caller picks its own interleaved fallback.
+std::optional<MemoryConfig> synthesize_sharded_mem_config(
+    const ttnn::Tensor& working_tensor,
+    const MemoryConfig& mem_config,
+    std::optional<ShardOrientation> orientation_hint) {
+    auto synth = repeat::generate_repeat_shard_spec(
+        working_tensor, working_tensor.padded_shape(), mem_config.memory_layout(), orientation_hint);
+    if (!synth.has_value()) {
+        return std::nullopt;
+    }
+    return MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), synth);
+}
+
 // Whether the codegen path can serve this call, on the rank-matched tensor and repeat vector.
 // Correctness only -- perf demotion is a separate, routing-only question.
 bool codegen_can_serve(
@@ -444,8 +458,27 @@ ttnn::Tensor repeat_native(
     if (std::all_of(
             working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
         // working_tensor holds the rank expansion from match_input_rank. input_tensor does not.
-        return finalize_into_preallocated(
-            ttnn::to_memory_config(working_tensor, output_mem_config), optional_output_tensor);
+        // A sharded config with neither a shard_spec nor an nd_shard_spec can't be handed to
+        // to_memory_config: reuse the input's spec when it already has that layout (rank expansion
+        // leaves it valid), else synthesize one, else stay interleaved like the composite path.
+        // An ND config carries only nd_shard_spec and is passed through as requested.
+        MemoryConfig all_ones_mc = output_mem_config;
+        if (all_ones_mc.is_sharded() && !all_ones_mc.shard_spec().has_value() &&
+            !all_ones_mc.nd_shard_spec().has_value()) {
+            const auto& input_mc = input_tensor.memory_config();
+            if (input_mc.memory_layout() == all_ones_mc.memory_layout() &&
+                input_mc.buffer_type() == all_ones_mc.buffer_type()) {
+                all_ones_mc = input_mc;
+            } else {
+                std::optional<ShardOrientation> orientation_hint;
+                if (input_tensor.shard_spec().has_value()) {
+                    orientation_hint = input_tensor.shard_spec()->orientation;
+                }
+                all_ones_mc = synthesize_sharded_mem_config(working_tensor, all_ones_mc, orientation_hint)
+                                  .value_or(MemoryConfig(TensorMemoryLayout::INTERLEAVED, all_ones_mc.buffer_type()));
+            }
+        }
+        return finalize_into_preallocated(ttnn::to_memory_config(working_tensor, all_ones_mc), optional_output_tensor);
     }
 
     // Direct prim write only when no later layout/reshard hop will reallocate.
@@ -542,14 +575,12 @@ ttnn::Tensor repeat_native(
     if (!native_sharded && output_mem_config.is_sharded()) {
         MemoryConfig final_mc = output_mem_config;
         if (!final_mc.shard_spec().has_value()) {
-            auto synth = repeat::generate_repeat_shard_spec(
-                working_tensor, working_tensor.padded_shape(), final_mc.memory_layout(), input_orientation_hint);
-            if (synth.has_value()) {
-                final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), synth);
-            } else {
+            auto synth = synthesize_sharded_mem_config(working_tensor, final_mc, input_orientation_hint);
+            if (!synth.has_value()) {
                 // No valid spec; keep interleaved.
                 return finalize_into_preallocated(working_tensor, optional_output_tensor);
             }
+            final_mc = *synth;
         }
         auto i2s_out = optional_output_tensor.has_value() ? optional_output_tensor : std::nullopt;
         working_tensor = ttnn::interleaved_to_sharded(

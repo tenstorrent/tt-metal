@@ -11,7 +11,6 @@ around the boundary write at different offsets so new tokens overwrite the prior
 cache's trailing pad cells before spilling into the next slab.
 """
 
-
 from types import SimpleNamespace
 
 import pytest
@@ -1486,3 +1485,207 @@ def test_update_padded_kv_cache_tp_sharded(
             logger.info(f"  user {u} layer {l}: exact match")
 
     logger.info(f"program cache entries: {mesh_device.num_program_cache_entries()}")
+
+
+@pytest.mark.parametrize("mesh_device", _full_mesh_update_cases(), indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
+@pytest.mark.parametrize("use_metadata", [False, True], ids=["scalar", "metadata"])
+@pytest.mark.parametrize("tp_dedup", [False, True], ids=["sp", "sp_tp"])
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("cache_format", ["bf16", "fp8_rm", "fp8_tile"])
+@pytest.mark.parametrize("use_valid", [False, True], ids=["full", "clamped"])
+def test_update_padded_kv_cache_split_inputs(mesh_device, use_metadata, tp_dedup, cache_format, use_valid):
+    _check_split_cache_inputs(mesh_device, use_metadata, tp_dedup, cache_format, use_valid)
+
+
+def _check_split_cache_inputs(mesh_device, use_metadata, tp_dedup, cache_format, use_valid, chunk_local=None):
+    """Fused tiled-input writes match the packed path across slots, rotated starts and partial chunks.
+
+    Two calls use different buffers and scalar/metadata bindings with the same cached program.
+    The metadata variant additionally replays a trace after replacing its start/slot/end values.
+    """
+    scaled_fp8 = cache_format != "bf16"
+    if scaled_fp8 and not is_blackhole():
+        pytest.skip("scaled FP8 cache requires Blackhole")
+    sp, tp = mesh_device.shape
+    # FP8 copies assign several rows per core, exercising CB wraparound.
+    chunk_local = chunk_local or (256 if scaled_fp8 else 64) * tp
+    stripe = chunk_local // tp if tp_dedup else chunk_local
+    cache_local = stripe * 4
+    num_layers, num_users = 2, 2
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, None))
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1))
+
+    def make_cache():
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=656 if scaled_fp8 else 576,
+            mesh_device=mesh_device,
+            seq_len=cache_local * sp,
+            mesh_shape=list(mesh_device.shape),
+            sp_axis=0,
+            num_kvpe_cache_layers=num_users * num_layers,
+            dtype=ttnn.fp8_e4m3 if scaled_fp8 else ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    fused, reference = make_cache(), make_cache()
+    torch.manual_seed(17)
+    trace_id = None
+    try:
+        for call, (slot, start, valid) in enumerate(
+            [(0, 0, sp * chunk_local - 17), (1, 32, 32 + sp * chunk_local - 47)]
+        ):
+            source = torch.randn(1, 1, sp * chunk_local, 576, dtype=torch.bfloat16)
+            latent = _make_input(source[..., :512].contiguous(), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, mapper)
+            rope = _make_input(source[..., 512:].contiguous(), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, mapper)
+            scales = None
+            if scaled_fp8:
+                latent_tile, rope_tile = latent, rope
+                latent_rm = ttnn.to_layout(latent, ttnn.ROW_MAJOR_LAYOUT)
+                latent, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+                    latent_rm, round_scale_to_power_of_two=True
+                )
+                rope = ttnn.to_layout(rope, ttnn.ROW_MAJOR_LAYOUT)
+                packed = ttnn.experimental.deepseek_prefill.pack_scaled_fp8_kv_cache(latent, scales, rope)
+                if cache_format == "fp8_tile":
+                    direct_latent, direct_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+                        latent_tile, round_scale_to_power_of_two=True
+                    )
+                    for direct, baseline in [(direct_latent, latent), (direct_scales, scales)]:
+                        assert torch.equal(
+                            ttnn.to_torch(direct, mesh_composer=composer).view(torch.uint8),
+                            ttnn.to_torch(baseline, mesh_composer=composer).view(torch.uint8),
+                        )
+                    latent, scales, rope = direct_latent, direct_scales, rope_tile
+            else:
+                packed = _make_input(source, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mapper)
+            kwargs = dict(layer_idx=1, num_layers=num_layers, cluster_axis=0, tp_axis=1 if tp_dedup else None)
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                reference,
+                packed,
+                slot_idx=slot,
+                kv_actual_global=start,
+                valid_global=valid if use_valid else None,
+                **kwargs,
+            )
+            if use_metadata:
+                slot_t = _make_scalar_tensor(mesh_device, slot)
+                start_t = _make_scalar_tensor(mesh_device, start)
+                valid_t = _make_scalar_tensor(mesh_device, valid)
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    fused,
+                    latent,
+                    slot_t,
+                    start_t,
+                    valid_global=valid_t if use_valid else None,
+                    rope=rope,
+                    scales=scales,
+                    **kwargs,
+                )
+            else:
+                ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                    fused,
+                    latent,
+                    slot_idx=slot,
+                    kv_actual_global=start,
+                    valid_global=valid if use_valid else None,
+                    rope=rope,
+                    scales=scales,
+                    **kwargs,
+                )
+            assert torch.equal(
+                ttnn.to_torch(fused, mesh_composer=composer).view(torch.uint8),
+                ttnn.to_torch(reference, mesh_composer=composer).view(torch.uint8),
+            )
+        if use_metadata:
+            trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                fused,
+                latent,
+                slot_t,
+                start_t,
+                valid_global=valid_t if use_valid else None,
+                rope=rope,
+                scales=scales,
+                **kwargs,
+            )
+            ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            new_slot, new_start = 0, sp * chunk_local
+            new_valid = new_start + sp * chunk_local - 19
+            for tensor, value in [(slot_t, new_slot), (start_t, new_start), (valid_t, new_valid)]:
+                payload = torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1)
+                ttnn.copy_host_to_device_tensor(ttnn.from_torch(payload, dtype=ttnn.uint32), tensor)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+                reference,
+                packed,
+                slot_idx=new_slot,
+                kv_actual_global=new_start,
+                valid_global=new_valid if use_valid else None,
+                **kwargs,
+            )
+            assert torch.equal(
+                ttnn.to_torch(fused, mesh_composer=composer).view(torch.uint8),
+                ttnn.to_torch(reference, mesh_composer=composer).view(torch.uint8),
+            )
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2")], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 1048576}], indirect=True)
+@pytest.mark.timeout(0)
+def test_update_padded_kv_cache_tiled_fp8_wraparound(mesh_device):
+    """Assign three 32-token blocks per core so both staging and untilize CBs wrap."""
+    if not is_blackhole():
+        pytest.skip("scaled FP8 cache requires Blackhole")
+    grid = mesh_device.compute_with_storage_grid_size()
+    chunk_local = 32 * 3 * grid.x * grid.y * mesh_device.shape[1]
+    _check_split_cache_inputs(mesh_device, True, True, "fp8_tile", True, chunk_local)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 2), id="2x2")], indirect=True)
+@pytest.mark.parametrize("scaled_fp8", [False, True], ids=["bf16", "scaled_fp8"])
+def test_update_padded_kv_cache_split_rejects_transposed_tiles(mesh_device, scaled_fp8, expect_error):
+    if scaled_fp8 and not is_blackhole():
+        pytest.skip("scaled FP8 cache requires Blackhole")
+    sp = mesh_device.shape[0]
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, None))
+
+    def upload(width, transposed=False):
+        tensor = ttnn.from_torch(
+            torch.randn(1, 1, sp * 32, width, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=mapper,
+            tile=ttnn.Tile((32, 32), transpose_tile=transposed),
+        )
+        assert tensor.get_tile().transpose_within_face == transposed
+        assert tensor.get_tile().transpose_of_faces == transposed
+        return ttnn.to_device(tensor, mesh_device)
+
+    latent, rope = upload(512), upload(64)
+    scales = None
+    if scaled_fp8:
+        latent, scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            latent, round_scale_to_power_of_two=True
+        )
+    cache = init_kvpe_cache(
+        kvpe_cache_head_dim=656 if scaled_fp8 else 576,
+        mesh_device=mesh_device,
+        seq_len=sp * 32,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+        dtype=ttnn.fp8_e4m3 if scaled_fp8 else ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    kwargs = dict(slot_idx=0, layer_idx=0, num_layers=1, kv_actual_global=0, cluster_axis=0, scales=scales)
+    # Warm the normal tile program first: a transpose must be rejected on cache hits too.
+    ttnn.experimental.deepseek_prefill.update_padded_kv_cache(cache, latent, rope=rope, **kwargs)
+    with expect_error(RuntimeError, "ordinary face order"):
+        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(cache, latent, rope=upload(64, True), **kwargs)
+    if not scaled_fp8:
+        with expect_error(RuntimeError, "ordinary face order"):
+            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(cache, upload(512, True), rope=rope, **kwargs)

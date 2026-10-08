@@ -14,7 +14,7 @@ namespace ttnn::operations::transformer {
 
 struct SDPAProgramConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
-    std::optional<CoreRangeSet> sub_core_grids;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     std::size_t q_chunk_size;
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;

@@ -314,9 +314,12 @@ public:
         static const char* const quasar_variant = std::getenv("TT_METAL_QUASAR_VARIANT");
         // TODO: Use UMD supplied variant instead of env var
         // defaults to Quasar if no variant is set
-        if (quasar_variant != nullptr && std::string(quasar_variant) == "horizon") {
+        if (quasar_variant != nullptr && (std::string(quasar_variant) == "horizon" || std::string(quasar_variant) == "2.0.1")) {
             log_info(LogMetal, "Using variant: Horizon");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.1/meta");
+        } else if (quasar_variant != nullptr && (std::string(quasar_variant) == "trinity" || std::string(quasar_variant) == "2.0.2")){
+            log_info(LogMetal, "Using variant: Trinity");
+            includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.2/meta");
         } else {
             log_info(LogMetal, "Using variant: Quasar");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");

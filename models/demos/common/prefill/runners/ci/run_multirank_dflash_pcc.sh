@@ -50,9 +50,8 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 
 # The dflash manifest differs from the plain one by the knobs a drafter run needs, so the two legs cannot
 # share a file. What it pins, and why, since JSON cannot say it:
-#   PREFILL_USE_TRACE=1    -- the verifier forward IS trace-captured with dflash on. The drafter's FC tap
-#      fires inside that forward and is allocation-free after warmup; its KV finalize runs after the
-#      captured forward returns and stays eager.
+#   PREFILL_USE_TRACE=1    -- the verifier forward, the drafter's FC taps and its KV finalize (last rank)
+#      or partial export (other ranks) are one capture, replayed per chunk.
 #   PREFILL_LAYER_ACK_D2H=1 -- each rank stands up its own LayerAckService from D2H device records.
 #      Without it the non-first ranks take the host-ring branch and connect() to
 #      /tt_prefill_layer_completion_ring_N with a HARD-CODED 30 s timeout, which a rank that finished

@@ -72,7 +72,7 @@ sfpi_inline sfpi::vFloat _calculate_log_body_no_init_(sfpi::vFloat base) {
     sfpi::vFloat expf = sfpi::convert<sfpi::vFloat>(exp, sfpi::RoundMode::Nearest);
 
     // De-normalize to original range
-    sfpi::vFloat vConstLn2 = 0.692871f;
+    sfpi::vFloat vConstLn2 = 0.69314718f;
     sfpi::vFloat log_result = expf * vConstLn2 + series_result;  // exp correction: ln(1+x) + exp*ln(2)
 
     // Base case when input is 0. ln(0) = -inf
@@ -103,7 +103,7 @@ inline void _init_log_() {
 // Blackhole metal-layer natural log (calculate_log_body / calculate_log / log_init), carried over for
 // the ported kernels that call it (erfinv). Only reset_counters is spelled the Quasar way.
 template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en, bool IS_BASE_TWO = false>
-sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_scale_factor) {
+sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t log_base_scale_factor) {
     if constexpr (!FAST_APPROX) {
         // normalise a (-0.0 and subnormals become +0.0). This must run before
         // the exponent read below so that -0.0 follows the same path as +0.0
@@ -210,7 +210,7 @@ template <
     bool is_fp32_dest_acc_en,
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
-inline void calculate_log(uint log_base_scale_factor) {
+inline void calculate_log(std::uint32_t log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(

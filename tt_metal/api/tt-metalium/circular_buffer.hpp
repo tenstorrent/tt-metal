@@ -14,10 +14,6 @@
 #include <tt-metalium/circular_buffer_constants.h>
 
 namespace tt::tt_metal {
-struct Tile;
-}  // namespace tt::tt_metal
-
-namespace tt::tt_metal {
 
 using CBHandle = uintptr_t;
 

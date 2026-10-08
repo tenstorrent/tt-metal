@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_reduce_async_program_factory.hpp"
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 
 #include <algorithm>
 
@@ -96,7 +97,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_mesh_workload_t AllReduceAsyncMeshWork
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
+        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
@@ -396,7 +397,7 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         output_cores_all,
         reduction_reader_kernel_config);
     if (!output_cores_unused.empty()) {
-        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0, 0});
+        tt::tt_metal::SetRuntimeArgs(program, reduction_reader_kernel_id, output_cores_unused, {!has_work, 0, 0});
     }
 
     // Create reduction dataflow kernel
@@ -501,7 +502,6 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
 
         // Set reader runtime args
         std::vector<uint32_t> reader_rt_args = {
-            input_tensor.buffer()->address(),    // tensor_address0
             input_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,            // num_tiles_to_read
             input_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -548,7 +548,6 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         uint32_t out_ready_sem_wait_value = ring_size;
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
@@ -596,23 +595,24 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
         std::vector<uint32_t> reduction_reader_rt_args = {
             has_work,
             reduction_semaphore_ids[link],  // reduction_semaphore_id
-            semaphore.address(),            // global semaphore_address
             out_ready_sem_wait_value,       // out_ready_sem_wait_value
         };
         tt::tt_metal::SetRuntimeArgs(
             program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
     }
 
+    SetCommonRuntimeArgs(program, worker_sender_reader_kernel_id, {input_tensor.buffer()->address()});
+    SetCommonRuntimeArgs(program, worker_sender_writer_kernel_id, {semaphore.address()});
+    SetCommonRuntimeArgs(program, reduction_reader_kernel_id, {semaphore.address()});
     return {
         std::move(program),
         shared_variables_t{
-            .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
-            .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
-            .reduction_reader_kernel_id = reduction_reader_kernel_id,
-            .sender_worker_cores = sender_worker_cores,
-            .output_tensor_cores = output_tensor_cores,
+            .reader_args = GetCommonRuntimeArgs(program, worker_sender_reader_kernel_id),
+            .writer_args = GetCommonRuntimeArgs(program, worker_sender_writer_kernel_id),
+            .reduction_args = GetCommonRuntimeArgs(program, reduction_reader_kernel_id),
             .cb_out = cb_out,
-            .cb_reduction = cb_reduction}};
+            .cb_reduction = cb_reduction,
+        }};
 }
 
 void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
@@ -620,37 +620,17 @@ void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
     const AllReduceAsyncParams& operation_attributes,
     const AllReduceAsyncInputs& tensor_args,
     Tensor& output_tensor) {
-    // Update runtime arguments for each program in the mesh workload
+    const auto input_address = tensor_args.input_tensor.buffer()->address();
+    const auto semaphore_address = operation_attributes.semaphore.address();
+    const auto& output_buffer = *output_tensor.buffer();
+    const auto& reduction_buffer = *tensor_args.buffer_tensor.buffer();
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-        auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
-
-        const auto& input_tensor = tensor_args.input_tensor;
-        const auto& buffer_tensor = tensor_args.buffer_tensor;
-
-        auto semaphore = operation_attributes.semaphore;
-
-        // update senders
-        auto& worker_reader_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
-        auto& worker_writer_sender_runtime_args_by_core =
-            GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
-        auto& reduction_reader_runtime_args_by_core = GetRuntimeArgs(program, shared_vars.reduction_reader_kernel_id);
-        for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader
-            auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
-            worker_reader_sender_runtime_args[0] = input_tensor.buffer()->address();
-            // writer
-            auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-            worker_writer_sender_runtime_args[1] = semaphore.address();
-        }
-        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_out, *output_tensor.buffer());
-        UpdateDynamicCircularBufferAddress(program, shared_vars.cb_reduction, *buffer_tensor.buffer());
-        for (const auto& cr : shared_vars.output_tensor_cores.ranges()) {
-            for (const auto& core : corerange_to_cores(cr, std::nullopt, true)) {
-                auto& reduction_reader_runtime_args = reduction_reader_runtime_args_by_core[core.x][core.y];
-                reduction_reader_runtime_args[2] = semaphore.address();
-            }
-        }
+        const auto& shared = cached_workload.shared_variables.at(coordinate_range);
+        shared.reader_args.get()[ttnn::ccl::AllReduceReaderCommonArgs::input] = input_address;
+        shared.writer_args.get()[ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore] = semaphore_address;
+        shared.reduction_args.get()[ttnn::ccl::AllReduceSemaphoreCommonArgs::semaphore] = semaphore_address;
+        UpdateDynamicCircularBufferAddress(program, shared.cb_out, output_buffer);
+        UpdateDynamicCircularBufferAddress(program, shared.cb_reduction, reduction_buffer);
     }
 }
 

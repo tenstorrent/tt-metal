@@ -249,6 +249,8 @@ class TPGatedDeltaNet:
         # Fuse adapter output relayout with rms_norm + head-flatten
         self._gdn_fuse_out = True
         self.gdn_program_config = getattr(args, "gdn_program_config", None)
+        # WY-inverse arithmetic (ttnn.ChunkGdnWyInverse); None = the op's AUTO (the forward-substitution solve on Blackhole).
+        self.gdn_wy_inverse = getattr(args, "gdn_wy_inverse", None)
         self.K = args.gdn_conv_kernel_size
         self.scale = self.Dk**-0.5
         self.cfg = tpc.COMPUTE_HIFI2
@@ -634,9 +636,15 @@ class TPGatedDeltaNet:
 
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
-        # const_tiles / program_config only apply to the fused op; the seq adapter has neither param.
+        # const_tiles / program_config / wy_inverse only apply to the fused op; the seq adapter has none of them.
         _extra = (
-            {"const_tiles": self._fused_const_tiles, "program_config": self.gdn_program_config} if _use_fused else {}
+            {
+                "const_tiles": self._fused_const_tiles,
+                "program_config": self.gdn_program_config,
+                "wy_inverse": self.gdn_wy_inverse,
+            }
+            if _use_fused
+            else {}
         )
         o, final_state = _delta_fn(
             q,
@@ -1072,7 +1080,13 @@ class TPGatedDeltaNet:
         _use_fused = fused_chunk_enabled()
         _delta_fn = chunk_gated_delta_rule_fused_adapter if _use_fused else chunk_gated_delta_rule_seq_adapter
         _extra = (
-            {"const_tiles": self._fused_const_tiles, "program_config": self.gdn_program_config} if _use_fused else {}
+            {
+                "const_tiles": self._fused_const_tiles,
+                "program_config": self.gdn_program_config,
+                "wy_inverse": self.gdn_wy_inverse,
+            }
+            if _use_fused
+            else {}
         )
         o, final_state = _delta_fn(
             q,

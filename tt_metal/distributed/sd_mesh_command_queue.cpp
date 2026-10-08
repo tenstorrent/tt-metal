@@ -67,8 +67,8 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     tt::tt_metal::emule::flush_deferred_mesh_dispatch();
     std::vector<int> device_ids;
     device_ids.reserve(mesh_device->get_devices().size());
-    for (const auto& device : mesh_device->get_devices()) {
-        device_ids.push_back(static_cast<int>(device->id()));
+    for (auto device_id : mesh_device->get_device_ids()) {
+        device_ids.push_back(static_cast<int>(device_id));
     }
     tt::tt_metal::emule::drain_device(device_ids);
 }
@@ -437,13 +437,11 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     auto lock = lock_api_function_();
     drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
-    for (const auto& device : mesh_device_->get_devices()) {
+    for (auto device_id : mesh_device_->get_device_ids()) {
         tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
             .get_cluster()
-            .dram_barrier(device->id());
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .l1_barrier(device->id());
+            .dram_barrier(device_id);
+        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().l1_barrier(device_id);
     }
 
     // Barrier across all active hosts of the mesh
