@@ -57,19 +57,19 @@ large slabs and padding their final local slab to whole normalization blocks
 (64 rows at C=8192). This small norm-only padding is separate from the packed
 token rows below.
 
-Packed TP reductions gather partials in rank order, add them locally in FP32,
-round the completed sum once, and then partition rows.
-Elementwise FP32 additions avoid the NC reduction kernel's intermediate truncation.
-Ring reduction order depends on destinations and communication worker ranges; moving packed
-tokens otherwise causes numerical drift that accumulates through all 60 layers.
-The local sum keeps the addition order independent of token placement, at the
-cost of gathering all four TP partials.
+Both packed and single-request prefill use the original TP reduce-scatter by
+default. Packed execution no longer forces an all-gather followed by local FP32
+additions and row partitioning. This removes that extra work from both the
+attention output projection and the MLP down projection in every layer.
 
-The default single-request path retains its original ring reduction. For numerical
-comparison with packing, enable `GEMMA4_PREFILL_STABLE_REDUCTIONS=1` before model
-construction, or set `runtime.model.stable_prefill_reductions = True` before
-warmup/capture. This selects the same FP32 order for independent calls. Treat it
-as a compile-time setting: release and warm/capture again after changing it.
+The previous fixed-order FP32 sum remains available as an explicit diagnostic
+control: enable `GEMMA4_PREFILL_STABLE_REDUCTIONS=1` before model construction, or
+set `runtime.model.stable_prefill_reductions = True` before warmup/capture. This
+applies to either path. Treat it as a compile-time setting: release and
+warm/capture again after changing it. Ring reduction order depends on destinations
+and communication worker ranges, so the packed path is no longer expected to
+match independent execution bitwise. The historical FP32 validation below does
+not qualify the current arithmetic.
 
 CP all-gather collects projected Q/K/V (or Q/packed KV) without gathering TP
 heads. Each segment is sliced, padded to the **configured original chunk size**,
@@ -140,17 +140,26 @@ There is no automatic retile or cache reinterpretation fallback.
 ## Validation and measurements
 
 For a direct comparison of **8K chunked prefill and full 8K ragged batches**, see
-the [three-page PDF](perf/ragged_8k_2026_10_08/comparison.pdf) or the
-[focused report and data](perf/ragged_8k_2026_10_08/report.html). Every ragged batch
+the [updated PDF](perf/ragged_8k_reduce_scatter_2026_10_08/comparison.pdf) or the
+[focused report and data](perf/ragged_8k_reduce_scatter_2026_10_08/report.html). Every ragged batch
 contains exactly 8,192 useful tokens, divided across one, two, or four requests.
-Both methods process the same requests at the same positions. The report covers
-early, late, mostly early/late, and mixed positions, using the completed study's
-five-replay medians. Recreate it from the committed measurements with:
+The blue reference is always **one chunked call processing 8K tokens for one
+request**; orange is one ragged batch totaling 8K tokens. Request counts differ,
+while useful token count and existing prefix length per request match. The report
+covers starts at zero and 248K. Mixed-prefix measurements remain in the raw data;
+there is no single chunk at one matching position for those batches. Both paths
+were rerun using their original reduce-scatter, with five timed replays per case.
+Page two shows the effect of removing the forced FP32 sums from ragged execution. The
+[previous FP32 report](perf/ragged_8k_2026_10_08/comparison.pdf) is retained.
+That older report sums separate chunked calls for the same requests, so its blue
+bars use a different comparison basis.
+Recreate the updated report from the committed measurements with:
 
 ```bash
 python -m models.demos.gemma4_d_p.scripts.ragged_8k_report \
-    --input models/demos/gemma4_d_p/docs/perf/ragged_load_2026_10_08/measurements.json \
-    --output models/demos/gemma4_d_p/docs/perf/ragged_8k_2026_10_08
+    --input models/demos/gemma4_d_p/docs/perf/ragged_8k_reduce_scatter_2026_10_08/input.json \
+    --before models/demos/gemma4_d_p/docs/perf/ragged_8k_2026_10_08/measurements.json \
+    --output models/demos/gemma4_d_p/docs/perf/ragged_8k_reduce_scatter_2026_10_08
 ```
 
 For the 256K canonical 2K/4K/8K sweep and loaded early/late/mixed-prefix
@@ -222,7 +231,37 @@ migration latency requires the loopback endpoint described in
 `PREFILL_MIGRATION.md`; host address-walk tests and device raw reads validate the
 unchanged source address mapping without an external endpoint.
 
-### Results on Blackhole 8×4, 2026-10-08
+### Reduce-scatter remeasurement on Blackhole 8×4, 2026-10-08
+
+Removing the forced FP32 TP sums saves **179–182 ms per full 8K ragged batch**
+across all eleven measured cases. For one request's first 8K tokens, ragged
+falls from **418.5 ms to 237.4 ms** (43% less time). Fresh chunked prefill takes
+**130.4 ms**, leaving 107.0 ms of ragged overhead. Packing, cache redistribution
+and attention were unchanged; this experiment does not time their individual
+contributions.
+
+For the requested equal-token comparison, **one chunked 8K call versus one ragged
+4×2K batch**, ragged takes **485.9 vs 130.4 ms** at the beginning and
+**1154.9 vs 312.7 ms** after a 248K prefix per request: about **3.7× the time** in
+either case. Every call processes 8,192 useful tokens. The chunked reference has
+one request; ragged has four. The fresh chunked medians differ from the previous
+study by at most 1.3%. Measurements use 60 layers, populated KV histories and five
+warmed replays. Projections/MLP process the same total useful rows, while ragged
+still redistributes data and runs a full padded attention chunk for each request.
+
+The six-layer correctness test passed all 144 output/KV comparisons, plus its
+isolation, cache preservation, migration-read and acknowledgement checks.
+The 60-layer test **failed** on a separate `[8192, 33]` batch at boundary zero,
+layer index 27's sliding V cache: relative RMSE **0.089467**, above the unchanged
+**0.08** limit (PCC **0.996063**, above its 0.995 limit). This compares packed with
+independent TT execution using the same original reduce-scatter, not a GPU
+reference. It stopped at that failure; later boundaries were not validated.
+The host checks passed 82 tests with two unsupported packed/socket combinations
+skipped. Numerical results are recorded alongside the timings in `input.json` and
+`measurements.json` in the updated report directory. Removing the forced FP32 sum
+improves performance but does not yet pass full-model numerical qualification.
+
+### Historical fixed-FP32 results on Blackhole 8×4, 2026-10-08
 
 The 60-layer hardware test passed with allocation tracking enabled. Across seven
 boundaries and twelve request chunks, all **1,332 output/KV comparisons were

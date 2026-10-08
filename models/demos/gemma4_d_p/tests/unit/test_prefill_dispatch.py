@@ -14,7 +14,10 @@ from models.demos.gemma4_d_p.tt.model import Gemma4Model
 
 @pytest.mark.parametrize("ack_mode", ["callback", "segmented_trace", "socket"])
 @pytest.mark.parametrize("stable_reductions", [False, True])
-def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, stable_reductions):
+@pytest.mark.parametrize("packed", [False, True])
+def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, stable_reductions, packed):
+    if packed and ack_mode == "socket":
+        pytest.skip("Packed socket acknowledgements are dispatched by prefill_batch")
     events = []
     hidden = SimpleNamespace(shape=(1, 1, 1024, 64))
     model = object.__new__(Gemma4Model)
@@ -31,9 +34,15 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, stable_re
         SimpleNamespace(layer_ack=lambda idx: events.append(("ack", idx))) if ack_mode == "segmented_trace" else None
     )
     model.mesh_config = SimpleNamespace(cp_degree=8, tp_degree=1)
+    model.prefill_chunk_size = 8192
     model.ccl_manager = None
     model.stable_prefill_reductions = stable_reductions
     model._get_rope_mats = lambda idx, **kwargs: (idx, idx)
+    ragged_layout = SimpleNamespace(plan=SimpleNamespace(chunk_size=8192, packed_size=8192)) if packed else None
+    if packed:
+        model.rope_caches_2d = {kind: (idx, idx) for idx, kind in enumerate(model.hf_config.layer_types)}
+        monkeypatch.setattr(ttnn, "embedding", lambda positions, cache, **kwargs: cache)
+        monkeypatch.setattr(ttnn, "unsqueeze_to_4D", lambda value: value)
 
     def layer(idx):
         def forward(x, **kwargs):
@@ -41,6 +50,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, stable_re
             assert kwargs["chunk_start_idx"] == 8192
             assert kwargs["rope_mats"] == (idx, idx)
             assert kwargs["stable_reductions"] is stable_reductions
+            assert kwargs["ragged_layout"] is ragged_layout
             events.append(("write", idx))
             return x
 
@@ -63,6 +73,8 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode, stable_re
         on_layer_complete=lambda idx: events.append(("ack", idx)),
         d2h_service=service if ack_mode == "socket" else None,
         metadata_msg=metadata if ack_mode == "socket" else None,
+        ragged_layout=ragged_layout,
+        rope_positions=object() if packed else None,
     )
     assert output is hidden
     expected = []

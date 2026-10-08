@@ -80,9 +80,8 @@ def test_packed_requests_outputs_cache_replay_and_timing(mesh_device, tmp_path):
     config = SimpleNamespace(num_users=4, chunk_size=8192, max_seq_len=32768, mesh_shape=(8, 4), num_layers=num_layers)
     runtime = Gemma4PrefillRuntime(mesh_device=mesh_device, hf_model_id=model_id, tt_cache_path=root, config=config)
     runtime.model = model
-    # Isolate packing correctness from the original ring sum's row-dependent
-    # rounding. The default service path keeps the original faster reduction.
-    model.stable_prefill_reductions = True
+    # Compare both paths using the production reduce-scatter arithmetic.
+    model.stable_prefill_reductions = False
     runtime.input_tokens = runtime.make_chunk_input([0] * 8192)
     runtime.positions = runtime.make_chunk_input(range(8192))
     runtime.metadata = None

@@ -1,0 +1,7 @@
+case,request_tokens,start_indices,end_indices_exclusive,chunked_reference_case,chunked_request_tokens,chunked_start_indices,chunked_end_indices_exclusive,chunked_calls,total_useful_tokens,chunked_ms,ragged_ms,chunked_useful_tokens_per_second,ragged_useful_tokens_per_second,ragged_extra_time_percent,ragged_before_fp32_ms,ragged_saved_ms,ragged_time_reduction_percent
+single_early,[8192],[0],[8192],single_early,[8192],[0],[8192],1,8192,130.42,237.44,62812,34501,82.06,418.47,181.03,43.26
+tails2_early,"[4096, 4096]","[0, 0]","[4096, 4096]",single_early,[8192],[0],[8192],1,8192,130.42,344.85,62812,23755,164.41,524.73,179.89,34.28
+tails4_early,"[2048, 2048, 2048, 2048]","[0, 0, 0, 0]","[2048, 2048, 2048, 2048]",single_early,[8192],[0],[8192],1,8192,130.42,485.87,62812,16860,272.54,668.24,182.36,27.29
+single_late,[8192],[253952],[262144],single_late,[8192],[253952],[262144],1,8192,312.67,403.92,26200,20281,29.18,583.22,179.3,30.74
+tails2_late,"[4096, 4096]","[253952, 253952]","[258048, 258048]",single_late,[8192],[253952],[262144],1,8192,312.67,674.79,26200,12140,115.81,855.06,180.26,21.08
+tails4_late,"[2048, 2048, 2048, 2048]","[253952, 253952, 253952, 253952]","[256000, 256000, 256000, 256000]",single_late,[8192],[253952],[262144],1,8192,312.67,1154.88,26200,7093,269.36,1334.28,179.39,13.44

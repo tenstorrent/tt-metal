@@ -191,8 +191,8 @@ class Gemma4Model:
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self.prefill_metadata = PrefillMetadata(mesh_config)
         self._prefill_metadata_external = False
-        # Set before capture when comparing independent calls with packed
-        # arithmetic. Ordinary single-request execution retains its ring sum.
+        # Optional diagnostic control; both single-request and packed prefill
+        # use the original reduce-scatter by default. Set before capture.
         self.stable_prefill_reductions = os.getenv("GEMMA4_PREFILL_STABLE_REDUCTIONS", "0").lower() in (
             "1",
             "true",
@@ -359,7 +359,7 @@ class Gemma4Model:
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
                 ragged_layout=ragged_layout,
-                stable_reductions=ragged_layout is not None or getattr(self, "stable_prefill_reductions", False),
+                stable_reductions=getattr(self, "stable_prefill_reductions", False),
             )
             if d2h_service is not None:
                 ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)

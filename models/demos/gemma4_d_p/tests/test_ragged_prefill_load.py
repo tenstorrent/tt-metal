@@ -76,7 +76,7 @@ def run_batch(mesh_device, tmp_path, request):
         ring_kv_caches=caches,
         tt_cache_path=root,
     )
-    model.stable_prefill_reductions = mode in ("ragged", "stable8192")
+    model.stable_prefill_reductions = mode == "stable8192"
     runtime = Gemma4PrefillRuntime(mesh_device=mesh_device, hf_model_id=model_id, tt_cache_path=root, config=config)
     runtime.model = model
     tokens = tuple(_get_prefill_tokens(model_id, config.max_seq_len, args.vocab_size, "text")[0].tolist())
@@ -113,6 +113,7 @@ def run_batch(mesh_device, tmp_path, request):
                     scheduler="round-robin chunks" if mode != "ragged" else "packed batch",
                     activations_dram_only=os.getenv("GEMMA4_ACTIVATIONS_DRAM_ONLY", "0"),
                     trace_allocation_tracking=os.getenv("TT_METAL_TRACE_ALLOC_TRACKING", "0"),
+                    tp_reduction="fixed_fp32" if model.stable_prefill_reductions else "reduce_scatter",
                     full_batch_dram_override=os.getenv("GEMMA4_LOAD_FULL_DRAM", "0"),
                     measurements=measurements,
                     full_stream=full_stream,

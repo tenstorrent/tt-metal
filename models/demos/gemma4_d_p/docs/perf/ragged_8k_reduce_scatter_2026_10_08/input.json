@@ -1,0 +1,2642 @@
+{
+  "provenance": {
+    "date": "2026-10-08",
+    "base_commit": "15623c70062",
+    "change": "Remove automatic fixed-FP32 TP reductions for ragged prefill; both paths use original reduce-scatter. No packing or attention changes.",
+    "description": "Fresh measurements on 2026-10-08, based on 15623c70062 with automatic FP32 TP sums removed from ragged prefill. Both modes use original reduce-scatter; all other model execution settings are unchanged.",
+    "previous_fp32_measurements": "../ragged_8k_2026_10_08/measurements.json"
+  },
+  "loaded": {
+    "regular8192": {
+      "mode": "regular8192",
+      "model": "google/gemma-4-31B-it",
+      "layers": 60,
+      "mesh": [
+        8,
+        4
+      ],
+      "chunk_size": 8192,
+      "cache_capacity": 262144,
+      "allocated_slots": 4,
+      "repeats": 5,
+      "prefix_tokens": 253952,
+      "scheduler": "round-robin chunks",
+      "activations_dram_only": "0",
+      "trace_allocation_tracking": "1",
+      "tp_reduction": "reduce_scatter",
+      "full_batch_dram_override": "0",
+      "measurements": [
+        {
+          "label": "tails4_early",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "ends": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.5158295450091828,
+          "median_seconds": 0.5129869550000876,
+          "useful_tokens_per_second": 15969.216994998636,
+          "median_request_completion_seconds": [
+            0.12826977597433142,
+            0.25693645898718387,
+            0.38511337598902173,
+            0.5129836899868678
+          ],
+          "samples": [
+            {
+              "seconds": 0.5139437160105444,
+              "request_completion_seconds": [
+                0.1292273180151824,
+                0.2573970730009023,
+                0.3859480130195152,
+                0.5139385280199349
+              ]
+            },
+            {
+              "seconds": 0.5114105329848826,
+              "request_completion_seconds": [
+                0.1279256989946589,
+                0.2558701849775389,
+                0.383697534998646,
+                0.5114067269896623
+              ]
+            },
+            {
+              "seconds": 0.5129869550000876,
+              "request_completion_seconds": [
+                0.12826977597433142,
+                0.25693645898718387,
+                0.38511337598902173,
+                0.5129836899868678
+              ]
+            },
+            {
+              "seconds": 0.5111635809880681,
+              "request_completion_seconds": [
+                0.12754079897422343,
+                0.2555474989931099,
+                0.383425174979493,
+                0.5111602259858046
+              ]
+            },
+            {
+              "seconds": 0.51436064299196,
+              "request_completion_seconds": [
+                0.12932377198012546,
+                0.25850572099443525,
+                0.3866812759952154,
+                0.5143574980029371
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            253952,
+            253952,
+            253952,
+            253952
+          ],
+          "ends": [
+            256000,
+            256000,
+            256000,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 1.2392986089980695,
+          "median_seconds": 1.243059917993378,
+          "useful_tokens_per_second": 6590.189162581977,
+          "median_request_completion_seconds": [
+            0.3104895429860335,
+            0.6219491359952372,
+            0.9327882440120447,
+            1.24305610198644
+          ],
+          "samples": [
+            {
+              "seconds": 1.2426411400083452,
+              "request_completion_seconds": [
+                0.3104678300151136,
+                0.6210050350055099,
+                0.9319437640078831,
+                1.2426382350095082
+              ]
+            },
+            {
+              "seconds": 1.242977054003859,
+              "request_completion_seconds": [
+                0.3104077799944207,
+                0.6219491359952372,
+                0.9327882440120447,
+                1.242971847008448
+              ]
+            },
+            {
+              "seconds": 1.2465608589991461,
+              "request_completion_seconds": [
+                0.31077920901589096,
+                0.6262776009971276,
+                0.9361511160095688,
+                1.2465573130175471
+              ]
+            },
+            {
+              "seconds": 1.243059917993378,
+              "request_completion_seconds": [
+                0.3104895429860335,
+                0.621138214977691,
+                0.9315679069841281,
+                1.24305610198644
+              ]
+            },
+            {
+              "seconds": 1.2466614180011675,
+              "request_completion_seconds": [
+                0.3125168939877767,
+                0.6233582959976047,
+                0.9359241230122279,
+                1.2466575930011459
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_mixed",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            8192,
+            131072,
+            253952
+          ],
+          "ends": [
+            2048,
+            10240,
+            133120,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.798005161981564,
+          "median_seconds": 0.7998767690150999,
+          "useful_tokens_per_second": 10241.577599618166,
+          "median_request_completion_seconds": [
+            0.13145180500578135,
+            0.2671812390035484,
+            0.4902898959990125,
+            0.7998739550239407
+          ],
+          "samples": [
+            {
+              "seconds": 0.7998767690150999,
+              "request_completion_seconds": [
+                0.1314604580111336,
+                0.2672847550129518,
+                0.4902898959990125,
+                0.7998739550239407
+              ]
+            },
+            {
+              "seconds": 0.7970072390162386,
+              "request_completion_seconds": [
+                0.13120375102153048,
+                0.26692975001060404,
+                0.48712578299455345,
+                0.7970040540094487
+              ]
+            },
+            {
+              "seconds": 0.8046710650087334,
+              "request_completion_seconds": [
+                0.13145180500578135,
+                0.2671812390035484,
+                0.49277828200138174,
+                0.8046678800019436
+              ]
+            },
+            {
+              "seconds": 0.8006458250165451,
+              "request_completion_seconds": [
+                0.13128076700377278,
+                0.2696436050173361,
+                0.49105927301570773,
+                0.8006425600033253
+              ]
+            },
+            {
+              "seconds": 0.7957294550142251,
+              "request_completion_seconds": [
+                0.13172895199386403,
+                0.26705324699287303,
+                0.48697302301297896,
+                0.7957263900025282
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_one_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            0,
+            0,
+            253952
+          ],
+          "ends": [
+            2048,
+            2048,
+            2048,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.6973066680075135,
+          "median_seconds": 0.7000940339930821,
+          "useful_tokens_per_second": 11701.285259175553,
+          "median_request_completion_seconds": [
+            0.13166480598738417,
+            0.260889186989516,
+            0.39065291100996546,
+            0.7000912590010557
+          ],
+          "samples": [
+            {
+              "seconds": 0.6958659990050364,
+              "request_completion_seconds": [
+                0.13176865101559088,
+                0.260889186989516,
+                0.3885800809948705,
+                0.6958627839921974
+              ]
+            },
+            {
+              "seconds": 0.7000940339930821,
+              "request_completion_seconds": [
+                0.13166480598738417,
+                0.2611277370015159,
+                0.3921599099994637,
+                0.7000912590010557
+              ]
+            },
+            {
+              "seconds": 0.7004297389939893,
+              "request_completion_seconds": [
+                0.1316037439974025,
+                0.26038336599594913,
+                0.39065291100996546,
+                0.7004263540147804
+              ]
+            },
+            {
+              "seconds": 0.7009756799961906,
+              "request_completion_seconds": [
+                0.13171990800765343,
+                0.2622128799848724,
+                0.3922471010009758,
+                0.7009726660035085
+              ]
+            },
+            {
+              "seconds": 0.6965623960131779,
+              "request_completion_seconds": [
+                0.13126062700757757,
+                0.2594236510049086,
+                0.38858604899724014,
+                0.6965592509950511
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_two_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            0,
+            253952,
+            253952
+          ],
+          "ends": [
+            2048,
+            2048,
+            256000,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.8809648080205079,
+          "median_seconds": 0.881378879013937,
+          "useful_tokens_per_second": 9294.527240277177,
+          "median_request_completion_seconds": [
+            0.1318358620046638,
+            0.261961351003265,
+            0.5706860640202649,
+            0.8813761950004846
+          ],
+          "samples": [
+            {
+              "seconds": 0.8831386690144427,
+              "request_completion_seconds": [
+                0.1319873809989076,
+                0.261961351003265,
+                0.571652950020507,
+                0.883135084004607
+              ]
+            },
+            {
+              "seconds": 0.8803005760128144,
+              "request_completion_seconds": [
+                0.1318358620046638,
+                0.26067625600262545,
+                0.5685188409988768,
+                0.8802959989989176
+              ]
+            },
+            {
+              "seconds": 0.8825442429806571,
+              "request_completion_seconds": [
+                0.13161092399968766,
+                0.2621251469827257,
+                0.5713850649772212,
+                0.8825406779942568
+              ]
+            },
+            {
+              "seconds": 0.881378879013937,
+              "request_completion_seconds": [
+                0.13260939699830487,
+                0.26261046799481846,
+                0.5706860640202649,
+                0.8813761950004846
+              ]
+            },
+            {
+              "seconds": 0.8774808800080791,
+              "request_completion_seconds": [
+                0.13082027301425114,
+                0.259312743000919,
+                0.5682867410068866,
+                0.8774781160173006
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_three_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            253952,
+            253952,
+            253952
+          ],
+          "ends": [
+            2048,
+            256000,
+            256000,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 1.0658562010212336,
+          "median_seconds": 1.0646971440000925,
+          "useful_tokens_per_second": 7694.206795016337,
+          "median_request_completion_seconds": [
+            0.13256108399946243,
+            0.4415019210136961,
+            0.7528710829792544,
+            1.0646944500040263
+          ],
+          "samples": [
+            {
+              "seconds": 1.0632603019766975,
+              "request_completion_seconds": [
+                0.13256108399946243,
+                0.4412738879909739,
+                0.7524591049877927,
+                1.0632571579772048
+              ]
+            },
+            {
+              "seconds": 1.0632368959777523,
+              "request_completion_seconds": [
+                0.1314048130006995,
+                0.44037982198642567,
+                0.7516303559823427,
+                1.0632341819873545
+              ]
+            },
+            {
+              "seconds": 1.0646971440000925,
+              "request_completion_seconds": [
+                0.13419780801632442,
+                0.44258488100604154,
+                0.7531746710010339,
+                1.0646944500040263
+              ]
+            },
+            {
+              "seconds": 1.065122423984576,
+              "request_completion_seconds": [
+                0.13306709498283453,
+                0.44184075098019093,
+                0.7528710829792544,
+                1.065119598992169
+              ]
+            },
+            {
+              "seconds": 1.065498138021212,
+              "request_completion_seconds": [
+                0.13177846500184387,
+                0.4415019210136961,
+                0.7529177030082792,
+                1.06549480301328
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails2_early",
+          "lengths": [
+            4096,
+            4096
+          ],
+          "starts": [
+            0,
+            0
+          ],
+          "ends": [
+            4096,
+            4096
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.2619478389970027,
+          "median_seconds": 0.2585276000027079,
+          "useful_tokens_per_second": 31687.139013065505,
+          "median_request_completion_seconds": [
+            0.1297537780192215,
+            0.25852380399010144
+          ],
+          "samples": [
+            {
+              "seconds": 0.25719009700696915,
+              "request_completion_seconds": [
+                0.12931139199645258,
+                0.25718605099245906
+              ]
+            },
+            {
+              "seconds": 0.259796060010558,
+              "request_completion_seconds": [
+                0.1297537780192215,
+                0.2597926950256806
+              ]
+            },
+            {
+              "seconds": 0.2645324189797975,
+              "request_completion_seconds": [
+                0.13051200899644755,
+                0.26452871298533864
+              ]
+            },
+            {
+              "seconds": 0.2565103340020869,
+              "request_completion_seconds": [
+                0.12840900401351973,
+                0.2565062380162999
+              ]
+            },
+            {
+              "seconds": 0.2585276000027079,
+              "request_completion_seconds": [
+                0.1298437830118928,
+                0.25852380399010144
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails2_late",
+          "lengths": [
+            4096,
+            4096
+          ],
+          "starts": [
+            253952,
+            253952
+          ],
+          "ends": [
+            258048,
+            258048
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.6177406100032385,
+          "median_seconds": 0.623613091011066,
+          "useful_tokens_per_second": 13136.350275646528,
+          "median_request_completion_seconds": [
+            0.3118391689786222,
+            0.6236092650215141
+          ],
+          "samples": [
+            {
+              "seconds": 0.623613091011066,
+              "request_completion_seconds": [
+                0.31139291799627244,
+                0.6236092650215141
+              ]
+            },
+            {
+              "seconds": 0.6230970629840158,
+              "request_completion_seconds": [
+                0.3114816609886475,
+                0.623093677975703
+              ]
+            },
+            {
+              "seconds": 0.6233843649970368,
+              "request_completion_seconds": [
+                0.3118391689786222,
+                0.6233805699739605
+              ]
+            },
+            {
+              "seconds": 0.6240270730049815,
+              "request_completion_seconds": [
+                0.31219067799975164,
+                0.6240244790096767
+              ]
+            },
+            {
+              "seconds": 0.6279247089987621,
+              "request_completion_seconds": [
+                0.3166701710142661,
+                0.6279208440100774
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails2_mixed",
+          "lengths": [
+            4096,
+            4096
+          ],
+          "starts": [
+            0,
+            253952
+          ],
+          "ends": [
+            4096,
+            258048
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.4401386370009277,
+          "median_seconds": 0.44175718299811706,
+          "useful_tokens_per_second": 18544.124046614354,
+          "median_request_completion_seconds": [
+            0.13237927900627255,
+            0.4417532770021353
+          ],
+          "samples": [
+            {
+              "seconds": 0.44126482200226746,
+              "request_completion_seconds": [
+                0.13250568899093196,
+                0.44126124601461925
+              ]
+            },
+            {
+              "seconds": 0.4478243160119746,
+              "request_completion_seconds": [
+                0.13237927900627255,
+                0.4478202290192712
+              ]
+            },
+            {
+              "seconds": 0.44280208501731977,
+              "request_completion_seconds": [
+                0.131606284994632,
+                0.44279938100953586
+              ]
+            },
+            {
+              "seconds": 0.4398144489969127,
+              "request_completion_seconds": [
+                0.1305483829928562,
+                0.4398103120038286
+              ]
+            },
+            {
+              "seconds": 0.44175718299811706,
+              "request_completion_seconds": [
+                0.1335756900080014,
+                0.4417532770021353
+              ]
+            }
+          ]
+        },
+        {
+          "label": "single_early",
+          "lengths": [
+            8192
+          ],
+          "starts": [
+            0
+          ],
+          "ends": [
+            8192
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.131528238998726,
+          "median_seconds": 0.13042196197784506,
+          "useful_tokens_per_second": 62811.507170790646,
+          "median_request_completion_seconds": [
+            0.1304189079964999
+          ],
+          "samples": [
+            {
+              "seconds": 0.13053722601034679,
+              "request_completion_seconds": [
+                0.1305337910016533
+              ]
+            },
+            {
+              "seconds": 0.13001598097616807,
+              "request_completion_seconds": [
+                0.13001354798325337
+              ]
+            },
+            {
+              "seconds": 0.13042196197784506,
+              "request_completion_seconds": [
+                0.1304189079964999
+              ]
+            },
+            {
+              "seconds": 0.1294751169916708,
+              "request_completion_seconds": [
+                0.1294721029989887
+              ]
+            },
+            {
+              "seconds": 0.13055920897750184,
+              "request_completion_seconds": [
+                0.1305563149799127
+              ]
+            }
+          ]
+        },
+        {
+          "label": "single_late",
+          "lengths": [
+            8192
+          ],
+          "starts": [
+            253952
+          ],
+          "ends": [
+            262144
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.3080986269924324,
+          "median_seconds": 0.3126726430200506,
+          "useful_tokens_per_second": 26199.925650274035,
+          "median_request_completion_seconds": [
+            0.31266899799811654
+          ],
+          "samples": [
+            {
+              "seconds": 0.31276893700123765,
+              "request_completion_seconds": [
+                0.31276556200464256
+              ]
+            },
+            {
+              "seconds": 0.3126726430200506,
+              "request_completion_seconds": [
+                0.31266899799811654
+              ]
+            },
+            {
+              "seconds": 0.31346805999055505,
+              "request_completion_seconds": [
+                0.313464844977716
+              ]
+            },
+            {
+              "seconds": 0.3120429250120651,
+              "request_completion_seconds": [
+                0.3120391689881217
+              ]
+            },
+            {
+              "seconds": 0.3112742069934029,
+              "request_completion_seconds": [
+                0.311270822014194
+              ]
+            }
+          ]
+        }
+      ],
+      "full_stream": null
+    },
+    "ragged": {
+      "mode": "ragged",
+      "model": "google/gemma-4-31B-it",
+      "layers": 60,
+      "mesh": [
+        8,
+        4
+      ],
+      "chunk_size": 8192,
+      "cache_capacity": 262144,
+      "allocated_slots": 4,
+      "repeats": 5,
+      "prefix_tokens": 253952,
+      "scheduler": "packed batch",
+      "activations_dram_only": "0",
+      "trace_allocation_tracking": "1",
+      "tp_reduction": "reduce_scatter",
+      "full_batch_dram_override": "0",
+      "measurements": [
+        {
+          "label": "tails4_early",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "ends": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": true,
+          "first_call_seconds": 10.881589043012355,
+          "median_seconds": 0.4858737739850767,
+          "useful_tokens_per_second": 16860.346119960803,
+          "median_request_completion_seconds": [
+            0.4858737739850767,
+            0.4858737739850767,
+            0.4858737739850767,
+            0.4858737739850767
+          ],
+          "samples": [
+            {
+              "seconds": 0.48282504398957826,
+              "request_completion_seconds": [
+                0.48282504398957826,
+                0.48282504398957826,
+                0.48282504398957826,
+                0.48282504398957826
+              ]
+            },
+            {
+              "seconds": 0.4858737739850767,
+              "request_completion_seconds": [
+                0.4858737739850767,
+                0.4858737739850767,
+                0.4858737739850767,
+                0.4858737739850767
+              ]
+            },
+            {
+              "seconds": 0.48635056099737994,
+              "request_completion_seconds": [
+                0.48635056099737994,
+                0.48635056099737994,
+                0.48635056099737994,
+                0.48635056099737994
+              ]
+            },
+            {
+              "seconds": 0.48581801902037114,
+              "request_completion_seconds": [
+                0.48581801902037114,
+                0.48581801902037114,
+                0.48581801902037114,
+                0.48581801902037114
+              ]
+            },
+            {
+              "seconds": 0.48658010602230206,
+              "request_completion_seconds": [
+                0.48658010602230206,
+                0.48658010602230206,
+                0.48658010602230206,
+                0.48658010602230206
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            253952,
+            253952,
+            253952,
+            253952
+          ],
+          "ends": [
+            256000,
+            256000,
+            256000,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 1.1541157889878377,
+          "median_seconds": 1.1548846350051463,
+          "useful_tokens_per_second": 7093.349198436167,
+          "median_request_completion_seconds": [
+            1.1548846350051463,
+            1.1548846350051463,
+            1.1548846350051463,
+            1.1548846350051463
+          ],
+          "samples": [
+            {
+              "seconds": 1.154438134020893,
+              "request_completion_seconds": [
+                1.154438134020893,
+                1.154438134020893,
+                1.154438134020893,
+                1.154438134020893
+              ]
+            },
+            {
+              "seconds": 1.1548846350051463,
+              "request_completion_seconds": [
+                1.1548846350051463,
+                1.1548846350051463,
+                1.1548846350051463,
+                1.1548846350051463
+              ]
+            },
+            {
+              "seconds": 1.1529108330141753,
+              "request_completion_seconds": [
+                1.1529108330141753,
+                1.1529108330141753,
+                1.1529108330141753,
+                1.1529108330141753
+              ]
+            },
+            {
+              "seconds": 1.1552653670078143,
+              "request_completion_seconds": [
+                1.1552653670078143,
+                1.1552653670078143,
+                1.1552653670078143,
+                1.1552653670078143
+              ]
+            },
+            {
+              "seconds": 1.1614082119776867,
+              "request_completion_seconds": [
+                1.1614082119776867,
+                1.1614082119776867,
+                1.1614082119776867,
+                1.1614082119776867
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_mixed",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            8192,
+            131072,
+            253952
+          ],
+          "ends": [
+            2048,
+            10240,
+            133120,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.7382462350069545,
+          "median_seconds": 0.7361673649866134,
+          "useful_tokens_per_second": 11127.904318536268,
+          "median_request_completion_seconds": [
+            0.7361673649866134,
+            0.7361673649866134,
+            0.7361673649866134,
+            0.7361673649866134
+          ],
+          "samples": [
+            {
+              "seconds": 0.736118772008922,
+              "request_completion_seconds": [
+                0.736118772008922,
+                0.736118772008922,
+                0.736118772008922,
+                0.736118772008922
+              ]
+            },
+            {
+              "seconds": 0.7481474980013445,
+              "request_completion_seconds": [
+                0.7481474980013445,
+                0.7481474980013445,
+                0.7481474980013445,
+                0.7481474980013445
+              ]
+            },
+            {
+              "seconds": 0.7360868940013461,
+              "request_completion_seconds": [
+                0.7360868940013461,
+                0.7360868940013461,
+                0.7360868940013461,
+                0.7360868940013461
+              ]
+            },
+            {
+              "seconds": 0.7363081959774718,
+              "request_completion_seconds": [
+                0.7363081959774718,
+                0.7363081959774718,
+                0.7363081959774718,
+                0.7363081959774718
+              ]
+            },
+            {
+              "seconds": 0.7361673649866134,
+              "request_completion_seconds": [
+                0.7361673649866134,
+                0.7361673649866134,
+                0.7361673649866134,
+                0.7361673649866134
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_one_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            0,
+            0,
+            253952
+          ],
+          "ends": [
+            2048,
+            2048,
+            2048,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.6425876470166259,
+          "median_seconds": 0.6471817219862714,
+          "useful_tokens_per_second": 12657.959459760168,
+          "median_request_completion_seconds": [
+            0.6471817219862714,
+            0.6471817219862714,
+            0.6471817219862714,
+            0.6471817219862714
+          ],
+          "samples": [
+            {
+              "seconds": 0.6458456209802534,
+              "request_completion_seconds": [
+                0.6458456209802534,
+                0.6458456209802534,
+                0.6458456209802534,
+                0.6458456209802534
+              ]
+            },
+            {
+              "seconds": 0.6470530279912055,
+              "request_completion_seconds": [
+                0.6470530279912055,
+                0.6470530279912055,
+                0.6470530279912055,
+                0.6470530279912055
+              ]
+            },
+            {
+              "seconds": 0.6471817219862714,
+              "request_completion_seconds": [
+                0.6471817219862714,
+                0.6471817219862714,
+                0.6471817219862714,
+                0.6471817219862714
+              ]
+            },
+            {
+              "seconds": 0.650615591002861,
+              "request_completion_seconds": [
+                0.650615591002861,
+                0.650615591002861,
+                0.650615591002861,
+                0.650615591002861
+              ]
+            },
+            {
+              "seconds": 0.6475245979963802,
+              "request_completion_seconds": [
+                0.6475245979963802,
+                0.6475245979963802,
+                0.6475245979963802,
+                0.6475245979963802
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_two_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            0,
+            253952,
+            253952
+          ],
+          "ends": [
+            2048,
+            2048,
+            256000,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.8142513549828436,
+          "median_seconds": 0.8135377310100012,
+          "useful_tokens_per_second": 10069.600570129294,
+          "median_request_completion_seconds": [
+            0.8135377310100012,
+            0.8135377310100012,
+            0.8135377310100012,
+            0.8135377310100012
+          ],
+          "samples": [
+            {
+              "seconds": 0.8125388069893233,
+              "request_completion_seconds": [
+                0.8125388069893233,
+                0.8125388069893233,
+                0.8125388069893233,
+                0.8125388069893233
+              ]
+            },
+            {
+              "seconds": 0.8135377310100012,
+              "request_completion_seconds": [
+                0.8135377310100012,
+                0.8135377310100012,
+                0.8135377310100012,
+                0.8135377310100012
+              ]
+            },
+            {
+              "seconds": 0.8156771610083524,
+              "request_completion_seconds": [
+                0.8156771610083524,
+                0.8156771610083524,
+                0.8156771610083524,
+                0.8156771610083524
+              ]
+            },
+            {
+              "seconds": 0.8136065939906985,
+              "request_completion_seconds": [
+                0.8136065939906985,
+                0.8136065939906985,
+                0.8136065939906985,
+                0.8136065939906985
+              ]
+            },
+            {
+              "seconds": 0.8133321310160682,
+              "request_completion_seconds": [
+                0.8133321310160682,
+                0.8133321310160682,
+                0.8133321310160682,
+                0.8133321310160682
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails4_three_late",
+          "lengths": [
+            2048,
+            2048,
+            2048,
+            2048
+          ],
+          "starts": [
+            0,
+            253952,
+            253952,
+            253952
+          ],
+          "ends": [
+            2048,
+            256000,
+            256000,
+            256000
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.9794177630101331,
+          "median_seconds": 0.9831791729957331,
+          "useful_tokens_per_second": 8332.153716233726,
+          "median_request_completion_seconds": [
+            0.9831791729957331,
+            0.9831791729957331,
+            0.9831791729957331,
+            0.9831791729957331
+          ],
+          "samples": [
+            {
+              "seconds": 0.9787666529882699,
+              "request_completion_seconds": [
+                0.9787666529882699,
+                0.9787666529882699,
+                0.9787666529882699,
+                0.9787666529882699
+              ]
+            },
+            {
+              "seconds": 0.9827517599915154,
+              "request_completion_seconds": [
+                0.9827517599915154,
+                0.9827517599915154,
+                0.9827517599915154,
+                0.9827517599915154
+              ]
+            },
+            {
+              "seconds": 0.9831988130172249,
+              "request_completion_seconds": [
+                0.9831988130172249,
+                0.9831988130172249,
+                0.9831988130172249,
+                0.9831988130172249
+              ]
+            },
+            {
+              "seconds": 0.9862028149946127,
+              "request_completion_seconds": [
+                0.9862028149946127,
+                0.9862028149946127,
+                0.9862028149946127,
+                0.9862028149946127
+              ]
+            },
+            {
+              "seconds": 0.9831791729957331,
+              "request_completion_seconds": [
+                0.9831791729957331,
+                0.9831791729957331,
+                0.9831791729957331,
+                0.9831791729957331
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails2_early",
+          "lengths": [
+            4096,
+            4096
+          ],
+          "starts": [
+            0,
+            0
+          ],
+          "ends": [
+            4096,
+            4096
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": true,
+          "first_call_seconds": 4.828550766018452,
+          "median_seconds": 0.34484793501906097,
+          "useful_tokens_per_second": 23755.398157008534,
+          "median_request_completion_seconds": [
+            0.34484793501906097,
+            0.34484793501906097
+          ],
+          "samples": [
+            {
+              "seconds": 0.34273835900239646,
+              "request_completion_seconds": [
+                0.34273835900239646,
+                0.34273835900239646
+              ]
+            },
+            {
+              "seconds": 0.34471118898363784,
+              "request_completion_seconds": [
+                0.34471118898363784,
+                0.34471118898363784
+              ]
+            },
+            {
+              "seconds": 0.3448957469954621,
+              "request_completion_seconds": [
+                0.3448957469954621,
+                0.3448957469954621
+              ]
+            },
+            {
+              "seconds": 0.34484793501906097,
+              "request_completion_seconds": [
+                0.34484793501906097,
+                0.34484793501906097
+              ]
+            },
+            {
+              "seconds": 0.34495044898358174,
+              "request_completion_seconds": [
+                0.34495044898358174,
+                0.34495044898358174
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails2_late",
+          "lengths": [
+            4096,
+            4096
+          ],
+          "starts": [
+            253952,
+            253952
+          ],
+          "ends": [
+            258048,
+            258048
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.6743342370027676,
+          "median_seconds": 0.6747937689942773,
+          "useful_tokens_per_second": 12140.00540077523,
+          "median_request_completion_seconds": [
+            0.6747937689942773,
+            0.6747937689942773
+          ],
+          "samples": [
+            {
+              "seconds": 0.6747937689942773,
+              "request_completion_seconds": [
+                0.6747937689942773,
+                0.6747937689942773
+              ]
+            },
+            {
+              "seconds": 0.6749827530002221,
+              "request_completion_seconds": [
+                0.6749827530002221,
+                0.6749827530002221
+              ]
+            },
+            {
+              "seconds": 0.6745174020179547,
+              "request_completion_seconds": [
+                0.6745174020179547,
+                0.6745174020179547
+              ]
+            },
+            {
+              "seconds": 0.6714867699774913,
+              "request_completion_seconds": [
+                0.6714867699774913,
+                0.6714867699774913
+              ]
+            },
+            {
+              "seconds": 0.6761336039926391,
+              "request_completion_seconds": [
+                0.6761336039926391,
+                0.6761336039926391
+              ]
+            }
+          ]
+        },
+        {
+          "label": "tails2_mixed",
+          "lengths": [
+            4096,
+            4096
+          ],
+          "starts": [
+            0,
+            253952
+          ],
+          "ends": [
+            4096,
+            258048
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.5086856629932299,
+          "median_seconds": 0.5067882559960708,
+          "useful_tokens_per_second": 16164.541903006359,
+          "median_request_completion_seconds": [
+            0.5067882559960708,
+            0.5067882559960708
+          ],
+          "samples": [
+            {
+              "seconds": 0.5067882559960708,
+              "request_completion_seconds": [
+                0.5067882559960708,
+                0.5067882559960708
+              ]
+            },
+            {
+              "seconds": 0.5065798219875433,
+              "request_completion_seconds": [
+                0.5065798219875433,
+                0.5065798219875433
+              ]
+            },
+            {
+              "seconds": 0.5068306299799588,
+              "request_completion_seconds": [
+                0.5068306299799588,
+                0.5068306299799588
+              ]
+            },
+            {
+              "seconds": 0.5062400399765465,
+              "request_completion_seconds": [
+                0.5062400399765465,
+                0.5062400399765465
+              ]
+            },
+            {
+              "seconds": 0.5068412949913181,
+              "request_completion_seconds": [
+                0.5068412949913181,
+                0.5068412949913181
+              ]
+            }
+          ]
+        },
+        {
+          "label": "single_early",
+          "lengths": [
+            8192
+          ],
+          "starts": [
+            0
+          ],
+          "ends": [
+            8192
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": true,
+          "first_call_seconds": 2.958838068996556,
+          "median_seconds": 0.2374415259982925,
+          "useful_tokens_per_second": 34501.12597431214,
+          "median_request_completion_seconds": [
+            0.2374415259982925
+          ],
+          "samples": [
+            {
+              "seconds": 0.2345562529808376,
+              "request_completion_seconds": [
+                0.2345562529808376
+              ]
+            },
+            {
+              "seconds": 0.2374415259982925,
+              "request_completion_seconds": [
+                0.2374415259982925
+              ]
+            },
+            {
+              "seconds": 0.23736595100490376,
+              "request_completion_seconds": [
+                0.23736595100490376
+              ]
+            },
+            {
+              "seconds": 0.2382999679830391,
+              "request_completion_seconds": [
+                0.2382999679830391
+              ]
+            },
+            {
+              "seconds": 0.23766477199387737,
+              "request_completion_seconds": [
+                0.23766477199387737
+              ]
+            }
+          ]
+        },
+        {
+          "label": "single_late",
+          "lengths": [
+            8192
+          ],
+          "starts": [
+            253952
+          ],
+          "ends": [
+            262144
+          ],
+          "useful_tokens": 8192,
+          "activation_storage": "default L1",
+          "capture_needed": false,
+          "first_call_seconds": 0.40263289099675603,
+          "median_seconds": 0.40391847598948516,
+          "useful_tokens_per_second": 20281.320333099233,
+          "median_request_completion_seconds": [
+            0.40391847598948516
+          ],
+          "samples": [
+            {
+              "seconds": 0.40445249900221825,
+              "request_completion_seconds": [
+                0.40445249900221825
+              ]
+            },
+            {
+              "seconds": 0.40391847598948516,
+              "request_completion_seconds": [
+                0.40391847598948516
+              ]
+            },
+            {
+              "seconds": 0.40453316099592485,
+              "request_completion_seconds": [
+                0.40453316099592485
+              ]
+            },
+            {
+              "seconds": 0.4031533029919956,
+              "request_completion_seconds": [
+                0.4031533029919956
+              ]
+            },
+            {
+              "seconds": 0.4023025030037388,
+              "request_completion_seconds": [
+                0.4023025030037388
+              ]
+            }
+          ]
+        }
+      ],
+      "full_stream": null
+    }
+  },
+  "validation": {
+    "note": "Numerics: separate 60-layer [8192, 33] batch failed existing tolerance; six-layer check passed. Performance only.",
+    "test": "tests/test_ragged_prefill.py::test_packed_requests_outputs_cache_replay_and_timing",
+    "reference": "Independent TT execution using the original reduce-scatter; not a GPU reference.",
+    "thresholds": {
+      "pcc_greater_than": 0.995,
+      "relative_rmse_less_than": 0.08
+    },
+    "failure": {
+      "batch_lengths": [
+        8192,
+        33
+      ],
+      "starts": [
+        0,
+        0
+      ],
+      "request_id": 10,
+      "boundary": 0,
+      "layer_index": 27,
+      "cache": "sliding V",
+      "relative_rmse": 0.08946681022644043
+    },
+    "host_tests": {
+      "passed": 82,
+      "skipped": 2
+    },
+    "checks": [
+      {
+        "layers": 6,
+        "status": "passed",
+        "comparison_count": 144,
+        "min_pcc": 0.998808,
+        "max_rrmse": 0.021506,
+        "last_comparison": {
+          "name": "boundary=6 request=19",
+          "pcc": 0.999977,
+          "rrmse": 0.005943
+        },
+        "printed_comparisons": [
+          {
+            "name": "KV boundary=0 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=1",
+            "pcc": 0.999967,
+            "rrmse": 0.00758
+          },
+          {
+            "name": "KV boundary=0 layer=1",
+            "pcc": 0.999872,
+            "rrmse": 0.008591
+          },
+          {
+            "name": "KV boundary=0 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.009419
+          },
+          {
+            "name": "KV boundary=0 layer=2",
+            "pcc": 0.9993,
+            "rrmse": 0.012574
+          },
+          {
+            "name": "KV boundary=0 layer=3",
+            "pcc": 0.999956,
+            "rrmse": 0.01239
+          },
+          {
+            "name": "KV boundary=0 layer=3",
+            "pcc": 0.999445,
+            "rrmse": 0.018583
+          },
+          {
+            "name": "KV boundary=0 layer=4",
+            "pcc": 0.998935,
+            "rrmse": 0.013271
+          },
+          {
+            "name": "KV boundary=0 layer=4",
+            "pcc": 0.999911,
+            "rrmse": 0.019641
+          },
+          {
+            "name": "KV boundary=0 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.02065
+          },
+          {
+            "name": "boundary=0 request=10",
+            "pcc": 0.999976,
+            "rrmse": 0.006116
+          },
+          {
+            "name": "KV boundary=0 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=1",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=1",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=4",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=4",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "boundary=0 request=11",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=1 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=1 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=1 layer=1",
+            "pcc": 0.999956,
+            "rrmse": 0.007526
+          },
+          {
+            "name": "KV boundary=1 layer=1",
+            "pcc": 0.999903,
+            "rrmse": 0.008527
+          },
+          {
+            "name": "KV boundary=1 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.009416
+          },
+          {
+            "name": "KV boundary=1 layer=2",
+            "pcc": 0.99929,
+            "rrmse": 0.012572
+          },
+          {
+            "name": "KV boundary=1 layer=3",
+            "pcc": 0.999911,
+            "rrmse": 0.012409
+          },
+          {
+            "name": "KV boundary=1 layer=3",
+            "pcc": 0.999642,
+            "rrmse": 0.01864
+          },
+          {
+            "name": "KV boundary=1 layer=4",
+            "pcc": 0.998808,
+            "rrmse": 0.013284
+          },
+          {
+            "name": "KV boundary=1 layer=4",
+            "pcc": 0.999806,
+            "rrmse": 0.019676
+          },
+          {
+            "name": "KV boundary=1 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.020705
+          },
+          {
+            "name": "boundary=1 request=10",
+            "pcc": 0.999979,
+            "rrmse": 0.006144
+          },
+          {
+            "name": "KV boundary=1 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=1 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=1 layer=1",
+            "pcc": 0.999984,
+            "rrmse": 0.007537
+          },
+          {
+            "name": "KV boundary=1 layer=1",
+            "pcc": 0.999956,
+            "rrmse": 0.008563
+          },
+          {
+            "name": "KV boundary=1 layer=2",
+            "pcc": 0.999937,
+            "rrmse": 0.009426
+          },
+          {
+            "name": "KV boundary=1 layer=2",
+            "pcc": 0.999797,
+            "rrmse": 0.012694
+          },
+          {
+            "name": "KV boundary=1 layer=3",
+            "pcc": 0.999977,
+            "rrmse": 0.012359
+          },
+          {
+            "name": "KV boundary=1 layer=3",
+            "pcc": 0.999822,
+            "rrmse": 0.018488
+          },
+          {
+            "name": "KV boundary=1 layer=4",
+            "pcc": 0.999931,
+            "rrmse": 0.013499
+          },
+          {
+            "name": "KV boundary=1 layer=4",
+            "pcc": 0.999698,
+            "rrmse": 0.020153
+          },
+          {
+            "name": "KV boundary=1 layer=5",
+            "pcc": 0.999706,
+            "rrmse": 0.021214
+          },
+          {
+            "name": "boundary=1 request=12",
+            "pcc": 0.999974,
+            "rrmse": 0.006988
+          },
+          {
+            "name": "KV boundary=2 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=2 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=2 layer=1",
+            "pcc": 0.999984,
+            "rrmse": 0.007186
+          },
+          {
+            "name": "KV boundary=2 layer=1",
+            "pcc": 0.999966,
+            "rrmse": 0.008207
+          },
+          {
+            "name": "KV boundary=2 layer=2",
+            "pcc": 0.999956,
+            "rrmse": 0.009081
+          },
+          {
+            "name": "KV boundary=2 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.012298
+          },
+          {
+            "name": "KV boundary=2 layer=3",
+            "pcc": 0.99997,
+            "rrmse": 0.011861
+          },
+          {
+            "name": "KV boundary=2 layer=3",
+            "pcc": 0.999821,
+            "rrmse": 0.017678
+          },
+          {
+            "name": "KV boundary=2 layer=4",
+            "pcc": 0.999877,
+            "rrmse": 0.012822
+          },
+          {
+            "name": "KV boundary=2 layer=4",
+            "pcc": 0.999645,
+            "rrmse": 0.019066
+          },
+          {
+            "name": "KV boundary=2 layer=5",
+            "pcc": 0.999813,
+            "rrmse": 0.01988
+          },
+          {
+            "name": "boundary=2 request=13",
+            "pcc": 0.999977,
+            "rrmse": 0.006211
+          },
+          {
+            "name": "KV boundary=2 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=2 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=2 layer=1",
+            "pcc": 0.999984,
+            "rrmse": 0.007444
+          },
+          {
+            "name": "KV boundary=2 layer=1",
+            "pcc": 0.999948,
+            "rrmse": 0.008548
+          },
+          {
+            "name": "KV boundary=2 layer=2",
+            "pcc": 0.999948,
+            "rrmse": 0.009437
+          },
+          {
+            "name": "KV boundary=2 layer=2",
+            "pcc": 0.999961,
+            "rrmse": 0.012842
+          },
+          {
+            "name": "KV boundary=2 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.012295
+          },
+          {
+            "name": "KV boundary=2 layer=3",
+            "pcc": 0.9998,
+            "rrmse": 0.01855
+          },
+          {
+            "name": "KV boundary=2 layer=4",
+            "pcc": 0.999897,
+            "rrmse": 0.013395
+          },
+          {
+            "name": "KV boundary=2 layer=4",
+            "pcc": 0.999526,
+            "rrmse": 0.020245
+          },
+          {
+            "name": "KV boundary=2 layer=5",
+            "pcc": 0.999802,
+            "rrmse": 0.021506
+          },
+          {
+            "name": "boundary=2 request=14",
+            "pcc": 0.999969,
+            "rrmse": 0.006675
+          },
+          {
+            "name": "KV boundary=3 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=3 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=3 layer=1",
+            "pcc": 0.999984,
+            "rrmse": 0.007186
+          },
+          {
+            "name": "KV boundary=3 layer=1",
+            "pcc": 0.999966,
+            "rrmse": 0.008207
+          },
+          {
+            "name": "KV boundary=3 layer=2",
+            "pcc": 0.999956,
+            "rrmse": 0.009081
+          },
+          {
+            "name": "KV boundary=3 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.012298
+          },
+          {
+            "name": "KV boundary=3 layer=3",
+            "pcc": 0.99997,
+            "rrmse": 0.011861
+          },
+          {
+            "name": "KV boundary=3 layer=3",
+            "pcc": 0.999821,
+            "rrmse": 0.017678
+          },
+          {
+            "name": "KV boundary=3 layer=4",
+            "pcc": 0.999877,
+            "rrmse": 0.012822
+          },
+          {
+            "name": "KV boundary=3 layer=4",
+            "pcc": 0.999645,
+            "rrmse": 0.019066
+          },
+          {
+            "name": "KV boundary=3 layer=5",
+            "pcc": 0.999813,
+            "rrmse": 0.01988
+          },
+          {
+            "name": "boundary=3 request=13",
+            "pcc": 0.999977,
+            "rrmse": 0.006211
+          },
+          {
+            "name": "KV boundary=3 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=3 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=3 layer=1",
+            "pcc": 0.999984,
+            "rrmse": 0.007564
+          },
+          {
+            "name": "KV boundary=3 layer=1",
+            "pcc": 0.999953,
+            "rrmse": 0.008643
+          },
+          {
+            "name": "KV boundary=3 layer=2",
+            "pcc": 0.999964,
+            "rrmse": 0.00947
+          },
+          {
+            "name": "KV boundary=3 layer=2",
+            "pcc": 0.999944,
+            "rrmse": 0.012825
+          },
+          {
+            "name": "KV boundary=3 layer=3",
+            "pcc": 0.999983,
+            "rrmse": 0.012339
+          },
+          {
+            "name": "KV boundary=3 layer=3",
+            "pcc": 0.999757,
+            "rrmse": 0.018644
+          },
+          {
+            "name": "KV boundary=3 layer=4",
+            "pcc": 0.999858,
+            "rrmse": 0.013638
+          },
+          {
+            "name": "KV boundary=3 layer=4",
+            "pcc": 0.999896,
+            "rrmse": 0.020256
+          },
+          {
+            "name": "KV boundary=3 layer=5",
+            "pcc": 0.999784,
+            "rrmse": 0.021178
+          },
+          {
+            "name": "boundary=3 request=17",
+            "pcc": 0.99997,
+            "rrmse": 0.006891
+          },
+          {
+            "name": "KV boundary=4 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=1",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=1",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=4",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=4",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=4 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "boundary=4 request=15",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=1",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=1",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=4",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=4",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=5 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "boundary=5 request=16",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=6 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=6 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=6 layer=1",
+            "pcc": 0.999972,
+            "rrmse": 0.006987
+          },
+          {
+            "name": "KV boundary=6 layer=1",
+            "pcc": 0.999903,
+            "rrmse": 0.00794
+          },
+          {
+            "name": "KV boundary=6 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.009247
+          },
+          {
+            "name": "KV boundary=6 layer=2",
+            "pcc": 0.99932,
+            "rrmse": 0.012373
+          },
+          {
+            "name": "KV boundary=6 layer=3",
+            "pcc": 0.999769,
+            "rrmse": 0.012329
+          },
+          {
+            "name": "KV boundary=6 layer=3",
+            "pcc": 1.0,
+            "rrmse": 0.018618
+          },
+          {
+            "name": "KV boundary=6 layer=4",
+            "pcc": 0.998985,
+            "rrmse": 0.013183
+          },
+          {
+            "name": "KV boundary=6 layer=4",
+            "pcc": 0.999894,
+            "rrmse": 0.019362
+          },
+          {
+            "name": "KV boundary=6 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.020686
+          },
+          {
+            "name": "boundary=6 request=18",
+            "pcc": 0.999975,
+            "rrmse": 0.005935
+          },
+          {
+            "name": "KV boundary=6 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=6 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=6 layer=1",
+            "pcc": 0.999963,
+            "rrmse": 0.007087
+          },
+          {
+            "name": "KV boundary=6 layer=1",
+            "pcc": 0.999915,
+            "rrmse": 0.008069
+          },
+          {
+            "name": "KV boundary=6 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.009217
+          },
+          {
+            "name": "KV boundary=6 layer=2",
+            "pcc": 0.999206,
+            "rrmse": 0.012301
+          },
+          {
+            "name": "KV boundary=6 layer=3",
+            "pcc": 0.999863,
+            "rrmse": 0.012179
+          },
+          {
+            "name": "KV boundary=6 layer=3",
+            "pcc": 0.999569,
+            "rrmse": 0.018124
+          },
+          {
+            "name": "KV boundary=6 layer=4",
+            "pcc": 0.998992,
+            "rrmse": 0.013069
+          },
+          {
+            "name": "KV boundary=6 layer=4",
+            "pcc": 1.0,
+            "rrmse": 0.019323
+          },
+          {
+            "name": "KV boundary=6 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.020383
+          },
+          {
+            "name": "boundary=6 request=19",
+            "pcc": 0.999977,
+            "rrmse": 0.005943
+          }
+        ]
+      },
+      {
+        "layers": 60,
+        "status": "failed",
+        "comparison_count": 53,
+        "min_pcc": 0.996063,
+        "max_rrmse": 0.089467,
+        "last_comparison": {
+          "name": "            print(f\"{name}",
+          "pcc": 1.0,
+          "rrmse": 0.0
+        },
+        "printed_comparisons": [
+          {
+            "name": "KV boundary=0 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=0",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          },
+          {
+            "name": "KV boundary=0 layer=1",
+            "pcc": 0.999967,
+            "rrmse": 0.00758
+          },
+          {
+            "name": "KV boundary=0 layer=1",
+            "pcc": 0.999872,
+            "rrmse": 0.008591
+          },
+          {
+            "name": "KV boundary=0 layer=2",
+            "pcc": 1.0,
+            "rrmse": 0.009419
+          },
+          {
+            "name": "KV boundary=0 layer=2",
+            "pcc": 0.9993,
+            "rrmse": 0.012574
+          },
+          {
+            "name": "KV boundary=0 layer=3",
+            "pcc": 0.999956,
+            "rrmse": 0.01239
+          },
+          {
+            "name": "KV boundary=0 layer=3",
+            "pcc": 0.999445,
+            "rrmse": 0.018583
+          },
+          {
+            "name": "KV boundary=0 layer=4",
+            "pcc": 0.998935,
+            "rrmse": 0.013271
+          },
+          {
+            "name": "KV boundary=0 layer=4",
+            "pcc": 0.999911,
+            "rrmse": 0.019641
+          },
+          {
+            "name": "KV boundary=0 layer=5",
+            "pcc": 1.0,
+            "rrmse": 0.02065
+          },
+          {
+            "name": "KV boundary=0 layer=6",
+            "pcc": 0.998372,
+            "rrmse": 0.018156
+          },
+          {
+            "name": "KV boundary=0 layer=6",
+            "pcc": 1.0,
+            "rrmse": 0.023719
+          },
+          {
+            "name": "KV boundary=0 layer=7",
+            "pcc": 0.999743,
+            "rrmse": 0.014564
+          },
+          {
+            "name": "KV boundary=0 layer=7",
+            "pcc": 1.0,
+            "rrmse": 0.020973
+          },
+          {
+            "name": "KV boundary=0 layer=8",
+            "pcc": 0.999252,
+            "rrmse": 0.013812
+          },
+          {
+            "name": "KV boundary=0 layer=8",
+            "pcc": 1.0,
+            "rrmse": 0.018868
+          },
+          {
+            "name": "KV boundary=0 layer=9",
+            "pcc": 0.998924,
+            "rrmse": 0.013891
+          },
+          {
+            "name": "KV boundary=0 layer=9",
+            "pcc": 1.0,
+            "rrmse": 0.021395
+          },
+          {
+            "name": "KV boundary=0 layer=10",
+            "pcc": 1.0,
+            "rrmse": 0.017367
+          },
+          {
+            "name": "KV boundary=0 layer=10",
+            "pcc": 1.0,
+            "rrmse": 0.023379
+          },
+          {
+            "name": "KV boundary=0 layer=11",
+            "pcc": 0.999952,
+            "rrmse": 0.022751
+          },
+          {
+            "name": "KV boundary=0 layer=12",
+            "pcc": 0.999923,
+            "rrmse": 0.010043
+          },
+          {
+            "name": "KV boundary=0 layer=12",
+            "pcc": 0.999785,
+            "rrmse": 0.016827
+          },
+          {
+            "name": "KV boundary=0 layer=13",
+            "pcc": 0.999863,
+            "rrmse": 0.016618
+          },
+          {
+            "name": "KV boundary=0 layer=13",
+            "pcc": 0.999842,
+            "rrmse": 0.024843
+          },
+          {
+            "name": "KV boundary=0 layer=14",
+            "pcc": 1.0,
+            "rrmse": 0.01814
+          },
+          {
+            "name": "KV boundary=0 layer=14",
+            "pcc": 0.99858,
+            "rrmse": 0.027615
+          },
+          {
+            "name": "KV boundary=0 layer=15",
+            "pcc": 1.0,
+            "rrmse": 0.014675
+          },
+          {
+            "name": "KV boundary=0 layer=15",
+            "pcc": 1.0,
+            "rrmse": 0.023202
+          },
+          {
+            "name": "KV boundary=0 layer=16",
+            "pcc": 1.0,
+            "rrmse": 0.018006
+          },
+          {
+            "name": "KV boundary=0 layer=16",
+            "pcc": 1.0,
+            "rrmse": 0.025562
+          },
+          {
+            "name": "KV boundary=0 layer=17",
+            "pcc": 0.999598,
+            "rrmse": 0.023252
+          },
+          {
+            "name": "KV boundary=0 layer=18",
+            "pcc": 0.99962,
+            "rrmse": 0.023383
+          },
+          {
+            "name": "KV boundary=0 layer=18",
+            "pcc": 0.999472,
+            "rrmse": 0.032617
+          },
+          {
+            "name": "KV boundary=0 layer=19",
+            "pcc": 0.999959,
+            "rrmse": 0.020726
+          },
+          {
+            "name": "KV boundary=0 layer=19",
+            "pcc": 1.0,
+            "rrmse": 0.02781
+          },
+          {
+            "name": "KV boundary=0 layer=20",
+            "pcc": 0.998757,
+            "rrmse": 0.021258
+          },
+          {
+            "name": "KV boundary=0 layer=20",
+            "pcc": 1.0,
+            "rrmse": 0.032859
+          },
+          {
+            "name": "KV boundary=0 layer=21",
+            "pcc": 0.99985,
+            "rrmse": 0.026954
+          },
+          {
+            "name": "KV boundary=0 layer=21",
+            "pcc": 0.998854,
+            "rrmse": 0.044873
+          },
+          {
+            "name": "KV boundary=0 layer=22",
+            "pcc": 1.0,
+            "rrmse": 0.028847
+          },
+          {
+            "name": "KV boundary=0 layer=22",
+            "pcc": 0.999372,
+            "rrmse": 0.043167
+          },
+          {
+            "name": "KV boundary=0 layer=23",
+            "pcc": 0.998533,
+            "rrmse": 0.04075
+          },
+          {
+            "name": "KV boundary=0 layer=24",
+            "pcc": 1.0,
+            "rrmse": 0.03448
+          },
+          {
+            "name": "KV boundary=0 layer=24",
+            "pcc": 0.997582,
+            "rrmse": 0.050301
+          },
+          {
+            "name": "KV boundary=0 layer=25",
+            "pcc": 0.999593,
+            "rrmse": 0.037814
+          },
+          {
+            "name": "KV boundary=0 layer=25",
+            "pcc": 0.997508,
+            "rrmse": 0.063817
+          },
+          {
+            "name": "KV boundary=0 layer=26",
+            "pcc": 0.999165,
+            "rrmse": 0.049074
+          },
+          {
+            "name": "KV boundary=0 layer=26",
+            "pcc": 0.997094,
+            "rrmse": 0.074211
+          },
+          {
+            "name": "KV boundary=0 layer=27",
+            "pcc": 0.998275,
+            "rrmse": 0.060237
+          },
+          {
+            "name": "KV boundary=0 layer=27",
+            "pcc": 0.996063,
+            "rrmse": 0.089467
+          },
+          {
+            "name": "            print(f\"{name}",
+            "pcc": 1.0,
+            "rrmse": 0.0
+          }
+        ]
+      }
+    ]
+  }
+}
