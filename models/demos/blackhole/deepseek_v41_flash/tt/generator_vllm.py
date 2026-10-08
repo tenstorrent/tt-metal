@@ -91,8 +91,9 @@ class DeepseekV41ForCausalLM:
         "supports_chunked_prefill": _interleave_on(),
         "supports_async_decode": False,
         "supports_sample_on_device": True,
-        # device sampling = greedy only: temperature > 0 with top_k != 1 falls back to host sampling on the logits this class returns
-        "max_device_top_k": 1,
+        # temperature / top-k / top-p sampling is done here (candidates of the device top-k + a host draw): no ``max_device_top_k`` restriction in a plain launch. A speculative launch keeps
+        # max_device_top_k = 1 (sampled requests then use the plugin's host sampler on full logits: slow) until the sampled verify path exists.
+        **({} if not any(a.startswith("--speculative") for a in sys.argv) else {"max_device_top_k": 1}),
         "supports_device_penalties": False,
         # speculative decoding through the plugin's model-owned drafter contract (``speculative_config`` method custom_class): see ``spec_plan`` and the SPECULATIVE DECODING section
         "supports_spec_decode": True,
@@ -140,6 +141,10 @@ class DeepseekV41ForCausalLM:
                 f"DSV41_SPEC={os.environ['DSV41_SPEC']} ignored by the vLLM interface (decode mode: {'spec k=%d' % spec_k if spec_k else 'plain'})"
             )
         os.environ["DSV41_SPEC"] = str(spec_k)
+        if not spec_k:
+            os.environ.setdefault(
+                "DSV41_DEV_CAND_K", "64"
+            )  # device top-k candidates of the decode traces (temperature / top-p sampling)
         os.environ.setdefault("MOE_COMPUTE_FP32_ACC", "1")
         os.environ.setdefault("MOE_COMPUTE_BFP8_WEIGHTS", "1")
         max_seq_len = cls.bounded_max_seq_len(max_seq_len, B)
@@ -249,6 +254,94 @@ class DeepseekV41ForCausalLM:
                 logger.info(f"DSV4.1 bucket bench: {k}: {v:.2f} ms per step (host loop, replay + token read)")
         if os.environ.get("DSV41_VLLM_BUCKET_SELFTEST", "0") == "1":
             self.bucket_selftest()
+        if os.environ.get("DSV41_VLLM_SAMPLE_CHECK", "0") == "1":
+            self.sample_check()
+
+    def sample_check(self, steps=30, every=2):
+        """Start-up distribution check (DSV41_VLLM_SAMPLE_CHECK=1) of the candidate sampler on REAL logits: GSM8K prompts, greedy continuation, and at every ``every``-th step per user the exact
+        distribution of (temperature, top-p) over the FULL vocabulary vs over the device candidates (union of the per-column top-k): total variation distance, KL(full || candidates),
+        and the mass the candidate set drops (softmax at the temperature, before top-p). Also the dropped mass of a global top-{32,64,128,256} for choosing k. Analytic, no sampling noise.
+        """
+        import json as _json
+
+        from transformers import AutoTokenizer
+
+        m, U = self.m, self.U
+        if not getattr(m, "cand_k", 0):
+            return
+        tok = AutoTokenizer.from_pretrained(os.environ["DSV41_CKPT"])
+        pp = _json.load(
+            open(
+                os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "demo/sample_prompts/input_data_gsm8k_128_with_answers.json",
+                )
+            )
+        )
+        small = [u for u in self.bucket_users if u < U]
+        Ub = small[0] if small else U
+        rows = VS.MESH_ROWS
+        phys = [r * U + u for r in range(rows) for u in range(min(2, Ub))]
+        prompts = {p: torch.tensor(tok.encode(pp[i]["prompt"])) for i, p in enumerate(phys)}
+        chunk = self._interleave_chunk()
+        res = m.prefill_interleaved(
+            [(p, prompts[p], 0, int(prompts[p].numel())) for p in phys], chunk, s_pad_max=self.s_pad_cur
+        )
+        fed = {p: int(res[p][0]) for p in phys}
+        bphys = torch.tensor([(i // Ub) * U + i % Ub for i in range(rows * Ub)], dtype=torch.long)
+        row_of = {int(q): i for i, q in enumerate(bphys.tolist())}
+        fill = m.decode_filler()
+        cfgs = [(1.0, 0.95), (1.0, 1.0), (0.6, 0.95)]
+        stats = {c: {"tv": [], "kl": [], "tail": [], **{f"tail_g{g}": [] for g in (32, 64, 128, 256)}} for c in cfgs}
+        for step in range(steps):
+            tk = fill[bphys].clone()
+            ps = torch.zeros(rows * Ub, dtype=torch.long)
+            for p in phys:
+                tk[row_of[p]], ps[row_of[p]] = fed[p], int(prompts[p].numel()) + step
+            out = m.decode_forward_bucket(Ub, tk, ps, bphys)
+            if step % every:
+                for p in phys:
+                    fed[p] = int(out[row_of[p]])
+                continue
+            lg = m.read_logits_bucket(Ub).float()
+            cv, ci = m.read_candidates(Ub)
+            for p in phys:
+                r = row_of[p]
+                full, cand_ids, cand_v = lg[r], ci[r], cv[r]
+                for T, tp in cfgs:
+
+                    def dist(vals, ids, size):
+                        o = torch.argsort(vals, descending=True)
+                        v, i = vals[o], ids[o]
+                        pr = torch.softmax(v / T, 0)
+                        if tp < 1.0:
+                            pr = pr * ((pr.cumsum(0) - pr) < tp)
+                            pr = pr / pr.sum()
+                        d = torch.zeros(size)
+                        d[i] = pr
+                        return d
+
+                    Pf = dist(full, torch.arange(full.numel()), full.numel())
+                    Pc = dist(cand_v, cand_ids, full.numel())
+                    st = stats[(T, tp)]
+                    st["tv"].append(float(0.5 * (Pf - Pc).abs().sum()))
+                    msk = Pf > 0
+                    st["kl"].append(float((Pf[msk] * (Pf[msk].log() - Pc[msk].clamp_min(1e-30).log())).sum()))
+                    sm = torch.softmax(full / T, 0)
+                    st["tail"].append(float(1.0 - sm[cand_ids].sum()))
+                    srt = torch.sort(sm, descending=True)[0]
+                    for g in (32, 64, 128, 256):
+                        st[f"tail_g{g}"].append(float(1.0 - srt[:g].sum()))
+                fed[p] = int(out[row_of[p]])
+        for c, st in stats.items():
+            f = lambda k: f"mean {sum(st[k]) / len(st[k]):.2e} max {max(st[k]):.2e}"
+            logger.info(
+                f"DSV4.1 sample check T={c[0]} top_p={c[1]} over {len(st['tv'])} real distributions: TV {f('tv')} | KL {f('kl')} | dropped mass (union of per-column top-{m.cand_k}, "
+                f"{8 * m.cand_k} candidates) {f('tail')} | dropped mass of a global top-32 {f('tail_g32')}, top-64 {f('tail_g64')}, top-128 {f('tail_g128')}, top-256 {f('tail_g256')}"
+            )
+        for p in phys:
+            m.release_user(p)
+            self.book.clear(p)
 
     def bucket_selftest(self, n_users_per_row=2, steps=8, prompt_len=2600):
         """Startup self-test (DSV41_VLLM_BUCKET_SELFTEST=1) on the idle model: prefill a few users (users u < n_users_per_row of every mesh row), decode ``steps`` steps in the SMALLEST bucket
@@ -438,6 +531,8 @@ class DeepseekV41ForCausalLM:
             self.spec_last = torch.full((self.B,), -1, dtype=torch.long)  # the committed token those drafts continue
             self.spec_has = torch.zeros(self.B, dtype=torch.bool)
             self.spec_stats = {"rounds": 0, "accepted": 0, "rows": 0}
+        self.gens = {}  # seeded per-request generators by model user
+        self.rng = torch.Generator().manual_seed(int(os.environ.get("DSV41_VLLM_SAMPLE_SEED", "9472")))
         self.timing = {}
         self._warm = False
         self._calls = {"prefill": 0, "decode": 0}
@@ -537,14 +632,16 @@ class DeepseekV41ForCausalLM:
                 raise ValueError(
                     "logprobs are not supported by the DSV4.1 adapter (no on-device logprobs); request without logprobs"
                 )
-            if not VS.sampling_wants_greedy(sampling_params):
+            if not VS.sampling_wants_greedy(sampling_params) and (not self.interleave or self.spec is not None):
                 raise ValueError(
-                    "DSV4.1 samples greedily on the device (temperature 0); temperature > 0 must use host sampling (max_device_top_k=1 selects it)"
+                    "temperature > 0 with device sampling needs the interleaved prefill and a plain (non-speculative) launch (max_device_top_k=1 selects host sampling otherwise)"
                 )
         if max(lens) + 1 > self.max_seq_len:
             raise ValueError(f"prompt of {max(lens)} tokens does not fit max_model_len {self.max_seq_len}")
         if self.interleave:
-            return self._prefill_interleaved(tokens, lens, empty_slots, start_pos, device_sampling, enable_trace)
+            return self._prefill_interleaved(
+                tokens, lens, empty_slots, start_pos, device_sampling, enable_trace, sampling_params
+            )
         if start_pos is not None and any(
             int(x) != 0 for x in (start_pos.tolist() if hasattr(start_pos, "tolist") else start_pos)
         ):
@@ -616,7 +713,13 @@ class DeepseekV41ForCausalLM:
             raise ValueError(f"prefill chunk {c} must be a multiple of 128")
         return c
 
-    def _prefill_interleaved(self, tokens, ends, empty_slots, start_pos, device_sampling, enable_trace):
+    def _gen_for(self, p):
+        """torch generator of model user p: the request's own (seeded) one, else the server-wide one."""
+        return self.gens.get(p, self.rng)
+
+    def _prefill_interleaved(
+        self, tokens, ends, empty_slots, start_pos, device_sampling, enable_trace, sampling_params=None
+    ):
         """Prefill of the new requests / prompt chunks while other requests keep decoding (``Model.prefill_interleaved``): tokens [N, >= max end] (every prompt from
         position 0), ``ends`` the end position of this chunk of every row (= the prompt length for a whole prompt), ``start_pos`` the start (0 for a new request).
         A row with start > 0 is a continuation chunk of a request that is prefilled over several steps; the first token returned for a chunk that is not the last one
@@ -674,7 +777,17 @@ class DeepseekV41ForCausalLM:
         S = max(ends)
         chunk = self._interleave_chunk()
         self.s_pad_cur = max(self.s_pad_cur, VS.s_pad_bucket(S, chunk, self.s_pad_policy))
-        want_logits = not device_sampling
+        samp = VS.row_sampling(sampling_params, N) if device_sampling else None
+        sampled = [] if samp is None else [i for i in range(N) if not VS.row_is_greedy(samp[0][i], samp[1][i])]
+        if samp is not None:
+            for i, p in enumerate(phys):  # per-request seed: its own generator, advanced by every draw of this request
+                if samp[3][i] is not None and starts[i] == 0:
+                    self.gens[p] = torch.Generator().manual_seed(int(samp[3][i]))
+                elif starts[i] == 0:
+                    self.gens.pop(p, None)
+        want_logits = (not device_sampling) or bool(
+            sampled
+        )  # sampled rows: the first token is drawn on the host from the full logits row (one row per request)
         logger.info(
             f"DSV4.1 prefill (interleave): chunks {[(it[2], it[3]) for it in items]} in slots {empty_slots} (users {phys}), chunk {chunk}, "
             f"S_pad {self.s_pad_cur}, {'host sampling' if want_logits else 'device sampling'}"
@@ -689,7 +802,14 @@ class DeepseekV41ForCausalLM:
         self._calls["prefill"] += 1
         logger.info(f"DSV4.1 prefill (interleave) done in {self.timing['prefill']:.2f} s (model: {self.m.timing})")
         if device_sampling:
-            return torch.tensor([int(res[p][0]) for p in phys], dtype=torch.int32).reshape(N)
+            first = [int(res[p][0]) for p in phys]
+            for i in sampled:
+                lg = res[phys[i]][1]
+                if lg is not None:
+                    first[i] = VS.sample_from_logits(
+                        lg.float(), samp[0][i], samp[1][i], samp[2][i], self._gen_for(phys[i])
+                    )
+            return torch.tensor(first, dtype=torch.int32).reshape(N)
         return torch.stack([res[p][1] for p in phys]).float().reshape(N, 1, -1)
 
     # ---- decode ------------------------------------------------------------------------------------------------------------------------------
@@ -744,9 +864,11 @@ class DeepseekV41ForCausalLM:
                 raise ValueError(
                     "logprobs are not supported by the DSV4.1 adapter (no on-device logprobs); request without logprobs"
                 )
-            if not VS.sampling_wants_greedy(sampling_params, [i for i, _, _ in rows]):
+            if not VS.sampling_wants_greedy(sampling_params, [i for i, _, _ in rows]) and not getattr(
+                self.m, "cand_k", 0
+            ):
                 raise ValueError(
-                    "DSV4.1 samples greedily on the device (temperature 0); temperature > 0 must use host sampling (max_device_top_k=1 selects it)"
+                    "temperature > 0 needs the device top-k candidates (DSV41_DEV_CAND_K > 0, plain launch); max_device_top_k=1 selects host sampling otherwise"
                 )
         if not rows:
             return (
@@ -783,6 +905,23 @@ class DeepseekV41ForCausalLM:
         else:
             self._decode_stats(t_in, t_out, Ub)
         if device_sampling:
+            out = out.reshape(-1).clone()
+            samp = VS.row_sampling(sampling_params, W)
+            srows = [
+                (i, idx, p)
+                for (i, idx, _), (_, p, _) in zip(rows, rows_p)
+                if not VS.row_is_greedy(samp[0][i], samp[1][i])
+            ]
+            if (
+                srows
+            ):  # sampled rows: temperature / top-k / top-p / draw over the device's top-k candidates (the greedy token of these rows is replaced)
+                t_s = time.perf_counter()
+                cv, ci = self.m.read_candidates(Ub if phys is not None else None)
+                for i, idx, p in srows:
+                    out[idx] = VS.sample_from_candidates(
+                        cv[idx], ci[idx], samp[0][i], samp[1][i], samp[2][i], self._gen_for(p)
+                    )
+                self.timing["sample"] = time.perf_counter() - t_s
             return VS.scatter_rows(out.reshape(-1, 1).to(torch.int32), rows, W)
         logits = (
             self.m.read_logits_bucket(Ub).float() if self.bucketing else self.m.read_logits().float()
@@ -866,6 +1005,7 @@ class DeepseekV41ForCausalLM:
             else:
                 self.m.pool.release(p)
             self.book.clear(p)
+            self.gens.pop(p, None)
             if self.spec is not None:
                 self.spec_has[p] = False
             self.inprog.drop(p)

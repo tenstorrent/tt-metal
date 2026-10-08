@@ -204,6 +204,25 @@ class DSV41DeviceHead:
         best = v[:, :, 0].argmax(-1)
         return v[torch.arange(v.shape[0]), best, 1].long() + best * shard
 
+    def topk_candidates(self, logits, mesh_config, ccl, k):
+        """Sampling candidates INSIDE the trace: per column (vocab slice) the k largest logits and their local ids, all-gathered over the mesh columns:
+        fp32 [1,1,T,cols * 2k], per column c the block [values (k) | local ids (k)] (ids < 16160 are exact in fp32). The union of the per-column top-k contains the global top-k;
+        the host does temperature / top-p / the random draw over these cols * k candidates (tt/vllm_state.sample_from_candidates).
+        """
+        vals, idx = ttnn.topk(logits, k=k, dim=-1, largest=True, sorted=True)
+        idxf = ttnn.typecast(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), ttnn.float32)
+        cat = ttnn.concat([ttnn.typecast(vals, ttnn.float32), idxf], dim=-1)
+        return mesh_config.allgather(cat, ccl, axis=1, dim=3)
+
+    def read_candidates(self, cand, k):
+        """Host copy of ``topk_candidates`` output: -> (values [B, cols*k] fp32, global token ids [B, cols*k] long), B rows in mesh-row order (users of mesh row r follow those of r-1)."""
+        rows, cols = tuple(self.md.shape)
+        shard = VOCAB // cols
+        devs = ttnn.get_device_tensors(ttnn.from_device(cand))
+        t = torch.cat([ttnn.to_torch(devs[r * cols]).reshape(-1, cols, 2, k) for r in range(rows)]).float()
+        ids = t[:, :, 1, :].long() + (torch.arange(cols) * shard).reshape(1, cols, 1)
+        return t[:, :, 0, :].reshape(t.shape[0], -1), ids.reshape(t.shape[0], -1)
+
     def gather_logits(self, logits):
         """Host copy of the full logits [B, vocab] (diagnostics / PCC; the decode loop uses ``argmax``)."""
         rows, cols = tuple(self.md.shape)

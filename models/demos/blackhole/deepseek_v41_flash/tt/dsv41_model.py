@@ -237,6 +237,10 @@ class Model:
             self.head = keep["head"]
         self.dec = DSV41Decoder(mesh_device, self.built, embedding, self.head, dev_engram, step_states=self.step_groups)
         self.dec.mesh_config, self.dec.ccl = self.mc, self.ccl
+        self.cand_k = int(
+            os.environ.get("DSV41_DEV_CAND_K", "0")
+        )  # per-column top-k candidates computed inside the decode traces for temperature / top-p sampling (adapter)
+        self.dec.cand_k = self.cand_k
         self.prefill_model = GenPrefillModel(
             mesh_device, pls, embedding, self.head, dev_engram, self.host_rows, self.Up
         )
@@ -1608,6 +1612,12 @@ class Model:
         if Ub == self.U:
             return self.decode_forward(tokens, current_pos, enable_trace=enable_trace, reload_inputs=True)
         return self.buckets[Ub].step(tokens, current_pos, phys, enable_trace=enable_trace)
+
+    def read_candidates(self, Ub=None):
+        """(values, global ids) [B', cols * cand_k] of the last decode step of the full model (``Ub`` None / U) or of a bucket."""
+        dec = self.dec if Ub is None or Ub == self.U else self.buckets[Ub].dec
+        ttnn.synchronize_device(self.md)
+        return self.head.read_candidates(dec.cand, self.cand_k)
 
     def read_logits_bucket(self, Ub):
         return self.read_logits() if Ub == self.U else self.buckets[Ub].read_logits()

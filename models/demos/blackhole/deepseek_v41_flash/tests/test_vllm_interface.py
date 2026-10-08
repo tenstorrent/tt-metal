@@ -950,3 +950,28 @@ def test_compaction_moves_a_straggler_into_the_small_bucket(monkeypatch, bucket_
     assert items[0][1:] == (0, 4)  # the re-prefill covered the prompt (2) + the 2 tokens fed before the third call
     # the moved request keeps its logical slot and its token stream: expected greedy chain (t + 1) % 7 every step
     assert last[16] == (firsts[16] + 5) % 7 and last[0] == (firsts[0] + 5) % 7
+
+
+# ---- sampling over candidates ---------------------------------------------------------------------------------------------------------------
+def test_row_sampling_and_greedy_rows():
+    sp = SimpleNamespace(temperature=[0.0, 1.0, 0.7], top_k=[-1, 1, 50], top_p=[1.0, 1.0, 0.9], seed=[None, None, 5])
+    t, k, p, sd = VS.row_sampling(sp, 3)
+    assert [VS.row_is_greedy(t[i], k[i]) for i in range(3)] == [True, True, False] and sd[2] == 5
+
+
+def test_sample_from_candidates_follows_the_truncated_distribution():
+    torch.manual_seed(0)
+    vals = torch.tensor([3.0, 2.0, 1.0, 0.0, -1.0, -5.0])
+    ids = torch.tensor([10, 11, 12, 13, 14, 15])
+    g = torch.Generator().manual_seed(1)
+    draws = torch.tensor([VS.sample_from_candidates(vals, ids, 1.0, -1, 1.0, g) for _ in range(20000)])
+    pr = torch.softmax(vals, 0)
+    emp = torch.stack([(draws == i).float().mean() for i in ids])
+    assert float((emp - pr).abs().sum()) / 2 < 0.02  # total variation
+    nuc = torch.tensor([VS.sample_from_candidates(vals, ids, 1.0, -1, 0.5, g) for _ in range(2000)])
+    assert set(nuc.tolist()) <= {
+        10,
+        11,
+    }  # the smallest prefix reaching 0.5 mass: tokens 10 (0.64 alone reaches it) -> only token 10 stays
+    top1 = {VS.sample_from_candidates(vals, ids, 0.01, 1, 1.0, g) for _ in range(20)}
+    assert top1 == {10}
