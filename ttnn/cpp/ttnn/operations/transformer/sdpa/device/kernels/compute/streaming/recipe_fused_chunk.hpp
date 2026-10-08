@@ -129,8 +129,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     constexpr uint32_t KT = Sk_chunk_t;
     // Rows per group. Dense STANDARD (math-bound) runs a short Q chunk in one-row groups, so the lagged QK / check /
     // PV pipeline has enough groups to overlap. FAST is pack-bound and keeps two-row groups (one-row groups double
-    // its per-group pack work), and so do the ring kernels.
-#if defined(SDPA_RECIPE_LOFI) || defined(SDPA_RECIPE_RING)
+    // its per-group pack work), and so do the ring kernels and Wormhole STANDARD.
+#if defined(SDPA_RECIPE_LOFI) || defined(SDPA_RECIPE_RING) || defined(ARCH_WORMHOLE)
     constexpr uint32_t kH1MaxQTiles = 0;
 #else
     constexpr uint32_t kH1MaxQTiles = 6;
