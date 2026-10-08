@@ -266,4 +266,31 @@ def test_moe_real_layer(mesh_device):
             ),
             flush=True,
         )
+    if (
+        os.environ.get("MIMO_TIME_STAGES", "0") == "1"
+    ):  # experts-op time = (forward upto=3) - (upto=2), host-timed medians, alternating ops
+        iters = int(os.environ.get("MIMO_TIME_ITERS", "5"))
+        st = {(op, u): [] for op in ums for u in (2, 3)}
+        for it in range(iters + 1):
+            for op, um in ums.items():
+                for u in (2, 3):
+                    t0 = time.time()
+                    x_rm = ttnn.reshape(ttnn.to_layout(xt, ttnn.ROW_MAJOR_LAYOUT), [1, N, HIDDEN])
+                    r_ = um.forward(x_rm, wtd, ixd, upto=u)
+                    ttnn.synchronize_device(md)
+                    st[(op, u)].append((time.time() - t0) * 1e3)
+                    for t_ in r_:
+                        ttnn.deallocate(t_)
+        med = lambda v: sorted(v[1:])[len(v[1:]) // 2]
+        print(
+            "RESULT stage time (host-timed medians, N=%d/row): %s"
+            % (
+                N,
+                {
+                    op: f"to-dispatch {med(st[(op, 2)]):.2f} ms, to-experts {med(st[(op, 3)]):.2f} ms, experts op {med(st[(op, 3)]) - med(st[(op, 2)]):.2f} ms"
+                    for op in ums
+                },
+            ),
+            flush=True,
+        )
     assert not failures, failures
