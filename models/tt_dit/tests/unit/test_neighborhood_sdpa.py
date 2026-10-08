@@ -181,9 +181,10 @@ def test_matches_torch_reference(mesh_device, volume, context_window, stride, ch
 def test_program_cache_keys_on_compile_time_inputs(mesh_device):
     """Calls differing only in a compile-time input must not share a cached program.
 
-    Fidelity, approx exp and the presence of an interior mask are all compiled into the program.
-    If one is missing from the hash, the second call silently reruns the first call's kernel: the
-    output still passes PCC, it just is not what was asked for.
+    Fidelity, approx exp, the presence of an interior mask, the query chunk shape and the shard
+    origin (it sets the compiled gather_bricks) all shape the program. If one is missing from the
+    hash, the second call silently reruns the first call's kernel: the output still passes PCC, it
+    just is not what was asked for.
     """
     from models.tt_dit.layers.neighborhood_attention_plan import _build_relative_masks
 
@@ -196,6 +197,29 @@ def test_program_cache_keys_on_compile_time_inputs(mesh_device):
     plan = ttnn.transformer.neighborhood_plan(
         volume, context_window, stride, brick, query_chunk_bricks=query_chunk_bricks
     )
+    one_brick_chunk = (1, 1, 1)
+    assert tuple(query_chunk_bricks) != one_brick_chunk
+    one_brick_plan = ttnn.transformer.neighborhood_plan(
+        volume, context_window, stride, brick, query_chunk_bricks=one_brick_chunk
+    )
+    # One width shard (owned 8 + a one-brick halo) at two origins: the shape of every call matches,
+    # only shard_origin differs.
+    owned_width = 8
+    resident = (volume[0], volume[1], owned_width + brick[2])
+    shard_plans = {
+        origin: ttnn.transformer.neighborhood_plan(
+            volume,
+            context_window,
+            stride,
+            brick,
+            query_chunk_bricks=one_brick_chunk,
+            shard_extent=resident,
+            shard_origin=origin,
+        )
+        for origin in ((0, 0, 0), (0, 0, owned_width - brick[2]))
+    }
+    # Hashed, so it must not change between the calls each step compares.
+    tiles_per_kv_chunk = min(8, *(p["gather_brick_count"] for p in (plan, one_brick_plan, *shard_plans.values())))
 
     site_count = volume[0] * volume[1] * volume[2]
     query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
@@ -204,19 +228,17 @@ def test_program_cache_keys_on_compile_time_inputs(mesh_device):
     )
     table = bricked_index_table(volume, brick)
 
-    def upload(tensor):
-        bricked = to_bricked(tensor, table).contiguous().reshape(1, 1, -1, head_count * head_dim)
+    def upload(tensor, index_table=table):
+        bricked = to_bricked(tensor, index_table).contiguous().reshape(1, 1, -1, head_count * head_dim)
         return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
-        1, 1, plan["chunk_count"], plan["gather_origin_columns"]
-    )
-    inputs = (
-        upload(query),
-        upload(key),
-        upload(value),
-        ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
-    )
+    def upload_origins(chunk_plan):
+        origin_table = torch.tensor(chunk_plan["gather_origin_table"], dtype=torch.uint32).reshape(
+            1, 1, chunk_plan["chunk_count"], chunk_plan["gather_origin_columns"]
+        )
+        return ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    inputs = (upload(query), upload(key), upload(value), upload_origins(plan))
     interior_mask = ttnn.from_torch(
         _build_relative_masks(context_window, brick), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
@@ -229,19 +251,20 @@ def test_program_cache_keys_on_compile_time_inputs(mesh_device):
     high = compute_config(ttnn.MathFidelity.HiFi4, False)
     low = compute_config(ttnn.MathFidelity.LoFi, True)
 
-    def run(config, mask=None):
+    def run(config, mask=None, tensors=inputs, chunk=query_chunk_bricks, **shard):
         return ttnn.transformer.neighborhood_scaled_dot_product_attention(
-            *inputs,
+            *tensors,
             interior_mask=mask,
             volume=volume,
             context_window=context_window,
             stride=stride,
             brick=brick,
-            query_chunk_bricks=query_chunk_bricks,
+            query_chunk_bricks=chunk,
             head_count=head_count,
             scale=1.0,
-            tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
+            tiles_per_kv_chunk=tiles_per_kv_chunk,
             compute_kernel_config=config,
+            **shard,
         )
 
     entries = [device.num_program_cache_entries()]
@@ -252,7 +275,24 @@ def test_program_cache_keys_on_compile_time_inputs(mesh_device):
     # A repeat of the first call must hit the cache, or the hash is keyed on something per-call.
     run(high)
     entries.append(device.num_program_cache_entries())
-    assert entries == [entries[0] + step for step in (0, 1, 2, 3, 3)], f"program cache entries {entries}"
+    outputs["high_one_brick_chunk"] = run(
+        high, tensors=(*inputs[:3], upload_origins(one_brick_plan)), chunk=one_brick_chunk
+    )
+    entries.append(device.num_program_cache_entries())
+
+    resident_table = bricked_index_table(resident, brick)
+    resident_sites = resident[0] * resident[1] * resident[2]
+    resident_inputs = [upload(torch.randn(1, resident_sites, head_count, head_dim), resident_table) for _ in range(3)]
+    for origin, shard_plan in shard_plans.items():
+        run(
+            high,
+            tensors=(*resident_inputs, upload_origins(shard_plan)),
+            chunk=one_brick_chunk,
+            shard_extent=resident,
+            shard_origin=origin,
+        )
+        entries.append(device.num_program_cache_entries())
+    assert entries == [entries[0] + step for step in (0, 1, 2, 3, 3, 4, 5, 6)], f"program cache entries {entries}"
 
     def unbrick(device_tensor):
         bricked = ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0]).float().reshape(1, -1, head_count, head_dim)
@@ -270,7 +310,7 @@ def test_program_cache_keys_on_compile_time_inputs(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
 def test_shards_match_the_whole_volume(mesh_device):
-    """Two shards with DIFFERENT origins reproduce the unsharded answer, on one program.
+    """Two shards with DIFFERENT origins reproduce the unsharded answer.
 
     This is the property the mesh needs and the one a zero origin cannot show. Window placement
     is GLOBAL -- a query half a window from a shard seam must still see a full window, clamped
@@ -278,7 +318,8 @@ def test_shards_match_the_whole_volume(mesh_device):
     device of a mesh would share one value, believe it sat at the origin, and clamp at its own
     seam: plausible output, wrong receptive field along every internal boundary.
 
-    Both shards run through the same cached program here, which is exactly what a mesh does.
+    Each shard reads its origin out of its gather origin table, which is how one program serves
+    every device of a mesh.
     """
     torch.manual_seed(0)
     volume, context_window, stride = (4, 8, 16), (3, 3, 3), (1, 1, 1)

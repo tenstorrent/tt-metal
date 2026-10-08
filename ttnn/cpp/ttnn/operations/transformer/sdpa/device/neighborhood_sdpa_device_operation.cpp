@@ -173,14 +173,19 @@ ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
         config.context_window.by_axis,
         config.stride.by_axis,
         config.brick.by_axis,
+        // The chunk shape reaches the reader and writer as compile-time arguments and sets the
+        // chunk count, the gather extent and the CB sizes.
+        config.query_chunk_bricks.by_axis,
         config.shard_extent.by_axis,
-        // shard_origin is deliberately NOT hashed: it rides the gather origin table as runtime
-        // data, so one compiled program serves every shard of the mesh.
-        //
-        // query_extent and query_origin ARE hashed, unlike shard_origin: both reach the reader as
-        // COMPILE-TIME arguments (query_bricks, query_origin_bricks), and query_extent also sets
-        // the chunk count. They are uniform across the mesh -- every shard owns the same-shaped
-        // region at the same offset in its resident box -- so hashing them costs no sharing.
+        // Each device reads its own shard origin out of the gather origin table at run time, but
+        // the plan also derives the compile-time gather_bricks from this representative origin
+        // (its key phase and where windows clamp). One mesh call passes one value, so hashing it
+        // costs no sharing across the mesh's shards.
+        config.shard_origin.by_axis,
+        // query_extent and query_origin reach the reader as COMPILE-TIME arguments (query_bricks,
+        // query_origin_bricks), and query_extent also sets the chunk count. They are uniform across
+        // the mesh -- every shard owns the same-shaped region at the same offset in its resident
+        // box -- so hashing them costs no sharing.
         config.query_extent.by_axis,
         config.query_origin.by_axis,
         attributes.head_count,
