@@ -31,6 +31,10 @@ case $1 in
              ab f4x2 - EB_R3_NO_PRE_SECTIONS=1 "test_mul_tg or mul_bfp8"
            done ;;
   f1b)     for i in 1 2 3; do ab f1b - EB_R3_NO_BLOCK=1 "llama8b_decode"; done ;;
+  lnint2)  for i in 1 2 3; do
+             ab lnint_h $O/off_lnint_h.txt - "(sdxl_transformer and d1) or (llama8b_prefill and accuracy)"
+             ab lnint_b $O/off_lnint_b.txt - "(sdxl_transformer and d1) or (llama8b_prefill and accuracy)"
+           done ;;
   smsa)    ab sm_b $O/off_sm_b.txt - "softmax_cfg"
            ab sa_b $O/off_sa_b.txt - "llama8b_sampling" ;;
 esac
