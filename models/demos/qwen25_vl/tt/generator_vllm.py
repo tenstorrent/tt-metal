@@ -134,7 +134,12 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     # Class-level capabilities
     model_capabilities = {
         "supports_prefix_caching": False,
-        "supports_async_decode": False,
+        # Split decode submission (decode_forward(read_from_device=False) + read_decode_output(async_read=True))
+        # and the resident token feedback buffer come from the shared tt_transformers generator, the same way
+        # the text models declare them; vLLM's async scheduling needs this flag.
+        "supports_async_decode": True,
+        "supports_sample_on_device": True,
+        "max_device_top_k": 32,
     }
 
     def __init__(self, *args, **kwargs):

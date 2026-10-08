@@ -415,8 +415,11 @@ class Transformer(TTTransformer):
     # Fix: route greedy decode through the force-argmax path (enabled in
     # __init__ below) and run sampling eagerly so the all-gather re-acquires a
     # fresh semaphore. The decode token input cannot alias the sampling output.
-    _tt_supports_decode_token_feedback = False
-    _tt_disable_sampling_trace = True
+    # Traced sampling and on-device token feedback stay enabled: vLLM's resident/async decode feeds the
+    # device-sampled token straight back into the next traced step, and with the force-argmax path
+    # (enabled in __init__) batch-32 greedy decode is correct (demo outputs identical to host argmax).
+    _tt_supports_decode_token_feedback = True
+    _tt_disable_sampling_trace = False
 
     def __init__(
         self,
