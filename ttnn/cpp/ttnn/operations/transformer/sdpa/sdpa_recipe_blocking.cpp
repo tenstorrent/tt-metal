@@ -608,8 +608,9 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor* attn_mask,
     uint64_t reserved_l1_bytes,
     const RecipeKeyRange* key_range,
-    const RecipeDenseOptions* options) {
-    if (!recipe_blocking_requested(program_config) || q.storage_type() != StorageType::DEVICE) {
+    const RecipeDenseOptions* options,
+    bool chunks_are_hints) {
+    if ((!recipe_blocking_requested(program_config) && !chunks_are_hints) || q.storage_type() != StorageType::DEVICE) {
         return program_config;
     }
     auto* device = q.device();
@@ -638,7 +639,20 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     if (options) {
         problem.extra_l1_bytes += recipe_dense_options_extra_bytes(*options);
     }
-    const auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
+    auto choice = invalid_fixed(config) ? std::nullopt : choose_recipe_blocking(problem);
+    if (!choice && chunks_are_hints && (problem.fixed_q_tiles != 0 || problem.fixed_k_tiles != 0)) {
+        log_debug(
+            tt::LogOp,
+            "SDPA recipe: Q{}/K{} from the caller's program config is not a supported recipe blocking or does not fit "
+            "L1; choosing the blocking",
+            config.q_chunk_size,
+            config.k_chunk_size);
+        config.q_chunk_size = 0;
+        config.k_chunk_size = 0;
+        problem.fixed_q_tiles = 0;
+        problem.fixed_k_tiles = 0;
+        choice = choose_recipe_blocking(problem);
+    }
     return apply_choice(config, choice, problem, joint_q ? "joint" : "dense");
 }
 

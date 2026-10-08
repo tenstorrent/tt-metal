@@ -139,7 +139,9 @@ void reject_auto_blocking_without_recipe(const std::optional<SDPAProgramConfig>&
 // Tensor-level hooks: return the caller's config when both chunk sizes are explicit, otherwise a
 // copy with the chosen chunk sizes (and, for exp ring, grid). If no candidate fits, unset chunks
 // fall back to Q256/K512 so the op's own validation reports why. Dense: `reserved_l1_bytes` per core
-// are kept free for buffers allocated after the choice (an L1 output).
+// are kept free for buffers allocated after the choice (an L1 output). `chunks_are_hints` (calls routed
+// to a recipe without `precision`, whose chunk sizes were chosen for the legacy kernels): explicit chunk
+// sizes are kept when the recipe supports them and they fit L1, else the op chooses both.
 std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const PrecisionPolicy& policy,
     const Tensor& q,
@@ -150,7 +152,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor* attn_mask = nullptr,
     uint64_t reserved_l1_bytes = 0,
     const RecipeKeyRange* key_range = nullptr,
-    const RecipeDenseOptions* options = nullptr);
+    const RecipeDenseOptions* options = nullptr,
+    bool chunks_are_hints = false);
 
 SDPAProgramConfig resolve_ring_recipe_blocking(
     const PrecisionPolicy& policy,
