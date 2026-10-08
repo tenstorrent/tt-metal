@@ -21,8 +21,8 @@ The user is away; their hours away are the budget. The two failure modes this sk
 2. a full Sanity + Nightly (+ LLK e2e) run **for that SHA**, every job **green** or proven
    **unrelated** with evidence;
 3. **every bot comment addressed** — valid ones fixed, wrong ones pushed back on, each with a short
-   reply — including comments that arrive after a CI-fix push or a rebase. `bot_threads.sh` prints
-   nothing.
+   reply — including comments that arrive after a CI-fix push or a rebase. `bot_threads.sh` exits 0
+   and prints nothing.
 
 Invoking this skill **is** the authorization to: create worktrees/branches, push your own branches
 (force-with-lease on them only), create sub-issues, open **DRAFT** PRs, reply to/resolve **bot** threads,
@@ -41,9 +41,13 @@ so a run can be resumed from another machine. Scripts avoid `gh run list --branc
 | `mkwt.sh <name> <branch>` | worktree off origin/main (or the existing branch on resume) |
 | `dispatch.sh "<workflow>" <ref> [-f k=v]` | dispatch a workflow **and get its run id** (gh prints none) |
 | `ci_triage.sh <run_id>` | every non-green job of a run with its failing tests |
-| `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main? |
+| `main_job_status.sh "<workflow>" "<job>"` | is the same job failing on main — on the same tests? |
 | `bot_threads.sh <pr>` | bot feedback still unanswered; ack handled summaries by URL |
-| `bots_pending.sh <pr>` | what must still finish before the head SHA is "bots quiet"; empty = quiet |
+| `bots_pending.sh <pr>` | what must still finish before the head SHA is "bots quiet"; exit 0 + empty = quiet |
+
+The two gate scripts print nothing when there is nothing left — and also when GitHub could not be
+read, so their **exit status is part of the gate**: a non-zero exit is "not quiet / not answered",
+retry after the poll interval. Never treat an empty failed read as done.
 
 ---
 
@@ -197,15 +201,18 @@ the head SHA** — queued, in progress, or completed — and Copilot, the one re
 app, sits in the PR's requested reviewers until it submits. So whether bots are done is **observed,
 not guessed**:
 ```bash
-$SKILL/scripts/bots_pending.sh <PR>      # empty output = bots quiet on the current head SHA
+pending=$($SKILL/scripts/bots_pending.sh <PR>) && [ -z "$pending" ]   # true = bots quiet on the head SHA
 ```
 It lists: `RUN` (a run on the head SHA still queued/in progress — reviewers, static checks, PR gate;
 any event, incl. `pull_request_target`), `DISPATCH` (an LLK PR Review run for this PR, or a run id you
-pass, not completed), `FAILED` (the latest LLK PR Review run for this PR did not succeed — re-dispatch once, then ack its URL), `COPILOT` (review requested, not submitted), `SETTLE` (no run has registered
-yet and the head is under 10 min old — GitHub needs a minute or two to queue runs after a push; after
-10 min with nothing registered, nothing is coming), and the `bot_threads.sh` lines.
+pass, not completed), `FAILED` (the latest LLK PR Review run for this PR did not succeed — re-dispatch
+once, then ack its URL), `COPILOT` (review requested, not submitted), `SETTLE` (no run has registered
+yet and the script first saw this head SHA under 10 min ago — GitHub needs a minute or two to queue
+runs after a push; after 10 min with nothing registered, nothing is coming), and the `bot_threads.sh`
+lines. The SETTLE clock starts when the script first sees the SHA, not at the commit date (commits
+are made long before they are pushed), so **run it right after every push**.
 
-**Bots quiet for a SHA** = `bots_pending.sh <PR>` prints nothing. A reviewer run that infra-failed
+**Bots quiet for a SHA** = `bots_pending.sh <PR>` exits 0 and prints nothing. A reviewer run that infra-failed
 counts as completed once it has been re-dispatched once (retry table). Pure rebases (no code change)
 don't need a fresh LLK PR Review dispatch, but `bots_pending.sh` must still be empty before CI is
 spent on the new SHA — reviewers that trigger on `synchronize` will have run again. Waiting for the
@@ -217,7 +224,7 @@ Poll it with the same discipline as any wait: a background loop every 2–5 min,
 **Every bot comment gets handled, on every push, for the life of the PR.** A CI fix, a review fix, or a
 rebase is a new head SHA, bots review it again, and those comments are in scope too.
 ```bash
-$SKILL/scripts/bot_threads.sh <PR>   # THREAD lines: unresolved inline threads; REVIEW lines: summaries/comments
+$SKILL/scripts/bot_threads.sh <PR>   # THREAD: unresolved threads a bot opened, latest comment from a bot; REVIEW: summaries/comments
 ```
 Read each in full (no truncation). Bots are not authorities — they are often wrong. For each:
 
@@ -232,9 +239,9 @@ Read each in full (no truncation). Bots are not authorities — they are often w
   `echo <url> >> $MASTER_ISSUE_DIR/acked-<PR>.txt`. Ack a findings summary only after every finding
   in it is handled.
 
-Reply to a THREAD with `gh api repos/<o>/<r>/pulls/<PR>/comments/<rest-id>/replies -f body='…'`,
-resolve with the GraphQL `resolveReviewThread` mutation on the thread id (both ids are in the
-`bot_threads.sh` line). Reply to a REVIEW with an issue comment on the PR.
+Reply to a THREAD with `gh api repos/<o>/<r>/pulls/<PR>/comments/<root-rest-id>/replies -f body='…'`
+(the thread's top-level comment id), resolve with the GraphQL `resolveReviewThread` mutation on the
+thread id (both ids are in the `bot_threads.sh` line). Reply to a REVIEW with an issue comment on the PR.
 
 **Replies: short, but keep the substance.** One to three sentences: the verdict, the evidence or the
 change, the commit. No preamble, no thanking, no restating the comment. E.g.
@@ -264,29 +271,39 @@ per PR**; every additional run must be justified in the ledger by exactly one of
 breakage. A bot finding that arrives while CI is already running is handled, but the fix is held
 (batched) until that CI run reports, so one re-run covers both.
 
-Once bots are quiet on the current head SHA, dispatch on the branch and record run ids:
+Once bots are quiet on the current head SHA, dispatch on the branch and record run ids. A manual
+dispatch is **not** the nightly by default: every test family the cron schedule turns on is an
+opt-in `workflow_dispatch` input that defaults to false, so a bare dispatch reports success with the
+test jobs skipped. Pass the opt-ins:
 ```bash
-$SKILL/scripts/dispatch.sh "Sanity tests"               <branch>
-$SKILL/scripts/dispatch.sh "Nightly tt-metal L2 tests"  <branch>
-$SKILL/scripts/dispatch.sh "LLK e2e Tests"              <branch>     # if tt-llk files changed
+$SKILL/scripts/dispatch.sh "Sanity tests"              <branch> -f run-llk-sanity-tests=true
+$SKILL/scripts/dispatch.sh "Nightly tt-metal L2 tests" <branch> -f run_llk_unit_tests=true -f run_cpp_tests=true \
+    -f additional_test_categories=<the list the workflow's `schedule` branch passes>
+$SKILL/scripts/dispatch.sh "LLK e2e Tests"             <branch>     # if tt-llk files changed
 ```
-("PR - Sanity tests" is not dispatchable. On drafts the PR-Gate llk lanes are skipped, so LLK e2e is
-the only silicon run for LLK changes.) Nightly takes hours — arm the watchers and move on.
+Take the category list from `.github/workflows/tt-metal-l2-nightly.yaml` (the
+`github.event_name == 'schedule'` arm of `additional_test_categories`) at dispatch time, so the manual
+run covers what the nightly covers. Then **check the run's job list**, not its conclusion: a green
+rollup whose test jobs are all skipped is not a pass. ("PR - Sanity tests" is not dispatchable. On
+drafts the PR-Gate llk lanes are skipped; silicon coverage for tt-llk changes comes from Sanity's
+`run-llk-sanity-tests` smoke on WH+BH, Nightly's `run_llk_unit_tests`, and LLK e2e, the whole tt-llk
+suite.) Nightly takes hours — arm the watchers and move on.
 
 **Triage every failing job** (`ci_triage.sh <run_id>`) by reading the job log, not the rollup:
 
 | verdict | evidence needed | action |
 |---|---|---|
 | **caused by PR** | failure touches changed code/test, or reproduces locally with the PR and not without | fix (with a test if the failure exposed a gap), push → §5 for the new SHA, then full re-dispatch |
-| **unrelated, main also broken** | same job fails on `main` in the same window (`main_job_status.sh "<workflow>" "<job substring>"`; "no matching job" is *not* evidence) | arm a watcher on main's runs of that workflow; when main's job goes green (cap 4 h), `git rebase origin/main`, `push --force-with-lease`, wait for bots quiet on the new SHA (§5), *then* full re-dispatch |
+| **unrelated, main also broken** | same job fails on `main` in the same window **on the same failing tests / error line** — `main_job_status.sh "<workflow>" "<job substring>"` prints each failed job's FAIL lines, compare them with `ci_triage.sh`'s for the PR run; a main failure on different tests is "can't tell", and "no matching job" is *not* evidence | arm a watcher on main's runs of that workflow; when main's job goes green (cap 4 h), `git fetch origin main && git rebase origin/main` (the worktree's `origin/main` is only as new as its last fetch), `push --force-with-lease`, wait for bots quiet on the new SHA (§5), *then* full re-dispatch |
 | **flaky / infra** | runner setup, rate limit, `infra:timeout`, card off bus, perf a hair past band; main passes | `gh api --method POST repos/<o>/<r>/actions/runs/<id>/rerun-failed-jobs` (max 2) |
 | **can't tell** | | rerun once; if still ambiguous, run the failing test locally with/without the PR if the box can |
 
 Never call a PR green from a partial rollup — enumerate every job of every dispatched workflow.
 
-**After a rebase**, re-run the item's test with the fix (must still pass). If main touched any of the
-PR's files (`git diff <old-base>..origin/main --stat -- <files>`), redo the fail-without check too —
-main may have fixed or moved the defect.
+**After a rebase** (always `git fetch origin main` first — watching main through the API does not
+move the local `origin/main`), re-run the item's test with the fix (must still pass). If main touched
+any of the PR's files (`git diff <old-base>..origin/main --stat -- <files>`), redo the fail-without
+check too — main may have fixed or moved the defect.
 
 **The final SHA must have its own full Sanity + Nightly (+ LLK e2e) pass.** Results from an older SHA
 don't count. Any push that changes the tree — review fix, CI fix, rebase — means a full re-dispatch
@@ -314,10 +331,11 @@ Keep it converging:
   report for the user. The other items keep going.
 
 **Done for a PR** only when, on the same final head SHA: a full Sanity + Nightly (+ LLK e2e) run exists
-**for that SHA** and every job is green or has a recorded unrelated verdict with evidence (main run
-URL, or log line showing infra); `bot_threads.sh <PR>` is empty (or what's left is in the report as a
-decision for the user); and the fail-without/pass-with test still holds. Record it, update the PR
-body's "tested on" section if it changed, and leave the PR as **draft**.
+**for that SHA**, its test jobs are present in the job list (not skipped for want of an opt-in input),
+and every job is green or has a recorded unrelated verdict with evidence (main run URL with the same
+failing tests, or log line showing infra); `bot_threads.sh <PR>` exits 0 and prints nothing (or what's
+left is in the report as a decision for the user); and the fail-without/pass-with test still holds.
+Record it, update the PR body's "tested on" section if it changed, and leave the PR as **draft**.
 
 ## 7. Revisit parked items
 

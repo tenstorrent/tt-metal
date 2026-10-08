@@ -4,7 +4,7 @@
 # origin/main, or the existing branch (local or origin/) when resuming. The tt-llk test sfpi/.venv
 # directories are symlinked from the main checkout when present — never stage those symlinks.
 # Run from inside the repository (or set REPO_ROOT).
-set -e
+set -euo pipefail
 main=${REPO_ROOT:-$(git rev-parse --show-toplevel)}
 wt=${WORKTREE_ROOT:-$(dirname "$main")}/wt-$1
 [ -e "$wt" ] && { echo "$wt already exists" >&2; exit 1; }
