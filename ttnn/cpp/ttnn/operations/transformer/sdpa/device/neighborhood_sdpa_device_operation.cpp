@@ -160,7 +160,7 @@ NeighborhoodSDPAOperation::tensor_return_value_t NeighborhoodSDPAOperation::crea
 
 bool NeighborhoodSDPAOperation::kv_ring_requested() {
     const char* value = std::getenv("DIFFVAE_NA_KV_RING");
-    return value != nullptr && std::string_view(value) == "1";
+    return value == nullptr || std::string_view(value) != "0";
 }
 
 ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
