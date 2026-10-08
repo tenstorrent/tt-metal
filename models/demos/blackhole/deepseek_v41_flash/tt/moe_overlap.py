@@ -21,7 +21,8 @@ MAX_M = 512  # rows of the own-token block up to which ``shared`` is bit-identic
 
 
 _AUTO = {"ok": False, "why": "not configured"}
-AUTO_MAX_B = 32  # bit-identical vs the baseline validated at 4k B=4 / 16 / 32
+AUTO_MIN_B = 16  # same-host paired + bit-identical per-user outputs vs the baseline validated at 4k B=16 (-2.2..-3.2% replay) and B=32 (-3.4%); B=4 / 8 not validated: old path
+AUTO_MAX_B = 32
 AUTO_MAX_CTX = int(
     os.environ.get("DSV41_MO_AUTO_CTX", "16384")
 )  # the split weights cost ~120 MiB / bank (24 MB / layer / chip): no automatic overlap where the DRAM is tight (long contexts)
@@ -29,9 +30,9 @@ AUTO_MAX_CTX = int(
 
 def configure(batch, max_ctx):
     """build time (DSV41Model._build): decide the DEFAULT (no DSV41_MO_OVERLAP set): overlap ON when the batch / context are inside the validated, DRAM-safe range"""
-    ok = batch <= AUTO_MAX_B and max_ctx <= AUTO_MAX_CTX
+    ok = AUTO_MIN_B <= batch <= AUTO_MAX_B and max_ctx <= AUTO_MAX_CTX
     _AUTO["ok"] = ok
-    _AUTO["why"] = f"batch {batch} (max {AUTO_MAX_B}), max_ctx {max_ctx} (max {AUTO_MAX_CTX})"
+    _AUTO["why"] = f"batch {batch} (validated {AUTO_MIN_B}..{AUTO_MAX_B}), max_ctx {max_ctx} (max {AUTO_MAX_CTX})"
 
 
 def mode():
