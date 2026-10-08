@@ -48,6 +48,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # Trace infrastructure for prefill
         # Keyed by "{padded_len}_{model_id}" (e.g., "4096_0")
         self.trace_id_prefill = collections.defaultdict(lambda: None)
+        # Persistent buffers allocated after a trace is recorded may overlap that trace's scratch
+        # addresses (see tt_transformers Generator), so prefill traces are only captured while no
+        # decode trace exists (warmup, or the first prompts of a demo); later lengths run eagerly.
+        self._prefill_trace_capture_frozen = False
         self.trace_inputs_prefill = {}
         self.trace_output_prefill = {}
         self.trace_mesh_prefill = {}
@@ -153,6 +157,19 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.trace_output_prefill.pop(trace_key, None)
         self.trace_mesh_prefill.pop(trace_key, None)
 
+    def _prefill_trace_usable(self, padded_len, model_id=0) -> bool:
+        """True when a prefill trace for this bucket exists or may still be captured safely."""
+        if self.trace_id_prefill[f"{padded_len}_{model_id}"] is not None:
+            return True
+        if self._prefill_trace_capture_frozen:
+            return False
+        decode_traces = getattr(self._ttt_generator, "trace_ids_decode", None) or {}
+        if any(decode_traces.values()):
+            self._prefill_trace_capture_frozen = True
+            logger.info("Decode trace is live; new prefill sequence lengths run without trace capture from now on")
+            return False
+        return True
+
     def _easy_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache, padded_len, model_id=0):
         """Capture trace on first call per (padded_len, model_id), replay on subsequent calls."""
         trace_key = f"{padded_len}_{model_id}"
@@ -246,14 +263,20 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 f" = {total_tokens} total tokens (DP={self.data_parallel})"
             )
             num_dp = max(self.data_parallel, 1)
+            # A request's KV cache (and therefore its DP lane) is decided by the physical slot vLLM
+            # assigned to it, not by its position in this batch: slots can be sparse or reused, so
+            # group the batch rows by ``empty_slots[row] // max_batch_size_per_model`` exactly like
+            # the sequential path below does per user.
+            lane_rows = {}
+            for row, slot in enumerate(empty_slots):
+                lane = int(slot) // max_batch_size_per_model if self.data_parallel > 1 else 0
+                assert lane < num_dp, f"slot {slot} is outside the {num_dp} data-parallel lane(s)"
+                lane_rows.setdefault(lane, []).append(row)
             lane_chunks = []
-            for dp_group in range(num_dp):
-                group_start = dp_group * max_batch_size_per_model
-                group_end = min(group_start + max_batch_size_per_model, batch)
-                if group_start >= batch:
-                    break
+            for dp_group in sorted(lane_rows):
+                rows = lane_rows[dp_group]
                 group_kv_cache = kv_cache[dp_group] if is_dp_kv_cache else kv_cache
-                group_size = group_end - group_start
+                group_size = len(rows)
                 chunk_size = min(group_size, max_batch)
 
                 # Cap per-chunk total tokens to avoid attention OOM on smaller
@@ -290,7 +313,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 group_chunks = []
                 chunk_start = 0
                 for current_chunk_size in _power_of_two_prefill_chunks(group_size, chunk_size):
-                    group_chunks.append((group_start + chunk_start, group_start + chunk_start + current_chunk_size))
+                    group_chunks.append(rows[chunk_start : chunk_start + current_chunk_size])
                     chunk_start += current_chunk_size
                 lane_chunks.append((dp_group, group_kv_cache, group_chunks))
 
@@ -301,24 +324,23 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 for dp_group, group_kv_cache, chunks in lane_chunks:
                     if round_idx >= len(chunks):
                         continue
-                    abs_start, abs_end = chunks[round_idx]
+                    chunk_rows = chunks[round_idx]
                     pending.append(
                         (
-                            abs_start,
-                            abs_end,
+                            chunk_rows,
                             self.__dispatch_batched_prefill(
-                                tokens=tokens[abs_start:abs_end],
-                                rot_mats=(rot_mats[0][abs_start:abs_end], rot_mats[1][abs_start:abs_end]),
-                                page_table=page_table[abs_start:abs_end],
+                                tokens=tokens[chunk_rows],
+                                rot_mats=(rot_mats[0][chunk_rows], rot_mats[1][chunk_rows]),
+                                page_table=page_table[chunk_rows],
                                 kv_cache=group_kv_cache,
-                                prompt_lens=prompt_lens[abs_start:abs_end],
+                                prompt_lens=[prompt_lens[r] for r in chunk_rows],
                                 prefill_seq_len=batch_seq_len,
                                 model_id=dp_group,
                             ),
                         )
                     )
-                for abs_start, abs_end, lane_pending in pending:
-                    output_logits[abs_start:abs_end] = self.__finish_batched_prefill(lane_pending)
+                for chunk_rows, lane_pending in pending:
+                    output_logits[chunk_rows] = self.__finish_batched_prefill(lane_pending)
         else:
             use_trace = (
                 enable_trace
@@ -354,7 +376,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     rot_mats[1][idx : idx + 1],
                 )
 
-                if use_trace:
+                if use_trace and self._prefill_trace_usable(batch_seq_len, model_id):
                     pt_user = page_table[idx : idx + 1, :num_blocks_padded]
                     trace_rot_mats = (
                         user_rot_mats[0][:, :, :batch_seq_len, :],
@@ -390,7 +412,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     )
                     output_logits[idx] = logits
 
-            if use_trace:
+            if out_list:
                 used_model_ids = set(mid for _, mid in out_list)
                 for mid in used_model_ids:
                     ttnn.synchronize_device(self._ttt_generator.model[mid].mesh_device)
