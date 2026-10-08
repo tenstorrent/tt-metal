@@ -176,9 +176,9 @@ SECTIONS
     . = ALIGN(4);
   }
 
-  /* Observability event descriptors: a fixed-stride array of 16-byte {descriptor_id, name_ptr, file_ptr, line}
-     records emitted by TT_EVENT_DESCRIPTOR_DEFINE_ID (hostdev/observability_event_descriptor.h), which the host walks
-     by that stride. (INFO) for the same reason as above. */
+  /* Site records: {id, signature_ptr, file_ptr, line} followed by the site's metadata struct,
+     emitted by TT_DEBUG_SITE (hostdev/observability_event_descriptor.h, layout in hostdev/debug_event_meta.h);
+     the host sizes each record from its signature. (INFO) for the same reason as above. */
   .tt_event_descriptor_meta TT_EVENT_DESCRIPTOR_META_VMA (INFO) :
   {
     __tt_event_descriptor_meta_start = .;
