@@ -122,8 +122,10 @@ inline void llk_unpack_A_init(
  * format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
- * @param dst_tile_index: DEST tile index the tile lands at. Used on the unpack-to-dest path only: there the unpacker
- * writes DEST directly, so math cannot place the tile. Ignored otherwise.
+ * @param dst_tile_index: DEST tile index the tile lands at, relative to the current section base; must be below the
+ * section capacity for the sync mode and DEST width (get_dest_max_tiles, asserted). Used on the non-broadcast
+ * unpack-to-dest path only: there the unpacker writes DEST directly, so math cannot place the tile. Ignored otherwise,
+ * including the broadcast paths, which unpack tile by tile.
  */
 template <
     BroadcastType BType = BroadcastType::NONE,
@@ -166,9 +168,9 @@ inline void llk_unpack_A(
 /**
  * @brief Unpacks a contiguous block of tiles for unary and unary-broadcast paths.
  *
- * On the unpack-to-dest path the block is one DEST bank section: the tiles land at DEST tiles
+ * On the non-broadcast unpack-to-dest path the block is one DEST bank section: the tiles land at DEST tiles
  * [start_dst_tile_index, start_dst_tile_index + ntiles) under a single UNPACK_MATH / MATH_PACK handshake. The other
- * paths unpack tile by tile.
+ * paths, broadcast included, unpack tile by tile.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
@@ -177,9 +179,12 @@ inline void llk_unpack_A(
  * through UNP_DEST regardless of format
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
- * @param ntiles: The number of consecutive tiles to unpack
- * @param start_dst_tile_index: DEST tile index of the first tile; consecutive tiles land at consecutive indices.
- * Unpack-to-dest path only, ignored otherwise.
+ * @param ntiles: The number of consecutive tiles to unpack. On the non-broadcast unpack-to-dest path the block is one
+ * DEST section, so start_dst_tile_index + ntiles must not exceed the section capacity for the sync mode and DEST width
+ * (get_dest_max_tiles, asserted).
+ * @param start_dst_tile_index: DEST tile index of the first tile, relative to the current section base; consecutive
+ * tiles land at consecutive indices. Non-broadcast unpack-to-dest path only, ignored otherwise (the broadcast paths
+ * unpack tile by tile).
  */
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
