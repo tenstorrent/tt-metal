@@ -116,8 +116,44 @@ inline void perf_binary_source_handshakes(
     }
 }
 
+#if defined(ARCH_BLACKHOLE)
+// Whether the dest-reuse unpack and math hand a folded tile over once per tile: two or more full faces.
+inline bool reuse_tile_handoff(const bool per_tile, const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    return per_tile && face_r_dim == ckernel::FACE_R_DIM && num_faces > 1;
+}
+
+// Each block seeds its output tiles with the two-operand op, then folds the rest with the dest-reuse op.
+template <bool Produce>
+inline void perf_dest_reuse_source_handshakes(
+    const std::uint32_t loop_factor,
+    const std::uint32_t num_tiles,
+    const std::uint32_t num_blocks,
+    const std::uint32_t seeds,
+    const std::uint32_t num_faces,
+    const bool seed_per_tile,
+    const bool fold_per_tile)
+{
+    const std::uint32_t folds         = num_tiles / num_blocks - seeds;
+    const std::uint32_t seed_handoffs = seed_per_tile ? seeds : seeds * num_faces;
+    const std::uint32_t fold_handoffs = fold_per_tile ? folds : folds * num_faces;
+    for (std::uint32_t i = 0; i < loop_factor * num_blocks; ++i)
+    {
+        if constexpr (Produce)
+        {
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(seed_handoffs + fold_handoffs);
+        }
+        else
+        {
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(seed_handoffs + fold_handoffs);
+        }
+    }
+}
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_unpack_A.h"
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common.h"
 #include "params.h"
@@ -146,6 +182,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
     const int INPUT_NUM_BLOCKS                   = params.INPUT_NUM_BLOCKS;
     const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
+#if defined(ARCH_BLACKHOLE) && defined(EN_DEST_REUSE) && defined(DEST_REUSE_UNPACK_A)
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+#endif
     const std::uint32_t TILE_SIZE_UNPACK_A       = params.TILE_SIZE_UNPACK_A;
     const std::uint32_t TILE_SIZE_UNPACK_B       = params.TILE_SIZE_UNPACK_B;
     const Operand& buffer_A                      = params.buffer_A;
@@ -187,11 +226,46 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+#if defined(ARCH_BLACKHOLE) && defined(EN_DEST_REUSE) && defined(DEST_REUSE_UNPACK_A)
+            perf_dest_reuse_source_handshakes<true>(
+                LOOP_FACTOR,
+                num_total_tiles,
+                INPUT_NUM_BLOCKS,
+                OUTPUT_NUM_TILES_IN_BLOCK,
+                tensor_shape.total_num_faces(),
+                PER_TILE_MOCK(tensor_shape),
+                reuse_tile_handoff(SRC_DVALID == ckernel::SrcDvalid::PerTile, tensor_shape.face_r_dim, tensor_shape.total_num_faces()));
+#else
             perf_binary_source_handshakes<true, BROADCAST_TYPE>(
                 LOOP_FACTOR, num_total_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim, PER_TILE_MOCK(tensor_shape));
+#endif
         }
         else
         {
+#if defined(ARCH_BLACKHOLE) && defined(EN_DEST_REUSE) && defined(DEST_REUSE_UNPACK_A)
+            // The folds take the dest-reuse unpack the compute API pairs with the dest-reuse math: the L1 operand is B for
+            // DEST_TO_SRCA and A for DEST_TO_SRCB
+            static_assert(BROADCAST_TYPE == BroadcastType::NONE, "The dest-reuse unpack variant has no broadcast");
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t i = 0; i < num_total_tiles;)
+                {
+                    _llk_unpack_AB_init_<BROADCAST_TYPE SRC_DVALID_ARG>(tensor_shape, transpose);
+                    for (std::uint32_t t = 0; t < OUTPUT_NUM_TILES_IN_BLOCK; ++t, ++i)
+                    {
+                        _llk_unpack_AB_<BROADCAST_TYPE>(L1_ADDRESS(buffer_A[i]), L1_ADDRESS(buffer_B[i]));
+                    }
+                    _llk_unpack_A_init_<BroadcastType::NONE, true /*acc_to_dest*/, REUSE_DEST_TYPE, false /*unpack_to_dest*/, SRC_DVALID>(
+                        0, 0, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+                    for (std::uint32_t t = OUTPUT_NUM_TILES_IN_BLOCK; t < INPUT_NUM_TILES_IN_BLOCK; ++t, ++i)
+                    {
+                        const std::uint32_t address =
+                            REUSE_DEST_TYPE == EltwiseBinaryReuseDestType::DEST_TO_SRCA ? L1_ADDRESS(buffer_B[i]) : L1_ADDRESS(buffer_A[i]);
+                        _llk_unpack_A_<BroadcastType::NONE, true /*acc_to_dest*/, REUSE_DEST_TYPE>(address, formats.unpack_A_src, formats.unpack_A_dst);
+                    }
+                }
+            }
+#else
 #if defined(ARCH_BLACKHOLE)
             if constexpr (unpack_ab_block)
             {
@@ -219,6 +293,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                 }
             }
+#endif
         }
         PROFILER_SYNC();
     }
@@ -291,8 +366,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+#if defined(ARCH_BLACKHOLE) && defined(DEST_REUSE_UNPACK_A)
+            perf_dest_reuse_source_handshakes<false>(
+                LOOP_FACTOR,
+                num_input_tiles,
+                num_blocks,
+                output_tiles_in_block,
+                tensor_shape.total_num_faces(),
+                PER_TILE_MOCK(tensor_shape),
+                reuse_tile_handoff(SRC_DVALID == ckernel::SrcDvalid::PerTile, tensor_shape.face_r_dim, tensor_shape.total_num_faces()));
+#else
             perf_binary_source_handshakes<false, BROADCAST_TYPE>(
                 LOOP_FACTOR, num_input_tiles, tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim, PER_TILE_MOCK(tensor_shape));
+#endif
         }
         else
         {

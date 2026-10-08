@@ -233,7 +233,7 @@ inline void _llk_unpack_A_mop_config_(
 /**
  * @brief Whether the dest-reuse unpack can hand the L1 operand over as one source bank holding the whole tile: SrcDvalid::PerTile on the
  *        dest-reuse form without unpack to dest, without broadcast or with a row broadcast of the L1 operand (DEST_TO_SRCA); it does without
- *        transpose and with full 16-row faces, 2 x 2 of them for the row broadcast. The math init (@ref _llk_math_eltwise_binary_init_)
+ *        transpose and with two or more full 16-row faces, 2 x 2 of them for the row broadcast. The math init (@ref _llk_math_eltwise_binary_init_)
  *        applies the same rule.
  */
 template <BroadcastType BType, bool acc_to_dest, EltwiseBinaryReuseDestType binary_reuse_dest, bool unpack_to_dest, SrcDvalid src_dvalid>
@@ -326,7 +326,7 @@ inline void _llk_unpack_A_init_(
 
     if constexpr (unpack_A_tile_dvalid<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, src_dvalid>)
     {
-        if (transpose_of_faces == 0 && within_face_16x16_transpose == 0 && face_r_dim == FACE_R_DIM &&
+        if (transpose_of_faces == 0 && within_face_16x16_transpose == 0 && face_r_dim == FACE_R_DIM && num_faces > 1 &&
             (BType != BroadcastType::ROW || (tensor_shape.num_faces_r_dim == 2 && tensor_shape.num_faces_c_dim == 2)))
         {
             // The L1 operand goes to SrcB for DEST_TO_SRCA and to SrcA for DEST_TO_SRCB
