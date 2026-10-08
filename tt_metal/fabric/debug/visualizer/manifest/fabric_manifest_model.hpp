@@ -319,6 +319,8 @@ struct ArchAreas {
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
     ArchAreas areas;
+    // Every struct a schema names, as laid out on this architecture.
+    std::vector<layout::StructType> types;
 };
 
 }  // namespace tt::tt_fabric::manifest
