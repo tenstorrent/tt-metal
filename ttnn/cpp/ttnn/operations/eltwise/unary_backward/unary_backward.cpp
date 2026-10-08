@@ -47,20 +47,20 @@ std::vector<Tensor> clamp_bw(
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
+        Tensor result = ttnn::where(minT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
     if (!min.has_value()) {
         Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor result = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
+        Tensor result = ttnn::where(maxT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
     Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
     Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
+    result = ttnn::where(result, grad, 0.0f, output_memory_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -77,20 +77,20 @@ std::vector<Tensor> clamp_bw(
     TT_FATAL((max.has_value() || min.has_value()), "Only one of 'min' or 'max' can be None. Please provide one value");
     if (!max.has_value()) {
         Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::multiply(grad, minT, std::nullopt, output_mem_config);
+        Tensor in_grad = ttnn::where(minT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
     if (!min.has_value()) {
         Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_mem_config);
-        Tensor in_grad = ttnn::multiply(grad, maxT, std::nullopt, output_mem_config);
+        Tensor in_grad = ttnn::where(maxT, grad, 0.0f, output_mem_config);
         grad_tensor.emplace_back(in_grad);
         return grad_tensor;
     }
     Tensor minT = ttnn::ge(input, min.value(), std::nullopt, output_memory_config);
     Tensor maxT = ttnn::le(input, max.value(), std::nullopt, output_memory_config);
     Tensor result = ttnn::logical_and(minT, maxT, std::nullopt, output_memory_config);
-    result = ttnn::multiply(grad, result, std::nullopt, output_memory_config);
+    result = ttnn::where(result, grad, 0.0f, output_memory_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }
@@ -564,7 +564,7 @@ std::vector<std::optional<Tensor>> neg_bw(
 std::vector<Tensor> relu_bw(
     const Tensor& grad, const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor result = ttnn::multiply(ttnn::gtz(input, output_mem_config), grad, std::nullopt, output_mem_config);
+    Tensor result = ttnn::where(ttnn::gtz(input, output_mem_config), grad, 0.0f, output_mem_config);
     grad_tensor.emplace_back(result);
     return grad_tensor;
 }

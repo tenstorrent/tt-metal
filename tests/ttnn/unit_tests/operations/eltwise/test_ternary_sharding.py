@@ -2609,3 +2609,32 @@ def test_lerp_tts_scalar_bcast_with_width_sharding(device, input_sharded, out_sh
 
     assert_with_pcc(torch_output, output_tensor)
     assert output_tensor.shape == output_shape
+
+
+def test_where_nd_sharded_preallocated_output(device):
+    """A preallocated ND-sharded output has no 2D shard spec for the worker grid to read."""
+    torch.manual_seed(0)
+    shape = torch.Size([1, 1, 128, 32])
+    nd_shard_config = ttnn.MemoryConfig(
+        ttnn.BufferType.DRAM,
+        ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([1, 1, 64, 64]),
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 0))}),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+    torch_cond = torch.randint(0, 2, shape).bfloat16()
+    torch_true = torch.randn(shape).bfloat16()
+    torch_false = torch.randn(shape).bfloat16()
+
+    def to_device(t, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    out = to_device(torch.zeros(shape).bfloat16(), nd_shard_config)
+    assert out.memory_config().shard_spec is None
+
+    ttnn.where(to_device(torch_cond), to_device(torch_true), to_device(torch_false), output_tensor=out)
+    assert torch.equal(ttnn.to_torch(out), torch.where(torch_cond.bool(), torch_true, torch_false))

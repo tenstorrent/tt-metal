@@ -29,21 +29,31 @@ CoreRangeSet get_worker_grid(
         return sub_core_grids.value();
     }
 
-    auto get_tensor_grid = [](const Tensor& tensor) -> CoreRangeSet {
-        const auto& grid = tensor.shard_spec()->grid;
+    // An ND_SHARDED tensor is_sharded() with an empty shard_spec(); its grid is in nd_shard_spec().
+    auto get_tensor_grid = [](const Tensor& tensor) -> std::optional<CoreRangeSet> {
+        std::optional<CoreRangeSet> grid;
+        if (tensor.shard_spec().has_value()) {
+            grid = tensor.shard_spec()->grid;
+        } else if (tensor.nd_shard_spec().has_value()) {
+            grid = tensor.nd_shard_spec()->grid;
+        } else {
+            return std::nullopt;
+        }
         auto* device = tensor.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
-            if (sub_device_workers.intersects(grid)) {
+            if (sub_device_workers.intersects(*grid)) {
                 return sub_device_workers;
             }
         }
-        __builtin_unreachable();
+        return std::nullopt;
     };
 
     if (output_tensor.has_value() && output_tensor->is_sharded()) {
-        log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", output_tensor->shard_spec()->grid.str());
-        return get_tensor_grid(*output_tensor);
+        if (auto workers = get_tensor_grid(*output_tensor)) {
+            log_debug(tt::LogOp, "Using output tensor grid for worker grid {}", workers->str());
+            return *workers;
+        }
     }
 
     if (memory_config.has_value()) {
@@ -79,26 +89,14 @@ CoreRangeSet get_worker_grid(
             input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
             input_tensor_c ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_c->tensor_spec()} : std::nullopt,
             memory_config_actual)) {
-        if (input_tensor_a.is_sharded()) {
-            log_debug(
-                tt::LogOp,
-                "Native L1 sharding using input tensor A grid for worker grid {}",
-                input_tensor_a.shard_spec()->grid.str());
-            return get_tensor_grid(input_tensor_a);
-        }
-        if (input_tensor_b && input_tensor_b->is_sharded()) {
-            log_debug(
-                tt::LogOp,
-                "Native L1 sharding using input tensor B grid for worker grid {}",
-                input_tensor_b->shard_spec()->grid.str());
-            return get_tensor_grid(*input_tensor_b);
-        }
-        if (input_tensor_c && input_tensor_c->is_sharded()) {
-            log_debug(
-                tt::LogOp,
-                "Native L1 sharding using input tensor C grid for worker grid {}",
-                input_tensor_c->shard_spec()->grid.str());
-            return get_tensor_grid(*input_tensor_c);
+        for (const Tensor* input : {&input_tensor_a, input_tensor_b, input_tensor_c}) {
+            if (input && input->is_sharded()) {
+                if (auto workers = get_tensor_grid(*input)) {
+                    log_debug(
+                        tt::LogOp, "Native L1 sharding using input tensor grid for worker grid {}", workers->str());
+                    return *workers;
+                }
+            }
         }
     }
     log_debug(tt::LogOp, "Using all worker cores of the device for worker grid");
@@ -362,7 +360,15 @@ void TernaryDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (optional_output_tensor.has_value()) {
-        const auto computed_output_shape = compute_output_specs(args, tensor_args).logical_shape();
+        // compute_output_specs returns a preallocated output's own spec, so derive the shape from the inputs.
+        const auto computed_output_shape = compute_output_specs(
+                                               args,
+                                               tensor_args_t{
+                                                   .input_tensor_a = tensor_args.input_tensor_a,
+                                                   .input_tensor_b = tensor_args.input_tensor_b,
+                                                   .input_tensor_c = tensor_args.input_tensor_c,
+                                                   .optional_output_tensor = std::nullopt})
+                                               .logical_shape();
         const auto optional_output_tensor_shape = optional_output_tensor.value().logical_shape();
         TT_FATAL(
             optional_output_tensor_shape == computed_output_shape,

@@ -28,3 +28,28 @@ def test_bw_relu(input_shapes, device):
 
     comp_pass = compare_pcc(tt_output_tensor_on_device, golden_tensor)
     assert comp_pass
+
+
+# relu_bw used to compute gtz(input) * grad, and in float32 0 * inf and 0 * nan are NaN. torch returns
+# an exact 0 wherever input <= 0, whatever grad holds.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["float32", "bfloat16"])
+@pytest.mark.parametrize("grad_value", [float("inf"), float("-inf"), float("nan")], ids=["pos_inf", "neg_inf", "nan"])
+@pytest.mark.parametrize("input_value", [-1.0, 1.0], ids=["inactive", "active"])
+def test_bw_relu_non_finite_grad(device, dtype, grad_value, input_value):
+    active = input_value > 0
+    if active and grad_value != grad_value and dtype == ttnn.bfloat16:
+        pytest.skip("#31406: bfloat16 loses a NaN operand on the device, returning an infinity")
+    shape = torch.Size([1, 1, 32, 32])
+    grad = ttnn.from_torch(torch.full(shape, grad_value), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    inp = ttnn.from_torch(torch.full(shape, input_value), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.to_torch(ttnn.relu_bw(grad, inp)[0]).float()
+
+    if not active:
+        assert torch.equal(output, torch.zeros(shape)), f"expected 0, got {output[0, 0, 0, 0].item()}"
+    elif grad_value != grad_value:
+        assert torch.isnan(output).all(), f"expected NaN, got {output[0, 0, 0, 0].item()}"
+    else:
+        assert torch.equal(
+            output, torch.full(shape, grad_value)
+        ), f"expected {grad_value}, got {output[0, 0, 0, 0].item()}"

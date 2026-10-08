@@ -88,16 +88,10 @@ std::vector<Tensor> _min_or_max_bw(
     Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
     Tensor t_sub_eqz = ttnn::eqz(t_sub, output_mem_config);
     Tensor t_sub_ltz = ttnn::ltz(t_sub, output_mem_config);
-    Tensor grad_other = ttnn::add(
-        ttnn::multiply(t_sub_ltz, grad, std::nullopt, output_mem_config),
-        ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    Tensor grad_input = ttnn::add(
-        ttnn::multiply(t_sub_gtz, grad, std::nullopt, output_mem_config),
-        ttnn::multiply(t_sub_eqz, t_scale_grad, std::nullopt, output_mem_config),
-        std::nullopt,
-        output_mem_config);
+    // Selects rather than mask multiplies: in float32, 0 * inf and 0 * nan are NaN.
+    Tensor tie = ttnn::where(t_sub_eqz, t_scale_grad, 0.0f, output_mem_config);
+    Tensor grad_other = ttnn::where(t_sub_ltz, grad, tie, output_mem_config);
+    Tensor grad_input = ttnn::where(t_sub_gtz, grad, tie, output_mem_config);
 
     if (min_or_max) {
         // MAX
