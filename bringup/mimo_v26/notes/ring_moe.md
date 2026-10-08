@@ -1,6 +1,6 @@
 # Ring decode MoE (moe agent): how to use it, what it costs, what was verified
 
-Select with `MIMO_MOE_DECODE=ring` (default `unified`); code `tt/moe_ring.py`, hook in `tt/layer.py moe_decode` (live-mask path). `MIMO_ROUTER=fast` is the default for the ring path (the unified path keeps its own default).
+Default is `MIMO_MOE_DECODE=ring` (since this flip; `MIMO_MOE_DECODE=unified` is the fallback; ring needs the integ library and falls back to unified automatically if headroom < 1 GiB per chip); code `tt/moe_ring.py`, hook in `tt/layer.py moe_decode` (live-mask path). `MIMO_ROUTER=fast` is the default for the ring path (the unified path keeps its own default).
 * Pipeline: router_select -> dead-slot routing (weight 0, balanced) -> all_to_all_dispatch_metadata -> moe_compute (ring matmul, fused combine; bfp8 weights, HiFi3 + fp32 accumulate) -> tilize + fast_reduce
   (score-weighted sum over k) -> reduce_scatter over the mesh columns -> all_gather (full hidden, replicated). Input `x [1,1,T,4096]` bf16 tile per device (T = tokens of a mesh row, 1..32; T = 8U for the verify path), output same shape.
 * Library: `artifacts/moe_C_<commit>/lib` (moe_compute env knobs patched: MOE_COMPUTE_BFP8_WEIGHTS=1, MOE_COMPUTE_FP32_ACC=1, MOE_COMPUTE_FIDELITY=HiFi3; moe_ring.py sets these defaults at import). LoFi/HiFi2 are NOT accurate (alpha/rel L2).
