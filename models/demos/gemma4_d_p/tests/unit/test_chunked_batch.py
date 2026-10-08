@@ -44,13 +44,16 @@ def test_partial_padding_and_absolute_positions(lengths):
     "change",
     [
         dict(slot_id=4),
+        dict(slot_id=0.5),
         dict(slot_id=1),
         dict(request_id=1),
         dict(actual_start=1),
+        dict(actual_start=0.0),
         dict(actual_start=-1024),
         dict(token_ids=()),
         dict(token_ids=(1,) * 1025),
         dict(token_ids=(-1,)),
+        dict(token_ids=(1.5,)),
         dict(actual_start=8192),
     ],
 )

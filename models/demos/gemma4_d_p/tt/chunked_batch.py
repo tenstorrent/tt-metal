@@ -50,9 +50,9 @@ class ChunkedBatchPlan:
         if len({r.request_id for r in requests}) != self.batch_size:
             raise ValueError("A request may appear only once in a batch")
         for req in requests:
-            if not 0 <= req.slot_id < num_slots:
+            if not isinstance(req.slot_id, int) or not 0 <= req.slot_id < num_slots:
                 raise ValueError("Request slot is outside the allocated cache")
-            if req.actual_start < 0 or req.actual_start % self.chunk_size:
+            if not isinstance(req.actual_start, int) or req.actual_start < 0 or req.actual_start % self.chunk_size:
                 raise ValueError("Request starts must be nonnegative multiples of 1024")
             if not 0 < len(req.token_ids) <= self.chunk_size or req.actual_end > max_seq_len:
                 raise ValueError("Each request must contain 1..1024 tokens within the context capacity")

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare fixed 4x1K batching and the canonical 1x8K path at equal prefix lengths.
+"""Compare fixed 4x1K batching and the canonical 1x4K path at equal prefix lengths.
 
 GEMMA4_BATCH_PERF_MODE=canonical or chunked4 (default), separate processes.
 All histories are populated by real model calls; no random or synthesized KV.
@@ -28,8 +28,9 @@ class CanonicalRuntime:
     def __init__(self, model):
         self.model = model
         self.device = model.mesh_device
-        self.input = ttnn.to_device(self.host([0] * 8192), self.device)
-        self.positions = ttnn.to_device(self.host(range(8192)), self.device)
+        self.chunk_size = model.prefill_chunk_size
+        self.input = ttnn.to_device(self.host([0] * self.chunk_size), self.device)
+        self.positions = ttnn.to_device(self.host(range(self.chunk_size)), self.device)
         model.set_prefill_rope_positions(self.positions)
         model._prefill_metadata_external = True
         model.prefill_metadata.update(slot_idx=0, kv_actual_global=0)
@@ -43,7 +44,7 @@ class CanonicalRuntime:
 
     def host(self, values):
         return ttnn.from_torch(
-            torch.tensor(values, dtype=torch.int32).reshape(1, 8192),
+            torch.tensor(values, dtype=torch.int32).reshape(1, self.chunk_size),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.device, (8, 4), dims=(1, None)),
@@ -71,7 +72,7 @@ class CanonicalRuntime:
 def test_chunked_batch_perf(mesh_device):
     mode = os.environ.get("GEMMA4_BATCH_PERF_MODE", "chunked4")
     assert mode in ("canonical", "chunked4")
-    lanes, chunk = (1, 8192) if mode == "canonical" else (4, 1024)
+    lanes, chunk = (1, 4096) if mode == "canonical" else (4, 1024)
     context = int(os.environ.get("GEMMA4_BATCH_PERF_CONTEXT", "262144"))
     layers = int(os.environ.get("GEMMA4_BATCH_TEST_LAYERS", "60"))
     repeats = int(os.environ.get("GEMMA4_BATCH_PERF_REPEATS", "5"))
