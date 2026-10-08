@@ -127,7 +127,7 @@ TEST_F(McastHostFixture, McastValueSemanticsAndConfigSnapshot) {
     EXPECT_EQ(assigned.participating_cores(), grid({4, 2}, {5, 2}));
 }
 
-TEST_F(McastHostFixture, ChainRejectsUnsupportedProtocolsAndGeometry) {
+TEST_F(McastHostFixture, ChainValidatesProtocolsAndGeometry) {
     const auto receivers = cores({{0, 0}, {2, 0}});
     const GroupInput group(receivers, {{0, 0}});
     McastConfig config;
@@ -138,8 +138,11 @@ TEST_F(McastHostFixture, ChainRejectsUnsupportedProtocolsAndGeometry) {
         EXPECT_ANY_THROW(compile_args(make_mcast(device_, {GroupInput(receivers, {{0, 0}}, ack)}, chain_config())));
     }
     EXPECT_ANY_THROW(compile_args(make_mcast(device_, {GroupInput(receivers, {{0, 0}, {2, 0}})}, chain_config())));
-    EXPECT_ANY_THROW(compile_args(
-        make_mcast(device_, {GroupInput(cores({{0, 0}, {2, 0}, {4, 0}, {6, 0}}), {{0, 0}})}, chain_config())));
+    auto fragmented =
+        make_mcast(device_, {GroupInput(cores({{0, 0}, {2, 0}, {4, 0}, {6, 0}}), {{0, 0}})}, chain_config());
+    const auto fragmented_ct = compile_args(fragmented);
+    EXPECT_EQ(wire::transfer_mode(emitted_metadata(fragmented_ct).mcast.flags), TransferMode::ChainUnicast);
+    EXPECT_EQ(emitted_metadata(fragmented_ct).mcast.rectangle_capacity, 0u);
     EXPECT_ANY_THROW(make_mcast(device_, {group, group}, chain_config()));
 }
 
