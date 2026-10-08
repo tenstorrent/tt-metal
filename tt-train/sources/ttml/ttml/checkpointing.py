@@ -93,7 +93,8 @@ def _rebuild(node, live_node, f, display_progress: bool = False, label: str = "o
         named = ttml.NamedParameters()
         leaf = node["named_parameters"]
         for name, meta in _progress(leaf.items(), total=len(leaf), desc=f"Loading {label}", enabled=display_progress):
-            _load_into(live_node[name], meta, pickle.load(f))
+            data = pickle.load(f)
+            _load_into(live_node[name], meta, data)
             named[name] = live_node[name]
         return named
     return {key: _rebuild(v, live_node[key], f, display_progress, key) for key, v in node.items()}
