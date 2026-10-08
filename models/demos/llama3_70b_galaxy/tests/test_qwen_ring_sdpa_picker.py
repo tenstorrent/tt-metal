@@ -67,16 +67,18 @@ def test_picker_valid_for_ring_sdpa():
 
 @pytest.mark.parametrize("seq_len", [8192, 16384, 24576, 32768, 40960, 49152])
 def test_ring_program_config_keeps_base_fields(qwen_cfg, seq_len):
-    # SDPA_RING_PROGCFG above the traced buckets = the real SDPA_PROGCFG with only q_chunk_size replaced.
+    # SDPA_RING_PROGCFG above the traced buckets = the real SDPA_PROGCFG with q_chunk_size replaced and the
+    # approximate exponential (exp_approx_mode=True); SDPA_PROGCFG itself keeps the exact one.
     base = qwen_cfg.model_config["SDPA_PROGCFG"](seq_len, chunk_start_idx=0)
     ring = qwen_cfg.model_config["SDPA_RING_PROGCFG"](seq_len, chunk_start_idx=0)
     (bgrid, bq, bk, bexp), (rgrid, rq, rk, rexp) = _fields(base), _fields(ring)
-    assert (rgrid, rk, rexp) == (bgrid, bk, bexp)
-    assert rgrid == (7, 10) and bexp is False  # the grid and exact exp the picker was measured with
+    assert (rgrid, rk) == (bgrid, bk)
+    assert rgrid == (7, 10)  # the grid the picker was measured with
+    assert bexp is False and rexp is True
     n_local_heads = qwen_cfg.n_heads // qwen_cfg.n_kv_heads
     assert n_local_heads == N_LOCAL_HEADS
     assert rq == ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, bgrid[0] * bgrid[1], default_q_chunk=bq)
-    assert _fields(qwen_ring_sdpa_program_config(base, seq_len, n_local_heads)) == _fields(ring)
+    assert _fields(qwen_ring_sdpa_program_config(base, seq_len, n_local_heads, exp_approx_mode=True)) == _fields(ring)
 
 
 @pytest.mark.parametrize("seq_len, chunk_start_idx", [(1024, 0), (2048, 0), (4096, 0), (8192, 2048), (40960, 4096)])
@@ -88,6 +90,7 @@ def test_ring_program_config_is_base_outside_picker(qwen_cfg, seq_len, chunk_sta
 
 
 def test_ring_program_config_40960_measured_pick(qwen_cfg):
-    # The measured keep (02/02b): 40960 runs q320 / k512 instead of SDPA_PROGCFG's q256 / k512.
-    assert _fields(qwen_cfg.model_config["SDPA_RING_PROGCFG"](40960)) == ((7, 10), 320, 512, False)
+    # The measured keeps (02/02b, 03): 40960 runs q320 / k512 / approximate exp instead of SDPA_PROGCFG's
+    # q256 / k512 / exact exp.
+    assert _fields(qwen_cfg.model_config["SDPA_RING_PROGCFG"](40960)) == ((7, 10), 320, 512, True)
     assert _fields(qwen_cfg.model_config["SDPA_PROGCFG"](40960)) == ((7, 10), 256, 512, False)
