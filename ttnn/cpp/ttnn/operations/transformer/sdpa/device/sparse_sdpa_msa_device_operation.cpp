@@ -340,7 +340,7 @@ SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
     // No slot fitting selects the streamed kernels; they need the same L1 as one slot, so that program fails at
     // launch exactly where the cache-off op would.
     auto* device = t.q.device();
-    const uint64_t cb_align = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+    const uint64_t cb_align = tt::tt_metal::hal::get_dram_alignment();
     uint64_t base_bytes = tt::align(
         static_cast<uint64_t>(sparse_sdpa_msa::SLOT_PAGE_BYTES) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH_MAX, cb_align);
     for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
