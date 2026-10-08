@@ -473,7 +473,6 @@ run_cmd_with_emu_monitor() {
     local cmd_pid rc=0
     local emu_log="" emu_offset=0 metal_offset=0 conflict_lines=""
     local tracked_sim_pid=""
-    local last_emu_poll=0
 
     gtest_emu_hostname_conflict=0
     gtest_emu_conflict_lines=""
@@ -490,44 +489,40 @@ run_cmd_with_emu_monitor() {
     active_tracked_sim_pid=""
 
     while kill -0 "$cmd_pid" 2>/dev/null; do
-        if (( SECONDS - last_emu_poll >= EMU_MONITOR_POLL_INTERVAL )); then
-            last_emu_poll=$SECONDS
-            if [[ -n "$log_file" ]]; then
-                poll_metal_log_for_simulator_pid "$log_file" metal_offset tracked_sim_pid || true
-                active_tracked_sim_pid="$tracked_sim_pid"
-            fi
+        if [[ -n "$log_file" ]]; then
+            poll_metal_log_for_simulator_pid "$log_file" metal_offset tracked_sim_pid || true
+            active_tracked_sim_pid="$tracked_sim_pid"
+        fi
 
-            if [[ -z "$emu_log" ]]; then
-                emu_log="$(find_newest_emu_log_since_baseline)"
-                emu_offset=0
-            fi
+        if [[ -z "$emu_log" ]]; then
+            emu_log="$(find_newest_emu_log_since_baseline)"
+            emu_offset=0
+        fi
 
-            if [[ -n "$emu_log" ]]; then
-                if conflict_lines="$(poll_emu_log_for_hostname_conflict "$emu_log" emu_offset)"; then
-                    gtest_emu_hostname_conflict=1
-                    gtest_emu_conflict_lines="$conflict_lines"
-                    echo "  EMU HOSTNAME CONFLICT in $emu_log (terminating hung test)"
-                    cleanup_emu_attempt "$cmd_pid" "$tracked_sim_pid"
-                    active_gtest_pid=""
-                    active_tracked_sim_pid=""
-                    break
-                fi
+        if [[ -n "$emu_log" ]]; then
+            if conflict_lines="$(poll_emu_log_for_hostname_conflict "$emu_log" emu_offset)"; then
+                gtest_emu_hostname_conflict=1
+                gtest_emu_conflict_lines="$conflict_lines"
+                echo "  EMU HOSTNAME CONFLICT in $emu_log (terminating hung test)"
+                cleanup_emu_attempt "$cmd_pid" "$tracked_sim_pid"
+                active_gtest_pid=""
+                active_tracked_sim_pid=""
+                break
             fi
         fi
 
         sleep "$EMU_MONITOR_POLL_INTERVAL"
     done
 
-    if [[ $gtest_emu_hostname_conflict -eq 1 ]]; then
-        rc=1
-    else
+    if [[ $gtest_emu_hostname_conflict -eq 0 ]]; then
         wait "$cmd_pid" || rc=$?
+    else
+        rc=1
     fi
     active_gtest_pid=""
     active_tracked_sim_pid=""
     return $rc
 }
-
 
 # Parse gtest --gtest_output=json and record one summary line per test case.
 record_gtest_result() {
@@ -1065,10 +1060,6 @@ on_interrupt() {
         cleanup_emu_attempt "$active_gtest_pid" "${active_tracked_sim_pid:-}"
         active_gtest_pid=""
         active_tracked_sim_pid=""
-    fi
-    if [[ -n "${gtest_output_file:-}" ]]; then
-        rm -f "$gtest_output_file"
-        gtest_output_file=""
     fi
 
     print_summary
