@@ -219,9 +219,14 @@ class DeepseekV41ForCausalLM:
                 logits, _ = trace.run(prompt)
             else:
                 logits = self.model.prefill_into(prompt, state)
+            t1 = time.time()
             self.decoder.begin(prompt, state)
             mode = "replay" if trace is not None else "eager"
-            logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s ({mode})")
+            phases = "" if trace is None else " " + " ".join(f"{k} {v:.3f}" for k, v in trace.last.items())
+            logger.info(
+                f"DeepSeek-V4.1-Flash: prefill of {n} tokens in {time.time() - t0:.2f} s ({mode};{phases} "
+                f"begin {time.time() - t1:.3f})"
+            )
             out[i, 0] = logits[-1]
         return out
 

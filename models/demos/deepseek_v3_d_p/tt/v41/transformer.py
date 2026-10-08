@@ -28,6 +28,7 @@ spans must lie in the first chunk (the reference asserts it). Image tokens route
 (``TtV41Moe``) and take no part in Engram n-grams and get no Engram update (hash and gate mask).
 """
 
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -315,25 +316,38 @@ class TtV41Transformer(LightweightModule):
                 rows = rows[len(tile) :]
         return scored
 
-    def _run(self, request: _Request, state, buffers: dict, step: Callable, on_block=None) -> list:
+    def _run(
+        self, request: _Request, state, buffers: dict, step: Callable, on_block=None, timings: dict | None = None
+    ) -> list:
         """The chunk loop of one request. ``step(c, forward)`` runs chunk ``c``'s device forward: ``forward()``
-        (untraced or captured) or a replay of its capture. Returns every chunk's scored device logits."""
+        (untraced or captured) or a replay of its capture. Returns every chunk's scored device logits. ``timings``
+        accumulates the host seconds of each phase (``prepare``: the chunks' host inputs, ``stage``: their copies
+        to the device, ``step``: the device call, untraced or a replay issued without waiting)."""
         total = int(request.tokens.numel())
         if self.dspark is not None and "dspark_rope" not in buffers:
             buffers["dspark_rope"] = [
                 self.dspark.seed_rope(s, min(self.chunk, total - s)) for s in range(0, total, self.chunk)
             ]
+        t = timings if timings is not None else {}
         chunks, scored = self._host_chunks(request), []
+        t0 = time.perf_counter()
         host = next(chunks)
+        t["prepare"] = t.get("prepare", 0.0) + time.perf_counter() - t0
         for c in range(-(-total // self.chunk)):
+            t0 = time.perf_counter()
             token_ids, engram_inputs = self._stage(host, buffers)
+            t["stage"] = t.get("stage", 0.0) + time.perf_counter() - t0
             rope = buffers["dspark_rope"][c] if self.dspark is not None else None
             forward = lambda: self._chunk_forward(
                 state, host, token_ids, engram_inputs, request.image_features, rope, request.first_scored, on_block
             )
+            t0 = time.perf_counter()
             scored += step(c, forward)
+            t["step"] = t.get("step", 0.0) + time.perf_counter() - t0
             length = host.length
+            t0 = time.perf_counter()
             host = next(chunks, None)  # the next chunk's host inputs, while the device runs this chunk
+            t["prepare"] += time.perf_counter() - t0
             state.advance(length)
         return scored
 
@@ -470,13 +484,24 @@ class V41PrefillTrace:
         assert int(tokens.numel()) == self.total, f"traced for {self.total} tokens, got {tokens.numel()}"
         model = self.model
         request = model._request(tokens, self.logit_positions)
+        t0 = time.perf_counter()
         model.reset_state(self.state)
+        self.last = {"reset": time.perf_counter() - t0}
         model._run(
-            request, self.state, self.buffers, lambda c, forward: self.controllers[c].replay(blocking=False) or []
+            request,
+            self.state,
+            self.buffers,
+            lambda c, forward: self.controllers[c].replay(blocking=False) or [],
+            timings=self.last,
         )
+        t0 = time.perf_counter()
         ttnn.synchronize_device(model.mesh_device)
+        self.last["wait"] = time.perf_counter() - t0
         self.state.compressor_carry.update(self.carry)
-        return model._logits(self.scored), self.state
+        t0 = time.perf_counter()
+        logits = model._logits(self.scored)
+        self.last["logits"] = time.perf_counter() - t0
+        return logits, self.state
 
     def release(self) -> None:
         for controller in self.controllers:
