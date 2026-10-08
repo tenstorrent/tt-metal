@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 #include "ckernel_sfpu_is_fp16_zero.h"
 #include "llk_sfpu_types.h"
@@ -547,10 +548,14 @@ sfpi_inline sfpi::vFloat _unary_comp_order_scalar_(sfpi::vFloat s)
     return s;
 }
 
-// Compare every Dest element against a threshold already decoded into a vFloat (defined below). Pass a vFloat:
-// a float argument converts to std::uint32_t and selects the overload below.
+// Compare every Dest element against a threshold already decoded into a vFloat (defined below).
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(sfpi::vFloat s);
+
+// A float threshold would otherwise convert to std::uint32_t and bind to the overload below (0.5f would become 0).
+// Pass the std::uint32_t that overload expects, or a vFloat.
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8, typename T, std::enable_if_t<std::is_floating_point_v<T>, int> = 0>
+void _calculate_comp_unary_(T) = delete;
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(std::uint32_t value)

@@ -11,19 +11,21 @@ for example, gt(+NaN, 0) = 1, lt(-0, +0) = 1, ge(-0, +0) = 0, and gt(x, -NaN) = 
 
 The golden is torch's IEEE compare and the check is exact: every lane is 0.0 or 1.0.
 
-Float32 -> Float32 at dest_acc=Yes only. It is the one tt-llk pipeline that unpacks straight to Dest, so
-it is the only one that hands the SFPU -0.0 and NaN unchanged (see ``negative_zero_delivered`` in
-``helpers/sfpu_domains.py``); the 16-bit paths turn them into +0.0 and +-inf before the kernel runs.
+Two pipelines:
+- Float32 -> Float32 at dest_acc=Yes unpacks straight to Dest, the only path that delivers both -0.0
+  and NaN to the SFPU (see ``negative_zero_delivered`` in ``helpers/sfpu_domains.py``).
+- Float16_b -> Float16_b at dest_acc=No, the common bf16 path. It carries NaN and +-inf but flattens
+  -0.0 to +0.0, which does not change an IEEE compare. Its inputs are the bf16-exact subset.
 
 Blackhole only: the Wormhole copy of this header is not changed by the fix.
 """
 
 import struct
+from typing import NamedTuple
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from conftest import blackhole_only
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
@@ -31,7 +33,8 @@ from helpers.llk_params import (
     VectorMode,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import parametrize
+from helpers.sfpu_domains import negative_zero_delivered
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -42,46 +45,75 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-pytestmark = pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
-    reason="tt-llk#1701 item 3: only the Blackhole ckernel_sfpu_comp.h compares are IEEE-754 so far",
-)
+# https://github.com/tenstorrent/tt-llk/issues/1701 item 3: only the Blackhole compares are fixed.
+pytestmark = blackhole_only
 
 ELEMENTS_PER_TILE = 1024
 
-# Inputs, as raw fp32 bits so the NaN signs and -0.0 are exact.
-INPUT_BITS = (
-    0x00000000,  # +0
-    0x80000000,  # -0
-    0x7FC00000,  # +NaN
-    0xFFC00000,  # -NaN
-    0x7FFFFFFF,  # +NaN, largest payload: the top of the sign-magnitude order
-    0xFFFFFFFF,  # -NaN, largest payload: the bottom of it
-    0x7F800000,  # +inf
-    0xFF800000,  # -inf
-    0x3F800000,  # 1.0
-    0xBF800000,  # -1.0
-    0x3F000000,  # 0.5
-    0xBF000000,  # -0.5
-    0x3F000001,  # 0.5 + 1 ulp
-    0x3EFFFFFF,  # 0.5 - 1 ulp
-    0xC0200000,  # -2.5
-    0x00000001,  # smallest +denormal
-    0x80000001,  # smallest -denormal
-    0x7F7FFFFF,  # +max
-    0xFF7FFFFF,  # -max
+
+class Bits(NamedTuple):
+    """An fp32 bit pattern with a readable name, so test ids read `threshold:-0.0`, not an integer."""
+
+    name: str
+    bits: int
+
+
+class Pipeline(NamedTuple):
+    name: str
+    formats: InputOutputFormat
+    dest_acc: DestAccumulation
+
+
+# Inputs, as raw fp32 bits so the NaN signs and -0.0 are exact. bf16_exact marks the ones a Float16_b
+# tile holds unchanged.
+INPUTS = (
+    # (bits, bf16_exact)
+    (0x00000000, True),  # +0
+    (0x80000000, True),  # -0
+    (0x7FC00000, True),  # +NaN
+    (0xFFC00000, True),  # -NaN
+    (0x7FFFFFFF, False),  # +NaN, largest payload: the top of the sign-magnitude order
+    (0xFFFFFFFF, False),  # -NaN, largest payload: the bottom of it
+    (0x7F800000, True),  # +inf
+    (0xFF800000, True),  # -inf
+    (0x3F800000, True),  # 1.0
+    (0xBF800000, True),  # -1.0
+    (0x3F000000, True),  # 0.5
+    (0xBF000000, True),  # -0.5
+    (0x3F000001, False),  # 0.5 + 1 ulp
+    (0x3EFFFFFF, False),  # 0.5 - 1 ulp
+    (0xC0200000, True),  # -2.5
+    (0x00000001, False),  # smallest +denormal
+    (0x80000001, False),  # smallest -denormal
+    (0x7F7FFFFF, False),  # +FLT_MAX
+    (0xFF7FFFFF, False),  # -FLT_MAX
+    (0x7F7F0000, True),  # +bf16 max
+    (0xFF7F0000, True),  # -bf16 max
 )
 
 # Thresholds: both zeros, both infinities, both NaN signs, and finite values on either side.
-THRESHOLD_BITS = [
-    0x00000000,  # +0
-    0x80000000,  # -0
-    0x7F800000,  # +inf
-    0xFF800000,  # -inf
-    0x7FC00000,  # +NaN
-    0xFFC00000,  # -NaN
-    0x3F000000,  # 0.5
-    0xC0200000,  # -2.5
+THRESHOLDS = [
+    Bits("+0.0", 0x00000000),
+    Bits("-0.0", 0x80000000),
+    Bits("+inf", 0x7F800000),
+    Bits("-inf", 0xFF800000),
+    Bits("+nan", 0x7FC00000),
+    Bits("-nan", 0xFFC00000),
+    Bits("0.5", 0x3F000000),
+    Bits("-2.5", 0xC0200000),
+]
+
+PIPELINES = [
+    Pipeline(
+        "Float32-dest_acc_Yes",
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        DestAccumulation.Yes,
+    ),
+    Pipeline(
+        "Float16_b-dest_acc_No",
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+    ),
 ]
 
 _TORCH_COMPARE = {
@@ -105,17 +137,24 @@ def _fmt(bits: int) -> str:
         return f"{sign}nan(0x{bits:08x})"
     if value == 0.0:
         return f"{sign}0.0"
-    return f"{value:g}"
+    return f"{value:.9g}"
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Float32], same=True),
+    pipeline=PIPELINES,
     mathop=list(_TORCH_COMPARE),
-    threshold=THRESHOLD_BITS,
+    threshold=THRESHOLDS,
 )
-def test_sfpu_comp_unary_ieee(formats, mathop, threshold):
-    reps = ELEMENTS_PER_TILE // len(INPUT_BITS) + 1
-    tile_bits = (list(INPUT_BITS) * reps)[:ELEMENTS_PER_TILE]
+def test_sfpu_comp_unary_ieee(pipeline, mathop, threshold):
+    formats, dest_acc = pipeline.formats, pipeline.dest_acc
+    unpack_to_dest = formats.input_format.is_32_bit()
+    if unpack_to_dest:
+        # Without a real -0.0 in Dest the -0.0 lanes would pass on the unfixed kernel too.
+        assert negative_zero_delivered(formats.input_format, dest_acc)
+
+    input_bits = [bits for bits, bf16_exact in INPUTS if unpack_to_dest or bf16_exact]
+    reps = ELEMENTS_PER_TILE // len(input_bits) + 1
+    tile_bits = (input_bits * reps)[:ELEMENTS_PER_TILE]
     src_A = _floats(tile_bits)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
 
@@ -126,7 +165,7 @@ def test_sfpu_comp_unary_ieee(formats, mathop, threshold):
             generate_input_dim([32, 32], [32, 32]),
             APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=mathop),
-            SFPU_UNARY_SCALAR(threshold),
+            SFPU_UNARY_SCALAR(threshold.bits),
             VECTOR_MODE(VectorMode.RC),
         ],
         runtimes=[],
@@ -140,8 +179,8 @@ def test_sfpu_comp_unary_ieee(formats, mathop, threshold):
             tile_count_B=1,
             tile_count_res=1,
         ),
-        dest_acc=DestAccumulation.Yes,
-        unpack_to_dest=True,
+        dest_acc=dest_acc,
+        unpack_to_dest=unpack_to_dest,
         compile_time_formats=True,
     )
 
@@ -150,7 +189,9 @@ def test_sfpu_comp_unary_ieee(formats, mathop, threshold):
         dtype=format_dict[formats.output_format],
     ).to(torch.float32)
 
-    golden = _TORCH_COMPARE[mathop](src_A, _floats([threshold])[0]).to(torch.float32)
+    golden = _TORCH_COMPARE[mathop](src_A, _floats([threshold.bits])[0]).to(
+        torch.float32
+    )
 
     wrong = sorted(
         {
@@ -160,6 +201,6 @@ def test_sfpu_comp_unary_ieee(formats, mathop, threshold):
         }
     )
     assert not wrong, (
-        f"{mathop.name}(x, {_fmt(threshold)}) disagrees with IEEE-754 on {len(wrong)} input classes:\n"
+        f"{mathop.name}(x, {threshold.name}) disagrees with IEEE-754 on {len(wrong)} input classes:\n"
         + "\n".join(f"  x = {x}: got {got}, expected {want}" for x, got, want in wrong)
     )
