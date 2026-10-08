@@ -307,4 +307,26 @@ FORCE_INLINE void prepare_reduce_auxiliary_tile() {
     dfb.push_back(1);
 }
 
+// =============================================================================
+// Host-planned auxiliary recipe
+// =============================================================================
+
+namespace reduce_auxiliary_detail {
+
+template <typename Auxiliary, uint32_t tile_index = 0>
+FORCE_INLINE void prepare_tiles() {
+    if constexpr (tile_index < Auxiliary::num_tiles) {
+        using Tile = typename Auxiliary::template Tile<tile_index>;
+        prepare_reduce_auxiliary_tile<Auxiliary::cb_id, Tile::type, Tile::num_valid_elements, Tile::value_bits>();
+        prepare_tiles<Auxiliary, tile_index + 1>();
+    }
+}
+
+}  // namespace reduce_auxiliary_detail
+
+template <typename Auxiliary>
+FORCE_INLINE void prepare_reduce_auxiliary_tiles() {
+    reduce_auxiliary_detail::prepare_tiles<Auxiliary>();
+}
+
 }  // namespace dataflow_kernel_lib
