@@ -1568,52 +1568,6 @@ FORCE_INLINE uint32_t head_wrap_tile_skip(uint32_t cols, uint32_t row_stride, ui
     return cols - head_rows * row_stride;
 }
 
-template <uint32_t head_rows = 0, typename TensorAccessorType>
-void write_block(
-    Noc noc,
-    const TensorAccessorType& out_writer,
-    const uint32_t cb_out,
-    const uint32_t out_chunk_tiles,
-    const uint32_t rows,
-    const uint32_t cols,
-    const uint32_t out_tile_id,
-    const uint32_t tile_bytes,
-    const uint32_t barrier_threshold,
-    const uint32_t row_stride = 0,
-    const uint32_t first_row_in_head = 0) {
-    uint32_t barrier_count = 0;
-    uint32_t tile_id = out_tile_id;
-    const uint32_t row_skip = (row_stride ? row_stride : cols) - cols;
-    [[maybe_unused]] const uint32_t head_skip = head_wrap_tile_skip(cols, row_stride ? row_stride : cols, head_rows);
-    [[maybe_unused]] uint32_t row_in_head = first_row_in_head;
-
-    CircularBuffer cb(cb_out);
-    cb.wait_front(out_chunk_tiles);
-
-    uint32_t tile_offset = 0;
-    for (uint32_t row = 0; row < rows; ++row) {
-        for (uint32_t col = 0; col < cols; ++col) {
-            noc.async_write(cb, out_writer, tile_bytes, {.offset_bytes = tile_offset}, {.page_id = tile_id});
-            ++tile_id;
-            tile_offset += tile_bytes;
-
-            if (++barrier_count == barrier_threshold) {
-                noc.async_writes_flushed();
-                barrier_count = 0;
-            }
-        }
-        tile_id += row_skip;
-        if constexpr (head_rows != 0) {
-            if (++row_in_head == head_rows) {
-                row_in_head = 0;
-                tile_id += head_skip;
-            }
-        }
-    }
-    noc.async_write_barrier();
-    cb.pop_front(out_chunk_tiles);
-}
-
 // Single-chip linear-tile-id drain. Iterates total_rows in groups of sbh rows (last group is
 // a smaller remainder if not divisible); per-group wait-front + flush-before-pop lets
 // cb_out be sized to a few groups instead of the full chunk. Rows in [write_rows, total_rows)

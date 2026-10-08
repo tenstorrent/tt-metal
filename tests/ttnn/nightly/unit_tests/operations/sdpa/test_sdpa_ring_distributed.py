@@ -304,35 +304,35 @@ def test_ring_distributed_sdpa_prefix_and_paged_kv(device, s, prefix_len, page_b
 
     # Skip if constraints not met
 
-    # ring_distributed_sdpa_device_operation.cpp:218
+    # rule of the former legacy ring-distributed op
     if s % (2 * ring_size) != 0:
         pytest.skip(f"Sequence length {s} not divisible by 2 * ring_size ({2 * ring_size})")
 
-    # ring_distributed_sdpa_device_operation.cpp:137
+    # rule of the former legacy ring-distributed op
     if prefix_len % q_chunk_size != 0:
         pytest.skip(f"prefix_len {prefix_len} not divisible by q_chunk_size {q_chunk_size}")
 
-    # ring_distributed_sdpa_device_operation.cpp:154
+    # rule of the former legacy ring-distributed op
     if s % page_block_size != 0:
         pytest.skip(f"Sequence length {s} not divisible by page_block_size {page_block_size}")
 
-    # ring_distributed_sdpa_device_operation.cpp: 160
+    # rule of the former legacy ring-distributed op
     if prefix_len % page_block_size != 0:
         pytest.skip(f"prefix_len {prefix_len} not divisible by page_block_size {page_block_size}")
 
-    # ring_distributed_sdpa_device_operation.cpp:240
+    # rule of the former legacy ring-distributed op
     if q_chunk_size > s / (2 * ring_size):
         pytest.skip(
             f"q_chunk_size {q_chunk_size} must be less or equal to per-device sequence length {s / (2 * ring_size)} for sequence length {s} and ring size {ring_size}."
         )
 
-    # ring_distributed_sdpa_device_operation.cpp:249
+    # rule of the former legacy ring-distributed op
     if (s / (2 * ring_size)) % q_chunk_size != 0:
         pytest.skip(
             f"per-device sequence length {s / (2 * ring_size)} not divisible by q_chunk_size {q_chunk_size} for sequence length {s} and ring size {ring_size}."
         )
 
-    # ring_distributed_sdpa_device_operation.cpp:166
+    # rule of the former legacy ring-distributed op
     if (s + prefix_len) % k_chunk_size != 0:
         pytest.skip(f"(s+prefix_len) {s+prefix_len} not divisible by k_chunk_size {k_chunk_size}")
 
