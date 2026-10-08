@@ -34,6 +34,16 @@ struct SparseSDPAMsaParams {
     // resolved at program creation and is part of the program-cache key, so a trace replays the program it
     // captured; none fitting selects the streamed kernels. N > 0 = min(N, that limit); raises if none fits.
     std::optional<uint32_t> kv_cache_blocks = std::nullopt;
+    // kv_cache_blocks resolved against the L1 free at this call, once, at the prim entry; the program hash, the
+    // validation and the program factory all read this plan. slots == 0 selects the streamed kernels.
+    // slot_depth = cb_slot depth = blocks the reader may run ahead of compute. Not user-facing.
+    struct KvCachePlan {
+        uint32_t slots = 0;
+        uint32_t slot_depth = 1;
+        uint32_t block_bytes = 0;
+        uint64_t free_l1 = 0;
+    };
+    KvCachePlan kv_cache_plan;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
     bool causal_enabled() const { return chunk_start_idx.has_value(); }
     bool has_block_cyclic() const { return block_cyclic.has_value(); }

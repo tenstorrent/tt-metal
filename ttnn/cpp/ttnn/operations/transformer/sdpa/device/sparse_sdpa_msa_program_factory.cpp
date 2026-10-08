@@ -68,7 +68,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     };
     // Per-core K/V block cache: the reader fills a slot on a miss and compute reads it in place, replacing the
     // streamed K/V block buffers. The plan is hashed, so this layout is fixed for the program's lifetime.
-    const KvCachePlan kv = resolve_kv_cache(g, attrs, t);
+    const KvCachePlan& kv = attrs.kv_cache_plan;
     const uint32_t kv_cache_slots = kv.slots;
     const uint32_t kv_cache_slot_depth = kv.slot_depth;
     for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/kv_cache_slots > 0)) {

@@ -181,15 +181,8 @@ struct SparseSDPAMsaOperation {
     // records on L1-aligned addresses, so a page is rounded up to the larger of the two.
     static uint32_t message_page_bytes(uint32_t words);
 
-    // The block cache as resolved for THIS call. slots == 0 selects the streamed kernels. auto depends on the free
-    // L1 at call time, so slots is a program-hash input. slot_depth = cb_slot depth = blocks the reader may run
-    // ahead of compute.
-    struct KvCachePlan {
-        uint32_t slots = 0;
-        uint32_t slot_depth = 1;
-        uint32_t block_bytes = 0;
-        uint64_t free_l1 = 0;
-    };
+    using KvCachePlan = operation_attributes_t::KvCachePlan;
+    // Resolves kv_cache_blocks against the current L1; sparse_sdpa_msa() calls it once per invocation.
     static KvCachePlan resolve_kv_cache(const Geometry& g, const operation_attributes_t& attrs, const tensor_args_t& t);
 };
 

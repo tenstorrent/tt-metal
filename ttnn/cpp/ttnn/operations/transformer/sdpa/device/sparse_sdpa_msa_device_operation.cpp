@@ -140,7 +140,7 @@ void SparseSDPAMsaOperation::validate_kv_cache_request(const SparseSDPAMsaParams
     if (attrs.kv_cache_blocks.value_or(0) == 0) {  // off or auto
         return;
     }
-    const KvCachePlan kv = resolve_kv_cache(geometry(attrs, t), attrs, t);
+    const KvCachePlan& kv = attrs.kv_cache_plan;
     TT_FATAL(
         kv.slots > 0,
         "sparse_sdpa_msa: kv_cache_blocks={} but no L1 is left for one {} B K+V block slot ({} B free after the "
@@ -392,7 +392,7 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         // The RESOLVED slot count: the CB layout and kernels bake it in, and auto depends on free L1 at this call.
         // A request that resolves to no slots aliases the cache-off program (same layout, same kernels).
-        resolve_kv_cache(geometry(attrs, t), attrs, t).slots,
+        attrs.kv_cache_plan.slots,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -586,23 +586,20 @@ Tensor sparse_sdpa_msa(
     std::optional<BlockCyclicLayout> block_cyclic,
     std::optional<uint32_t> kv_cache_blocks) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .scale = scale,
-            .block_size = block_size,
-            .compute_kernel_config = compute_kernel_config,
-            .cache_batch_idx = cache_batch_idx,
-            .block_cyclic = block_cyclic,
-            .chunk_start_idx = chunk_start_idx,
-            .cluster_axis = cluster_axis,
-            .kv_cache_blocks = kv_cache_blocks,
-        },
-        OperationType::tensor_args_t{
-            .q = q,
-            .k = k,
-            .v = v,
-            .indices = indices,
-        });
+    OperationType::operation_attributes_t attrs{
+        .scale = scale,
+        .block_size = block_size,
+        .compute_kernel_config = compute_kernel_config,
+        .cache_batch_idx = cache_batch_idx,
+        .block_cyclic = block_cyclic,
+        .chunk_start_idx = chunk_start_idx,
+        .cluster_axis = cluster_axis,
+        .kv_cache_blocks = kv_cache_blocks,
+    };
+    const OperationType::tensor_args_t tensors{.q = q, .k = k, .v = v, .indices = indices};
+    // One resolution per call, against the L1 free now; the hash, the validation and the factory read this plan.
+    attrs.kv_cache_plan = OperationType::resolve_kv_cache(OperationType::geometry(attrs, tensors), attrs, tensors);
+    return ttnn::device_operation::launch<OperationType>(attrs, tensors);
 }
 
 }  // namespace ttnn::prim
