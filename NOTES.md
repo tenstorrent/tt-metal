@@ -27,3 +27,13 @@ Simpler than the full edge-slab design (NP volume unchanged); est. ~3.6 of 8.8 b
 - Next: confirm dr tree has "tiles-to-sticks"; md5 dr == def per seed; decode means; ms/block;
   score: $F/t48/python_env/bin/python $F/t276/drv/cmp241.py $F/diffvae/ref $F/t276/out_B/dr $F/t276/out_B/cmp_dr.json 0,1,2,3,4
 - Bar: gain >= 0.116 s (5% of 2.31 s) -> flip default + land on t48; else notes branch.
+
+## Job 045 result: dr arm crashed (def arm fine: 2.309-2.312 s)
+- TT_FATAL input_tensor.is_allocated() in neighbor_pad_async inside the k exchange (warm-up seed 0).
+- Cause: direct_rephased deallocated `exchanged`, the ccl manager's cached zero-padded ping-pong
+  buffer (get_np_ping_pong_buffer), which later neighbor_pad calls reuse. Fix: code commit d1d466afe4b.
+
+## Job 049 (blx01, 2026-10-08 12:30 UTC, -t 340): rerun A/B with d1d466afe4b
+- Submit: tt-device-mcp run-bg -w $T -e $T/drv/env.yaml -t 340 "bash $T/drv/run276.sh \"def: dr:DIFFVAE_NA_DIRECT_REPHASE=1\" $T/out_C \"def dr\" \"dr\""
+- Overlay $T/src = git archive models/ @d1d466afe4b. Out /var/tmp/fasth3/t276/out_C.
+- Next: same checks as job 045 (tiles-to-sticks in dr tree, md5 dr == def, decode means, ms/block, cmp241 on out_C/dr).
