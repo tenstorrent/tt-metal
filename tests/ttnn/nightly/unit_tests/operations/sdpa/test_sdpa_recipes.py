@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     OP_SELECTED_SHAPES,
     SHAPES,
     VARIANTS,
-    blackhole_only,
+    recipe_hardware,
     check_accuracy,
     check_attn_mask,
     check_cache_hit_rebinds,
@@ -40,10 +40,35 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     to_device,
 )
 
-pytestmark = blackhole_only
+pytestmark = recipe_hardware
+
+# Wormhole runs a subset of these sweeps so that the nightly sdpa job fits its 90-minute timeout there: every recipe
+# with every feature at least once (on_wormhole keeps the parameter sets named in its second argument), while
+# Blackhole runs the full cross products. Wormhole-specific numerics also run in the unit file's fast subset.
+WORMHOLE = ttnn.get_arch_name() == "wormhole_b0"
 
 
-@pytest.mark.parametrize("shape", SHAPES.values(), ids=SHAPES.keys())
+def on_wormhole(params, keep):
+    """params: pytest.params; on Wormhole, only those whose id is in keep."""
+    if not WORMHOLE:
+        return params
+    kept = [p for p in params if p.id in keep]
+    assert len(kept) == len(keep), f"unknown ids in {keep}"
+    return kept
+
+
+def named(cases, ids=None, sets=False):
+    """pytest.params of a dict's values (ids: its keys) or of a list with the given ids; sets: each case is a tuple of
+    argument values."""
+    if isinstance(cases, dict):
+        ids, cases = list(cases.keys()), list(cases.values())
+    return [pytest.param(*(c if sets else (c,)), id=i) for c, i in zip(cases, ids)]
+
+
+wormhole_skip = pytest.mark.skipif(WORMHOLE, reason="Blackhole only: the Wormhole nightly runs a subset (on_wormhole)")
+
+
+@pytest.mark.parametrize("shape", on_wormhole(named(SHAPES), {"odd_q96_k160_d64"}))
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_accuracy(device, variant, shape):
     check_accuracy(device, variant, shape)
@@ -69,7 +94,10 @@ def test_sdpa_recipe_long_k(device, variant):
 # move it.
 # With scale=0.25 the spike is 2.75 instead of 8: the same scores, about 27.5 and 24.75 above the first chunk's
 # maximum, reach the recipes' thresholds (theta and tau are in units of the scaled scores) through the scale.
-@pytest.mark.parametrize("scale, spike", [(None, 8.0), (0.25, 2.75)], ids=["default_scale", "scale_0.25"])
+@pytest.mark.parametrize(
+    "scale, spike",
+    on_wormhole(named([(None, 8.0), (0.25, 2.75)], ["default_scale", "scale_0.25"], sets=True), {"default_scale"}),
+)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_rising_max(device, variant, scale, spike):
     sq, sk, d = 512, 4096, 128
@@ -82,7 +110,10 @@ def test_sdpa_recipe_rising_max(device, variant, scale, spike):
     assert l2_pct(actual, reference(q, k, v, scale=scale)) < L2_PCT_BOUND[variant]
 
 
-@pytest.mark.parametrize("mask_kind", ["random", "key_padding"])
+@pytest.mark.parametrize(
+    "mask_kind",
+    on_wormhole(named(["random", "key_padding"], ["mask_kind=random", "mask_kind=key_padding"]), {"mask_kind=random"}),
+)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_attn_mask(device, variant, mask_kind):
     check_attn_mask(device, variant, mask_kind)
@@ -93,7 +124,7 @@ def test_joint_sdpa_recipe(device, variant):
     check_joint(device, variant)
 
 
-@pytest.mark.parametrize("shape", OP_SELECTED_SHAPES.values(), ids=OP_SELECTED_SHAPES.keys())
+@pytest.mark.parametrize("shape", on_wormhole(named(OP_SELECTED_SHAPES), {"self_attention"}))
 @pytest.mark.parametrize("variant", ["standard", "balanced", "accurate", "fast_bfp8"])
 def test_sdpa_recipe_op_selected_blocking(device, variant, shape):
     """Chunk sizes left to the op (no program_config, or zero chunk sizes)."""
@@ -106,15 +137,27 @@ def test_sdpa_recipe_op_selected_blocking(device, variant, shape):
 # scale 1.0 (Gemma-style) with Q scaled by 1/8: the same scaled logits as the default scale at D64. Unscaled, the
 # logits (std 8) hit a FAST bug that predates the scale argument (Q96 with a one-tile-wide QK subblock, K160 or
 # K32: rel-L2 in the thousands, also at the default scale with Q x8); see stream-b notes.
-@pytest.mark.parametrize("scale, q_multiplier", [(1.0, 0.125), (0.3, 1.0), (0.02, 1.0)], ids=["1.0", "0.3", "0.02"])
+@pytest.mark.parametrize(
+    "scale, q_multiplier",
+    on_wormhole(named([(1.0, 0.125), (0.3, 1.0), (0.02, 1.0)], ["1.0", "0.3", "0.02"], sets=True), {"0.3"}),
+)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_scale(device, variant, scale, q_multiplier):
     """The exp folds the scale in; an attn_mask is pre-scaled by 1/scale (exact for 0 and -inf)."""
     check_legacy_arguments(device, variant, scale=scale, mask=scale == 0.3, q_multiplier=q_multiplier)
 
 
-@pytest.mark.parametrize("scale", [0.125, 1.0, 0.3])
-@pytest.mark.parametrize("mask_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+@pytest.mark.parametrize(
+    "mask_dtype, scale",
+    on_wormhole(
+        [
+            pytest.param(dtype, scale, id=f"{name}-scale={scale}")
+            for name, dtype in (("bf16", ttnn.bfloat16), ("bfp8", ttnn.bfloat8_b))
+            for scale in (0.125, 1.0, 0.3)
+        ],
+        {"bfp8-scale=0.125", "bf16-scale=0.3"},
+    ),
+)
 @pytest.mark.parametrize("variant", ["balanced", "accurate"])
 def test_sdpa_recipe_narrow_mask_prescale(device, variant, mask_dtype, scale):
     """FP32-state recipes keep a BF16/BFP8 attn_mask narrow when its 1/scale pre-scale is exact (a power of two);
@@ -144,13 +187,19 @@ def test_sdpa_recipe_narrow_mask_prescale(device, variant, mask_dtype, scale):
 
 @pytest.mark.parametrize(
     "q_dtype, kv_dtype",
-    [
-        (ttnn.bfloat16, ttnn.bfloat8_b),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b),
-        (ttnn.bfloat16, ttnn.bfloat4_b),
-        (ttnn.bfloat4_b, ttnn.bfloat4_b),
-    ],
-    ids=["kv_bfp8", "qkv_bfp8", "kv_bfp4", "qkv_bfp4"],
+    on_wormhole(
+        named(
+            [
+                (ttnn.bfloat16, ttnn.bfloat8_b),
+                (ttnn.bfloat8_b, ttnn.bfloat8_b),
+                (ttnn.bfloat16, ttnn.bfloat4_b),
+                (ttnn.bfloat4_b, ttnn.bfloat4_b),
+            ],
+            ["kv_bfp8", "qkv_bfp8", "kv_bfp4", "qkv_bfp4"],
+            sets=True,
+        ),
+        {"qkv_bfp8"},
+    ),
 )
 @pytest.mark.parametrize("variant", ["standard", "balanced", "accurate"])
 def test_sdpa_recipe_packed_inputs(device, variant, q_dtype, kv_dtype):
@@ -182,7 +231,9 @@ MANY_HEADS = {
 }
 
 
-@pytest.mark.parametrize("case", MANY_HEADS)
+@pytest.mark.parametrize(
+    "case", on_wormhole(named(list(MANY_HEADS), [f"case={c}" for c in MANY_HEADS]), {"case=gqa_2x2_grid"})
+)
 @pytest.mark.parametrize("variant", ["standard", "balanced", "accurate", "fast_bfp8"])
 def test_sdpa_recipe_more_heads_than_cores(device, variant, case):
     """More batch/heads than cores: the Q chunks of every head split evenly over the grid."""
@@ -190,6 +241,7 @@ def test_sdpa_recipe_more_heads_than_cores(device, variant, case):
     check_legacy_arguments(device, variant, shape=shape, grid=grid, mask=True)
 
 
+@wormhole_skip
 @pytest.mark.parametrize("variant", ["standard", "balanced", "accurate"])
 def test_joint_sdpa_recipe_legacy_arguments(device, variant):
     """Joint attention with BFP8 inputs (outputs in BFP8), a custom scale and an ignored compute config."""
@@ -215,7 +267,7 @@ def test_joint_sdpa_recipe_legacy_arguments(device, variant):
     assert l2_pct(actual, expected) < L2_PCT_BOUND[variant] + output_rounding
 
 
-@pytest.mark.parametrize("shape", CAUSAL_SHAPES.values(), ids=CAUSAL_SHAPES.keys())
+@pytest.mark.parametrize("shape", on_wormhole(named(CAUSAL_SHAPES), {"odd_q96_k160_d64"}))
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_causal(device, variant, shape):
     check_key_range(device, variant, shape, causal=True)
@@ -223,9 +275,21 @@ def test_sdpa_recipe_causal(device, variant, shape):
 
 # Windows narrower than a K chunk (rows with no visible key in a Q chunk's first K chunk), off tile and chunk
 # boundaries, and wider than the sequence's chunks; causal (left) and centred.
-@pytest.mark.parametrize("window", [64, 300, 1100])
-@pytest.mark.parametrize("causal", [True, False], ids=["causal", "centred"])
-@pytest.mark.parametrize("shape", ["q256_k512", "odd_q96_k160_d64", "gqa_batch2"])
+@pytest.mark.parametrize(
+    "shape, causal, window",
+    on_wormhole(
+        [
+            pytest.param(shape, causal, window, id=f"shape={shape}-{'causal' if causal else 'centred'}-window={window}")
+            for shape in ("q256_k512", "odd_q96_k160_d64", "gqa_batch2")
+            for causal in (True, False)
+            for window in (64, 300, 1100)
+        ],
+        {
+            "shape=q256_k512-causal-window=64",
+            "shape=odd_q96_k160_d64-centred-window=300",
+        },
+    ),
+)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_sliding_window(device, variant, shape, causal, window):
     check_key_range(device, variant, CAUSAL_SHAPES[shape], causal=causal, window=window)
@@ -249,10 +313,20 @@ CHUNKED_CASES = {
     "paged_geometry": dict(start=256, blocks_per_seq=2, block=256, cache_shape=(1, 512, 128)),
     "sink": dict(start=384, sink=True),
 }
+CHUNKED_WORMHOLE = {"paged_gqa_batch2_4x96-scalar_start", "window300-tensor_start"}
 
 
-@pytest.mark.parametrize("as_tensor", [False, True], ids=["scalar_start", "tensor_start"])
-@pytest.mark.parametrize("case", CHUNKED_CASES.values(), ids=CHUNKED_CASES.keys())
+@pytest.mark.parametrize(
+    "case, as_tensor",
+    on_wormhole(
+        [
+            pytest.param(case, as_tensor, id=f"{name}-{'tensor_start' if as_tensor else 'scalar_start'}")
+            for name, case in CHUNKED_CASES.items()
+            for as_tensor in (False, True)
+        ],
+        CHUNKED_WORMHOLE,
+    ),
+)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_chunked_sdpa_recipe(device, variant, case, as_tensor):
     check_chunked(device, variant, as_tensor=as_tensor, **case)
@@ -273,8 +347,17 @@ WINDOWED_CASES = {
 }
 
 
-@pytest.mark.parametrize("causal", [False, True], ids=["bidir", "causal"])
-@pytest.mark.parametrize("case", WINDOWED_CASES.values(), ids=WINDOWED_CASES.keys())
+@pytest.mark.parametrize(
+    "case, causal",
+    on_wormhole(
+        [
+            pytest.param(case, causal, id=f"{name}-{'causal' if causal else 'bidir'}")
+            for name, case in WINDOWED_CASES.items()
+            for causal in (False, True)
+        ],
+        {"q_slice_tensor-causal", "full_q-bidir"},
+    ),
+)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_windowed_sdpa_recipe(device, variant, case, causal):
     check_windowed(device, variant, causal=causal, **case)
@@ -308,7 +391,13 @@ KEY_RANGE_GRID_CASES = {
 }
 
 
-@pytest.mark.parametrize("case", KEY_RANGE_GRID_CASES.keys())
+@pytest.mark.parametrize(
+    "case",
+    on_wormhole(
+        named(list(KEY_RANGE_GRID_CASES), [f"case={c}" for c in KEY_RANGE_GRID_CASES]),
+        {"case=causal_5_cores_7_rounds"},
+    ),
+)
 @pytest.mark.parametrize("variant", ["standard", "accurate", "fast_bfp8"])
 def test_sdpa_recipe_key_range_small_grid(device, variant, case):
     KEY_RANGE_GRID_CASES[case](device, variant)
@@ -320,14 +409,29 @@ def test_chunked_flash_mla_prefill_recipe(device, variant):
     check_chunked(device, variant, 256, nh=4, nkv=1, sq=128, d=192, head_dim_v=128, blocks_per_seq=3, block=128)
 
 
-@pytest.mark.parametrize("v_tensor", [False, True], ids=["v_from_k", "v_tensor"])
-@pytest.mark.parametrize("causal", [True, False], ids=["causal", "noncausal"])
-@pytest.mark.parametrize("shape", ["d192_v128", "d576_v512"])
+@pytest.mark.parametrize(
+    "shape, causal, v_tensor",
+    on_wormhole(
+        [
+            pytest.param(
+                shape,
+                causal,
+                v_tensor,
+                id=f"shape={shape}-{'causal' if causal else 'noncausal'}-{'v_tensor' if v_tensor else 'v_from_k'}",
+            )
+            for shape in ("d192_v128", "d576_v512")
+            for causal in (True, False)
+            for v_tensor in (False, True)
+        ],
+        {"shape=d576_v512-noncausal-v_tensor"},
+    ),
+)
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_flash_mla_prefill_recipe(device, variant, shape, causal, v_tensor):
     check_mla(device, variant, MLA_SHAPES[shape], causal=causal, v_tensor=v_tensor)
 
 
+@wormhole_skip
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_flash_mla_prefill_recipe_tails(device, variant):
     """Sequence lengths off the tile and chunk sizes, batch 2, three heads, noncausal (Sq != Sk)."""
@@ -345,13 +449,13 @@ SINK_CASES = {
 }
 
 
-@pytest.mark.parametrize("case", SINK_CASES.values(), ids=SINK_CASES.keys())
+@pytest.mark.parametrize("case", on_wormhole(named(SINK_CASES), {"window"}))
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_attention_sink(device, variant, case):
     check_sink(device, variant, **case)
 
 
-@pytest.mark.parametrize("causal", [False, True], ids=["noncausal", "causal"])
+@pytest.mark.parametrize("causal", on_wormhole(named([False, True], ["noncausal", "causal"]), {"causal"}))
 @pytest.mark.parametrize("variant", VARIANTS)
 def test_sdpa_recipe_output_concat_heads(device, variant, causal):
     shape = (2, 4, 2, 640, 640, 64, 128, 256) if causal else (2, 4, 2, 300, 640, 64, 128, 256)
@@ -365,7 +469,17 @@ def test_sdpa_recipe_output_concat_heads(device, variant, causal):
 ODD_Q_LARGE_LOGIT_BOUND = {"standard": 5.0, "fast_bf16": 7.0, "fast_bfp8": 7.0}
 
 
-@pytest.mark.parametrize("q_chunk, k_chunk", [(96, 160), (96, 32), (160, 160), (96, 128)])
+@pytest.mark.parametrize(
+    "q_chunk, k_chunk",
+    on_wormhole(
+        named(
+            [(96, 160), (96, 32), (160, 160), (96, 128)],
+            [f"q_chunk={q}-k_chunk={k}" for q, k in ((96, 160), (96, 32), (160, 160), (96, 128))],
+            sets=True,
+        ),
+        {"q_chunk=96-k_chunk=128"},
+    ),
+)
 @pytest.mark.parametrize("variant", ODD_Q_LARGE_LOGIT_BOUND)
 def test_sdpa_recipe_odd_q_large_logits(device, variant, q_chunk, k_chunk):
     q, k, v = randn(1, 2, 288, 64, seed=1), randn(1, 2, 640, 64, seed=2), randn(1, 2, 640, 64, seed=3)
@@ -376,7 +490,17 @@ def test_sdpa_recipe_odd_q_large_logits(device, variant, q_chunk, k_chunk):
 
 # Odd Q chunks with an attn_mask that hides every key of a row's first K chunks (a causal sliding window, masked
 # with -2^100 so such rows start from a finite maximum): the reference max jumps in a middle chunk.
-@pytest.mark.parametrize("q_chunk, k_chunk", [(96, 160), (96, 128), (160, 96)])
+@pytest.mark.parametrize(
+    "q_chunk, k_chunk",
+    on_wormhole(
+        named(
+            [(96, 160), (96, 128), (160, 96)],
+            [f"q_chunk={q}-k_chunk={k}" for q, k in ((96, 160), (96, 128), (160, 96))],
+            sets=True,
+        ),
+        {"q_chunk=96-k_chunk=160"},
+    ),
+)
 @pytest.mark.parametrize("variant", ["standard", "fast_bf16"])
 def test_sdpa_recipe_odd_q_masked_first_chunk(device, variant, q_chunk, k_chunk):
     s, window = 864, 300
