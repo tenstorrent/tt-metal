@@ -105,3 +105,14 @@ def test_packed_lanes_default_on(monkeypatch, flag, enabled):
     else:
         monkeypatch.setenv("DIFFVAE_S5_PACKED_LANES", flag)
     assert packed_lanes_enabled() is enabled
+
+
+@pytest.mark.parametrize("flag, enabled", [(None, True), ("1", True), ("0", False)])
+def test_na_approx_exp_default_on(monkeypatch, flag, enabled):
+    from models.tt_dit.layers.neighborhood_attention import approx_exp_enabled
+
+    if flag is None:
+        monkeypatch.delenv("DIFFVAE_NA_APPROX_EXP", raising=False)
+    else:
+        monkeypatch.setenv("DIFFVAE_NA_APPROX_EXP", flag)
+    assert approx_exp_enabled() is enabled

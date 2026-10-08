@@ -395,8 +395,8 @@ and Q pre-scaled; the return is `(B, T, H, W, heads * head_dim)` ROW_MAJOR.
   sticks split by `_halo_split` when they exceed what the op moves intact), the op with
   `query_extent` / `query_origin` so Q and the output address the owned grid while K, V and the
   gather address the resident one, `to_natural` unless `already_bricked`, then the head all-gather
-  over `tp_axis`. `_compute_kernel_config` is HiFi2 with an exact exp, matching the general SDPA op
-  the oracle runs; `_tp_trace` is the hang locator.
+  over `tp_axis`. `_compute_kernel_config` is HiFi2 with the approximate exp (the oracle's general SDPA op
+  uses the exact one; `DIFFVAE_NA_APPROX_EXP=0` matches it); `_tp_trace` is the hang locator.
 - `NAKernel` / `NA_KERNELS` / `resolve_na_kernel` -- the backend registry: a name
   (`linear_order`, `bricked`, `bricked_sp_w_sharded`) and the layout decisions that follow from it
   (`w_sharded`, `bricked`, `keep_bricked`). Both the deterministic stages and stage 5 resolve their
@@ -582,7 +582,7 @@ build it from the `--diffvae-*` options (`pytest --help`, group "LTX-2.5 DiffVAE
 | `DIFFVAE_NA_WINDOW`         | overrides the architectural context window                                                    |
 | `DIFFVAE_NA_BRICK`          | overrides the derived brick: `bt,bh,bw` for every volume, or keyed by full volume `T,H,W:bt,bh,bw;...` so one stage can be forced without moving the others |
 | `DIFFVAE_NA_KV_CHUNK_TILES` | tiles per flash step; 8 = 256 tokens                                                          |
-| `DIFFVAE_NA_FIDELITY`, `DIFFVAE_NA_APPROX_EXP` | A/B knobs on the op's compute config; the default is HiFi2 with an exact exp |
+| `DIFFVAE_NA_FIDELITY`, `DIFFVAE_NA_APPROX_EXP` | the op's compute config; the default is HiFi2 with the approximate exp, `DIFFVAE_NA_APPROX_EXP=0` for the exact exp |
 
 
 ### Ours — diagnostics

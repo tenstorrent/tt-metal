@@ -177,10 +177,16 @@ def _cached_gather_index(device, resident, phased, brick, front, cut_h, cut_w) -
     return _GATHER_INDEX_CACHE[key]
 
 
-def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
-    """HiFi2 with an exact exp, matching the general SDPA op the replicated reference runs.
+def approx_exp_enabled() -> bool:
+    """Whether the op's softmax uses the approximate exp. On by default: it cuts the 1080p 145-frame
+    decode by about 0.13 s for under 0.5 dB PSNR. Off (exact exp) with ``DIFFVAE_NA_APPROX_EXP=0``."""
+    return os.environ.get("DIFFVAE_NA_APPROX_EXP") != "0"
 
-    ``DIFFVAE_NA_FIDELITY=lofi|hifi2|hifi4`` and ``DIFFVAE_NA_APPROX_EXP=1`` are A/B knobs only.
+
+def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
+    """HiFi2 with the approximate exp (see ``approx_exp_enabled``).
+
+    ``DIFFVAE_NA_FIDELITY=lofi|hifi2|hifi4`` is an A/B knob only.
     """
     fidelity = {
         "lofi": ttnn.MathFidelity.LoFi,
@@ -189,7 +195,7 @@ def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
     }[os.environ.get("DIFFVAE_NA_FIDELITY", "hifi2").lower()]
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
-        math_approx_mode=os.environ.get("DIFFVAE_NA_APPROX_EXP") == "1",
+        math_approx_mode=approx_exp_enabled(),
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
