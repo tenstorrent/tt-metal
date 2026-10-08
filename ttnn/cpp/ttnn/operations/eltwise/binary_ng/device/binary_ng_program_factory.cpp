@@ -976,6 +976,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // FPU op's activations, for the Blackhole block and broadcast sections
     bool has_operand_activations = false;
+    bool both_operand_activations = false;
     bool has_post_activations = false;
     bool post_zero_point = false;
     bool mul_at_hifi3 = false;
@@ -1055,6 +1056,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                        lhs_activations.empty() && rhs_activations.empty() && block_float(srcb_dtype) &&
                        (block_float(srca_dtype) || srca_dtype == DataType::BFLOAT16);
         has_operand_activations = !lhs_activations.empty() || !rhs_activations.empty();
+        both_operand_activations = !lhs_activations.empty() && !rhs_activations.empty();
         has_post_activations = !post_activations.empty();
         post_zero_point = has_post_activations && post_activations[0].type() == unary::UnaryOpType::ZERO_POINT;
 
@@ -1144,14 +1146,20 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                 (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
                                  operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B);
     const uint32_t bcast_section_tiles = fp32_dest_acc_en ? 4 : 8;
-    // Blackhole: with an operand activation and more than one DEST section per core, the no-broadcast and Python-scalar
-    // kernels run the operand pass over two sections before one binary init, so the intermediate CBs hold two.
-    const uint32_t pre_sections = bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 &&
-                                          c_num_tiles_per_shard.value_or(0) > num_tiles_per_cycle
-                                      ? 2
-                                      : 1;
+    // Blackhole: with an operand activation the operand pass runs over up to four DEST sections before one binary init; one
+    // section takes it when partial, or in the no-broadcast kernel with block-float operands or both operands activated.
+    const uint32_t c_shard_tiles = c_num_tiles_per_shard.value_or(0);
+    const uint32_t shard_sections = tt::div_up(c_shard_tiles, num_tiles_per_cycle);
+    const bool one_section_pass =
+        c_shard_tiles < num_tiles_per_cycle ||
+        (b.has_value() && (both_operand_activations || (is_block_float(a_dtype) && is_block_float(b_dtype))));
+    const uint32_t pre_sections = bh_fpu_op && has_operand_activations && num_tiles_per_cycle > 1 && c_shard_tiles > 0 &&
+                                          (shard_sections > 1 || one_section_pass)
+                                      ? std::min(shard_sections, 4u)
+                                      : 0;
     const uint32_t a_intermediate_tiles =
-        (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) * pre_sections;
+        (bcast_sections ? std::max(num_tiles_per_cycle, bcast_section_tiles) : num_tiles_per_cycle) *
+        std::max(pre_sections, 1u);
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -1209,7 +1217,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         desc.cbs.push_back(CBDescriptor{
-            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle * pre_sections,
+            .total_size = b_intermediate_single_tile_size * num_tiles_per_cycle * std::max(pre_sections, 1u),
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
@@ -1473,7 +1481,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel_defines["BINARY_NG_BLOCK_PACK"] = "1";
     }
 
-    if (pre_sections > 1) {
+    if (pre_sections > 0) {
         compute_kernel_defines["BINARY_NG_PRE_SECTIONS"] = std::to_string(pre_sections);
     }
 
