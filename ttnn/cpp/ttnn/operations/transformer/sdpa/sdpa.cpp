@@ -54,10 +54,8 @@ void reject_decode_settings(const std::optional<ttnn::operations::transformer::S
 // (compute_streaming.hpp). Routed dense, chunked, MLA, joint and ring-distributed calls choose their chunks (the
 // program_config chunk sizes were tuned for the legacy kernels; resolve_dense_recipe_blocking); ring and exp ring calls
 // keep them when the recipe supports them.
-bool routes_to_recipes(const ttnn::Tensor& q) {
-    return q.storage_type() == StorageType::DEVICE &&
-           (q.device()->arch() == tt::ARCH::BLACKHOLE || q.device()->arch() == tt::ARCH::WORMHOLE_B0);
-}
+// The recipes run on Blackhole and Wormhole; only device inputs are routed (host inputs fail the op's validation).
+bool routes_to_recipes(const ttnn::Tensor& q) { return q.storage_type() == StorageType::DEVICE; }
 
 // The compute config the legacy kernels would run with (the defaults every SDPA prefill op applies).
 DeviceComputeKernelConfig legacy_compute_config(
