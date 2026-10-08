@@ -110,18 +110,15 @@ def _prepare_chunk_terms(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    gate_scale: float,
 ) -> _PreparedChunks:
-    beta_by_head = ttnn.permute(beta, (0, 2, 1))
-    beta_by_chunk = ttnn.reshape(
-        beta_by_head,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, 1),
-    )
+    # Chunk preparation reads each head's column straight from token-major [1, rows, heads] beta.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
         v,
         gate,
-        beta_by_chunk,
+        beta,
         geometry.heads,
         memory_config=KDA_PREPARATION_MEMORY_CONFIG,
         compute_kernel_config=compute_config.preparation,
@@ -129,6 +126,7 @@ def _prepare_chunk_terms(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        gate_scale=gate_scale,
     )
     return _PreparedChunks(*outputs)
 
@@ -488,7 +486,10 @@ class KDARecurrence:
         key_dim: int,
         value_dim: int,
         batch: int = 1,
+        gate_scale: float = 1.0,
     ) -> None:
+        # Preparation multiplies the gate by gate_scale before its cumulative sum.
+        self._gate_scale = gate_scale
         preparation = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -579,6 +580,7 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            gate_scale=self._gate_scale,
         )
         return prepared, state, geometry
 

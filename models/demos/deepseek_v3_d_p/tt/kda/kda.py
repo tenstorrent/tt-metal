@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
+    decay_projection_program_config,
     tuned_projection_matmul_configs,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
@@ -54,6 +55,7 @@ class _ProjectedInputs:
     qkv: ttnn.Tensor
     decay_rank: ttnn.Tensor
     output_gate: ttnn.Tensor
+    output_gate_offset: int
     beta: ttnn.Tensor
 
 
@@ -167,6 +169,16 @@ class ttKDA:
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
+        # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
+        self.decay_activation = (
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if config.gate_lower_bound is not None else None
+        )
+        self.decay_projection_program_config = decay_projection_program_config(
+            mesh_device.compute_with_storage_grid_size(),
+            self.active_seq_len_local,
+            *tuple(self.weights.decay_output_projection.shape)[-2:],
+            self.decay_activation,
+        )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
         self.kda_compute_config = ttnn.init_device_compute_kernel_config(
@@ -184,6 +196,8 @@ class ttKDA:
             heads=self.config.num_heads,
             key_dim=self.config.head_k_dim,
             value_dim=self.config.head_v_dim,
+            # The bounded gate's lower-bound scale is applied by chunk preparation.
+            gate_scale=1.0 if config.gate_lower_bound is None else config.gate_lower_bound,
         )
         self.output_projection_compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -324,11 +338,10 @@ class ttKDA:
         return _ProjectedInputs(
             qkv=_slice_width(projected, 0, auxiliary_start),
             decay_rank=_slice_width(projected, auxiliary_start, auxiliary_start + config.head_k_dim),
-            output_gate=_slice_width(
-                projected,
-                auxiliary_start + config.head_k_dim,
-                auxiliary_start + config.head_k_dim + config.v_dim,
-            ),
+            # The gated norm reads its gate columns straight from the fused projection, which therefore
+            # stays allocated until the norm instead of only its gate slice.
+            output_gate=projected,
+            output_gate_offset=auxiliary_start + config.head_k_dim,
             beta=_slice_width(
                 projected,
                 auxiliary_start + config.head_k_dim + config.v_dim,
@@ -359,6 +372,12 @@ class ttKDA:
             bias=weights.decay_bias_flat,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
+            program_config=self.decay_projection_program_config,
+            activation=(
+                "sigmoid"
+                if self.decay_activation is not None and self.decay_projection_program_config is None
+                else None
+            ),
         )
         return self._activate_decay(gate), beta_for_recurrence
 
@@ -373,17 +392,16 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _bounded_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
-        gate = ttnn.multiply(
-            self.weights.decay_scale_flat, gate, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.multiply(gate, self.config.gate_lower_bound, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    @staticmethod
+    def _bounded_decay(gate: ttnn.Tensor) -> ttnn.Tensor:
+        # The projection already applied sigmoid(scale * (x @ W + bias)); chunk preparation applies the lower bound.
+        return gate
 
     def _kda_rms_norm(
         self,
         output: ttnn.Tensor,
         output_gate: ttnn.Tensor,
+        output_gate_offset: int,
     ) -> ttnn.Tensor:
         """Apply the KDA gated RMSNorm epilogue."""
         config, weights = self.config, self.weights
@@ -396,6 +414,7 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.kda_compute_config,
             output_dtype=self.gated_rms_output_dtype,
+            gate_column_offset=output_gate_offset,
         )
 
     def _project_output(
@@ -503,6 +522,6 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
         )
-        output = self._kda_rms_norm(result.output, projected.output_gate)
+        output = self._kda_rms_norm(result.output, projected.output_gate, projected.output_gate_offset)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
