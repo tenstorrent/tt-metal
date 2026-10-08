@@ -180,6 +180,59 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             output.padded_shape());
     }
 
+    // Columns each input contributes, logical rather than padded: a ragged width pads the last
+    // dim out to whole shards -- 11 over three shards of 4 is stored as 12 -- so padded_shape()[-1]
+    // equals input_shard_w * shard_grid_w for a tensor spanning every grid column, and using it
+    // reproduces the capacity cursor exactly. Shard width still locates a column in its shard, below.
+    std::vector<uint32_t> input_total_w(num_input_tensors);
+    uint32_t out_total_w = 0;
+    if (width_concat) {
+        for (uint32_t i = 0; i < num_input_tensors; i++) {
+            input_total_w[i] = input_tensors[i].logical_shape()[-1];
+            out_total_w += input_total_w[i];
+        }
+        // Width concat sums the inputs' widths, so this restates the output spec.
+        TT_FATAL(
+            out_total_w == output.logical_shape()[-1],
+            "Width concat: inputs contribute {} columns but the output's width is {} (shape {}).",
+            out_total_w,
+            output.logical_shape()[-1],
+            output.logical_shape());
+        // The shards have to hold the result; they may hold more (a padded tail).
+        TT_FATAL(
+            output_shard_w * shard_grid_w >= out_total_w,
+            "Width concat: output shards span {} x {} columns, too few for the {} of shape {}.",
+            output_shard_w,
+            shard_grid_w,
+            out_total_w,
+            output.logical_shape());
+        // Each input starts at the sum of the widths before it, a byte offset inside the
+        // destination shard, and a NOC transfer cannot start unaligned -- it copies the wrong bytes
+        // rather than failing. Only ragged widths reach this: the shard-row check above already
+        // forces an exact width to a multiple of the alignment.
+        //
+        // The quantity wanted here is the NOC alignment (NOC_L1_{READ,WRITE}_ALIGNMENT_BYTES), not
+        // the L1 allocation alignment: they agree at 16 B on Wormhole and Blackhole, but Quasar
+        // decouples them and shifts the data, so its NOC alignment is 1 B. Hal::get_read_alignment
+        // is unreachable from TTNN (same limitation noted in all_gather.cpp), so this check is
+        // conservative on Quasar -- it rejects ragged prefixes the NOC could service there.
+        uint32_t prefix_w = 0;
+        for (uint32_t i = 0; i + 1 < num_input_tensors; i++) {
+            prefix_w += input_total_w[i];
+            TT_FATAL(
+                (prefix_w * element_size) % l1_alignment == 0,
+                "Width concat: input {} starts at column {} ({} bytes), not L1-aligned ({} bytes). "
+                "A ragged width puts the boundary inside a shard and the NOC cannot write at an "
+                "unaligned offset. Pad each width to a multiple of {} elements, or concat before "
+                "sharding.",
+                i + 1,
+                prefix_w,
+                prefix_w * element_size,
+                l1_alignment,
+                l1_alignment / element_size);
+        }
+    }
+
     // --- Circular Buffers ---
     for (uint32_t i = 0; i < num_input_tensors; i++) {
         const uint32_t in_num_units = to_units_h(input_shard_h[i]) * to_units_w(input_shard_w[i]);
@@ -238,13 +291,15 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             const uint32_t sw = row_major_orient ? gx : gy;  // shard width index
 
             if (width_concat) {
+                // Clipped to the real width: the last shard can run past it into padding, which
+                // has no source column.
                 const uint32_t out_col_start = sw * output_shard_w;
-                const uint32_t out_col_end = out_col_start + output_shard_w;
+                const uint32_t out_col_end = std::min(out_col_start + output_shard_w, out_total_w);
                 const uint32_t num_rows_units = to_units_h(output_shard_h);
 
                 uint32_t cum_w = 0;
                 for (uint32_t inp_id = 0; inp_id < num_input_tensors; inp_id++) {
-                    const uint32_t inp_total_w = input_shard_w[inp_id] * shard_grid_w;
+                    const uint32_t inp_total_w = input_total_w[inp_id];
                     const uint32_t inp_shard_w_val = input_shard_w[inp_id];
 
                     const uint32_t overlap_start = std::max(out_col_start, cum_w);
