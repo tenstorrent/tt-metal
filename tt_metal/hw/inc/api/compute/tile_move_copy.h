@@ -171,9 +171,12 @@ ALWI void copy_block(
     std::uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
-#endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles)));
+#else
+    UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+        in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
+#endif
     MATH((llk_math_eltwise_unary_datacopy_block<
           DataCopyType::A2D,
           is_fp32_dest_acc_en,

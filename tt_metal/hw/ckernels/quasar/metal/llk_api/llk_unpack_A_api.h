@@ -158,8 +158,9 @@ inline void llk_unpack_A(
 /**
  * @brief Unpacks a contiguous block of tiles for unary and unary-broadcast paths.
  *
- * On the unpack-to-dest path the block is one DEST bank section: the tiles land at DEST tiles [0, ntiles) under a
- * single UNPACK_MATH / MATH_PACK handshake. The other paths unpack tile by tile.
+ * On the unpack-to-dest path the block is one DEST bank section: the tiles land at DEST tiles
+ * [start_dst_tile_index, start_dst_tile_index + ntiles) under a single UNPACK_MATH / MATH_PACK handshake. The other
+ * paths unpack tile by tile.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
@@ -169,6 +170,8 @@ inline void llk_unpack_A(
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
+ * @param start_dst_tile_index: DEST tile index of the first tile; consecutive tiles land at consecutive indices.
+ * Unpack-to-dest path only, ignored otherwise.
  */
 // TODO: AM; Optimize block calls by using ntiles per unpack, issue #40798
 template <
@@ -177,7 +180,10 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
-    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand,
+    const std::uint32_t start_tile_index,
+    const std::uint32_t ntiles,
+    const std::uint32_t start_dst_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
@@ -186,7 +192,7 @@ inline void llk_unpack_A_block(
         WAYPOINT("UPAW");
         // EN_32BIT_DEST must match the pack side, see llk_unpack_A.
         _llk_unpack_unary_operand_to_dest_block_<DST_SYNC_MODE, DST_ACCUM_MODE>(
-            rd_entry_idx + start_tile_index, ntiles);
+            rd_entry_idx + start_tile_index, start_dst_tile_index, ntiles);
         WAYPOINT("UPAD");
     } else {
         [[maybe_unused]] const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
