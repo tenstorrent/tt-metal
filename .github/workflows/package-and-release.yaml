@@ -325,31 +325,54 @@ jobs:
           find artifacts -type f -name '*.tar.gz' -exec cp {} dist/ \;
           ls -l dist
 
-      - name: Verify no profiler wheel is about to be published
+      # Fail closed before anything is published.
+      #
+      # This asserts PROVENANCE, not wheel contents, and that is deliberate: the
+      # plain and profiler wheels are indistinguishable by inspection. They carry
+      # the same filename (CIBW_ENABLE_TRACY only flips -DENABLE_TRACY in setup.py
+      # and never touches name or version) AND the same 8592-entry file list --
+      # libtracy.so ships in both. They differ only in binary contents (_ttnncpp.so
+      # is ~4.4MB larger with tracy on). So the only thing that can be checked is
+      # that the profiler ARTIFACT never made it into dist/, which is what the
+      # "Remove profiler artifacts" step above is responsible for. This verifies
+      # that step actually did its job, so a regression in it -- a changed download
+      # layout, an artifact rename, a lost -maxdepth/-type flag -- fails here
+      # instead of silently publishing a tracy build to PyPI as `ttnn`.
+      #
+      # It does NOT require a profiler build to exist. If build-artifact-profiler
+      # failed or was skipped there is simply no profiler directory to remove, and
+      # the plain wheel ships exactly as it did before that build was added.
+      - name: Verify no profiler build is about to be published
         run: |
           set -euo pipefail
 
-          # Matches the wheel-side suffix produced by wheels.yaml / build-artifact.yaml
-          # ("-profiler-"), and stays loose enough to catch a bare "profiler" appearing
-          # anywhere in a filename.
-          OFFENDERS=$(find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) \
-                        -name '*profiler*' -printf '%f\n' || true)
-          if [ -n "$OFFENDERS" ]; then
-            echo "::error::Refusing to publish: a profiler build reached dist/. PyPI must only ever receive the non-profiler wheel."
-            echo "Offending files:"
-            echo "$OFFENDERS"
+          # 1. The removal step must have left nothing profiler-shaped behind.
+          LEFTOVER=$(find artifacts -maxdepth 1 -type d -name '*profiler*' -printf '%f\n' || true)
+          if [ -n "$LEFTOVER" ]; then
+            echo "::error::Refusing to publish: profiler artifact director(ies) survived the removal step, so dist/ may contain a tracy build. PyPI must only ever receive the non-profiler wheel."
+            echo "$LEFTOVER" | sed 's/^/  /'
             exit 1
           fi
 
-          # An empty dist/ would let pypa/gh-action-pypi-publish no-op silently, which
-          # looks identical to a successful release. Catch it here instead.
+          # 2. At least one plain wheel artifact must remain. If the filter ever
+          #    over-matches and deletes everything, dist/ would be empty and
+          #    pypa/gh-action-pypi-publish would no-op silently -- indistinguishable
+          #    from a successful release.
+          KEPT=$(find artifacts -maxdepth 1 -type d -name 'ttnn-dist-*' -printf '%f\n' | sort || true)
+          if [ -z "$KEPT" ]; then
+            echo "::error::No non-profiler ttnn-dist-* artifact remains under artifacts/; nothing legitimate left to publish."
+            exit 1
+          fi
+
           COUNT=$(find dist -type f \( -name '*.whl' -o -name '*.tar.gz' \) | wc -l)
           if [ "$COUNT" -eq 0 ]; then
             echo "::error::dist/ contains no wheel or sdist to publish."
             exit 1
           fi
 
-          echo "dist/ verified clean: ${COUNT} non-profiler artifact(s) to publish."
+          echo "Publishing from these artifacts:"
+          echo "$KEPT" | sed 's/^/  /'
+          echo "dist/ verified clean: ${COUNT} artifact(s), no profiler provenance."
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
@@ -822,10 +845,25 @@ jobs:
           echo "No new commits found since latest release. No RC release needed."
 
   trigger-prod-after-rc-success:
-    needs: [build-test-publish, release-precheck, create-tag]
+    # blaze-merge-gate is in `needs` for the same reason publish-to-pypi has it:
+    # the gate used to live inside release-build-test-publish.yaml, so its failure
+    # propagated through build-test-publish and blocked RC promotion. Once it moved
+    # out, `success()` below stopped seeing it and an RC could dispatch a PROD
+    # release while the downstream gate was still running, or after it went red.
+    needs: [build-test-publish, release-precheck, create-tag, blaze-merge-gate]
     runs-on: ubuntu-slim
-    # Only trigger if we are on an RC and the RC build-test-publish succeeded
-    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    # `success()` cannot express this any more: it is all-or-nothing over `needs`,
+    # and blaze being SKIPPED (the profiler build died) must NOT block promotion --
+    # that is the coupling the profiler build was moved out of the release workflow
+    # to avoid. So each prerequisite is checked explicitly, mirroring the policy on
+    # publish-to-pypi: blaze `failure` blocks, blaze `skipped` does not.
+    if: >-
+      ${{ !cancelled()
+          && needs.release-precheck.outputs.tag-type == 'rc'
+          && needs.release-precheck.result == 'success'
+          && needs.build-test-publish.result == 'success'
+          && needs.create-tag.result == 'success'
+          && (needs.blaze-merge-gate.result == 'success' || needs.blaze-merge-gate.result == 'skipped') }}
     steps:
       - name: Wait for RC workflow completion
         run: |
