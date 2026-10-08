@@ -73,6 +73,7 @@ from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
+from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
@@ -547,6 +548,9 @@ class MiniMaxH3Pipeline:
         self._tt_audio_out_idx = StateTensor()
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
+        # The AdaLN cache a live denoise trace was captured against. A trace binds the resident tables
+        # by address, so a different cache must release the traces before replay.
+        self._trace_adaln_cache = None
         self._tt_logical_n = StateTensor()
         # Set for the duration of `warmup`, whose short generations compile and capture but whose
         # output is discarded.
@@ -805,17 +809,30 @@ class MiniMaxH3Pipeline:
         """A partition's weights, sharded or single-file. `transformer` and `vae` are sharded here."""
         from safetensors.torch import load_file
 
+        # On the precomputed-AdaLN path the keys the host table replaces are dropped per shard, so
+        # the 26 GB of `adaln_proj` never accumulates in host memory. Either transformer partition.
+        drop = subfolder.startswith("transformer") and self._precomputed_adaln()
+
+        def keep(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+            if not drop:
+                return state
+            return {
+                k: v
+                for k, v in state.items()
+                if ".adaln_proj." not in k and not k.startswith("time_embedder.") and "norm_out.linear" not in k
+            }
+
         directory = self.weights_dir / subfolder
         index = directory / "diffusion_pytorch_model.safetensors.index.json"
         state: dict[str, torch.Tensor] = {}
         if index.is_file():
             for shard in sorted(set(json.loads(index.read_text())["weight_map"].values())):
-                state.update(load_file(str(directory / shard)))
+                state.update(keep(load_file(str(directory / shard))))
         else:
             single = directory / "diffusion_pytorch_model.safetensors"
             if not single.is_file():
                 raise FileNotFoundError(f"no safetensors (sharded or single) under {directory}")
-            state.update(load_file(str(single)))
+            state.update(keep(load_file(str(single))))
         return state
 
     # ------------------------------------------------------------------ residency
@@ -1346,7 +1363,23 @@ class MiniMaxH3Pipeline:
 
     # ------------------------------------------------------------------ denoiser
 
+    def _precomputed_adaln(self) -> bool:
+        """Whether the AdaLN modulation comes from a host-built table instead of on-device projections.
+
+        Only a schedule fixed before the first request makes the table finite, so the base pipeline
+        never does; `_prepare_adaln` must be provided by a subclass that returns True here.
+        """
+        return False
+
+    def _prepare_adaln(self, slot_roles: tuple[str, ...]) -> tuple[MiniMaxH3AdalnCache, list[torch.Tensor]]:
+        """The resident AdaLN cache and, per step, each slot's absolute row in it."""
+        raise NotImplementedError("precomputed AdaLN needs a fixed schedule; see MiniMaxH3TurboPipeline")
+
     def _dit_weight_mode(self) -> str:
+        # The precomputed build drops `adaln_proj`, `time_embedder` and `norm_out.linear`, so it must
+        # not share a device-weight cache entry with the resident build.
+        if self._precomputed_adaln():
+            return "precomputed_adaln_fsdp" if self.dit_fsdp else "precomputed_adaln"
         return "resident_adaln_fsdp" if self.dit_fsdp else "resident_adaln"
 
     def _build_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -1365,6 +1398,7 @@ class MiniMaxH3Pipeline:
             is_fsdp=self.dit_fsdp,
             # Bucketed rungs each pin their own K/V gather pair; size one at the top rung for all.
             kv_gather_capacity=self.bucket_ladder[-1] if self.bucket_denoise else None,
+            precomputed_adaln=self._precomputed_adaln(),
         )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
@@ -2687,11 +2721,23 @@ class MiniMaxH3Pipeline:
 
         timesteps = scheduler.timesteps
         audio_timesteps = audio_scheduler.timesteps
-        endpoints = self._step_endpoints(scheduler, audio_scheduler)
+        precomputed = self._precomputed_adaln()
+        # On the precomputed path the interval endpoints are baked into the AdaLN table.
+        endpoints = None if precomputed else self._step_endpoints(scheduler, audio_scheduler)
 
         row_slot, slot_roles = build_slot_routing(layout, roles=self.adaln_slot_roles)
 
         state = self._buckets.setdefault(rung if self.bucket_denoise else 0, _BucketState())
+        slot_rows = None
+        if precomputed:
+            adaln_cache, slot_rows = self._prepare_adaln(slot_roles)
+            transformer.traced_adaln_cache = adaln_cache
+            if adaln_cache is not self._trace_adaln_cache:
+                # A capture binds the resident tables by address and would replay the old ones.
+                self.release_traces()
+                for bucket in self._buckets.values():
+                    bucket.warm = False
+                self._trace_adaln_cache = adaln_cache
         traced = self.trace_denoise and state.warm
         if self.trace_denoise and not state.warm:
             self.release_traces()
@@ -2731,8 +2777,9 @@ class MiniMaxH3Pipeline:
             traced=traced,
         )
 
-        state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
-        state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
+        if not precomputed:
+            state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, row_slot), rung), traced=traced)
+            state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
         state.assembly_idx.update(
             self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
         )
@@ -2768,6 +2815,13 @@ class MiniMaxH3Pipeline:
             return level_kwargs
 
         def upload_levels(i: int) -> None:
+            if precomputed:
+                # Absolute rows into the resident table: only these index tensors change per step.
+                # Warmup runs its own short schedule; any table step compiles the same programs.
+                step_rows = slot_rows[i % len(slot_rows)][row_slot]
+                state.tsi.update(self._row_indices(step_rows, rung), traced=traced)
+                state.adaln.update(self._row_indices(adaln_indices(layout.token_tags, step_rows), rung), traced=traced)
+                return
             level_kwargs = step_level_kwargs(i)
             self._tt_timestep.update(
                 slot_levels(slot_roles, **level_kwargs).reshape(1, 1, -1, 1),
@@ -2822,7 +2876,7 @@ class MiniMaxH3Pipeline:
                     assembly_indices=state.assembly_idx.value,
                     video_out_indices=self._tt_video_out_idx.value,
                     audio_out_indices=self._tt_audio_out_idx.value,
-                    timestep=self._tt_timestep.value,
+                    timestep=None if precomputed else self._tt_timestep.value,
                     adaln_indices=state.adaln.value,
                     timestep_indices=state.tsi.value,
                     rope_cos=state.rope_cos.value,
