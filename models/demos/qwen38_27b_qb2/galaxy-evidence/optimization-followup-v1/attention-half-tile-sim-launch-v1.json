@@ -1,0 +1,43 @@
+{
+  "created_at": "2026-10-08T06:02:18.360746+00:00",
+  "command": [
+    "systemd-run",
+    "--user",
+    "--unit=qwen38-attention-half-tile-sim-v1-20261008",
+    "--property=RuntimeMaxSec=2h",
+    "--property=TimeoutStopSec=180",
+    "--property=KillMode=control-group",
+    "--property=MemoryMax=8G",
+    "--property=CPUQuota=100%",
+    "--property=StandardOutput=append:/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1.log",
+    "--property=StandardError=append:/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1.log",
+    "--working-directory=/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v1",
+    "--setenv=PATH=/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin:/usr/bin:/bin",
+    "--setenv=PYTHONPATH=/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v1:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal:/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal/tools",
+    "--setenv=PYTHONUNBUFFERED=1",
+    "--setenv=OMP_NUM_THREADS=1",
+    "--setenv=TT_METAL_INSPECTOR_RPC=0",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python",
+    "-m",
+    "models.demos.qwen38_27b_qb2.demo.run_attention_half_tile_simulator",
+    "--task",
+    "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006",
+    "--source",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v1",
+    "--weights",
+    "/home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2",
+    "--results",
+    "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1",
+    "--simulator",
+    "/home/ttuser/qwen38-artifacts-20261007/bfp4-simulator-v1/libttsim_bh.so"
+  ],
+  "source_sha256": {
+    "models/demos/qwen38_27b_qb2/tests/attention_half_tile.py": "09c6987e56e0d2389096c3a49067ebed4778676fb0931d071e266a9e5d0995a6",
+    "models/demos/qwen38_27b_qb2/tests/unit/test_attention_half_tile.py": "3d62fe11c90420fc599fcf4430d1389697c51179104f6c591da6c80cffbc6f77",
+    "models/demos/qwen38_27b_qb2/demo/probe_attention_half_tile.py": "4f88120d05ce932c11e61935c34f9d05b68072a54e5c43638f7f68048b9ef842",
+    "models/demos/qwen38_27b_qb2/demo/run_attention_half_tile_simulator.py": "9c7a9f455c9cd0e8d89d42c6371adec806f2afd21788c1f7dbf512fd3505d446"
+  },
+  "source_lineage": "aac83195c546284d55599c638a681af8c893107d runtime plus partial-tile diagnostic",
+  "physical_devices_accessed": false,
+  "scope": "CPU simulator native/candidate accurate partial-tile attention screen; BFP8 KV unchanged"
+}

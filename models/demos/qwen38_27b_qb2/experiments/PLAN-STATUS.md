@@ -1,5 +1,8 @@
 # Qwen plan gates: observed status, Oct 8 2026 UTC
 
+Current user priorities: **32K ISL first, 16K second; 128K/256K remain active
+secondary optimization targets**. Report gains and losses across all four.
+
 We are partway through P1/P2, not at the projected "after P2" performance point.
 The plan's 4.7-ms fixed overhead and 85% peak-DRAM utilization are modeling
 assumptions/targets. Neither has been established by the current implementation.
@@ -82,7 +85,9 @@ These timings include trace dispatch/synchronization. The target uses the plan's
 512-GB/s/chip assumption. Real layer-0 block timing including projection,
 convolution, preparation, recurrence and output epilogue/projection improves
 29.1% at B16 and 40.6% at B32; B1/B8 regress. The full model at 32K/B16 improves
-23.86%, but 128K/B8 and 256K/B4 were approximately flat/slightly slower. See
+23.86%. The fresh 128K/B16 pair improves 14.99%; earlier 128K/B8 and
+256K/B4 were approximately flat/slightly slower. This favors a batch-dependent
+recurrence choice; new model-eval qualification is still pending. See
 [integration evidence](../galaxy-evidence/gdn-model-integration-v1/README.md) and
 [matched model sweeps](../galaxy-evidence/gdn-matched-comparison-v4/README.md).
 
@@ -92,52 +97,51 @@ quality gate. New attention/GDN policy reference-eval qualification is pending.
 
 ## Current long-context work
 
-The user prioritizes 128K/256K placement and bandwidth with BFP8 KV; 32K gains
-and regressions remain explicit tradeoffs. BFP4 KV investigation is a separate
-CPU simulator experiment and is not a precision change in these hardware runs.
+The user now prioritizes 32K ISL, followed by 16K. Both 128K/256K remain
+active secondary tuning targets. Hardware runs retain BFP8 KV/FP32 state.
 
-- Fresh native 128K/B16 completed with three repeatable measurements and clean
-  device close at 05:10 UTC: **142.06 output tok/s per TP4**, 8.879 tok/s/user.
-  The single-step comparison subsequently started; no paired uplift yet.
-- A new persistent placement/chunk experiment was launched at 05:16:12 UTC.
-  **263 CPU tests and 40 subtests passed**. It waits on the shared device lock
-  behind the running full-model case. Its six geometries start at 256K/B8 and
-  128K/B16, then smaller long-context cases and 32K tradeoff checks.
-- Thirteen variants per geometry isolate equal-core-count location changes,
-  full-grid output-sharding overhead, and 256/512-token chunks. Bitwise output
-  hashes strengthen location-only comparisons. Numerical failures, repeated
-  output changes or excessive timing drift cannot produce a qualified win.
-- KV remains interleaved. This is not yet a bank-sharded KV implementation.
-  No new placement speedup, full-model gain or online-eval pass is claimed before
-  hardware receipts establish it.
-- A bounded two-layer profile was queued at 05:42:41 UTC after placement.
-  It uses actual weights with synthetic populated caches and exactly three
-  decode calls per capture, with no prefill. Five geometries, native/single-step
-  recurrence, separate processes, a shared hardware lock and explicit export
-  limits replace the previous unbounded capture. **276 CPU tests and 40 subtests
-  passed**. Per-RISC intervals include waits; even a complete capture will not
-  establish active compute cycles or a full-model traced P0 pass.
+- **Fresh 128K/B16 pair completed:** native 142.06 vs single-step 163.36 output
+  tok/s per TP4, **14.99% uplift**, three repeats, matched prompt/source/precision
+  and clean device close. Prefill is ~4044 input tok/s for both. Output hashes
+  repeat within each arm but differ between arms; no eval qualification follows.
+- **Placement/chunk diagnostic completed all 78 cases:** passing attention-call
+  gains are 2.52% at 32K/B16, 1.94% at 32K/B32, 3.57% at 128K/B16 and 3.60% at
+  256K/B8. At 256K/B4 native wins. Accuracy-failing candidates remain excluded.
+  These are component measurements, not full-model improvements.
+- **Accurate partial-query simulator passed:** all 16 candidate cases and eight
+  full-tile controls pass; candidate partial-query outputs are bit-identical to
+  the full-query controls. Six original partial-query cases failed. Hardware
+  timing, production-instruction parity and model evaluation remain untested.
+  The retained first attempt failed a generated-file evidence lookup, fixed in
+  v2 without relaxing numerical or source-verification checks.
+- **Bounded profile requeued at 06:16:39 UTC:** prioritize 32K/B16/B32, then
+  16K/B16/B32, then 128K/B16 and 256K/B8. The prior still-waiting controller was
+  stopped before a device worker started; the active 32K model sweep continues.
+  CPU validation passed 276 tests plus 40 subtests. Both controllers are systemd
+  user services; `Linger=yes` was verified. No profiling result is claimed yet.
+- KV is still interleaved. A source audit of Blaze's 92% bandwidth reference
+  identifies bank-local streaming and transaction-ID buffering as useful next
+  experiments. The cited rate is recorded expert-matmul streaming bandwidth,
+  not a measured guarantee for reload or Qwen attention.
 - The [BFP4 KV simulator experiment](../galaxy-evidence/bfp4-kv-simulator-v1/README.md)
-  completed all 24 cases. Execution passed against quantized operands, but
-  total long-context synthetic output RMS was 15.65-16.64% for K4/V4 versus
-  1.28-1.86% for K8/V8. Keep BFP8. Real-activation/logit and model-eval validation
-  remain necessary to decide BFP4 model suitability; this is not a task-score
-  loss estimate or proof that BFP4 can never work.
+  completed all 24 cases. Total synthetic long-context output RMS was 15.65-16.64%
+  for K4/V4 vs 1.28-1.86% for K8/V8. Keep BFP8 while real activations/logits and
+  model evals remain necessary to decide BFP4 suitability.
 
-Launch/source hashes, CPU results and the completed fresh 128K receipt are in
-[the current evidence snapshot](../galaxy-evidence/placement-long-launch-v1).
+Raw comparisons, plots, source/launch pins, failure receipts and the priority
+change are in [optimization-followup-v1](../galaxy-evidence/optimization-followup-v1).
 The existing baseline G0 and failed P0 recovery receipts are respectively
 [eight-replicas-v3](../galaxy-evidence/eight-replicas-v3/full-model.json) and
 [profile-recovery-v1](../galaxy-evidence/profile-recovery-v1/profile-v5-outcome.json).
 
 ## Long-context throughput projection and traffic limits
 
-Best completed operating points as of the native 128K/B16 receipt above:
+Best completed operating points as of the paired 128K/B16 receipt above:
 
 | Context | Batch per TP4 | Measured output tok/s per TP4 | 8x projection, output tok/s/Galaxy | Ideal traffic-model ceiling at that batch |
 |---|---:|---:|---:|---:|
 | 32K, single-step GDN | 16 | 259.22 | 2,074 | 6,991 |
-| 128K, native GDN | 16 | 142.06 | 1,137 | 2,841 |
+| 128K, single-step GDN | 16 | 163.36 | 1,307 | 2,841 |
 | 262016, native GDN | 8 | 89.98 | 720 | 1,459 |
 
 All output rates exclude prefill. The 8x projection is not physical Galaxy

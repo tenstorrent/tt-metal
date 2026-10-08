@@ -11,8 +11,9 @@ from pathlib import Path
 
 from models.demos.qwen38_27b_qb2.tests.layer_profile_report import DURATIONS, analyze, write_report
 
-# Every geometry runs in its own process; prioritize the long-context workload.
-CASES = ((262016, 8), (131072, 16), (32768, 16), (8192, 32), (8192, 1))
+# Every geometry runs in its own process. User priority changed Oct 8 UTC:
+# 32K ISL first, 16K second; 128K/256K remain active secondary tuning targets.
+CASES = ((32768, 16), (32768, 32), (16384, 16), (16384, 32), (131072, 16), (262016, 8))
 VARIANTS = ("native", "single_step")
 SCOPE = (
     "Warm eager two-layer diagnostic with real weights and synthetic populated caches; "

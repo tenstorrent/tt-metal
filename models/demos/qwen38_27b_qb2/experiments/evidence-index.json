@@ -1,11 +1,16 @@
 {
-  "generated_at": "2026-10-08T05:47:44.403518+00:00",
+  "generated_at": "2026-10-08T06:26:39.364627+00:00",
   "scope": "Published evidence inventory including this publication. Status fields are copied, not inferred qualification. Git times are separate from execution times.",
   "entries": [
     {
+      "path": "experiments/LOGBOOK.md",
+      "bytes": 32394,
+      "sha256": "f517279972c1f39c9fb7e5dacbf375353386b58d73c931d61bcc594e939136fa"
+    },
+    {
       "path": "experiments/PLAN-STATUS.md",
-      "bytes": 12185,
-      "sha256": "a7f4448e9e8baa30f4091aa87ea1c83a17500546c139eb78c1ca1f17ed1409d8"
+      "bytes": 12471,
+      "sha256": "bba7a3de0da45e32657774cf469522ba32429b82df057bf176a116aaa65dfc68"
     },
     {
       "path": "experiments/TT-LAB-REVIEW.md",
@@ -1961,6 +1966,481 @@
         "errors": 0,
         "skipped": 0
       }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/README.md",
+      "bytes": 7870,
+      "sha256": "385e9afc6cd9cfade984cde1b537db5019c4745a9e45859f4aa71db634a91a47"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-launch-v1.json",
+      "bytes": 2561,
+      "sha256": "4ca4527059094b09639a61094c2edec7f826c46b4a7829b1308d60c45f0b0a1a",
+      "scope": "CPU simulator native/candidate accurate partial-tile attention screen; BFP8 KV unchanged",
+      "created_at": "2026-10-08T06:02:18.360746+00:00"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-launch-v2.json",
+      "bytes": 2630,
+      "sha256": "19835f5f7b1f0af7af77afa0259cf3a3fac483d357433903cb72c373a1f8242b",
+      "scope": "CPU simulator native/candidate accurate partial-tile attention screen; BFP8 KV unchanged",
+      "created_at": "2026-10-08T06:08:27.106169+00:00"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1.log.gz",
+      "bytes": 2302,
+      "sha256": "2d2963edd256328ffe3f6e30da4f7ed33402a0fca09528eb31bbd18670951e8a"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11496738696213083723/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "8f7bae500b31d51ddde82efe438f4f94fd92cfcc583bb65a429f32c8948ddbc6"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp.gz",
+      "bytes": 192,
+      "sha256": "85057a707d6c90cf2a01af707cb079f67b29874a305e707b38be78a9fcbef9a9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/overlay/manifest.json",
+      "bytes": 1456,
+      "sha256": "d6b5b51fda14416c0c17f9d83e3eb726d40aa0f700af9901db42aba1276184f3"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
+      "bytes": 18732,
+      "sha256": "fa19ea43aa9538a2398524b63fedc93ff922086f478162818aa469bcf8f94501"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp.gz",
+      "bytes": 9426,
+      "sha256": "a68bae5e02cb37fa006ad6a736abd9888a699d1595b050cd9a71397e6ba990d7"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/native/probe.json",
+      "bytes": 3277,
+      "sha256": "6f73eaa7495b2fd60c02135ed7a837e46743dcd567ea3553a8d8dda391ac2726",
+      "state": "failed",
+      "cleanup_completed": true,
+      "scope": "BFP8 KV, BF16 Q/output, HiFi4 FP32 accumulation, accurate exp; synthetic CPU simulator",
+      "updated_at": "2026-10-08T06:02:31Z",
+      "model_accuracy_qualified": false,
+      "error_type": "ValueError"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/queue.json",
+      "bytes": 17110,
+      "sha256": "b19706c59b7935a3f8e38595c616a20aa747221139aecc1578a1abc760cef0d1",
+      "state": "failed",
+      "updated_at": "2026-10-08T06:02:32Z",
+      "error_type": "CalledProcessError"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v1/unit.xml.gz",
+      "bytes": 5746,
+      "sha256": "23a37742febbe4caaf3ec2d7eba59b559655dd1eb1c109c6d9830b996a686bad",
+      "junit": {
+        "tests": 325,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2.log.gz",
+      "bytes": 3291,
+      "sha256": "426e6dcc7c8b852c44de4502751021464cbf6d126bd8e99b98aa43306eca4e16"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11875319925865179794/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/12619915078558052292/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/15235461891653085176/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/15740951737990959164/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16437446324810250071/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16870547401703459355/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/17498074439923767279/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/4651836481470825821/chlkc_math.cpp.gz",
+      "bytes": 217,
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp.gz",
+      "bytes": 192,
+      "sha256": "85057a707d6c90cf2a01af707cb079f67b29874a305e707b38be78a9fcbef9a9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/overlay/manifest.json",
+      "bytes": 1496,
+      "sha256": "3d614cd942e4b9bb82fbfd9c24df910ed60c9930fba4e4c75e219d675a8065cc"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
+      "bytes": 18840,
+      "sha256": "a43c33a5c8cd08a5488cd848446bd97e0d329dbabde84ac28963194e70c546e9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp.gz",
+      "bytes": 9430,
+      "sha256": "ab96eda6e51d2f5fe475dc5542323e9af2b78e66d790581e5e0e0b727c9189fb"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/accurate_partial/probe.json",
+      "bytes": 27467,
+      "sha256": "94b042a20cd25b307f9243ac8c5ce70d5b0604af59480c206bc94f7681cf7ccf",
+      "state": "completed",
+      "cleanup_completed": true,
+      "scope": "BFP8 KV, BF16 Q/output, HiFi4 FP32 accumulation, accurate exp; synthetic CPU simulator",
+      "updated_at": "2026-10-08T06:15:35Z",
+      "model_accuracy_qualified": false
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/comparison.json",
+      "bytes": 11814,
+      "sha256": "9d2dddf81541074947945c529f3853ded8371f518a67406b5a4d011e635ec38d",
+      "scope": "One virtual-chip synthetic numerical screen; no hardware timing or model-eval qualification"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11404448665778722456/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11415235669964283618/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/14183100300179078064/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16022079182741863691/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/18218257819030578041/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/489314612231901190/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/5775238452605807342/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/8667190354888061956/chlkc_math.cpp.gz",
+      "bytes": 211,
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp.gz",
+      "bytes": 192,
+      "sha256": "85057a707d6c90cf2a01af707cb079f67b29874a305e707b38be78a9fcbef9a9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/overlay/manifest.json",
+      "bytes": 1456,
+      "sha256": "399dcb58f46826a8042e099808347cd13dfdf46e1311565466ed35febffec8a9"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
+      "bytes": 18732,
+      "sha256": "fa19ea43aa9538a2398524b63fedc93ff922086f478162818aa469bcf8f94501"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp.gz",
+      "bytes": 9426,
+      "sha256": "42f4b67c666194c471ca629cd71f183cc2bb30b016669336a970adf1815b525b"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/native/probe.json",
+      "bytes": 27082,
+      "sha256": "64d577485f9fbee311354ac19d1dbedd29079d691c6f401244aed3954ce610d0",
+      "state": "completed",
+      "cleanup_completed": true,
+      "scope": "BFP8 KV, BF16 Q/output, HiFi4 FP32 accumulation, accurate exp; synthetic CPU simulator",
+      "updated_at": "2026-10-08T06:12:02Z",
+      "model_accuracy_qualified": false
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/queue.json",
+      "bytes": 18844,
+      "sha256": "89d41040feda88c86fe28547deff7d027aaa764c40d3d5c074e39a23bd67c317",
+      "state": "completed",
+      "cleanup_completed": true,
+      "updated_at": "2026-10-08T06:15:35Z"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-sim-v2/unit.xml.gz",
+      "bytes": 5739,
+      "sha256": "51bd664f36973d0dd3ceba16d4ec88a9e84d62b71b27143057d10e22146ece77",
+      "junit": {
+        "tests": 325,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/demo/probe_attention_half_tile.py.gz",
+      "bytes": 2919,
+      "sha256": "00877f0491bc7fa4c21aaabba4b6b2b173d9724c0331b64f51b4f421dfb368de"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/demo/run_attention_half_tile_simulator.py.gz",
+      "bytes": 1641,
+      "sha256": "f32fda1a7851be3fa2f197db5eb41bda4dc4881242c0b7a94907b6acd7e97e75"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/tests/attention_half_tile.py.gz",
+      "bytes": 2772,
+      "sha256": "c6767282287b19247f2e7011a6267e6ddcab610e6f914b833da451383e09363c"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_attention_half_tile.py.gz",
+      "bytes": 1993,
+      "sha256": "8c39b198a2dd7f0fd8b4eeb04ecdc8261fc27a1e0c25c3b94240bc59df9a8f1b"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/demo/probe_attention_half_tile.py.gz",
+      "bytes": 2919,
+      "sha256": "00877f0491bc7fa4c21aaabba4b6b2b173d9724c0331b64f51b4f421dfb368de"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/demo/run_attention_half_tile_simulator.py.gz",
+      "bytes": 1641,
+      "sha256": "f32fda1a7851be3fa2f197db5eb41bda4dc4881242c0b7a94907b6acd7e97e75"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/tests/attention_half_tile.py.gz",
+      "bytes": 2953,
+      "sha256": "0190e109c834e187939c6ced4ab0ce51353e71d0cd61fc421eb874530701821a"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_attention_half_tile.py.gz",
+      "bytes": 2031,
+      "sha256": "acecf776c3ca186e73aac8ea1a88eb25d58ac6581e04cf499bd3396cb1039a30"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-unit-v1.xml.gz",
+      "bytes": 5738,
+      "sha256": "46d6322cfd1edf333e51b980b9224195a39866b70cde4e9d8e64b99432bf11e1",
+      "junit": {
+        "tests": 325,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-half-tile-unit-v2.xml.gz",
+      "bytes": 5747,
+      "sha256": "e4a61a1080e7d0c81d8577a270d1631d8ed6f213fcac0ac3c3909373f25f9e40",
+      "junit": {
+        "tests": 325,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-placement-long-v1/hardware.xml.gz",
+      "bytes": 306,
+      "sha256": "75550990bb2c79cfbeec2dcad948283c3a397b2b6f3facfc64545b4768f12322",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-placement-long-v1/placement.json.gz",
+      "bytes": 57739,
+      "sha256": "d84cba1a21d50df70665cb5767577721ec36a6b458222bd6fe346f7e80dd16aa",
+      "state": "completed",
+      "passed": true,
+      "cleanup_completed": true,
+      "scope": "Synthetic TP4 placement/chunk diagnostic; no full-model or reference-eval qualification",
+      "updated_at": "2026-10-08T06:09:53Z"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/attention-placement-long-v1/queue.json",
+      "bytes": 14487,
+      "sha256": "5e702010122e2218319df1437f7d5d05b3d9d5d37059be992b5430e64d7d8caa",
+      "state": "completed",
+      "cleanup_completed": true,
+      "updated_at": "2026-10-08T06:09:57Z"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/bounded-layer-profile-launch-v2.json",
+      "bytes": 3226,
+      "sha256": "d8eb681473e3c1dd256da026fb0eaa3aa359fb26e25322d84a1761ace77f2c8b",
+      "scope": "Real two-layer weights; synthetic caches; warm eager attribution, not model qualification",
+      "created_at": "2026-10-08T06:16:39.364560+00:00"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/bounded-layer-profile-replacement-v2.json",
+      "bytes": 2281,
+      "sha256": "1dfae4087f8092ca9ddbcd1e6960bf11765d5202241810902a68a0adeb6864a7"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/bounded-layer-profile-unit-v2.xml.gz",
+      "bytes": 5575,
+      "sha256": "4c32e337f44c65211a3fab0aae75af19bc1b1a61807c6d3fe75b57b2f38e05e6",
+      "junit": {
+        "tests": 316,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/bounded-layer-profile-v2/queue.json",
+      "bytes": 15630,
+      "sha256": "bb48de8829167267c410de821cee734b182e8cd4b2e0b0f0716fe5d1e2412e6c",
+      "state": "bounded_profile",
+      "scope": "Warm eager two-layer diagnostic with real weights and synthetic populated caches; not natural prompt activations, model accuracy, traced TPOT or a complete P0 pass",
+      "updated_at": "2026-10-08T06:16:46Z"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/queue.json",
+      "bytes": 17728,
+      "sha256": "af2f094d7960f98fd63733745d704384fc5648140588da55974121744ac5d9cb",
+      "state": "hardware_sweep",
+      "updated_at": "2026-10-08T05:53:13Z"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/comparison/comparison.csv",
+      "bytes": 596,
+      "sha256": "af0778a06d5ad7cba98bd596a40ed50447377c79fd38c9cdc18e346a46ca5090"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/comparison/comparison.json",
+      "bytes": 2158,
+      "sha256": "0f3f17a153fb05735f6c8fb6116fe20ead97cdd19f5a8b74a0b29af784c8e74c",
+      "state": "completed",
+      "scope": "One TP4 replica, 64 layers; measured decode output throughput, not full-Galaxy or online-eval qualification"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/comparison/comparison.pdf",
+      "bytes": 32678,
+      "sha256": "554b4f148de69ee281e86ce6cb8a0ba803554c50e5e6f9d58a546591814c1b34"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/comparison/comparison.png",
+      "bytes": 103573,
+      "sha256": "819bb5280b782de82265832959324f643f1ca1c907417f698c3bc35a4de9f426"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/comparison/comparison.svg",
+      "bytes": 88514,
+      "sha256": "e155afc54ac66dd4f7ea9881a26fb1cececab299775767e927e6457b13283d4c"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/comparison/index.html",
+      "bytes": 90357,
+      "sha256": "f01b733a319b06faa9835853e47999b86a1a25e833e08bab145ced2d737ebcc5"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/native/attempt-01/command.json",
+      "bytes": 647,
+      "sha256": "d55410bab06d0d4780b214eec1db03f3ce54fa9f74a6b7dd25e60db698cc102c"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/native/attempt-01/hardware.xml.gz",
+      "bytes": 303,
+      "sha256": "8dd7acccc5214b041d90368e4d5a5d5ba9b2bded1640ad0037802c864bdd5857",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/native/sweep.csv",
+      "bytes": 368,
+      "sha256": "f4ea133a54884f2aebbc223c69de48d9fd1a24491eff6d73d0f8b83b25cddff7"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/native/sweep.json",
+      "bytes": 14198,
+      "sha256": "5bd8e483e4fd49a9f3adf3cb97f40538102cd7ffa0fc794f7e5f1aa6a48768d3",
+      "state": "completed",
+      "cleanup_completed": true,
+      "updated_at": "2026-10-08T05:10:46.938726+00:00",
+      "created_at": "2026-10-08T04:28:08.891092+00:00"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/single-step/attempt-01/command.json",
+      "bytes": 652,
+      "sha256": "625efc9e94017e9c7fcc0a5d177cc1053fdaa5c6a67a90a4f387f2d43f9e95b6"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/single-step/attempt-01/hardware.xml.gz",
+      "bytes": 301,
+      "sha256": "5e5ba654204825fbf2fcaa97f0ff780b99ad0d77cb37f5e4a62c2c1e7eccab58",
+      "junit": {
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/single-step/sweep.csv",
+      "bytes": 367,
+      "sha256": "0e6a725eab9c1438a6fd305faf8da2db951572390f64878b34c0c2b349a13304"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/capacity-pairs-v1/s131072-b16/single-step/sweep.json",
+      "bytes": 14235,
+      "sha256": "8467ae9e06d1c69d38c9e90c1a581272514ba19436ed01dc696f47f20bedcb2e",
+      "state": "completed",
+      "cleanup_completed": true,
+      "updated_at": "2026-10-08T05:53:10.293802+00:00",
+      "created_at": "2026-10-08T05:10:48.419983+00:00"
+    },
+    {
+      "path": "galaxy-evidence/optimization-followup-v1/collection.json",
+      "bytes": 35160,
+      "sha256": "6d945418a29f5054a2a8a190bd8e70811d2227d11eb71097bd184829ad1bcbd6"
     },
     {
       "path": "galaxy-evidence/perf-sweep-tp4-v1/hardware.xml",

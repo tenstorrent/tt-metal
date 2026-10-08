@@ -71,7 +71,7 @@ def test_bounded_capture_is_distinct_from_original_six_case_profile(tmp_path, ex
     assert report["measurements_complete"] and report["synthetic_caches"]
     assert len(report["device_totals"]) == 4
     assert all(x["firmware_ns"] == 200 for x in report["device_totals"])
-    assert "262016" in (tmp_path / "analysis/report.md").read_text()
+    assert str(CASES[0][0]) in (tmp_path / "analysis/report.md").read_text()
 
 
 @pytest.mark.parametrize(

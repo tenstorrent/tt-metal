@@ -274,11 +274,55 @@ tool, not a replacement for hardware, long-horizon state checks, or model evals.
   hardware lock; the other controllers were waiting. No new performance win
   is credited to a queued or running diagnostic.
 
+## Paired gain, partial-query screen and priority change, Oct 8 UTC
+
+- **05:53:09:** the 128K/B16 single-step model closed cleanly. Three-repetition
+  native/candidate throughput is 142.063/163.359 output tok/s per TP4: **14.99%**
+  uplift. Source/prompt/precision match except recurrence; hashes repeat within
+  each arm but differ between arms. Prefill remains ~4044 input tok/s. The 1307
+  tok/s Galaxy figure is an 8x projection, not measured scaling or an eval pass.
+- **06:02:** started isolated accurate-partial-query simulator v1 after 285 CPU
+  tests and 40 subtests passed. It stopped after the first passing full-tile case:
+  the evidence collector expected compute includes in `kernel_includes.hpp`, but
+  this runtime puts them in generated TRISC wrappers. Clean virtual-device close;
+  source/log/result retained. Corrected the checker to require unpack/math/pack
+  wrappers and exact overlay paths, preserving thresholds and original attempts.
+- **06:08:27:** simulator v2 launched persistently after the same CPU suite passed.
+  It completed both 16-case arms, exit 0. All candidate cases pass and eight partial
+  outputs are bit-identical to full-tile controls. Six native partial cases fail.
+  Candidate scaling/exp honors valid faces; BFP8 precision is unchanged. This is
+  simulator-only, with explicit-instruction compatibility fallback; no hardware
+  speedup or model qualification yet.
+- **06:09:53:** all 78 placement cases completed with clean device close. Best
+  passing attention-call gains: 32K/B16 +2.52%, 32K/B32 +1.94%, 128K/B16 +3.57%,
+  256K/B8 +3.60%; native remains best at 256K/B4. Failed numerical candidates
+  excluded. Useful KV bytes/time reaches ~70-76% of assumed peak, not measured
+  DRAM counters. Full-model attention promotion remains gated.
+- User revised priorities: **32K ISL primary, 16K second, 128K/256K still active
+  secondary optimization targets**. Report throughput/TSU/TTFT/memory/accuracy
+  tradeoffs rather than applying one policy globally.
+- **06:16:39:** replaced the older profile queue while it was still waiting on
+  flock. Freeze and process inspection verified no device worker had started;
+  the active 32K capacity run was untouched. New persistent v2 profile order is
+  32K/B16/B32, 16K/B16/B32, 128K/B16, 256K/B8, both recurrence variants. CPU
+  gate: 276 tests plus 40 subtests. Export/resource limits unchanged. Live
+  `Linger=yes` and active controller PIDs confirmed disconnect persistence.
+- Inspected Blaze reload documentation at cached revision `9415da978b3` and
+  streaming kernels at `75ae38aabb0`. Its 471 GB/s / 92% reference measures
+  expert streaming matmuls; applying it to reload is explicitly a model
+  assumption. Bank-adjacent readers, contiguous bank-local shards, larger
+  packets and oldest-transaction waits are relevant candidate mechanisms.
+  Qwen KV bank-local/pipelined reading is not implemented or tested yet.
+- Collected and verified 73 original artifact hashes, matched pair inputs/source,
+  78 terminal placement cases, 16 simulator candidates and eight partial/full
+  output hash matches. See [follow-up evidence](../galaxy-evidence/optimization-followup-v1).
+
 ## Remaining gates and next experiments
 
 1. Finish the fresh-process capacity pairs; keep OOM, accuracy, and timing outcomes
    distinct. Then choose the useful batch/context operating points.
-2. Prioritize long-context placement and bank-aware KV/state traffic, with compact
+2. Prioritize 32K, then 16K placement and bank-aware KV/state traffic; continue
+   active 128K/256K tuning. Use compact
    reader/compute/writer attribution and calibrated bandwidth baselines. Diagnose
    the failing placement candidates' reduction geometry before promotion. Report
    32K/128K/256K tradeoffs together; do not automatically reject a worthwhile

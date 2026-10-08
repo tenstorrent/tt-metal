@@ -1,0 +1,457 @@
+{
+  "completed": true,
+  "candidate_accuracy_passed": true,
+  "comparisons": [
+    {
+      "context": 1024,
+      "active_tokens": 1024,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999797344207764
+        ],
+        "relative_rms": 0.007135521620512009,
+        "relative_rms_per_user": [
+          0.007135521620512009
+        ],
+        "max_abs_error": 0.001920253038406372
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999797344207764
+        ],
+        "relative_rms": 0.007135521620512009,
+        "relative_rms_per_user": [
+          0.007135521620512009
+        ],
+        "max_abs_error": 0.001920253038406372
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 1024,
+      "active_tokens": 1024,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": false,
+        "pcc_per_user": [
+          0.9997909665107727
+        ],
+        "relative_rms": 0.02043641358613968,
+        "relative_rms_per_user": [
+          0.02043641358613968
+        ],
+        "max_abs_error": 0.0034234339836984873
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999797344207764
+        ],
+        "relative_rms": 0.007135521620512009,
+        "relative_rms_per_user": [
+          0.007135521620512009
+        ],
+        "max_abs_error": 0.001920253038406372
+      },
+      "output_bit_identical": false
+    },
+    {
+      "context": 1024,
+      "active_tokens": 987,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999814629554749
+        ],
+        "relative_rms": 0.006933581084012985,
+        "relative_rms_per_user": [
+          0.006933581084012985
+        ],
+        "max_abs_error": 0.0017746835947036743
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999814629554749
+        ],
+        "relative_rms": 0.006933581084012985,
+        "relative_rms_per_user": [
+          0.006933581084012985
+        ],
+        "max_abs_error": 0.0017746835947036743
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 1024,
+      "active_tokens": 987,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": false,
+        "pcc_per_user": [
+          0.9997899532318115
+        ],
+        "relative_rms": 0.020489104092121124,
+        "relative_rms_per_user": [
+          0.020489104092121124
+        ],
+        "max_abs_error": 0.003416062332689762
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999814629554749
+        ],
+        "relative_rms": 0.006933581084012985,
+        "relative_rms_per_user": [
+          0.006933581084012985
+        ],
+        "max_abs_error": 0.0017746835947036743
+      },
+      "output_bit_identical": false
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32768,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999711513519287
+        ],
+        "relative_rms": 0.008562321774661541,
+        "relative_rms_per_user": [
+          0.008562321774661541
+        ],
+        "max_abs_error": 0.00033679045736789703
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999711513519287
+        ],
+        "relative_rms": 0.008562321774661541,
+        "relative_rms_per_user": [
+          0.008562321774661541
+        ],
+        "max_abs_error": 0.00033679045736789703
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32768,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9998283386230469
+        ],
+        "relative_rms": 0.018480895087122917,
+        "relative_rms_per_user": [
+          0.018480895087122917
+        ],
+        "max_abs_error": 0.0006186268292367458
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999711513519287
+        ],
+        "relative_rms": 0.008562321774661541,
+        "relative_rms_per_user": [
+          0.008562321774661541
+        ],
+        "max_abs_error": 0.00033679045736789703
+      },
+      "output_bit_identical": false
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32731,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999677538871765
+        ],
+        "relative_rms": 0.009117933921515942,
+        "relative_rms_per_user": [
+          0.009117933921515942
+        ],
+        "max_abs_error": 0.00038386695086956024
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999677538871765
+        ],
+        "relative_rms": 0.009117933921515942,
+        "relative_rms_per_user": [
+          0.009117933921515942
+        ],
+        "max_abs_error": 0.00038386695086956024
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 32768,
+      "active_tokens": 32731,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.999824047088623
+        ],
+        "relative_rms": 0.018722854554653168,
+        "relative_rms_per_user": [
+          0.018722854554653168
+        ],
+        "max_abs_error": 0.0006329473108053207
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999677538871765
+        ],
+        "relative_rms": 0.009117933921515942,
+        "relative_rms_per_user": [
+          0.009117933921515942
+        ],
+        "max_abs_error": 0.00038386695086956024
+      },
+      "output_bit_identical": false
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131072,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999380707740784
+        ],
+        "relative_rms": 0.011679476127028465,
+        "relative_rms_per_user": [
+          0.011679476127028465
+        ],
+        "max_abs_error": 0.00025509390980005264
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999380707740784
+        ],
+        "relative_rms": 0.011679476127028465,
+        "relative_rms_per_user": [
+          0.011679476127028465
+        ],
+        "max_abs_error": 0.00025509390980005264
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131072,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": false,
+        "pcc_per_user": [
+          0.9997704029083252
+        ],
+        "relative_rms": 0.02148604951798916,
+        "relative_rms_per_user": [
+          0.02148604951798916
+        ],
+        "max_abs_error": 0.0003242539241909981
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999380707740784
+        ],
+        "relative_rms": 0.011679476127028465,
+        "relative_rms_per_user": [
+          0.011679476127028465
+        ],
+        "max_abs_error": 0.00025509390980005264
+      },
+      "output_bit_identical": false
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131035,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999374747276306
+        ],
+        "relative_rms": 0.011615334078669548,
+        "relative_rms_per_user": [
+          0.011615334078669548
+        ],
+        "max_abs_error": 0.0002314206212759018
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999374747276306
+        ],
+        "relative_rms": 0.011615334078669548,
+        "relative_rms_per_user": [
+          0.011615334078669548
+        ],
+        "max_abs_error": 0.0002314206212759018
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 131072,
+      "active_tokens": 131035,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": false,
+        "pcc_per_user": [
+          0.999765932559967
+        ],
+        "relative_rms": 0.021705662831664085,
+        "relative_rms_per_user": [
+          0.021705662831664085
+        ],
+        "max_abs_error": 0.000322817824780941
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999374747276306
+        ],
+        "relative_rms": 0.011615334078669548,
+        "relative_rms_per_user": [
+          0.011615334078669548
+        ],
+        "max_abs_error": 0.0002314206212759018
+      },
+      "output_bit_identical": false
+    },
+    {
+      "context": 262016,
+      "active_tokens": 262016,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.999906063079834
+        ],
+        "relative_rms": 0.014015867374837399,
+        "relative_rms_per_user": [
+          0.014015867374837399
+        ],
+        "max_abs_error": 0.00018021883442997932
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.999906063079834
+        ],
+        "relative_rms": 0.014015867374837399,
+        "relative_rms_per_user": [
+          0.014015867374837399
+        ],
+        "max_abs_error": 0.00018021883442997932
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 262016,
+      "active_tokens": 262016,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": false,
+        "pcc_per_user": [
+          0.9997590184211731
+        ],
+        "relative_rms": 0.022019973024725914,
+        "relative_rms_per_user": [
+          0.022019973024725914
+        ],
+        "max_abs_error": 0.00028861919417977333
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.999906063079834
+        ],
+        "relative_rms": 0.014015867374837399,
+        "relative_rms_per_user": [
+          0.014015867374837399
+        ],
+        "max_abs_error": 0.00018021883442997932
+      },
+      "output_bit_identical": false
+    },
+    {
+      "context": 262016,
+      "active_tokens": 261979,
+      "query_heads": 32,
+      "native_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999080300331116
+        ],
+        "relative_rms": 0.013858793303370476,
+        "relative_rms_per_user": [
+          0.013858793303370476
+        ],
+        "max_abs_error": 0.0001903437077999115
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999080300331116
+        ],
+        "relative_rms": 0.013858793303370476,
+        "relative_rms_per_user": [
+          0.013858793303370476
+        ],
+        "max_abs_error": 0.0001903437077999115
+      },
+      "output_bit_identical": true
+    },
+    {
+      "context": 262016,
+      "active_tokens": 261979,
+      "query_heads": 6,
+      "native_accuracy": {
+        "passed": false,
+        "pcc_per_user": [
+          0.9997639060020447
+        ],
+        "relative_rms": 0.021789003163576126,
+        "relative_rms_per_user": [
+          0.021789003163576126
+        ],
+        "max_abs_error": 0.0002768347039818764
+      },
+      "candidate_accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999080300331116
+        ],
+        "relative_rms": 0.013858793303370476,
+        "relative_rms_per_user": [
+          0.013858793303370476
+        ],
+        "max_abs_error": 0.0001903437077999115
+      },
+      "output_bit_identical": false
+    }
+  ],
+  "hardware_qualified": false,
+  "promoted_to_model": false,
+  "scope": "One virtual-chip synthetic numerical screen; no hardware timing or model-eval qualification"
+}

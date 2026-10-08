@@ -1,0 +1,171 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Isolated accurate partial-tile attention experiment; native sources stay fixed."""
+
+import hashlib
+import json
+from pathlib import Path
+
+COMPUTE = Path("ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp")
+COMMON = Path("ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp")
+PINNED = {
+    str(COMPUTE): "c865353d07a55967ca6959e3b5efda744312009e8b998d7425edf84d4e18f23e",
+    str(COMMON): "6ae905e3619ffc6cb940fc88985d64c798aed732eaadc67da1b593c45d50a2cd",
+}
+VARIANTS = ("native", "accurate_partial")
+CONTEXTS = (1024, 32768, 131072, 262016)
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def replace_once(source, before, after):
+    if source.count(before) != 1:
+        raise ValueError("Missing or ambiguous partial-tile source anchor")
+    return source.replace(before, after, 1)
+
+
+def patch_common(source):
+    # Restrict edits to this one helper; other exponentials/reduction stages
+    # retain the pinned arithmetic. Removing the forced approximate branch alone
+    # is insufficient: the full-tile scalar API also ignores vector_mode.
+    begin = source.index("void sub_exp_block_bcast_cols_inplace(")
+    end = source.index("\n}", begin) + 2
+    body = source[begin:end]
+    condition = "if constexpr (EXP_APPROX_MODE || vector_mode != VectorMode::RC)"
+    if body.count(condition) != 2:
+        raise ValueError("Missing or ambiguous partial-tile exponential branches")
+    body = body.replace(condition, "if constexpr (EXP_APPROX_MODE)")
+    body = replace_once(
+        body,
+        "Keep this path for partial faces.\n    // The accurate branch below handles full RC tiles.",
+        "Accurate mode also supports partial faces.\n    // Preserve the requested vector region for both scaling and exponentiation.",
+    )
+    body = replace_once(
+        body,
+        "                    mul_unary_tile(j, scale_fp32);",
+        """                    if constexpr (vector_mode == VectorMode::RC) {
+                        mul_unary_tile(j, scale_fp32);
+                    } else {
+                        // Same FP32 scalar multiplication as mul_unary_tile,
+                        // restricted to the valid faces of this partial tile.
+                        MATH(SFPU_UNARY_CALL(
+                            DST_SYNC_MODE,
+                            DST_ACCUM_MODE,
+                            calculate_binop_with_scalar,
+                            (APPROX, MUL_UNARY, 8, DST_ACCUM_MODE),
+                            j,
+                            vector_mode,
+                            scale_fp32));
+                    }""",
+    )
+    return source[:begin] + body + source[end:]
+
+
+def build_overlay(native, destination, variant):
+    if variant not in VARIANTS:
+        raise ValueError("Unknown partial-tile diagnostic variant")
+    native, destination = Path(native).resolve(), Path(destination).resolve()
+    if any(c in str(destination) for c in ('"', "\n", "\r", "\\")):
+        raise ValueError("Unsafe overlay header path")
+    for name, expected in PINNED.items():
+        if sha(native / name) != expected:
+            raise ValueError(f"Pinned attention dependency changed: {name}")
+    source = (native / COMMON).read_text()
+    header = patch_common(source) if variant == "accurate_partial" else source
+    compute = replace_once(
+        (native / COMPUTE).read_text(),
+        '#include "ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp"',
+        f'#include "{destination / COMMON}"',
+    )
+    destination.mkdir(parents=True, exist_ok=False)
+    for name, contents in ((COMMON, header), (COMPUTE, compute)):
+        path = destination / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents)
+    manifest = dict(
+        variant=variant,
+        overlay=str(destination),
+        native=str(native),
+        native_sha256=PINNED,
+        compute=str(destination / COMPUTE),
+        common=str(destination / COMMON),
+        overlay_sha256={str(p): sha(destination / p) for p in (COMPUTE, COMMON)},
+        precision_change=False,
+        promoted_to_model=False,
+        changes="Honor accurate exp on partial query tiles, including FP32 scale over only the valid vector region",
+    )
+    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
+def verify_overlay(manifest, kernel_path, cwd):
+    if Path(kernel_path).resolve() != Path(manifest["overlay"]):
+        raise ValueError("Partial-tile override does not match manifest")
+    if (Path(cwd) / COMPUTE).exists():
+        raise ValueError("Working directory shadows the attention override")
+    for name, expected in manifest["native_sha256"].items():
+        if sha(Path(manifest["native"]) / name) != expected:
+            raise ValueError("Native attention source changed")
+    for name, expected in manifest["overlay_sha256"].items():
+        if sha(Path(manifest["overlay"]) / name) != expected:
+            raise ValueError("Partial-tile overlay changed")
+
+
+def compilation_evidence(cache, manifest):
+    rows = []
+    groups = {}
+    # Dataflow kernels use kernel_includes.hpp; this pinned runtime emits
+    # compute includes directly into the generated TRISC source wrappers.
+    for path in Path(cache).rglob("chlkc_*.cpp"):
+        source = path.read_text()
+        if COMPUTE.name not in source:
+            continue
+        if f'#include "{manifest["compute"]}"' not in source:
+            raise ValueError("JIT compiled a different attention compute kernel")
+        groups.setdefault(path.parent, set()).add(path.name)
+        rows.append(dict(path=str(path), sha256=sha(path)))
+    if not rows:
+        raise ValueError("Missing compilation evidence for partial-tile overlay")
+    required = {"chlkc_unpack.cpp", "chlkc_math.cpp", "chlkc_pack.cpp"}
+    if any(not required.issubset(names) for names in groups.values()):
+        raise ValueError("Incomplete TRISC compilation evidence for partial-tile overlay")
+    return rows
+
+
+def compare_simulator(reports):
+    if [r["variant"] for r in reports] != list(VARIANTS):
+        raise ValueError("Need native and candidate simulator receipts")
+    if any(r.get("state") != "completed" or r.get("cleanup_completed") is not True for r in reports):
+        raise ValueError("Both simulator processes must complete cleanly")
+    expected = [(length, length - delta, heads) for length in CONTEXTS for delta in (0, 37) for heads in (32, 6)]
+    if any([(c["context"], c["active_tokens"], c["query_heads"]) for c in r["cases"]] != expected for r in reports):
+        raise ValueError("Incomplete simulator case coverage")
+    rows = []
+    for native, candidate in zip(reports[0]["cases"], reports[1]["cases"]):
+        for key in ("context", "active_tokens", "query_heads", "operand_sha256", "reference_sha256"):
+            if native[key] != candidate[key]:
+                raise ValueError("Simulator comparisons have mismatched operands")
+        if native["query_heads"] == 32 and (
+            not native["accuracy"]["passed"] or native["output_sha256"] != candidate["output_sha256"]
+        ):
+            raise ValueError("Passing full-tile control must remain bit-identical")
+        rows.append(
+            dict(
+                context=native["context"],
+                active_tokens=native["active_tokens"],
+                query_heads=native["query_heads"],
+                native_accuracy=native["accuracy"],
+                candidate_accuracy=candidate["accuracy"],
+                output_bit_identical=native["output_sha256"] == candidate["output_sha256"],
+            )
+        )
+    return dict(
+        completed=True,
+        candidate_accuracy_passed=all(r["candidate_accuracy"]["passed"] for r in rows),
+        comparisons=rows,
+        hardware_qualified=False,
+        promoted_to_model=False,
+        scope="One virtual-chip synthetic numerical screen; no hardware timing or model-eval qualification",
+    )

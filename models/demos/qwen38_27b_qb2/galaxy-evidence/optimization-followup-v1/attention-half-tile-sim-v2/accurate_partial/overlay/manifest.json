@@ -1,0 +1,18 @@
+{
+  "variant": "accurate_partial",
+  "overlay": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/overlay",
+  "native": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+  "native_sha256": {
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp": "c865353d07a55967ca6959e3b5efda744312009e8b998d7425edf84d4e18f23e",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "6ae905e3619ffc6cb940fc88985d64c798aed732eaadc67da1b593c45d50a2cd"
+  },
+  "compute": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+  "common": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+  "overlay_sha256": {
+    "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp": "968b8457594ee848df41853d0148e463c21fa6c5daf84037d22d776bbf8021cf",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "1a460ea0cc51466c3cb9bc573e0b7741e236af4cfa43dcff462f95102573ead2"
+  },
+  "precision_change": false,
+  "promoted_to_model": false,
+  "changes": "Honor accurate exp on partial query tiles, including FP32 scale over only the valid vector region"
+}

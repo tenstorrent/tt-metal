@@ -1,0 +1,523 @@
+{
+  "collected_at": "2026-10-08T06:17:04.814530+00:00",
+  "root": "/home/ttuser/qwen38-artifacts-20261007",
+  "systemd": "MainPID=2502739\nExecMainStatus=0\nId=qwen38-capacity-pairs-v1-20261007.service\nActiveState=active\nSubState=running\n\nMainPID=0\nExecMainStatus=0\nId=qwen38-attention-placement-long-v1-20261008.service\nActiveState=inactive\nSubState=dead\n\nMainPID=0\nExecMainStatus=0\nId=qwen38-bounded-layer-profile-v1-20261008.service\nActiveState=inactive\nSubState=dead\n\nMainPID=2630383\nExecMainStatus=0\nId=qwen38-bounded-layer-profile-v2-20261008.service\nActiveState=active\nSubState=running\n\nMainPID=0\nExecMainStatus=1\nId=qwen38-attention-half-tile-sim-v1-20261008.service\nActiveState=failed\nSubState=failed\n\nMainPID=0\nExecMainStatus=0\nId=qwen38-attention-half-tile-sim-v2-20261008.service\nActiveState=inactive\nSubState=dead\n",
+  "absent": [
+    "attention-half-tile-sim-v1/comparison.json",
+    "attention-half-tile-sim-v1/accurate_partial/probe.json",
+    "attention-half-tile-sim-v1/accurate_partial/overlay/manifest.json"
+  ],
+  "files": [
+    {
+      "path": "capacity-pairs-v1/s131072-b16/native/sweep.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/native/sweep.json",
+      "sha256": "5bd8e483e4fd49a9f3adf3cb97f40538102cd7ffa0fc794f7e5f1aa6a48768d3",
+      "uncompressed_sha256": "5bd8e483e4fd49a9f3adf3cb97f40538102cd7ffa0fc794f7e5f1aa6a48768d3",
+      "bytes": 14198
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/native/sweep.csv",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/native/sweep.csv",
+      "sha256": "f4ea133a54884f2aebbc223c69de48d9fd1a24491eff6d73d0f8b83b25cddff7",
+      "uncompressed_sha256": "f4ea133a54884f2aebbc223c69de48d9fd1a24491eff6d73d0f8b83b25cddff7",
+      "bytes": 368
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/native/attempt-01/command.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/native/attempt-01/command.json",
+      "sha256": "d55410bab06d0d4780b214eec1db03f3ce54fa9f74a6b7dd25e60db698cc102c",
+      "uncompressed_sha256": "d55410bab06d0d4780b214eec1db03f3ce54fa9f74a6b7dd25e60db698cc102c",
+      "bytes": 647
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/native/attempt-01/hardware.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/native/attempt-01/hardware.xml",
+      "sha256": "8dd7acccc5214b041d90368e4d5a5d5ba9b2bded1640ad0037802c864bdd5857",
+      "uncompressed_sha256": "5786df59ce100dd9790a43df32ab44ca7eacf89878b177039c654783636fca01",
+      "bytes": 541
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/single-step/sweep.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/single-step/sweep.json",
+      "sha256": "8467ae9e06d1c69d38c9e90c1a581272514ba19436ed01dc696f47f20bedcb2e",
+      "uncompressed_sha256": "8467ae9e06d1c69d38c9e90c1a581272514ba19436ed01dc696f47f20bedcb2e",
+      "bytes": 14235
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/single-step/sweep.csv",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/single-step/sweep.csv",
+      "sha256": "0e6a725eab9c1438a6fd305faf8da2db951572390f64878b34c0c2b349a13304",
+      "uncompressed_sha256": "0e6a725eab9c1438a6fd305faf8da2db951572390f64878b34c0c2b349a13304",
+      "bytes": 367
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/single-step/attempt-01/command.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/single-step/attempt-01/command.json",
+      "sha256": "625efc9e94017e9c7fcc0a5d177cc1053fdaa5c6a67a90a4f387f2d43f9e95b6",
+      "uncompressed_sha256": "625efc9e94017e9c7fcc0a5d177cc1053fdaa5c6a67a90a4f387f2d43f9e95b6",
+      "bytes": 652
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/single-step/attempt-01/hardware.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/single-step/attempt-01/hardware.xml",
+      "sha256": "5e5ba654204825fbf2fcaa97f0ff780b99ad0d77cb37f5e4a62c2c1e7eccab58",
+      "uncompressed_sha256": "33baf7b510e1a8a7387a649b3ae176a84864dc1323eb6c8113588036388a1ba8",
+      "bytes": 541
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/comparison/comparison.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/comparison/comparison.json",
+      "sha256": "0f3f17a153fb05735f6c8fb6116fe20ead97cdd19f5a8b74a0b29af784c8e74c",
+      "uncompressed_sha256": "0f3f17a153fb05735f6c8fb6116fe20ead97cdd19f5a8b74a0b29af784c8e74c",
+      "bytes": 2158
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/comparison/comparison.csv",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/comparison/comparison.csv",
+      "sha256": "af0778a06d5ad7cba98bd596a40ed50447377c79fd38c9cdc18e346a46ca5090",
+      "uncompressed_sha256": "af0778a06d5ad7cba98bd596a40ed50447377c79fd38c9cdc18e346a46ca5090",
+      "bytes": 596
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/comparison/comparison.png",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/comparison/comparison.png",
+      "sha256": "819bb5280b782de82265832959324f643f1ca1c907417f698c3bc35a4de9f426",
+      "uncompressed_sha256": "819bb5280b782de82265832959324f643f1ca1c907417f698c3bc35a4de9f426",
+      "bytes": 103573
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/comparison/comparison.svg",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/comparison/comparison.svg",
+      "sha256": "e155afc54ac66dd4f7ea9881a26fb1cececab299775767e927e6457b13283d4c",
+      "uncompressed_sha256": "e155afc54ac66dd4f7ea9881a26fb1cececab299775767e927e6457b13283d4c",
+      "bytes": 88514
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/comparison/comparison.pdf",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/comparison/comparison.pdf",
+      "sha256": "554b4f148de69ee281e86ce6cb8a0ba803554c50e5e6f9d58a546591814c1b34",
+      "uncompressed_sha256": "554b4f148de69ee281e86ce6cb8a0ba803554c50e5e6f9d58a546591814c1b34",
+      "bytes": 32678
+    },
+    {
+      "path": "capacity-pairs-v1/s131072-b16/comparison/index.html",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/s131072-b16/comparison/index.html",
+      "sha256": "f01b733a319b06faa9835853e47999b86a1a25e833e08bab145ced2d737ebcc5",
+      "uncompressed_sha256": "f01b733a319b06faa9835853e47999b86a1a25e833e08bab145ced2d737ebcc5",
+      "bytes": 90357
+    },
+    {
+      "path": "capacity-pairs-v1/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/capacity-pairs-v1/queue.json",
+      "sha256": "af2f094d7960f98fd63733745d704384fc5648140588da55974121744ac5d9cb",
+      "uncompressed_sha256": "af2f094d7960f98fd63733745d704384fc5648140588da55974121744ac5d9cb",
+      "bytes": 17728
+    },
+    {
+      "path": "attention-placement-long-v1/placement.json.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1/placement.json",
+      "sha256": "d84cba1a21d50df70665cb5767577721ec36a6b458222bd6fe346f7e80dd16aa",
+      "uncompressed_sha256": "34727729810e6f8cf3de7c8bb3195d062007a78d623b3fa73deea864026617be",
+      "bytes": 1528706
+    },
+    {
+      "path": "attention-placement-long-v1/hardware.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1/hardware.xml",
+      "sha256": "75550990bb2c79cfbeec2dcad948283c3a397b2b6f3facfc64545b4768f12322",
+      "uncompressed_sha256": "0884bc3ba9575cb1b1bc62d5c544b8da98b175126d28ca2e1643236569f88b78",
+      "bytes": 554
+    },
+    {
+      "path": "attention-placement-long-v1/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1/queue.json",
+      "sha256": "5e702010122e2218319df1437f7d5d05b3d9d5d37059be992b5430e64d7d8caa",
+      "uncompressed_sha256": "5e702010122e2218319df1437f7d5d05b3d9d5d37059be992b5430e64d7d8caa",
+      "bytes": 14487
+    },
+    {
+      "path": "bounded-layer-profile-launch-v2.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-launch-v2.json",
+      "sha256": "d8eb681473e3c1dd256da026fb0eaa3aa359fb26e25322d84a1761ace77f2c8b",
+      "uncompressed_sha256": "d8eb681473e3c1dd256da026fb0eaa3aa359fb26e25322d84a1761ace77f2c8b",
+      "bytes": 3226
+    },
+    {
+      "path": "bounded-layer-profile-unit-v2.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-unit-v2.xml",
+      "sha256": "4c32e337f44c65211a3fab0aae75af19bc1b1a61807c6d3fe75b57b2f38e05e6",
+      "uncompressed_sha256": "5a8e063d7dd202af648d456f6247e08008cbe29cea54bfbb6628ab09d0d106a1",
+      "bytes": 89325
+    },
+    {
+      "path": "bounded-layer-profile-replacement-v2.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-replacement-v2.json",
+      "sha256": "1dfae4087f8092ca9ddbcd1e6960bf11765d5202241810902a68a0adeb6864a7",
+      "uncompressed_sha256": "1dfae4087f8092ca9ddbcd1e6960bf11765d5202241810902a68a0adeb6864a7",
+      "bytes": 2281
+    },
+    {
+      "path": "bounded-layer-profile-v2/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v2/queue.json",
+      "sha256": "bb48de8829167267c410de821cee734b182e8cd4b2e0b0f0716fe5d1e2412e6c",
+      "uncompressed_sha256": "bb48de8829167267c410de821cee734b182e8cd4b2e0b0f0716fe5d1e2412e6c",
+      "bytes": 15630
+    },
+    {
+      "path": "attention-half-tile-sim-launch-v1.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-launch-v1.json",
+      "sha256": "4ca4527059094b09639a61094c2edec7f826c46b4a7829b1308d60c45f0b0a1a",
+      "uncompressed_sha256": "4ca4527059094b09639a61094c2edec7f826c46b4a7829b1308d60c45f0b0a1a",
+      "bytes": 2561
+    },
+    {
+      "path": "attention-half-tile-unit-v1.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-unit-v1.xml",
+      "sha256": "46d6322cfd1edf333e51b980b9224195a39866b70cde4e9d8e64b99432bf11e1",
+      "uncompressed_sha256": "4203773faef7e7ac93eee5cf72d9981945fb7eeb37f6b7aece6424b9aae0422a",
+      "bytes": 92324
+    },
+    {
+      "path": "attention-half-tile-sim-v1.log.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1.log",
+      "sha256": "2d2963edd256328ffe3f6e30da4f7ed33402a0fca09528eb31bbd18670951e8a",
+      "uncompressed_sha256": "c6e8018a1cb50c48d53a34f99c323249a447719eb8239db5d415ecb9c2abcd31",
+      "bytes": 8379
+    },
+    {
+      "path": "attention-half-tile-sim-v1/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/queue.json",
+      "sha256": "b19706c59b7935a3f8e38595c616a20aa747221139aecc1578a1abc760cef0d1",
+      "uncompressed_sha256": "b19706c59b7935a3f8e38595c616a20aa747221139aecc1578a1abc760cef0d1",
+      "bytes": 17110
+    },
+    {
+      "path": "attention-half-tile-sim-v1/unit.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/unit.xml",
+      "sha256": "23a37742febbe4caaf3ec2d7eba59b559655dd1eb1c109c6d9830b996a686bad",
+      "uncompressed_sha256": "5503f5678942353ea81126f025cda92227041b7f5b7a4d25fa817dc29f78d1eb",
+      "bytes": 92324
+    },
+    {
+      "path": "attention-half-tile-sim-v1/native/probe.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/probe.json",
+      "sha256": "6f73eaa7495b2fd60c02135ed7a837e46743dcd567ea3553a8d8dda391ac2726",
+      "uncompressed_sha256": "6f73eaa7495b2fd60c02135ed7a837e46743dcd567ea3553a8d8dda391ac2726",
+      "bytes": 3277
+    },
+    {
+      "path": "attention-half-tile-sim-v1/native/overlay/manifest.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/overlay/manifest.json",
+      "sha256": "d6b5b51fda14416c0c17f9d83e3eb726d40aa0f700af9901db42aba1276184f3",
+      "uncompressed_sha256": "d6b5b51fda14416c0c17f9d83e3eb726d40aa0f700af9901db42aba1276184f3",
+      "bytes": 1456
+    },
+    {
+      "path": "attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+      "sha256": "fa19ea43aa9538a2398524b63fedc93ff922086f478162818aa469bcf8f94501",
+      "uncompressed_sha256": "6ae905e3619ffc6cb940fc88985d64c798aed732eaadc67da1b593c45d50a2cd",
+      "bytes": 101108
+    },
+    {
+      "path": "attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+      "sha256": "a68bae5e02cb37fa006ad6a736abd9888a699d1595b050cd9a71397e6ba990d7",
+      "uncompressed_sha256": "0f243b14bbb06fb10c281db35f2ee771e3fc5f525b1743bd9bd398a4fdcb702e",
+      "bytes": 38442
+    },
+    {
+      "path": "attention-half-tile-sim-v1/native/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp",
+      "sha256": "85057a707d6c90cf2a01af707cb079f67b29874a305e707b38be78a9fcbef9a9",
+      "uncompressed_sha256": "bc4797c472a35d9b3522c4175bce81ea35c75f0803c31c76bbe3960d582da6d9",
+      "bytes": 269
+    },
+    {
+      "path": "attention-half-tile-sim-v1/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11496738696213083723/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11496738696213083723/chlkc_math.cpp",
+      "sha256": "8f7bae500b31d51ddde82efe438f4f94fd92cfcc583bb65a429f32c8948ddbc6",
+      "uncompressed_sha256": "b8648ef25b1e2416702c89fb7636777e9251ba23812c633076230e106584c4d0",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/tests/attention_half_tile.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/tests/attention_half_tile.py",
+      "sha256": "c6767282287b19247f2e7011a6267e6ddcab610e6f914b833da451383e09363c",
+      "uncompressed_sha256": "09c6987e56e0d2389096c3a49067ebed4778676fb0931d071e266a9e5d0995a6",
+      "bytes": 7662
+    },
+    {
+      "path": "attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_attention_half_tile.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/tests/unit/test_attention_half_tile.py",
+      "sha256": "8c39b198a2dd7f0fd8b4eeb04ecdc8261fc27a1e0c25c3b94240bc59df9a8f1b",
+      "uncompressed_sha256": "3d62fe11c90420fc599fcf4430d1389697c51179104f6c591da6c80cffbc6f77",
+      "bytes": 5694
+    },
+    {
+      "path": "attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/demo/probe_attention_half_tile.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/demo/probe_attention_half_tile.py",
+      "sha256": "00877f0491bc7fa4c21aaabba4b6b2b173d9724c0331b64f51b4f421dfb368de",
+      "uncompressed_sha256": "4f88120d05ce932c11e61935c34f9d05b68072a54e5c43638f7f68048b9ef842",
+      "bytes": 8414
+    },
+    {
+      "path": "attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/demo/run_attention_half_tile_simulator.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v1/models/demos/qwen38_27b_qb2/demo/run_attention_half_tile_simulator.py",
+      "sha256": "f32fda1a7851be3fa2f197db5eb41bda4dc4881242c0b7a94907b6acd7e97e75",
+      "uncompressed_sha256": "9c7a9f455c9cd0e8d89d42c6371adec806f2afd21788c1f7dbf512fd3505d446",
+      "bytes": 4151
+    },
+    {
+      "path": "attention-half-tile-sim-launch-v2.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-launch-v2.json",
+      "sha256": "19835f5f7b1f0af7af77afa0259cf3a3fac483d357433903cb72c373a1f8242b",
+      "uncompressed_sha256": "19835f5f7b1f0af7af77afa0259cf3a3fac483d357433903cb72c373a1f8242b",
+      "bytes": 2630
+    },
+    {
+      "path": "attention-half-tile-unit-v2.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-unit-v2.xml",
+      "sha256": "e4a61a1080e7d0c81d8577a270d1631d8ed6f213fcac0ac3c3909373f25f9e40",
+      "uncompressed_sha256": "26384c28aeafd3fed1f4894577c85cffe775df084523788db51508c97c9fb2c1",
+      "bytes": 92324
+    },
+    {
+      "path": "attention-half-tile-sim-v2.log.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2.log",
+      "sha256": "426e6dcc7c8b852c44de4502751021464cbf6d126bd8e99b98aa43306eca4e16",
+      "uncompressed_sha256": "954d06de70256047ceca69ae47bbd6c36989550a6bf986c7aa4dcf3d109293a1",
+      "bytes": 27052
+    },
+    {
+      "path": "attention-half-tile-sim-v2/queue.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/queue.json",
+      "sha256": "89d41040feda88c86fe28547deff7d027aaa764c40d3d5c074e39a23bd67c317",
+      "uncompressed_sha256": "89d41040feda88c86fe28547deff7d027aaa764c40d3d5c074e39a23bd67c317",
+      "bytes": 18844
+    },
+    {
+      "path": "attention-half-tile-sim-v2/unit.xml.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/unit.xml",
+      "sha256": "51bd664f36973d0dd3ceba16d4ec88a9e84d62b71b27143057d10e22146ece77",
+      "uncompressed_sha256": "38b9908d72472398f57c93fc6c79983c4250864e1d79fbf761e329d03f541752",
+      "bytes": 92324
+    },
+    {
+      "path": "attention-half-tile-sim-v2/comparison.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/comparison.json",
+      "sha256": "9d2dddf81541074947945c529f3853ded8371f518a67406b5a4d011e635ec38d",
+      "uncompressed_sha256": "9d2dddf81541074947945c529f3853ded8371f518a67406b5a4d011e635ec38d",
+      "bytes": 11814
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/probe.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/probe.json",
+      "sha256": "64d577485f9fbee311354ac19d1dbedd29079d691c6f401244aed3954ce610d0",
+      "uncompressed_sha256": "64d577485f9fbee311354ac19d1dbedd29079d691c6f401244aed3954ce610d0",
+      "bytes": 27082
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/overlay/manifest.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/overlay/manifest.json",
+      "sha256": "399dcb58f46826a8042e099808347cd13dfdf46e1311565466ed35febffec8a9",
+      "uncompressed_sha256": "399dcb58f46826a8042e099808347cd13dfdf46e1311565466ed35febffec8a9",
+      "bytes": 1456
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+      "sha256": "fa19ea43aa9538a2398524b63fedc93ff922086f478162818aa469bcf8f94501",
+      "uncompressed_sha256": "6ae905e3619ffc6cb940fc88985d64c798aed732eaadc67da1b593c45d50a2cd",
+      "bytes": 101108
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+      "sha256": "42f4b67c666194c471ca629cd71f183cc2bb30b016669336a970adf1815b525b",
+      "uncompressed_sha256": "685468a7a8c2d6b8cdffcda11cc72ffdeaadc21d24a53ec02402f76ca90c834d",
+      "bytes": 38442
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp",
+      "sha256": "85057a707d6c90cf2a01af707cb079f67b29874a305e707b38be78a9fcbef9a9",
+      "uncompressed_sha256": "bc4797c472a35d9b3522c4175bce81ea35c75f0803c31c76bbe3960d582da6d9",
+      "bytes": 269
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/14183100300179078064/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/14183100300179078064/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16022079182741863691/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16022079182741863691/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/18218257819030578041/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/18218257819030578041/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/8667190354888061956/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/8667190354888061956/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/489314612231901190/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/489314612231901190/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11415235669964283618/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11415235669964283618/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11404448665778722456/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11404448665778722456/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/5775238452605807342/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/native/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/5775238452605807342/chlkc_math.cpp",
+      "sha256": "4e62374e4f9b6c7eb84d3f05404c92263d1fd0eed9d2a04b1427a93fdf8bd1f9",
+      "uncompressed_sha256": "c0ead4021345de982a0c2f9e4dd980cf952832719ae530dc0781a3f3bfe58eba",
+      "bytes": 256
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/probe.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/probe.json",
+      "sha256": "94b042a20cd25b307f9243ac8c5ce70d5b0604af59480c206bc94f7681cf7ccf",
+      "uncompressed_sha256": "94b042a20cd25b307f9243ac8c5ce70d5b0604af59480c206bc94f7681cf7ccf",
+      "bytes": 27467
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/overlay/manifest.json",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/overlay/manifest.json",
+      "sha256": "3d614cd942e4b9bb82fbfd9c24df910ed60c9930fba4e4c75e219d675a8065cc",
+      "uncompressed_sha256": "3d614cd942e4b9bb82fbfd9c24df910ed60c9930fba4e4c75e219d675a8065cc",
+      "bytes": 1496
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+      "sha256": "a43c33a5c8cd08a5488cd848446bd97e0d329dbabde84ac28963194e70c546e9",
+      "uncompressed_sha256": "1a460ea0cc51466c3cb9bc573e0b7741e236af4cfa43dcff462f95102573ead2",
+      "bytes": 101727
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+      "sha256": "ab96eda6e51d2f5fe475dc5542323e9af2b78e66d790581e5e0e0b727c9189fb",
+      "uncompressed_sha256": "968b8457594ee848df41853d0148e463c21fa6c5daf84037d22d776bbf8021cf",
+      "bytes": 38452
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/tilize_metal2/10168265947033130705/chlkc_math.cpp",
+      "sha256": "85057a707d6c90cf2a01af707cb079f67b29874a305e707b38be78a9fcbef9a9",
+      "uncompressed_sha256": "bc4797c472a35d9b3522c4175bce81ea35c75f0803c31c76bbe3960d582da6d9",
+      "bytes": 269
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16437446324810250071/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16437446324810250071/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/4651836481470825821/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/4651836481470825821/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16870547401703459355/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/16870547401703459355/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/17498074439923767279/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/17498074439923767279/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/15740951737990959164/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/15740951737990959164/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/15235461891653085176/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/15235461891653085176/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11875319925865179794/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/11875319925865179794/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/12619915078558052292/chlkc_math.cpp.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v2/accurate_partial/jit-cache/tt-metal-cache4257977395081971944/kernels/sdpa_flash_decode/12619915078558052292/chlkc_math.cpp",
+      "sha256": "55756fd44df46ca54797944cb2fdaf362edabc83634d64a71806c6dcb930a497",
+      "uncompressed_sha256": "c55a69645db845c4f4f2890a63a0ce28aa74409fe56a07b4b01bc687ca5c6fb2",
+      "bytes": 266
+    },
+    {
+      "path": "attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/tests/attention_half_tile.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/tests/attention_half_tile.py",
+      "sha256": "0190e109c834e187939c6ced4ab0ce51353e71d0cd61fc421eb874530701821a",
+      "uncompressed_sha256": "aa9c265651f9ecbced522359252a6afabe93292d40f5d8d669e81d5799b7ca80",
+      "bytes": 8113
+    },
+    {
+      "path": "attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_attention_half_tile.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/tests/unit/test_attention_half_tile.py",
+      "sha256": "acecf776c3ca186e73aac8ea1a88eb25d58ac6581e04cf499bd3396cb1039a30",
+      "uncompressed_sha256": "9381a09eb11d827cf9979f4ea734a381fbeddc550645affb01ff22e97b59e832",
+      "bytes": 5901
+    },
+    {
+      "path": "attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/demo/probe_attention_half_tile.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/demo/probe_attention_half_tile.py",
+      "sha256": "00877f0491bc7fa4c21aaabba4b6b2b173d9724c0331b64f51b4f421dfb368de",
+      "uncompressed_sha256": "4f88120d05ce932c11e61935c34f9d05b68072a54e5c43638f7f68048b9ef842",
+      "bytes": 8414
+    },
+    {
+      "path": "attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/demo/run_attention_half_tile_simulator.py.gz",
+      "remote_path": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-source-v2/models/demos/qwen38_27b_qb2/demo/run_attention_half_tile_simulator.py",
+      "sha256": "f32fda1a7851be3fa2f197db5eb41bda4dc4881242c0b7a94907b6acd7e97e75",
+      "uncompressed_sha256": "9c7a9f455c9cd0e8d89d42c6371adec806f2afd21788c1f7dbf512fd3505d446",
+      "bytes": 4151
+    }
+  ]
+}

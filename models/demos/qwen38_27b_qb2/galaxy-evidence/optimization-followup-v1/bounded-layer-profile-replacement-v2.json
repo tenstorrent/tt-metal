@@ -1,0 +1,15 @@
+{
+  "recorded_at": "2026-10-08T06:16:39.407081+00:00",
+  "old_unit": "qwen38-bounded-layer-profile-v1-20261008.service",
+  "reason": "User changed primary optimization target to 32K ISL, followed by 16K; retain active 128K/256K tuning",
+  "previous_processes": {
+    "2589215": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/python_env/bin/python -m models.demos.qwen38_27b_qb2.demo.run_bounded_layer_profile --task /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006 --source /home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1 --weights /home/ttuser/qwen38-artifacts-20261007/checkpoint-pinned-1d4bf0f2 --results /home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v1 --after-unit qwen38-attention-placement-long-v1-20261008.service --after-results /home/ttuser/qwen38-artifacts-20261007/attention-placement-long-v1",
+    "2622282": "timeout --signal=TERM --kill-after=180 7200 /bin/bash /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/source/scripts/run_safe_pytest.sh --profile-ops /home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py --rootdir=/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1 -c /home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1/pytest.ini -vv -s --tb=short --timeout=1200 --junitxml=/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v1/s262016-b8-native/hardware.xml",
+    "2622283": "/bin/bash /home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/source/scripts/run_safe_pytest.sh --profile-ops /home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1/models/demos/qwen38_27b_qb2/tests/test_bounded_layer_profile.py --rootdir=/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1 -c /home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-source-v1/pytest.ini -vv -s --tb=short --timeout=1200 --junitxml=/home/ttuser/qwen38-artifacts-20261007/bounded-layer-profile-v1/s262016-b8-native/hardware.xml",
+    "2622286": "flock 9"
+  },
+  "no_device_worker_started": true,
+  "replacement_unit": "qwen38-bounded-layer-profile-v2-20261008.service",
+  "hardware_reset": false,
+  "original_capacity_run_untouched": true
+}

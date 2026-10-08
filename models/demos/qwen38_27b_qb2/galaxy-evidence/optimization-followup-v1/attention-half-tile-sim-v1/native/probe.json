@@ -1,0 +1,67 @@
+{
+  "state": "failed",
+  "variant": "native",
+  "overlay": {
+    "variant": "native",
+    "overlay": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/overlay",
+    "native": "/home/ttuser/kimi-prefill.Ubx2wY/runtime/qwen38-27b-20261006/metal",
+    "native_sha256": {
+      "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp": "c865353d07a55967ca6959e3b5efda744312009e8b998d7425edf84d4e18f23e",
+      "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "6ae905e3619ffc6cb940fc88985d64c798aed732eaadc67da1b593c45d50a2cd"
+    },
+    "compute": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp",
+    "common": "/home/ttuser/qwen38-artifacts-20261007/attention-half-tile-sim-v1/native/overlay/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp",
+    "overlay_sha256": {
+      "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/compute/sdpa_flash_decode.cpp": "0f243b14bbb06fb10c281db35f2ee771e3fc5f525b1743bd9bd398a4fdcb702e",
+      "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "6ae905e3619ffc6cb940fc88985d64c798aed732eaadc67da1b593c45d50a2cd"
+    },
+    "precision_change": false,
+    "promoted_to_model": false,
+    "changes": "Honor accurate exp on partial query tiles, including FP32 scale over only the valid vector region"
+  },
+  "cases": [
+    {
+      "context": 1024,
+      "active_tokens": 1024,
+      "query_heads": 32,
+      "operand_sha256": {
+        "query": "37b1d0ab97e56b33303ecac5a30b9fc31eea001d611738c94d9c76a9dc699e43",
+        "key": "a6e0226e43a70c0ce1cd7475e0072994ab686b2e5ea20dd1ec6ca8fcf726c992",
+        "value": "0d97c4e3b946ca7bf249f9da7fd8503a0128f69ab9301385ab3f9a120f12686f",
+        "pages": "53d3d2f9a27a12d9dba22320a2f765e232102be29b096962f5c82419e256c725"
+      },
+      "reference_sha256": "f8f0f2255f71290589e4f5b296429c2c9dee3ed836953c978cd18d446c4cd1cd",
+      "state": "completed",
+      "accuracy": {
+        "passed": true,
+        "pcc_per_user": [
+          0.9999797344207764
+        ],
+        "relative_rms": 0.007135521620512009,
+        "relative_rms_per_user": [
+          0.007135521620512009
+        ],
+        "max_abs_error": 0.001920253038406372
+      },
+      "output_sha256": "a77147a74d56f62f7bb69fd0c2795d2707149278d40769f2b092b05c2cbb558a"
+    }
+  ],
+  "cleanup_completed": true,
+  "physical_devices_accessed": false,
+  "model_accuracy_qualified": false,
+  "promoted_to_model": false,
+  "simulator_sha256": "d01be2a094f9f0f6a00e771defeae2311cb82f051b8af89c2df509e78b8432b7",
+  "probe_sha256": "4f88120d05ce932c11e61935c34f9d05b68072a54e5c43638f7f68048b9ef842",
+  "compiler_fallback": "Native TT_METAL_DISABLE_SFPLOADMACRO=1; production instruction parity unqualified",
+  "scope": "BFP8 KV, BF16 Q/output, HiFi4 FP32 accumulation, accurate exp; synthetic CPU simulator",
+  "hardware_timing_claim": false,
+  "updated_at": "2026-10-08T06:02:31Z",
+  "worker_grid": [
+    11,
+    10
+  ],
+  "error": {
+    "type": "ValueError",
+    "message": "Missing compilation evidence for partial-tile overlay"
+  }
+}
