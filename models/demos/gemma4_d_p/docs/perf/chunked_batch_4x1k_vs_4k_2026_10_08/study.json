@@ -1,0 +1,470 @@
+{
+  "source_commit": "ba821d84706",
+  "method": "Gemma-4-31B-it, 60 layers, Blackhole CP8/TP4, original reduce-scatter, default activation placement. Each call processes 4,096 useful tokens: one 4K request in canonical, or four 1K requests in the fixed batch. Every request has the prefix shown on the chart. All histories were populated by real model calls. Five replays at prefixes 0, 8K, 32K, 64K, 128K, 192K and 248K; one replay at other positions. Timing covers trace replay and synchronization. Host staging is recorded separately; loading, compilation, output download and KV migration are excluded.",
+  "validation": {
+    "summary": "132 host checks and six-layer output/KV, isolation, migration and trace replay checks passed. The strict 60-layer numerical comparison showed drift; further rounding analysis was stopped. Original math settings retained.",
+    "host_tests_passed": 132,
+    "six_layer_comparisons": 144,
+    "minimum_pcc": 0.999444,
+    "maximum_rrmse": 0.031539,
+    "full_model_numerical_comparison": "not qualified",
+    "full_model_first_output_pcc": 0.972462,
+    "full_model_first_output_rrmse": 0.235303,
+    "scope": "No further numerical precision tuning, per user instruction. Performance covers all 60 layers through 256K context."
+  },
+  "memory_note": "Eight 256K slots plus weights failed DRAM allocation. Four slots halve KV storage; the measured fixed batch uses four 256K slots.",
+  "kv_storage_bytes_per_device": {
+    "four_slots": 15151923200,
+    "eight_slots": 30303846400
+  },
+  "official_canonical": [
+    {
+      "chunk": 1,
+      "total_chunks": 64,
+      "start": 0,
+      "end": 4096,
+      "device_ms": 81.8
+    },
+    {
+      "chunk": 2,
+      "total_chunks": 64,
+      "start": 4096,
+      "end": 8192,
+      "device_ms": 83.5
+    },
+    {
+      "chunk": 3,
+      "total_chunks": 64,
+      "start": 8192,
+      "end": 12288,
+      "device_ms": 84.0
+    },
+    {
+      "chunk": 4,
+      "total_chunks": 64,
+      "start": 12288,
+      "end": 16384,
+      "device_ms": 85.4
+    },
+    {
+      "chunk": 5,
+      "total_chunks": 64,
+      "start": 16384,
+      "end": 20480,
+      "device_ms": 87.0
+    },
+    {
+      "chunk": 6,
+      "total_chunks": 64,
+      "start": 20480,
+      "end": 24576,
+      "device_ms": 87.5
+    },
+    {
+      "chunk": 7,
+      "total_chunks": 64,
+      "start": 24576,
+      "end": 28672,
+      "device_ms": 88.9
+    },
+    {
+      "chunk": 8,
+      "total_chunks": 64,
+      "start": 28672,
+      "end": 32768,
+      "device_ms": 90.7
+    },
+    {
+      "chunk": 9,
+      "total_chunks": 64,
+      "start": 32768,
+      "end": 36864,
+      "device_ms": 90.9
+    },
+    {
+      "chunk": 10,
+      "total_chunks": 64,
+      "start": 36864,
+      "end": 40960,
+      "device_ms": 92.3
+    },
+    {
+      "chunk": 11,
+      "total_chunks": 64,
+      "start": 40960,
+      "end": 45056,
+      "device_ms": 94.2
+    },
+    {
+      "chunk": 12,
+      "total_chunks": 64,
+      "start": 45056,
+      "end": 49152,
+      "device_ms": 94.4
+    },
+    {
+      "chunk": 13,
+      "total_chunks": 64,
+      "start": 49152,
+      "end": 53248,
+      "device_ms": 95.8
+    },
+    {
+      "chunk": 14,
+      "total_chunks": 64,
+      "start": 53248,
+      "end": 57344,
+      "device_ms": 97.5
+    },
+    {
+      "chunk": 15,
+      "total_chunks": 64,
+      "start": 57344,
+      "end": 61440,
+      "device_ms": 97.9
+    },
+    {
+      "chunk": 16,
+      "total_chunks": 64,
+      "start": 61440,
+      "end": 65536,
+      "device_ms": 99.2
+    },
+    {
+      "chunk": 17,
+      "total_chunks": 64,
+      "start": 65536,
+      "end": 69632,
+      "device_ms": 100.8
+    },
+    {
+      "chunk": 18,
+      "total_chunks": 64,
+      "start": 69632,
+      "end": 73728,
+      "device_ms": 101.4
+    },
+    {
+      "chunk": 19,
+      "total_chunks": 64,
+      "start": 73728,
+      "end": 77824,
+      "device_ms": 102.6
+    },
+    {
+      "chunk": 20,
+      "total_chunks": 64,
+      "start": 77824,
+      "end": 81920,
+      "device_ms": 104.3
+    },
+    {
+      "chunk": 21,
+      "total_chunks": 64,
+      "start": 81920,
+      "end": 86016,
+      "device_ms": 104.9
+    },
+    {
+      "chunk": 22,
+      "total_chunks": 64,
+      "start": 86016,
+      "end": 90112,
+      "device_ms": 106.1
+    },
+    {
+      "chunk": 23,
+      "total_chunks": 64,
+      "start": 90112,
+      "end": 94208,
+      "device_ms": 108.0
+    },
+    {
+      "chunk": 24,
+      "total_chunks": 64,
+      "start": 94208,
+      "end": 98304,
+      "device_ms": 108.3
+    },
+    {
+      "chunk": 25,
+      "total_chunks": 64,
+      "start": 98304,
+      "end": 102400,
+      "device_ms": 109.8
+    },
+    {
+      "chunk": 26,
+      "total_chunks": 64,
+      "start": 102400,
+      "end": 106496,
+      "device_ms": 111.4
+    },
+    {
+      "chunk": 27,
+      "total_chunks": 64,
+      "start": 106496,
+      "end": 110592,
+      "device_ms": 111.9
+    },
+    {
+      "chunk": 28,
+      "total_chunks": 64,
+      "start": 110592,
+      "end": 114688,
+      "device_ms": 113.3
+    },
+    {
+      "chunk": 29,
+      "total_chunks": 64,
+      "start": 114688,
+      "end": 118784,
+      "device_ms": 114.9
+    },
+    {
+      "chunk": 30,
+      "total_chunks": 64,
+      "start": 118784,
+      "end": 122880,
+      "device_ms": 115.4
+    },
+    {
+      "chunk": 31,
+      "total_chunks": 64,
+      "start": 122880,
+      "end": 126976,
+      "device_ms": 117.4
+    },
+    {
+      "chunk": 32,
+      "total_chunks": 64,
+      "start": 126976,
+      "end": 131072,
+      "device_ms": 118.5
+    },
+    {
+      "chunk": 33,
+      "total_chunks": 64,
+      "start": 131072,
+      "end": 135168,
+      "device_ms": 119.2
+    },
+    {
+      "chunk": 34,
+      "total_chunks": 64,
+      "start": 135168,
+      "end": 139264,
+      "device_ms": 121.0
+    },
+    {
+      "chunk": 35,
+      "total_chunks": 64,
+      "start": 139264,
+      "end": 143360,
+      "device_ms": 122.3
+    },
+    {
+      "chunk": 36,
+      "total_chunks": 64,
+      "start": 143360,
+      "end": 147456,
+      "device_ms": 123.2
+    },
+    {
+      "chunk": 37,
+      "total_chunks": 64,
+      "start": 147456,
+      "end": 151552,
+      "device_ms": 124.6
+    },
+    {
+      "chunk": 38,
+      "total_chunks": 64,
+      "start": 151552,
+      "end": 155648,
+      "device_ms": 126.4
+    },
+    {
+      "chunk": 39,
+      "total_chunks": 64,
+      "start": 155648,
+      "end": 159744,
+      "device_ms": 127.3
+    },
+    {
+      "chunk": 40,
+      "total_chunks": 64,
+      "start": 159744,
+      "end": 163840,
+      "device_ms": 128.5
+    },
+    {
+      "chunk": 41,
+      "total_chunks": 64,
+      "start": 163840,
+      "end": 167936,
+      "device_ms": 130.8
+    },
+    {
+      "chunk": 42,
+      "total_chunks": 64,
+      "start": 167936,
+      "end": 172032,
+      "device_ms": 131.3
+    },
+    {
+      "chunk": 43,
+      "total_chunks": 64,
+      "start": 172032,
+      "end": 176128,
+      "device_ms": 132.1
+    },
+    {
+      "chunk": 44,
+      "total_chunks": 64,
+      "start": 176128,
+      "end": 180224,
+      "device_ms": 134.2
+    },
+    {
+      "chunk": 45,
+      "total_chunks": 64,
+      "start": 180224,
+      "end": 184320,
+      "device_ms": 135.2
+    },
+    {
+      "chunk": 46,
+      "total_chunks": 64,
+      "start": 184320,
+      "end": 188416,
+      "device_ms": 137.0
+    },
+    {
+      "chunk": 47,
+      "total_chunks": 64,
+      "start": 188416,
+      "end": 192512,
+      "device_ms": 138.7
+    },
+    {
+      "chunk": 48,
+      "total_chunks": 64,
+      "start": 192512,
+      "end": 196608,
+      "device_ms": 138.8
+    },
+    {
+      "chunk": 49,
+      "total_chunks": 64,
+      "start": 196608,
+      "end": 200704,
+      "device_ms": 141.0
+    },
+    {
+      "chunk": 50,
+      "total_chunks": 64,
+      "start": 200704,
+      "end": 204800,
+      "device_ms": 142.6
+    },
+    {
+      "chunk": 51,
+      "total_chunks": 64,
+      "start": 204800,
+      "end": 208896,
+      "device_ms": 142.8
+    },
+    {
+      "chunk": 52,
+      "total_chunks": 64,
+      "start": 208896,
+      "end": 212992,
+      "device_ms": 144.5
+    },
+    {
+      "chunk": 53,
+      "total_chunks": 64,
+      "start": 212992,
+      "end": 217088,
+      "device_ms": 146.6
+    },
+    {
+      "chunk": 54,
+      "total_chunks": 64,
+      "start": 217088,
+      "end": 221184,
+      "device_ms": 147.6
+    },
+    {
+      "chunk": 55,
+      "total_chunks": 64,
+      "start": 221184,
+      "end": 225280,
+      "device_ms": 149.1
+    },
+    {
+      "chunk": 56,
+      "total_chunks": 64,
+      "start": 225280,
+      "end": 229376,
+      "device_ms": 151.1
+    },
+    {
+      "chunk": 57,
+      "total_chunks": 64,
+      "start": 229376,
+      "end": 233472,
+      "device_ms": 151.0
+    },
+    {
+      "chunk": 58,
+      "total_chunks": 64,
+      "start": 233472,
+      "end": 237568,
+      "device_ms": 152.5
+    },
+    {
+      "chunk": 59,
+      "total_chunks": 64,
+      "start": 237568,
+      "end": 241664,
+      "device_ms": 154.8
+    },
+    {
+      "chunk": 60,
+      "total_chunks": 64,
+      "start": 241664,
+      "end": 245760,
+      "device_ms": 155.9
+    },
+    {
+      "chunk": 61,
+      "total_chunks": 64,
+      "start": 245760,
+      "end": 249856,
+      "device_ms": 157.1
+    },
+    {
+      "chunk": 62,
+      "total_chunks": 64,
+      "start": 249856,
+      "end": 253952,
+      "device_ms": 160.1
+    },
+    {
+      "chunk": 63,
+      "total_chunks": 64,
+      "start": 253952,
+      "end": 258048,
+      "device_ms": 161.1
+    },
+    {
+      "chunk": 64,
+      "total_chunks": 64,
+      "start": 258048,
+      "end": 262144,
+      "device_ms": 161.7
+    }
+  ]
+}

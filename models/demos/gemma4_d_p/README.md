@@ -108,16 +108,15 @@ performance modes in separate processes:
 
 ```bash
 pytest models/demos/gemma4_d_p/tests/test_chunked_batch.py -sv --timeout=7200
-GEMMA4_BATCH_TEST_LAYERS=60 pytest models/demos/gemma4_d_p/tests/test_chunked_batch.py -sv --timeout=7200
 GEMMA4_BATCH_PERF_MODE=canonical pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
 GEMMA4_BATCH_PERF_MODE=chunked4 pytest models/demos/gemma4_d_p/tests/test_chunked_batch_perf.py -sv --timeout=7200
 ```
 
 The perf test defaults to 60 layers and 256K context, populates histories using
 real model calls, and measures five warmed replays at selected prefix positions.
-A canonical call processes 8,192 useful tokens; a fixed batch processes 4,096
-useful tokens across four requests. Compare useful tokens/s, or explicitly
-normalize the fixed batch to an 8K token budget. `GEMMA4_BATCH_PERF_CONTEXT`
+Both paths process 4,096 useful tokens per call: canonical handles one 4K
+chunk, while the fixed batch handles four 1K chunks. Compare call latency or
+useful tokens/s directly. `GEMMA4_BATCH_PERF_CONTEXT`
 controls capacity and
 `GEMMA4_BATCH_PERF_OUTPUT` selects the JSON output. Host staging is reported
 separately from trace execution; compilation, output downloads and KV migration
@@ -125,7 +124,14 @@ are excluded. Two final-batch samples retain the fixed 4K execution shape with
 fewer useful tokens. Cache capacity is per request, so four long histories
 require more memory than the single-request canonical comparison.
 The earlier eight-request configuration exceeded DRAM capacity at 256K;
-four requests halve its KV-cache storage.
+four requests halve its KV-cache storage (28.2 to 14.1 GiB/device, excluding
+weights and other buffers). The six-layer numerical, isolation, migration and
+trace checks pass. A stricter 60-layer numerical comparison showed drift;
+full-model numerical equivalence is not established. The performance runs
+retain the existing math settings.
+
+Measured results and reproduction commands: [4×1K vs canonical 4K report](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/report.html)
+and [PDF](docs/perf/chunked_batch_4x1k_vs_4k_2026_10_08/comparison.pdf).
 
 ## Host verification
 
