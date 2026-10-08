@@ -52,13 +52,24 @@ def main():
     ap.add_argument("--budget", type=float, default=0.05)
     ap.add_argument("--floor", type=float, default=0.88)
     ap.add_argument("--json")
+    ap.add_argument(
+        "--noise-floor",
+        help="compare.json of a BENIGN perturbation (e.g. single-RS vs its bit-exact twin, or chunk 4096 vs 5120): "
+        "calibrated gate = every layer/cache PCC >= that arm's PCC - --floor-margin (the literal 5%%/0.88 rule "
+        "only passes bit-exact candidates because prefill numerics are chaotic over 60 layers)",
+    )
+    ap.add_argument("--floor-margin", type=float, default=0.02)
+    ap.add_argument("--nll-tol", type=float, default=0.02, help="calibrated gate: upper 95%% CI of mean NLL delta")
     a = ap.parse_args()
     base, cand = Path(a.base), Path(a.cand)
     out = {"base": str(base), "cand": str(cand), "layers": {}}
     ok = True
     bitexact = True
     worst = {}
-    for name in ("k", "v", "ik"):
+    has_kv = all((d / f"kv_{n}.pt").exists() for d in (base, cand) for n in ("k", "v", "ik"))
+    if not has_kv:
+        print("[compare] no KV dump in one of the dirs: logits / NLL comparison only")
+    for name in ("k", "v", "ik") if has_kv else ():
         kb = torch.load(base / f"kv_{name}.pt")
         kc = torch.load(cand / f"kv_{name}.pt")
         assert kb.shape == kc.shape, (name, kb.shape, kc.shape)
@@ -118,9 +129,16 @@ def main():
         # paired bootstrap of mean NLL(cand) - NLL(base) over request rows (teacher-forced perplexity on the text)
         m = ~(db["nll"].isnan() | dc["nll"].isnan())
         diff = (dc["nll"][m] - db["nll"][m]).double()
+        # moving-block bootstrap: neighbouring rows share context, so per-row resampling would understate the CI
         g = torch.Generator().manual_seed(0)
+        blk = 256
+        nb = max(1, diff.numel() // blk)
+        starts_max = diff.numel() - blk + 1
         boots = torch.stack(
-            [diff[torch.randint(0, diff.numel(), (diff.numel(),), generator=g)].mean() for _ in range(2000)]
+            [
+                torch.cat([diff[s : s + blk] for s in torch.randint(0, starts_max, (nb,), generator=g).tolist()]).mean()
+                for _ in range(2000)
+            ]
         )
         out["logits"]["nll_delta"] = diff.mean().item()
         out["logits"]["nll_delta_ci95"] = [boots.quantile(0.025).item(), boots.quantile(0.975).item()]
@@ -144,6 +162,27 @@ def main():
         print(
             f"[compare]   teacher-forced NLL base {g['nll_base']:.4f} cand {g['nll_cand']:.4f}; paired delta "
             f"{g['nll_delta']:+.4f} nats/token, 95% CI [{g['nll_delta_ci95'][0]:+.4f}, {g['nll_delta_ci95'][1]:+.4f}]"
+        )
+    if a.noise_floor:
+        nf = json.load(open(a.noise_floor))["layers"]
+        worst_gap, cal_ok = (1.0, None), True
+        for L, caches in out["layers"].items():
+            for name, r in caches.items():
+                ref = nf.get(str(L), {}).get(name)
+                if ref is None or r["exact"]:
+                    continue
+                m = min(r["pcc_all"], r["pcc_request"])
+                fl = min(ref["pcc_all"], ref["pcc_request"]) - a.floor_margin
+                if m - fl < worst_gap[0]:
+                    worst_gap = (m - fl, f"layer {L} {name}: {m:.5f} vs floor {fl:.5f}")
+                cal_ok &= m >= fl
+        g = out.get("logits", {})
+        nll_ok = g.get("nll_delta_ci95") is None or g["nll_delta_ci95"][1] <= a.nll_tol
+        out["calibrated_gate"] = {"kv_ok": cal_ok, "nll_ok": nll_ok, "tightest": worst_gap[1]}
+        print(
+            f"[compare] calibrated gate (KV >= noise floor - {a.floor_margin} every layer; NLL delta CI95 upper <= "
+            f"{a.nll_tol}): KV {'PASS' if cal_ok else 'FAIL'} (tightest {worst_gap[1]}), NLL "
+            f"{'PASS' if nll_ok else 'FAIL'}"
         )
     print(f"[compare] L2 KV gate (1-PCC <= {a.budget}, PCC >= {a.floor} every layer/cache): {'PASS' if ok else 'FAIL'}")
     if a.json:

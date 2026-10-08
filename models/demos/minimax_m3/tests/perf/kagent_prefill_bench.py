@@ -278,7 +278,7 @@ def main():
 
         # ---- the timed request ---------------------------------------------------------------------------------
         times, enq = [], []
-        for it in range(iters + 1):
+        for it in range(iters + (0 if profile else 1)):  # profile: exactly one (profiled) request
             layer_stamps.clear()
             if profile:
                 state["profiling_chunk"] = True
@@ -522,8 +522,8 @@ def main():
                         Path(dump_dir) / "logits_top5.pt",
                     )
 
-            # ---- KV dump ---------------------------------------------------------------------------------------------
-            if dump_dir:
+            # ---- KV dump (BENCH_DUMP_KV=0: logits only) ---------------------------------------------------------
+            if dump_dir and os.getenv("BENCH_DUMP_KV", "1") == "1":
                 from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
 
                 os.makedirs(dump_dir, exist_ok=True)
