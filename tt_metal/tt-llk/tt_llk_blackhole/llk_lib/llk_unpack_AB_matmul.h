@@ -40,8 +40,8 @@ inline void _llk_unpack_AB_matmul_ttsync_restore_()
 {
     if (unpack_matmul_ttsync_on)
     {
-        TTI_RESOURCEDECL(2, 0x1FF, 13);
-        TTI_RESOURCEDECL(2, 0x1FF, 14);
+        TTI_RESOURCEDECL(1, 0x1FF, 13);
+        TTI_RESOURCEDECL(1, 0x1FF, 14);
         set_ttsync_enables<0>();
         tensix_sync();
         unpack_matmul_ttsync_on = 0;
@@ -266,6 +266,8 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  *                 poll and the memory-mapped writes; faster for streams of one or two tiles. The first such init of a
  *                 kernel turns Auto TTSync on; the kernel must define MATMUL_UNPACK_TTSYNC (see
  *                 @ref _llk_unpack_AB_matmul_ttsync_restore_), and @ref _llk_unpack_AB_matmul_ takes the same value.
+ *                 Every init waits for the thread to drain; an unpack config write after the init needs a new init,
+ *                 and while the form is on no RISC store may target a GPR that a MOP or replay uses.
  * @param transpose: Nonzero to enable within-face (16x16) transpose for SrcA.
  * @param ct_dim: Number of column tiles in the output block.
  * @param rt_dim: Number of row tiles in the output block.
@@ -346,12 +348,15 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
         if (!unpack_matmul_ttsync_on)
         {
             // the unpack MOP and replay never touch the address GPRs, so the RISC's stores need not wait for them
-            TTI_RESOURCEDECL(2, 0x19F, 13);
-            TTI_RESOURCEDECL(2, 0x19F, 14);
+            TTI_RESOURCEDECL(1, 0x19F, 13);
+            TTI_RESOURCEDECL(1, 0x19F, 14);
             set_ttsync_enables<TRACK_GPR | TRACK_TENSIX_INSTRUCTIONS>();
-            tensix_sync();
             unpack_matmul_ttsync_on = 1;
         }
+        // the RISC's config writes land before the first UNPACR, and no earlier op's TRISC_CFG stall can wait on a GPR
+        // store that Auto TTSync holds behind that op's own GPR instructions
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        tensix_sync();
     }
 }
 
