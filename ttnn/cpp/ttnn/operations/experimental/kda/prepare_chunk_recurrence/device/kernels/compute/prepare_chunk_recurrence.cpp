@@ -18,8 +18,8 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
@@ -152,8 +152,9 @@ inline void square_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     o.push_back(n);
 }
 
-// Mode and Iterations restrict the exponential to a row vector for row-replicated inputs (one iteration covers
-// row 0 of faces 0 and 1); the rest of each output tile is then unspecified.
+// Mode and Iterations restrict the exponential to a row vector for row-replicated inputs: VectorMode::R visits faces 0
+// and 1, and two of a face's eight SFPU iterations span its first rows, row 0 included. The rest of each output tile
+// is then unspecified.
 template <VectorMode Mode = VectorMode::RC, int Iterations = 8>
 inline void exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
@@ -206,26 +207,20 @@ inline void multiply_by_half(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) 
     o.push_back(n);
 }
 
-inline void negated_exponential_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
+inline void reciprocal_tiles(DataflowBuffer& in, DataflowBuffer& o, uint32_t n) {
     const uint32_t in_id = in.get_id();
     const uint32_t o_id = o.get_id();
 
     o.reserve_back(n);
     reconfig_data_format_srca(in_id);
     copy_init(in_id);
+    recip_tile_init();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
-        }
-        negative_tile_init();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            negative_tile(tile);
-        }
-        exp_tile_init();
-        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
-            exp_tile(tile);
+            recip_tile(tile);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -495,13 +490,13 @@ inline void prepare_gate_factors(
         centered_decay.pop_front(chunk_key_tiles);
         exponential_tiles(centered_g, centered_decay, chunk_key_tiles);
         centered_decay.wait_front(chunk_key_tiles);
-        negated_exponential_tiles(centered_g, centered_inverse_decay, chunk_key_tiles);
+        reciprocal_tiles(centered_decay, centered_inverse_decay, chunk_key_tiles);  // exp(anchor-G)
         centered_inverse_decay.wait_front(chunk_key_tiles);
         centered_g.pop_front(chunk_key_tiles);
     }
 
-    // exp(G_last/2) is row-replicated; only row 0 is computed and read.
-    exponential_tiles<VectorMode::R>(anchor_g, anchor_decay, chunk_key_tiles);
+    // exp(G_last/2) is row-replicated; only its leading rows are computed, and row 0 is read.
+    exponential_tiles<VectorMode::R, 2>(anchor_g, anchor_decay, chunk_key_tiles);
     anchor_decay.wait_front(chunk_key_tiles);
     anchor_g.pop_front(chunk_key_tiles);
 }
@@ -541,12 +536,34 @@ inline void prepare_scan_and_pairwise_inputs(
     pack_reconfig_data_format(kd.get_id(), k_beta_pairwise.get_id());
 }
 
+// exp(G_last) = exp(G_last / 2)^2, squared in FP32 from the anchor's rows, of which the transpose to dl reads row 0.
 template <uint32_t Ct, uint32_t Kt>
-inline void prepare_final_decay_rows(DataflowBuffer& g_last, DataflowBuffer& final_decay_rows) {
+inline void prepare_final_decay_rows(
+    DataflowBuffer& g_last, DataflowBuffer& anchor_decay, DataflowBuffer& final_decay_rows) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    const uint32_t anchor_id = anchor_decay.get_id();
+    const uint32_t rows_id = final_decay_rows.get_id();
 
-    // exp(G_last) is row-replicated; only row 0 is computed, which the transpose turns into dl's column 0.
-    exponential_tiles<VectorMode::R>(g_last, final_decay_rows, chunk_key_tiles);
+    final_decay_rows.reserve_back(chunk_key_tiles);
+    reconfig_data_format_srca(anchor_id);
+    copy_init(anchor_id);
+    square_tile_init();
+    for (uint32_t block_start = 0; block_start < chunk_key_tiles; block_start += max_dst_tiles) {
+        const uint32_t block_tiles =
+            (chunk_key_tiles - block_start < max_dst_tiles) ? chunk_key_tiles - block_start : max_dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            copy_tile(anchor_id, block_start + tile, tile);
+            square_tile(tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, rows_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    final_decay_rows.push_back(chunk_key_tiles);
     final_decay_rows.wait_front(chunk_key_tiles);
     g_last.pop_front(chunk_key_tiles);
 }
@@ -772,7 +789,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
 
         DataflowBuffer& final_decay_rows = workspace_0;
-        prepare_final_decay_rows<Ct, Kt>(g_last, final_decay_rows);
+        prepare_final_decay_rows<Ct, Kt>(g_last, anchor_decay, final_decay_rows);
 
         DataflowBuffer& k_pairwise = workspace_3;
         prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
