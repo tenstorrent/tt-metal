@@ -47,7 +47,8 @@ ttnn::Tensor layer_norm_pre_all_gather(
         kernel_config_val,
         program_config.value_or(ttnn::prim::LayerNormDefaultProgramConfig{}),
         std::nullopt,  // use_2d_core_grid
-        fast_and_approximate_mode);
+        fast_and_approximate_mode,
+        memory_config);
 }
 
 }  // namespace ttnn

@@ -215,6 +215,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
         "conversion.");
 
     auto grid_size = device->compute_with_storage_grid_size();
+    uint32_t max_cores_x = grid_size.x;
     uint32_t max_cores_y = grid_size.y;
     uint32_t tiles_per_core_y = Wt;
 
@@ -237,7 +238,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPostAllGatherWelfordProgramFac
 
     if (use_2d_kernel) {
         // 2D kernel layout: distribute work across cores in a 2D grid
-        cores_x = std::min(max_cores_y, num_tile_rows);
+        cores_x = std::min(max_cores_x, num_tile_rows);
         while (num_tile_rows % cores_x != 0 && cores_x > 1) {
             cores_x--;
         }

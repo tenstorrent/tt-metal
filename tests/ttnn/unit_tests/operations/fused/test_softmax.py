@@ -974,3 +974,19 @@ def test_softmax_large_kernel_mask_padded(device, shape, dim):
         ulp_threshold=15,
         check_ulp=True,
     )
+
+
+# The dim range check used size_t arithmetic and ran before the rank-0 exit, so a 0-D input always
+# threw with a wrapped dim, and an out-of-range dim was reported as 18446744073709551613.
+def test_softmax_rank_0_returns_one(device):
+    torch_input = torch.randn(())
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.to_torch(ttnn.softmax(tt_input, dim=-1))
+    assert tt_output.shape == torch.Size([])
+    assert tt_output.item() == 1.0
+
+
+def test_softmax_dim_out_of_range_reports_caller_dim(device, expect_error):
+    tt_input = ttnn.from_torch(torch.randn((1, 1, 32, 32)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, r"expected to be in range of \[-4, 3\], but got -7"):
+        ttnn.softmax(tt_input, dim=-7)

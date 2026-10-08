@@ -247,3 +247,39 @@ def test_pre_all_gather_wide_row_fp32_dest_acc_fits_l1(device, width, is_rmsnorm
     expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
     passing, pcc = check_with_pcc(expected, got, 0.99)
     assert passing, f"sum(x^2) mismatch at width {width}: {pcc}"
+
+
+# The interleaved pre-all-gather path used to drop memory_config, so an L1 request came back in DRAM.
+@pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+def test_pre_all_gather_interleaved_honors_memory_config(device, is_rmsnorm):
+    torch.manual_seed(0)
+    inp = torch.randn((1, 1, 32, 1024), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    op = ttnn.rms_norm_pre_all_gather if is_rmsnorm else ttnn.layer_norm_pre_all_gather
+    tt_stats = op(tt_inp, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    assert tt_stats.memory_config() == ttnn.L1_MEMORY_CONFIG
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    torch.testing.assert_close(got, expected, rtol=5e-2, atol=0)
+
+
+# The 2D pre-all-gather grid used to bound its X extent by grid.y. Column dispatch makes the grid taller
+# than wide, so num_tile_rows == grid.y used to place cores past the last column.
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_rms_norm_pre_all_gather_2d_grid_taller_than_wide(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.y <= grid.x:
+        pytest.skip(f"needs a compute grid taller than wide, got {grid.x}x{grid.y}")
+    torch.manual_seed(0)
+    inp = torch.randn((1, 1, grid.y * 32, 2048), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_stats = ttnn.rms_norm_pre_all_gather(tt_inp, dtype=ttnn.bfloat16, use_2d_core_grid=True)
+
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    torch.testing.assert_close(got, expected, rtol=5e-2, atol=0)
