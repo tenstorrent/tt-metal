@@ -524,6 +524,12 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
         // because `if constexpr` cannot suppress name lookup.
         compute_defines_map["REDUCE_FPU_NEGATE"] = "1";
     }
+    // Every SFPU call of reduce.cpp follows copy_tile, an unpack to DEST or SFPU work, and loads before it stores, so
+    // with #58821's opt-in the SFPU start spaces its first DEST load with a NOP instead of draining the FPU.
+    if (!rm_path && !operation_attributes.negate && is_sfpu_reduce &&
+        (a.dtype() != DataType::FLOAT32 || fp32_sfpu_reduce) && device.arch() == tt::ARCH::BLACKHOLE) {
+        compute_defines_map["SFPU_START_AFTER_COPY"] = "1";
+    }
 
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t ht_per_core_group) {
         Group<DFBBinding> dfb_bindings;
