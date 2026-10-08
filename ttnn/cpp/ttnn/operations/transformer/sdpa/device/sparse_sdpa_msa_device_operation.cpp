@@ -14,6 +14,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <algorithm>
 #include <bit>
 
@@ -142,11 +143,10 @@ void SparseSDPAMsaOperation::validate_kv_cache_request(const SparseSDPAMsaParams
     TT_FATAL(
         kv.slots > 0,
         "sparse_sdpa_msa: kv_cache_blocks={} but no L1 is left for one {} B K+V block slot ({} B free after the "
-        "op's own CBs and {} B slack)",
+        "op's own CBs)",
         attrs.kv_cache_blocks.value(),
         kv.block_bytes,
-        kv.free_l1,
-        sparse_sdpa_msa::KV_CACHE_L1_SLACK_BYTES);
+        kv.free_l1);
 }
 
 void SparseSDPAMsaOperation::validate_on_program_cache_miss(
@@ -332,20 +332,24 @@ SparseSDPAMsaOperation::KvCachePlan SparseSDPAMsaOperation::resolve_kv_cache(
     if (!attrs.kv_cache_blocks.has_value() || plan.block_bytes == 0) {
         return plan;
     }
-    uint64_t base_bytes = 0;
-    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
-        base_bytes += static_cast<uint64_t>(s.page_size) * s.num_pages;
-    }
-    // Free L1 for the slots: [CB base, lowest live L1 buffer) minus the base CBs and the slack. L1 buffers fill the
-    // interleaved-L1 bank top-down, so its end (not l1_size_per_core(), which also spans L1_SMALL) is the bound
-    // when nothing is live. Anything this mesh-level view misses, e.g. a HYBRID allocator's per-device buffers,
-    // trips the CB/buffer overlap check at program launch, which fails rather than corrupts.
+    // Free L1 for the slots: [CB base, lowest live L1 buffer) minus the base CBs and the slot queue, each rounded up
+    // to the CB placement alignment as the program allocator does; the cache CBs are whole tiles, already aligned.
+    // L1 buffers fill the interleaved-L1 bank top-down, so its end (not l1_size_per_core(), which also spans
+    // L1_SMALL) is the bound when nothing is live. Anything this mesh-level view misses, e.g. a HYBRID allocator's
+    // per-device buffers, trips the CB/buffer overlap check at program launch, which fails rather than corrupts.
+    // No slot fitting selects the streamed kernels; they need the same L1 as one slot, so that program fails at
+    // launch exactly where the cache-off op would.
     auto* device = t.q.device();
+    const uint64_t cb_align = device->allocator()->get_alignment(tt::tt_metal::BufferType::DRAM);
+    uint64_t base_bytes = tt::align(
+        static_cast<uint64_t>(sparse_sdpa_msa::SLOT_PAGE_BYTES) * sparse_sdpa_msa::KV_CACHE_SLOT_DEPTH_MAX, cb_align);
+    for (const CbSpec& s : base_cbs(g, attrs.causal_enabled(), /*block_cache_serves_kv=*/true)) {
+        base_bytes += tt::align(static_cast<uint64_t>(s.page_size) * s.num_pages, cb_align);
+    }
     const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const uint64_t l1_end = l1_base + device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
     const uint64_t l1_top = std::min<uint64_t>(device->lowest_occupied_compute_l1_address().value_or(l1_end), l1_end);
-    const uint64_t reserved = base_bytes + sparse_sdpa_msa::KV_CACHE_L1_SLACK_BYTES;
-    plan.free_l1 = l1_top > l1_base + reserved ? l1_top - l1_base - reserved : 0;
+    plan.free_l1 = l1_top > l1_base + base_bytes ? l1_top - l1_base - base_bytes : 0;
     const uint32_t n_fit =
         static_cast<uint32_t>(std::min<uint64_t>(plan.free_l1 / plan.block_bytes, sparse_sdpa_msa::KV_CACHE_SLOTS_MAX));
     const uint32_t requested = attrs.kv_cache_blocks.value();

@@ -232,17 +232,16 @@ def test_msa_native_kv_cache_program_cache(device):
 
 @run_for_blackhole()
 def test_msa_native_kv_cache_no_room(device, expect_error):
-    # L1 pinned so the op's own CBs fit but not one more block: auto silently runs the streamed kernels (the same
-    # program as cache-off, so no new program-cache entry) and an explicit slot count raises, on a hit as well.
+    # L1 pinned so no slot fits: an explicit slot count raises at validation, on a program-cache hit as well (the
+    # request resolves to the streamed program warmed below). auto resolves to that same program, which needs the
+    # same L1 as one slot, so there is no headroom at which only the streamed kernels fit.
     d, H, S, topk, nblk = _D, 16, 64, 16, 20
     T = nblk * BLK_KV
     q, k, v, indices = make_msa_inputs(H, 1, S, T, topk, d, causal=False, seed=19)
     device.clear_program_cache()
-    off = run_op_msa_native(q, k, v, indices, device)
+    run_op_msa_native(q, k, v, indices, device)
     info = ttnn._ttnn.reports.get_device_info(device)
-    # Per bank at this shape: the streamed layout needs the ~68 KiB base CBs + the 64 KiB bf16 block buffers =
-    # ~132 KiB; a single slot needs base + 32 KiB slack + a 64 KiB slot = ~164 KiB. 148 KiB sits midway.
-    headroom = 148 * 1024
+    headroom = 100 * 1024  # per bank: the ~68 KiB base CBs fit, a 64 KiB bf16 block slot does not
     tiles_per_bank = (info.l1_bank_size - headroom) // 2048
     pinned = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
@@ -252,9 +251,6 @@ def test_msa_native_kv_cache_no_room(device, expect_error):
         ttnn.L1_MEMORY_CONFIG,
     )
     try:
-        auto = run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=0)
-        assert device.num_program_cache_entries() == 1, "auto with no room must alias the cache-off program"
-        assert torch.equal(off, auto)
         with expect_error(RuntimeError, "no L1 is left"):
             run_op_msa_native(q, k, v, indices, device, kv_cache_blocks=1)
     finally:

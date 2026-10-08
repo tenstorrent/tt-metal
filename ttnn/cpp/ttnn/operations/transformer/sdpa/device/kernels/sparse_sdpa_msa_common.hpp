@@ -52,9 +52,5 @@ constexpr uint32_t COMPUTE_CT_ARGS = 31;
 // Per-core K/V block cache.
 constexpr uint32_t KV_CACHE_SLOTS_MAX = 64;      // bounds the reader's per-block residency scan
 constexpr uint32_t KV_CACHE_SLOT_DEPTH_MAX = 2;  // blocks the reader may run ahead of compute
-// Headroom kept below the lowest live L1 buffer when sizing the slots: per-CB alignment rounding plus a small L1
-// tensor allocated between program creation and launch. Sized empirically on the MiniMax-M3 (2,4) shape; too small
-// shows up as the launch-time CB region check failing, never as corruption.
-constexpr uint32_t KV_CACHE_L1_SLACK_BYTES = 32 * 1024;
 
 }  // namespace sparse_sdpa_msa
