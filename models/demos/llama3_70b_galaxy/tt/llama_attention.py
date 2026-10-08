@@ -1043,6 +1043,97 @@ class TtLlamaAttention(LightweightModule):
 
         return dense_out_reduced
 
+    def _qwen_local_q_setup(self, rot_mats, seq_len):
+        """Per-column helpers for _qwen_local_q_prep, built once per (seq_len, rot mats) and shared by all layers."""
+        cache = self.tt_ccl.__dict__.setdefault("_qwen_local_q_cache", {})
+        key = (seq_len, id(rot_mats[0]), id(rot_mats[1]))
+        if key in cache:
+            return cache[key]
+        cache.clear()
+        rows, cols = list(self.mesh_device.shape)
+        sl = seq_len // 8  # ring SDPA slice length (2 * ring_size slices); column c owns slices c and 7 - c
+        col_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, 0), mesh_shape=(rows, cols))
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+
+        def per_column_i32(values):
+            return ttnn.from_torch(
+                torch.tensor(values, dtype=torch.int32).reshape(-1),
+                dtype=ttnn.int32,
+                device=self.mesh_device,
+                mesh_mapper=col_mapper,
+            )
+
+        starts = (
+            per_column_i32([[0, 0, c * sl, 0] for c in range(cols)]),
+            per_column_i32([[0, 0, (2 * cols - 1 - c) * sl, 0] for c in range(cols)]),
+        )
+        ends_q = ttnn.from_torch(
+            torch.tensor([1, self.n_local_heads, seq_len, self.head_dim], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+        )
+        ends_rot = ttnn.from_torch(
+            torch.tensor([1, 1, seq_len, self.head_dim], dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+        )
+        # Local Q [1, H, 2*sl, D] viewed as 2*H blocks of sl rows (block 2h + j = head h, local slice j) is written
+        # into the full Q buffer viewed as 8*H blocks (block 8h + s = head h, slice s).
+        page_table = ttnn.from_torch(
+            torch.tensor(
+                [
+                    [8 * h + (c if j == 0 else 2 * cols - 1 - c) for h in range(self.n_local_heads) for j in range(2)]
+                    for c in range(cols)
+                ],
+                dtype=torch.int32,
+            ),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=col_mapper,
+        )
+        rot_local = []
+        for rot in rot_mats[:2]:
+            if rot.shape[-2] != seq_len:
+                rot = ttnn.slice(rot, [0, 0, 0, 0], [1, 1, seq_len, self.head_dim])
+            parts = [ttnn.slice(rot, starts=st, ends=ends_rot, slice_dim=2, num_devices=8) for st in starts]
+            rot_local.append(ttnn.concat(parts, dim=2))
+            for t in parts:
+                ttnn.deallocate(t)
+        cache[key] = (starts, ends_q, page_table, rot_local)
+        return cache[key]
+
+    def _qwen_local_q_prep(self, q_pre_bf8, rot_mats, seq_len):
+        """Q prep on this column's two ring-SDPA slices only; returns the full bf8 Q buffer (other slices unused)."""
+        starts, ends_q, page_table, (cos_local, sin_local) = self._qwen_local_q_setup(rot_mats, seq_len)
+        sl = seq_len // 8
+        parts = [ttnn.slice(q_pre_bf8, starts=st, ends=ends_q, slice_dim=2, num_devices=8) for st in starts]
+        q_local = ttnn.concat(parts, dim=2)
+        for t in parts:
+            ttnn.deallocate(t)
+        q_local_bf16 = ttnn.typecast(q_local, dtype=ttnn.bfloat16)
+        ttnn.deallocate(q_local)
+        if self.qk_norm:
+            q_local_bf16 = self.q_norm(q_local_bf16, mode="prefill")
+        q_local_rot = ttnn.experimental.rotary_embedding_llama(
+            q_local_bf16,
+            cos_local,
+            sin_local,
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+        )
+        ttnn.deallocate(q_local_bf16)
+        q_local_8b = ttnn.typecast(q_local_rot, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(q_local_rot)
+        ttnn.experimental.paged_fill_cache(
+            ttnn.reshape(q_pre_bf8, [8 * self.n_local_heads, 1, sl, self.head_dim]),
+            ttnn.reshape(q_local_8b, [1, 1, 2 * self.n_local_heads * sl, self.head_dim]),
+            page_table,
+            batch_idx=0,
+        )
+        ttnn.deallocate(q_local_8b)
+        return q_pre_bf8
+
     def forward_prefill(
         self,
         x_11SH,
@@ -1150,22 +1241,36 @@ class TtLlamaAttention(LightweightModule):
         # Rotary embeddings
         ###
 
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
-            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-            ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
-
-        if self.qk_norm:
-            q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
-
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
+        # Qwen long prefill on Wormhole: ring SDPA on mesh column c reads only Q slices c and 7-c of 8, so Q prep
+        # (typecast, q_norm, RoPE, typecast) runs on those two S/8 slices and is written back into the bf8 Q buffer.
+        use_local_q_prep = (
+            self.is_qwen
+            and self.use_prefetcher
+            and not self.is_blackhole
+            and batch_size == 1
+            and seq_len > 8192
+            and (chunk_start_idx is None or chunk_start_idx == 0)
+            and q_heads_1QSD_pre_rot.dtype == ttnn.bfloat8_b
         )
-        ttnn.deallocate(q_heads_1QSD_pre_rot)
+        if use_local_q_prep:
+            q_heads_1QSD_8b = self._qwen_local_q_prep(q_heads_1QSD_pre_rot, rot_mats, seq_len)
+        else:
+            if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+                q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
+                q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
+                ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
+
+            if self.qk_norm:
+                q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+
+            q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
+                q_heads_1QSD_pre_rot,
+                rot_mats[0],
+                rot_mats[1],
+                self.transformation_mats["prefill"],
+                is_decode_mode=False,
+            )
+            ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
@@ -1233,8 +1338,9 @@ class TtLlamaAttention(LightweightModule):
             )
 
         # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        if not use_local_q_prep:
+            q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+            ttnn.deallocate(q_heads_1QSD)
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
