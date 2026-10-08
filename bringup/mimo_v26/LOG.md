@@ -2486,3 +2486,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_specdev_u4_17feb8f9173.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/spec_dev.py, models/demos/blackhole/mimo_v26/tt/spec.py, models/demos/blackhole/mimo_v26/tt/dflash.py, models/demos/blackhole/mimo_v26/tt/verify_dev.py, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py, models/demos/blackhole/mimo_v26/tt/layer.py, models/demos/blackhole/mimo_v26/tt/model.py, models/demos/blackhole/mimo_v26/tt/weights.py, models/demos/blackhole/mimo_v26/tt/moe_ring.py, models/demos/blackhole/mimo_v26/tt/moe_decode.py, models/demos/blackhole/mimo_v26/tt/decode.py, models/demos/blackhole/mimo_v26/tt/generator.py, models/demos/blackhole/mimo_v26/tt/prefill.py
 - data: {"n":28,"identical":28,"strict_identical":24,"near_tie_divergent":4,"max_divergence_gap_logits":0.25,"by_u":{"U1":{"n":4,"strict":4,"round_ms":61.49,"accepted":4.395,"tok_s_user":71.5,"plain_ms":32.04},"U2":{"n":8,"strict":7,"round_ms":72.89,"accepted":4.601,"tok_s_user":63.1,"plain_ms":39.47},"U4":{"n":16,"strict":13,"round_ms":86.88,"accepted":4.425,"tok_s_user":50.9,"plain_ms":47.87}}}
+
+## E261008-0534-62c
+- date: 2026-10-08T05:34:31
+- commit: 17feb8f9173
+- branch: ssinghal/mimo-regate
+- host: 30,40,43,44,47,48
+- track: handoff
+- status: verified
+- claim: regate round 2 handoff: measured commit 17feb8f9173 (no merges after); all required gates except first_token PASS plus spec_exact (28/28 incl. 4 near-tie divergences, gaps <=0.25); gsm8k 113/128 on two hosts, determinism identical per host and across hosts; decode 63.4 ms (dedicated) / 75.0 ms full-occupancy U=32; memory min free 2.698 GiB after first decode at B=16/64k. Logs rg2_*_17feb8f9173 in /mnt/tt-data/ssinghal/mimo-logs. Caveat: decode_phase test uses the legacy non-ring MoE path.
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/rg2_gsm_h48_17feb8f9173.jsonl
+- paths: models/demos/blackhole/mimo_v26/tests/harness.py
