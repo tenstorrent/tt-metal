@@ -138,8 +138,10 @@
   # No #44767 exclusions remain: Top32RmDevPipelineCompletes fixed by #46344; the 3 FP8e4m3
   # tests (TensixComputePackUntilizeFp8e4m3/TensixComputeUnpackTilizeFp8e4m3/TensixFp8e4m3ToFp8e4m3)
   # fixed by #49909 (BH packer input format Float16) + #49953 (dead unpacker writes).
+  # SDPA tests are gated by the LLK merge gate (LLK SD blackhole); excluded here to keep the
+  # suite under the 12 min timeout.
   cmd: |
-    ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+    ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.Sdpa*'
     ./build/test/tt_metal/unit_tests_sfpi
   skus:
     wh_n150_civ2:
@@ -331,9 +333,9 @@
 
 # --- LLK Tests (SD) ---
 - name: runtime_sd_llk
-  # No #44767 exclusions remain (see runtime_llk above).
+  # No #44767 exclusions remain; SDPA tests run in the LLK merge gate (see runtime_llk above).
   cmd: |
-    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_llk --gtest_filter='-LLKBlackholeSingleCardFixture.Sdpa*'
   skus:
     wh_n150_civ2:
       timeout: 12
