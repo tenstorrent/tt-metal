@@ -176,6 +176,22 @@ LLK_ZONE_HELPER_ATTR __attribute__((noipa, section(".text.llk_zone.record"))) in
     write_entry_at(EntryType::ZONE_END, id16, end_timestamp);
 }
 
+#if defined(LLK_ZONE_EARLY_RESERVE)
+// Experiment: the reserve call runs before the zone's barrier rendezvous, so after the release (cold instruction cache) the
+// zone start reads the clock with no helper call; a change to the helper cannot move what happens in the window.
+// 0: no early reserve (zones opened by ZONE_SCOPED alone), 1: reserved, 2: buffer full
+inline std::uint32_t early_state = 0;
+
+__attribute__((always_inline)) inline void zone_open_early()
+{
+    early_state = is_buffer_full() ? 2 : 1;
+    if (early_state == 1)
+    {
+        zone_reserve();
+    }
+}
+#endif
+
 template <std::uint16_t id16, bool LOOP_PAD = false>
 class zone_scoped
 {
@@ -192,11 +208,24 @@ public:
     inline __attribute__((always_inline)) zone_scoped()
     {
         ckernel::fence_compiler();
+#if defined(LLK_ZONE_EARLY_RESERVE)
+        const std::uint32_t early = early_state;
+        early_state               = 0;
+        if (early == 1 || (early == 0 && !is_buffer_full()))
+        {
+            is_opened = true;
+            if (early == 0)
+            {
+                zone_reserve();
+            }
+            start_timestamp = ckernel::read_wall_clock();
+#else
         if (!is_buffer_full())
         {
             is_opened = true;
             zone_reserve();
             start_timestamp = ckernel::read_wall_clock();
+#endif
 #if defined(LLK_ZONE_OLD) // experiment: the start record goes to L1 inside the window, as before df14044db9e
             write_entry_at(EntryType::ZONE_START, id16, start_timestamp);
             reserved_words_count -= ZONE_START_WORDS;

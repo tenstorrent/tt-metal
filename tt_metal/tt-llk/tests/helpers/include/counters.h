@@ -701,7 +701,12 @@ inline void read_last_zone()
 #endif
 
 // One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
-#if defined(LLK_PROFILER)
+#if defined(LLK_PROFILER) && defined(LLK_ZONE_EARLY_RESERVE)
+#define START_PERF_MEASURE(zone_name) \
+    llk_profiler::zone_open_early();  \
+    MEASURE_PERF_COUNTERS(zone_name)  \
+    ZONE_SCOPED(zone_name)
+#elif defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)

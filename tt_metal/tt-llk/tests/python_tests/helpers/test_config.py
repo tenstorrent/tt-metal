@@ -1438,6 +1438,10 @@ class TestConfig:
             os.environ.get("LLK_ISO_SETTLE", "0")
         ):  # experiment: measured thread waits before an isolate zone
             OPTIONS_COMPILE += f"-DLLK_ISO_SETTLE={int(os.environ['LLK_ISO_SETTLE'])} "
+        if (
+            os.environ.get("LLK_ZONE_EARLY_RESERVE") == "1"
+        ):  # experiment: zone reserve before the barrier rendezvous
+            OPTIONS_COMPILE += "-DLLK_ZONE_EARLY_RESERVE "
         if os.environ.get("LLK_FN_NOPS_FIXED_HELPERS") == "1":  # experiment
             OPTIONS_COMPILE += "-DLLK_FN_NOPS_FIXED_HELPERS "
         # experiment: TRISC branch predictor disable mask, written every boot (default 0 = all on)
