@@ -144,10 +144,10 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
             - None: minimum across all axes.
 
     Returns:
-        int: The number of available links. 0 for a single-device mesh.
+        int: The number of available links. 1 for a single-device mesh.
     """
     if cluster_axis not in (None, 0, 1):
         raise ValueError(f"Unsupported cluster_axis: {cluster_axis}")
     if mesh_device.get_num_devices() == 1:
-        return 0
+        return 1
     return ttnn.get_num_links(mesh_device, cluster_axis)

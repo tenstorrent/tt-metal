@@ -66,14 +66,14 @@ def test_get_num_links_follows_fabric_not_device_count(native_get_num_links, ccl
 
 
 @pytest.mark.parametrize("ccl_module", [tt_transformers_ccl, common_tt_ccl])
-def test_get_num_links_single_device_has_no_links(native_get_num_links, ccl_module):
+def test_get_num_links_single_device_returns_one(native_get_num_links, ccl_module):
     """
-    Validates that the CCL get_num_links function returns 0 for a single-device mesh.
+    Validates that the CCL get_num_links function returns 1 for a single-device mesh.
     """
     mesh_device = FakeMeshDevice(num_devices=1)
 
-    assert ccl_module.get_num_links(mesh_device) == 0
-    assert ccl_module.get_num_links(mesh_device, cluster_axis=1) == 0
+    assert ccl_module.get_num_links(mesh_device) == 1
+    assert ccl_module.get_num_links(mesh_device, cluster_axis=1) == 1
     assert native_get_num_links == []
 
 
