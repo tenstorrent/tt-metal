@@ -314,6 +314,83 @@ FORCE_INLINE void reduce_split_row(
         transpose_dest<true, false>(tiles_per_sequence + tile);
     }
 }
+
+// A K = 2048 row of more than 32 chunks: its first segment split as above (tiles 0 to 5, the later segments' tiles 4 to
+// 7 still free), split once into the unfused accumulator, then the later segments as reduce_segmented_row runs them.
+template <uint32_t K>
+FORCE_INLINE void reduce_split_first_segment_row(
+    CircularBuffer& input, uint32_t indices_cb, uint32_t num_chunks, uint32_t tail_elements) {
+    static_assert(K == 2048, "the segmented body is K = 2048's");
+    constexpr uint32_t tiles_per_sequence = 2;
+    constexpr uint32_t segment_capacity = 32;
+    constexpr uint32_t accumulator_slot = 0;
+    constexpr uint32_t segment_slot = 2 * tiles_per_sequence;
+    constexpr uint32_t chunk_slot = segment_slot + tiles_per_sequence;
+    const uint32_t input_cb = input.get_cb_id();
+#ifdef TRISC_UNPACK
+    for (uint32_t chunk = 0; chunk < segment_capacity; ++chunk) {
+        input.wait_front(tiles_per_sequence);
+        if (chunk == 0) {
+            topk_xl_copy_tile_init(input_cb);
+        }
+        topk_xl_copy_tile<K>(input_cb, 0, 0, K);
+        input.pop_front(tiles_per_sequence);
+        llk_unpack_set_srcb_dummy_valid();  // the local sort's transposes
+        if (chunk > 0) {
+            llk_unpack_set_srcb_dummy_valid();  // the rebuild's
+        }
+    }
+#endif
+#ifdef TRISC_MATH
+    _llk_math_eltwise_unary_sfpu_init_once_();
+    topk_large_indices_split::math_row<K, false>(segment_capacity, [&](uint32_t chunk, uint32_t tile) {
+        if (chunk == 0) {
+            topk_xl_copy_tile_init(input_cb);
+        }
+        topk_xl_copy_tile<K>(input_cb, tile, 0, K);
+    });
+#endif
+#ifdef TRISC_PACK
+    topk_large_indices_split::pack_row<K, false>(segment_capacity, [] {}, [] {
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_init_();
+        ckernel::sfpu::_topk_xl_split_begin_(accumulator_slot);
+        ckernel::sfpu::_topk_xl_separate_indices_row_major_global_base_<K>(0);
+        TTI_SETRWC(ckernel::p_setrwc::CLR_NONE, 0, 0, 0, 0, ckernel::p_setrwc::SET_D);
+    });
+#endif
+
+    const uint32_t num_segments = (num_chunks + segment_capacity - 1) / segment_capacity;
+    for (uint32_t segment = 1; segment < num_segments; ++segment) {
+        const uint32_t first_chunk = segment * segment_capacity;
+        const uint32_t end_chunk =
+            first_chunk + segment_capacity < num_chunks ? first_chunk + segment_capacity : num_chunks;
+        const uint32_t last_chunk = end_chunk - 1;
+        const uint32_t first_elements = first_chunk + 1 == num_chunks ? tail_elements : K;
+        // The pack thread left its own SFPU and copy state: the first segment after it starts with the full init.
+        if (segment == 1) {
+            sort_fused_chunk<K, true>(input, segment_slot, first_elements, false, 0);
+        } else {
+            sort_fused_chunk<K, false>(input, segment_slot, first_elements, false, 0);
+        }
+        if (first_chunk == last_chunk) {
+            topk_xl_rebuild<K, true>(segment_slot, true);
+        } else {
+            for (uint32_t chunk = first_chunk + 1; chunk <= last_chunk; ++chunk) {
+                const uint32_t active_elements = chunk + 1 == num_chunks ? tail_elements : K;
+                sort_fused_chunk<K, false>(input, chunk_slot, active_elements, true, chunk - first_chunk);
+                topk_xl_merge<K, true>(segment_slot);
+                topk_xl_rebuild<K, true>(segment_slot, chunk == last_chunk);
+            }
+        }
+        topk_xl_separate_indices_row_major_global_init();
+        topk_xl_separate_indices_row_major_global_base<K>(segment_slot, segment * (segment_capacity * K));
+        topk_xl_init<K, false>();
+        topk_xl_merge<K, false>(accumulator_slot);
+        topk_xl_rebuild<K, false>(accumulator_slot, false);
+    }
+    mark_neginf_indices<K>(accumulator_slot);
+    materialize_index_rank_order<K>(accumulator_slot, indices_cb);
+}
 #endif
 
 }  // namespace
@@ -359,16 +436,24 @@ void kernel_main() {
     CircularBuffer indices(indices_cb);
 
 #ifdef ARCH_BLACKHOLE
-    // K = 512 rows of either body and K = 2048 rows of up to 32 chunks: a K = 2048 row's later segments need Dst tiles
-    // 4 to 7.
+    // K = 512 rows of either body and K = 2048 rows of two or more chunks; a K = 2048 row longer than 32 chunks splits
+    // its first segment only, since the later segments need Dst tiles 4 to 7.
     if constexpr (multi_chunk_rows && K != 1024) {
-        if (num_chunks >= 2 && (K == 512 || num_chunks <= 32)) {
+        if (num_chunks >= 2) {
             MATH((topk_large_indices_split::start()));
             PACK((topk_large_indices_split::wait_start()));
             for (uint32_t row = 0; row < num_rows; ++row) {
                 tile_regs_acquire();
-                reduce_split_row<K, body_mode == ComputeBodyMode::Classic>(
-                    input, indices_cb, num_chunks, tail_elements);
+                if constexpr (K == 2048 && body_mode == ComputeBodyMode::FusedSegmented) {
+                    if (num_chunks > 32) {
+                        reduce_split_first_segment_row<K>(input, indices_cb, num_chunks, tail_elements);
+                    } else {
+                        reduce_split_row<K, false>(input, indices_cb, num_chunks, tail_elements);
+                    }
+                } else {
+                    reduce_split_row<K, body_mode == ComputeBodyMode::Classic>(
+                        input, indices_cb, num_chunks, tail_elements);
+                }
                 tile_regs_commit();
                 tile_regs_wait();
 
