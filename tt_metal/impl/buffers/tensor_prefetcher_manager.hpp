@@ -239,6 +239,9 @@ private:
     // Base (local DRISC L1) of this prefetcher's per-CQ signal slots; uniform
     // across all sender cores. Carved at the front of the kernel working region.
     uint32_t cq_signal_l1_addr_ = 0;
+    // Base (local DRISC L1) of the kTensorPrefetcherSelectorScratchBytes a selector page is read into;
+    // uniform across all sender cores.
+    uint32_t selector_scratch_l1_addr_ = 0;
     // Distance between consecutive signal slots. The slots hold one uint32 each but are
     // spaced a full L1 alignment apart: each is the destination of its own dispatcher
     // write, and a dispatch write only lands on an L1-aligned address. Packed 4 bytes

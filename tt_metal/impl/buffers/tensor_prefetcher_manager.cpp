@@ -811,6 +811,7 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 ordinary_mpfe_weight,
                 static_cast<uint32_t>(dynamic_mpfe_weighting),
                 static_cast<uint32_t>(mpfe_policy.has_value()),
+                selector_scratch_l1_addr_,
             };
 
             // WATCHER_NOINLINE only takes effect in watcher builds: it lets the compiler outline the
@@ -916,7 +917,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
         "DRISC L1 kernel region ({} B) too small for the prefetcher ping-pong stage",
         kernel_region_size);
     // Carve the per-core DRISC L1 kernel working region into:
-    //   [socket_config | socket_data FIFO | stage ring].
+    //   [cq signal slots | socket_config | socket_data FIFO | selector scratch | stage ring].
     // Each DRAM core hosts exactly one H2DSocket recv (for its own sender), so
     // the layout is uniform across all DRAM cores. The MeshBuffer L1 allocator
     // can't reach DRAM-core L1, so we hand the addresses to the H2DSocket
@@ -937,7 +938,11 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     cq_signal_l1_addr_ = align_up(kernel_region_base, l1_alignment);
     socket_config_l1_addr_ = align_up(cq_signal_l1_addr_ + cq_signal_bytes, pcie_alignment_for_layout);
     socket_data_l1_addr_ = align_up(socket_config_l1_addr_ + socket_config_bytes, pcie_alignment_for_layout);
-    stage_ring_base_ = align_up(socket_data_l1_addr_ + socket_data_bytes, l1_alignment);
+    // The selector scratch takes a NoC read from DRAM, which lands at the same offset within a
+    // DRAM-alignment word as its source, and selector pages start DRAM-aligned.
+    const uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
+    selector_scratch_l1_addr_ = align_up(socket_data_l1_addr_ + socket_data_bytes, dram_alignment);
+    stage_ring_base_ = align_up(selector_scratch_l1_addr_ + kTensorPrefetcherSelectorScratchBytes, l1_alignment);
     const uint32_t kernel_region_end = kernel_region_base + kernel_region_size;
     TT_FATAL(
         stage_ring_base_ < kernel_region_end,
