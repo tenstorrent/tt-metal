@@ -180,7 +180,6 @@ def _cached_gather_index(device, resident, phased, brick, front, cut_h, cut_w) -
 
 
 _BRICK_GATHER_KERNEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "na_brick_gather.cpp")
-_BRICK_BYTES = SITES_PER_BRICK * 64 * 2
 
 
 def direct_rephase_enabled() -> bool:
@@ -190,11 +189,21 @@ def direct_rephase_enabled() -> bool:
     return os.environ.get("DIFFVAE_NA_DIRECT_REPHASE") == "1"
 
 
-def _brick_gather(mode: int, source: ttnn.Tensor, shape, layout, bricks: int, table: ttnn.Tensor | None = None):
+def _brick_gather(
+    mode: int,
+    source: ttnn.Tensor,
+    shape,
+    layout,
+    bricks: int,
+    channels: int,
+    parts: int,
+    table: ttnn.Tensor | None = None,
+):
     """Run ``kernels/na_brick_gather.cpp`` over ``bricks`` output bricks on every core of every chip.
 
     ``mode`` 0: tiled ``source`` -> row-major brick sticks. ``mode`` 1: brick-stick ``source`` ->
-    tiled bricks, output site ``i`` of brick ``o`` taken from source site ``table[o][i]``.
+    tiled bricks, output site ``i`` of brick ``o`` taken from source site ``table[o][i]``. A stick
+    is ``parts`` row-major pages (see ``_halo_split``).
     """
     device = source.device()
     output = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.bfloat16, layout, device, ttnn.DRAM_MEMORY_CONFIG)
@@ -208,7 +217,7 @@ def _brick_gather(mode: int, source: ttnn.Tensor, shape, layout, bricks: int, ta
         + ttnn.TensorAccessorArgs(table if table is not None else output).get_compile_time_args()
     )
     table_addr = table.buffer_address() if table is not None else 0
-    scratch_bytes = 2 * _BRICK_BYTES + SITES_PER_BRICK * 4
+    scratch_bytes = 2 * SITES_PER_BRICK * channels * 2 + SITES_PER_BRICK * 4
     kernels, cbs, start, slot = [], [], 0, 0
     args = [ttnn.RuntimeArgs(), ttnn.RuntimeArgs()]
     for y in range(grid.y):
@@ -224,7 +233,7 @@ def _brick_gather(mode: int, source: ttnn.Tensor, shape, layout, bricks: int, ta
                 kernel_source=_BRICK_GATHER_KERNEL,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=cores,
-                compile_time_args=[mode, risc] + accessor,
+                compile_time_args=[mode, risc, channels, parts] + accessor,
                 runtime_args=args[risc],
                 config=config,
             )
@@ -736,7 +745,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
             f"stick={SITES_PER_BRICK * channels // parts * grid5.element_size()}B",
         )
         with timing_tree.span(device, f"{lane}: halo-exchange", category=timing_tree.ALLGATHER, deep=True):
-            split = ttnn.reshape(grid5, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
+            split_shape = (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts)
+            split = grid5 if tuple(grid5.shape) == split_shape else ttnn.reshape(grid5, split_shape)
             if h_axis is not None:
                 # H first, so the W exchange below carries the neighbours' H halo rows: the corners.
                 halo_h_br = halo_h // brick[1]
@@ -907,10 +917,18 @@ def neighborhood_attention_3d_bricked_w_sharded(
         front, low_h, low_w = key_phase_low
         cut_h, cut_w = halo_h - low_h, halo - low_w
         owned_bricks = t_br * h_br * w_br
+        parts = _halo_split(SITES_PER_BRICK * channels, 2)
         with timing_tree.span(device, f"{lane}: tiles-to-sticks", category=timing_tree.RESHAPE, deep=True):
             band = ttnn.reshape(tensor, (1, 1, owned_bricks * SITES_PER_BRICK, channels))
+            # Written straight in the exchange's sub-column shape, so the exchange reshapes nothing.
             grid5 = _brick_gather(
-                0, band, (batch, t_br, h_br, w_br, SITES_PER_BRICK * channels), ttnn.ROW_MAJOR_LAYOUT, owned_bricks
+                0,
+                band,
+                (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts),
+                ttnn.ROW_MAJOR_LAYOUT,
+                owned_bricks,
+                channels,
+                parts,
             )
         exchanged = exchange(grid5, lane, sticks=True)
         ttnn.deallocate(grid5)
@@ -923,6 +941,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
                 (batch, 1, phased_bricks * SITES_PER_BRICK, channels),
                 ttnn.TILE_LAYOUT,
                 phased_bricks,
+                channels,
+                parts,
                 table=index,
             )
         ttnn.deallocate(exchanged)
@@ -935,15 +955,17 @@ def neighborhood_attention_3d_bricked_w_sharded(
             direct_rephase_enabled()
             and widen is widened_bricked
             and batch == 1
-            and channels == 64
-            and _halo_split(SITES_PER_BRICK * channels, 2) == 1
-            and key.dtype == ttnn.bfloat16
-            and key.layout == ttnn.TILE_LAYOUT
-            and key.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            and channels % 32 == 0
+            and SITES_PER_BRICK % _halo_split(SITES_PER_BRICK * channels, 2) == 0
         )
 
         def widen(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
-            if direct:
+            if (
+                direct
+                and tensor.dtype == ttnn.bfloat16
+                and tensor.layout == ttnn.TILE_LAYOUT
+                and tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            ):
                 return direct_rephased(tensor, lane)
             return rephased(exchange_only(tensor, lane), lane)
 
