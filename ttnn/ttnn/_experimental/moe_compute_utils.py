@@ -403,20 +403,16 @@ def auto_output_width_shard_dim(
     hidden_size: int,
     tile_size: int = 32,
     max_dim: int = 4,
-    matmul_ring_size: int | None = None,
 ) -> int:
     """Largest divisor d of (hidden_size // tile_size) with d <= max_dim.
 
-    When ``matmul_ring_size`` is set, also require ``matmul_ring_size % d == 0`` so the
-    chosen width parallelism divides the matmul ring evenly. This matches the op's
-    ring-aware auto-derivation in ``moe_compute_device_operation.cpp::invoke()``.
-
-    Use ``effective_matmul_ring_size(mesh_device, bh_ring_size)`` for ``matmul_ring_size``
-    when preparing test tensors so host layout matches the device op.
+    Matches the op's auto-derivation in ``moe_compute_device_operation.cpp::invoke()``. The
+    matmul ring size does not constrain d: a ring core whose width slice straddles combine
+    columns signals each of them.
     """
     hidden_tiles = hidden_size // tile_size
     for d in range(max_dim, 0, -1):
-        if hidden_tiles % d == 0 and (matmul_ring_size is None or matmul_ring_size % d == 0):
+        if hidden_tiles % d == 0:
             return d
     return 1
 
