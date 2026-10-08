@@ -996,6 +996,7 @@ INPUT                  = tt_metal/hw/inc/api/compile_time_args.h \
                          tt_metal/hw/inc/api/compute/lcm.h \
                          tt_metal/hw/inc/api/compute/mask.h \
                          tt_metal/hw/inc/api/compute/reshuffle.h \
+                         tt_metal/hw/inc/api/compute/triangle_solve.h \
                          tt_metal/hw/inc/api/compute/binary_shift.h \
                          tt_metal/hw/inc/api/compute/binary_max_min.h \
                          tt_metal/hw/inc/api/compute/binary_bitwise_sfpu.h \

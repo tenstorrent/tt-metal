@@ -227,6 +227,7 @@ Data manipulation and processing
   where_tile
   addcmul_tile
   reshuffle_rows_tile
+  triangle_solve_tile
   typecast_tile
   dropout_tile
   rand_tile

@@ -21,6 +21,10 @@ This module is the leaf of that dependency: it must not import from golden_gener
 sfpu_domains.
 """
 
+# exp_with_base(x) = exp(EXP_WITH_BASE_SCALE * x), base e^0.5: EXP_WITH_BASE_SCALE_BF16
+# (and its fp32 form for exp_init) in sfpu_operations.h.
+EXP_WITH_BASE_SCALE = 0.5
+
 # Comparison ops (UnaryGt/Lt/Ge/Le/Eq/Ne) compare x against this.
 UNARY_COMP_THRESHOLD = 0.5
 
@@ -74,3 +78,7 @@ SOFTCAP_BETA = 5.0
 CLAMPED_SILU_GLU_LIMIT = 10.0
 SITU_GLU_BETA_GATE = 4.0
 SITU_GLU_BETA_UP = 25.0
+
+# rand's default interval [RAND_FROM, RAND_FROM + RAND_SCALE] (RAND_FROM_BITS / RAND_SCALE_BITS).
+RAND_FROM = 1.0
+RAND_SCALE = 2.0

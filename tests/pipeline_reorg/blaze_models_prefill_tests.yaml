@@ -35,8 +35,8 @@
 #   test_group: Group identifier for selecting multiple related tests at once.
 #   test_tags: Optional list of coarse selectors for workflow_dispatch, matched exactly and
 #              OR-ed with test_type / test_group. Two vocabularies in one list: the model a
-#              leg covers (kimi_k2_7, kimi_k3, glm_5_3, dsv4_flash, minimax_m3)
-#              and the unit under test (moe, gate, mla, hca, swa, sdpa, ccl, block, transformer,
+#              leg covers (kimi_k2_7, kimi_k3, glm_5_3, dsv4_flash, dsv4_pro, minimax_m3)
+#              and the unit under test (moe, gate, mla, hca, swa, csa, sdpa, ccl, block, transformer,
 #              kv_cache, dflash, mtp, runner, determinism). So `moe` runs every MoE leg and `kimi_k3`
 #              every K3 leg. Multiple tokens UNION, they do not intersect: `moe,kimi_k3` is every MoE
 #              leg plus every K3 leg, not the K3 MoE legs.
@@ -603,7 +603,7 @@
       timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
         test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP leg: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; the pretrained parametrization would skip and leave the leg green on random weights alone"; exit 1; }
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and (fused or pretrained)" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py -k "torus-xy-8x4 and not levels7 and not multiturn and (fused or pretrained)" -vvv --tb=short
       '
     )
 
@@ -709,13 +709,15 @@
 # * Each section runs in its own subshell under `timeout -k 2m <N>m`; a timeout is a FAIL.
 # * The first failed section ends the job with its exit code, and later sections report NOT RUN:
 #   nothing resets the devices between sections (tt-metal#57706).
-- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k"
+- name: "(DeepSeek-V4-Flash, DeepSeek-V4-Pro) HCA chunked accuracy 6k@5k + SWA chunked accuracy 55k@5k + teacher-forced block chunked accuracy 55k@5k + CSA chunked accuracy 13k@5k"
   fabric_profile: torus_xy
   cmd: |
     titles=(
       "(DeepSeek-V4-Flash) HCA chunked accuracy 6k@5k"
       "(DeepSeek-V4-Flash) SWA chunked accuracy 55k@5k"
       "(DeepSeek-V4) teacher-forced block chunked 55k@5k"
+      "(DeepSeek-V4-Flash) CSA chunked accuracy 13k@5k"
+      "(DeepSeek-V4-Pro) CSA chunked accuracy 13k@5k"
     )
     summary=""
     section_start() {
@@ -770,16 +772,36 @@
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Production-width chunked CSA with the real sparse top-k: 5120+5120+3000 actual tokens, fixed
+    # 5120 device width, and the variant's stock index_topk.
+    section_start 4
+    (
+      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "flash and 3chunk-production and torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
+    section_start 5
+    (
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "pro and 3chunk-production and torus-xy-8x4" -vvv --tb=short
+      '
+    ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
+    section_end 0
+
     finish
   test_type: dsv4_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
-  test_tags: [dsv4_flash, hca, swa, hca_chunked, swa_mixed, v4_block_chunked]
+  test_tags: [dsv4_flash, dsv4_pro, hca, swa, csa, hca_chunked, swa_mixed, v4_block_chunked, csa_chunked, csa_chunked_pro]
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12 = 26). No margin: models/demo/bh_sc1 in
-      # .github/time_budget.yaml is full (1750/1750), so anything above 26 fails verify-time-budgets.
-      timeout: 26
+      # Sum of the section timeouts (6+8+12+15+25 = 66). No margin: models/demo/bh_sc1 in
+      # .github/time_budget.yaml is full (1790/1790), so anything above 66 fails verify-time-budgets.
+      timeout: 66
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -1121,7 +1143,7 @@
 
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_mistral4_prefill_block -k "pcc-prompt_5k and no_determinism and iter1" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_chunked.py::test_mistral4_prefill_block_chunked -vvv --tb=short
       '
     ) || rc=$?
     section_end "$rc"
@@ -1200,6 +1222,7 @@
       # Sum of the section timeouts (20+44+40+20+28+52+20 = 224). No margin: models/demo/bh_sc1 in
       # .github/time_budget.yaml is full (1750/1750), so anything above 224 fails verify-time-budgets.
       timeout: 224
+
       tier: 2
       release_ready: false
   owner_id: U0AQ3FGS9MG # Alina Khan
@@ -1207,17 +1230,81 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "Mistral-Small-4-119B chunked prefill throughput 100k"
+  # Without this the workflow skips its TorusXY step, PREFILL_TORUS_XY_CERTIFIED stays unset, and
+  # conftest skips every row before device open.
+  fabric_profile: torus_xy
+  cmd: |
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
 
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_mistral4_prefill_transformer_chunked_no_pcc -k "mistral4 and torus-xy-8x4 and L36 and chunks20 and ten_iters" -vvv --tb=short | tee /tmp/mistral4_chunked_perf.out
+      # A leg whose rows all skip exits 0 and reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_chunked_perf.out || { echo "::error::mistral4_chunked_perf: every row skipped, so the leg measured nothing; check the TorusXY fabric profile and the certified allocation"; exit 1; }
+    '
+  test_type: mistral4_chunked_perf
+  test_tags: [mistral4, transformer]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      # ~1.4x the worst observed step. The swing is weight-cache warmth, not the measured work.
+      timeout: 35
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# Traced-vs-eager KV equivalence for the #55126 per-offset query-scale fix. This is the ONLY gate on
+# that path: an unrefreshed scale buffer applies temperature 1.0, which moves the chunked PCC rows by
+# 0.989719 to 0.981986 against a 0.96 bar, so they cannot see it. The test asserts its own sensitivity
+# FIRST -- suppressing the temperature must drive the deep layers BELOW the agreement bar -- so it
+# cannot pass vacuously.
+#
+# fabric_profile torus_xy is load-bearing, not decoration: conftest collect-skips TorusXY cases before
+# device open unless PREFILL_TORUS_XY_CERTIFIED is set, and only this profile's workflow step sets it.
+- name: "Mistral-Small-4-119B traced-vs-eager prefill KV equivalence 30k@5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export MESH_DEVICE=TG
+    export LOGURU_LEVEL=INFO
+    export MISTRAL4_HF_MODEL=/mnt/models/blaze/mistralai/Mistral-Small-4-119B-2603
+    export TT_MISTRAL4_PREFILL_TTNN_CACHE=/mnt/models/blaze/mistralai/Mistral-Small-4-Cache/CI
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -eo pipefail
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_chunk_traced_vs_eager.py -vvv --tb=short | tee /tmp/mistral4_traced_vs_eager.out
+      # A leg whose only row skipped exits 0 and reads as green. Fail instead.
+      grep -qE "[0-9]+ passed" /tmp/mistral4_traced_vs_eager.out || { echo "::error::mistral4_traced_vs_eager: nothing ran; check the staged weight cache and the certified TorusXY allocation"; exit 1; }
+    '
+  test_type: mistral4_traced_vs_eager
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 10 min on CI run 34660979358; 16 is 1.6x.
+      timeout: 16
+      tier: 2
+      release_ready: false
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
 # ===== GPT-OSS-120B ==================================================================================
 
-# GPT-OSS-120B prefill suite: sections run serially on one allocation; each is time-bounded and
-# runs regardless of the others, and the job fails if any section fails.
+# GPT-OSS-120B prefill suite: sections run serially on one allocation, each time-bounded; the job
+# stops at the first failed section.
 #
-# [1/3] chunked prefill KV accuracy longbook 5k@2.5k and [2/3] 5k@1k: full-model real-weights
-# chunked prefill + per-layer KV PCC (models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py,
-# standalone harness, not pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above).
-# [2/3] is the same harness/goldens at the small variable-chunk size (PREFILL_CHUNK_SIZE=1024 ->
-# 5 chunks over the 5k golden). Auto-SKIP (rc 0) off-galaxy or when PREFILL_TRACE_DIR is unset.
+# [1/3] producer/runner e2e through the common prefill runner (the production path).
+# [2/3] chunked prefill KV accuracy longbook 5k@1k: full-model real-weights chunked prefill +
+# per-layer KV PCC (models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py, standalone harness, not
+# pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above) at the small variable-chunk
+# size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks over the 5k golden). Auto-SKIP (rc 0) off-galaxy or when
+# PREFILL_TRACE_DIR is unset.
 # GPT_OSS_KV_PCC_MIN=0.85 is a floor under the measured ~0.92 min KV PCC (ring chunked and
 # 1k-chunk configs, EXPERT_DTYPE=bf8), keeping headroom for bf8/golden noise.
 # [3/3] variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py): one
@@ -1237,34 +1324,44 @@
 # needs the certified TorusXY wraparound links the impl workflow provides.
 #
 # Per-section bounds (timeout -k 2m, a timeout counts as FAIL and the next section still runs):
-#   [1/3] 35 min: cache load + JIT + prefill + PCC readback, with headroom for cold kernel JIT and
-#         the ~180 GB tilized-cache read over NFS. A cold cache BUILD exceeds it.
-#   [2/3] 35 min: same profile as [1/3] (5 ring chunks instead of 2; compile/IO dominate).
+#   [1/3] 35 min: producer/runner e2e through the common prefill runner (the production path):
+#         11 x 5120-token chunks for one user, producer KV PCC over the 5k golden prefix. Runner ready
+#         measured 14-29 min (tilized-cache read over NFS + JIT); chunks + PCC readback ~1 min.
+#         GPT-OSS reports layer completion through the host callback, so PREFILL_LAYER_ACK_D2H=0.
+#   [2/3] 35 min: standalone harness, cache load + JIT + prefill + PCC readback (5 ring chunks), with
+#         headroom for cold kernel JIT and the ~180 GB tilized-cache read over NFS. A cold cache BUILD exceeds it.
 #   [3/3] 30 min: one runtime build + 6 short prefills, no golden readback; cache read + JIT dominate.
-- name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k, 5k@1k + variable-chunk smoke 1k vs 8k"
+- name: "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k"
   fabric_profile: torus_xy
   cmd: |
-    # errexit off for the whole suite: each section must run whatever the previous one did.
-    set +e
-    suite_rc=0
-    suite_summary=()
-
     # Section bodies run in a subshell "( ... )" so one section's exports cannot leak into the next.
-    gpt_oss_kv_pcc_2p5k() (
+    gpt_oss_prefill_runner() (
       export LOGURU_LEVEL=INFO
       export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
       export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export MESH_DEVICE=TG
+      export PREFILL_MODEL=gpt_oss_d_p
+      export PREFILL_FABRIC_MODE=2d_torus_xy
+      export PREFILL_SP=4
+      export PREFILL_TP=8
+      export PREFILL_NUM_LAYERS=36
       export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+      export PREFILL_HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
       export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+      export PREFILL_TTNN_CACHE=/mnt/models/blaze/openai/gpt-oss-120b
       export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
       export GPT_OSS_WEIGHTS_FROM_CACHE=1
       export EXPERT_DTYPE=bf8
-      export PREFILL_CHUNKED=1
-      export PREFILL_CHUNK_SIZE=2560
-      export PREFILL_TPS_ITERS=1
-      export GPT_OSS_KV_PCC_MIN=0.85
-      timeout -k 2m 35m mpirun --pernode --tag-output bash -lc '
-        python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
+      export PREFILL_PCC_GOLDEN_LEN=5000
+      export PREFILL_STANDALONE_CHUNKED_PCC=0.85
+      export PREFILL_LAYER_ACK_D2H=0
+      export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
+      export PREFILL_CI_PRODUCER_TIMEOUT_S=900
+      export PREFILL_RUNNER_LAUNCH=ci
+      timeout -k 2m 35m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles in the H2D recv between chunks
+        python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=2040
       '
     )
 
@@ -1301,31 +1398,27 @@
       '
     )
 
-    # run_section <n/total> <title> <function>: banner, run, one-line result; never aborts.
+    # run_section <n/total> <title> <function>: banner, run, one-line result; stops the job on failure.
     run_section() {
-      local tag="$1" title="$2" fn="$3" t0=$SECONDS rc verdict note=""
+      local tag="$1" title="$2" fn="$3" t0=$SECONDS
       echo "::group::[$tag] $title"
-      "$fn"
-      rc=$?
+      "$fn" || {
+        local rc=$?
+        echo "::endgroup::"
+        echo "[$tag] FAIL (exit $rc$( { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } && echo ', timed out'))  $title"
+        exit "$rc"
+      }
       echo "::endgroup::"
-      if [ "$rc" -eq 0 ]; then verdict=PASS; else verdict=FAIL; suite_rc=1; fi
-      if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then note=", timed out"; fi
       local d=$((SECONDS - t0))
-      echo "[$tag] $verdict (exit $rc, $((d / 60)) min $((d % 60)) s$note)"
-      suite_summary+=("[$tag] $verdict  $title")
+      echo "[$tag] PASS ($((d / 60)) min $((d % 60)) s)  $title"
     }
 
-    run_section 1/3 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k" gpt_oss_kv_pcc_2p5k
+    run_section 1/3 "(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k vs 5k golden prefix" gpt_oss_prefill_runner
     run_section 2/3 "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k" gpt_oss_kv_pcc_1k
     run_section 3/3 "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k" gpt_oss_varchunk_smoke
-
-    echo "===== GPT-OSS-120B prefill suite summary ====="
-    printf '%s\n' "${suite_summary[@]}"
-    if [ "$suite_rc" -eq 0 ]; then echo "suite: PASS"; else echo "suite: FAIL"; fi
-    exit "$suite_rc"
   test_type: gpt_oss_prefill_suite
   # Per-section tokens: `-f test-type=<token>` selects this job.
-  test_tags: [gpt_oss_prefill_kv_pcc, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke]
+  test_tags: [gpt_oss_prefill_runner, gpt_oss_prefill_kv_pcc_1k, gpt_oss_varchunk_smoke]
   test_group: module
   skus:
     bh_sc1:
@@ -1338,6 +1431,48 @@
   budget_type: demo
   sp_config: sc1
 
+# Four pipeline ranks share one galaxy (SP=8, TP=1 per rank); the TT_VISIBLE_DEVICES mapping differs
+# between galaxies, so the columns are probed before launching.
+- name: "Mistral-Small-4-119B PP4 prefill KV accuracy + throughput 55k@5k, SC1"
+  fabric_profile: torus_xy
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    # Host-only orchestration tests, run first so a broken gate fails in seconds rather than after a
+    # 12 min weight load. This cmd runs on the host through the container hook, where /opt/venv is
+    # not on PATH, so find an interpreter with pytest and warn rather than fail if there is none.
+    HOST_PY=""
+    for p in "${TT_METAL_HOME}/python_env/bin/python3" /opt/venv/bin/python3 python3; do
+      if "$p" -c 'import pytest' >/dev/null 2>&1; then HOST_PY="$p"; break; fi
+    done
+    if [ -n "${HOST_PY}" ]; then
+      echo "run_multirank_pcc host tests: using ${HOST_PY}"
+      "${HOST_PY}" -m pytest models/demos/common/prefill/runners/ci/test_run_multirank_pcc.py -q --no-header
+    else
+      echo "::warning::no host interpreter with pytest; skipped the run_multirank_pcc host tests"
+    fi
+    # One run gates PCC and throughput both. The gate reads the deepest probe (@55k) from the
+    # runner-side perf JSON, taken during the measured request so the KV readback sits outside it.
+    # The band spans a 44% spread across two galaxies; re-cut it once the CI pool has several runs.
+    export PREFILL_EXPECTED_TPS=36900
+    export PREFILL_PERF_MARGIN=0.25
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
+  test_type: mistral4_pp4_kv_pcc
+  test_tags: [mistral4, runner, kv_cache]
+  test_group: module
+  skus:
+    bh_sc1:
+      # 12 min on CI run 34660979358; 30 is 2.5x, looser than the siblings because this leg also
+      # pays per-galaxy column probing and a 36-layer weight load.
+      timeout: 30
+  owner_id: U0AQ3FGS9MG # Alina Khan
+  team: models
+  budget_type: demo
+  sp_config: sc1
 
 # ===== Llama-3.1-8B ===================================================================================
 
@@ -1444,10 +1579,9 @@
 
 # 4-galaxy (SC4) disaggregated prefill: a 4-rank background runner opens the mesh, loads Kimi-2.7,
 # warmup-compiles, and publishes the merged KV chunk table to shared NFS; a device-less producer then
-# reads it back and PCCs it against the golden KV cache. The request runs to 250k so the per-chunk
-# timings cover depth, but only the 55k the golden trace spans is PCC'd -- the tail is timed, not
-# checked. A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC4"
+# reads it back and PCCs it against the golden KV cache.
+# A throwaway warmup request precedes the measured one, so first-chunk compile is not timed.
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1478,7 +1612,7 @@
 # its 21 `full` layers), and the pipeline split is layer-aware (18/20/20/20, snapped to `full` starts).
 # Both caches are PCC'd: the producer gates on min(config 0, config 1), so this is the only leg that
 # covers the merged multi-cache KV chunk table and the per-stage index-cache numbering.
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1558,7 +1692,7 @@
 
 
 
-- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+- name: "(Kimi-K2.7-1T) disaggregated prefill KV accuracy 256k tail@5k + perf 256k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1579,7 +1713,7 @@
   sp_config: sc1
 
 
-- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 55k@5k + perf 250k@5k, SC1"
+- name: "(GLM-5.3-744B) disaggregated prefill KV accuracy 1M tail@5k + perf 1M@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1633,7 +1767,19 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 7
+    echo "===== [1/2] (GLM-5.3-744B) MTP7 prefill KV accuracy + perf 55k@5k, runner ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 7 || exit $?
+    echo "===== [2/2] (GLM-5.3-744B) MTP7 predictor multi-turn accuracy, 8 turn schedules ====="
+    (
+      export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
+      export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+      export PREFILL_TORUS_XY_CERTIFIED=1
+      timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
+        test -f "$GLM53_HF_MODEL/config.json" || { echo "MTP multi-turn: GLM53_HF_MODEL=$GLM53_HF_MODEL has no config.json on this worker; every selected case is pretrained, so all would skip and leave the job green"; exit 1; }
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/mtp_prefill/test_mtp.py::test_mtp_multiturn_pcc -k "torus-xy-8x4 and pretrained and levels7" -vvv --tb=short
+      '
+    ) || exit $?
+    echo "===== both sections passed ====="
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp]
   test_group: disagg_prefill
