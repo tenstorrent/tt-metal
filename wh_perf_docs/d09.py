@@ -31,7 +31,7 @@ D = dict(
 <tr><td>X after a full test / after L1_TO_L1 only</td><td class="n">10,573 / 12,347</td><td class="n">12,345 / 12,345</td></tr>
 <tr><td>323 cases, forward vs reverse order</td><td class="n">–</td><td class="n">0 values move</td></tr>
 <tr><td>Full suite (CI, 842,256 points), warm-up off for Wormhole, run vs rerun</td><td class="n">–</td><td class="n">all TILE_LOOP values identical; 44 KERNEL values differ (head with warm-up: 40)</td></tr></table></div>""",
-    open="""<ul><li>Which change between the 17-commit version and the head removes it with the barrier off.</li>
+    open="""<ul><li>Which change removes it with the barrier off. At 73e829efa99 (the commit after the 17-commit version, warm-up off) X gave 10,573 after both predecessors in one session, so the state there depends on history from before the session too; the change that removes it is 054096d8efa or later. A clean bisect needs a fixed card history (reset before each try).</li>
 <li>No Versim proof.</li></ul>""",
     repro="""<ul><li>17-commit: branch <code>nstojictt/p58-v17-nowarm</code>, <code>LLK_PERF_NO_WARMUP=1</code>; run P then X in one pytest call, with and without <code>LLK_PERF_RUN_TYPES=L1_TO_L1</code>.</li>
 <li>Head: <code>nstojictt/p58-versim</code>, <code>LLK_PERF_NO_WARMUP=1</code>, forward and reversed id lists.</li></ul>""",
