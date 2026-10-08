@@ -196,3 +196,18 @@ def test_one4(device, op, mem, d):
         if t is not None:
             ttnn.deallocate(t)
     assert got.shape[-1] == shape[-1]
+
+
+# fifth pass (#58723): logical_and (per-tile multiply, init per tile) off the native path on block grids around 4x4, the same
+# tensors, with logical_or (an add, the same program on both sides) as the control
+SH8 = {"g2x4": ((1, 1, 1024, 1024), 2, 4), "g4x4": ((1, 1, 1024, 1024), 4, 4), "g2x8": ((1, 1, 1024, 1024), 2, 8),
+       "g4x2": ((1, 1, 1024, 1024), 4, 2), "g3x4": ((1, 1, 768, 1024), 3, 4), "g4x8": ((1, 1, 1024, 1024), 4, 8),
+       "g4x4n2": ((2, 1, 1024, 1024), 4, 4), "g8x4": ((1, 1, 2048, 1024), 8, 4)}
+MA3 = [(op, g, k) for op in ("logical_and", "logical_or") for g in SH8 for k in ("col", "scalar")]
+
+
+@pytest.mark.parametrize("op, grid, kind", MA3, ids=["-".join(c) for c in MA3])
+def test_mulact3(device, op, grid, kind):
+    shape, gy, gx = SH8[grid]
+    mc = ttnn.create_sharded_memory_config(shape, core_grid=ttnn.CoreGrid(y=gy, x=gx), strategy=ttnn.ShardStrategy.BLOCK)
+    _run(device, op, shape, mc, "bf16", "bf16", "bf16", kind)
