@@ -323,10 +323,10 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         static_cast<uint32_t>(use_joint_mask),
         mask_chunk_0,
         mask_chunk_1,
-        static_cast<uint32_t>(use_streaming_compute),  // arg 15
-        out_out_subblock_h,                            // arg 16: drain group height
-        k_partial_col,                                 // arg 17
-        n_partial_col,                                 // arg 18
+        static_cast<uint32_t>(use_streaming_compute),
+        out_out_subblock_h,  // drain group height
+        k_partial_col,
+        n_partial_col,
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -351,11 +351,11 @@ ProgramDescriptor JointSDPADeviceOperation::JointSDPAProgramFactory::create_desc
         mask_chunk_0,
         mask_chunk_1,
         scale_packed,
-        static_cast<uint32_t>(use_streaming_compute),  // arg 19
-        streaming_valid_Skt,                           // arg 20: unpadded concatenated K tiles
-        k_partial_col,                                 // arg 21
-        n_partial_col,                                 // arg 22
-        mid_padded_tiles,                              // arg 23
+        static_cast<uint32_t>(use_streaming_compute),
+        streaming_valid_Skt,
+        k_partial_col,
+        n_partial_col,
+        mid_padded_tiles,
     };
 
     std::map<std::string, std::string> defines_map;

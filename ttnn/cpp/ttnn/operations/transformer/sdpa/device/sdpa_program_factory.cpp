@@ -991,8 +991,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder
     reader_compile_time_args.push_back(static_cast<uint32_t>(use_zigzag_balancing));  // arg 32
     reader_compile_time_args.push_back(static_cast<uint32_t>(windowed_mode));         // arg 33: K-range narrowing
-    reader_compile_time_args.push_back(kv_chain_mode);  // arg 34: kv chain mode, 2 = causal prefix chains
-    reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));  // arg 35: mask block map
+    reader_compile_time_args.push_back(kv_chain_mode);                                // arg 34
+    reader_compile_time_args.push_back(static_cast<uint32_t>(use_mask_block_map));    // arg 35
     reader_compile_time_args.push_back(kv_slots);                                   // arg 36: K/V CB depth in chunks
     reader_compile_time_args.push_back(0);  // arg 37: fwd_done_semaphore_id placeholder
 
@@ -1011,7 +1011,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(reader_compile_time_args);
     TensorAccessorArgs(buffer_or_null(tensor_args.attn_mask_block_map)).append_to(reader_compile_time_args);
 
-    // Set up semaphore IDs for KV chain forwarding (non-causal only).
+    // Set up semaphore IDs for KV chain forwarding.
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
     // matching the order they are pushed into desc.semaphores below.
     uint32_t sender_semaphore_id = 0;
@@ -1071,7 +1071,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         receiver_semaphore_id,  // arg 24
         valid_semaphore_id,     // arg 25
         fwd_done_semaphore_id,  // arg 26
-        kv_chain_mode,          // arg 27: 2 = causal prefix chains
+        kv_chain_mode,          // arg 27
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the
@@ -1315,7 +1315,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // the layout — assert early so the failure is loud rather than a slot reinterpretation.
     TT_FATAL(num_phases == 1, "Single-chip SDPA assumes num_phases == 1 under global Q scheduling");
 
-    // Build chain topology for KV forwarding (non-causal only)
+    // Build chain topology for KV forwarding.
     std::vector<CoreWork> core_work(num_cores);
     std::vector<CoreChainInfo> core_chain_info(num_cores);
     const uint32_t total_heads = B * NQH;
@@ -1359,9 +1359,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
                 }
             };
 
-            // Walk the core's [g_start, g_start + g_count) linear range and split into
-            // contiguous (nb, nq, q_chunk_range) segments. Non-causal here (chain section is
-            // !use_causal_kernel), so the zigzag remap is off and the decompose is identity.
+            // Split the core's linear [g_start, g_start + g_count) range into per head segments; the zigzag remap
+            // only reorders Q chunks within a head, so the segments hold for causal chains too.
             const auto [g_start, g_count] = global_q_range_for_core(i);
             work.global_q_start = g_start;
             work.global_q_count = g_count;

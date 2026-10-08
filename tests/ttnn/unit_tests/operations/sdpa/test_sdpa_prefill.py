@@ -820,7 +820,7 @@ def test_sdpa_output_concat_heads(device, b, nh, s, d, pad_rows):
     assert torch.equal(out_torch[:, :valid], ref_torch[:, :valid]), f"{n_diff} of the valid elements differ"
 
 
-# Small shapes here; the nightly prefill file sweeps the masked fraction and the chunk sizes at S 2048 and 4096.
+# The nightly prefill file sweeps the masked fraction and chunk sizes at S 2048 and 4096.
 @pytest.mark.parametrize(
     "s, nkv, bcast_heads, q_chunk_size, k_chunk_size, p_masked",
     [(1024, 8, True, 128, 128, 0.5), (1024, 2, False, 128, 256, 0.75)],

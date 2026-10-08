@@ -1438,7 +1438,7 @@ def run_sdpa_block_mask(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, p_
         out_pass, out_pcc = comp_pcc(gt, out, 0.994)
         logger.debug(f"python vs pytorch: {out_pcc}")
         assert out_pass
-    # skipped blocks contributed exact zeros, so the two device results should agree closely
+    # skipped blocks contribute exact zeros, so both device results should agree closely
     assert (outs[0] - outs[1]).abs().max().item() < 0.02
 
     # a new mask and map of the same shapes hit the program cache, which has to read the new buffers
