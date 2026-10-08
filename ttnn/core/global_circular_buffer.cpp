@@ -217,7 +217,7 @@ uint32_t validate_recv_contig_weight_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const ttnn::Tensor& weight,
     uint32_t receiver_count,
-    SlabDepth slab_depth = SlabDepth::WeightK) {
+    SlabDepth slab_depth) {
     TT_FATAL(
         program_config.gather_in0 != program_config.mcast_in0,
         "receiver-contiguous Tensor prefetcher requires exactly one of gather_in0 or mcast_in0 to be true");
@@ -436,7 +436,7 @@ uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const uint32_t receiver_count = gcb.receiver_cores().num_cores();
     TT_FATAL(receiver_count > 0, "global_cb has no receivers");
     if (is_receiver_contiguous_weight(weight)) {
-        return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count);
+        return validate_recv_contig_weight_for_matmul_1d(program_config, weight, receiver_count, SlabDepth::WeightK);
     }
     // Weight checks first: they establish num_global_cb_receivers > 0 and that it divides the
     // receiver count, which is what the per-sender rule below is stated against.
@@ -579,7 +579,8 @@ static GlobalCircularBuffer build_matmul_1d_gcb_recv_contig(
         validate_grid_for_consumer(cfg, i, receiver_count);
 
         // Per-(config, weight) recv-contig cross-checks and consumer-specific K-block count.
-        const uint32_t block_count = validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], receiver_count);
+        const uint32_t block_count =
+            validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], receiver_count, SlabDepth::WeightK);
 
         const uint32_t page_bytes = gcb_page_bytes(cfg, weights[i], block_count);
         TT_FATAL(page_bytes > 0, "program_configs[{}] page_bytes computed as 0", i);

@@ -1154,6 +1154,7 @@ def _streaming_gather_in0_setup(
     num_global_cb_receivers=1,
     k_tiles=None,
     hop_cores=None,
+    act_dtype=ttnn.bfloat16,
 ):
     """Weight, activation, program config and bank pairing for a gather-in0 matmul over a receiver ring.
 
@@ -1163,6 +1164,7 @@ def _streaming_gather_in0_setup(
     one ``entry_size`` page of the GCB or the pipes. ``out_subblock_w`` defaults to one subblock across
     the worker's columns. ``k_tiles`` below ``k_tiles_per_shard * ring_size`` pads the last in0 shards,
     and the weight's per-receiver shard with them; ``hop_cores`` adds in0-only cores to the ring.
+    ``act_dtype`` is the activation's dtype; ``dtype`` is the weight's.
     """
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -1200,7 +1202,7 @@ def _streaming_gather_in0_setup(
 
     def make_act(pt):
         return ttnn.from_torch(
-            pt, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
+            pt, device=device, dtype=act_dtype, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
         )
 
     if K < K_padded:
@@ -1212,7 +1214,7 @@ def _streaming_gather_in0_setup(
             pt_weight, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         act_source = ttnn.from_torch(
-            pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            pt_act, device=device, dtype=act_dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         poison_weight = make_weight(torch.full((1, 1, K_padded, N), float("nan")))
         poison_act = make_act(torch.full((1, 1, M, K_padded), float("nan")))
@@ -1946,24 +1948,27 @@ def _hop_cores(device, num_hops):
 
 
 @pytest.mark.parametrize(
-    "stream_in1,num_hops,k_tiles_short",
+    "stream_in1,num_hops,k_tiles_short,act_dtype",
     [
-        (False, 0, 0),
-        (True, 1, 0),
-        (False, 2, 0),
-        (True, 0, 3),
-        (False, 2, 3),
+        (False, 0, 0, ttnn.bfloat16),
+        (True, 1, 0, ttnn.bfloat16),
+        (False, 2, 0, ttnn.bfloat16),
+        (True, 0, 3, ttnn.bfloat16),
+        (False, 2, 3, ttnn.bfloat16),
+        (True, 2, 0, ttnn.float32),
     ],
-    ids=["k_order", "hop1", "hop2_k_order", "padded", "padded_hop2_k_order"],
+    ids=["k_order", "hop1", "hop2_k_order", "padded", "padded_hop2_k_order", "hop2_fp32_act"],
 )
-def test_tensor_prefetcher_gather_in0_pipes_ring_shapes(device, stream_in1, num_hops, k_tiles_short):
+def test_tensor_prefetcher_gather_in0_pipes_ring_shapes(device, stream_in1, num_hops, k_tiles_short, act_dtype):
     """Gather-in0 over Tensor-prefetcher pipes with the ring shapes beyond the plain one.
 
     ``stream_in1=False`` delivers each worker its K-blocks in K order rather than ring order, into a
     ring that holds the whole layer and a K-block and a half more, so the second layer starts mid-ring.
-    Hop cores carry the ring's link from its first worker round to its last. ``k_tiles_short`` takes that many tiles off K, so the
-    last shard is empty and the one before it short, and the weight's per-receiver shard is padded to
-    whole K-blocks. Each runs twice, the second hitting the program cache.
+    Hop cores carry the ring's link from its first worker round to its last. ``k_tiles_short`` takes
+    that many tiles off K, so the last shard is empty and the one before it short, and the weight's
+    per-receiver shard is padded to whole K-blocks. A Float32 activation under 32-bit DEST needs an
+    unpack mode for in2 on every core that binds it, the hop cores' sink included. Each runs twice, the
+    second hitting the program cache.
     """
     k_tiles_per_shard, recv_per_bank = 2, 2
     ring_size = device.dram_grid_size().x * recv_per_bank
@@ -1978,6 +1983,7 @@ def test_tensor_prefetcher_gather_in0_pipes_ring_shapes(device, stream_in1, num_
         stream_in1=stream_in1,
         k_tiles=k_tiles_per_shard * ring_size - k_tiles_short,
         hop_cores=_hop_cores(device, num_hops) if num_hops else None,
+        act_dtype=act_dtype,
     )
     ring_half_blocks = 4 if stream_in1 else 2 * ring_size + 3
     _space, pipes = _make_tensor_prefetcher_pipes(
@@ -1989,7 +1995,8 @@ def test_tensor_prefetcher_gather_in0_pipes_ring_shapes(device, stream_in1, num_
         setup,
         pipes,
         _hifi4_compute_kernel_config(device),
-        f"gather_in0_pipes_ring_shapes stream_in1={stream_in1} hops={num_hops} k_tiles_short={k_tiles_short}",
+        f"gather_in0_pipes_ring_shapes stream_in1={stream_in1} hops={num_hops} k_tiles_short={k_tiles_short} "
+        f"act_dtype={act_dtype}",
         runs=2,
     )
 

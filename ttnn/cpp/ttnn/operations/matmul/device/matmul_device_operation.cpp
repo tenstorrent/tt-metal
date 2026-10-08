@@ -1280,8 +1280,10 @@ void validate_prefetcher_pipes_gather_in0_geometry(
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
-    // One K-block per ring position, an in0 shard wide. When K does not fill the ring the last shards are
-    // padded; compute reads only their unpadded K, but each pipe entry is still a whole shard wide.
+    // One K-block per ring position, an in0 shard wide. The shards always reach K: a width-sharded
+    // TensorSpec holds no more shards than cores, and the activation's K matches the weight's. When K
+    // does not fill the ring the last shards are padded; compute reads only their unpadded K, but each
+    // pipe entry is still a whole shard wide.
     const auto& in0_shard_spec = input_tensor_a.shard_spec().value();
     const uint32_t ring_size = in0_shard_spec.grid.num_cores();
     const uint32_t in0_shard_width_tiles = in0_shard_spec.shape[1] / in0_tile.get_width();
