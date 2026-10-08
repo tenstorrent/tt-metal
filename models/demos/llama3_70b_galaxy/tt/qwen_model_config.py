@@ -870,7 +870,7 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_w=8,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 7),
                     )
-                else:
+                elif seq_len <= 8192 or is_blackhole():
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
@@ -878,6 +878,15 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_h=4,
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                else:  # Wormhole, seq_len > 8192: S=40960 isolated op 1.67 -> 1.24 ms, bit-identical output
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=16,
+                        K_block_size=8,
+                        N_block_size=4,
+                        subblock_h=4,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
                     )
 
             self.model_config["WO_PREFILL_MINIMAL_PROGCFG"] = prefill_wo_minimal_matmul_config
@@ -1048,7 +1057,7 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
                     )
-                else:  # seqlen > 1024
+                elif seq_len <= 8192 or is_blackhole():
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
@@ -1056,6 +1065,17 @@ class TtQwenModelArgs(TtModelArgs):
                         subblock_h=1,
                         subblock_w=8,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                    )
+                else:  # Wormhole, seq_len > 8192 (used by llama_attention.py QKV for Qwen long prefill)
+                    # HiFi2 with fp32 dest acc -> subblock area <= 4. S=40960 isolated op: ttnn.linear
+                    # (XQKV_PREFILL_PROGCFG) 2.64 ms -> 1.98 ms, bit-identical output.
+                    return ttnn.MinimalMatmulConfig(
+                        M_block_size=8,
+                        K_block_size=8,
+                        N_block_size=8,
+                        subblock_h=2,
+                        subblock_w=2,
+                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 10),
                     )
 
             self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"] = prefill_xqkv_minimal_matmul_config
