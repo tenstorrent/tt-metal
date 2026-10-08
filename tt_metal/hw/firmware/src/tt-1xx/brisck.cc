@@ -84,6 +84,16 @@ uint32_t _start() {
         RECORD_DFB_REGION_CLEAR();
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
+#ifndef DISPATCH_KERNEL
+            // Wait until every transaction this kernel issued has completed. The next kernel on this RISC snapshots the
+            // NIU counters in noc_local_state_init(), possibly before this one has been reported done, and its barriers
+            // compare against that snapshot for equality: a response landing after the snapshot leaves a counter ahead
+            // of the software count for the whole next kernel, and its barrier never returns. Dispatch kernels don't
+            // maintain the software counters, so they are excluded.
+            while (
+                !(ncrisc_noc_reads_flushed(NOC_INDEX) & ncrisc_noc_nonposted_writes_flushed(NOC_INDEX) &
+                  ncrisc_noc_nonposted_atomics_flushed(NOC_INDEX) & ncrisc_noc_posted_writes_sent(NOC_INDEX)));
+#endif
             // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed and the
             // NOC interface is in a known idle state for the next kernel. Dispatch kernels don't increment noc counters
             // so we only include this for non-dispatch kernels
