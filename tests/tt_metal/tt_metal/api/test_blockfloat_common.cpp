@@ -10,7 +10,10 @@
 #include <memory>
 #include <random>
 #include <future>
+#include <chrono>
+#include <stdexcept>
 #include "impl/data_format/bfp_simd.hpp"
+#include "impl/data_format/bfp_tasks.hpp"
 
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
@@ -121,9 +124,15 @@ void check_simd_rows(int isa) {
     if (!encode) {
         return;  // Unsupported ISAs must never execute on this host.
     }
-    constexpr auto format = bits == 7   ? tt::DataFormat::Bfp8_b
-                            : bits == 3 ? tt::DataFormat::Bfp4_b
-                                        : tt::DataFormat::Bfp2_b;
+    constexpr auto format = [] {
+        if constexpr (bits == 7) {
+            return tt::DataFormat::Bfp8_b;
+        } else if constexpr (bits == 3) {
+            return tt::DataFormat::Bfp4_b;
+        } else {
+            return tt::DataFormat::Bfp2_b;
+        }
+    }();
     std::mt19937 rng(5127);
     for (uint32_t row = 0; row < 4096; ++row) {
         std::array<T, 16> input;
@@ -211,6 +220,7 @@ TEST(BfpSimdTiles, CPU_ConcurrentCalls) {
     }
     auto expected = pack_as_bfp_tiles<tt::DataFormat::Bfp4, float>(input, true, false, std::nullopt);
     std::vector<std::future<std::vector<uint32_t>>> calls;
+    calls.reserve(8);
     for (int i = 0; i < 8; ++i) {
         calls.emplace_back(std::async(std::launch::async, [&] {
             return pack_as_bfp_tiles<tt::DataFormat::Bfp4_b, float>(input, true, false, std::nullopt);
@@ -220,3 +230,34 @@ TEST(BfpSimdTiles, CPU_ConcurrentCalls) {
         EXPECT_EQ(call.get(), expected);
     }
 }
+
+class BfpTaskLifetime : public ::testing::TestWithParam<bool> {};
+
+TEST_P(BfpTaskLifetime, CPU_DrainBeforeRethrowing) {
+    // Promise-backed futures, like pool futures, do not join on destruction.
+    // Keep one task pending while either submission or another task fails.
+    const bool submission_fails = GetParam();
+    std::promise<void> unfinished, failed, submitted;
+    auto unfinished_result = unfinished.get_future().share();
+    auto failed_result = failed.get_future().share();
+    failed.set_exception(std::make_exception_ptr(std::runtime_error("packing failed")));
+    auto submitted_result = submitted.get_future();
+    auto operation = std::async(std::launch::async, [&] {
+        tt::tt_metal::detail::run_bfp_tasks(2, [&](size_t i) {
+            if (i == 0) {
+                return submission_fails ? unfinished_result : failed_result;
+            }
+            submitted.set_value();
+            if (submission_fails) {
+                throw std::runtime_error("submission failed");
+            }
+            return unfinished_result;
+        });
+    });
+    EXPECT_EQ(submitted_result.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    EXPECT_EQ(operation.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+    unfinished.set_value();
+    EXPECT_THROW(operation.get(), std::runtime_error);
+}
+
+INSTANTIATE_TEST_SUITE_P(BlockfloatCommonTests, BfpTaskLifetime, ::testing::Bool());

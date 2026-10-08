@@ -14,6 +14,7 @@
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
 #include "bfp_simd.hpp"
+#include "bfp_tasks.hpp"
 #include "common/executor.hpp"
 #include "constants.hpp"
 #include "hal_types.hpp"
@@ -382,7 +383,15 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         (BfpFormat == tt::DataFormat::Bfp2_b || BfpFormat == tt::DataFormat::Bfp4_b ||
          BfpFormat == tt::DataFormat::Bfp8_b)) {
         if (!is_exp_a && face_W == 16 && std::endian::native == std::endian::little) {
-            constexpr int bits = BfpFormat == tt::DataFormat::Bfp8_b ? 7 : BfpFormat == tt::DataFormat::Bfp4_b ? 3 : 1;
+            constexpr int bits = [] {
+                if constexpr (BfpFormat == tt::DataFormat::Bfp8_b) {
+                    return 7;
+                } else if constexpr (BfpFormat == tt::DataFormat::Bfp4_b) {
+                    return 3;
+                } else {
+                    return 1;
+                }
+            }();
             const uint32_t rows = tile_HW / 16;
             const uint32_t exponent_bytes = exponent_padding ? tt::round_up(rows, l1_alignment) : rows;
             const uint32_t packed_bytes = exponent_bytes + tile_HW * (bits + 1) / 8;
@@ -415,16 +424,11 @@ std::vector<uint32_t> pack_as_bfp_tiles(
             if (chunks == 1) {
                 process(0, num_tiles);
             } else {
-                std::vector<std::shared_future<void>> pending;
-                pending.reserve(chunks);
-                for (uint32_t chunk = 0; chunk < chunks; ++chunk) {
+                tt::tt_metal::detail::run_bfp_tasks(chunks, [&](size_t chunk) {
                     const uint32_t begin = static_cast<uint64_t>(num_tiles) * chunk / chunks;
                     const uint32_t end = static_cast<uint64_t>(num_tiles) * (chunk + 1) / chunks;
-                    pending.emplace_back(tt::tt_metal::detail::async([&, begin, end] { process(begin, end); }));
-                }
-                for (auto& future : pending) {
-                    future.get();
-                }
+                    return tt::tt_metal::detail::async([&, begin, end] { process(begin, end); });
+                });
             }
             return result;
         }
