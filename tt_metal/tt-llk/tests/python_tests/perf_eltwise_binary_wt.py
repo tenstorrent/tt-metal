@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Round 3 eltwise binary (#58723 third review, CI only): harness rows of the whole-tile programs, fidelity phase outer, for
-partial-face tiles (1x32, 8x32) and the column broadcast on 1 x 2-face 16x32 tiles, against main's per-face program
-(eb_handoff "face"), 8 tiles per run, 32 loops, bf16 in and out, 16-bit and fp32 DEST."""
+"""Round 3 eltwise binary (#58723 fourth review, CI only): harness rows of the whole-tile program, fidelity phase outer, for the
+column broadcast multiply of partial-face tiles (1x32 to 8x32), against main's per-face program (eb_handoff "face"), with the
+standard form, the row broadcast and the 16x32 column broadcast as same-program controls; 8 tiles per run, 32 loops, bf16 in
+and out, 16-bit and fp32 DEST."""
 from dataclasses import dataclass
 
 import pytest
@@ -25,23 +26,9 @@ class EB_HANDOFF(TemplateParameter):
 M, A = MathOperation.Elwmul, MathOperation.Elwadd
 N, C, R, S = BroadcastType.None_, BroadcastType.Column, BroadcastType.Row, BroadcastType.Scalar
 L, H2, H3, H4 = MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4
-CASES = {
-    "mul_none_8x32_lofi": (M, N, [8, 32], L),
-    "mul_none_8x32_hifi2": (M, N, [8, 32], H2),
-    "mul_none_8x32_hifi3": (M, N, [8, 32], H3),
-    "mul_none_8x32_hifi4": (M, N, [8, 32], H4),
-    "add_none_8x32_lofi": (A, N, [8, 32], L),
-    "mul_col_8x32_lofi": (M, C, [8, 32], L),
-    "mul_col_8x32_hifi2": (M, C, [8, 32], H2),
-    "mul_col_8x32_hifi4": (M, C, [8, 32], H4),
-    "mul_col_16x32_lofi": (M, C, [16, 32], L),
-    "mul_col_16x32_hifi2": (M, C, [16, 32], H2),
-    "mul_col_16x32_hifi4": (M, C, [16, 32], H4),
-    "mul_row_8x32_hifi4": (M, R, [8, 32], H4),
-    "mul_scalar_8x32_hifi4": (M, S, [8, 32], H4),
-    "mul_none_1x32_hifi4": (M, N, [1, 32], H4),
-    "add_none_1x32_lofi": (A, N, [1, 32], L),
-}
+CASES = {f"mul_col_{h}x32_{f.name.lower()}": (M, C, [h, 32], f) for h in (1, 2, 4, 8) for f in (L, H2, H3, H4)}
+# same-program controls: the standard form and the row broadcast keep the per-face program for partial faces
+CASES.update({"mul_none_8x32_hifi4": (M, N, [8, 32], H4), "mul_row_8x32_hifi4": (M, R, [8, 32], H4), "mul_col_16x32_hifi4": (M, C, [16, 32], H4)})
 RUN_TYPES = [PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE]
 
 

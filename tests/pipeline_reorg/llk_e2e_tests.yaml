@@ -99,8 +99,8 @@
     set -euo pipefail
     cd tests/python_tests
     export PYTHONPATH=$PWD:${PYTHONPATH:-} EB_FORCE_PER_FACE=1
-    export EB_SEL='(test_eltwise_binary\[|broadcast_type:Column).*math_op:Elwmul.*tile_dimensions:\[(1|2|4|8|16), 32\]'
-    pytest -q --override-ini=log_cli=false -p eb_sel_plugin -n auto --dist=worksteal -m "$PYTEST_MARKERS" --timeout=120 --junitxml=pytest-report-blackhole-6.xml test_eltwise_binary.py test_eltwise_binary_broadcast.py
+    export EB_SEL='broadcast_type:Column.*math_op:Elwmul.*tile_dimensions:\[(1|2|4|8|16), 32\]'
+    pytest -q --override-ini=log_cli=false -p eb_sel_plugin -n auto --dist=worksteal -m "$PYTEST_MARKERS" --timeout=120 --junitxml=pytest-report-blackhole-6.xml test_eltwise_binary_broadcast.py
   skus:
     bh_p150b_civ2:
       timeout: 90
