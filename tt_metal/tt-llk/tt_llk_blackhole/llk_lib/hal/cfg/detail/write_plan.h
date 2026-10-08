@@ -36,7 +36,7 @@ inline constexpr WriteOperandMeta write_operand_meta()
     }
     else
     {
-        constexpr std::uint32_t word_count = Operation::scope == RegisterScope::Thread ? ThreadCfgWordCount : StateCfgWordCount;
+        constexpr std::uint32_t word_count = cfg_word_count(Operation::scope);
         static_assert(Operation::addr < word_count, "CFG write destination lies outside its register scope");
 
         if constexpr (is_constant_field_assignment_v<Operation>)
@@ -94,7 +94,7 @@ inline constexpr WritePlan<Count> build_write_plan(const std::array<WriteOperand
     for (std::size_t i = 0; i < Count; ++i)
     {
         const auto& operand   = operands[i];
-        const auto word_count = operand.scope == RegisterScope::Thread ? ThreadCfgWordCount : StateCfgWordCount;
+        const auto word_count = cfg_word_count(operand.scope);
         if (operand.addr >= word_count || operand.words == 0u || operand.words > word_count - operand.addr)
         {
             __builtin_trap();

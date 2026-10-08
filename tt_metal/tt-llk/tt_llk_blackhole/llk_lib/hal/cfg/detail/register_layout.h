@@ -26,6 +26,11 @@ inline constexpr std::uint32_t CregSelectorMax      = 0x7ffu;
 
 inline constexpr std::uint32_t ThreadCfgBase = StateCfgBankCount * StateCfgWordCount + ConfigDualWriteWords;
 
+inline constexpr std::uint32_t cfg_word_count(RegisterScope scope)
+{
+    return scope == RegisterScope::Thread ? ThreadCfgWordCount : StateCfgWordCount;
+}
+
 static_assert(ChickenBits::sfpu_scbd_disable.addr32(Sec::S0) < StateCfgWordCount, "state CFG descriptor lies outside a hardware CFG bank");
 static_assert(TensixCsrConfig::RawBusyStatus.addr32(Sec::S0) < ThreadCfgWordCount, "thread CFG descriptor lies outside a hardware thread bank");
 
