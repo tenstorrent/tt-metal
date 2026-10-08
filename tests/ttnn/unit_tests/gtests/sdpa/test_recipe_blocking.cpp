@@ -130,6 +130,47 @@ TEST(SDPARecipeBlocking, ExplicitChunksAreHonored) {
     EXPECT_EQ(choice->k_chunk_size, 384u);
 }
 
+TEST(SDPARecipeBlocking, KeyRangesCostOnlyTheirKChunks) {
+    // Causal and sliding-window calls process only the K chunks their rows see, dealt over the whole grid. Measured
+    // (one P150b, 8192 rows): causal 10 heads D128 is fastest at Q256/K512 for every recipe; a Gemma-style sliding
+    // window 1024 with 16 heads D256 (ACCURATE 2.55 ms at the choice, 3.15 ms at the caller's Q128/K128) wants short
+    // K chunks, where the dense model picked K256 (3.42 ms).
+    for (auto recipe : {Recipe::B, Recipe::C, Recipe::D}) {
+        auto causal = problem(RecipeOp::Dense, {recipe}, 10, 8192, 8192);
+        causal.key_range = causal.causal = true;
+        causal.mask_page_bytes = 576;
+        const auto choice = choose_recipe_blocking(causal);
+        ASSERT_TRUE(choice.has_value());
+        expect_valid(causal, *choice);
+        EXPECT_EQ(choice->q_chunk_size, 256u);
+        EXPECT_EQ(choice->k_chunk_size, 512u);
+    }
+    auto window = problem(RecipeOp::Dense, {Recipe::D}, 16, 8192, 8192, 8);
+    window.key_range = window.causal = true;
+    window.sliding_window = 1024;
+    window.mask_page_bytes = 576;
+    const auto choice = choose_recipe_blocking(window);
+    ASSERT_TRUE(choice.has_value());
+    expect_valid(window, *choice);
+    EXPECT_LE(choice->k_chunk_size, 192u);
+    auto hint = window;
+    hint.fixed_q_tiles = hint.fixed_k_tiles = 4;
+    EXPECT_LT(choice->cost, choose_recipe_blocking(hint)->cost);
+
+    // A causal call costs less than the dense one at the same blocking (measured STANDARD 1.49 vs 1.62 ms: the
+    // dense call keeps its K/V chain).
+    auto causal = problem(RecipeOp::Dense, {Recipe::B}, 10, 8192, 8192);
+    causal.key_range = causal.causal = true;
+    causal.mask_page_bytes = 576;
+    auto dense = causal;
+    dense.key_range = dense.causal = false;
+    dense.fixed_q_tiles = causal.fixed_q_tiles = 8;
+    dense.fixed_k_tiles = causal.fixed_k_tiles = 16;
+    const double ratio = choose_recipe_blocking(causal)->cost / choose_recipe_blocking(dense)->cost;
+    EXPECT_GT(ratio, 0.5);
+    EXPECT_LT(ratio, 1.0);
+}
+
 TEST(SDPARecipeBlocking, AttnMaskCircularBufferIsBudgeted) {
     constexpr uint32_t page = 2048;  // BF16 mask tile
     for (const auto& selection : kSelections) {
