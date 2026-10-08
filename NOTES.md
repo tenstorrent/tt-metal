@@ -50,3 +50,10 @@ Base: origin/ttp/t48-ltx25-integrated 5833f56096f (decode 2.714 s, blx01 job 019
   on, =0 off), cherry-pick ONLY ac876509daa + the flip onto a -land branch from
   origin/ttp/t48-ltx25-integrated (enum conflict: ablate_mask entry is absent there, resolve by
   dropping it), rebuild/verify, `ttp push --detach`; notes via `ttp push --own --detach`.
+
+## Run 3 (2026-10-08 12:01 UTC)
+- First go274 launch (11:58 UTC) refused at health stage: blx01 broker fsm=recovering after a chip
+  PCIe drop/glx_reset (broker 031-041, ~11:48-11:58 UTC; hold ended 11:58 "ready for tenants";
+  not during one of our jobs, chips not named in the status line).
+- Relaunched: broker job 042 (base vs edge, ac876509daa, -t 450). Probe: `ssh g15blx01 bash /var/tmp/fasth3/t274/drv/probe.sh`.
+- Next: read out_E as in "Next step" above.
