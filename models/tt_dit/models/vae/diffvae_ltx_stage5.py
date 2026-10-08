@@ -52,6 +52,8 @@ from .diffvae_ops import (
     consume,
     consume_all,
     device_major_qkv,
+    head_gain_matrix,
+    head_mean_matrix,
     mesh_axis_size,
     pad_dim,
     release_intermediates,
@@ -101,6 +103,13 @@ def s5_2d_enabled(gna_stride: tuple[int, int, int] = (1, 1, 1)) -> bool:
     if flag is not None:
         return flag not in ("0", "false", "False")
     return tuple(gna_stride) == (1, 1, 1)
+
+
+def packed_lanes_enabled() -> bool:
+    """Whether the keep-bricked W-sharded stage 5 norms and rotates Q and K in the packed
+    ``(sites, heads * head_dim)`` qkv layout, which is already the op's site-major layout, instead
+    of retiling each lane to one row per head and back. Opt-in with ``DIFFVAE_S5_PACKED_LANES=1``."""
+    return os.environ.get("DIFFVAE_S5_PACKED_LANES") == "1"
 
 
 @dataclass(frozen=True)
@@ -202,6 +211,8 @@ class _RopeTables:
     fused: _RopeParts | None = None
     brick: tuple[int, int, int] | None = None
     sites_per_t_br: int = 0
+    #: One row per site, ``heads * head_dim`` wide: the packed qkv-lane layout (see packed_lanes_enabled).
+    packed: bool = False
 
     def frames(self, lo: int, hi: int) -> _RopeTables:
         """The same tables restricted to frames ``[lo, hi)``, for a slab of the volume."""
@@ -222,6 +233,7 @@ class _RopeTables:
                 ),
                 brick=self.brick,
                 sites_per_t_br=self.sites_per_t_br,
+                packed=self.packed,
             )
         if (lo, hi) == (0, self.time.cos.shape[1]):
             return self
@@ -291,10 +303,15 @@ def _build_bricked_rope_tables(
     dtype: ttnn.DataType,
     w_shard: tuple[int, int] | None = None,
     h_shard: tuple[int, int] | None = None,
+    packed: bool = False,
 ) -> _RopeTables:
     """Fused RoPE in bricked site order, one row per (site, head). The factored frame/time form
-    does not survive bricking. Built once per stage, sliced per band on ``T_br``."""
+    does not survive bricking. Built once per stage, sliced per band on ``T_br``.
+
+    ``packed`` lays the same values out one row per site, ``num_heads * head_dim`` wide.
+    """
     head_dim = sum(dim_split)
+    row_width = head_dim * num_heads if packed else head_dim
     brick_time, brick_height, brick_width = brick
 
     def table_for_shard(
@@ -336,14 +353,14 @@ def _build_bricked_rope_tables(
         )
         fused = _RopeParts(
             cos=sharded_from_torch(
-                torch.stack(cos_parts).reshape(hs, 1, -1, head_dim).contiguous(),
+                torch.stack(cos_parts).reshape(hs, 1, -1, row_width).contiguous(),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
                 mesh_axes=[h_axis, None, sp_axis, None],
             ),
             sin=sharded_from_torch(
-                torch.stack(sin_parts).reshape(hs, 1, -1, head_dim).contiguous(),
+                torch.stack(sin_parts).reshape(hs, 1, -1, row_width).contiguous(),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
@@ -355,13 +372,13 @@ def _build_bricked_rope_tables(
         cos, sin = table_for_shard((grid.t, grid.h, grid.w), 0)
         fused = _RopeParts(
             cos=ttnn.from_torch(
-                cos.reshape(1, 1, -1, head_dim).contiguous(),
+                cos.reshape(1, 1, -1, row_width).contiguous(),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
             ),
             sin=ttnn.from_torch(
-                sin.reshape(1, 1, -1, head_dim).contiguous(),
+                sin.reshape(1, 1, -1, row_width).contiguous(),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
@@ -370,7 +387,7 @@ def _build_bricked_rope_tables(
         volume = (grid.t, grid.h, grid.w)
 
     dummy = ttnn.from_torch(torch.zeros(1, 1, 1, head_dim), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-    sites_per_t_br = sites_per_t_brick(volume, brick) * num_heads
+    sites_per_t_br = sites_per_t_brick(volume, brick) * (1 if packed else num_heads)
     return _RopeTables(
         frame=fused,
         time=_RopeParts(cos=dummy, sin=dummy),
@@ -378,6 +395,7 @@ def _build_bricked_rope_tables(
         fused=fused,
         brick=brick,
         sites_per_t_br=sites_per_t_br,
+        packed=packed,
     )
 
 
@@ -496,6 +514,7 @@ class _NeighborhoodAttention3D(Module):
         fused_qkv: bool = False,
         tp_proj: bool = True,
         h_axis: int | None = None,
+        packed_lanes: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -557,10 +576,36 @@ class _NeighborhoodAttention3D(Module):
             packer_l1_acc=False,
         )
 
+        # Packed lanes: per-head RMS from a (width, 32) mean matmul, spread back over each head's
+        # lanes by a (32, width) matmul that also carries the norm gain (and Q's scale).
+        self.packed_lanes = packed_lanes and fused_qkv
+        if self.packed_lanes:
+            width = self.heads_local * config.head_dim
+            constant = {"device": mesh_device, "layout": ttnn.TILE_LAYOUT, "dtype": dtype}
+            self.head_mean = ttnn.from_torch(head_mean_matrix(self.heads_local, config.head_dim), **constant)
+            self.norm_eps_row = ttnn.from_torch(torch.full((1, TILE), config.norm_eps), **constant)
+            self.trans_mat = ttnn.from_torch(pair_swap_matrix(TILE).reshape(1, 1, TILE, TILE), **constant)
+            self.q_gain = Parameter(total_shape=[TILE, width], device=mesh_device, dtype=dtype)
+            self.k_gain = Parameter(total_shape=[TILE, width], device=mesh_device, dtype=dtype)
+            # rotary_embedding_llama refuses fp32 dest above a 128-wide head; the swap is a signed
+            # permutation and the products are rounded to bf16 per op today, so nothing is lost.
+            self.packed_rope_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Checkpoints ship one Linear(dim, 3*dim) under qkv.*, split [q | k | v] along the output dim.
         # Kept fused, it is regrouped device-major so each chip's column shard is its own q, k and v.
         devices = self.config.num_heads // self.heads_local
+        if self.packed_lanes:
+            for lane, scale in (("q", self.scale), ("k", 1.0)):
+                gamma = state.get(f"{lane}_norm.weight")
+                if gamma is not None:
+                    state[f"{lane}_gain"] = head_gain_matrix(gamma, self.heads_local, scale)
         for leaf in ("weight", "bias"):
             fused = state.pop(f"qkv.{leaf}", None)
             if fused is None:
@@ -573,6 +618,30 @@ class _NeighborhoodAttention3D(Module):
     def _rope(self, x: ttnn.Tensor, tables: _RopeTables) -> ttnn.Tensor:
         """**Consumes** ``x``."""
         return _apply_rope(x, tables, pair_swap=self.pair_swap, compute_kernel_config=self.swap_compute_config)
+
+    def _packed_lane(self, x: ttnn.Tensor, gain: ttnn.Tensor, tables: _RopeTables) -> ttnn.Tensor:
+        """RMSNorm per head, gain, then RoPE on a packed ``(1, 1, sites, heads * head_dim)`` lane.
+        **Consumes** ``x``.
+
+        The per-head factor is constant over a head's lanes, so normalizing before the rotation
+        matches the per-head RMSNorm exactly; the per-lane gain must still precede it.
+        """
+        squares = ttnn.square(x)
+        mean = consume(
+            squares, ttnn.linear, self.head_mean, bias=self.norm_eps_row, compute_kernel_config=self.swap_compute_config
+        )
+        inverse = consume(mean, ttnn.rsqrt)
+        factor = consume(inverse, ttnn.matmul, gain, compute_kernel_config=self.swap_compute_config)
+        normed = consume_all(ttnn.multiply, x, factor)
+        return consume(
+            normed,
+            ttnn.experimental.rotary_embedding_llama,
+            tables.fused.cos,
+            tables.fused.sin,
+            self.trans_mat,
+            is_decode_mode=False,
+            compute_kernel_config=self.packed_rope_config,
+        )
 
     def _normed(self, norm, x: ttnn.Tensor, *, scale: float | None = None) -> ttnn.Tensor:
         """``norm(x)``, optionally scaled, consuming ``x``."""
@@ -647,8 +716,13 @@ class _NeighborhoodAttention3D(Module):
             with timing_tree.span(
                 self.mesh_device, "qkv-lanes: slice+norm+rope", category=timing_tree.NORM_ROPE, deep=True
             ):
-                q = prep(self._rope(self._normed(self.q_norm, lane(0), scale=self.scale), tables))
-                k = prep(self._rope(self._normed(self.k_norm, lane(1)), tables))
+                if tables.packed:
+                    assert self.packed_lanes and brick is not None and sharded, "packed RoPE tables need packed lanes"
+                    q = self._packed_lane(slice_last(packed, 0, width), self.q_gain.data, tables)
+                    k = self._packed_lane(slice_last(packed, width, 2 * width), self.k_gain.data, tables)
+                else:
+                    q = prep(self._rope(self._normed(self.q_norm, lane(0), scale=self.scale), tables))
+                    k = prep(self._rope(self._normed(self.k_norm, lane(1)), tables))
                 if brick is not None and sharded and lean_layout_enabled():
                     # The W-sharded executor untilizes V into site-major rows, which the packed
                     # (sites, heads * head_dim) slice already is.
@@ -693,6 +767,7 @@ class _NeighborhoodAttention3D(Module):
             brick=brick,
             stride=cfg.gna_stride,
             h_axis=self.h_axis,
+            packed_heads=heads if tables.packed else None,
         )
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
@@ -720,6 +795,7 @@ class DiffusionNABlock(Module):
         fused_qkv: bool = False,
         tp_proj: bool = True,
         h_axis: int | None = None,
+        packed_lanes: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -749,6 +825,7 @@ class DiffusionNABlock(Module):
             sp_axis=sp_axis,
             tp_axis=tp_axis,
             fused_qkv=fused_qkv,
+            packed_lanes=packed_lanes,
             tp_proj=tp_proj,
             h_axis=h_axis,
         )
@@ -950,6 +1027,14 @@ class DiffVAEStage5(Module):
         # TP-over-heads on a second mesh axis: only the per-head attention shards over it.
         self.tp_axis = tp_axis
         self._keep_bricked = self.kernel.keep_bricked
+        self._packed_lanes = (
+            packed_lanes_enabled()
+            and fused_qkv
+            and self._w_sharded
+            and self._keep_bricked
+            and tp_axis is None
+            and lean_layout_enabled()
+        )
         self._brick: tuple[int, int, int] | None = None
         # Frames per band, or None for the whole volume; see bands().
         self.slab_frames = slab_frames
@@ -986,6 +1071,7 @@ class DiffVAEStage5(Module):
                 sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 fused_qkv=fused_qkv,
+                packed_lanes=self._packed_lanes,
                 tp_proj=tp_proj,
                 h_axis=self.h_axis,
             )
@@ -1102,6 +1188,7 @@ class DiffVAEStage5(Module):
                     dtype=self.dtype,
                     w_shard=w_shard,
                     h_shard=(self.hs, self.h_axis) if self.h_axis is not None else None,
+                    packed=self._packed_lanes and w_shard is not None,
                 )
             else:
                 assert w_shard is None, "a W-sharded stage 5 keeps bricked; the factored table is replicated only"
