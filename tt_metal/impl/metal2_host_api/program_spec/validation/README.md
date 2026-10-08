@@ -1,18 +1,17 @@
-# ProgramSpec validation
+# ProgramSpec validation folder
 
-This folder implements `ValidateProgramSpec`.
-This function peforms invariant validation for `ProgramSpec`.
+There are 3 stages to transform a `ProgramSpec` into a `Program`.
 
-The invariant tests are listed under:
-`tests/tt_metal/tt_metal/api/metal2_host_api/unit_tests/invariant_tests/`.
+1. Structural lookup table build-up.
+2. **Validation of `ProgramSpec`** <- you're here.
+3. Construct the actual `Program`.
 
-## Folder organization
+## Folder structure
 
-This folder is organized by domain of validation.
-
-| Directory / file | What it checks |
+| Directory / file | Validation target |
 |---|---|
-| `resource/` | Validate resources (e.g. dfb, scratchpad) associated with a `ProgramSpec`, e.g. binding |
-| `placement/` | Validate placements of kernels and resources |
-| `kernel_spec.cpp`, `hardware_config.cpp` | Validate properties of `KernelSpec` that are not listed above |
-| `program_spec.cpp` | Validate properties of `ProgramSpec` that are not listed above |
+| `validate_spec.cpp` | Driver function |
+| `program_spec.cpp` | Fields on `ProgramSpec` not covered by other validations |
+| `placement/` | Work units, kernel placement, node capacity |
+| `kernel_spec.cpp`, `hardware_config.cpp` | Fields on `KernelSpec` that are not resource related |
+| `resource/` | Memory Resource & their bindings & relations |
