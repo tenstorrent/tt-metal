@@ -24,6 +24,9 @@ struct SparseMatmulParams {
     std::optional<const tt::tt_metal::Tile> output_tile;
     std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    // false: leave rows of skipped batches uninitialized instead of zero-filling the whole output first. Only valid
+    // when the consumer never reads them (e.g. a following is_input_a_sparse matmul with the same sparsity).
+    bool zero_init_output = true;
 };
 
 struct SparseMatmulInputs {

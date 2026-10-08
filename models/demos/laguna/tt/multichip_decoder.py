@@ -279,6 +279,8 @@ class MultichipDecoder(OptimizedDecoder):
         self._router_sharded_logits = _parse_binary_env("TT_LAGUNA_ROUTER_SHARDED_LOGITS", True)
         self._router_fp32_out = self.D > 1 and self.PACK_GATE_UP and _parse_binary_env("TT_LAGUNA_ROUTER_FP32_OUT", True)
         self._token_dispatch_fallback_reason = "feature flag is disabled"
+        # routed gate+up sparse matmul skips the output zero-fill (needs ttnn sparse_matmul zero_init_output)
+        self._gu_skip_zero_init = _parse_binary_env("TT_LAGUNA_MOE_GU_SKIP_ZERO_INIT", True)
         # Prefill attention gate without head reshapes: a 0/1 [nh, nh*hd] matrix expands the per-head softplus gate
         # to full width (each output = 1.0 x one gate value, fp32 accumulation -> exact), then one flat multiply.
         # The [seq, nh, hd] reshape pads nh to a full tile (12 or 18 -> 32) and copied ~2.7x the attention output.
@@ -1086,6 +1088,10 @@ class MultichipDecoder(OptimizedDecoder):
         moe_mem = ttnn.L1_MEMORY_CONFIG if sharded and self.moe_decode_in_l1 else ttnn.DRAM_MEMORY_CONFIG
         otile = ttnn.Tile([TILE, TILE])
         gu_pc = _sparse_pc(2 * I, matmul_m, H)  # packed gate+up, N = 2*I
+        # The down projection below reads only the experts active in its sparsity, which (without tile-sparse
+        # grouping) is this matmul's sparsity, whose rows are all computed. So the inactive experts' output need not
+        # be zero-filled first (~13.6 us per decode MoE layer for [64, 32, 2048]).
+        gu_kw = {} if tile_sparse or not getattr(self, "_gu_skip_zero_init", False) else {"zero_init_output": False}
         gu = ttnn.sparse_matmul(
             a,
             self.w["exp_gate_up"],
@@ -1094,6 +1100,7 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=self._ck_moe,
             memory_config=moe_mem,
             output_tile=otile,
+            **gu_kw,
         )
         if tile_sparse:
             # sparse_matmul orders output batches as A-batches then B-batches:
