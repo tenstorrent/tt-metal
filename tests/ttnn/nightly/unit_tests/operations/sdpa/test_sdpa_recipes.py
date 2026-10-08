@@ -113,6 +113,35 @@ def test_sdpa_recipe_scale(device, variant, scale, q_multiplier):
     check_legacy_arguments(device, variant, scale=scale, mask=scale == 0.3, q_multiplier=q_multiplier)
 
 
+@pytest.mark.parametrize("scale", [0.125, 1.0, 0.3])
+@pytest.mark.parametrize("mask_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bfp8"])
+@pytest.mark.parametrize("variant", ["balanced", "accurate"])
+def test_sdpa_recipe_narrow_mask_prescale(device, variant, mask_dtype, scale):
+    """FP32-state recipes keep a BF16/BFP8 attn_mask narrow when its 1/scale pre-scale is exact (a power of two);
+    other scales widen it to FP32 first. Either way the result is bitwise that of the same mask values given as
+    FP32. FP64 bound on the stored mask."""
+    q, k, v = randn(2, 4, 600, 64, seed=60), randn(2, 4, 600, 64, seed=61), randn(2, 4, 600, 64, seed=62)
+    generator = torch.Generator().manual_seed(63)
+    mask = torch.randn(2, 1, 600, 600, generator=generator) * 3
+    mask[torch.rand(mask.shape, generator=generator) < 0.2] = -1e9
+    mask = stored(mask.bfloat16(), mask_dtype).float()
+    narrow, wide = to_device(device, mask, mask_dtype), to_device(device, mask, ttnn.float32)
+    tensors = [to_device(device, x) for x in (q, k, v)]
+    run = lambda m: ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            *tensors,
+            is_causal=False,
+            attn_mask=m,
+            scale=scale,
+            program_config=program_config(device, 128, 256),
+            precision=VARIANTS[variant][0],
+        )
+    )
+    actual = run(narrow)
+    assert torch.equal(actual, run(wide))
+    assert l2_pct(actual, reference(q, k, v, mask, scale)) < L2_PCT_BOUND[variant]
+
+
 @pytest.mark.parametrize(
     "q_dtype, kv_dtype",
     [

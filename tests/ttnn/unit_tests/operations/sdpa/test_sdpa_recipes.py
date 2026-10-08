@@ -3,8 +3,8 @@
 """SDPA precision recipes (ttnn.SDPAPrecision): the fast subset that runs in the ttnn sanity sdpa group.
 
 Every recipe once, plus masks, causal / sliding-window / chunked / windowed key ranges, paged K/V, MLA, attention
-sinks, concatenated-heads output, joint attention, op-selected blocking, program cache and trace, rejected arguments and
-prepare_sdpa_input. The sweeps (all shapes, long K, rising maxima, every recipe for masks / joint / blocking)
+sinks, concatenated-heads output, joint attention, op-selected blocking, program cache and trace, precision routing,
+rejected arguments and prepare_sdpa_input. The sweeps (all shapes, long K, rising maxima, every recipe for masks / joint / blocking)
 are in tests/ttnn/nightly/unit_tests/operations/sdpa/test_sdpa_recipes.py.
 """
 
@@ -28,6 +28,7 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_recipe_test_utils import (
     check_legacy_arguments,
     check_mla,
     check_op_selected_blocking,
+    check_routing,
     check_sink,
     check_windowed,
     MLA_SHAPES,
@@ -144,6 +145,16 @@ def test_sdpa_recipe_legacy_arguments(device, variant):
         shape=(2, 3, 1, 288, 640, 64, 96, 160),
         grid=(2, 2),
     )
+
+
+# Precision routing (no `precision`): FP32 dest runs ACCURATE (dense causal with BFP8 Q/K/V and a custom scale; an
+# attn_mask call whose Q2048 chunk the recipe does not take, so the op picks the blocking; chunked prefill from a
+# start tensor), non-ring joint runs STANDARD (ACCURATE with FP32 dest).
+@pytest.mark.parametrize(
+    "case", ["dense_causal_bfp8", "dense_mask_q2048", "chunked_tensor_start", "joint_bf16_dest", "joint_fp32_dest"]
+)
+def test_sdpa_precision_routing(device, case):
+    check_routing(device, case)
 
 
 @pytest.mark.parametrize(

@@ -556,3 +556,73 @@ def check_chunked_trace(device, variant, starts, *, q_chunk=128, k_chunk=256):
             chunked.check(traced, start)
     finally:
         ttnn.release_trace(device, trace)
+
+
+def fp32_dest_config(device):
+    """The shared HiFi4 + FP32-dest config legacy callers pass (it selected the legacy kernels)."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def check_routing(device, case):
+    """Precision routing: a call without `precision` that would reach a legacy loop runs a recipe (FP32 dest ->
+    ACCURATE; non-ring joint -> STANDARD, or ACCURATE with FP32 dest). With chunk sizes the recipe supports, the
+    routed call is bitwise the explicit recipe's; chunk sizes it does not support (Q2048) leave the blocking to the
+    op. Either way the output meets the recipe's FP64 bound."""
+    fp32 = fp32_dest_config(device)
+    accurate, standard = ttnn.SDPAPrecision.ACCURATE, ttnn.SDPAPrecision.STANDARD
+    if case in ("dense_causal_bfp8", "dense_mask_q2048"):
+        causal = case == "dense_causal_bfp8"
+        dtype = ttnn.bfloat8_b if causal else ttnn.bfloat16
+        q, k, v = (stored(randn(1, h, 1000, 128, seed=80 + i), dtype) for i, h in enumerate((4, 2, 2)))
+        mask = None if causal else key_mask(1000, 1000, window=512)[None, None]
+        kwargs = dict(is_causal=causal, scale=0.1, attn_mask=None if causal else to_device(device, mask))
+        tensors = [to_device(device, x, dtype) for x in (q, k, v)]
+        cfg = program_config(device, 256, 512) if causal else program_config(device, 2048, 512)
+        run = lambda **extra: ttnn.transformer.scaled_dot_product_attention(
+            *tensors, program_config=cfg, **kwargs, **extra
+        )
+        routed, recipe = run(compute_kernel_config=fp32), accurate
+        expected = reference(q, k, v, key_mask(1000, 1000, causal=True) if causal else mask, 0.1)
+        explicit = run(precision=recipe) if causal else None
+        tolerance = 1.5 * l2_pct(stored(expected.bfloat16(), dtype), expected)  # BFP8 output, as legacy
+    elif case == "chunked_tensor_start":
+        chunked = ChunkedCase(device, "accurate", sq=256, blocks_per_seq=4, block=128)
+        start = int_tensor(device, [256])
+        run = lambda **extra: ttnn.transformer.chunked_scaled_dot_product_attention(
+            *chunked.inputs,
+            chunked.page_table,
+            chunk_start_idx_tensor=start,
+            program_config=program_config(device, 128, 256),
+            **extra,
+        )
+        routed, recipe = run(compute_kernel_config=fp32), accurate
+        explicit, expected, tolerance = run(precision=recipe), chunked.expected(256), 0.0
+    else:  # joint_bf16_dest / joint_fp32_dest
+        recipe = accurate if case == "joint_fp32_dest" else standard
+        q, k, v = randn(1, 2, 600, 128, seed=90), randn(1, 2, 600, 128, seed=91), randn(1, 2, 600, 128, seed=92)
+        jq, jk, jv = randn(1, 2, 77, 128, seed=93), randn(1, 2, 77, 128, seed=94), randn(1, 2, 77, 128, seed=95)
+        tensors = [to_device(device, x) for x in (q, k, v, jq, jk, jv)]
+        run = lambda **extra: torch.cat(
+            [
+                ttnn.to_torch(x)
+                for x in ttnn.transformer.joint_scaled_dot_product_attention(
+                    *tensors, joint_strategy="rear", program_config=program_config(device, 128, 256), **extra
+                )
+            ],
+            2,
+        )
+        routed = run(compute_kernel_config=fp32) if recipe == accurate else run()
+        explicit, tolerance = run(precision=recipe), 0.0
+        expected = reference(torch.cat([q, jq], 2), torch.cat([k, jk], 2), torch.cat([v, jv], 2))
+    routed = routed if isinstance(routed, torch.Tensor) else ttnn.to_torch(routed)
+    if explicit is not None:
+        explicit = explicit if isinstance(explicit, torch.Tensor) else ttnn.to_torch(explicit)
+        assert torch.equal(routed, explicit), "the routed call must run the explicit recipe"
+    name = "accurate" if recipe == accurate else "standard"
+    assert l2_pct(routed, expected) < L2_PCT_BOUND[name] + tolerance

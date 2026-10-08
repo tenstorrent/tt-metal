@@ -9,6 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 )
 import ttnn
 from loguru import logger
+from models.common.utility_functions import is_blackhole
 import pytest
 
 
@@ -199,7 +200,13 @@ def test_joint_sdpa_zero_chunk_size(device, expect_error, q_chunk_size, k_chunk_
 def test_joint_sdpa_zero_heads(device, expect_error):
     q, k, v, joint_q, joint_k, joint_v = _zero_div_tensors(device, 6, heads=0)
     program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=(1, 1), q_chunk_size=32, k_chunk_size=32)
-    with expect_error(RuntimeError, "Q num_heads must be equal to K num_heads, and greater than 0"):
+    # Blackhole routes joint SDPA to a recipe (no `precision`: STANDARD), whose validation words it differently.
+    message = (
+        "matching positive batch/head counts"
+        if is_blackhole()
+        else "Q num_heads must be equal to K num_heads, and greater than 0"
+    )
+    with expect_error(RuntimeError, message):
         ttnn.transformer.joint_scaled_dot_product_attention(
             q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
         )
