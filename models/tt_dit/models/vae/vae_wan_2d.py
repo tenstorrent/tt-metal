@@ -462,13 +462,14 @@ class WanVaeDecoder2DAdapter:
         self.patch_size: int = hf_config.get("patch_size") or 1
         # Wan 2.1 style configs, such as Qwen-Image's, omit the keys that default to the Wan 2.1 VAE.
         self.spatial_compression_ratio: int = hf_config.get("scale_factor_spatial", 8)
+        # One tracer per latent size, created on first use.
+        self._tracers: dict[tuple[int, int], Tracer] = {}
 
         if use_torch:
             self._torch_vae = AutoencoderKLWan.from_pretrained(
                 checkpoint_name, subfolder="vae", torch_dtype=torch.float32
             )
             self._decoder = None
-            self._tracer = None
             self._tt_latents_std = None
             self._tt_latents_mean = None
         else:
@@ -485,7 +486,6 @@ class WanVaeDecoder2DAdapter:
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            self._tracer = Tracer(self._rescale_and_decode, device=self._device, clone_prep_inputs=False)
             self._tt_latents_std = tensor.from_torch(torch.tensor(hf_config["latents_std"]), device=self._device)
             self._tt_latents_mean = tensor.from_torch(torch.tensor(hf_config["latents_mean"]), device=self._device)
 
@@ -523,7 +523,9 @@ class WanVaeDecoder2DAdapter:
             layout=ttnn.TILE_LAYOUT,
             mesh_axes=_bhwc_mesh_axes(self._parallel_config),
         )
-        tt_out = self._tracer(tt_latents, traced=traced)
+        if (h, w) not in self._tracers:
+            self._tracers[h, w] = Tracer(self._rescale_and_decode, device=self._device, clone_prep_inputs=False)
+        tt_out = self._tracers[h, w](tt_latents, traced=traced)
         torch_out = tensor.to_torch(tt_out)
         b, out_h, _ = torch_out.shape
         torch_out = torch_out.reshape(b, out_h, w * self.spatial_compression_ratio // self.patch_size, -1)
@@ -553,13 +555,14 @@ class WanVaeEncoder2DAdapter:
         self.patch_size: int = hf_config.get("patch_size") or 1
         # Wan 2.1 style configs, such as Qwen-Image's, omit the keys that default to the Wan 2.1 VAE.
         self.spatial_compression_ratio: int = hf_config.get("scale_factor_spatial", 8)
+        # One tracer per image size, created on first use.
+        self._tracers: dict[tuple[int, int], Tracer] = {}
 
         if use_torch:
             self._torch_vae = AutoencoderKLWan.from_pretrained(
                 checkpoint_name, subfolder="vae", torch_dtype=torch.float32
             )
             self._encoder = None
-            self._tracer = None
             self._tt_latents_mean = None
             self._tt_latents_scaling = None
         else:
@@ -576,7 +579,6 @@ class WanVaeEncoder2DAdapter:
                 parallel_config=parallel_config,
                 ccl_manager=ccl_manager,
             )
-            self._tracer = Tracer(self._encode_and_rescale, device=self._device, clone_prep_inputs=False)
             self._tt_latents_mean = tensor.from_torch(self._latents_mean, device=self._device)
             self._tt_latents_scaling = tensor.from_torch(1.0 / self._latents_std, device=self._device)
 
@@ -625,7 +627,9 @@ class WanVaeEncoder2DAdapter:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_axes=mesh_axes,
         )
-        tt_out = self._tracer(tt_images, traced=traced)
+        if (h, w) not in self._tracers:
+            self._tracers[h, w] = Tracer(self._encode_and_rescale, device=self._device, clone_prep_inputs=False)
+        tt_out = self._tracers[h, w](tt_images, traced=traced)
         return tensor.to_torch(tt_out, mesh_axes=mesh_axes)
 
 

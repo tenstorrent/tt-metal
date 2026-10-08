@@ -29,7 +29,11 @@ DOG_IMAGE_PATH = Path(__file__).resolve().parents[4] / "demos" / "multimodal" / 
     ids=["line"],
     indirect=True,
 )
-@pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])
+@pytest.mark.parametrize(
+    ("width", "height", "num_inference_steps"),
+    [(1024, 1024, 50), (1344, 1344, 50), (1664, 928, 50), (928, 1664, 50)],
+    ids=["1024x1024", "1344x1344", "1664x928", "928x1664"],
+)
 @pytest.mark.parametrize(
     ("mesh_device", "cfg", "sp", "tp", "encoder_tp", "encoder_fsdp", "topology", "num_links"),
     [
@@ -91,8 +95,6 @@ def test_qwenimage_pipeline(
             use_torch_vae_decoder=False,
             num_links=num_links,
             topology=topology,
-            width=width,
-            height=height,
         ),
     )
 
@@ -138,6 +140,8 @@ def test_qwenimage_pipeline(
             prompts=[prompt],
             num_inference_steps=num_inference_steps,
             seed=seed,
+            width=width,
+            height=height,
             traced=traced,
         )
 

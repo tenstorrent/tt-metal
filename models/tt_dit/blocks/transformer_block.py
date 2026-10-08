@@ -196,7 +196,7 @@ class TransformerBlock(Module):
         spatial: ttnn.Tensor,
         prompt: ttnn.Tensor,
         time_embed: ttnn.Tensor,
-        spatial_sequence_length: int,
+        spatial_sequence_length: int | ttnn.Tensor,
         *,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         prompt_rope: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
