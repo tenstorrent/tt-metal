@@ -49,8 +49,8 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer dfb_values(cb_values);
     DataflowBuffer dfb_indices(cb_indices);
-    DataflowBuffer dfb_stick(cb_stick);    // writer-private scratch: never pushed
-    DataflowBuffer dfb_bounce(cb_bounce);  // writer-private scratch: never pushed
+    DataflowBuffer dfb_stick(cb_stick);
+    DataflowBuffer dfb_bounce(cb_bounce);
 
     // Scratch bases stay fixed (nothing pushed); the 64 B bounce slots rely on the allocator's 64 B CB alignment.
     const uint32_t stick_base = dfb_stick.get_write_ptr();

@@ -913,7 +913,7 @@ def _tree_merge_sub_core_grid(device, local_x, local_y):
 @pytest.mark.parametrize("largest", (True, False))
 @pytest.mark.parametrize("stable", (False, True))
 def test_topk_multicore_tree_merge(local_x, local_y, k, largest, stable, device):
-    """Pairwise tree merge over n local cores (#56797); H=64 runs the per-row handshake across two tile rows."""
+    """Pairwise tree merge over n local cores; H=64 runs the per-row handshake across two tile rows."""
     torch.manual_seed(2007)
     W = 16384
     sub_core_grids = _tree_merge_sub_core_grid(device, local_x, local_y)

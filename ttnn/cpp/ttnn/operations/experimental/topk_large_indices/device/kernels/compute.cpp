@@ -230,7 +230,7 @@ FORCE_INLINE void merge_landed_survivor(
         copy_tile(landing_cb, tile, incoming_slot + tile);
     }
     landing.pop_front(survivor_tiles);
-    // The integer landing format switched the FPU to int math; the rebuild transposes need the float path.
+    // The integer landing format leaves the FPU in int math; the rebuild transposes need the float path.
     reconfig_data_format_srca(input_cb);
 
     topk_xl_init<K, false>();
@@ -363,8 +363,7 @@ void kernel_main() {
         }
     }
     if (num_recv_rounds > 0 || sends_survivor) {
-        // Workaround for #57205 until its root cause is known: without one discarded datacopy here the next
-        // program's first tile on this core is corrupt.
+        // Workaround: one discarded datacopy here keeps the next program's first tile on this core intact.
         reconfig_data_format_srca(input_cb);
         copy_init(input_cb);
         tile_regs_acquire();

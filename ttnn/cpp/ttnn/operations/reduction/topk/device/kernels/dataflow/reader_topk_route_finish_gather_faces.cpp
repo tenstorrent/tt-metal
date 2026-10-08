@@ -39,8 +39,8 @@ void kernel_main() {
     const auto idx = TensorAccessor(idx_args, idx_addr);
 
     Noc noc;
-    DataflowBuffer dfb_stick(cb_stick);    // reader-private scratch: never pushed
-    DataflowBuffer dfb_bounce(cb_bounce);  // reader-private scratch: never pushed
+    DataflowBuffer dfb_stick(cb_stick);
+    DataflowBuffer dfb_bounce(cb_bounce);
     DataflowBuffer dfb_values(cb_values);
     DataflowBuffer dfb_indices(cb_indices);
 
