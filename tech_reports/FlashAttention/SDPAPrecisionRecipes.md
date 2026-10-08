@@ -111,8 +111,11 @@ compute level; they cut K/V bandwidth and L1 to about a half or a quarter.
 - `is_causal`, `sliding_window_size` (causal or centred), windowed attention (`cu_window_seqlens` with
   `windowed_q_token_offset` or its tensor form) and chunked prefill (`chunk_start_idx` or `chunk_start_idx_tensor`)
   through the [K-range model](#causal-sliding-window-chunked-and-windowed-attention). Causal and sliding windows
-  need Sq == Sk, as in the legacy kernel. Chunked prefill takes one cache block per sequence (page table [B, 1]);
-  multi-block page tables, `paged_cache_geometry` and attention sinks are not supported yet.
+  need Sq == Sk, as in the legacy kernel. Chunked prefill reads a paged K/V cache (page table [B, blocks per
+  sequence], `paged_cache_geometry`).
+- [MLA prefill, attention sinks and concatenated heads](#paged-kv-mla-attention-sinks-and-concatenated-heads):
+  `flash_mla_prefill` and `chunked_flash_mla_prefill` take `precision`; `attention_sink` and
+  `output_concat_heads` work on dense SDPA (sinks also on chunked SDPA).
 - Batch and GQA are supported, with any number of batch/heads (more than the grid's cores is fine). Q/K lengths
   need not be tile or chunk multiples. Head dim and chunk sizes must be tile multiples, and the chunks must fit in
   L1.
@@ -177,6 +180,27 @@ offset.
 Throughput on one P150b (8192² × 10 heads, D128, Q256/K512, full grid): causal STANDARD 2.21 ms, FAST BFP8 1.55 ms,
 ACCURATE 3.22 ms, against 1.96 ms for the legacy BF16-dest kernel (noncausal STANDARD 1.78 ms, which keeps the K/V
 chain). Edge chunks run the unfused path, so causal STANDARD per core is about 1.15x the legacy kernel.
+
+## Paged K/V, MLA, attention sinks and concatenated heads
+
+- **Paged K/V.** The reader translates each K/V tile row through the sequence's page-table row (cache block
+  `table[b][t / block]`, row `t % block`), so blocks may be in any order and need not align with the K chunk. With
+  `paged_cache_geometry` the cache was declared for another layer: the call's block size and KV heads address it,
+  and they must cover each block's elements exactly (legacy rule; not with MLA).
+- **MLA** (`head_dim_v` < the QK head dim). Q and K keep the QK width; V, the numerator state, PV and the output use
+  `head_dim_v`, with their own matmul subblock width. Without a V tensor (`flash_mla_prefill(q, k, head_dim_v)`,
+  `chunked_flash_mla_prefill`) the reader takes V as K's first `head_dim_v` columns, as the legacy kernel does.
+- **Attention sinks** (`attention_sink` [1, H, 1, 1], unscaled logits as in the legacy op): each row's softmax
+  denominator gains exp(scale·sink). One hook at normalization adds k·exp(scale·(sink − m)) to l (accurate FP32
+  exp), where m is the maximum the row's P were taken against and k is the score path's mean factor
+  (P ≈ k·exp(scale·(s − m)): 0.970 for ACCURATE, 0.965 for BALANCED, 1.005·2⁻²⁸ for STANDARD and FAST with their
+  headroom; measured with a sink that takes nearly all of a row's weight). Accuracy is unchanged with or without a
+  dominant sink.
+- **`output_concat_heads`** writes [B, 1, Sq, H·Dv] from the writer (the same tiles at concatenated addresses).
+
+Each is a compile-time switch that is off unless the call uses it; builds without them are unchanged. The largest
+program (STANDARD fused Q256/K512 with a sink) holds 65,968 B of code and data for the 70,656 B kernel config buffer
+(without the sink 63,572 B).
 
 ## Blocking
 
