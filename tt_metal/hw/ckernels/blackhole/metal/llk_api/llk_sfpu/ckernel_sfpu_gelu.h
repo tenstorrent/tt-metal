@@ -421,13 +421,31 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     sfpi::vFloat result = 0.0f;  // Default: 0 for x <= -13.375
 
+    // NaN (fp32 destination only). The region tests are sign-magnitude ordered compares, which
+    // sort +NaN above +inf and -NaN below -inf, so +NaN used to saturate to 1.0 and -NaN to fall
+    // through to 0 (tenstorrent/tt-llk#1701 item 12). x*1 and x*-1 are exact for every other
+    // input (a denormal flushes to a zero, which lands in the same region) and turn every NaN
+    // into the canonical +NaN. Testing -x <= -3.1719 then keeps NaN out of the saturation
+    // region, and x >= -3 sends it into the polynomial, which propagates it. The two SFPMADs pay
+    // for x*x, which both remaining regions computed separately before; net one instruction.
+    // A bfloat16 destination keeps the plain compares: convert<vFloat16b> below (SFPSTOCHRND)
+    // turns any NaN into an infinity, so that arm could not return NaN anyway.
+    sfpi::vFloat neg_x, x2;
+    if constexpr (is_fp32_dest_acc_en) {
+        neg_x = __builtin_rvtt_sfpmad(
+            x.get(), sfpi::vFloat(-1.0f).get(), sfpi::vFloat(0.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        x = __builtin_rvtt_sfpmad(
+            x.get(), sfpi::vFloat(1.0f).get(), sfpi::vFloat(0.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        x2 = x * x;
+    }
+
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
-    v_if(x >= 3.1719f) { result = 1.0f; }
+    v_if(is_fp32_dest_acc_en ? (neg_x <= -3.1719f) : (x >= 3.1719f)) { result = 1.0f; }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
     v_elseif(x >= -3.0f) {
-        sfpi::vFloat u = x * x;
+        sfpi::vFloat u = is_fp32_dest_acc_en ? x2 : x * x;
         sfpi::vFloat h = PolynomialEvaluator::eval(
             u,
             GELU_DERIV_H0,
@@ -455,7 +473,9 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     v_elseif(x > -13.375f) {
         constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
 
-        sfpi::vFloat x2 = x * x;
+        if constexpr (!is_fp32_dest_acc_en) {
+            x2 = x * x;
+        }
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
         sfpi::vFloat x_exp = x_times_exp_negative_tail(x, t);
