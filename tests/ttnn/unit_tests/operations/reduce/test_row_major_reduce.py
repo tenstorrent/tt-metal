@@ -16,8 +16,7 @@ from models.common.utility_functions import torch_random
 @pytest.mark.parametrize(
     "input_shape, dim, keepdim",
     [
-        # Test cases from rm_reduce.py, scaled down from (512, 1024, 1, 2): the degenerate H=1/W=2 slab
-        # pads each row to a full tile, so the original was ~512x tile inflation (up to ~4 min per case on ttsim)
+        # Test cases from rm_reduce.py: degenerate H=1/W=2 slabs, each padded to a full tile
         ((32, 32, 1, 2), -1, False),
         ((32, 32, 1, 2), -1, True),
         ((32, 32, 1, 2), -2, False),
