@@ -16,3 +16,11 @@ Device A/B of DIFFVAE_S5_PACKED_LANES=1 (b8c2b3403f8, branch ttp/t242-..., pushe
 - vs #214 host-noise refs: def PCC 0.999956/0.999957, PSNR 55.56/55.12; packed PCC 0.999956/0.999957, PSNR 55.51/55.07 (-0.05 dB).
 - packed vs def: PCC 0.999958, PSNR 55.7/55.3. Decision: PASS, faster -> flip default on, land on t48, video + still.
 - No drops.
+
+## Land (2026-10-08 standard wake)
+- Branch ttp/t243-land = origin/t48 @94958f7acee + cherry-pick of b8c2b3403f8 (03b11f85782) + default flip 34a571c5f47
+  (DIFFVAE_S5_PACKED_LANES on unless =0; unit test test_packed_lanes_default_on fails without the flip).
+- First `ttp push --detach` failed (exit 4) only because I switched the worktree branch while its checks ran
+  (test_denoise_trims.py vanished mid-run); it passes on the land tree. Rerun: state/pushes/t243-20261008-013902-514950.json.
+- Media: blx01 /var/tmp/fasth3/t242/out/packed/packed_seed{0,1}.mp4 (+ _t3s.jpg stills), side-by-side def vs packed
+  frame 72 in tt-project/t243/media/ (frame PSNR 53.3 dB, no visible difference).
