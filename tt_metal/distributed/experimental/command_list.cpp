@@ -945,6 +945,13 @@ void CommandListBuilderImpl::resolve_parameters(
             auto& program = *captured.trace_node.program;
             const auto* expected_spec = program.get_tensor_parameter_layout(*info.param_name);
             TT_FATAL(expected_spec != nullptr, "TensorParameter '{}' is not declared by the program", info.param_name);
+            for (const auto& [dfb_id, borrowed_param_name] : program.get_dfb_borrowed_bindings()) {
+                TT_FATAL(
+                    borrowed_param_name != *info.param_name,
+                    "TensorParameter '{}' backs borrowed-memory DFB {}, which command lists cannot patch",
+                    info.param_name,
+                    dfb_id);
+            }
             const auto relaxations = program.get_tensor_parameter_relaxations(*info.param_name);
             bool bound = false;
             for (const auto& kernel_name : program.get_registered_kernel_names()) {

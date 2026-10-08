@@ -1394,7 +1394,7 @@ void FDMeshCommandQueue::enqueue_command_list_patch(
     const DeviceAddr buffer_size = buffer.device_local_size();
     for (const auto& patch : patches) {
         const uint32_t size_bytes = patch.data.size() * sizeof(uint32_t);
-        TT_ASSERT(
+        TT_FATAL(
             size_bytes > 0 && patch.offset % dram_alignment == 0 && size_bytes % dram_alignment == 0 &&
                 patch.offset / page_size == (patch.offset + size_bytes - 1) / page_size &&
                 patch.offset + size_bytes <= buffer_size,
