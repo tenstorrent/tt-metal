@@ -21,7 +21,7 @@ BLK = 8
 
 
 class SpecEngine:
-    def __init__(self, model, pf, drafter, U, max_pos, eos, cap=CAP, trace=True, log=print):
+    def __init__(self, model, pf, drafter, U, max_pos, eos, cap=CAP, trace=True, log=print, keep_logits=False):
         self.m, self.pf, self.dr, self.U, self.max_pos, self.eos, self.log = (
             model,
             pf,
@@ -32,7 +32,7 @@ class SpecEngine:
             log,
         )
         self.rows = model.mesh.shape[0]
-        self.dec = Decoder(model, trace=trace, U=U, block=BLK, capture=tuple(cap))
+        self.dec = Decoder(model, trace=trace, U=U, block=BLK, capture=tuple(cap), keep_logits=keep_logits)
         self.trace = trace
         self.dr_mode = os.environ.get(
             "SPEC_DR_TRACE", "late"

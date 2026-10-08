@@ -71,6 +71,9 @@ class SpecDevice:
         self.c_offs = const(
             (torch.arange(self.cols, dtype=torch.float32) * self.vocab_local).reshape(1, 1, 1, self.cols)
         )
+        self.c_rev = const(
+            (self.vocab_local - torch.arange(self.vocab_local, dtype=torch.float32)).reshape(1, 1, 1, self.vocab_local)
+        )  # for the lowest-index tie rule
         self.c_iotacols = const(torch.arange(self.cols, dtype=torch.float32).reshape(1, 1, 1, self.cols))
         E = torch.zeros(self.B, U)
         for u in range(U):
@@ -103,14 +106,24 @@ class SpecDevice:
         r = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), shape)
         return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
-    def global_argmax(self, vals, idx):
-        """Per-device local (max, argmax) of the vocab shard [1,1,N,1] -> global argmax fp32 [1,1,N,1]; lowest vocab id wins ties (lowest column first, argmax = first max)."""
+    def global_argmax(self, vals, idx, lg=None):
+        """Per-device local (max, argmax) of the vocab shard [1,1,N,1] -> global argmax fp32 [1,1,N,1]; lowest vocab id wins ties (lowest column first).
+        With lg (the bf16 logits shard [1,1,N,V/8]) the LOCAL argmax is recomputed with an explicit lowest-index rule: ttnn.argmax on 8 rows breaks exact ties differently from the
+        1-row plain decode (found at ISL 4096: 3 of 4 spec/plain divergences were exact logit ties that went to the higher id).
+        """
         N = vals.shape[2]
+        if lg is not None:
+            m = ttnn.max(lg, dim=3, keepdim=True)  # [1,1,N,1] bf16
+            hit = ttnn.typecast(ttnn.eq(lg, m), F32)
+            sc = ttnn.max(ttnn.multiply(hit, self.c_rev), dim=3, keepdim=True)  # fp32: V/8 - first hit index
+            vals = m
+            idx_f = ttnn.subtract(float(self.vocab_local), sc)
+        else:
+            idx_f = ttnn.typecast(self.tl(idx), F32)
         vg = ttnn.all_gather(
             self.tl(ttnn.typecast(vals, F32)), dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )  # [1,1,N,cols]
-        il = ttnn.typecast(self.tl(idx), F32)
-        ig = ttnn.all_gather(il, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ig = ttnn.all_gather(idx_f, dim=3, cluster_axis=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         col = ttnn.argmax(ttnn.to_layout(ttnn.typecast(vg, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT), dim=3, keepdim=True)
         colf = ttnn.typecast(self.tl(col), F32)  # [1,1,N,1]
         onehot = ttnn.eq(self.c_iotacols, colf)  # [1,1,N,cols]
@@ -183,8 +196,8 @@ class SpecDevice:
         )
         ttnn.assign(ttnn.to_layout(live, ttnn.TILE_LAYOUT), dec.live.t)
         # ---- verify (the decode agent's graph; reads the persistent inputs assigned above)
-        vvals, vidx, _, feat = dec._forward()
-        ag = self.global_argmax(vvals, vidx)  # [1,1,B,1]
+        vvals, vidx, vlg, feat = dec._forward()
+        ag = self.global_argmax(vvals, vidx, vlg)  # [1,1,B,1]
         arow = ttnn.reshape(ttnn.to_layout(ttnn.transpose(ag, -2, -1), ttnn.ROW_MAJOR_LAYOUT), (1, U, 1, BLK))
         arow = ttnn.to_layout(arow, ttnn.TILE_LAYOUT)  # target argmax after block position t
         # ---- accept

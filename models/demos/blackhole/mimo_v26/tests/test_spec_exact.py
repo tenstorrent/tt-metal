@@ -33,7 +33,14 @@ MODE = E(
 REF = E("SPEC_REF", "")
 CHUNK = int(E("SPEC_CHUNK", "4"))
 OUT = E("SPEC_OUT", "/tmp/spec.jsonl")
-CH = 256
+CH = int(E("SPEC_CH", "256"))
+ISL = int(
+    E("SPEC_ISL", "0")
+)  # >0: Frankenstein book windows of this many tokens (long-context runs) instead of GSM8K prompts
+
+
+def eng_place(n, rows):
+    return [(i % rows, i // rows) for i in range(n)]
 
 
 def rec(case, **kw):
@@ -72,8 +79,18 @@ def dram(mesh):
 def test_spec_exact(mesh_device):
     md = mesh_device
     tok = tokenizer()
-    items = gsm_prompts(4 * U, tok, START)
-    prompts = [it["prompt_ids"] for it in items]
+    if ISL:
+        from models.demos.blackhole.mimo_v26.reference.prompts import BOOK_QUESTION
+        from models.demos.blackhole.mimo_v26.tests.test_ctx64k import book_body, chat_frame
+
+        body = book_body(tok)
+        pre, post = chat_frame(tok, BOOK_QUESTION)
+        n_ = ISL - len(pre) - len(post)
+        stride = int(E("SPEC_STRIDE", "2400"))
+        prompts = [pre + body[b * stride : b * stride + n_] + post for b in range(4 * U)]
+    else:
+        items = gsm_prompts(4 * U, tok, START)
+        prompts = [it["prompt_ids"] for it in items]
     maxlen = max(len(p) for p in prompts)
     max_pos = -(-(maxlen + NEW + 64) // CH) * CH
     lay = KVLayout(users=U, max_pos=max_pos, chunk=CH)
@@ -97,6 +114,66 @@ def test_spec_exact(mesh_device):
     for (r_, u_), (t_, _) in ft.items():
         ids[r_, u_] = t_
     gen.prefill = lambda prompts_, S=None: (ids, None)
+    if MODE == "numerics":
+        # logits of the 8-row verify vs the 1-row plain decode on the SAME token stream (teacher forced): how big is the ulp-level noise, how often does it flip the argmax
+        from models.demos.blackhole.mimo_v26.tt.decode import Decoder as _Dec
+
+        ref = json.load(open(REF))
+        pl = ref["plain"]
+        g2 = ChunkedGenerator(model, max_pos, pf, trace=False, keep_logits=True, U=U, eos=eos)
+        g2.prefill = lambda prompts_, S=None: (ids, None)
+        teach = [t_ + [0] * (NEW - len(t_)) for t_ in pl]
+        rr = g2.generate(prompts, NEW, S=maxlen, teacher=teach)
+        plog = rr["step_logits"]  # [user][step] -> logits predicting token index step+1
+        dv = _Dec(model, trace=False, U=U, block=8, keep_logits=True)
+        rows_ = 4
+        stats = []
+        nflip = ntot = 0
+        for j0 in range(0, NEW - 9, 8):
+            blk = torch.zeros(rows_, U, 8, dtype=torch.long)
+            posn = torch.zeros(rows_, U, dtype=torch.long)
+            for i_, (r_, u_) in enumerate(eng_place(len(prompts), 4)):
+                blk[r_, u_] = torch.tensor(pl[i_][j0 : j0 + 8])
+                posn[r_, u_] = len(prompts[i_]) + j0
+            dv.set_inputs(blk, posn, torch.zeros(rows_, U, dtype=torch.bool))
+            res_ = dv.run()
+            vl = res_[2]  # [rows, B, V] fp32 logits of the verify rows (B = U*8, row u*8+t)
+            for i_, (r_, u_) in enumerate(eng_place(len(prompts), 4)):
+                for t_ in range(8):
+                    pv = plog[i_][j0 + t_].float()
+                    vv = vl[r_, u_ * 8 + t_].float()
+                    d = (pv - vv).abs()
+                    top2 = torch.topk(pv, 2)
+                    ntot += 1
+                    flip = int(pv.argmax()) != int(vv.argmax())
+                    nflip += flip
+                    stats.append(
+                        dict(
+                            user=i_,
+                            step=j0 + t_,
+                            maxabs=float(d.max()),
+                            top1_abs=float(abs(pv.max() - vv.max())),
+                            plain_gap=float(top2.values[0] - top2.values[1]),
+                            flip=bool(flip),
+                        )
+                    )
+        ma = torch.tensor([s_["maxabs"] for s_ in stats])
+        t1 = torch.tensor([s_["top1_abs"] for s_ in stats])
+        rec(
+            "numerics",
+            rows=ntot,
+            argmax_flips=nflip,
+            flip_rate=round(nflip / ntot, 5),
+            maxabs_logit_diff_mean=round(float(ma.mean()), 4),
+            maxabs_logit_diff_max=round(float(ma.max()), 4),
+            top1_logit_diff_mean=round(float(t1.mean()), 4),
+            top1_logit_diff_frac_zero=round(float((t1 == 0).float().mean()), 4),
+            flips=[s_ for s_ in stats if s_["flip"]][:20],
+            plain_gap_lt_0p25_frac=round(
+                float(torch.tensor([s_["plain_gap"] < 0.25 for s_ in stats]).float().mean()), 4
+            ),
+        )
+        return
     if MODE == "gap":
         # target logit gap at the first divergence between the spec stream and the plain stream (REF json has plain + spec): teacher-force the PLAIN stream, keep logits
         ref = json.load(open(REF))
