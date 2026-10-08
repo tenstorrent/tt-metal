@@ -205,14 +205,14 @@ ninja install # Installs to build directory by default, required for Python envi
 |------|------------------------|-------|
 | x86_64 | `cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake` | Prebuilt SFPI and Tracy WASM viewer available |
 | aarch64 | `cmake/aarch64-linux-clang-20-libstdcpp-toolchain.cmake` | Prebuilt SFPI available |
-| riscv64 | `cmake/riscv64-linux-gcc-14-toolchain.cmake` | GCC ≥ 12 (no clang packages); see below |
+| riscv64 | `cmake/riscv64-linux-gcc-toolchain.cmake` | GCC ≥ 12 (no clang packages); see below |
 
 **riscv64 hosts (experimental)**
 
 The host library builds on 64-bit RISC-V Linux (tested on an 8-core rv64gc board running openKylin 2.0 with gcc-14, cmake 3.28, mold). Differences from x86_64/aarch64:
 
 - There is no prebuilt SFPI (the RISC-V device cross-compiler) for riscv64, so the first configure builds it from source via `tt_metal/sfpi-info.sh BUILD` (several CPU-hours; log in `runtime/sfpi-build.log`, result cached as `runtime/sfpi_<ver>_riscv64_<distro>.txz`). `install_dependencies.sh` installs the GCC build prerequisites (gmp/mpc/mpfr/expat, texinfo, flex, bison, ...) on such hosts.
-- The Tracy WASM profiler viewer is skipped (`TT_BUILD_TRACY_WASM_VIEWER=OFF`) because emsdk has no riscv64 binaries; the Tracy client and CLI tools still build.
+- The Tracy WASM profiler viewer is skipped because emsdk has no riscv64 binaries; the Tracy client and CLI tools still build. The default follows the build host and can be overridden with `build_metal.sh --build-tracy-wasm-viewer` / `--no-build-tracy-wasm-viewer` (`-DTT_BUILD_TRACY_WASM_VIEWER`).
 - The OpenMPI ULFM package is x86_64-only; the build falls back to the distro OpenMPI (`libopenmpi-dev`) or single-host mode.
 - Python packages: PyPI has no riscv64 wheels for numpy/pandas/ml_dtypes (they compile from source in the venv) and no PyTorch at all, so model demos that need `torch` do not run; the `ttnn` runtime itself does not need it.
 - Host-side SIMD fast paths (`tt_metal/impl/dispatch/memcpy.hpp`, UMD `device_memcpy.cpp`) fall back to portable code; the hugepage D2H socket path is x86-only (the real-time profiler is therefore unavailable on riscv64 without an IOMMU). UMD's `memcpy_to/from_device` has an explicit riscv64 branch using 8-byte accesses: GCC's strict-alignment code generation otherwise turns the generic 16-byte vector copy into byte stores, which corrupt writes into the ARC CSM (seen as garbled SMC dispatch-telemetry control blocks).
