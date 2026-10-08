@@ -216,19 +216,42 @@ p's window. Neither end moves left as p grows, so for a Q chunk each K chunk is
 3. otherwise an edge: the attn_mask path, with {0, −2^100} BFP4 mask tiles the writer generates (mixed tiles are
    cached by their diagonal offset, so a causal call writes one).
 
-Compute reads each Q chunk's K range and its unmasked sub-range from a control page the writer sends. Masked keys
-add −2^100 instead of −∞, so a row with no visible key in its Q chunk's first K chunk keeps a finite running max,
-and the next chunk's real keys replace it with a zero rescale (STANDARD and FAST: θ is exceeded, the fused chunk's
-saturation check redoes the group). Q chunks of a head run in zigzag order (0, J−1, 1, J−2, ...) split over its
-cores, which balances causal work by pairs; there is no K/V chain, and each core bounds its in-flight K/V reads
-like the legacy kernel. A paired recipe pads an odd Q chunk to even (the single-row group mishandles a row whose
-keys are all masked in its first K chunk). The chunk start (scalar) is part of the program hash, as in the legacy
-op; `chunk_start_idx_tensor` and `windowed_q_token_offset_tensor` are read on device, so one trace serves every
-offset.
+Compute reads each Q chunk's K range and its unmasked sub-range from a control page the writer sends, and processes
+the edge chunks first: a Q chunk's first K chunk always runs the unfused reduce path, so starting on the (masked)
+edge leaves every full chunk to the fused path. Masked keys add −2^100 instead of −∞, so a row with no visible key in
+its Q chunk's first K chunk keeps a finite running max, and the next chunk's real keys replace it with a zero
+rescale (STANDARD and FAST: θ is exceeded, the fused chunk's saturation check redoes the group). A paired recipe pads
+an odd Q chunk to even (the single-row group mishandles a row whose keys are all masked in its first K chunk). The
+chunk start (scalar) is part of the program hash, as in the legacy op; `chunk_start_idx_tensor` and
+`windowed_q_token_offset_tensor` are read on device, so one trace serves every offset.
 
-Throughput on one P150b (8192² × 10 heads, D128, Q256/K512, full grid): causal STANDARD 2.21 ms, FAST BFP8 1.55 ms,
-ACCURATE 3.22 ms, against 1.96 ms for the legacy BF16-dest kernel (noncausal STANDARD 1.78 ms, which keeps the K/V
-chain). Edge chunks run the unfused path, so causal STANDARD per core is about 1.15x the legacy kernel.
+**Work split.** All heads' Q chunks, sorted by cost (the latest chunks first, heads interleaved), are dealt to the
+whole grid in snake order: round r gives core c sorted entry r·cores + c (r even) or r·cores + cores − 1 − c
+(r odd). Causal work is balanced to within a light Q chunk per core, and every core works even when the heads do
+not divide the grid.
+
+**K/V sharing.** There is no K/V chain, but in each round deal positions p and p + heads run Q chunks j and j − 1 of
+the same head on two fixed partner cores. The full K chunks both Q chunks see travel from the first core to the
+second (store and forward: the receiver passes its circular-buffer write pointer to the sender in a semaphore), so
+a head's K/V is read from DRAM about once per round instead of once per Q chunk; edge chunks and chunks only one
+side sees are read directly. FP32 recipes, which keep one K/V buffer slot, share only causal and chunked ranges (with
+a window, neighbouring chunks' shared ranges start at different points and the sender waits for the receiver).
+
+Op time on one P150b (ms, full grid, trace replay; causal unless noted; legacy = the kernels without `precision`,
+BF16 dest; FP32-dest legacy runs where it builds):
+
+| Shape | STANDARD | legacy BF16 | FAST BFP8 | ACCURATE | legacy FP32 |
+|---|---|---|---|---|---|
+| 10 heads × 8192², D128, Q256/K512 | 1.49 | 1.92 | 0.88 | 2.46 | does not build |
+| same, Q128/K256 | 2.51 | 3.49 | 1.52 | 2.71 | 3.51 |
+| 16 heads × 8192², D64, Q256/K512 | 1.27 | 1.73 | 1.00 | 3.00 | 2.16 |
+| 32/8 heads (GQA) × 8192², D128 | 5.39 | 6.24 | 3.20 | 7.21 | does not build |
+| 8 heads × 32768², D128, Q128/K256 | 29.1 | 43.9 | 16.4 | 39.4 | 44.4 |
+| sliding window 1024, 10 heads × 8192², Q256/K256 | 0.64 | 0.64 | 0.49 | 0.88 | 2.48 |
+| chunked: 8 heads, 2048 rows at 6144 of 8192 | 0.76 | 1.03 | 0.48 | 1.45 | does not build |
+
+ACCURATE at D64 stays slower than the legacy FP32 kernel (its FP32 softmax costs more per score; noncausal D64 is
+2.05× the legacy FP32 time, causal 1.4×).
 
 ## Paged K/V, MLA, attention sinks and concatenated heads
 
@@ -257,7 +280,9 @@ With a recipe, the op chooses Q and K chunk sizes when the caller leaves them un
 or a chunk size of 0 in `SDPAProgramConfig`. For exp ring it also chooses the SDPA grid width. The chooser
 (`sdpa_recipe_blocking.cpp`) scores every supported chunk pair that fits L1, counting the attn_mask buffer.
 It uses a roofline cost model fitted to Blackhole timings, plus pipeline fill/drain terms that dominate
-short-K cross attention. Explicit chunk sizes are honored (a [routed](#routing) call's only when they fit). Blocking never changes a recipe's
+short-K cross attention. Causal, sliding-window and chunked calls cost the K chunks each Q chunk actually processes,
+dealt over the grid as the kernels deal them, plus fitted per-K-chunk streaming, per-edge-chunk and per-Q-chunk
+terms; sliding windows also consider 128-row K chunks. Explicit chunk sizes are honored (a [routed](#routing) call's only when they fit). Blocking never changes a recipe's
 arithmetic, only its rounding order. Without a recipe, chunk sizes must be explicit.
 
 ## Ring and exp ring attention
@@ -334,8 +359,8 @@ slabs of the whole sequence, chunks `ring_id` and 2R − 1 − `ring_id` of 2R, 
 needs no communication: Q, K and V hold the whole sequence on every device. With `precision` it runs on the dense
 recipe kernels and the [K-range model](#causal-sliding-window-chunked-and-windowed-attention): a head's Q chunks are
 the two slabs' chunks, read from Q at their sequence rows (`SDPA_RECIPE_Q_SLAB_JOBS`; the reader and writer map a job
-to its chunk of the sequence), and the causal key range of each follows from its global position. The zigzag order
-pairs the early slab's chunks with the late slab's, so pairs cost the same. Without an explicit `ring_id`, each
+to its chunk of the sequence), and the causal key range of each follows from its global position. The snake deal
+balances the early slab's chunks against the late slab's. Without an explicit `ring_id`, each
 device takes its index along the mesh axis of length R, and the op runs one program per device that differs only
 in the slabs' rows (runtime arguments, folded into the program hash).
 
@@ -380,7 +405,7 @@ rounding differs from the round-to-nearest-even with saturation in `prepare_bfp4
 | `streaming/recipe_streaming.hpp` | Shared K-chunk step: reduce path (first chunk, redo), FP32 / reference-max state, normalization |
 | `streaming/recipe_fused_chunk.hpp` | Fused K chunk (above) |
 | `streaming/recipe_sfpu.hpp`, `recipe_tail.hpp` | Exp variants, key-tail masking |
-| `dataflow/recipe_key_range.hpp` | K-range model: per-row key intervals, chunk classes, edge mask tiles, zigzag Q order |
+| `dataflow/recipe_key_range.hpp` | K-range model: per-row key intervals, chunk classes and order, edge mask tiles, snake Q deal |
 | `streaming/recipe_checkpoint.hpp`, `dataflow/recipe_state_transfer.hpp` | Ring multi-Q state checkpoints (compute side, writer side) |
 | `dataflow/reader_recipe.cpp`, `ring_joint_*_impl.hpp`, `exp_ring_joint_*_impl.hpp` | Readers / writers; the ring and exp ring bodies are shared with the legacy kernels through a `Policy` struct (the legacy kernels compile unchanged) |
 | `sdpa_recipe.cpp`, `sdpa_recipe_blocking.cpp` | Host: recipe → CB layout and defines; chunk chooser |
@@ -396,6 +421,7 @@ Compile-time defines set by the host:
 | `SDPA_RECIPE_MASK` | an attn_mask or a key range | additive mask on the reduce path |
 | `SDPA_RECIPE_KRANGE` | causal, sliding window, chunked, windowed | K range per Q chunk; mask on edge chunks only |
 | `SDPA_RECIPE_Q_SLAB_JOBS` (reader, writer) | ring-distributed | a head's Q chunks are two slabs of the sequence |
+| `SDPA_RECIPE_KV_SHARE` (reader) | key ranges with more cores than heads | K/V passed between a round's partner cores |
 | `SDPA_RECIPE_QK_W`, `SDPA_RECIPE_PV_W` | all | matmul subblock widths |
 | `SDPA_RECIPE_RING` (in the ring kernels) | ring, exp ring | key-tail masking, resident state |
 | `SDPA_RING_STREAM_STATE` | ring STANDARD and FAST with fused chunks | streamed multi-Q checkpoints |
