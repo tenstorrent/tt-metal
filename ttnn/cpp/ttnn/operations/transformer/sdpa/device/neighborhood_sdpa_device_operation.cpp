@@ -7,6 +7,8 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/neighborhood_kernel_args.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <string_view>
 
 #include <tt-metalium/constants.hpp>
 
@@ -156,6 +158,11 @@ NeighborhoodSDPAOperation::tensor_return_value_t NeighborhoodSDPAOperation::crea
     return create_device_tensor(compute_output_specs(attributes, tensors), tensors.query_tensor.device());
 }
 
+bool NeighborhoodSDPAOperation::kv_ring_requested() {
+    const char* value = std::getenv("DIFFVAE_NA_KV_RING");
+    return value != nullptr && std::string_view(value) == "1";
+}
+
 ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
     const NeighborhoodSDPAParams& attributes, const NeighborhoodSDPAInputs& tensors) {
     // The eight stage-5 blocks share one geometry, so they must share one compiled program.
@@ -194,7 +201,8 @@ ttsl::hash::hash_t NeighborhoodSDPAOperation::compute_program_hash(
         tensors.interior_mask.has_value()
             ? std::optional<tt::tt_metal::MemoryConfig>(tensors.interior_mask->memory_config())
             : std::nullopt,
-        tensors.output_tensor.has_value() ? tensors.output_tensor->memory_config() : attributes.output_memory_config);
+        tensors.output_tensor.has_value() ? tensors.output_tensor->memory_config() : attributes.output_memory_config,
+        kv_ring_requested());
 }
 
 Tensor neighborhood_sdpa(

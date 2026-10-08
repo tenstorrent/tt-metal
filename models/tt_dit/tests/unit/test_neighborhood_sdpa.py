@@ -542,7 +542,24 @@ def test_interior_table_per_brick_persistence(mesh_device, owned_width, brick, v
     _run_interior_table_case(mesh_device, owned_width, brick, volume)
 
 
-def _run_interior_table_case(mesh_device, owned_width, brick, volume):
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize("owned_width", [None, 12], ids=["unsharded", "w_sharded_negative_origin"])
+def test_kv_ring_is_bit_identical(mesh_device, owned_width, monkeypatch):
+    """DIFFVAE_NA_KV_RING only changes where K/V tiles come from, never which tiles compute sees or
+    in what order, so its output must equal the default path's bit for bit."""
+    monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
+    monkeypatch.delenv("DIFFVAE_NA_KV_RING", raising=False)
+    plain = []
+    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=plain)
+    monkeypatch.setenv("DIFFVAE_NA_KV_RING", "1")
+    ringed = []
+    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=ringed)
+    assert len(plain) == len(ringed)
+    for shard_index, (left, right) in enumerate(zip(plain, ringed)):
+        assert torch.equal(left, right), f"shard {shard_index}: ring output differs"
+
+
+def _run_interior_table_case(mesh_device, owned_width, brick, volume, outputs=None):
     from models.tt_dit.layers.neighborhood_attention_plan import _build_relative_masks, halo_sites
 
     torch.manual_seed(0)
@@ -645,6 +662,8 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
         # The output covers the query region: the whole resident tensor unsharded, the owned band
         # sharded (so no halo columns to slice off).
         bricked_out = ttnn.to_torch(actual_device).float().reshape(1, -1, head_count, head_dim)
+        if outputs is not None:
+            outputs.append(bricked_out)
         present = output_table >= 0
         actual_owned = torch.zeros(1, output_extent[0] * output_extent[1] * output_extent[2], head_count, head_dim)
         actual_owned[:, output_table[present]] = bricked_out[:, present]
