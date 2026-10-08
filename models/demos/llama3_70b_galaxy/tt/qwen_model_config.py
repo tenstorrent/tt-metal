@@ -58,6 +58,9 @@ def _build_galaxy_sub_core_grids(max_y=9):
 
 
 RING_SDPA_Q_CHUNK_CANDIDATES = (64, 128, 160, 192, 256, 320)
+# Longest seq_len whose pick was measured (ring SDPA micro-benchmark, Qwen3-32B shapes, Wormhole Galaxy).
+# Longer prefills keep the default q_chunk until their picks are measured.
+RING_SDPA_MAX_MEASURED_SEQ_LEN = 40960
 
 
 def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, default_q_chunk=256):
@@ -70,8 +73,11 @@ def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, d
     the busiest core: ceil(pairs / num_cores) * 2 * q_chunk rows. With q_chunk 256 at seq_len 40960 that is
     80 pairs on 70 cores -> 2 pairs on 10 cores, 1 on the rest (1024 rows max vs 585 mean).
     Only q_chunk changes (k_chunk stays), so each output row sees the same K chunks in the same order.
-    Returns default_q_chunk unless a candidate cuts the busiest core's rows by >= 10%.
+    Returns default_q_chunk unless a candidate cuts the busiest core's rows by >= 10%, and for
+    seq_len > RING_SDPA_MAX_MEASURED_SEQ_LEN.
     """
+    if seq_len > RING_SDPA_MAX_MEASURED_SEQ_LEN:
+        return default_q_chunk
     q_slice = seq_len // (2 * ring_size)
 
     def busiest_core_rows(q):
@@ -90,6 +96,25 @@ def ring_sdpa_balanced_q_chunk(seq_len, n_local_heads, num_cores, ring_size=4, d
     if busiest_core_rows(best) <= 0.9 * busiest_core_rows(default_q_chunk):
         return best
     return default_q_chunk
+
+
+def qwen_ring_sdpa_program_config(base_program_config, seq_len, n_local_heads):
+    """Ring SDPA program config: base_program_config (SDPA_PROGCFG for this seq_len) with only q_chunk_size
+    replaced by ring_sdpa_balanced_q_chunk. Grid, k_chunk and exp_approx_mode come from the base config, and
+    the picker's core count is the base grid's, so the two cannot drift apart."""
+    grid = base_program_config.compute_with_storage_grid_size
+    num_cores = grid.x * grid.y
+    cfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        exp_approx_mode=base_program_config.exp_approx_mode,
+        q_chunk_size=ring_sdpa_balanced_q_chunk(
+            seq_len, n_local_heads=n_local_heads, num_cores=num_cores, default_q_chunk=base_program_config.q_chunk_size
+        ),
+        k_chunk_size=base_program_config.k_chunk_size,
+    )
+    out_grid = cfg.compute_with_storage_grid_size
+    assert out_grid.x * out_grid.y == num_cores, f"ring SDPA grid {out_grid} != {num_cores} cores used by the picker"
+    return cfg
 
 
 def set_tg_attention_config(
@@ -557,16 +582,10 @@ class TtQwenModelArgs(TtModelArgs):
             # buckets (> 4096): same config but with a q_chunk that balances Q-chunk pairs over the 70 cores
             # (ring_sdpa_balanced_q_chunk). Wormhole only (measured there); <= 4096 and Blackhole use SDPA_PROGCFG.
             def _sdpa_ring_progcfg(seqlen, chunk_start_idx=0):
+                base = self.model_config["SDPA_PROGCFG"](seqlen, chunk_start_idx=chunk_start_idx)
                 if self.is_blackhole or seqlen <= 4096 or chunk_start_idx != 0:
-                    return self.model_config["SDPA_PROGCFG"](seqlen, chunk_start_idx=chunk_start_idx)
-                return ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=(7, 10),
-                    exp_approx_mode=False,
-                    q_chunk_size=ring_sdpa_balanced_q_chunk(
-                        seqlen, n_local_heads=self.n_heads // self.n_kv_heads, num_cores=7 * 10
-                    ),
-                    k_chunk_size=512,
-                )
+                    return base
+                return qwen_ring_sdpa_program_config(base, seqlen, n_local_heads=self.n_heads // self.n_kv_heads)
 
             self.model_config["SDPA_RING_PROGCFG"] = _sdpa_ring_progcfg
 
