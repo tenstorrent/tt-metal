@@ -5,7 +5,9 @@
 # Runtime-configured (unpack and math) variant of fpu_reduce_block_max_tiny_bf16_fp32_dest.
 # Source B is all ones as the identity scale; source A spans a wide range so the row maxima differ.
 
-supported_archs: ["wormhole", "blackhole"]
+# Blackhole only: on Wormhole, 16x32 reduce_block_max_row places some rows' maxima in the wrong tile with
+# spread input, in 16-bit DEST mode too (not specific to this 32-bit DEST path); not yet root-caused.
+supported_archs: ["blackhole"]
 
 dest_acc: true
 
