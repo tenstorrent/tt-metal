@@ -48,19 +48,25 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
         }
     }
     // Recover the express-link ring decomposition per mesh; null where a mesh declares none, which
-    // leaves that mesh on the base dimension-order policy. express_rings_ and x_rings_ keep their
-    // existing meaning and population rules so nothing that reads them changes behaviour.
+    // leaves that mesh on the base dimension-order policy. orthogonal_rings_ is the ordinary ring on the
+    // other axis, populated only for express meshes.
     this->express_rings_.resize(intra_mesh_connectivity.size());
-    this->x_rings_.resize(intra_mesh_connectivity.size());
+    this->orthogonal_rings_.resize(intra_mesh_connectivity.size());
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
         auto rings = derive_express_ring_topology(mesh_graph, MeshId{mesh_id_val});
         if (!rings.has_value()) {
             continue;  // no express links: the mesh keeps the base policy and needs no ring state
         }
         this->express_rings_[mesh_id_val] = std::make_unique<AxisRouteTopology>(std::move(*rings));
-        auto x_rings = derive_ordinary_ring_topology(mesh_graph, MeshId{mesh_id_val}, 1);
-        if (x_rings.has_value()) {
-            this->x_rings_[mesh_id_val] = std::make_unique<AxisRouteTopology>(std::move(*x_rings));
+        const int express_axis = this->express_rings_[mesh_id_val]->axis_dim;
+        auto orthogonal_rings = derive_ordinary_ring_topology(mesh_graph, MeshId{mesh_id_val}, 1 - express_axis);
+        if (orthogonal_rings.has_value()) {
+            TT_FATAL(
+                orthogonal_rings->axis_dim != express_axis,
+                "Mesh {}: orthogonal ring derived on the express axis {}",
+                mesh_id_val,
+                express_axis);
+            this->orthogonal_rings_[mesh_id_val] = std::make_unique<AxisRouteTopology>(std::move(*orthogonal_rings));
         }
     }
 
@@ -68,7 +74,7 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
     // encoder needs: it builds a reverse tree per axis, so a missing topology on either one silently
     // produces an empty map rather than an error.
     //
-    // x_rings_ above cannot serve that purpose -- it is only populated for express meshes, and only
+    // orthogonal_rings_ above cannot serve that purpose -- it is only populated for express meshes, and only
     // when the X dimension closes. Deriving it unconditionally is not safe either, because
     // derive_ordinary_ring_topology() is fatal when a line on the axis lacks an ordinary edge while
     // axis_wraps() only inspects line 0. derive_axis_topology() resolves both: it falls back to the
@@ -95,8 +101,8 @@ const AxisRouteTopology* RoutingTableGenerator::get_express_rings(MeshId mesh_id
     return *mesh_id < this->express_rings_.size() ? this->express_rings_[*mesh_id].get() : nullptr;
 }
 
-const AxisRouteTopology* RoutingTableGenerator::get_x_rings(MeshId mesh_id) const {
-    return *mesh_id < this->x_rings_.size() ? this->x_rings_[*mesh_id].get() : nullptr;
+const AxisRouteTopology* RoutingTableGenerator::get_orthogonal_rings(MeshId mesh_id) const {
+    return *mesh_id < this->orthogonal_rings_.size() ? this->orthogonal_rings_[*mesh_id].get() : nullptr;
 }
 
 const AxisRouteTopology* RoutingTableGenerator::get_axis_topology(MeshId mesh_id, int axis) const {
