@@ -3,6 +3,8 @@
 
 """Explicit matmul blocking for the prefill projections."""
 
+import os
+
 import ttnn
 
 # Weight columns per core in the 1D config: with 2-row output subblocks, 2 x 2 tiles fill the fp32 dest.
@@ -33,6 +35,21 @@ def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_a
     per_core_n = ttnn.core.divup(n_tiles, grid_x)
     subblock_w = 2 if per_core_n % 2 == 0 else 1
     max_subblock_tiles = 4 if fp32_dest_acc else 8
+    # LOCAL EXPERIMENT (G4X_MM_LLK=1): the matmul LLK team's 2D configs for the fp32-dest attention projections
+    # (Emir, 10-08): local QKV at chunk 8192 (M 32 x N 128 tiles) and global QK at chunk 4096 (M 16 x N 144 tiles).
+    llk = {(32, 128): (12, 21, 1, 4), (16, 144): (12, 24, 1, 4)}.get((m_tiles, n_tiles))
+    if llk and fp32_dest_acc and os.environ.get("G4X_MM_LLK") and k_tiles % llk[1] == 0:
+        pn, kb, h, w = llk
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid_x, grid_y),
+            in0_block_w=kb,
+            out_subblock_h=h,
+            out_subblock_w=w,
+            per_core_M=per_core_m,
+            per_core_N=pn,
+            transpose_mcast=False,
+            fused_activation=fused_activation,
+        )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=_in0_block_w(k_tiles),
