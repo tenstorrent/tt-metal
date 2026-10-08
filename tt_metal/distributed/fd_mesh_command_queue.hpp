@@ -37,6 +37,14 @@ struct MeshCoreDataReadDescriptor;
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
+// Words to write at a byte offset of an interleaved DRAM MeshBuffer on every device in device_range. The offset and
+// size must be DRAM-aligned, and the span must not cross a page.
+struct MeshBufferPatch {
+    MeshCoordinateRange device_range;
+    uint32_t offset = 0;
+    ttsl::Span<const uint32_t> data;
+};
+
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
 private:
     // This class can now access private members of FDMeshCommandQueue
@@ -296,6 +304,8 @@ public:
         const MeshBuffer& buffer,
         SubDeviceManagerId sub_device_manager_id,
         bool blocking);
+    // Overwrite parts of a command-list buffer. Ordered after earlier replays, and later replays read the new bytes.
+    void enqueue_command_list_patch(const MeshBuffer& buffer, ttsl::Span<const MeshBufferPatch> patches);
     // Wait until this host's queued device work completes.
     void drain_device_work();
     // Main function (event loop) for the Completion Queue Reader
