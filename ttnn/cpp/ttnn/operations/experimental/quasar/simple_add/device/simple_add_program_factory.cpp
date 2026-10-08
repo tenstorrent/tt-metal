@@ -82,13 +82,14 @@ ProgramArtifacts SimpleAddDeviceOperation::SingleNodeProgramFactory::create_prog
     // DFB implicit sync (Quasar only): the reader and writer issue transaction-id tagged NoC reads/writes and the
     // DM0 ISR posts/acks the tile-counter credits. On the craq-sim Quasar simulator a partial transaction-id batch
     // on the reader side, whose credits finish() posts by hand, makes a later Tensix push_back on out go missing
-    // and hangs the writer. So the readers process num_input_tiles = num_tiles rounded up to a multiple of
-    // reader_threads, which keeps every reader batch full (the in0/in1 batch is reader_threads reads here): the
-    // extra tiles carry filler data, compute pops them without producing output, and the writers still see exactly
-    // num_tiles tiles.
+    // and hangs the writer. So the readers process num_input_tiles = num_tiles rounded up to a multiple of the
+    // in0/in1 batch, which keeps every reader batch full. The runtime splits the kEntriesPerThread * in_counters
+    // entries into two transaction ids, so the batch is in_counters = max(reader_threads, compute_threads) reads.
+    // The extra tiles carry filler data, compute pops them without producing output, and the writers still see
+    // exactly num_tiles tiles.
     const bool implicit_sync = is_quasar;
     const uint32_t num_input_tiles =
-        implicit_sync ? (num_tiles + reader_threads - 1) / reader_threads * reader_threads : num_tiles;
+        implicit_sync ? (num_tiles + in_counters - 1) / in_counters * in_counters : num_tiles;
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::filesystem::path{std::string(kKernelDir) + "dataflow/reader_simple_add.cpp"},
