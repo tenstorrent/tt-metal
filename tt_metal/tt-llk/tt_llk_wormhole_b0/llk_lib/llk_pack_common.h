@@ -9,6 +9,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_instr_params.h"
+#include "ckernel_template.h"
 #include "cpack_common.h"
 #include "llk_defs.h"
 #include "tensor_shape.h"
@@ -225,6 +226,31 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
     reconfigure_packer_l1_acc(enable);
 }
 
+namespace llk_pack_internal
+{
+static std::uint32_t configured_zero_output = 0;
+static bool configured_partial_face_bfp     = false;
+static bool zero_partial_face_bfp_last_face = false;
+
+/**
+ * @brief Program the MOP that packs a partial-face BFP tile through packer 0, one PACR per face.
+ *
+ * When a reduce mask needs face 1 to be padding only, its PACR writes zeros instead of reading Dst. The
+ * per-face edge-mask lookup cannot be used for this on Wormhole: its face index comes from a packer tile
+ * counter that is never reset between kernels.
+ */
+inline void program_partial_face_bfp_mop()
+{
+    constexpr std::uint32_t MEGAROW         = 1;
+    const std::uint32_t last_face_zero_flag = zero_partial_face_bfp_last_face ? p_pacr::P_ZERO_OUTPUT_ENABLED : configured_zero_output;
+    ckernel::ckernel_template tmp(1, 1, TT_OP_PACR(ADDR_MOD_1, last_face_zero_flag, PACK_SEL(1), 0, MEGAROW, 0, 1));
+    tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, configured_zero_output, PACK_SEL(1), 0, MEGAROW, 0, 0)); // Don't close the tile, point to the next face
+    tmp.set_loop_op0(TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));                                     // Inc ch0_y+=1 (addr_mod_0 will increment by 15)
+    tmp.set_loop_op1(TT_OP_PACR(ADDR_MOD_1, last_face_zero_flag, PACK_SEL(1), 0, MEGAROW, 0, 1));    // Close the tile
+    tmp.program();
+}
+} // namespace llk_pack_internal
+
 /**
  * @brief Configure the packer edge-offset masks and tile-row-set mapping for a reduce output.
  *
@@ -238,6 +264,8 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
  * @param pack_dst_format: Packer output (L1) data format, as last programmed by the caller's pack reconfig.
  * @param tensor_shape: Output face dimensions and face grid.
  * @note Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
+ * @note For partial-face BFP outputs this also selects a zero-writing last-face PACR in the pack MOP, which
+ *       @ref _llk_pack_init_ keeps when called afterwards.
  * @note Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
  */
 template <PoolType reduce_type, ReduceDim dim, PackMode pack_mode = PackMode::Default>
@@ -345,19 +373,17 @@ inline void _llk_pack_reduce_mask_config_(const std::uint32_t pack_dst_format, c
         cfg_reg_rmw_tensix<PCK_EDGE_MODE_mode_RMW>(!IS_BFP_FORMAT(pack_dst_format) && !IS_INTEGER_FORMAT(pack_dst_format));
     }
 
-    // Partial faces pack BFP through packer 0 alone (see _llk_pack_mop_config_),
-    // so the per-packer selectors above cannot separate faces; select the row table per face instead.
-    if (pack_mode == PackMode::Default && IS_BFP_FORMAT(pack_dst_format) && tensor_shape.face_r_dim < FACE_R_DIM)
+    // Partial faces pack BFP through packer 0 alone, so the per-packer selectors above apply the face-0 mask to
+    // face 1 too. ROW and SCALAR need face 1 to be padding only; BFP outputs pad with zero, so its PACR writes zeros.
+    const bool zero_last_face = pack_mode == PackMode::Default && dim != ReduceDim::REDUCE_COL && IS_BFP_FORMAT(pack_dst_format) &&
+                                tensor_shape.face_r_dim < FACE_R_DIM && tensor_shape.num_faces_c_dim == 2;
+    if (zero_last_face != llk_pack_internal::zero_partial_face_bfp_last_face)
     {
-        // 2-bit row-table selectors repeated across all face-table entries: 0x55555555 = [1], 0x11111111 = [1,0].
-        const std::uint32_t face_set_mapping = (tensor_shape.num_faces_c_dim == 1 || dim == ReduceDim::REDUCE_COL) ? 0x55555555 : 0x11111111;
-        cfg_reg_rmw_tensix<TILE_FACE_SET_MAPPING_0_face_set_mapping_0_ADDR32, 0, 0xffffffff>(face_set_mapping);
-        // Select face table 0 for packer 0 and enable the face -> row -> column-mask lookup.
-        cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32, 0, 0x1ff>(0x100);
-    }
-    else
-    {
-        cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_enable_RMW>(0);
+        llk_pack_internal::zero_partial_face_bfp_last_face = zero_last_face;
+        if (llk_pack_internal::configured_partial_face_bfp)
+        {
+            llk_pack_internal::program_partial_face_bfp_mop();
+        }
     }
 
     TTI_NOP;
@@ -390,7 +416,6 @@ inline void _llk_pack_reduce_mask_clear_()
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC1_pack_reads_per_xy_plane_RMW>(1);
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC2_pack_reads_per_xy_plane_RMW>(1);
     cfg_reg_rmw_tensix<PACK_COUNTERS_SEC3_pack_reads_per_xy_plane_RMW>(1);
-    cfg_reg_rmw_tensix<PCK_EDGE_TILE_FACE_SET_SELECT_enable_RMW>(0);
 
     // Clear out packer configuration for reduce
     TTI_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, PCK_EDGE_OFFSET_SEC0_mask_ADDR32);
@@ -399,6 +424,15 @@ inline void _llk_pack_reduce_mask_clear_()
     // All mappings point to PCK_EDGE_OFFSET_SEC0_mask_ADDR32
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, TILE_ROW_SET_MAPPING_1_row_set_mapping_0_ADDR32);
+
+    if (llk_pack_internal::zero_partial_face_bfp_last_face)
+    {
+        llk_pack_internal::zero_partial_face_bfp_last_face = false;
+        if (llk_pack_internal::configured_partial_face_bfp)
+        {
+            llk_pack_internal::program_partial_face_bfp_mop();
+        }
+    }
 
     TTI_NOP;
     TTI_NOP;
