@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Blackhole hardware allocation experiment. Input is 2.0; raw L0 is 1.0.
-// Output tile 1 must contain 1.0. An intervening typed load/store must not
+// Blackhole hardware allocation experiment. Per-row values provide an
+// address-sensitive oracle. An intervening typed load/store must not
 // change the raw value. SCHEME: 0 unannotated, 1 read/write pairs, 2 effects,
 // 3 explicitly thread the producer value to the consumer.
 #include <array>
@@ -43,23 +43,46 @@ template <unsigned Word> __attribute__((always_inline)) inline void issue_word()
 
 template <unsigned Row> __attribute__((always_inline)) inline void probe_row()
 {
-    issue_word<TT_OP_SFPLOADI(0, 0, 0x3f80)>(); // bf16 immediate 1.0
+    if constexpr (PARTIAL) {
+        issue_word<static_cast<unsigned>(TT_OP_SFPENCC(3, 0, 0, 10))>();
+        issue_word<TT_OP_SFPLOADI(LREG, 0, 0x4040)>(); // inactive lanes: 3.0
+        if constexpr (SCHEME == 2)
+            __builtin_rvtt_sfprawlreg_effect(1u << LREG, 1u << LREG);
+        constexpr unsigned predicate_reg = (LREG + 1) % 8;
+        issue_word<TT_OP_SFPLOAD(predicate_reg, 0, 7, 2 * Row)>();
+        if constexpr (SCHEME == 2)
+            __builtin_rvtt_sfprawlreg_effect(1u << predicate_reg, 1u << predicate_reg);
+        issue_word<TT_OP_SFPSETCC(0, predicate_reg, 0, 0)>();
+        if constexpr (SCHEME == 2)
+            __builtin_rvtt_sfprawlreg_effect(1u << predicate_reg, 0);
+    }
+    __xtt_vector temporary;
+    if constexpr (LIVE_BEFORE)
+        temporary = __builtin_rvtt_sfpload(nullptr, 2 * Row, 0, 0, 0, 7);
+    issue_word<TT_OP_SFPLOADI(LREG, 0, 0x3f80 + Row)>();
     if constexpr (SCHEME == 1)
-        __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(0), 0);
+        __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(LREG), LREG);
     else if constexpr (SCHEME == 2)
-        __builtin_rvtt_sfprawlreg_effect(1, 1);
+        __builtin_rvtt_sfprawlreg_effect(1u << LREG, 1u << LREG);
     // A real C++ use-def edge, unlike two independent identity pairs.
     // Reading is deliberately after the raw producer, not before it.
     __xtt_vector saved;
-    if constexpr (SCHEME == 3) saved = __builtin_rvtt_sfpreadlreg(0);
-    auto temporary = __builtin_rvtt_sfpload(nullptr, 0, 0, 0, 0, 7);
-    __builtin_rvtt_sfpstore(nullptr, temporary, 2, 0, 0, 0, 7);
+    if constexpr (SCHEME == 3 && !DEAD_OUTPUT) saved = __builtin_rvtt_sfpreadlreg(LREG);
+    else if constexpr (SCHEME == 3) (void)__builtin_rvtt_sfpreadlreg(LREG);
+    if constexpr (!LIVE_BEFORE)
+        temporary = __builtin_rvtt_sfpload(nullptr, 2 * Row, 0, 0, 0, 7);
+    __builtin_rvtt_sfpstore(nullptr, temporary, 2 * Row, 0, 0, 0, 7);
+    if constexpr (FORCE_MOVE)
+        __builtin_rvtt_sfpwritelreg(temporary, LREG);
     if constexpr (SCHEME == 1)
-        __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(0), 0);
-    else if constexpr (SCHEME == 3)
-        __builtin_rvtt_sfpwritelreg(saved, 0);
-    issue_word<TT_OP_SFPSTORE(0, 0, 7, 64 + 2 * Row)>();
-    if constexpr (SCHEME == 2) __builtin_rvtt_sfprawlreg_effect(1, 0);
+        __builtin_rvtt_sfpwritelreg(__builtin_rvtt_sfpreadlreg(LREG), LREG);
+    else if constexpr (SCHEME == 3 && !DEAD_OUTPUT)
+        __builtin_rvtt_sfpwritelreg(saved, LREG);
+    if constexpr (PARTIAL) issue_word<static_cast<unsigned>(TT_OP_SFPENCC(3, 0, 0, 10))>();
+    if constexpr (!DEAD_OUTPUT) {
+        issue_word<TT_OP_SFPSTORE(LREG, 0, 7, 64 + 2 * Row)>();
+        if constexpr (SCHEME == 2) __builtin_rvtt_sfprawlreg_effect(1u << LREG, 0);
+    }
 }
 
 template <std::size_t... Row> inline void probe_rows(std::index_sequence<Row...>)
@@ -77,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_init_once_();
     math::reset_counters(p_setrwc::SET_ABD_F);
     _llk_math_welfords_sfpu_params_(+[]() {
-        // Enable all lanes; partial-predicate validation is a separate case.
+        // Each partial-predicate row establishes its own mask below.
         TTI_SFPENCC(3, 0, 0, 10);
         probe_rows(std::make_index_sequence<32>{});
     }, 0);
@@ -95,7 +118,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
     _llk_packer_wait_for_math_done_();
     _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(1, L1_ADDRESS(params.buffer_Res[1]));
+    if constexpr (!DEAD_OUTPUT)
+        _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(1, L1_ADDRESS(params.buffer_Res[1]));
     _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 }
 #endif
