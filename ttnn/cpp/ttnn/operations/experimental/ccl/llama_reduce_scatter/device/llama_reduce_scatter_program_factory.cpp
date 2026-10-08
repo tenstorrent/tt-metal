@@ -1048,7 +1048,7 @@ tt::tt_metal::ProgramDescriptor LlamaReduceScatterDeviceOperation::LlamaReduceSc
     reader_defines["SCHEDULE"] = schedule_string;
 
     TT_FATAL(!all_cores.empty(), "llama_reduce_scatter requires at least one worker core");
-    const auto local_semaphore_id = desc.find_available_semaphore_id(all_cores.front());
+    const auto local_semaphore_id = desc.find_available_semaphore_id(all_cores.front(), tt::CoreType::WORKER);
     TT_FATAL(local_semaphore_id.has_value(), "llama_reduce_scatter could not allocate a local semaphore");
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = local_semaphore_id.value(),
