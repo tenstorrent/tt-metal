@@ -10,6 +10,7 @@ expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_
 """
 
 import ttnn
+from models.demos.minimax_m3.utils import kagent_flags
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
@@ -111,6 +112,7 @@ class MLP:
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "shared_expert"),
+                fidelity_group="shared",
             )
             if (shared_state_dict or cache_only)
             else None
@@ -223,8 +225,14 @@ class MLP:
         or full emb under the replicated one (the routed output is all-gathered back and the shared
         expert all-reduced), matching the layer residual either way.
         """
+        # M3_KA_MOE_SINGLE_RS: both the shared-expert down projection and post_combine_reduce are TP partial sums
+        # of the same [S, emb] output; add them first and reduce-scatter ONCE (one RS + one add fewer per layer).
+        single_rs = kagent_flags.MOE_SINGLE_RS and self.sharded_residual and self.shared_expert is not None
         with zone("shared_expert"):
-            shared_out = self.shared_expert(hidden_states) if self.shared_expert is not None else None
+            if self.shared_expert is None:
+                shared_out = None
+            else:
+                shared_out = self.shared_expert(hidden_states, reduce=not single_rs)
 
         Hfull = hidden_states.shape[-1]
         # ONE padding config per chunk, shared by the gate and the EP dispatch. Built (and memoized) by
@@ -235,9 +243,18 @@ class MLP:
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
         out = self.experts(
-            x3d, topk_indices=idx, topk_weights=wts, padding_config=padding_config
-        )  # -> [1,S,H/tp] reduce-scattered
+            x3d, topk_indices=idx, topk_weights=wts, padding_config=padding_config, skip_reduce_scatter=single_rs
+        )  # -> [1,S,H/tp] reduce-scattered ([1,S,H] partial with single_rs)
         out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
+        if single_rs:
+            with zone("add_shared", FINE):
+                total = ttnn.add(out, shared_out)
+            out.deallocate(True)
+            shared_out.deallocate(True)
+            with zone("moe_shared_reduce_scatter"):
+                scattered = self.mesh_config.reduce_scatter(total, self.ccl, dim=3, axis=self.mesh_config.tp_axis)
+            total.deallocate(True)
+            return scattered
         if not self.sharded_residual and self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
             # TP all-gather (reduce-scattered emb -> full emb). Use the MANAGED all_gather_async
             # (mesh_config.allgather, semaphore/barrier-managed — the path DeepSeek's MoE uses) instead of

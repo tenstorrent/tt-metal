@@ -4,6 +4,7 @@
 import math
 
 import ttnn
+from models.demos.minimax_m3.utils import kagent_flags
 
 from .weights import AttentionWeights
 
@@ -22,7 +23,9 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
-    xqkv_fused = ttnn.linear(hidden_states, weights.wqkv, dtype=ttnn.bfloat16)
+    xqkv_fused = ttnn.linear(
+        hidden_states, weights.wqkv, dtype=ttnn.bfloat16, compute_kernel_config=kagent_flags.lofi_config("qkv")
+    )
     return xqkv_fused
 
 
@@ -96,6 +99,19 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool, kv_a
 
     if rotary_dim >= head_dim:
         return _rotate(tensor)
+
+    if kv_actual_global is not None and kagent_flags.ROPE_FUSED:
+        # One op: the indexed rope rotates channels [0, rotary_dim) and copies [rotary_dim, head_dim)
+        # unchanged, i.e. exactly slice + rope + concat below without the three extra ops.
+        return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            tensor,
+            rope_mats[0],
+            rope_mats[1],
+            transformation_mat,
+            kv_actual_global=kv_actual_global,
+            cluster_axis=cluster_axis,
+            rotary_dim=rotary_dim,
+        )
 
     # Partial rotary: split [..., :rotary_dim] (rotate) and [..., rotary_dim:] (pass through).
     shape = tensor.shape

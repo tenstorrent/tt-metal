@@ -81,6 +81,7 @@ class DecoderLayer:
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
+                fidelity_group="dense",
             )
         else:
             self.mlp = MLP(

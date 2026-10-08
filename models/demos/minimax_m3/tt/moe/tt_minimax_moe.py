@@ -184,7 +184,7 @@ class TtMiniMaxMoE(LightweightModule):
             reduce_scatter_fn=reduce_scatter_fn,
         )
 
-    def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None):
+    def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None, skip_reduce_scatter=False):
         """Routed (expert-parallel) MoE output.
 
         x: (dispatch_group_size, seq_len_per_chip, emb_dim) — emb may be TP-sharded
@@ -260,7 +260,11 @@ class TtMiniMaxMoE(LightweightModule):
         # Fused weighted-sum over topk, then the TP reduce-scatter (see tt_reduce.py).
         with zone("moe_reduce"):
             routed_output = self.reduce_module(
-                combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table
+                combined_output,
+                weights=scores,
+                indices=indices,
+                expert_dispatch_table=self.tt_expert_dispatch_table,
+                skip_collective=skip_reduce_scatter,
             )
             routed_output = ttnn.squeeze(routed_output, dim=0)
         return routed_output

@@ -384,9 +384,18 @@ class Model:
             )
             # Per-layer migration seam (no-op unless a pipeline supplies a callback).
             if on_layer_complete is not None:
-                # The migration reader is outside this command queue.
-                ttnn.synchronize_device(self.mesh_device)
-                on_layer_complete(i)
+                if getattr(on_layer_complete, "record_device_fence", False):
+                    # Device fence instead of a host stall: a MeshEvent recorded on CQ0 right after this
+                    # layer's ops completes only once every earlier command (this layer's KV-cache writes
+                    # included) has finished on every device -- the same condition synchronize_device
+                    # (Finish = record event + wait) waits for. The callback's publisher waits on it off
+                    # the enqueue thread and acks afterwards, so the migration reader sees identical data
+                    # while the host keeps enqueueing the next layer.
+                    on_layer_complete(i, ttnn.record_event(self.mesh_device, 0))
+                else:
+                    # The migration reader is outside this command queue.
+                    ttnn.synchronize_device(self.mesh_device)
+                    on_layer_complete(i)
 
         # Non-last rank: hand the hidden state to the next rank (the norm/lm_head tail is last-rank only).
         if not self.is_last_rank:

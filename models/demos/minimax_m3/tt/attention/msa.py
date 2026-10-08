@@ -25,6 +25,7 @@ selection; sparse_sdpa_msa applies no token mask.
 """
 
 import ttnn
+from models.demos.minimax_m3.utils import kagent_flags
 from models.demos.minimax_m3.utils.profiler_utils import zone
 
 from .operations import apply_qk_norm_per_head, apply_rope
@@ -57,6 +58,8 @@ def _split_index_heads(t, index_dim):
     """[1, 1, S, n*index_dim] -> [1, n, S, index_dim] (head-major split, like the main QKV split)."""
     s = t.shape[2]
     n = t.shape[-1] // index_dim
+    if n == 1 and t.shape[1] == 1 and kagent_flags.SKIP_IDX_SPLIT:
+        return t  # [1, 1, S, D] -> [1, 1, S, D]: the split is the identity (one index head on this device)
     t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
     t = ttnn.reshape(t, [1, s, n, index_dim])
     t = ttnn.permute(t, (0, 2, 1, 3))  # [1, n, S, index_dim]
@@ -90,7 +93,8 @@ def index_branch_forward(
       * norm: index_q_norm/index_k_norm gains ship in the checkpoint, applied per-head.
     """
     iq = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_q_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_q_proj, compute_kernel_config=kagent_flags.lofi_config("index")),
+        index_dim,
     )  # [1, n_idx_local, S, index_dim]
     iq = apply_qk_norm_per_head(iq, weights.index_q_norm, rms_norm_eps)
     iq = apply_rope(
@@ -103,7 +107,8 @@ def index_branch_forward(
     )
 
     ik = _split_index_heads(
-        ttnn.linear(hidden_states, weights.index_k_proj), index_dim
+        ttnn.linear(hidden_states, weights.index_k_proj, compute_kernel_config=kagent_flags.lofi_config("index")),
+        index_dim,
     )  # [1, 1, S, index_dim] (shared)
     ik = apply_qk_norm_per_head(ik, weights.index_k_norm, rms_norm_eps)
     ik = apply_rope(

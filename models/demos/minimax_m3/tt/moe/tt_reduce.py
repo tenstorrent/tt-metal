@@ -56,6 +56,7 @@ class TtMiniMaxReduce(LightweightModule):
         weights: Optional[ttnn.Tensor] = None,
         indices: Optional[ttnn.Tensor] = None,
         expert_dispatch_table: Optional[ttnn.Tensor] = None,
+        skip_collective: bool = False,
     ) -> ttnn.Tensor:
         """
         Args:
@@ -91,8 +92,8 @@ class TtMiniMaxReduce(LightweightModule):
             logger.warning("TtMiniMaxReduce: weights not provided, using unweighted sum")
             summed = ttnn.sum(combine_output, dim=self.topk_dim)
 
-        if self.mesh_device.shape[self.cluster_axis] <= 1:
-            return summed
+        if skip_collective or self.mesh_device.shape[self.cluster_axis] <= 1:
+            return summed  # skip_collective: the caller folds this partial sum into its own reduce-scatter
 
         if self.reduce_scatter_fn is not None:
             return self.reduce_scatter_fn(summed)
