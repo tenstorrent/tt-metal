@@ -403,24 +403,20 @@ def test_erfinv(device):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# erfc: the rational is fit on [0, 5] and the input is clamped there (#51137),
-#       so x >= 5 returns one constant instead of decaying toward 0.
+# erfc: the rational is fit on [0, 5] and the input is clamped there (#51137).
+#       x >= 5 is checked against torch.erfc in test_erfc_tail, which is
+#       xfailed until that clamp is removed. The constant is not the expected result.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # erfc(2) ≈ 4.68e-3. Blackhole's body atol sits under that, so a zero result fails.
 ERFC_BODY_END = 2.0
 ERFC_CLAMP = 5.0
-# Wormhole clamp measured as 0x2c4efece; 0x2c4efed0 is 2 float32 ULPs away.
-# Blackhole returns that value rounded to bfloat16, 0x2c4f0000.
-ERFC_CLAMP_WORMHOLE = torch.tensor([0x2C4EFECE], dtype=torch.int32).view(torch.float32).item()
-ERFC_CLAMP_BLACKHOLE = torch.tensor([0x2C4F0000], dtype=torch.int32).view(torch.float32).item()
 
 
 def _assert_erfc(x, golden, result):
     body = x <= ERFC_BODY_END
     mid = (x > ERFC_BODY_END) & (x < ERFC_CLAMP)
-    tail = x >= ERFC_CLAMP
-    assert body.any() and mid.any() and tail.any()
+    assert body.any() and mid.any()
 
     if is_blackhole():
         assert_allclose(expected_result=golden[body], actual_result=result[body], atol=3.9e-3, rtol=0)
@@ -429,19 +425,9 @@ def _assert_erfc(x, golden, result):
 
     assert_allclose(expected_result=golden[mid], actual_result=result[mid], atol=0, rtol=3.2e-1)
 
-    tail_result = result[tail]
-    if is_blackhole():
-        assert torch.equal(tail_result, torch.full_like(tail_result, ERFC_CLAMP_BLACKHOLE))
-    else:
-        assert_with_ulp(
-            expected_result=torch.full_like(tail_result, ERFC_CLAMP_WORMHOLE),
-            actual_result=tail_result,
-            ulp_threshold=2,
-        )
-
 
 def test_erfc(device):
-    """Float32 sweep on [-10, 10]. The fit is [-5, 5]; |x| above 5 is clamped (#51137).
+    """Float32 sweep on [-10, 10], for x < 5. The fit is [-5, 5]; the tail is test_erfc_tail.
 
     | slice     | wormhole                  | blackhole                     |
     |-----------|---------------------------|-------------------------------|
@@ -449,9 +435,9 @@ def test_erfc(device):
     |           | max abs 9.70e-5 at x=-2.5 | max abs 3.883e-3 near x=-6e-8 |
     | 2 < x < 5 | atol=0, rtol=0.32         | atol=0, rtol=0.32             |
     |           | max rel 0.311             | max rel 0.312 at x=3.453125   |
-    | x >= 5    | 2.94e-12, within 2 ULP    | 2.94e-12 exactly            |
     """
     input_tensor = generate_float32_bits_in_range(-10.0, 10.0)
+    input_tensor = input_tensor[input_tensor < ERFC_CLAMP]
 
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -462,13 +448,29 @@ def test_erfc(device):
     _assert_erfc(input_tensor, golden, result)
 
 
+@pytest.mark.xfail(
+    reason="#51137: |x| >= 5 is clamped instead of decaying.",
+)
+def test_erfc_tail(device):
+    """x >= 5 against torch.erfc, same rtol as (2, 5). Expected to fail while the input is clamped at 5."""
+    input_tensor = generate_float32_bits_in_range(ERFC_CLAMP, 10.0)
+
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden_function = ttnn.get_golden_function(ttnn.erfc)
+    golden = golden_function(input_tensor, device=device)
+
+    result = ttnn.to_torch(ttnn.erfc(tt_in))
+    assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=3.2e-1)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # reciprocal: 1/x, swept over the bfloat16 lattice stored as float32
 #
 # Float32 on wormhole keeps 1/2^126, the smallest normal. Blackhole flushes
 # that boundary to signed zero, same as every larger magnitude. Below 2^126,
-# wormhole is within 1 ULP. Blackhole (#55797) is tested only for |x| < 2^112,
-# also at 1 ULP; the error above that is documented in test_reciprocal.
+# wormhole is within 1 ULP. Blackhole (#55797) is 1 ULP for |x| < 2^112 and
+# bounded at rtol=5.7e-3 above that (test_reciprocal_blackhole_tail).
 #   wormhole  |x| = 2^126   exact signed smallest normal
 #   blackhole |x| = 2^126   signed zero (+0 for +2^126, -0 for -2^126)
 #   both      |x| > 2^126   signed zero (subnormal reciprocal flushed)
@@ -492,19 +494,8 @@ RECIPROCAL_BH_MAX_INPUT = 2.0**112 * (1 - 2.0**-8)
 def test_reciprocal(device, low, high):
     """Float32 reciprocal. Wormhole sweeps |x| < 2^126 and stays within 1 ULP.
 
-    Blackhole (#55797) is tested only for |x| < 2^112, also at 1 ULP. Above that the Newton step flushes.
-    Measured |err|/|golden|, not asserted:
-
-    | |x|            | measured |
-    |----------------|----------|
-    | < 2^112        | 1 ULP    |
-    | [2^112, 2^114) | 6.10e-5  |
-    | [2^114, 2^115) | 2.44e-4  |
-    | [2^115, 2^116) | 4.27e-4  |
-    | [2^116, 2^117) | 7.93e-4  |
-    | [2^117, 2^118) | 1.92e-3  |
-    | [2^118, 2^119) | 3.66e-3  |
-    | [2^119, 2^126) | 5.58e-3  |
+    Blackhole (#55797) is 1 ULP only for |x| < 2^112, so the sweep stops there.
+    [2^112, 2^126) is covered by test_reciprocal_blackhole_tail.
     """
     if is_blackhole():
         if low >= 0:
@@ -523,6 +514,41 @@ def test_reciprocal(device, low, high):
     result = ttnn.to_torch(tt_result)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="wormhole is 1 ULP up to 2^126, covered by test_reciprocal")
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        (2.0**112, RECIPROCAL_MAX_INPUT),
+        (-RECIPROCAL_MAX_INPUT, -(2.0**112)),
+    ],
+    ids=["positive", "negative"],
+)
+def test_reciprocal_blackhole_tail(device, low, high):
+    """Blackhole reciprocal on 2^112 <= |x| < 2^126, where it is not 1 ULP (#55797).
+
+    The Newton step flushes, and the error grows with |x|. Measured |err|/|golden|:
+
+    | |x|            | measured |
+    |----------------|----------|
+    | [2^112, 2^114) | 6.10e-5  |
+    | [2^114, 2^115) | 2.44e-4  |
+    | [2^115, 2^116) | 4.27e-4  |
+    | [2^116, 2^117) | 7.93e-4  |
+    | [2^117, 2^118) | 1.92e-3  |
+    | [2^118, 2^119) | 3.66e-3  |
+    | [2^119, 2^126) | 5.58e-3  |
+
+    Measured against the device output, max |err|/|device| = 5.62e-3. rtol=5.7e-3 is an upper bound,
+    so a fix for #55797 still passes.
+    """
+    input_tensor = generate_float32_bits_in_range(low, high)
+
+    golden = ttnn.get_golden_function(ttnn.reciprocal)(input_tensor, device=device)
+    result = ttnn.to_torch(ttnn.reciprocal(to_tt_tensor(input_tensor, device)))
+
+    assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=5.7e-3)
 
 
 @pytest.mark.parametrize(
