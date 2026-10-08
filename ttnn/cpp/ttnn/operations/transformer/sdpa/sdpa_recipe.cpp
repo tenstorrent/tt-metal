@@ -14,9 +14,14 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::generic {
+ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
+}  // namespace ttnn::operations::generic
 
 namespace ttnn::operations::transformer::sdpa::detail {
 using namespace tt::tt_metal;
@@ -54,10 +59,12 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
     return k_chunk / 32;
 }
 
-uint32_t recipe_compute_q_tiles(const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked) {
+uint32_t recipe_compute_q_tiles(
+    const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked, bool keyed) {
     const bool unfused_standard =
         policy.selection.recipe == Recipe::B && (masked || recipe_subblock_width(k_tiles) < 2);
-    return unfused_standard && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
+    const bool paired = !policy.fp32_destination;
+    return (unfused_standard || (keyed && paired)) && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
 }
 
 namespace {
@@ -313,6 +320,87 @@ void validate_recipe_mask(const Tensor& q, const Tensor& k, const Tensor& mask, 
 
 // CB 15 is free in the dense recipe layout (0-14 and 16 are recipe-owned; ring uses 17/18).
 constexpr uint8_t kRecipeMaskCb = 15;
+// Key-range calls (RecipeKeyRange): the reader's control page per Q chunk (compute: recipe_read_key_range), the
+// all-masked template tile, and a scratch page for the Q offset / page-table row (64 B slots) and cu_window_seqlens.
+constexpr uint8_t kRecipeKeyRangeCb = 17;
+constexpr uint8_t kRecipeMaskedTileCb = 18;
+constexpr uint8_t kRecipeKeyScratchCb = 19;
+constexpr uint32_t kRecipeKeyRangePage = 32;
+// Generated mixed mask tiles the writer reuses (causal diagonal, window edges), after the all-masked template.
+constexpr uint32_t kRecipeMaskCacheTiles = 4;
+// Key-range masks are BFP4 tiles: {0, -2^100} is exact there (dataflow/recipe_key_range.hpp).
+constexpr uint32_t kRecipeKeyMaskPage = 576;
+
+namespace {
+// Two halves (reader, writer) of 64 B slots for the Q offset and a page-table row, then cu_window_seqlens
+// (dataflow/recipe_key_range.hpp: RecipeScratch).
+uint32_t key_range_scratch_bytes(const RecipeKeyRange& key_range) {
+    if (!key_range.q_offset_tensor && !key_range.segments && !key_range.page_table) {
+        return 0;
+    }
+    return 2 * (128 + (key_range.segments ? key_range.segments->buffer()->aligned_page_size() : 0));
+}
+
+// A core's share of one head's Q chunks: a contiguous [first, first + count) of the zigzag order 0, J-1, 1, J-2, ...
+// (dataflow/recipe_key_range.hpp). Pairs cost the same under a causal mask; with fewer than two chunks per core the
+// heaviest go alone.
+std::vector<std::pair<uint32_t, uint32_t>> recipe_zigzag_split(uint32_t jobs, uint32_t chain) {
+    std::vector<std::pair<uint32_t, uint32_t>> split;
+    uint32_t first = 0;
+    for (uint32_t r = 0; r < chain; ++r) {
+        uint32_t count;
+        if (jobs >= 2 * chain) {
+            const uint32_t pairs = jobs / 2;
+            count = 2 * (pairs / chain + (r < pairs % chain ? 1 : 0)) + (jobs % 2 != 0 && r + 1 == chain ? 1 : 0);
+        } else {
+            count = r < jobs - chain ? 2 : 1;
+        }
+        split.emplace_back(first, count);
+        first += count;
+    }
+    TT_ASSERT(first == jobs);
+    return split;
+}
+
+void validate_key_range(const Tensor& q, const RecipeKeyRange& key_range) {
+    auto check_index_tensor = [&](const Tensor& t, const char* name) {
+        TT_FATAL(t.storage_type() == StorageType::DEVICE && t.device() == q.device(), "{} must be on Q's device", name);
+        TT_FATAL(t.dtype() == DataType::INT32 || t.dtype() == DataType::UINT32, "{} must be INT32 or UINT32", name);
+        TT_FATAL(t.layout() == Layout::ROW_MAJOR, "{} must be row-major", name);
+        TT_FATAL(!t.is_sharded(), "{} must be interleaved", name);
+    };
+    if (key_range.q_offset_tensor) {
+        check_index_tensor(*key_range.q_offset_tensor, "SDPA recipe Q offset tensor");
+        TT_FATAL(
+            key_range.q_offset_tensor->logical_shape().volume() == 1,
+            "SDPA recipe Q offset tensor must hold one value");
+    }
+    if (key_range.segments) {
+        check_index_tensor(*key_range.segments, "cu_window_seqlens");
+        const auto& shape = key_range.segments->logical_shape();
+        TT_FATAL(
+            shape.rank() == 1 && shape[0] >= 2 && shape[0] <= 1024,
+            "cu_window_seqlens must be 1-D with 2 to 1024 entries, got {}",
+            shape);
+    }
+    if (key_range.page_table) {
+        const auto& table = *key_range.page_table;
+        check_index_tensor(table, "SDPA recipe page table");
+        const auto& shape = table.logical_shape();
+        TT_FATAL(
+            shape.rank() == 2 && shape[0] == q.logical_shape()[0] && shape[1] == 1,
+            "Named SDPA recipes support chunked prefill with one cache block per sequence (page table [B, 1]), got "
+            "{}; multi-block paged K/V is not supported yet",
+            shape);
+    }
+}
+}  // namespace
+
+uint32_t recipe_key_range_extra_bytes(const RecipeKeyRange& key_range) {
+    return key_range.active() ? 2 * kRecipeKeyRangePage + (1 + kRecipeMaskCacheTiles) * kRecipeKeyMaskPage +
+                                    key_range_scratch_bytes(key_range)
+                              : 0;
+}
 
 static std::vector<Tensor> run_recipe_segments(
     const std::vector<std::array<Tensor, 3>>& segments,
@@ -320,7 +408,10 @@ static std::vector<Tensor> run_recipe_segments(
     const std::optional<SDPAProgramConfig>& program_config,
     const std::optional<Tensor>& attn_mask,
     std::optional<float> scale,
-    const MemoryConfig& output_memory_config) {
+    const MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range = {}) {
+    const bool keyed = key_range.active();
+    const bool paged = key_range.page_table.has_value();
     const auto& [q, k, v] = segments.front();
     std::vector<Tensor> io;
     for (const auto& segment : segments) {
@@ -355,9 +446,10 @@ static std::vector<Tensor> run_recipe_segments(
         TT_FATAL(
             qshape[0] > 0 && qshape[0] == qs[0] && qshape[1] > 0 && qshape[1] == qs[1] && qshape[3] == qs[3],
             "SDPA recipe segments require Q [B,H,Q,D] with matching positive batch/head counts");
+        // Chunked prefill: K/V are [cache blocks, Hkv, block size, D] (RecipeKeyRange::page_table).
         TT_FATAL(
-            kshape == sv.logical_shape() && kshape[0] == qs[0] && kshape[1] > 0 && kshape[1] == k.logical_shape()[1] &&
-                qs[1] % kshape[1] == 0 && kshape[3] == qs[3],
+            kshape == sv.logical_shape() && (paged || kshape[0] == qs[0]) && kshape[1] > 0 &&
+                kshape[1] == k.logical_shape()[1] && qs[1] % kshape[1] == 0 && kshape[3] == qs[3],
             "SDPA recipes require matching K/V [B,Hkv,K,D] and Q heads divisible by KV heads");
         TT_FATAL(qshape[2] > 0 && kshape[2] > 0, "SDPA recipe segments require positive sequence lengths");
         TT_FATAL(
@@ -369,6 +461,11 @@ static std::vector<Tensor> run_recipe_segments(
     if (attn_mask) {
         TT_FATAL(segments.size() == 1, "SDPA recipe masks are supported on the dense (non-joint) path only");
         validate_recipe_mask(q, k, *attn_mask, policy);
+    }
+    if (keyed) {
+        TT_FATAL(segments.size() == 1, "SDPA recipe key ranges are supported on the dense (non-joint) path only");
+        TT_FATAL(!attn_mask, "SDPA recipes take either an attn_mask or a causal / window / chunked key range");
+        validate_key_range(q, key_range);
     }
     const uint32_t joint_q_rows = segments.size() == 2 ? segments[1][0].logical_shape()[2] : 0;
     const uint32_t joint_k_rows = segments.size() == 2 ? segments[1][1].logical_shape()[2] : 0;
@@ -423,18 +520,21 @@ static std::vector<Tensor> run_recipe_segments(
             q.device()));
     }
     const auto& output = outputs.front();
-    const uint32_t compute_q_tiles = recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value());
+    const uint32_t compute_q_tiles =
+        recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value() || keyed, keyed);
     auto program = recipe_compute_program(policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles, scale);
     // QK row-group height the compute consumes the mask in: FP32 recipes single rows, paired BF16 recipes row pairs.
     const uint32_t mask_group_rows = policy.fp32_destination ? 1 : 2;
-    if (attn_mask) {
+    if (attn_mask || keyed) {
         // The reader streams mask tiles one Q tile row (k_tiles tiles) at a time in whole row groups
         // (an odd paired chunk's last group is padded with a zero row), and compute pops one group at a
         // time, so group reads never wrap. Double-buffer the group when L1 allows, else single.
-        const auto mask_format = datatype_to_dataformat_converter(attn_mask->dtype());
-        const uint32_t mask_page = attn_mask->buffer()->page_size();
+        // Key ranges generate BFP4 {0, -2^100} tiles for their edge chunks only.
+        const auto mask_format =
+            attn_mask ? datatype_to_dataformat_converter(attn_mask->dtype()) : tt::DataFormat::Bfp4_b;
+        const uint32_t mask_page = attn_mask ? attn_mask->buffer()->page_size() : kRecipeKeyMaskPage;
         const uint32_t group_bytes = mask_group_rows * k_tiles * mask_page;
-        uint64_t used = 0;
+        uint64_t used = recipe_key_range_extra_bytes(key_range);
         for (const auto& cb : program.cbs) {
             used += cb.total_size;
         }
@@ -446,10 +546,26 @@ static std::vector<Tensor> run_recipe_segments(
             .format_descriptors = {{.buffer_index = kRecipeMaskCb, .data_format = mask_format, .page_size = mask_page}}});
         auto& defines = program.kernels.front().defines;
         defines.emplace_back("SDPA_RECIPE_MASK", "1");
+        if (keyed) {
+            defines.emplace_back("SDPA_RECIPE_KRANGE", "1");
+        }
         if (mask_format == tt::DataFormat::Float32) {
             // Unpack the FP32 mask straight to DST so the L1 add sees the exact FP32 values.
             auto& config = std::get<ComputeConfigDescriptor>(program.kernels.front().config);
             config.unpack_to_dest_mode[kRecipeMaskCb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+    if (keyed) {
+        auto add_cb = [&](uint8_t index, uint32_t pages, uint32_t page, tt::DataFormat format) {
+            program.cbs.push_back(CBDescriptor{
+                .total_size = pages * page,
+                .core_ranges = grid,
+                .format_descriptors = {{.buffer_index = index, .data_format = format, .page_size = page}}});
+        };
+        add_cb(kRecipeKeyRangeCb, 2, kRecipeKeyRangePage, tt::DataFormat::UInt32);
+        add_cb(kRecipeMaskedTileCb, 1 + kRecipeMaskCacheTiles, kRecipeKeyMaskPage, tt::DataFormat::Bfp4_b);
+        if (const uint32_t scratch = key_range_scratch_bytes(key_range)) {
+            add_cb(kRecipeKeyScratchCb, 1, scratch, tt::DataFormat::UInt32);
         }
     }
     check_recipe_l1_fit(program, *q.device(), q_chunk, k_chunk);
@@ -505,7 +621,74 @@ static std::vector<Tensor> run_recipe_segments(
     for (const auto& tensor : outputs) {
         TensorAccessorArgs(tensor.buffer()).append_to(writer.compile_time_args);
     }
+    // Key ranges: the reader streams each Q chunk's K range; the writer sends compute the range and generates the
+    // edge masks (dataflow/recipe_key_range.hpp). Both read the Q offset and cu_window_seqlens tensors; the reader
+    // also reads the page table. Device tensors are bound in the order Q offset, cu_window_seqlens, page table.
+    std::vector<Tensor> key_tensors;
+    if (keyed) {
+        TT_FATAL(
+            !key_range.q_offset_tensor || key_range.q_offset_tensor->buffer()->aligned_page_size() <= 64,
+            "SDPA recipe Q offset tensor page must fit 64 bytes");
+        TT_FATAL(
+            !paged || key_range.page_table->buffer()->aligned_page_size() <= 64,
+            "SDPA recipe page table rows must fit 64 bytes");
+        const std::string segment_bounds =
+            std::to_string(key_range.segments ? key_range.segments->logical_shape()[0] : 0);
+        for (auto* kernel : {&reader, &writer}) {
+            kernel->defines.emplace_back("SDPA_RECIPE_KRANGE", "1");
+            kernel->defines.emplace_back("SDPA_RECIPE_CAUSAL", key_range.causal ? "1" : "0");
+            kernel->defines.emplace_back("SDPA_RECIPE_WINDOW", std::to_string(key_range.sliding_window));
+            kernel->defines.emplace_back("SDPA_RECIPE_SEGMENTS", segment_bounds);
+            kernel->defines.emplace_back("SDPA_RECIPE_SCRATCH_CB", std::to_string(kRecipeKeyScratchCb));
+        }
+        writer.defines.emplace_back("SDPA_RECIPE_Q_JOBS", std::to_string(jobs_per_head));
+        writer.defines.emplace_back("SDPA_RECIPE_K_ROWS", std::to_string(k.logical_shape()[2]));
+        writer.defines.emplace_back("SDPA_RECIPE_K_CHUNKS", std::to_string(k_chunks));
+        writer.defines.emplace_back("SDPA_K_CHUNK_TILES", std::to_string(k_tiles));
+        writer.defines.emplace_back("SDPA_RECIPE_MASK_CB", std::to_string(kRecipeMaskCb));
+        writer.defines.emplace_back("SDPA_RECIPE_MASK_GROUP_ROWS", std::to_string(mask_group_rows));
+        writer.defines.emplace_back("SDPA_RECIPE_KEY_RANGE_CB", std::to_string(kRecipeKeyRangeCb));
+        writer.defines.emplace_back("SDPA_RECIPE_MASKED_TILE_CB", std::to_string(kRecipeMaskedTileCb));
+        writer.defines.emplace_back("SDPA_RECIPE_MASK_CACHE_TILES", std::to_string(kRecipeMaskCacheTiles));
+        writer.defines.emplace_back(
+            "SDPA_RECIPE_SCRATCH_WRITER", std::to_string(key_range_scratch_bytes(key_range) / 2));
+        for (const auto& [tensor, define, to_writer] :
+             {std::tuple{&key_range.q_offset_tensor, "SDPA_RECIPE_Q_OFFSET_PAGE", true},
+              std::tuple{&key_range.segments, "SDPA_RECIPE_SEGMENTS_PAGE", true},
+              std::tuple{&key_range.page_table, "SDPA_RECIPE_PAGE_TABLE_PAGE", false}}) {
+            if (!*tensor) {
+                continue;
+            }
+            key_tensors.push_back(**tensor);
+            const auto page = std::to_string((*tensor)->buffer()->aligned_page_size());
+            for (auto* kernel : to_writer ? std::vector{&reader, &writer} : std::vector{&reader}) {
+                kernel->defines.emplace_back(define, page);
+            }
+        }
+        // Without the chain every core reads its own K/V: bound the reads in flight per core like legacy SDPA
+        // (dataflow_common.hpp: get_barrier_read_threshold), at most the chain head's 16 tiles. Measured on 10 heads x
+        // 8192^2 causal over 110 cores: 16 tiles 2.66 ms, 2 tiles 2.25 ms (STANDARD).
+        const uint32_t kv_page = k.buffer()->page_size();
+        reader.defines.emplace_back(
+            "SDPA_RECIPE_READ_BARRIER_TILES",
+            std::to_string(std::clamp<uint32_t>((512 / cores) * (1024 + 128) / kv_page, 1, 16)));
+        if (paged) {
+            reader.defines.emplace_back("SDPA_RECIPE_Q_HEADS", std::to_string(qs[1]));
+            reader.defines.emplace_back("SDPA_RECIPE_KV_HEADS", std::to_string(k.logical_shape()[1]));
+        }
+        for (const auto& tensor : key_tensors) {
+            TensorAccessorArgs(tensor.buffer()).append_to(reader.compile_time_args);
+        }
+        for (const auto& tensor : {key_range.q_offset_tensor, key_range.segments}) {
+            if (tensor) {
+                TensorAccessorArgs(tensor->buffer()).append_to(writer.compile_time_args);
+            }
+        }
+    }
     auto compute = std::move(program.kernels.front());
+    // Key ranges: no K/V chain (each Q chunk reads its own K range), Q chunks in zigzag order.
+    const auto zigzag =
+        keyed ? recipe_zigzag_split(jobs_per_head, chain) : std::vector<std::pair<uint32_t, uint32_t>>{};
     for (uint32_t i = 0; i < cores; ++i) {
         const auto core = coordinates[i];
         const uint32_t head = i / chain, rank = i % chain;
@@ -516,6 +699,43 @@ static std::vector<Tensor> run_recipe_segments(
         const uint32_t count = split_jobs / split_ways + (part < split_jobs % split_ways);
         const uint32_t offset = (global_jobs ? 0 : head * jobs_per_head) + part * (split_jobs / split_ways) +
                                 std::min(part, split_jobs % split_ways);
+        if (keyed) {
+            // A contiguous range of positions in the heads' zigzag orders (position z: head z / J, its zigzag
+            // entry z % J): the chain's zigzag split of one head, or with more batch/heads than cores the even split
+            // of all of them.
+            const uint32_t z_first = global_jobs ? offset : head * jobs_per_head + zigzag[rank].first;
+            const uint32_t z_count = global_jobs ? count : zigzag[rank].second;
+            reader.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    q.buffer()->address(),
+                    k.buffer()->address(),
+                    v.buffer()->address(),
+                    z_first,
+                    z_count,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    key_range.q_offset});
+            for (const auto& tensor : {key_range.q_offset_tensor, key_range.segments, key_range.page_table}) {
+                reader.runtime_args.back().second.push_back(tensor ? tensor->buffer()->address() : 0);
+            }
+            writer.runtime_args.emplace_back(
+                core,
+                KernelDescriptor::CoreRuntimeArgs{
+                    output.buffer()->address(),
+                    z_first,
+                    z_count,
+                    key_range.q_offset,
+                    key_range.q_offset_tensor ? key_range.q_offset_tensor->buffer()->address() : 0,
+                    key_range.segments ? key_range.segments->buffer()->address() : 0});
+            compute.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{z_count});
+            continue;
+        }
         const auto prev = rank ? q.device()->worker_core_from_logical_core(coordinates[i - 1]) : CoreCoord(0, 0);
         const auto next =
             rank + 1 < chain ? q.device()->worker_core_from_logical_core(coordinates[i + 1]) : CoreCoord(0, 0);
@@ -552,7 +772,15 @@ static std::vector<Tensor> run_recipe_segments(
     if (attn_mask) {
         io.push_back(*attn_mask);
     }
+    io.insert(io.end(), key_tensors.begin(), key_tensors.end());
     io.insert(io.end(), outputs.begin(), outputs.end());
+    if (keyed) {
+        // The scalar Q offset is a runtime arg the cache-hit path does not re-apply: key the program on it (legacy
+        // chunked SDPA keys its cache on chunk_start_idx the same way); the kernels do not recompile.
+        auto hash = ttnn::operations::generic::compute_program_descriptor_hash(program);
+        ttsl::hash::hash_combine(hash, key_range.q_offset);
+        program.custom_program_hash = hash;
+    }
     ttnn::generic_op(io, program);
     return outputs;
 }
@@ -565,8 +793,10 @@ Tensor run_recipe(
     const std::optional<SDPAProgramConfig>& program_config,
     const std::optional<Tensor>& attn_mask,
     std::optional<float> scale,
-    const MemoryConfig& output_memory_config) {
-    return run_recipe_segments({{q, k, v}}, policy, program_config, attn_mask, scale, output_memory_config).front();
+    const MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range) {
+    return run_recipe_segments({{q, k, v}}, policy, program_config, attn_mask, scale, output_memory_config, key_range)
+        .front();
 }
 
 std::tuple<Tensor, Tensor> run_joint_recipe(

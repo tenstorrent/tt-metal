@@ -28,6 +28,8 @@
 
 namespace ttnn::operations::transformer::sdpa::detail {
 
+struct RecipeKeyRange;  // sdpa_recipe.hpp
+
 enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 
 // Q/K chunk tile counts the chooser enumerates. Candidates outside the supported geometry are
@@ -57,6 +59,7 @@ inline bool recipe_geometry_supported(
 // Schedule facts that change the circular-buffer layout.
 struct RecipeL1Context {
     uint32_t mask_page_bytes = 0;      // dense: attn_mask tile bytes (0 = no mask)
+    uint32_t extra_bytes = 0;          // dense key ranges: control pages, template tile, scratch
 };
 
 // Dense attn_mask circular buffer: one QK row group of mask tiles per buffer slot (the factory
@@ -99,8 +102,10 @@ struct RecipeBlockingProblem {
     CoreCoord grid{1, 1};
     uint32_t max_cores_per_head_batch = 16;
     uint64_t l1_bytes = 0;  // unreserved L1 per core available to circular buffers
-    // Dense: attn_mask tile bytes (0 = no mask); the mask CB counts against l1_bytes.
+    // Dense: attn_mask tile bytes (0 = no mask); the mask CB counts against l1_bytes. Key ranges (causal,
+    // sliding window, chunked, windowed) use a BF16 mask CB plus extra_l1_bytes (recipe_key_range_extra_bytes).
     uint32_t mask_page_bytes = 0;
+    uint32_t extra_l1_bytes = 0;
     // Nonzero pins that dimension (a caller-provided chunk); zero lets the chooser pick.
     uint32_t fixed_q_tiles = 0;
     uint32_t fixed_k_tiles = 0;
@@ -140,7 +145,8 @@ std::optional<SDPAProgramConfig> resolve_dense_recipe_blocking(
     const Tensor* joint_k,
     const std::optional<SDPAProgramConfig>& program_config,
     const Tensor* attn_mask = nullptr,
-    uint64_t reserved_l1_bytes = 0);
+    uint64_t reserved_l1_bytes = 0,
+    const RecipeKeyRange* key_range = nullptr);
 
 SDPAProgramConfig resolve_ring_recipe_blocking(
     const PrecisionPolicy& policy,
