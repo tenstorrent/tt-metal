@@ -2521,3 +2521,14 @@
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/tbl3/state.json
 - paths: models/demos/blackhole/mimo_v26/tt, models/demos/blackhole/mimo_v26/tests/test_spec_exact.py
 - data: {"spec_book":{"4k":{"U1":{"plain_ms":35.46,"round_ms":63.21,"accepted":2.417,"strict_identical":0,"n":4},"U2":{"plain_ms":40.54,"round_ms":75.88,"accepted":2.534,"strict_identical":1,"n":8},"U4":{"plain_ms":46.84,"round_ms":88.22,"accepted":2.501,"strict_identical":0,"n":16}},"65000":{"U1":{"plain_ms":36.83,"round_ms":71.99,"accepted":2.692,"strict_identical":0,"n":4},"U4":{"plain_ms":50.77,"round_ms":121.03,"accepted":2.456,"strict_identical":0,"n":16}}}}
+
+## E261008-1542-a46
+- date: 2026-10-08T15:42:50
+- commit: c60484a2b64
+- branch: ssinghal/mimo
+- host: coordinator
+- track: decision
+- status: inferred
+- claim: USER DECISION 2026-10-08: skip B=128; limit the implementation to B<=64 (U<=16 users per mesh row). Consequences: (1) the chunked prefill scratch-slot limit at 32 users per row (kv_pool.py SLOTS=32, IndexError at U=32, E261008-1518-2fb) is NOT fixed and not required; (2) the e2e table covers B=4,8,16,32,64; (3) spec decode covers B=4,8,16 (verify rows 8U<=32 caps it at B=16 anyway); (4) existing B=128 evidence (decode U=32 sweep point 75.01 ms, GSM8K n=128 run at 128 live users) stays in the log as a decode-path datum, but no B=128 prefill or gate is required; (5) the ring DRAM fallback at B=32/65000 (0.84 GiB headroom < 1.0, unified decode 82.83 ms) is accepted behaviour inside the supported range, to be revisited only if the user wants ring at B=32 with 64k (options: a smaller KV for 64k or a lower headroom threshold).
+- evidence: -
+- paths: bringup/mimo_v26/scorecard.json
