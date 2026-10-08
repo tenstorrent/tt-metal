@@ -38,10 +38,12 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
 #if !defined(NOC_API_V1)
     // Engage the Quasar iDMA zero device (Overlay Spec §4.12). The zero mode is
     // a HW overlay on top of the iDMA copy path: same MISC.idma_en + MISC.write_trans
-    // setup as iDMA copy, but with AXI_OPT_1.src_protocol = 4 and decouple_aw = 1. The
-    // payload bytes coming out the back are forced to zero. Source address is
-    // ignored. We reuse idma_setup_as_copy_cmdbuf_0 for the MISC setup, then flip
-    // src_protocol / decouple_aw via set_axi_opt_1_cmdbuf_0.
+    // setup as iDMA copy, but with AXI_OPT_1.src_protocol = 4. The payload bytes coming
+    // out the back are forced to zero. Source address is ignored. We reuse
+    // idma_setup_as_copy_cmdbuf_0 for the MISC setup, then flip src_protocol via
+    // set_axi_opt_1_cmdbuf_0. The spec's recipe also sets decouple_aw = 1, but Quasar's
+    // iDMA has an OBI backend, which keeps only the two protocol fields of AXI_OPT_1:
+    // decouple_aw is an AXI option with no storage there, so it is left at 0.
     //
     // The cmdbuf splits the transaction into packets and round-robins them across
     // the 8 backend engines via per-packet VC autoincrement wrapping the 8 iDMA
@@ -54,7 +56,7 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     // several async_write_zeros before a single barrier — a CMDBUF_RESET on the next
     // call may disturb a previous zero whose iDMA ack is still pending.
     overlay::idma_setup_as_copy_cmdbuf_0(/*wrapping=*/false);                 // MISC.idma_en + MISC.write_trans
-    overlay::set_axi_opt_1_cmdbuf_0(/*src_protocol=*/4, /*decouple_aw=*/1);   // flip to zero mode
+    overlay::set_axi_opt_1_cmdbuf_0(/*src_protocol=*/4, /*decouple_aw=*/0);   // flip to zero mode
     overlay::setup_ongoing_cmdbuf_0({.req_vc = true});                        // per-packet VC autoincrement
     overlay::setup_wrapping_vcs_cmdbuf_0(
         {.start = overlay::CMDBUF_FIRST_IDMA_VC,
