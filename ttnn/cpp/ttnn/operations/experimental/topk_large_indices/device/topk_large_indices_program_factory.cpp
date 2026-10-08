@@ -127,6 +127,10 @@ ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     return physical_chunks <= 32 ? ComputeBodyMode::FusedEndToEnd : ComputeBodyMode::Classic;
 }
 
+bool multi_chunk_rows(uint32_t k, uint32_t input_last_dim) {
+    return tt::div_up(input_last_dim, to_uint32(snap_to_llk_target_k(k))) >= 2;
+}
+
 std::vector<CoreRowAssignment> derive_core_row_assignments(const CoreRangeSet& core_grid, uint32_t num_rows) {
     const auto work_split = tt::tt_metal::split_work_to_cores(core_grid, num_rows, true);
     const auto num_active_cores = std::get<0>(work_split);
@@ -242,7 +246,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     std::vector<uint32_t> compute_compile_args = {cb_in, cb_indices, llk_k, static_cast<uint32_t>(body_mode)};
     compute_compile_args.push_back(has_meta ? 1u : 0u);
     compute_compile_args.push_back(has_meta ? cb_meta : 0u);
-    compute_compile_args.push_back(tt::div_up(input.logical_shape()[-1], llk_k) >= 2 ? 1u : 0u);
+    compute_compile_args.push_back(multi_chunk_rows(k, input.logical_shape()[-1]) ? 1u : 0u);
     auto compute_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/compute.cpp",
