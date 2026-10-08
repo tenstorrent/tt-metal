@@ -12,15 +12,14 @@ covers the trace buckets (<= one chunk), so nothing warmed the longer shapes.
 ``GEMMA4_WARMUP_PREFILL_ISLS="4096,8192,16384,32768"`` runs one eager batch-1
 prefill per listed length at boot, once per process. Unset (default) warms
 nothing extra, so serving behaviour is unchanged unless an entry opts in.
-Lengths above the served context, or at or below the longest length the
-existing warmup already covers, are skipped.
+Lengths above the served context are skipped; nothing else is inferred.
 
 This module is host-only (no ttnn import) so the selection and the
 orchestration can be unit-tested with a fake generator.
 """
 
 import os
-from typing import Callable, Iterable, List, Optional
+from typing import Callable, List, Optional
 
 from loguru import logger
 
@@ -50,25 +49,13 @@ def parse_warmup_isls(raw: Optional[str]) -> List[int]:
     return sorted(out)
 
 
-def warmup_prefill_isls(
-    max_seq_len: Optional[int],
-    already_warmed: Iterable[int] = (),
-    env: Optional[dict] = None,
-) -> List[int]:
-    """The ladder to run: env lengths within the served context and strictly
-    longer than ``max(already_warmed)`` (the longest length the base/trace
-    warmup covers). This is a floor, not set membership: anything at or below
-    that longest length is treated as covered."""
+def warmup_prefill_isls(max_seq_len: Optional[int], env: Optional[dict] = None) -> List[int]:
+    """The ladder to run: every env length within the served context. Nothing is
+    inferred as "already covered": the trace buckets only warm a shape when prefill
+    tracing is on, and the first 4K request on an entry with tracing off paid
+    1.9 s vs 0.7 s because 4096 had been skipped as a trace bucket."""
     env = os.environ if env is None else env
-    floor = max([int(x) for x in already_warmed] or [0])
-    ladder = []
-    for isl in parse_warmup_isls(env.get(ENV_VAR)):
-        if max_seq_len is not None and isl > int(max_seq_len):
-            continue
-        if isl <= floor:
-            continue
-        ladder.append(isl)
-    return ladder
+    return [isl for isl in parse_warmup_isls(env.get(ENV_VAR)) if max_seq_len is None or isl <= int(max_seq_len)]
 
 
 def run_prefill_ladder(

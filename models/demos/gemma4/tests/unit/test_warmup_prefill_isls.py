@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Host-only: GEMMA4_WARMUP_PREFILL_ISLS selection and ladder orchestration."""
 
-
 from models.demos.gemma4.tt.warmup_isls import ENV_VAR, parse_warmup_isls, run_prefill_ladder, warmup_prefill_isls
 
 
@@ -26,21 +25,13 @@ def test_parse_warns_on_invalid_entries():
 
 
 def test_unset_env_warms_nothing_extra():
-    assert warmup_prefill_isls(262144, already_warmed=[32, 128, 512], env={}) == []
+    assert warmup_prefill_isls(262144, env={}) == []
 
 
-def test_ladder_is_capped_by_context():
-    env = {ENV_VAR: "4096,8192,16384,32768,65536"}
-    assert warmup_prefill_isls(16384, already_warmed=[], env=env) == [4096, 8192, 16384]
-    assert warmup_prefill_isls(None, already_warmed=[], env=env) == [4096, 8192, 16384, 32768, 65536]
-
-
-def test_already_warmed_is_a_floor_not_set_membership():
-    # Everything at or below the longest already-warmed length counts as covered,
-    # including lengths that were never explicitly warmed (512 here).
-    env = {ENV_VAR: "128,512,4096,8192"}
-    assert warmup_prefill_isls(262144, already_warmed=[32, 4096], env=env) == [8192]
-    assert warmup_prefill_isls(262144, already_warmed=[32, 128], env=env) == [512, 4096, 8192]
+def test_ladder_is_capped_by_context_and_nothing_is_inferred_as_covered():
+    env = {ENV_VAR: "128,512,4096,8192,16384,32768,65536"}
+    assert warmup_prefill_isls(16384, env=env) == [128, 512, 4096, 8192, 16384]
+    assert warmup_prefill_isls(None, env=env) == [128, 512, 4096, 8192, 16384, 32768, 65536]
 
 
 class _FakeGenerator:

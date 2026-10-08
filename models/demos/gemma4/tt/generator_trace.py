@@ -1111,10 +1111,7 @@ def _warmup_gemma4_prefill_isl_ladder(generator, kv_cache, *, prefill_forward_fn
     shape compile. Selection and orchestration live in
     ``models.demos.gemma4.tt.warmup_isls`` (host-only, unit-tested)."""
     model_args = generator.model_args[0]
-    ladder = warmup_prefill_isls(
-        getattr(model_args, "max_seq_len", None),
-        already_warmed=model_args.get_warmup_prefill_supported_seq_lens(),
-    )
+    ladder = warmup_prefill_isls(getattr(model_args, "max_seq_len", None))
     if not ladder:
         return
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
