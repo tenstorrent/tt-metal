@@ -101,6 +101,10 @@ def chunk_gated_delta_rule_fused_adapter(
     # host upload, illegal under trace); if None, the op builds them eagerly.
     program_config=None,  # ttnn.ChunkGdnFusedProgramConfig / ChunkGdnPhasedProgramConfig / ChunkGdnMono...:
     # None: the op's own dispatch — fused or phased depending on the cost model.
+    masks=None,  # (m_bg, m_qkv) PERSISTENT device masks for a traced masked-bucket prefill (valid_len must be None):
+    # m_bg [B, T, 1] fp32 TILE (1 for t < valid_len), multiplied into beta and g exactly like the host-built `_m`;
+    # m_qkv (optional, may be None) [B, T, 1] in q's dtype, multiplied into flat q/k/v like `_mq` (bit-parity only).
+    # Used INSTEAD of the host-built masks (whose ttnn.from_torch uploads are illegal under trace capture).
 ):
     global _logged_path
     if not _logged_path:
@@ -149,7 +153,19 @@ def chunk_gated_delta_rule_fused_adapter(
     # Scalar (one length for all rows) or a per-row list/tuple of B lengths (grouped batched prefill:
     # each user its own real length within the shared bucket).
     _is_per_row = isinstance(valid_len, (list, tuple))
-    if _is_per_row or (valid_len is not None and valid_len < T):
+    if masks is not None:
+        # Traced masked bucket: the masks are persistent device inputs rewritten per request (no host upload here).
+        assert valid_len is None, "masks= (persistent device masks) and valid_len= (host-built masks) are exclusive"
+        _dram = ttnn.DRAM_MEMORY_CONFIG
+        _m_bg, _m_qkv = masks
+        beta = ttnn.multiply(beta, _m_bg, memory_config=_dram)  # same ops/dtypes as the host-built path below
+        g = ttnn.multiply(g, _m_bg, memory_config=_dram)
+        if _m_qkv is not None:
+            assert len(q.shape) == 3, "the persistent q/k/v mask needs flat [B, T, C] q/k/v (flat_qkv)"
+            q = ttnn.multiply(q, _m_qkv, memory_config=_dram)
+            k = ttnn.multiply(k, _m_qkv, memory_config=_dram)
+            v = ttnn.multiply(v, _m_qkv, memory_config=_dram)
+    elif _is_per_row or (valid_len is not None and valid_len < T):
         _dram = ttnn.DRAM_MEMORY_CONFIG  # op CBs clash with L1 inputs at small buckets
         _mt = torch.zeros(B, T, 1, dtype=torch.float32)
         if _is_per_row:

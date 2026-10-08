@@ -282,9 +282,10 @@ def test_demo_text(
         # below as a batched-correctness check).
         rows, perf = _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch)
         text0 = tokenizer.decode(rows[0], skip_special_tokens=True)
+        _mode_tag = f" ({perf['decode_mode']})" if perf.get("decode_mode") else ""
         logger.info(
             f"[TP {model.num_devices}-dev B={batch}] ttft={perf['ttft_s']:.2f}s "
-            f"per-user-decode={perf['decode_tok_s']:.2f} tok/s aggregate={perf['agg_tok_s']:.1f} tok/s"
+            f"per-user-decode={perf['decode_tok_s']:.2f} tok/s aggregate={perf['agg_tok_s']:.1f} tok/s{_mode_tag}"
         )
         logger.info(f"[TP B={batch}] GENERATED (row 0): {text0!r}")
         for u in range(batch):
@@ -473,6 +474,12 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     # Round block budget to multiple of 32 for chunked SDPA page-table alignment
     num_blocks = ((num_blocks + 31) // 32) * 32
+    # Traced short prefill (QWEN36_PREFILL_BUCKET_TRACE): a prompt shorter than its bucket writes the padded K/V
+    # of the bucket into a TRASH block; reserve a spare one that neither the prompt nor the decode ever owns.
+    if model.short_prefill_trace_enabled():
+        if num_blocks <= -(-(T + max_generated_tokens) // BLOCK_SIZE):
+            num_blocks += 32
+        model.prefill_trash_block = num_blocks - 1
 
     # Paged KV cache + in-place GDN state (n_local_kv_heads per device at TP>1)
     kv_cache_shape = [num_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
@@ -489,11 +496,11 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
     # Capture chunk prefill trace (warmup; also warms masked-bucket programs)
     CHUNK = 2048
-    # Short prompt (< CHUNK) whose length is EXACTLY a masked bucket (e.g. the 128-token perf prompt, the
-    # 512-token accuracy prompt): prefill as ONE captured trace (QWEN36_PREFILL_BUCKET_TRACE, default on) that
-    # also picks the greedy first token on device, so TTFT is a trace replay + two tiny reads instead of an
-    # eager ~3.3k-op forward + full-logit readback. Sampling (temperature / penalties) needs the full logits ->
-    # keep the eager path. Other lengths (valid_len < bucket needs per-layer host masks) also keep it.
+    # Short prompt (any length < CHUNK, e.g. the 128-token perf prompt, the 512-token accuracy prompt, a 700-token
+    # prompt): prefill as ONE captured trace of its bucket (QWEN36_PREFILL_BUCKET_TRACE, default on; the GDN length
+    # masks are persistent device inputs) that also picks the greedy first token on device, so TTFT is a trace
+    # replay + two tiny reads instead of an eager ~3.3k-op forward + full-logit readback. Sampling (temperature /
+    # penalties) needs the full logits -> keep the eager path.
     _short_bucket = model.short_prefill_trace_bucket(T, CHUNK)
     _use_short_trace = _short_bucket is not None and _temp == 0 and _rep_pen == 1.0 and _no_repeat == 0
     t_cap = time.time()
@@ -684,6 +691,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     tt_idx = tt_val = None
     signpost("compile_decode")
     profiler.start("compile_decode")
+    model.prepare_gdn_decode_width(1)  # batched fused GDN decode conv-state class (no-op for a 1-user model)
     if not eager:
         gdn_snap = _snapshot_gdn()
         # Eager compile + throwaway capture; restore GDN state and warm argmax kernels before trace
@@ -708,6 +716,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
             tt_tok, _ = model.sampling.sample(tt_logits, enable_trace=False)
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(gdn_snap)
+        model.prepare_gdn_decode_width(1)  # restore re-validates the history only: re-prepare before the loop
     profiler.end("compile_decode")
 
     pos = T
@@ -772,7 +781,7 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
 
 
 def _run_tp_decode_device_loop(
-    model, mesh, page_table_dev, first_token, T, num_steps, snapshot_gdn, restore_gdn, profiler
+    model, mesh, page_table_dev, first_token, T, num_steps, snapshot_gdn, restore_gdn, profiler, batch=1
 ):
     """Device-resident greedy decode of the single-user TP demo (QWEN36_DECODE_DEVICE_LOOP, see
     Qwen36Model.device_decode_step for the in-trace step).
@@ -788,11 +797,15 @@ def _run_tp_decode_device_loop(
     comparable step by step with the host loop's metric, which timed every step including a host update, a device
     sync and a host readback; ``total_*`` additionally includes the first enqueue.
 
+    Batched (``batch`` > 1, the batched demo): ``first_token`` is the list of the ``batch`` users' first tokens, all
+    users sit at position ``T``, and the returned tokens are ``batch`` per-user lists. Each trace replay advances every
+    user by one token, so ``steady_tok_s`` is per user and ``agg_tok_s`` = batch * steady_tok_s.
+
     Returns (tokens, info) -- the ``num_steps`` tokens after ``first_token`` -- or None when the loop does not apply or
     could not be built (the caller then runs the host loop; QWEN36_DECODE_DEVICE_LOOP=2 re-raises instead).
     """
     strict = os.environ.get("QWEN36_DECODE_DEVICE_LOOP", "1") == "2"
-    reason = model.device_decode_loop_unsupported_reason(T, num_steps)
+    reason = model.device_decode_loop_unsupported_reason(T, num_steps, batch)
     if reason is not None:
         logger.info(f"[TP device-loop] not used: {reason}")
         return None
@@ -802,8 +815,10 @@ def _run_tp_decode_device_loop(
     signpost("compile_decode")
     profiler.start("compile_decode")
     try:
-        dl = model.setup_device_decode_loop(num_steps)
+        dl = model.setup_device_decode_loop(num_steps, batch)
         model.device_decode_loop_arm(dl, first_token, T)
+        # Batched fused GDN decode: conv-state class of this width, before the snapshot / eager step / capture.
+        model.prepare_gdn_decode_width(batch)
         gdn_snap = snapshot_gdn()
         model.device_decode_step(dl, page_table_dev)  # eager: compile + warm the whole in-trace sequence
         ttnn.synchronize_device(mesh)
@@ -813,6 +828,7 @@ def _run_tp_decode_device_loop(
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         capturing = False
         restore_gdn(gdn_snap)  # ttnn.copy: the trace-baked state buffers keep their addresses
+        model.prepare_gdn_decode_width(batch)  # the restore re-validates the history only: re-prepare before replay
         model.device_decode_loop_arm(dl, first_token, T)  # token / position / RoPE index / cursor back to the start
         ttnn.synchronize_device(mesh)  # the staging copies and the restore are done; capture is closed
     except Exception as exc:  # noqa: BLE001 - any failure of the new path must not take the demo down (unless strict)
@@ -825,6 +841,7 @@ def _run_tp_decode_device_loop(
             ttnn.release_trace(mesh, trace_id)
         if gdn_snap is not None:
             restore_gdn(gdn_snap)
+            model.prepare_gdn_decode_width(batch)
         if dl is not None:
             dl.release()
         profiler.end("compile_decode")
@@ -861,15 +878,20 @@ def _run_tp_decode_device_loop(
         "total_s": total_s,
         "total_tok_s": num_steps / total_s if total_s > 0 else 0.0,
         "enqueue_s": t_enqueued - t_begin,
+        "batch": batch,
+        "agg_tok_s": batch * num_steps / steady_s if steady_s > 0 else 0.0,
     }
+    agg_note = f" per user, {info['agg_tok_s']:.1f} tok/s aggregate" if batch > 1 else ""
     logger.info(
-        f"[TP device-loop] {num_steps} decode steps, host only enqueued traces "
-        f"({info['enqueue_s'] * 1000:.1f} ms for all enqueues): steady-state {info['steady_tok_s']:.2f} tok/s "
+        f"[TP device-loop] {f'B={batch}, ' if batch > 1 else ''}{num_steps} decode steps, host only enqueued traces "
+        f"({info['enqueue_s'] * 1000:.1f} ms for all enqueues): steady-state {info['steady_tok_s']:.2f} tok/s"
+        f"{agg_note} "
         f"({steady_s * 1000 / num_steps:.2f} ms/token; 2nd enqueue -> final drain + one history read = "
         f"{steady_s:.3f}s), {info['total_tok_s']:.2f} tok/s incl. the 1st enqueue; the host loop's per-token metric "
         f"also timed a per-step host update + sync + readback"
     )
-    bad = [(i, t) for i, t in enumerate(tokens) if not 0 <= t < model.vocab_size]
+    flat = [t for row in tokens for t in row] if batch > 1 else tokens
+    bad = [(i, t) for i, t in enumerate(flat) if not 0 <= t < model.vocab_size]
     assert not bad, f"device decode loop produced out-of-vocab token ids (step, id): {bad[:8]}"
     return tokens, info
 
@@ -888,6 +910,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     from models.tt_transformers.tt.common import copy_host_to_device
 
     B = batch
+    profiler = BenchmarkProfiler()  # compile_decode / inference_decode spans of the device-resident loop (no-op in CI)
     vocab = model.args.vocab_size
     mesh = model.mesh_device
     T = token_ids.shape[1]
@@ -898,7 +921,15 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     # the single-user path). A misaligned bpu makes the long-prefill SDPA read the wrong KV.
     bpu = max(8, -(-(T + max_generated_tokens) // BLOCK_SIZE))
     bpu = ((bpu + 7) // 8) * 8
+    # QWEN36_BATCHED_PREFILL_MODE=grouped (default, as before) | trace: "trace" prefills each user through the B=1
+    # short-prompt trace (any T < 2048) + a device-side write of its GDN state into its slot (prefill_paged_slots),
+    # to be measured against the grouped eager path.
+    _pf_mode = os.environ.get("QWEN36_BATCHED_PREFILL_MODE", "grouped")
+    assert _pf_mode in ("grouped", "trace"), f"QWEN36_BATCHED_PREFILL_MODE={_pf_mode!r} (grouped|trace)"
     total_blocks = B * bpu
+    if _pf_mode == "trace" and model.short_prefill_trace_bucket(T, PREFILL_CHUNK) is not None:
+        model.prefill_trash_block = total_blocks  # spare block after the B users' blocks (absorbs padded K/V writes)
+        total_blocks += 1
     kv_cache_shape = [total_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
     page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
@@ -909,16 +940,44 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
     # T<=128 and T<=256. prefill_paged_grouped auto-caps group size. T>256 stays per-user.
     bucket = 128
     eager = os.environ.get("QWEN35_TP_PREFILL_EAGER") == "1"
-    grouped_short = os.environ.get("QWEN_BATCHED_GROUPED", "1") != "0" and T <= 256
-    use_traced_bucket = (T == bucket) and not eager and not grouped_short
+    traced_slots = _pf_mode == "trace" and model.short_prefill_trace_bucket(T, PREFILL_CHUNK) is not None
+    grouped_short = os.environ.get("QWEN_BATCHED_GROUPED", "1") != "0" and T <= 256 and not traced_slots
+    use_traced_bucket = (T == bucket) and not eager and not grouped_short and not traced_slots
     token_list = [token_ids[:, :T] for _ in range(B)]
     if use_traced_bucket:
         # Capture is a one-time startup cost, so it runs outside the TTFT timer (mirrors the
         # single-user traced path's capture_prefill_trace_chunked before t0). Capture against one
         # row (buffer width is fixed across replays); each replay DMAs the user's page-table row in.
         model.capture_prefill_trace_bucket(mesh, page_table[0:1].contiguous(), bucket=bucket)
+    if traced_slots:
+        # Capture is a one-time startup cost, outside the TTFT timer, with the SAME GDN binding prefill_paged_slots
+        # replays with: the persistent B=1 prefill scratch (allocated after allocate_kv_caches). The capture page
+        # table is padded to a 32-multiple (SDPA stick alignment) with block 0 (never read by a real request).
+        _w = ((total_blocks + 31) // 32) * 32
+        _warm_pt = torch.cat(
+            [torch.arange(total_blocks, dtype=torch.int32), torch.zeros(_w - total_blocks, dtype=torch.int32)]
+        )
+        _prev = model._bind_gdn_prefill_scratch()
+        try:
+            model.capture_prefill_trace_short(
+                mesh, _warm_pt.reshape(1, -1), bucket=model.short_prefill_trace_bucket(T, PREFILL_CHUNK)
+            )
+        finally:
+            model._unbind_gdn_prefill_scratch(_prev)
     t0 = time.time()
-    if grouped_short:
+    if traced_slots:
+        _host = model.prefill_paged_slots(token_list, page_table, list(range(B)), valid_lens=[T] * B)
+        pf_logits = [
+            ttnn.from_torch(
+                h.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+            )
+            for h in _host
+        ]
+    elif grouped_short:
         pf_logits = model.prefill_paged_grouped(token_list, page_table, valid_lens=[T] * B, group_size=8)
     elif use_traced_bucket:
         pf_logits = model.prefill_traced_bucket_batched(token_list, page_table, valid_lens=[T] * B)
@@ -1058,7 +1117,44 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
         )
 
     _sharded_logits_mode = _mode in ("shard", "sample")
+
+    # Device-resident greedy decode loop (QWEN36_DECODE_DEVICE_LOOP, default 1; 0 = the host loop below, byte for byte;
+    # 2 = strict: raise instead of falling back), see _run_tp_decode_device_loop / Qwen36Model.device_decode_step.
+    # Needs pure greedy decoding with the model's own tokens fed back, which is always the case here (the batched demo
+    # has no sampling / teacher forcing) except in "host" mode (full logits to host) and eager decode.
+    if (
+        _mode in ("shard", "sample")
+        and not eager
+        and os.environ.get("QWEN36_DECODE_DEVICE_LOOP", "1") != "0"
+        and max_generated_tokens - len(generated[0]) >= 2
+    ):
+        _dev_loop = _run_tp_decode_device_loop(
+            model,
+            mesh,
+            dev[3],
+            nxt,
+            T,
+            max_generated_tokens - len(generated[0]),
+            _snapshot_gdn,
+            _restore_gdn,
+            profiler,
+            batch=B,
+        )
+        if _dev_loop is not None:
+            _dl_tokens, _dl_info = _dev_loop
+            for u in range(B):
+                generated[u].extend(_dl_tokens[u])
+            return generated, {
+                "ttft_s": ttft,
+                # Steady-state device-loop throughput per user / aggregate, see _run_tp_decode_device_loop.
+                "decode_tok_s": _dl_info["steady_tok_s"],
+                "agg_tok_s": _dl_info["agg_tok_s"],
+                "decode_mode": "device-loop",
+                "device_loop": _dl_info,
+            }
+
     trace_id, tt_logits, tt_idx, tt_val, tt_tok = None, None, None, None, None
+    model.prepare_gdn_decode_width(B)  # batched fused GDN decode: conv-state class of this width (before warm/capture)
     if not eager:
         snap = _snapshot_gdn()
         _warm_logits = model.ttnn_decode_forward(
@@ -1086,6 +1182,7 @@ def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens
             tt_logits = tt_logits[0]
         ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
         _restore_gdn(snap)
+        model.prepare_gdn_decode_width(B)  # restore re-validates the history only: re-prepare before the loop
 
     # Time the FULL decode step (input update + device decode + host logit read + token select)
     # so the reported tok/s is real end-to-end throughput, not just the device compute.

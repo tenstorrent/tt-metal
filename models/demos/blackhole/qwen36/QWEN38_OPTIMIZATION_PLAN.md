@@ -24,6 +24,16 @@ B README quotes 39.4 t/s/u / 67.9 ms TTFT via vLLM (different harness, Qwen3.8 w
 | 1.6 | Device-resident decode loop: sampled token fed back on device, on-device position/RoPE increment, deferred readback | Measured host overhead 0.5 ms/token | ~−0.5 ms/token |
 | | **Tier 1 total** | | **≈ 32–33 t/s/u (+17–19%), TTFT ≈ halved** |
 
+**Status:** done. 1.1, 1.2, 1.3, 1.4 and 1.6 are kept; 1.5 is reverted (no end-to-end gain).
+Section B extended them to batch > 1 and to tt-inference-server serving:
+- 1.2B v3: batched fused GDN decode.
+- 1.4B: traced prefill for any prompt length.
+- 1.6S: device-resident serving decode with vLLM async scheduling.
+- 1.6S-r: fast GDN slot remap.
+- 1.6B: batched demo device loop.
+
+Measured results are in `QWEN38_OPTIMIZATION_LOG.md` ("Tier 1 summary" and "Tier 1 completion summary (section B)").
+
 ## Tier 2 — selective BFP4 (each group measured alone with no measurable loss; combination untested)
 | Group → BFP4 + LoFi | Measured alone (on top of 1.1, base 28.8) | accuracy_512 |
 |---|---|---|

@@ -79,7 +79,8 @@ def test_positional_slot_remap_moves_gdn_state_and_keeps_full_width(monkeypatch)
         sampling=None,
         _remap_gdn_slots=remaps.append,
     )
-    wrapper = SimpleNamespace(model=[model])
+    wrapper = Qwen36ForCausalLM.__new__(Qwen36ForCausalLM)
+    wrapper.model = [model]
     monkeypatch.setenv("TT_DECODE_BUCKETING", "1")
     monkeypatch.setattr(
         Generator,
@@ -497,6 +498,68 @@ def test_gdn_prefix_write_trace(mesh_device, reset_seeds, ensure_gc):
     logger.info(f"GDN_PREFIX_WRITE_RESULT width={B} bmax={BMAX} dtype=fp32 " f"cores=48 ms_per_write={prefix_ms:.6f}")
 
     ttnn.release_trace(mesh_device, tid)
+
+
+@torch.no_grad()
+@_parametrize_traced()
+@pytest.mark.parametrize("B", [1, 2, 4, 8, 9], ids=lambda b: f"w{b}")
+@pytest.mark.parametrize("BMAX", [8, 32], ids=lambda b: f"Bmax{b}")
+def test_gdn_conv_hist_prefix_write_trace(mesh_device, BMAX, B, reset_seeds, ensure_gc):
+    """Trace-safe prefix update of the fused-batched GDN conv history.
+
+    The history is ROW_MAJOR bf16 DRAM ``[Bmax, K-1, C]`` (row u = user u's K-1 previous conv inputs). A bucketed
+    decode of width B < Bmax produces only ``[B, K-1, C]`` and must update rows ``[0:B]`` IN PLACE (fixed
+    address) without touching the idle rows: ``ttnn.experimental.slice_write`` of the RM-interleaved new rows.
+    Unlike the TILE recurrent state (test_gdn_prefix_write_trace), no sharded staging is needed: the RM interleaved
+    slice_write writes the supplied output buffer directly. Checks eager and trace replay bit-exactly, with a distinct
+    value in every idle row so any overwrite is visible."""
+    if B > BMAX:
+        pytest.skip(f"width {B} > Bmax {BMAX}")
+    KH, C = 3, 2560
+    iters = int(os.environ.get("QWEN36_PREFIX_WRITE_ITERS", "20"))
+    base = torch.arange(BMAX, dtype=torch.float32).reshape(BMAX, 1, 1).expand(BMAX, KH, C).contiguous()
+    base = (base + torch.arange(KH, dtype=torch.float32).reshape(1, KH, 1) / 8.0).to(torch.bfloat16)
+    new = (
+        (100.0 + torch.arange(B, dtype=torch.float32)).reshape(B, 1, 1).expand(B, KH, C).contiguous().to(torch.bfloat16)
+    )
+    expected = base.clone()
+    expected[:B] = new
+
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def rm(t, device=True):
+        kw = dict(device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) if device else {}
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep, **kw)
+
+    hist, src, base_host = rm(base), rm(new), rm(base, device=False)
+    start, end, step = [0, 0, 0], [B, KH, C], [1, 1, 1]
+
+    def read():
+        return ttnn.to_torch(ttnn.get_device_tensors(hist)[0]).reshape(BMAX, KH, C)
+
+    # eager first (also compiles the program), then capture against the fixed address
+    ttnn.experimental.slice_write(src, hist, start, end, step)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.equal(read(), expected), "eager RM prefix write changed active or idle history rows"
+
+    ttnn.copy_host_to_device_tensor(base_host, hist)
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    ttnn.experimental.slice_write(src, hist, start, end, step)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.copy_host_to_device_tensor(base_host, hist)  # reset, so the check below depends on the replay
+    ttnn.synchronize_device(mesh_device)
+
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.equal(read(), expected), "trace replay changed active or idle history rows"
+    for _ in range(iters):  # idempotent: replays keep the idle rows intact
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    assert torch.equal(read(), expected), "repeated trace replays changed the idle history rows"
+    ttnn.release_trace(mesh_device, tid)
+    logger.info(f"PASSED: RM conv-history prefix write trace Bmax={BMAX} width={B}")
 
 
 @torch.no_grad()

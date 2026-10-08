@@ -6,6 +6,7 @@ Run:
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 The prefill conv-path tests at the end (test_conv_paths_*, test_kda_*) use random data and need no checkpoint.
 """
+
 import os
 
 import pytest
@@ -258,7 +259,10 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
       (a) writing B users one slot at a time (in reverse order, so each write must preserve the
           rows written before it) then ONE batched decode matches B independent B=1 runs, row by row;
       (b) remap_slots(reverse) makes decode row i carry user (B-1-i)'s state, and the permuted state
-          is exactly the pre-remap rows reindexed (no cross-row contamination).
+          is exactly the pre-remap rows reindexed (no cross-row contamination);
+      (c) a SECOND batched decode after the remap matches, row by row, each user's second B=1 decode: the
+          conv history (fused path: _conv_hist_rm) and the recurrent state were permuted together, so decode
+          continues every user's own sequence in its new slot.
     """
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
@@ -277,15 +281,18 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
 
     xp = [torch.randn(1, 1, T, args.dim, dtype=torch.bfloat16) for _ in range(B)]
     xd = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]
+    xd2 = [torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16) for _ in range(B)]  # second decode token
 
-    # ---- reference: B independent B=1 prefill(capture_state) + decode ----
-    ref_rows = []
+    # ---- reference: B independent B=1 prefill(capture_state) + two decode steps ----
+    ref_rows, ref_rows2 = [], []
     for u in range(B):
         g = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         g.reset_state()
         g.forward_prefill(shard_to_device(mesh_device, xp[u], dim=-1), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        out_u2 = g.forward_decode(replicate_to_device(mesh_device, xd2[u]))
+        ref_rows2.append(ttnn.to_torch(out_u2, mesh_composer=comp)[0, 0, 0].float())
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -320,6 +327,15 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
             max_diff = max(max_diff, (post[d * B + i] - pre[d * B + remap[i]]).abs().max().item())
     assert max_diff < 1e-3, f"remap_slots rec mismatch: max_diff={max_diff}"
     logger.info(f"remap_slots (B={B}) exact-permutation max_diff = {max_diff:.2e}")
+
+    # ---- (c) decode AFTER the remap: row i now carries user (B-1-i); its second token is xd2[B-1-i] ----
+    x_dec2 = torch.cat([xd2[remap[i]] for i in range(B)], dim=2)
+    out2_t = ttnn.to_torch(gb.forward_decode(replicate_to_device(mesh_device, x_dec2)), mesh_composer=comp)
+    assert not torch.isnan(out2_t).any() and not torch.isinf(out2_t).any(), "NaN/Inf in decode after remap"
+    pccs2 = [compute_pcc(ref_rows2[remap[i]], out2_t[0, 0, i].float()) for i in range(B)]
+    bad2 = [(i, p) for i, p in enumerate(pccs2) if p < thr]
+    assert not bad2, f"decode after remap_slots: rows below PCC {thr}: {bad2} (min={min(pccs2):.5f})"
+    logger.info(f"decode after remap_slots (B={B}) worst PCC = {min(pccs2):.5f}")
     logger.info(f"PASSED: write_slot + remap_slots (B={B})")
 
 
@@ -1019,3 +1035,226 @@ def test_kda_channel_chunk_size(channels, expected):
 def test_kda_channel_chunk_size_rejects_unaligned(expect_error):
     with expect_error(ValueError, "no tile-aligned channel chunk divides 100"):
         kda_channel_chunk_size(100)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Fused batched decode (QWEN36_GDN_FUSED_DECODE, max_batch_size > 1, every decode width 1..Bmax).
+# Random weights, no checkpoint (needs the model's config.json via HF_MODEL).
+# ---------------------------------------------------------------------------------------------------------------
+
+BATCHED_DECODE_PCC = 0.999
+# (Bmax, per-step decode widths): one sequence of consecutive decode steps; steps with a width below Bmax run on the
+# state prefix [0:w] and must leave the idle users' state (rec_state rows, conv history rows) untouched, so a width
+# switch (8 -> 1 -> 8) must not disturb anything. Bmax=8: every width is <= SCAN_MAX (fused chunk_gated_delta_rule);
+# Bmax=32: widths 1 and 8 take the fused path (conv history format "hist"), 16 and 32 the ENTIRE original decode
+# (shift-register conv_states, format "states"); a switch across the two classes runs the in-place format sync
+# (prepare_decode_width) and the carried conv state must match the references' shift register.
+BATCHED_DECODE_SCHEDULES = [
+    pytest.param(8, (1, 1, 1, 1), id="B8-w1"),
+    pytest.param(8, (2, 2, 2, 2), id="B8-w2"),
+    pytest.param(8, (4, 4, 4, 4), id="B8-w4"),
+    pytest.param(8, (8, 8, 8, 8), id="B8-w8"),
+    pytest.param(8, (8, 1, 8, 4), id="B8-switch-8-1-8-4"),
+    pytest.param(32, (1, 1, 1, 1), id="B32-w1"),
+    pytest.param(32, (8, 8, 8, 8), id="B32-w8"),
+    pytest.param(32, (16, 16, 16, 16), id="B32-w16"),
+    pytest.param(32, (32, 32, 32, 32), id="B32-w32"),
+    pytest.param(32, (32, 1, 16, 8), id="B32-switch-32-1-16-8"),
+    pytest.param(32, (1, 32, 8, 16, 4), id="B32-switch-1-32-8-16-4"),
+]
+
+
+def _mesh_cat0(mesh, t):
+    """Per-device host copies stacked on dim 0: [num_devices * dim0, ...]."""
+    return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float()
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("Bmax, widths", BATCHED_DECODE_SCHEDULES)
+def test_gdn_tp_fused_batched_decode(mesh_device, Bmax, widths, reset_seeds, ensure_gc, monkeypatch):
+    """Fused batched GDN decode at every width vs B independent single-user ORIGINAL-path decodes.
+
+    The batched layer (QWEN36_GDN_FUSED_DECODE=1, max_batch_size=Bmax, persistent state) is seeded with random
+    per-user conv history + recurrent state through assemble_batched_state; the references are Bmax separate
+    max_batch_size=1 layers on the original shift-register path (QWEN36_GDN_FUSED_DECODE=0) seeded with the SAME
+    per-user state. Each step feeds one token to users [0:w]: the batched layer decodes at width w (a bucketed
+    step), the references of users [0:w] decode one B=1 step, users [w:Bmax] do not move. Per step and row: output
+    PCC >= 0.999, the recurrent state of every row matches its reference (idle rows: bitwise unchanged), the
+    conv history rows match the references' shift register, and nothing is NaN/Inf (idle rows included)."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    mesh = mesh_device
+    nd = mesh.get_num_devices()
+    args = Qwen36ModelArgs(mesh, max_batch_size=Bmax, max_seq_len=256)
+    args1 = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh) if nd > 1 else None
+    monkeypatch.setenv("QWEN36_GDN_FUSED_DECODE", "1")
+    tw = load_gdn_weights_tp(mesh, sd, args)  # holds the fused-decode weights; the original path ignores them
+    gb = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    assert gb._fused_batched, "fused batched decode is not active (QWEN36_GDN_FUSED_DECODE / build support)"
+    monkeypatch.setenv("QWEN36_GDN_FUSED_DECODE", "0")
+    refs = [TPGatedDeltaNet(mesh, args1, tw, tt_ccl) for _ in range(Bmax)]
+    assert not any(r._fused_decode for r in refs)
+    logger.info(f"Bmax={Bmax} widths={widths} SCAN_MAX={gb._scan_max_b}")
+
+    Nv, Dk, Dv, C = args.gdn_nv_tp, args.gdn_dk, args.gdn_dv, args.gdn_qkv_dim_tp
+    rec0 = [0.1 * torch.randn(1, Nv, Dk, Dv, dtype=torch.float32) for _ in range(Bmax)]
+    hist0 = [torch.randn(1, args.gdn_conv_kernel_size - 1, C, dtype=torch.bfloat16) for _ in range(Bmax)]
+
+    def rec_tt(u):
+        return ttnn.from_torch(
+            rec0[u],
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
+
+    def hist_tt(u):
+        return replicate_to_device(mesh, hist0[u])
+
+    gb._stable_state = True
+    gb.reset_state()  # persistent buffers + width constants, before any decode
+    gb.assemble_batched_state([rec_tt(u) for u in range(Bmax)], [hist_tt(u) for u in range(Bmax)])
+    for u in range(Bmax):
+        refs[u].assemble_batched_state([rec_tt(u)], [hist_tt(u)])
+
+    def snapshot():
+        """rec_state + the conv history in the format the current width class maintains (hist or conv_states)."""
+        if gb._conv_fmt == "states":
+            hist = torch.stack([_mesh_cat0(mesh, gb.conv_states[m]).reshape(nd, Bmax, C) for m in (1, 2, 3)], dim=2)
+        else:
+            hist = _mesh_cat0(mesh, gb._conv_hist_rm).reshape(nd, Bmax, 3, C)
+        return _mesh_cat0(mesh, gb.rec_state).reshape(nd, Bmax, Nv, Dk, Dv), hist
+
+    for step, w in enumerate(widths):
+        fused_class = w <= gb._scan_max_b
+        gb.prepare_decode_width(w)  # eager in-place conv-format sync when the width class changed
+        assert gb._conv_fmt == ("hist" if fused_class else "states")
+        rec_pre, hist_pre = snapshot()
+        x = torch.randn(1, 1, w, args.dim, dtype=torch.bfloat16)
+        out = ttnn.to_torch(gb.forward_decode(replicate_to_device(mesh, x)), mesh_composer=tp_composer(mesh))
+        assert out.shape[-2] == w, f"step {step}: decode output has {out.shape[-2]} rows, expected {w}"
+        assert torch.isfinite(out.float()).all(), f"step {step} (w={w}): NaN/Inf in the decode output"
+        rec_post, hist_post = snapshot()
+        assert torch.isfinite(rec_post).all() and torch.isfinite(hist_post).all(), f"step {step}: NaN/Inf in state"
+        # Idle users: state untouched, bit for bit.
+        assert torch.equal(rec_post[:, w:], rec_pre[:, w:]), f"step {step} (w={w}): idle rec_state rows changed"
+        if fused_class:  # the original decode shifts zeros into idle conv_states rows (don't-care slots)
+            assert torch.equal(
+                hist_post[:, w:], hist_pre[:, w:]
+            ), f"step {step} (w={w}): idle conv history rows changed"
+
+        worst = 1.0
+        for u in range(w):
+            ref_out = refs[u].forward_decode(replicate_to_device(mesh, x[:, :, u : u + 1]))
+            ref_t = ttnn.to_torch(ref_out, mesh_composer=tp_composer(mesh))[0, 0, 0].float()
+            pcc = compute_pcc(ref_t, out[0, 0, u].float())
+            ref_rec = _mesh_cat0(mesh, refs[u].rec_state).reshape(nd, Nv, Dk, Dv)
+            ref_hist = torch.stack([_mesh_cat0(mesh, refs[u].conv_states[m]).reshape(nd, C) for m in (1, 2, 3)], dim=1)
+            pcc_rec = compute_pcc(ref_rec, rec_post[:, u])
+            pcc_hist = compute_pcc(ref_hist, hist_post[:, u])
+            worst = min(worst, pcc, pcc_rec, pcc_hist)
+            assert pcc >= BATCHED_DECODE_PCC, f"step {step} (w={w}) user {u}: output PCC {pcc:.5f}"
+            assert pcc_rec >= BATCHED_DECODE_PCC, f"step {step} (w={w}) user {u}: rec_state PCC {pcc_rec:.5f}"
+            assert pcc_hist >= BATCHED_DECODE_PCC, f"step {step} (w={w}) user {u}: conv history PCC {pcc_hist:.5f}"
+        logger.info(f"step {step} width {w}: worst (output/rec/hist) PCC over {w} users = {worst:.5f}")
+    logger.info(f"PASSED: fused batched GDN decode Bmax={Bmax} widths={widths}")
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "l1_small_size": GDN_CONV1D_L1_SMALL_SIZE,
+            "trace_region_size": 268435456,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4")], indirect=True)
+@pytest.mark.parametrize("Bmax, width", [pytest.param(8, 1, id="B8-w1"), pytest.param(8, 8, id="B8-w8")])
+def test_gdn_tp_fused_batched_decode_trace(mesh_device, Bmax, width, reset_seeds, ensure_gc):
+    """The fused batched decode step captured in a trace replays bit-exactly like the eager step.
+
+    Catches an allocation or host write inside the traced step (width constants / history must exist before the
+    capture) and a non-in-place state update: from the same seeded state, one eager step vs one replayed step must
+    give identical outputs, recurrent state and conv history."""
+    os.environ.setdefault("HF_MODEL", model_path())
+    mesh = mesh_device
+    args = Qwen36ModelArgs(mesh, max_batch_size=Bmax, max_seq_len=256)
+    li = next(i for i, t in enumerate(args.attention_type_list) if t == "linear_attention")
+    sd = random_gdn_state_dict(args, seed=li)
+    from models.tt_transformers.tt.ccl import TT_CCL
+
+    tt_ccl = TT_CCL(mesh)
+    tw = load_gdn_weights_tp(mesh, sd, args)
+    gb = TPGatedDeltaNet(mesh, args, tw, tt_ccl)
+    assert gb._fused_batched
+    gb._stable_state = True
+    gb.reset_state()
+    Nv, Dk, Dv, C = args.gdn_nv_tp, args.gdn_dk, args.gdn_dv, args.gdn_qkv_dim_tp
+    rep = ttnn.ReplicateTensorToMesh(mesh)
+    gb.assemble_batched_state(
+        [
+            ttnn.from_torch(
+                0.1 * torch.randn(1, Nv, Dk, Dv),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=rep,
+            )
+            for _ in range(Bmax)
+        ],
+        [replicate_to_device(mesh, torch.randn(1, 3, C, dtype=torch.bfloat16)) for _ in range(Bmax)],
+    )
+    comp = tp_composer(mesh)
+    rec_seed = ttnn.to_torch(gb.rec_state, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+    hist_seed = gb.snapshot_fused_decode_state()
+
+    def reseed():
+        src = ttnn.from_torch(
+            rec_seed,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        ttnn.copy(src, gb.rec_state)
+        ttnn.deallocate(src)
+        gb.restore_fused_decode_state(hist_seed)
+
+    def state():
+        return (
+            ttnn.to_torch(gb.rec_state, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float(),
+            ttnn.to_torch(gb._conv_hist_rm, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)).float(),
+        )
+
+    x_buf = replicate_to_device(mesh, torch.randn(1, 1, width, args.dim, dtype=torch.bfloat16))
+    out = gb.forward_decode(x_buf)  # eager step (also compiles every program before the capture)
+    eager_out = ttnn.to_torch(out, mesh_composer=comp).float()
+    eager_rec, eager_hist = state()
+    ttnn.deallocate(out)
+
+    reseed()
+    ttnn.synchronize_device(mesh)
+    tid = ttnn.begin_trace_capture(mesh, cq_id=0)
+    out_t = gb.forward_decode(x_buf)
+    ttnn.end_trace_capture(mesh, tid, cq_id=0)
+    reseed()
+    ttnn.synchronize_device(mesh)
+    ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
+    replay_out = ttnn.to_torch(out_t, mesh_composer=comp).float()
+    replay_rec, replay_hist = state()
+    ttnn.release_trace(mesh, tid)
+
+    assert torch.equal(eager_out, replay_out), "traced decode output differs from the eager step"
+    assert torch.equal(eager_rec, replay_rec), "traced decode rec_state differs from the eager step"
+    assert torch.equal(eager_hist, replay_hist), "traced decode conv history differs from the eager step"
+    logger.info(f"PASSED: traced fused batched GDN decode Bmax={Bmax} width={width} == eager")

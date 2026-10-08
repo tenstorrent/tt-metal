@@ -10,6 +10,14 @@ from loguru import logger
 import ttnn
 
 
+def _prepare_gdn_width(generator, width):
+    """Batched fused GDN decode: make the conv state of `width`'s class valid before a decode pass at that width."""
+    models = getattr(generator, "model", None)
+    for m in models if isinstance(models, (list, tuple)) else [models]:
+        if hasattr(m, "prepare_gdn_decode_width"):
+            m.prepare_gdn_decode_width(width)
+
+
 def warmup_decode_buckets(generator, warmup, *args, **kwargs):
     """Compile every decode width before capturing any bucket trace."""
     max_batch_size = kwargs.get("max_batch_size")
@@ -35,6 +43,7 @@ def warmup_decode_buckets(generator, warmup, *args, **kwargs):
         for width in widths:
             bucket_kwargs = dict(kwargs, max_batch_size=width, enable_trace=False)
             logger.info(f"Qwen decode compile warmup: bucket width={width}")
+            _prepare_gdn_width(generator, width)
             result = warmup(*args, **bucket_kwargs)
         generator._decode_bucket_compile_key = compile_key
 
@@ -51,6 +60,7 @@ def warmup_decode_buckets(generator, warmup, *args, **kwargs):
             skip_trace_precompile=True,
         )
         logger.info(f"Qwen decode trace capture: bucket width={width}")
+        _prepare_gdn_width(generator, width)
         result = warmup(*args, **bucket_kwargs)
     return result
 

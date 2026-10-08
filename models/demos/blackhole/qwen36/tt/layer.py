@@ -182,6 +182,7 @@ class Qwen36DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
         gdn_collect=False,
+        gdn_masks=None,
     ):
         # Validate up front: attention/norm treat non-"prefill" as decode while the MoE experts
         # treat non-"decode" as prefill, so an unsupported mode would split the two down opposite
@@ -253,8 +254,10 @@ class Qwen36DecoderLayer:
                             attn_input, chunk_size=chunk_size, valid_len=valid_len
                         )
                     else:
+                        # gdn_masks: persistent device masks of the traced masked-bucket prefill (None: unchanged call).
+                        _gm = {"prefill_masks": gdn_masks} if gdn_masks is not None else {}
                         attn_output = self.attention.forward_prefill(
-                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True, **_gm
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input, **_dar_kw)

@@ -26,7 +26,54 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
+from models.demos.blackhole.qwen36.tt.model import serve_device_decode_env_enabled
 from models.tt_transformers.tt.generator import Generator
+
+# Sampler top-k limit (models/common/sampling TTSampling.max_top_k default; ttnn.sampling walks k <= 32 candidates).
+_MAX_DEVICE_TOP_K = 32
+# Positional order of Generator.decode_forward's leading parameters (the plugin passes keywords; direct callers may not).
+_DECODE_POSITIONAL = (
+    "tokens",
+    "start_pos",
+    "page_table",
+    "kv_cache",
+    "enable_trace",
+    "read_from_device",
+    "sampling_params",
+    "prompt_tokens",
+    "output_tokens",
+    "slot_remap",
+    "defer_device_sampling",
+)
+# Host-authoritative defaults for direct callers (DECODE_RELOAD_CONTRACT.md "Command defaults"); the plugin always
+# sends all four explicitly.
+_RELOAD_COMMAND_DEFAULTS = {
+    "reload_inputs": True,
+    "reload_page_table": False,
+    "reload_sampling_params": False,
+    "reset_sampling_state": False,
+}
+
+
+def _build_model_capabilities():
+    """The plugin-visible capabilities. QWEN36_SERVE_DEVICE_DECODE=0 returns exactly the pre-1.6S dict."""
+    caps = {
+        "supports_prefix_caching": False,
+        "supports_async_decode": False,
+        "supports_sample_on_device": True,
+    }
+    if serve_device_decode_env_enabled():
+        caps.update(
+            supports_async_decode=True,
+            # TTSampling.max_top_k: k outside [1, 32] on a sampled row is routed to the host sampler by the plugin.
+            max_device_top_k=_MAX_DEVICE_TOP_K,
+            # Penalty bookkeeping (tt_penalties.update_output_tokens) reshapes and deallocates the sampled-token
+            # tensor, which is now the persistent decode token input; not validated on device for this model, so
+            # penalty requests use the host sampler (which reloads every step).
+            supports_device_penalties=False,
+        )
+    return caps
+
 
 _PREFILL_WARMUP_CHUNK = 2048
 _PREFILL_WARMUP_BUCKET = 4096
@@ -53,13 +100,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     _tt_allow_decode_trace_buffer_reuse = True
     decode_input_update_contract = 1
 
-    # supports_async_decode=False: async decode assumes on-device token/position continuity, which
-    # corrupts Qwen's GDN scan. supports_sample_on_device=True: on-device sampling is decode-only.
-    model_capabilities = {
-        "supports_prefix_caching": False,
-        "supports_async_decode": False,
-        "supports_sample_on_device": True,
-    }
+    # QWEN36_SERVE_DEVICE_DECODE=0: supports_async_decode=False -- the decode inputs (host-packed RoPE, [B,1] token
+    # input) are reloaded every step, so there is no on-device token/position continuity, and replaying a stale
+    # token would corrupt Qwen's non-idempotent GDN scan. supports_sample_on_device=True: on-device sampling is
+    # decode-only.
+    # QWEN36_SERVE_DEVICE_DECODE=1 (default): the serving decode is device-resident (token feedback in place, RoPE
+    # lookup + position increment in-trace, see model.py / _decode_forward_resident), so async decode is safe:
+    # every replay consumes the correct (token, position) exactly once (_decode_forward_resident docstring).
+    model_capabilities = _build_model_capabilities()
 
     def _validate_device_sampling_request(self, requested):
         if not requested:
@@ -203,6 +251,9 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
+        # Prefill replays other traces / rewrites slot state: any resident decode inputs are stale from here on, so
+        # the next decode must be a commanded reload (_decode_forward_resident refuses a steady step).
+        self._decode_bucket_last = None
         model = self.model[0]
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
@@ -257,14 +308,11 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # a fixed-shape ttnn.where over hidden-sharded persistent buffers (the vision rows are
         # gathered to full hidden on host, placed along seq, then re-sharded), so no request-time
         # compile clobbers the parked trace.
+        # Host logits [1,1,vocab]: one trace replay for any T < 2048 whose bucket was captured at warmup
+        # (QWEN36_PREFILL_BUCKET_TRACE=1; one D2H of the pre-gather vocab shards), else the eager masked-bucket /
+        # chunk-trace path (replicated device logits, read back one replica).
         logits = model.prefill_traced_chunked(
-            tokens, page_table, actual_len=T, vision_tokens=vision_tokens
-        )  # [1,1,vocab] replicated
-        logits = (
-            ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
-            .reshape(-1, model.args.vocab_size)[:1]
-            .float()
-            .view(1, 1, -1)
+            tokens, page_table, actual_len=T, vision_tokens=vision_tokens, return_host_logits=True
         )
         logger.info(f"Finished prefill up to {T} tokens, starting decode...")
         return logits, torch.zeros(1, dtype=torch.long)
@@ -295,7 +343,136 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         logger.info(f"Finished batched prefill of {N} user(s), starting decode...")
         return logits, torch.zeros(N, dtype=torch.long)
 
+    def _serve_device_decode_active(self):
+        """Device-resident serving decode: env flag on AND the model built the resident inputs (TP mesh)."""
+        return serve_device_decode_env_enabled() and bool(getattr(self.model[0], "_serve_device_decode", False))
+
+    @staticmethod
+    def _pick_decode_bucket(tokens, start_pos):
+        """Smallest power-of-2 width >= the active prefix [0:num_active) (rows are front-packed), capped at the
+        padded width. Same rule on every step, remap or not (tests/test_decode_bucketing.py::_pick_bucket)."""
+        width = int(tokens.shape[0])
+        if os.environ.get("TT_DECODE_BUCKETING", "1") != "1":
+            return width
+        num_active = int((start_pos != -1).sum()) if start_pos is not None else width
+        num_active = max(1, min(num_active, width))
+        return min(width, 1 << max(0, (num_active - 1).bit_length()))
+
+    def _bind_bucket_store(self, B):
+        """Select the per-width trace metadata / inputs / output (+ the sampling trace namespace) of bucket B."""
+        store = getattr(self, "_bucket_trace_store", None)
+        if store is None:
+            store = self._bucket_trace_store = {}
+        if B not in store:
+            store[B] = (defaultdict(lambda: None), defaultdict(lambda: None), defaultdict(lambda: None))
+        self.trace_ids_decode, self.trace_inputs_decode, self.trace_output_decode = store[B]
+        # Key the sampling trace by bucket width too: Generator binds it to one logits tensor
+        # by identity, and each decode-bucket width has its own.
+        for _m in self.model:
+            _sm = getattr(_m, "sampling", None)
+            if _sm is not None and hasattr(_sm, "set_trace_bucket"):
+                _sm.set_trace_bucket(B)
+
     def decode_forward(self, *args, **kwargs):
+        if self._serve_device_decode_active():
+            return self._decode_forward_resident(*args, **kwargs)
+        return self._decode_forward_legacy(*args, **kwargs)
+
+    def _decode_forward_resident(self, *args, **kwargs):
+        """QWEN36_SERVE_DEVICE_DECODE=1 decode: honors the four decode_input_update_contract=1 commands exactly.
+
+        reload_inputs         -> Generator copies token / position / RoPE-index / page-table host inputs into the
+                                 bucket's persistent trace inputs.
+        reload_page_table     -> Generator copies ONLY the page table (token / cur_pos / rope_idx stay resident).
+        reload_sampling_params / reset_sampling_state -> forwarded to the Generator's sampler (apply_decode_state,
+                                 seed alignment); nothing here infers extra reloads or skips commanded ones.
+
+        Why each async replay consumes the correct (token, position) exactly once, so the GDN scan (non-idempotent:
+        a stale / duplicated token permanently corrupts the recurrent + conv state) stays exact:
+          * token: the sampler writes the sampled token IN PLACE into trace_inputs_decode[...][0] (the [1,1,1,32]
+            buffer the next replay embeds; _tt_supports_decode_token_feedback), so replay k+1 reads t_k from device;
+          * position: each device-sampling replay advances cur_pos / rope_idx exactly once, in-trace, after their
+            readers; sampling and readback never advance it; idle rows (-1) stay -1;
+          * no extra replay: serving issues exactly one model replay + one sampling replay per accepted decode (the
+            warmup replays happen before the first request and are followed by a reload on the first decode);
+          * idle / padding rows are don't-care: GDN state is per slot and a slot is re-initialised by prefill before
+            it is read again; their cur_pos stays -1 so no valid KV position is written;
+          * slot_remap is applied exactly once: GDN state here (before the replay reads it), the sampler's seed /
+            penalty state inside Generator.decode_forward; every remap implies a layout change, hence a reload;
+          * every transition (first decode, layout change, bucket switch, prefill, sampling-mode change) is a
+            plugin-commanded reload_inputs; a bucket switch without one is refused (stale resident inputs).
+        All argument validation happens BEFORE any state mutation (the GDN remap is not idempotent, and the plugin
+        advances its slot map only after an accepted call).
+        """
+        if len(args) > len(_DECODE_POSITIONAL):
+            raise TypeError(f"decode_forward takes at most {len(_DECODE_POSITIONAL)} positional arguments")
+        for name, value in zip(_DECODE_POSITIONAL, args):
+            if name in kwargs:
+                raise TypeError(f"decode_forward got multiple values for argument '{name}'")
+            kwargs[name] = value
+        if "reset_batch" in kwargs:
+            raise TypeError("decode_input_update_contract=1 requires explicit reload commands; reset_batch is legacy")
+        for name, default in _RELOAD_COMMAND_DEFAULTS.items():
+            kwargs.setdefault(name, default)
+            if not isinstance(kwargs[name], bool):
+                raise TypeError(f"{name} must be a bool, got {type(kwargs[name]).__name__}")
+        reload_inputs = kwargs["reload_inputs"]
+        if reload_inputs and kwargs["reload_page_table"]:
+            raise ValueError("reload_page_table must be false when reload_inputs is true")
+        if kwargs["reset_sampling_state"] and not reload_inputs:
+            raise ValueError("Resetting sampling state requires current tokens and positions (reload_inputs=True)")
+        device_sampling = kwargs.get("sampling_params") is not None or bool(kwargs.get("defer_device_sampling", False))
+        if not device_sampling and not reload_inputs:
+            raise ValueError("Host sampling requires authoritative token and position inputs (reload_inputs=True)")
+        slot_remap = kwargs.get("slot_remap")
+        if slot_remap is not None and not reload_inputs:
+            raise ValueError(
+                "slot_remap moves slot-indexed state; the resident token / position rows are in the old slot order, "
+                "so a remap requires reload_inputs=True"
+            )
+        tokens = kwargs.get("tokens")
+        if tokens is None:
+            raise TypeError("decode_forward requires tokens")
+        start_pos = kwargs.get("start_pos")
+        width = int(tokens.shape[0])
+        # Bucket by the active prefix with ONE rule on every step (a remap step no longer forces full width: the
+        # remap is applied to the full slot space below and rows are front-packed, so slicing afterwards is exact).
+        bucket = self._pick_decode_bucket(tokens, start_pos)
+        previous = getattr(self, "_decode_bucket_last", None)
+        if not reload_inputs and bucket != previous:
+            raise ValueError(
+                f"decode bucket changed ({previous} -> {bucket}) with reload_inputs=False: the new bucket's resident "
+                "inputs are stale (replaying them would feed a stale token to the GDN scan); the layout change must "
+                "carry reload_inputs=True"
+            )
+
+        model = self.model[0]
+        # Batched fused GDN decode: make the conv state of this width class valid FIRST (in-place sync when the width
+        # class changed since the last call; no-op otherwise / when the fused path is off). After this the conv tag is
+        # the single needed format, so the remap below gathers only that one (both ops are row-wise: order-free).
+        if hasattr(model, "prepare_gdn_decode_width"):
+            model.prepare_gdn_decode_width(bucket)
+        # Batched serving: apply vLLM's condense slot_remap to the per-slot GDN recurrent/conv state BEFORE the
+        # decode trace reads it (the plugin remaps its own buffers; the sampler's seed/penalty state is remapped by
+        # Generator.decode_forward; GDN state is model-internal, so mirror the reindex here). Exactly once.
+        if slot_remap is not None and model.num_devices > 1 and model.args.max_batch_size > 1:
+            model._remap_gdn_slots(slot_remap)
+
+        if bucket < width:
+            kwargs["tokens"] = tokens[:bucket]
+            if start_pos is not None:
+                kwargs["start_pos"] = start_pos[:bucket]
+            if kwargs.get("page_table") is not None:
+                kwargs["page_table"] = kwargs["page_table"][:bucket]
+        if not getattr(self, "_decode_logged", False):
+            self._decode_logged = True
+            logger.info("Decode trace replay active (Qwen, device-resident serving decode)")
+        self._bind_bucket_store(bucket)
+        result = super().decode_forward(**kwargs)
+        self._decode_bucket_last = bucket
+        return result
+
+    def _decode_forward_legacy(self, *args, **kwargs):
         args = list(args)
 
         def _read(name, pos):
@@ -319,10 +496,11 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # BEFORE the decode trace reads it. The plugin remaps its own buffers (and the seed RNG via
         # super().decode_forward), but GDN state is model-internal, so mirror the same reindex here.
         # slot_remap is passed through unchanged so the seed-RNG remap inside super() still runs.
+        # The remap is deferred until after prepare_gdn_decode_width(bucket) (below) so it gathers only the single
+        # conv format that tag leaves valid; both ops are row-wise, so the order does not change the result.
+        gdn_remap = None
         if model.num_devices > 1 and model.args.max_batch_size > 1:
-            slot_remap = _read("slot_remap", 9)
-            if slot_remap is not None:
-                model._remap_gdn_slots(slot_remap)
+            gdn_remap = _read("slot_remap", 9)
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
@@ -361,11 +539,19 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                 _sm = getattr(_m, "sampling", None)
                 if _sm is not None and hasattr(_sm, "set_trace_bucket"):
                     _sm.set_trace_bucket(B)
+            # Batched fused GDN decode: make the conv state of this width class valid (in-place sync when the width
+            # class changed since the last call; no-op otherwise / when the fused path is off), BEFORE the remap so
+            # the remap gathers only the one valid format.
+            if hasattr(model, "prepare_gdn_decode_width"):
+                model.prepare_gdn_decode_width(B)
+        if gdn_remap is not None:
+            model._remap_gdn_slots(gdn_remap)
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
         # pre-compiled programs (compile-clobbers-trace fix). Guard name must match the plugin's reset.
+        self._decode_bucket_last = None
         if not enable_trace:
             return
         if getattr(self, "already_warmed_up_prefill", False):
@@ -395,6 +581,15 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             model.capture_prefill_trace_chunked(
                 self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK, capture_chunk_trace=True
             )
+            # Traced short prefill for ANY prompt length < 2048 (QWEN36_PREFILL_BUCKET_TRACE, default 1): one B=1 trace
+            # per bucket (QWEN36_PREFILL_TRACE_BUCKETS, default 128,256,512,1024,2048; 2048 serves lengths 1025..2047,
+            # exactly 2048 tokens keeps the chunk trace). Captured HERE, with the SAME GDN binding the requests run
+            # with (the scratch when batched, the decode buffers at max_batch_size==1), and only because this call
+            # has enable_trace=True (the plugin's trace_mode == "all"). Block 0 is vLLM's null block, never
+            # allocated to a request: padded K/V writes of a bucket land there.
+            if model.short_prefill_trace_enabled() and model.num_devices > 1 and model._lmhead_vocab_sharded:
+                model.prefill_trash_block = 0
+                model.capture_prefill_traces_short(self.mesh_device, page_table)
         finally:
             if prev is not None:
                 model._unbind_gdn_prefill_scratch(prev)
@@ -403,5 +598,6 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # Defer to WarmupForwardMixin, which warms the paged-SDPA + GDN decode path at pos 0.
         # Drop stale `non_greedy_decoding_on_device` from the old vLLM plugin; no-op for Qwen.
         kwargs.pop("non_greedy_decoding_on_device", None)
+        self._decode_bucket_last = None  # warmup replays leave the resident decode inputs at warmup values
         self._validate_device_sampling_request(kwargs.get("can_sample_on_device", False))
         return warmup_decode_buckets(self, super().warmup_model_decode, *args, **kwargs)
