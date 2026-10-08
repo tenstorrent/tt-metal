@@ -113,8 +113,6 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
 #endif
 }
 
-inline void DataflowBuffer::finish_impl() {}
-
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
 #if DFB_IS_COMPUTE_MATH
     return 0;
