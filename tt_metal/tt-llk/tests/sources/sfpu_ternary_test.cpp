@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef SFPU_TERNARY_PRIOR_UNARY_INIT
             // Another SFPU op's init first, as in a fused compute kernel: it leaves its own values in the
             // programmable constant registers, which the ternary op's init must overwrite where its body reads them.
-            test_utils::call_unary_sfpu_operation_init<SFPU_TERNARY_PRIOR_UNARY_INIT, APPROX_MODE, is_fp32_dest_acc_en, 8>(MATH_FMT);
+            test_utils::call_unary_sfpu_operation_init<SFPU_TERNARY_PRIOR_UNARY_INIT, APPROX_MODE, is_fp32_dest_acc_en, 8 /*ITERATIONS*/>(MATH_FMT);
 #endif
             test_utils::call_ternary_sfpu_operation_init<SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en>();
             test_utils::call_ternary_sfpu_operation<dest_sync, is_fp32_dest_acc_en, SFPU_TERNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, MATH_FORMAT, 8>(

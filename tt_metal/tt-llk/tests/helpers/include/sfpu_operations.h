@@ -2346,7 +2346,7 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::addcdiv)
     {
-        // addcdiv uses sfpu_reciprocal internally; init_addcdiv forwards to sfpu_reciprocal_init.
+        // addcdiv uses sfpu_reciprocal_iter internally; init_addcdiv programs its Newton constant in every mode.
         SFPU_TERNARY_INIT_FN(addcdiv, sfpu::init_addcdiv, (APPROX_MODE));
     }
     else if constexpr (OPERATION == SfpuType::lerp)
