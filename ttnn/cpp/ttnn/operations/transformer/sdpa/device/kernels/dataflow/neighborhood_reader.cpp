@@ -502,6 +502,8 @@ void kernel_main() {
     const uint32_t work_item_start = get_arg_val<uint32_t>(argument_index++);
     const uint32_t work_item_count = get_arg_val<uint32_t>(argument_index++);
     const uint32_t tile_bytes = get_arg_val<uint32_t>(argument_index++);
+    // Masks stay bfloat16 whatever the Q/K/V format, so their pages have their own size.
+    const uint32_t mask_tile_bytes = get_tile_size(kernel_args::cb_mask);
 
     const auto query_reader = TensorAccessor(query_accessor_args, query_address);
     const auto key_reader = TensorAccessor(key_accessor_args, key_address);
@@ -668,8 +670,8 @@ void kernel_main() {
                 for (uint32_t slot = 0; slot < gather_brick_count; ++slot) {
                     noc.async_read(
                         interior_mask_reader,
-                        CoreLocalMem<uint32_t>(resident_mask_pointer + slot * tile_bytes),
-                        tile_bytes,
+                        CoreLocalMem<uint32_t>(resident_mask_pointer + slot * mask_tile_bytes),
+                        mask_tile_bytes,
                         {.page_id = regime * gather_brick_count + slot},
                         {});
                 }
@@ -854,7 +856,7 @@ void kernel_main() {
                         const Site query_origin_site =
                             first_site_of(query_brick + query_origin_bricks, extents.brick_sites) + query_phase;
                         const uint32_t brick_base =
-                            mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * tile_bytes;
+                            mask_write_pointer + brick_in_chunk * tiles_per_kv_chunk * mask_tile_bytes;
                         // Resolved per brick, not per slot: the table describes a window that centres
                         // on its query, which stops being true once the window clamps at a volume edge.
                         const bool brick_takes_table = relative_mask != 0 && use_uploaded_mask &&
@@ -876,22 +878,22 @@ void kernel_main() {
                                     if (table_index != NO_REGIME) {
                                         noc.async_read(
                                             interior_mask_reader,
-                                            CoreLocalMem<uint32_t>(brick_base + slot * tile_bytes),
-                                            tile_bytes,
+                                            CoreLocalMem<uint32_t>(brick_base + slot * mask_tile_bytes),
+                                            mask_tile_bytes,
                                             {.page_id = table_index},
                                             {});
                                         continue;
                                     }
                                 }
                                 mask_gen::fill_mask_tile(
-                                    brick_base + slot * tile_bytes, query_origin_site, key_origins[slot], extents);
+                                    brick_base + slot * mask_tile_bytes, query_origin_site, key_origins[slot], extents);
                                 continue;
                             }
                             const uint32_t fill =
                                 brick_coverage == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
                             volatile tt_l1_ptr uint32_t* destination =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * tile_bytes);
-                            for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brick_base + slot * mask_tile_bytes);
+                            for (uint32_t word = 0; word < mask_tile_bytes / sizeof(uint32_t); ++word) {
                                 destination[word] = fill;
                             }
                         }
@@ -915,13 +917,13 @@ void kernel_main() {
                 if (refill_mask) {
                     for (uint32_t slot = 0; slot < tiles_per_kv_chunk; ++slot) {
                         const uint32_t gather_slot = kv_chunk_index * tiles_per_kv_chunk + slot;
-                        const uint32_t destination_address = mask_write_pointer + slot * tile_bytes;
+                        const uint32_t destination_address = mask_write_pointer + slot * mask_tile_bytes;
                         if (gather_slot < gather_brick_count) {
                             // Canonical gather, so the table page IS the slot.
                             noc.async_read(
                                 interior_mask_reader,
                                 CoreLocalMem<uint32_t>(destination_address),
-                                tile_bytes,
+                                mask_tile_bytes,
                                 {.page_id = gather_slot},
                                 {});
                             continue;
@@ -930,7 +932,7 @@ void kernel_main() {
                         // leaving whatever the pages held.
                         volatile tt_l1_ptr uint32_t* destination =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(destination_address);
-                        for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                        for (uint32_t word = 0; word < mask_tile_bytes / sizeof(uint32_t); ++word) {
                             destination[word] = 0xFF80FF80u;
                         }
                     }
@@ -952,8 +954,8 @@ void kernel_main() {
                 }
                 const uint32_t fill = coverage[slot] == mask_gen::BrickCoverage::AllVisible ? 0x00000000u : 0xFF80FF80u;
                 volatile tt_l1_ptr uint32_t* destination =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_write_pointer + slot * tile_bytes);
-                for (uint32_t word = 0; word < tile_bytes / sizeof(uint32_t); ++word) {
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mask_write_pointer + slot * mask_tile_bytes);
+                for (uint32_t word = 0; word < mask_tile_bytes / sizeof(uint32_t); ++word) {
                     destination[word] = fill;
                 }
             }
@@ -976,8 +978,8 @@ void kernel_main() {
                     const uint32_t page = regime * gather_brick_count + gather_slot;
                     noc.async_read(
                         interior_mask_reader,
-                        CoreLocalMem<uint32_t>(mask_write_pointer + slot * tile_bytes),
-                        tile_bytes,
+                        CoreLocalMem<uint32_t>(mask_write_pointer + slot * mask_tile_bytes),
+                        mask_tile_bytes,
                         {.page_id = page},
                         {});
                 }
@@ -987,7 +989,7 @@ void kernel_main() {
                         continue;
                     }
                     mask_gen::fill_mask_tile(
-                        mask_write_pointer + slot * tile_bytes, chunk_origin_site, key_origins[slot], extents);
+                        mask_write_pointer + slot * mask_tile_bytes, chunk_origin_site, key_origins[slot], extents);
                 }
             }
 
