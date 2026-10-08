@@ -630,6 +630,15 @@ def neighborhood_attention_3d_bricked_w_sharded(
     num_links = int(os.environ.get("DIFFVAE_NA_HALO_LINKS", 0)) or max(1, ccl_manager.num_links)
     # The rebrick and the out-proj both start from row-major, so their tilize/untilize is skipped.
     lean = lean_layout_enabled() and already_bricked and not single_head_tiles
+    # DIFFVAE_NA_HALO_2D=1: one fused H+W neighbor_pad, and the rows reshaped once into its sticks.
+    halo_2d = os.environ.get("DIFFVAE_NA_HALO_2D") == "1"
+    # DIFFVAE_NA_HALO_PARTS=32 cuts the stick down to one site, so both reshapes become views, at
+    # the cost of 8x more sticks through neighbor_pad's one-stick-per-barrier local copy.
+    halo_parts = int(os.environ.get("DIFFVAE_NA_HALO_PARTS", 0))
+
+    def stick_parts(element_bytes: int) -> int:
+        return halo_parts or _halo_split(SITES_PER_BRICK * channels, element_bytes)
+
     semaphore = ccl_manager.get_np_ping_pong_semaphore(sp_axis)
     h_semaphore = ccl_manager.get_np_ping_pong_semaphore(h_axis) if h_axis is not None else None
 
@@ -655,11 +664,13 @@ def neighborhood_attention_3d_bricked_w_sharded(
     def exchange(grid5: ttnn.Tensor, lane: str) -> ttnn.Tensor:
         """Halo-exchange a ``(b, T_br, H_br, W_br, 32*C)`` ROW_MAJOR brick grid on ``W_br`` -> op layout.
 
+        A grid already cut into ``_halo_split`` sub-columns is taken as is (its reshape is a view).
+
         The stick is one brick of sites (``32 * channels``), and the halo is whole bricks. Above
         the stick bound it is cut into sub-columns of the same memory (``_halo_split``).
         """
         halo_br = halo // brick[2]
-        parts = _halo_split(SITES_PER_BRICK * channels, grid5.element_size())
+        parts = stick_parts(grid5.element_size())
         _tp_trace(
             device,
             f"{lane}: about to neighbor_pad halo_br={halo_br} links={num_links} parts={parts} "
@@ -667,29 +678,44 @@ def neighborhood_attention_3d_bricked_w_sharded(
         )
         with timing_tree.span(device, f"{lane}: halo-exchange", category=timing_tree.ALLGATHER, deep=True):
             split = ttnn.reshape(grid5, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
-            if h_axis is not None:
-                # H first, so the W exchange below carries the neighbours' H halo rows: the corners.
+            if h_axis is not None and halo_2d:
+                # One fused pass: phase 2 reads the W halo back from the H-padded output, so the
+                # corners match the two-call form below and the band is copied locally only once.
                 halo_h_br = halo_h // brick[1]
-                split = _halo_exchange(
+                exchanged = _halo_exchange(
                     ccl_manager,
                     split,
-                    dims=[2],
-                    pad_left=[halo_h_br],
-                    pad_right=[halo_h_br],
-                    axes=[h_axis],
-                    neighbor_sems=[h_semaphore],
+                    dims=[2, 3],
+                    pad_left=[halo_h_br, halo_br * parts],
+                    pad_right=[halo_h_br, halo_br * parts],
+                    axes=[h_axis, sp_axis],
+                    neighbor_sems=[h_semaphore, semaphore],
+                    num_links=[num_links, num_links],
+                )
+            else:
+                if h_axis is not None:
+                    # H first, so the W exchange below carries the neighbours' H halo rows: the corners.
+                    halo_h_br = halo_h // brick[1]
+                    split = _halo_exchange(
+                        ccl_manager,
+                        split,
+                        dims=[2],
+                        pad_left=[halo_h_br],
+                        pad_right=[halo_h_br],
+                        axes=[h_axis],
+                        neighbor_sems=[h_semaphore],
+                        num_links=[num_links],
+                    )
+                exchanged = _halo_exchange(
+                    ccl_manager,
+                    split,
+                    dims=[3],
+                    pad_left=[halo_br * parts],
+                    pad_right=[halo_br * parts],
+                    axes=[sp_axis],
+                    neighbor_sems=[semaphore],
                     num_links=[num_links],
                 )
-            exchanged = _halo_exchange(
-                ccl_manager,
-                split,
-                dims=[3],
-                pad_left=[halo_br * parts],
-                pad_right=[halo_br * parts],
-                axes=[sp_axis],
-                neighbor_sems=[semaphore],
-                num_links=[num_links],
-            )
         _tp_trace(device, f"{lane}: neighbor_pad done -> {tuple(exchanged.shape)}")
         site_major = ttnn.reshape(exchanged, (batch, 1, bricked_sites, channels))
         if lean and key_phase:
@@ -704,6 +730,12 @@ def neighborhood_attention_3d_bricked_w_sharded(
         _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels})")
         with timing_tree.span(device, f"{lane}: untilize", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
+        if halo_2d:
+            # Straight to the exchange's sub-columns: a row-major reshape that changes the last dim
+            # is a full copy, so going through the whole-brick stick first copied the band twice.
+            parts = stick_parts(rows.element_size())
+            split = ttnn.reshape(rows, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
+            return exchange(split, lane)
         grid5 = ttnn.reshape(rows, (batch, t_br, h_br, w_br, SITES_PER_BRICK * channels))
         return exchange(grid5, lane)
 
