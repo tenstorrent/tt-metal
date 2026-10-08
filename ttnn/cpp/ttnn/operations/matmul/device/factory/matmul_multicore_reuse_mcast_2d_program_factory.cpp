@@ -342,9 +342,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     tt::DataFormat output_data_format,
     bool untilize_out,
     bool row_broadcast_bias = true,
-    CoreCoord sub_device_start_core = {0, 0}) {
+    CoreCoord sub_device_start_core = {0, 0},
+    uint32_t in0_row_tiles = 0,
+    uint32_t in0_column_offset_tiles = 0) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
+
+    // A column window reads in0's K tiles from rows of in0_row_tiles tiles, starting at in0_column_offset_tiles.
+    if (in0_row_tiles == 0) {
+        in0_row_tiles = K;
+    }
 
     ttsl::optional_reference<const tt_metal::MeshTensor> bias_mesh;
     if (bias_tensor.has_value()) {
@@ -625,7 +632,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     }
 
     const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
-        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
+        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, in0_row_tiles);
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
@@ -1134,7 +1141,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             AddRuntimeArgsForNode(
                 in0_sender_run_args.runtime_arg_values,
                 core,
-                {{"in0_tensor_start_tile_id", in0_tensor_start_tile_id_stride * in0_idx},
+                {{"in0_tensor_start_tile_id", (in0_tensor_start_tile_id_stride * in0_idx) + in0_column_offset_tiles},
                  {"in0_mcast_dest_noc_start_x", (std::uint32_t)in0_mcast_start.x},
                  {"in0_mcast_dest_noc_start_y", (std::uint32_t)in0_mcast_start.y},
                  {"in0_mcast_dest_noc_end_x", (std::uint32_t)in0_mcast_end.x},
@@ -1386,7 +1393,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     {"num_blocks_h_dim", out_num_blocks_y},
                     {"in0_mcast_num_dests", num_blocks_x - 1},
                     {"in0_mcast_num_cores", num_blocks_x - 1},
-                    {"MtKt", M * K},
+                    {"MtKt", M * in0_row_tiles},
                     {"in0_B", B},
                     {"in1_B", B},
                     {"in0_reuse_in_dfb", 0u},
@@ -3793,7 +3800,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     auto compute_kernel_config = operation_attributes.compute_kernel_config.value();
     auto untilize_out = operation_attributes.untilize_out;
 
-    const auto& a_shape_padded = get_matmul_tensor_padded_shape(a, transpose_a);
+    auto a_shape_padded = get_matmul_tensor_padded_shape(a, transpose_a);
     const auto& b_shape_padded = get_matmul_tensor_padded_shape(b, transpose_b);
     const auto in0_tile = get_matmul_tile(a, transpose_a);
     const auto in1_tile = get_matmul_tile(b, transpose_b);
@@ -3809,7 +3816,15 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    // With a column window, A's K is B's and its rows keep the full width; the window is tile aligned.
+    const uint32_t in0_row_tiles = a_shape_padded[-1] / in0_tile.get_width();
+    const uint32_t in0_column_offset_tiles = operation_attributes.in0_column_offset.value_or(0) / in0_tile.get_width();
+    if (operation_attributes.in0_column_offset.has_value()) {
+        a_shape_padded[-1] = b_shape_padded[-2];
+    }
+    const auto in0_last_ktile_w = (transpose_a || operation_attributes.in0_column_offset.has_value())
+                                      ? 0
+                                      : a_shape_logical[-1] % in0_tile.get_width();
     const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
     TT_FATAL(
         in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
@@ -3891,7 +3906,9 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         output_data_format,
         untilize_out,
         fused_matmul_bias_row_broadcastable(bias),
-        sub_device_start_core);
+        sub_device_start_core,
+        in0_row_tiles,
+        in0_column_offset_tiles);
 }
 
 ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory::shared_variables_t>

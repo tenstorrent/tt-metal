@@ -157,6 +157,7 @@ template <
     uint32_t Vt,
     uint32_t beta_token_major,
     uint32_t beta_width_tiles,
+    uint32_t beta_offset_tiles,
     uint32_t GATE_SCALE_BITS,
     uint32_t has_actual_start,
     uint32_t has_actual_end,
@@ -261,7 +262,10 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
             static_assert(Ct == 1, "token-major beta supports one tile row per chunk");
             const uint32_t chunk = head_chunk_index % num_chunks;
             enqueue_contiguous_read(
-                beta_accessor, beta, chunk * beta_width_tiles + head / tt::constants::TILE_WIDTH, 1);
+                beta_accessor,
+                beta,
+                chunk * beta_width_tiles + beta_offset_tiles + head / tt::constants::TILE_WIDTH,
+                1);
         } else {
             enqueue_contiguous_read(beta_accessor, beta, head_chunk_index * Ct, Ct);
         }
@@ -271,16 +275,23 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         if constexpr (beta_token_major) {
             // Compute broadcasts column 0; move this head's column there. Each row reads its source before
             // overwriting column 0, so the in-place move is safe.
-            auto* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(beta.get_write_ptr());
-            const uint32_t column = head % tt::constants::TILE_WIDTH;
-            const uint32_t column_face = column / tt::constants::FACE_WIDTH;
-            const uint32_t column_offset = column % tt::constants::FACE_WIDTH;
-            for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
-                const uint32_t face_row = row / tt::constants::FACE_HEIGHT;
-                const uint32_t row_base = (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
-                const uint32_t source =
-                    (face_row * 2 + column_face) * tt::constants::FACE_HW + row_base + column_offset;
-                tile[face_row * 2 * tt::constants::FACE_HW + row_base] = tile[source];
+            const auto move_head_column = [&](auto* tile) {
+                const uint32_t column = head % tt::constants::TILE_WIDTH;
+                const uint32_t column_face = column / tt::constants::FACE_WIDTH;
+                const uint32_t column_offset = column % tt::constants::FACE_WIDTH;
+                for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
+                    const uint32_t face_row = row / tt::constants::FACE_HEIGHT;
+                    const uint32_t row_base = (row % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
+                    const uint32_t source =
+                        (face_row * 2 + column_face) * tt::constants::FACE_HW + row_base + column_offset;
+                    tile[face_row * 2 * tt::constants::FACE_HW + row_base] = tile[source];
+                }
+            };
+            // FP32 beta, or BF16 beta logits read in place from a wider tensor.
+            if (beta.get_entry_size() == tt::constants::TILE_HW * sizeof(uint32_t)) {
+                move_head_column(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(beta.get_write_ptr()));
+            } else {
+                move_head_column(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(beta.get_write_ptr()));
             }
         }
         q.push_back(chunk_key_tiles);

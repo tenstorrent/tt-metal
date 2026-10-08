@@ -27,6 +27,9 @@ struct MatmulParams {
     std::optional<tt::tt_metal::Tile> output_tile = std::nullopt;
     std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb = std::nullopt;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt;
+    // Read A's K columns from this tile-aligned column of a wider interleaved A, instead of all of A's columns.
+    // Only the 2D multicast program config supports it.
+    std::optional<uint32_t> in0_column_offset = std::nullopt;
 };
 
 struct MatmulInputs {

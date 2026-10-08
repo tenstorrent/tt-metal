@@ -88,6 +88,34 @@ void validate_matmul_matrix_dimensions(
     TT_FATAL(Kt_a == Kt_b, "K dimension in tiles must match between input A ({}) and input B ({})", Kt_a, Kt_b);
 }
 
+// In0 Column Window: A is read from a tile-aligned column window [offset, offset + K) of a wider, interleaved A
+// whose width holds the window; only the 2D multicast program config supports it.
+void validate_matmul_in0_column_window(
+    const MatmulParams& attributes,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& a_shape,
+    const ttnn::Shape& b_shape,
+    const tt::tt_metal::Tile& in0_tile) {
+    const uint64_t offset = *attributes.in0_column_offset;
+    TT_FATAL(
+        attributes.program_config.has_value() &&
+            std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+                *attributes.program_config),
+        "in0_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
+    TT_FATAL(!attributes.transpose_a, "in0_column_offset does not support transpose_a");
+    TT_FATAL(
+        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+        "in0_column_offset requires an interleaved input A, got {}",
+        input_tensor_a.memory_config().memory_layout());
+    TT_FATAL(
+        b_shape.rank() >= 2 && offset % in0_tile.get_width() == 0 && b_shape[-2] % in0_tile.get_width() == 0 &&
+            offset + b_shape[-2] <= a_shape[-1],
+        "in0_column_offset: the tile-aligned window [{}, {}) must fit input A's {} columns",
+        offset,
+        offset + b_shape[-2],
+        a_shape[-1]);
+}
+
 // Bfloat4 Tile Size: checks that a bfloat4 input has each tile dim >= 4. Only A's height
 // and B's width are checked; the other two dims (A's width, B's height) are the K axis,
 // already forced to 32 by the Operand Basics check above, so they can't be < 4.
@@ -2255,16 +2283,23 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = args.input_tensors.at(1);
     const auto& optional_input_tensors = args.optional_input_tensors;
 
-    const auto& a_shape =
+    auto a_shape =
         operations::matmul::utilities::get_matmul_tensor_logical_shape(input_tensor_a, attributes.transpose_a);
     const auto& b_shape =
         operations::matmul::utilities::get_matmul_tensor_logical_shape(input_tensor_b, attributes.transpose_b);
-    const auto& a_shape_padded =
+    auto a_shape_padded =
         operations::matmul::utilities::get_matmul_tensor_padded_shape(input_tensor_a, attributes.transpose_a);
     const auto& b_shape_padded =
         operations::matmul::utilities::get_matmul_tensor_padded_shape(input_tensor_b, attributes.transpose_b);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, attributes.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, attributes.transpose_b);
+
+    if (attributes.in0_column_offset.has_value()) {
+        // The rest of validation sees A as its column window: B's K columns starting at the offset.
+        validate_matmul_in0_column_window(attributes, input_tensor_a, a_shape, b_shape, in0_tile);
+        a_shape[-1] = b_shape[-2];
+        a_shape_padded[-1] = b_shape_padded[-2];
+    }
 
     // ---- universal checks, part 1: independent of the chosen program config ----
     validate_matmul_operand_basics(input_tensor_a, input_tensor_b, in0_tile, in1_tile);
@@ -2907,7 +2942,8 @@ MatmulParams create_matmul_attributes(
         parameters.transpose_b,
         output_tile,
         parameters.global_cb,
-        parameters.sub_device_id};
+        parameters.sub_device_id,
+        parameters.in0_column_offset};
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
