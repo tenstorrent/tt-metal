@@ -162,8 +162,8 @@ constexpr uint32_t INVALID_CB = 32;
 #ifdef SDPA_RECIPE_FP32
 static bool sdpa_skip_prev_sum_pop = false;
 #endif
-// Blackhole benefits from blocked packing at width four; Wormhole keeps eight (as legacy streaming SDPA)
-// because width-4 blocked-pack reconfiguration costs more than it saves there.
+// Blackhole benefits from blocked packing at width four; Wormhole keeps eight (as legacy streaming SDPA): width-4
+// blocked packs there corrupt the recipe outputs (STANDARD rel-L2 30-50%).
 #ifdef ARCH_BLACKHOLE
 constexpr uint32_t MIN_BLOCKED_PACK_TILES = 4;
 #else
