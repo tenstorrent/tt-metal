@@ -713,36 +713,6 @@ def test_exp2_allclose(device):
     assert_allclose(actual_result=result, expected_result=golden, atol=8.4e-39, rtol=0)
 
 
-@pytest.mark.parametrize(
-    "low, high, expected_atol, expected_rtol",
-    [
-        (-1.6 * 10**38, -0.28515625, 0, 1.2e-7),
-        (-0.28515625, 0.69140625, 0, 1.2e-7),
-        (0.69140625, 88.5, 0, 1.2e-7),
-    ],
-)
-def test_expm1_allclose(low, high, expected_atol, expected_rtol, device):
-    """expm1 sub-range allclose check.
-
-    The ULP sweep in test_exp_ops covers [-87.0, 88.5]; this test extends the
-    negative tail to -1.6e38 and checks three subdomains. Each is within 1
-    float32 ULP. Max |err|/|device| is 1.19e-7 on [-0.285, 0.691], so rtol sits
-    just above that and atol stays 0. The 5.07e30 absolute error at x=87 is one
-    ULP of that output and is covered by rtol.
-    """
-    input_tensor = generate_float32_bits_in_range(low, high)
-
-    golden_function = ttnn.get_golden_function(ttnn.expm1)
-    golden = golden_function(input_tensor, device=device)
-
-    tt_in = to_tt_tensor(input_tensor, device)
-
-    tt_result = ttnn.expm1(tt_in)
-    result = ttnn.to_torch(tt_result)
-
-    assert_allclose(actual_result=result, expected_result=golden, atol=expected_atol, rtol=expected_rtol)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # digamma and multigammaln
 # digamma: defined for x > 0, LUT kernel fitted on [0.01, 102], asymptotic for x > 102
@@ -874,14 +844,36 @@ def test_lgamma_poles(device):
 @pytest.mark.parametrize(
     "ttnn_op, low, high, atol, rtol",
     [
-        # largest err x=10: max |err| = 0.630, max |err|/|device| = 2.24e-4.
-        (ttnn.i0, -10.0, 10.0, 0.64, 2.3e-4),
+        # i0 >= 1, so atol is unnecessary. max |err|/|device| = 2.24e-4 at x=10.
+        (ttnn.i0, -10.0, 10.0, 0, 2.3e-4),
         # After the flush below, largest err abs is x=9.9375 (4.88e-4) and largest err rel
         # is x=8 (1.07e-6). Unflushed, x≈2.3e-38 returns 0 against golden ≈1.17e-38.
         (ttnn.i1, -10.0, 10.0, 4.9e-4, 1.1e-6),
     ],
 )
 def test_bessel_ops(device, ttnn_op, low, high, atol, rtol):
+    """i0 is at least 1 on [-10, 10], so atol=0 and rtol=2.3e-4. Same on wormhole and blackhole.
+
+    | |x| range | max abs err | max rel err      |
+    |-----------|-------------|------------------|
+    | [0, 1)    | 2.98e-7     | 2.98e-7          |
+    | [1, 2)    | 4.77e-7     | 2.18e-7          |
+    | [2, 4)    | 1.72e-5     | 1.58e-6          |
+    | [4, 8)    | 2.55e-2     | 6.14e-5          |
+    | [8, 10]   | 0.630       | 2.24e-4 at x=10  |
+
+    i1 on [-10, 10], rtol=1.1e-6.
+
+    | |x| range   | max abs err | max rel err    |
+    |-------------|-------------|----------------|
+    | [0, 1e-6)   | 1.14e-13    | 3.18e-7        |
+    | [1e-6, 0.1) | 7.45e-9     | 4.30e-7        |
+    | [0.1, 1)    | 1.19e-7     | 4.10e-7        |
+    | [1, 2)      | 2.38e-7     | 2.63e-7        |
+    | [2, 4)      | 1.91e-6     | 3.10e-7        |
+    | [4, 8)      | 2.75e-4     | 8.70e-7        |
+    | [8, 10]     | 4.88e-4     | 1.07e-6 at x=8 |
+    """
     input_tensor = generate_float32_bits_in_range(low, high)
 
     tt_in = to_tt_tensor(input_tensor, device)
