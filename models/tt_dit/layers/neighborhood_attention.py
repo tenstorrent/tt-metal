@@ -579,7 +579,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
     )
     halo_h = halo_sites(context_window[1], brick[1]) if h_axis is not None else 0
     assert halo_h <= height_extent, f"a {halo_h}-site H halo exceeds the {height_extent}-site H shard"
-    assert height_extent % brick[1] == 0, f"H shard {height_extent} is not whole {brick[1]}-site bricks"
+    # Only an H split needs whole bricks per shard; an unsplit H is ghost-padded like T.
+    assert (
+        h_axis is None or height_extent % brick[1] == 0
+    ), f"H shard {height_extent} is not whole {brick[1]}-site bricks"
     resident = (time_extent, height_extent + 2 * halo_h, width_local + 2 * halo)
     # Under a key phase the op sees K/V on a grid offset from the query grid (``phased``); they are
     # still exchanged as whole bricks of the query grid (``resident``) and re-bricked after.
