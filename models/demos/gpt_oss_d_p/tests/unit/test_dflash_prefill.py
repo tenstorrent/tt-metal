@@ -194,6 +194,10 @@ def test_adapter_resolves_drafter_path_only_when_opted_in(monkeypatch, tmp_path,
     monkeypatch.setenv("PREFILL_DFLASH", "1")
     assert _resolve_dflash_checkpoint_path() == tmp_path / "draft"
 
+    monkeypatch.setenv("DFLASH_HF_MODEL", str(tmp_path / "common-runner-draft"))
+    assert _resolve_dflash_checkpoint_path() == tmp_path / "common-runner-draft"
+    monkeypatch.delenv("DFLASH_HF_MODEL")
+
     monkeypatch.delenv("TT_HF_DRAFT_MODEL")
     with expect_error(ValueError, "TT_HF_DRAFT_MODEL"):
         _resolve_dflash_checkpoint_path()

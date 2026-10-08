@@ -487,12 +487,13 @@ class TtPrefillRuntime:
             on_layer_complete = None
 
         wants_dflash_result = dflash_handoff or dflash_sink is not None
+        dflash_accumulator = getattr(self, "dflash_accumulator", None)
         accumulate_dflash_features, run_dflash_kv = resolve_dflash_execution(
-            checkpoint_enabled=self.dflash_accumulator is not None,
+            checkpoint_enabled=dflash_accumulator is not None,
             handoff_requested=wants_dflash_result,
             kv_tail=dflash_kv_tail,
         )
-        if accumulate_dflash_features and self.dflash_accumulator is None:
+        if accumulate_dflash_features and dflash_accumulator is None:
             raise RuntimeError(
                 "DFlash execution requested but no checkpoint was configured; "
                 "set TtPrefillRuntimeConfig.dflash_checkpoint_path"
@@ -524,7 +525,7 @@ class TtPrefillRuntime:
             skip_lm_head=False if wants_dflash_result else skip_lm_head,
             indexed_rope=True,
             on_layer_complete=on_layer_complete,
-            dflash_accumulator=self.dflash_accumulator if accumulate_dflash_features else None,
+            dflash_accumulator=dflash_accumulator if accumulate_dflash_features else None,
         )
         enqueue_ms = (time.perf_counter() - enqueue_started) * 1000.0
         if accumulate_dflash_features:

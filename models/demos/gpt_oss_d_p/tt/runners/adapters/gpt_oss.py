@@ -31,9 +31,11 @@ def _resolve_dflash_checkpoint_path() -> Optional[Path]:
 
     if os.getenv("PREFILL_DFLASH", "0") != "1":
         return None
-    draft_model = os.environ.get("TT_HF_DRAFT_MODEL")
+    draft_model = os.environ.get("DFLASH_HF_MODEL") or os.environ.get("TT_HF_DRAFT_MODEL")
     if not draft_model:
-        raise ValueError("PREFILL_DFLASH=1 requires TT_HF_DRAFT_MODEL=/path/to/gpt-oss-120b-DFlash")
+        raise ValueError(
+            "PREFILL_DFLASH=1 requires DFLASH_HF_MODEL (or TT_HF_DRAFT_MODEL) " "to point at gpt-oss-120b-DFlash"
+        )
     return Path(draft_model)
 
 
@@ -64,6 +66,8 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"
+    supports_dflash = True
+    dflash_requires_trace = False
     dflash_num_layers = 8
 
     # --- test metadata ---

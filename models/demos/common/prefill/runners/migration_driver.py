@@ -700,6 +700,10 @@ def _run_validator(rank: int, world_size: int, args) -> None:
     except Exception as e:
         logger.error(f"[migration_driver] validator rank={rank}: KV table read raised {type(e).__name__}: {e}")
         kv_table = None
+    if kv_table is not None and not driver.layers:
+        # Auxiliary caches (for example GPT-OSS DFlash) may occupy virtual migration rows after
+        # the verifier's model layers. Cover the table's full declared depth by default.
+        driver.num_layers = max(driver.num_layers, producer._ack_layers_per_chunk(kv_table))
 
     stats = producer.RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
     needs_traces = cfg.verify or args.verify_migration in ("dst-golden", "both")
@@ -840,6 +844,10 @@ def main() -> None:
     logger.info(f"[migration_driver] attached; payload={payload_bytes}B")
 
     kv_table = producer._read_kv_chunk_table(timeout_s)
+    if not driver.layers:
+        # The migration table is authoritative: named auxiliary-cache configs can extend beyond
+        # NUM_LAYERS even though they are produced and ACKed by the same prefill request.
+        driver.num_layers = max(driver.num_layers, producer._ack_layers_per_chunk(kv_table))
     ack_channel = producer._connect_layer_ack_channel(timeout_s)
 
     driver.attach()

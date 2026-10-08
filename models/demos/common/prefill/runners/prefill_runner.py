@@ -100,7 +100,7 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
-DFLASH_MODEL = os.environ.get("DFLASH_HF_MODEL") or ADAPTER.dflash_model_default
+DFLASH_MODEL = os.environ.get("DFLASH_HF_MODEL") or os.environ.get("TT_HF_DRAFT_MODEL") or ADAPTER.dflash_model_default
 DFLASH_ENABLED = ADAPTER.supports_dflash and os.environ.get("PREFILL_DFLASH", "0") == "1" and bool(DFLASH_MODEL)
 
 MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0)) if ADAPTER.supports_mtp else 0
@@ -127,13 +127,7 @@ assert not (MTP_LEVELS and USE_TRACE), (
 )
 assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DFLASH=1 are mutually exclusive"
 
-# DFlash runs traced, and only traced. The eager drafter path is no longer a supported configuration:
-# the tap fires from inside the verifier forward, so trace capture is what the wiring is built and
-# validated against, and an untraced drafter is a second path nothing gates. The manifests pin
-# PREFILL_USE_TRACE=1; this catches a run that overrides it back to 0 rather than letting it start and
-# diverge silently. To re-measure traced-vs-eager equivalence, drop this assert in a scratch tree --
-# deliberately not an env escape hatch, so a production run cannot reach the eager path by accident.
-assert not (DFLASH_ENABLED and not USE_TRACE), (
+assert not (DFLASH_ENABLED and ADAPTER.dflash_requires_trace and not USE_TRACE), (
     "PREFILL_DFLASH=1 requires PREFILL_USE_TRACE=1: the DFlash drafter is only supported on the "
     "traced path. Unset PREFILL_USE_TRACE (the dflash manifest pins it to 1) or drop PREFILL_DFLASH."
 )

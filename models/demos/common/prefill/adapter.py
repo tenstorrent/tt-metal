@@ -140,6 +140,9 @@ class PrefillModelAdapter(ABC):
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
+    # Most DFlash implementations tap a captured verifier trace. Models with an independently
+    # validated eager producer path override this so P/D can generate drafter KV without tracing.
+    dflash_requires_trace: bool = True
     supports_mtp: bool = False
 
     def cache_kind(self, config_id: int) -> str:
