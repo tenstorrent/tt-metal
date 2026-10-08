@@ -345,3 +345,44 @@ the exact gate first. Existing quietbox evidence under `/tmp/lreg-review.Y7HFRq`
 `topk-distinct-stress`, `topk-distinct-control` (logs/XML as applicable). Temporary evidence paths are
 not reproduction prerequisites. Add `-fdump-tree-cunroll-details` to inspect
 the unroll decision; use a separate RUNNER_TEMP per run to retain its ELFs.
+
+## Public LRegFile integration — 2026-10-08
+
+The test-only production merge adaptation now uses public `sfpi::l_reg`
+reads and assignments instead of direct read/write builtins. Value registers
+use `vFloat`, index registers use `vUInt`; neither is numerically converted.
+Every coupled result is recaptured after the raw swap. The stress-only typed
+load/store remains a builtin call to preserve its exact address-mode spelling.
+No new public API, compiler pass, production-default selector, or unroll
+pragma was introduced.
+
+Fresh tests use the same standalone `bc27e710ef4` compiler with the live-in
+pass disabled. The two-format matrix adds IEEE FP16 to BF16: handwritten,
+public-API threaded merge, and distinct-value stress; two row shapes, two
+directions, three deterministic orders, K32/width128/non-stable. O2/default
+scheduling and O3/explicit scheduling each completed **72 PASS**, zero
+skips/failures. These are
+exact value AND index checks with at least two executions per case. Stable
+sorting/ties, special values, FP32, other widths/K values, other chips, and
+other TopK phases rewritten with this API remain outside the claim.
+
+Before expanding to two formats, the 36-case BF16 correctness matrix and two
+five-run profiling arms passed with each of the default and diagnostic unroll
+settings. Fresh public-API timings reproduce the earlier builtin measurements:
+
+| Complete-unroll limit | Hand cycles | Public-API threaded cycles |
+|---|---:|---:|
+| Default (200) | 5038 | 5186 |
+| Diagnostic (300), same flags on both arms | 4941 | 4827 |
+
+The public interface therefore works in this tested region, but does not solve
+the default **2.94% regression**. Do not enable the adaptation as a production
+default or use the diagnostic global knob as a claimed targeted compiler fix.
+The local, unbuilt launch-flatten eligibility patch was NOT used for any run.
+
+The reproduction commands above now select both formats automatically.
+Fresh evidence at the same quietbox root: `topk-public-api.{log,xml}`,
+`topk-public-api-control.{log,xml}`, `topk-public-formats.{log,xml}`, and
+`topk-public-formats-O2.{log,xml}`.
+These are separate from the upstream-based macro companion PR: passing the
+explicit-state region does not validate every opcode in the effect decoder.

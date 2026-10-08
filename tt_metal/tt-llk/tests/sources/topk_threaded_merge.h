@@ -5,6 +5,7 @@
 // Test-only adaptation of ckernel_sfpu_topk.h::_bitonic_topk_merge.
 // Preserve the production loop, instruction words, formats and addressing.
 // Only the load8 -> swap -> store8 region gets explicit C++ value lifetimes.
+// Public LRegFile reads/assignments carry these lifetimes; no new SFPI API.
 // Raw issue deliberately bypasses effect annotations: this is an independent
 // alternative, not threaded values accidentally protected by the effect pass.
 // TOPK_IMPL=2 injects no stress temporaries into the measured workload.
@@ -27,7 +28,7 @@ __attribute__((always_inline)) inline void merge8(std::uint32_t offset, std::uin
     // These are the four production TT_SFPLOAD words, with each value captured
     // immediately; delaying all captures until after load8 hides earlier lives.
     instrn_buffer[0] = TT_OP_SFPLOAD(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, ld_offset);
-    auto value0 = __builtin_rvtt_sfpreadlreg(0);
+    sfpi::vFloat value0 = sfpi::l_reg[sfpi::LRegs::LReg0];
     if constexpr (TOPK_IMPL == 3)
     {
         // Preserve value0 across an allocator-owned vector temporary. The
@@ -39,16 +40,16 @@ __attribute__((always_inline)) inline void merge8(std::uint32_t offset, std::uin
         (__builtin_rvtt_sfpstore)(instrn_buffer, gap, ld_offset + dist, 0, 0, static_cast<unsigned>(instr_mod_value), ADDR_MOD_7);
     }
     instrn_buffer[0] = TT_OP_SFPLOAD(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, ld_offset + dist);
-    auto value1 = __builtin_rvtt_sfpreadlreg(1);
+    sfpi::vFloat value1 = sfpi::l_reg[sfpi::LRegs::LReg1];
     instrn_buffer[0] = TT_OP_SFPLOAD(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset);
-    auto index0 = __builtin_rvtt_sfpreadlreg(4);
+    sfpi::vUInt index0 = sfpi::l_reg[sfpi::LRegs::LReg4];
     instrn_buffer[0] = TT_OP_SFPLOAD(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
-    auto index1 = __builtin_rvtt_sfpreadlreg(5);
+    sfpi::vUInt index1 = sfpi::l_reg[sfpi::LRegs::LReg5];
 
-    __builtin_rvtt_sfpwritelreg(value0, 0);
-    __builtin_rvtt_sfpwritelreg(value1, 1);
-    __builtin_rvtt_sfpwritelreg(index0, 4);
-    __builtin_rvtt_sfpwritelreg(index1, 5);
+    sfpi::l_reg[sfpi::LRegs::LReg0] = value0;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = value1;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = index0;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = index1;
     INSTRUCTION_WORD(TT_OP_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX));
     if constexpr (STABLE_SORT)
     {
@@ -58,17 +59,17 @@ __attribute__((always_inline)) inline void merge8(std::uint32_t offset, std::uin
 
     // Index tracking updates L4/L5 together with L0/L1. Capture all four NEW
     // results; restoring the pre-swap inputs here would undo the raw operation.
-    auto result0 = __builtin_rvtt_sfpreadlreg(0);
-    auto result1 = __builtin_rvtt_sfpreadlreg(1);
-    auto result_index0 = __builtin_rvtt_sfpreadlreg(4);
-    auto result_index1 = __builtin_rvtt_sfpreadlreg(5);
-    __builtin_rvtt_sfpwritelreg(result0, 0);
+    sfpi::vFloat result0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat result1 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt result_index0 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vUInt result_index1 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::l_reg[sfpi::LRegs::LReg0] = result0;
     instrn_buffer[0] = TT_OP_SFPSTORE(p_sfpu::LREG0, instr_mod_value, ADDR_MOD_7, ld_offset);
-    __builtin_rvtt_sfpwritelreg(result1, 1);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = result1;
     instrn_buffer[0] = TT_OP_SFPSTORE(p_sfpu::LREG1, instr_mod_value, ADDR_MOD_7, ld_offset + dist);
-    __builtin_rvtt_sfpwritelreg(result_index0, 4);
+    sfpi::l_reg[sfpi::LRegs::LReg4] = result_index0;
     instrn_buffer[0] = TT_OP_SFPSTORE(p_sfpu::LREG4, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset);
-    __builtin_rvtt_sfpwritelreg(result_index1, 5);
+    sfpi::l_reg[sfpi::LRegs::LReg5] = result_index1;
     instrn_buffer[0] = TT_OP_SFPSTORE(p_sfpu::LREG5, instr_mod_index, ADDR_MOD_7, dst_indices_offset + ld_offset + dist);
 }
 } // namespace topk_threaded_merge

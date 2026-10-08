@@ -396,7 +396,7 @@ def test_topk_sfpu(
     ), "Result tensor and golden tensor are not of the same length"
 
     if exact_order is not None:
-        # Unique finite BF16 values make both values and indices unambiguous.
+        # Unique exactly representable values make values/indices unambiguous.
         assert torch.equal(res_tensor, golden_tensor), "exact TopK value/index mismatch"
 
     # TODO: Fix issue #1344 on tt-llk.
@@ -478,11 +478,14 @@ def test_topk_device_profile(perf_report, implementation: int, label: str):
 @pytest.mark.parametrize(
     "direction", [TopKSortDirection.Descending, TopKSortDirection.Ascending]
 )
-def test_topk_threaded_merge_exact(implementation, rows, order, direction, monkeypatch):
+@pytest.mark.parametrize("data_format", [DataFormat.Float16_b, DataFormat.Float16])
+def test_topk_threaded_merge_exact(
+    implementation, rows, order, direction, data_format, monkeypatch
+):
     """Production TopK pipeline, replacing only the four-register merge region."""
     monkeypatch.setattr(TestConfig, "BIT_EXACT_RUNS", max(2, TestConfig.BIT_EXACT_RUNS))
     test_topk_sfpu(
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        InputOutputFormat(data_format, data_format),
         [rows, 128],
         32,
         direction,
