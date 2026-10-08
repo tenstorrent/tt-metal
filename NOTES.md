@@ -1,0 +1,34 @@
+# t295 notes
+
+## Done (run 1168, 2026-10-08 ~19:05 UTC)
+- Not reverted anywhere before: t48 tip 9e20d905481 still had `_DEFAULT_S2_SIGMAS = [0.909375, 0.421875, 0.0]`;
+  #293 only overrides via LTX_S2_SIGMAS in its run script.
+- Code commit f6547442b30 "ltx distilled: restore the 3-step stage-2 schedule as the default" LANDED on
+  origin/ttp/t48-ltx25-integrated (ttp push, pushed f6547442b304d744711e80e2281f6bd368291673).
+  Sigma block now byte-identical to b21f12b93a2's parent (a1da2e19509). LTX_S2_SIGMAS override kept.
+  Tests: test_ltx_quality (3-step default; 2-step and FAST still selectable), test_ltx_euler_tail (11 steps);
+  both failed before the fix, 19 pass after. README_euler_tail / test_euler_tail_trace docstring / ltx.py
+  high-tier comment back to 8+3. medium/fast tiers (FAST_S2_SIGMAS=0.909375,0.0) left as is: explicit opt-in tiers.
+
+## Device md5 check: NOT RUN yet
+blx03 (No route to host) and blx01 (ssh timeout) both down at 19:00 UTC. g15blx02 has no LTX setup (/home full).
+
+Reference: tt-project/data/g15/ref_t48_f6b8/seed0-4.mp4 (job 710; t188 job 755 matched it byte-for-byte):
+  seed0 b894579d77d8f57bf92d8db79cfd9b92  seed1 e72baf2eb9d393c486b561acb14cb9c1  seed2 395b25ecbbafaea1f6bc3d5f02151ddc
+  seed3 0347a6649be40a3a0af41fd397d4d0a1  seed4 a884491baa50155bfa6597c5f2db0531
+Env = LTX_VERSION=2.5 (LTX-2.3 ckpt + LTX-2.5 split ckpt root), dit-ltx25 cache, t48 build bf7db12a149 on blx01.
+The ref used LTX25_ROOT=/mnt/MLPerf/... -> FORBIDDEN now (job 086 D-state hang). Need a LOCAL LTX-2.5 root.
+
+## Next step (when blx01 or blx03 answers ssh)
+1. On the box: df -h /; ls /var/tmp/fasth3/{t48,cache,models}; find a local LTX-2.5 split root
+   (e.g. /var/tmp/fasth3/models/ltx-2.5*, ~/.cache/ltx-checkpoints/ltx-2.5, /home/sulphur/hf/...). None -> copy only the
+   files the 2.5 path reads (check size vs 150 GB blx01 limit) or skip the box. Check cache/dit-ltx25 still exists.
+   Check $W=/var/tmp/fasth3/t48 build commit: tip imports neighborhood_sdpa (C++ after bf7db12a149) - make sure ttnn import works.
+2. `git archive f6547442b30 models/tt_dit conftest.py pytest.ini pyproject.toml | gzip > tmp/t295/py.tar.gz`,
+   scp tarball + setup295.sh + run295.sh to /var/tmp/fasth3/t295/ (tmp name + mv), run setup295.sh (no device).
+3. Health check (tt-device-mcp status), then tt-device-mcp run-bg -w /var/tmp/fasth3/t48 -t 240
+   -- bash /var/tmp/fasth3/t295/run295.sh s5 <local LTX25_ROOT>   (job 755: 161.6 s at 8+3).
+4. Compare md5 of ltx_av_fast_1920x1088_{1..5}.mp4 (= seeds 0-4) with the ref above. If they differ, later t48
+   commits changed numerics: run a 2nd job with the pre-change tip 9e20d905481 overlay + LTX_S2_SIGMAS=0.909375,0.725,0.421875,0.0;
+   it must match this run's md5s (that is the real identity check of the revert).
+5. Clean up /var/tmp/fasth3/t295 (keep run.log + md5s here).
