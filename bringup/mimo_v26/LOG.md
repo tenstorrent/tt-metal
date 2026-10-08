@@ -2238,3 +2238,14 @@
 - claim: RING MoE with W2=LoFi as the DEFAULT (moe_ring.py setdefault MOE_COMPUTE_FID_W2=0; only LD_LIBRARY_PATH=artifacts/ringk_full_7a16eb305aa/lib and MIMO_EXPERT_OP=unified set) at 196b79fa91e: test_verify_decode 48 layers U=1,2,4: argmax 100% token-exact vs sequential, features bit-identical, verify repeat bit-identical; 4-layer closed-loop oracle (test_decode_reconf, reconfigure U=32,1,4 in one process): tokens equal the oracle 100% (teacher-forced and free-running), step logits PCC min 0.99875 / 0.99978 / 0.99935, DRAM identical on return (log moe_AQ_default_reconf4_h48_196b79fa91e.log, jsonl moe_AQ_default_reconf4.jsonl)
 - evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AQ_default_verify48.jsonl
 - paths: models/demos/blackhole/mimo_v26/tt/moe_ring.py
+
+## E261008-0227-87a
+- date: 2026-10-08T02:27:27
+- commit: 8da907cb394
+- branch: ssinghal/mimo-ringk
+- host: DC16-2-BG-0204-u20-44
+- track: moe
+- status: verified
+- claim: RING MoE with W2=LoFi (default): 48-layer deep trace, 1000 replays, no hang: T=8 0.865 ms/layer (HiFi3 for both: 0.957), T=32 live 32 1.112 ms/layer (1.181); lib artifacts/ringk_full_7a16eb305aa/lib, hosts 30 (T=8) and 48 (T=32), logs moe_AR_deep48_t{8,32}_*
+- evidence: /mnt/tt-data/ssinghal/mimo-logs/moe_AR_deep48_t32_h48_8da907cb394.log
+- paths: ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/compute.cpp, models/demos/blackhole/mimo_v26/tt/moe_ring.py
