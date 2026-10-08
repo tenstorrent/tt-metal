@@ -32,15 +32,23 @@ __attribute__((interrupt)) inline void fds_go_interrupt_handler() {
         // Not completing the claim stops the PLIC from delivering this source again.
         return;
     }
-    uint32_t dispatch_lanes = overlay::fds_signalling::worker_read_group_status(group_id);
+    const uint32_t handled_dispatch_lanes = overlay::fds_signalling::worker_read_group_status(group_id);
+    uint32_t dispatch_lanes = handled_dispatch_lanes;
     while (dispatch_lanes != 0) {
         const uint32_t dispatch_lane = __builtin_ctz(dispatch_lanes);
         overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
         dispatch_lanes &= ~(uint32_t{1} << dispatch_lane);
     }
+    // Where group status is sticky, clearing the input lanes leaves it set. Clear only the handled lanes, so a go
+    // that arrived on another lane since the read above keeps the interrupt raised.
+    overlay::fds_signalling::worker_clear_group_status(group_id, handled_dispatch_lanes);
 
-    // Clear the FDS lanes and read them back before completing the claim so the live level cannot re-pend it.
-    (void)overlay::fds_signalling::worker_read_group_status(group_id);
+    // The go interrupt is level-triggered, so completing the claim while the handled lanes still read set would make
+    // the PLIC deliver it again. Wait until a read shows them clear.
+    WAYPOINT("FGCW");
+    while ((overlay::fds_signalling::worker_read_group_status(group_id) & handled_dispatch_lanes) != 0) {
+    }
+    WAYPOINT("FGCD");
     overlay::quasar::plic_complete(claimed_source);
 
     // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
@@ -85,6 +93,8 @@ inline void init_go_signalling(tt_l1_ptr mailboxes_t* const mailboxes) {
          ++go_group_id) {
         overlay::fds_signalling::worker_config_group(
             go_group_id, overlay::fds_signalling::dispatch_lane_mask, overlay::fds_signalling::worker_go_threshold);
+        // Where group status is sticky, a go a previous run left in it would fire as soon as the interrupt is armed.
+        overlay::fds_signalling::worker_clear_group_status(go_group_id, overlay::fds_signalling::dispatch_lane_mask);
     }
     overlay::quasar::plic_set_threshold(overlay::quasar::plic_threshold_allow_all);
     for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;

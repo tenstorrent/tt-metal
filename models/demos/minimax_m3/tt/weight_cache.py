@@ -23,6 +23,9 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import is_sparse_attention_layer
 
+# Each pipeline rank builds its own layers, so each writes its own cache files.
+CACHE_DUMP_MODE = ttnn.DumpTensorMode.LOCAL
+
 # ttnn's cache_file_name suffix uses these dtype tags (e.g. ..._dtype_BFLOAT8_B_layout_TILE.tensorbin).
 _DTYPE_TAG = {
     ttnn.bfloat16: "BFLOAT16",

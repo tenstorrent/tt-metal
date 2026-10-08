@@ -167,8 +167,7 @@ def _run_moe_compute_single_card_test(
 
     The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
     BH) — the same ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used
-    to pack the weights so host tensor layout matches the op's ring-aware width-parallel
-    auto-derivation.
+    to pack the weights so host tensor layout matches the op.
     """
     arch = mesh_device.arch()
     if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
@@ -645,11 +644,10 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, com
     Runs in both compute_only mode (5 outputs, matmul is final) and fused-local mode
     (6 outputs, combine is final). The matmul ring size is auto-detected from the live
     DRAM-bank count (12 on WH, 7/8 on BH); the op no longer exposes a bh_ring_size knob.
-    The width-shard dim must match the op's ring-aware derivation, so it is auto-derived.
+    The width-shard dim must match the op's derivation, so it is auto-derived.
     """
     hidden_size = 7168
     N = 2048
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -659,7 +657,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, com
         N=N,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=has_bias,
@@ -689,7 +687,6 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, 
     DRAM-bank count (12 on WH, 7/8 on BH); the op no longer exposes a bh_ring_size knob.
     """
     hidden_size = 2880
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -699,7 +696,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, compute_only, 
         N=hidden_size,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SWIGLU,
         has_bias=True,
@@ -774,7 +771,7 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
         N=N,
         hidden_size=cfg["hidden_size"],
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(cfg["hidden_size"], matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(cfg["hidden_size"]),
         dtype=ttnn.bfloat16,
         activation_type=cfg["activation_type"],
         has_bias=cfg["has_bias"],
@@ -791,7 +788,6 @@ def test_moe_compute_single_card_nontile_tokens_sweep(mesh_device, mesh_shape, c
 def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
     """Regression for tt-metal#52371: B=1 dense token-map stride in FullLocal mode."""
     hidden_size = 2048
-    ring_n = effective_matmul_ring_size(mesh_device)
     _run_moe_compute_single_card_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -801,7 +797,7 @@ def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
         N=512,
         hidden_size=hidden_size,
         output_height_shard_dim=4,
-        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size),
         dtype=ttnn.bfloat16,
         activation_type=MoEActivationFunction.SILU,
         has_bias=False,
