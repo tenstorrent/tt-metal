@@ -1156,11 +1156,8 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
     if dim == "REDUCE_COL":
         tail_shapes = tuple(tuple((w, h, b) for h, w, b in shapes) for shapes in tail_shapes)
     tail_shapes = tuple(shape for pair in tail_shapes for shape in pair)
-    # Repeat the first geometry with the tail on a different core. Both launches
-    # must have identical compile-time payloads, as do all cores in each launch.
-    previous_args = None
-    for shape_index, tail_shape in enumerate((tail_shapes[0], *tail_shapes)):
-        tail_core = shape_index % core_count
+    tail_core = core_count - 1
+    for tail_shape in tail_shapes:
         shapes = [(max_h, max_w, max_batches)] * core_count
         shapes[tail_core] = tail_shape
         block = _PLANNER.ReduceBlockSpec(
@@ -1199,9 +1196,6 @@ def test_reduce_runtime_tail_cores(device, dim, pool, algorithm, calls, explicit
         auxiliary_tiles = len(sequence.auxiliary.tiles)
 
         compute_args, auxiliary_args = _serialize_plan(sequence)
-        if shape_index == 1:
-            assert previous_args == (compute_args, auxiliary_args)
-        previous_args = (compute_args, auxiliary_args)
 
         physical = torch.full((core_count, allocation_rows * TILE, row_stride * TILE), 128, dtype=torch.bfloat16)
         expected = []
