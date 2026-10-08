@@ -90,3 +90,20 @@ track. Gain <dev, ref>/<ref, ref> 1.00 +- 0.006 through L33, 0.944 at L44 with n
 Error source: at L3 ffn_in rel 0.008 -> experts_out rel 0.098 (gain 1.008), shared expert (bf16) 0.005: bfp4
 experts add ~10% unbiased relative error per MoE layer; residual rel 0.06 (L3) -> 0.10 (L10) -> 0.18 (L20) ->
 0.31 (L44), fastest in the last layers where the reference residual RMS grows 0.04 -> 1.04.
+
+## Fidelity and links (2026-10-08), now the spec defaults (device.experts_fidelity / attn_fidelity / moe_links)
+
+Profile (Tracy + tt-perf-report, layers 2-4, chunk at 51200): device-bound (per chip 18.3 / 59.4 / 29.4 ms per
+kda_dense / dsa_moe / kda_moe layer, ~1.62 s per chunk vs 1.69 s wall). Largest: MoE dispatch+combine 20% (1 link,
+3-5 cores), matmuls 18%, AG/RS 18%, routed experts 16% (~30% of the HiFi4 roofline), indexer fp32 eltwise ~10%.
+Knobs (env, read at construction; hooks.apply_device_settings sets them from the spec unless already set):
+GLM_EXPERTS_FIDELITY, GLM_ATTN_FIDELITY (MLA, sparse SDPA, indexer, q_a, KDA incl. ttKDA's internal configs),
+GLM_MOE_LINKS (TtExperts num_links: was 1, inherited from the MiMo 2x2 port; the LoudBox has 2 per axis).
+Warm 56k prefill / 56k top1 vs text (all rows; last chunk top1 / top5):
+  baseline HiFi4, 1 link        17.77 s  0.867  0.705 / 0.898
+  experts LoFi                  15.93 s
+  + 2 MoE links                 14.05 s  0.874  0.725 / 0.914
+  + attention HiFi2             13.79 s  0.881  0.767 / 0.938   <- defaults
+Lower fidelity is *more* accurate here (LoFi should equal HiFi4 on bfp4 weights, yet outputs differ): a HiFi4-path
+precision issue to find (split KDA vs MLA/indexer HiFi2 next). CPU reference per chunk (s56320 golden): 0.967,
+0.953, 0.955, 0.949, 0.948, 0.937, 0.933 at 0..30k: the device's position decay is device error, not the model.

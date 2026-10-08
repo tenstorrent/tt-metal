@@ -379,6 +379,7 @@ def _device_step(mesh, spec, layer, step, loader, cfg):
 
 
 def device_component(mesh, spec, layer, step):
+    apply_device_settings(spec)
     loader, cfg = _loader_cfg(spec)
     return _device_step(mesh, spec, layer, step, loader, cfg)
 
@@ -584,11 +585,31 @@ def experts_dtype(spec):
     return getattr(ttnn, spec.get("device.experts_dtype") or "bfloat8_b")
 
 
+# spec device.<key> -> the environment knob the tt modules read at construction (an explicit env var wins)
+DEVICE_SETTINGS = {
+    "experts_fidelity": "GLM_EXPERTS_FIDELITY",  # routed experts math fidelity (default HiFi4)
+    "attn_fidelity": "GLM_ATTN_FIDELITY",  # MLA, sparse SDPA, indexer, q_a, KDA (default HiFi4)
+    "moe_links": "GLM_MOE_LINKS",  # fabric links for dispatch / combine / offset_cumsum (default 1)
+}
+
+
+def apply_device_settings(spec) -> None:
+    """Spec defaults for the device knobs (device.experts_fidelity / attn_fidelity / moe_links), unless set in the
+    environment. A spec without them keeps the module defaults."""
+    import os
+
+    for key, env in DEVICE_SETTINGS.items():
+        v = spec.get(f"device.{key}")
+        if v is not None:
+            os.environ.setdefault(env, str(v))
+
+
 def device_model(mesh, spec, layers, lm_head=True):
     """All-device model (default); BRINGUP_HYBRID=1 selects the hybrid harness (CPU reference + DEVICE_STEPS on the
     device, host in / host out per step) for debugging."""
     import os
 
+    apply_device_settings(spec)
     if os.environ.get("BRINGUP_HYBRID") == "1":
         return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
     return GlmDeviceModel(mesh, spec, layers, lm_head=lm_head)
