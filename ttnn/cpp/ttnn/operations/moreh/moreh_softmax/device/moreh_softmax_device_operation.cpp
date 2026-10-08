@@ -21,15 +21,18 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    // Same formats as the small factories.
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
+    auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    int32_t cb_usage = 0;        // bytes
-    cb_usage += Wt * tile_size;  // input;
-    cb_usage += 1 * tile_size;   // mask;
-    cb_usage += 1 * tile_size;   // scaler;
+    int32_t cb_usage = 0;                   // bytes
+    cb_usage += Wt * tile_size;             // input;
+    cb_usage += 1 * mask_scaler_tile_size;  // mask;
+    cb_usage += 2 * mask_scaler_tile_size;  // max and sum scalers;
 
     cb_usage += Wt * tile_size;  // output;
 
@@ -51,15 +54,18 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    // Same formats as the small factories.
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
+    auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    int32_t cb_usage = 0;        // bytes
-    cb_usage += Ht * tile_size;  // input;
-    cb_usage += 1 * tile_size;   // mask;
-    cb_usage += 1 * tile_size;   // scaler;
+    int32_t cb_usage = 0;                   // bytes
+    cb_usage += Ht * tile_size;             // input;
+    cb_usage += 1 * mask_scaler_tile_size;  // mask;
+    cb_usage += 2 * mask_scaler_tile_size;  // max and sum scalers;
 
     cb_usage += Ht * tile_size;  // output;
 
