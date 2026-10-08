@@ -10,12 +10,13 @@ lanes), retain output clobbers, and carry live outputs to their consumers.
 The complete current O2 device suite finished **370 PASS / 14 diagnostic XFAIL**,
 zero unexpected failures, 384 cases. The broader and focused matrices below
 establish additional configuration coverage, not universal compiler correctness.
-No production wrapper rewrite or compiler-pass removal is justified yet.
+No global production-wrapper rewrite or compiler-pass removal is justified.
+The final section records the scoped, opt-in Blackhole production entry point.
 
 The production-linked TopK merge experiment below additionally passes exact
 value/index checks with the pass disabled. Its default-codegen performance
 regression is associated with an unroll-cost threshold, not extra vector moves.
-It remains test-only; neither global pass removal nor production adoption follows.
+It does not justify global pass removal or changing production defaults.
 
 ## Question and controlled intervention
 
@@ -443,3 +444,46 @@ This resolves the measured performance blocker with an existing compiler knob.
 It does not expand the input/architecture coverage stated above, enable the
 test adaptation as a production default, validate all raw opcodes, or justify
 removing the live-in pass globally.
+
+## Production interface decision — 2026-10-08
+
+For the validated Blackhole merge region, use caller-owned values through
+the existing public `sfpi::l_reg` API. No new SFPI builtin or public class
+member is needed. The production header now exposes
+`_bitonic_topk_merge_explicit<APPROX, DEST_ACC, TOP_MIN, STABLE>(m_iter, k)`.
+It shares the original production loop/addressing implementation and selects
+`bitonic_topk_merge8_explicit` for the four-register load/swap/store region.
+The existing `_bitonic_topk_merge` entry and its default behavior are unchanged.
+Only Blackhole is changed; this is an opt-in interface, not an automatic
+production rollout.
+
+All L0/L1 values and L4/L5 indices are captured immediately after their loads,
+restored for the swap, then recaptured as new coupled results before stores.
+The region issues raw words directly, so its correctness does not borrow
+protection from the macro-effect decoder. `TOPK_IMPL=2` now invokes this actual
+production entry rather than a separate test-only implementation. The
+injected-temporary variant remains a test-only stress copy, not the timed path.
+
+Fresh production-entry results with compiler `064ef4565ea` and launch-flatten
+enabled: 72 exact BF16/FP16 cases pass at O3/explicit scheduling with the
+live-in pass disabled; another 72 pass with that pass enabled. Both profiling
+runs give legacy 5038/explicit 4929 cycles, five executions per arm. Both final
+runs use the named entry above. The O2 run also passes all 72 cases with the
+live-in pass disabled.
+
+Adoption contract: retain the surrounding TopK initialization/lane-state and
+address-mode contract, and enable `-mtt-tensix-optimize-launch-flatten` using
+the fixed compiler to avoid the known cost regression. Validated input scope
+remains K32, width128, rows32/64, finite unique BF16/FP16 values, non-stable,
+both sort directions. No tie/special-value/FP32/general-predicate claim is
+added by placing the interface in a production header.
+
+Other raw users are NOT mechanically rewritten. Helpers spanning separately
+owned register state need an explicit state-passing interface; LOADMACRO needs
+its configured effects, and predicated writes need old inactive destinations.
+The global macro-effect proposal remains draft; this region is not evidence
+that either mechanism is universally necessary or sufficient.
+
+Reproduce with the existing test commands and compiler option above. Final
+evidence: `topk-production-final.{log,xml}`, `topk-production-enabled.{log,xml}`,
+and `topk-production-O2.{log,xml}` under the same quietbox evidence root.

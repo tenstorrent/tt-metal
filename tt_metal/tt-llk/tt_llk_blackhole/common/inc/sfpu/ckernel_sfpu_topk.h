@@ -682,7 +682,51 @@ inline void _bitonic_topk_phases_steps(const int idir, const int i_end_phase, co
     topk_replay_init = -1;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false>
+// Caller-owned state for one load/swap/store region. Values and indices are
+// coupled outputs of SFPSWAP; recapture all four rather than restoring stale
+// inputs. Use the existing public SFPI API, not independent in_use() pairs.
+// This entry is opt-in: compilers without annotation-aware launch flattening
+// can retain the legacy entry without its measured unroll-cost regression.
+template <bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT>
+inline void bitonic_topk_merge8_explicit(std::uint32_t offset, std::uint32_t dist)
+{
+    constexpr auto value_format = TOPK_UINT16_IN_FP32_DEST ? InstrModLoadStore::INT32 : InstrModLoadStore::DEFAULT;
+    constexpr auto index_format = is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16;
+    const std::uint32_t address = (offset & 0xF) + (offset >> 4) * 32;
+    // Issue raw words directly so the state interface does not also depend
+    // on the experimental macro-effect annotation/compiler pass.
+    instrn_buffer[0] = TT_OP_SFPLOAD(0, value_format, ADDR_MOD_7, address);
+    sfpi::vFloat a = sfpi::l_reg[sfpi::LRegs::LReg0];
+    instrn_buffer[0] = TT_OP_SFPLOAD(1, value_format, ADDR_MOD_7, address + dist);
+    sfpi::vFloat b = sfpi::l_reg[sfpi::LRegs::LReg1];
+    instrn_buffer[0] = TT_OP_SFPLOAD(4, index_format, ADDR_MOD_7, 128 + address);
+    sfpi::vUInt ia = sfpi::l_reg[sfpi::LRegs::LReg4];
+    instrn_buffer[0] = TT_OP_SFPLOAD(5, index_format, ADDR_MOD_7, 128 + address + dist);
+    sfpi::vUInt ib = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::l_reg[sfpi::LRegs::LReg0] = a;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = b;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = ia;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = ib;
+    INSTRUCTION_WORD(TT_OP_SFPSWAP(0, top_min ? 1 : 0, top_min ? 0 : 1, p_sfpswap::ALL_ROWS_MAX));
+    if constexpr (STABLE_SORT)
+    {
+        INSTRUCTION_WORD(TT_OP_SFPSWAP(0, top_min ? 1 : 0, top_min ? 0 : 1, p_sfpswap::ALL_ROWS_MAX));
+    }
+    sfpi::vFloat ra = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat rb = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vUInt ria = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vUInt rib = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::l_reg[sfpi::LRegs::LReg0] = ra;
+    instrn_buffer[0] = TT_OP_SFPSTORE(0, value_format, ADDR_MOD_7, address);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = rb;
+    instrn_buffer[0] = TT_OP_SFPSTORE(1, value_format, ADDR_MOD_7, address + dist);
+    sfpi::l_reg[sfpi::LRegs::LReg4] = ria;
+    instrn_buffer[0] = TT_OP_SFPSTORE(4, index_format, ADDR_MOD_7, 128 + address);
+    sfpi::l_reg[sfpi::LRegs::LReg5] = rib;
+    instrn_buffer[0] = TT_OP_SFPSTORE(5, index_format, ADDR_MOD_7, 128 + address + dist);
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false, bool EXPLICIT_LREG_STATE = false>
 inline void _bitonic_topk_merge(const int m_iter, const int k)
 {
     // UInt16-in-32b-DEST: clear garbage high bits before compare-swap (#50215).
@@ -709,14 +753,21 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
             {
                 for (std::uint32_t ii = 0; ii < inner_d; ii++)
                 {
-                    bitonic_topk_load8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
-                    TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
-                    if constexpr (STABLE_SORT)
+                    if constexpr (EXPLICIT_LREG_STATE)
                     {
-                        // 1-cycle stall: second swap for index tracking on same LREGs
-                        TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                        bitonic_topk_merge8_explicit<is_fp32_dest_acc_en, top_min, STABLE_SORT>(dst_offset, ld_dist);
                     }
-                    bitonic_topk_store8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
+                    else
+                    {
+                        bitonic_topk_load8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
+                        TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                        if constexpr (STABLE_SORT)
+                        {
+                            // 1-cycle stall: second swap for index tracking on same LREGs
+                            TTI_SFPSWAP(0, top_min ? p_sfpu::LREG1 : p_sfpu::LREG0, top_min ? p_sfpu::LREG0 : p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+                        }
+                        bitonic_topk_store8<is_fp32_dest_acc_en>(dst_offset, ld_dist);
+                    }
                     datums_compared += 8;
                     if (ii == (inner_d - 1))
                     {
@@ -735,6 +786,15 @@ inline void _bitonic_topk_merge(const int m_iter, const int k)
         dst_addr_offset = 16;
         set_dst_write_addr(dst_addr_offset);
     }
+}
+
+// Explicit opt-in entry; the legacy entry/default above is unchanged.
+// Validated on Blackhole BF16/FP16, K32, width128, non-stable sorting.
+// Use a compiler with annotation-aware launch flattening for performance.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min, bool STABLE_SORT = false>
+inline void _bitonic_topk_merge_explicit(const int m_iter, const int k)
+{
+    _bitonic_topk_merge<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT, true>(m_iter, k);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool STABLE_SORT = false>

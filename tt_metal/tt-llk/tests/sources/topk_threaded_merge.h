@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// Test-only adaptation of ckernel_sfpu_topk.h::_bitonic_topk_merge.
+// Adapter to the production explicit-state merge plus a test-only stress copy.
 // Preserve the production loop, instruction words, formats and addressing.
 // Only the load8 -> swap -> store8 region gets explicit C++ value lifetimes.
 // Public LRegFile reads/assignments carry these lifetimes; no new SFPI API.
@@ -77,6 +77,12 @@ __attribute__((always_inline)) inline void merge8(std::uint32_t offset, std::uin
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min = false, bool STABLE_SORT = false>
 inline void calculate_bitonic_topk_merge_threaded(std::uint32_t m_iter_arg, std::uint32_t k_arg)
 {
+    if constexpr (TOPK_IMPL == 2)
+    {
+        // Measure the production region/interface, not the stress-only copy.
+        _bitonic_topk_merge_explicit<APPROXIMATION_MODE, is_fp32_dest_acc_en, top_min, STABLE_SORT>(m_iter_arg, k_arg);
+        return;
+    }
     // The production public wrapper forwards unsigned arguments to an int
     // implementation. Preserve that conversion and its expression types.
     const int m_iter = m_iter_arg;
