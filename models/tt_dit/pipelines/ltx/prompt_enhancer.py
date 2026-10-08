@@ -39,6 +39,12 @@ ENHANCER_TOP_K = 64
 ENHANCER_TOP_P = 0.95
 
 
+def _host_sampling() -> bool:
+    """LTX_ENHANCER_HOST_SAMPLE=1 keeps the old host sampling path (full-logits
+    gather to the host every decode step) instead of the device sampler."""
+    return os.environ.get("LTX_ENHANCER_HOST_SAMPLE", "0").lower() in ("1", "true", "yes")
+
+
 class PromptTooLongError(ValueError):
     """The templated prompt does not fit the rewriter's context next to its token budget."""
 
@@ -719,6 +725,20 @@ class DevicePromptEnhancer(PromptEnhancer):
         tok = self._sample(logits, temperature)
         prefill_s = time.time() - t0
 
+        # Decode samples on the device by default: only the token id crosses back to the
+        # host, not the full logits. Greedy routes the device sampler to its force-argmax
+        # path via top_k=1 (same as the trace-device arm in e2b_bringup.py).
+        sampling_params = None
+        if not _host_sampling():
+            from models.common.sampling.generator import SamplingParams
+
+            if temperature > 0:
+                sampling_params = SamplingParams(
+                    temperature=temperature, top_k=self.top_k, top_p=self.top_p, seed=seed
+                )
+            else:
+                sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
+
         # The prefill's token is the first new token; each decode step feeds the previous token back and
         # advances the position by one. Positions are not advanced by the generator itself.
         new_ids: list[int] = []
@@ -730,24 +750,29 @@ class DevicePromptEnhancer(PromptEnhancer):
             if len(new_ids) >= max_new_tokens:
                 break
             # reload_inputs=True: E2B's per-layer inputs are computed on the host for every token.
-            logits, _ = self._generator.decode_forward(
+            out, _ = self._generator.decode_forward(
                 torch.tensor([[tok]]),
                 current_pos,
                 enable_trace=self.enable_trace,
                 page_table=self._page_table,
                 kv_cache=self._kv_cache,
-                sampling_params=None,
+                sampling_params=sampling_params,
                 reload_inputs=True,
                 reload_page_table=False,
-                reload_sampling_params=False,
-                reset_sampling_state=False,
+                # Prefill sampled on host, so the device sampler gets its params at decode step 0.
+                reload_sampling_params=sampling_params is not None and decode_steps == 0,
+                reset_sampling_state=sampling_params is not None and decode_steps == 0,
             )
             current_pos += 1
             decode_steps += 1
-            tok = self._sample(logits, temperature)
+            if sampling_params is not None:
+                tok = int(out.reshape(-1)[0].item())
+            else:
+                tok = self._sample(out, temperature)
         decode_s = time.time() - t0
 
         self.last_stats = {
+            "sampling": "host" if sampling_params is None else "device",
             "prompt_tokens": prompt_len,
             "new_tokens": len(new_ids),
             "prefill_s": round(prefill_s, 3),
