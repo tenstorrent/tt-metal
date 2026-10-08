@@ -520,7 +520,7 @@ sfpi_inline void apply_unary_float_comp<SfpuType::unary_le>(sfpi::vFloat v, sfpi
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 sfpi_inline void _calculate_comp_unary_(std::uint32_t value)
 {
-    const sfpi::vFloat s = Converter::as_float(value);
+    const sfpi::vFloat s = Converter::as_float(value); // value is the threshold's fp32 bit pattern
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)

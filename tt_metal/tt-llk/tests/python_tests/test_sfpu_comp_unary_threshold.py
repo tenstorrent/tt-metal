@@ -18,9 +18,8 @@ Blackhole only: the Wormhole copy of this header is not changed by the fix.
 
 import struct
 
-import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -40,35 +39,47 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-pytestmark = pytest.mark.skipif(
-    get_chip_architecture() != ChipArchitecture.BLACKHOLE,
-    reason="tt-llk#1701 item 16: only the Blackhole _calculate_comp_unary_ decodes its threshold bits so far",
-)
+# https://github.com/tenstorrent/tt-llk/issues/1701 item 16: only the Blackhole _calculate_comp_unary_ is fixed.
+pytestmark = blackhole_only
 
 ELEMENTS_PER_TILE = 1024
 
-# Inputs: each threshold below, its fp32 neighbours, and values on both sides of it.
+
+def _from_bits(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+# Inputs: each finite threshold below with its fp32 neighbours, the largest finite values next to the
+# infinities, and values on both sides of every threshold.
 INPUTS = (
     0.0,
     -0.0,
     0.5,
-    0.49999997,  # 0.5 - 1 ulp
-    0.50000006,  # 0.5 + 1 ulp
+    _from_bits(0x3EFFFFFF),  # 0.5 - 1 ulp
+    _from_bits(0x3F000001),  # 0.5 + 1 ulp
     1.0,
+    _from_bits(0x3F7FFFFF),  # 1.0 - 1 ulp
+    _from_bits(0x3F800001),  # 1.0 + 1 ulp
     -1.0,
     -2.5,
-    -2.4999998,  # -2.5 + 1 ulp
-    -2.5000002,  # -2.5 - 1 ulp
+    _from_bits(0xC01FFFFF),  # -2.5 + 1 ulp
+    _from_bits(0xC0200001),  # -2.5 - 1 ulp
+    _from_bits(
+        0x3DCCCCCD
+    ),  # 0.1f: low mantissa bits set, so a decode that kept only the upper half fails
+    _from_bits(0x3DCCCCCC),  # 0.1f - 1 ulp
+    _from_bits(0x3DCCCCCE),  # 0.1f + 1 ulp
+    0.099609375,  # 0.1f truncated to bf16 (0x3DCC0000)
     3.0,
     1.0e9,
     1.1e9,  # straddle 1056964608.0, the value 0x3F000000 used to decode to
-    -3.0e38,
-    3.0e38,
+    _from_bits(0x7F7FFFFF),  # FLT_MAX
+    _from_bits(0xFF7FFFFF),  # -FLT_MAX
     float("inf"),
     float("-inf"),
 )
 
-THRESHOLDS = [0.5, 1.0, -2.5, float("inf"), float("-inf")]
+THRESHOLDS = [0.5, 1.0, -2.5, _from_bits(0x3DCCCCCD), float("inf"), float("-inf")]
 
 _TORCH_COMPARE = {
     MathOperation.UnaryGt: torch.gt,
